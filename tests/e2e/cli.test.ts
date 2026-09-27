@@ -112,7 +112,12 @@ describe("CLI", () => {
         ? spawnSync(
             "cmd.exe",
             ["/d", "/s", "/c", `call "${installedCommand}" --smoke`],
-            { cwd: temp, env, encoding: "utf8" },
+            {
+              cwd: temp,
+              env,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            },
           )
         : spawnSync(installedCommand, ["--smoke"], {
             cwd: temp,
@@ -126,7 +131,12 @@ describe("CLI", () => {
         ? spawnSync(
             "cmd.exe",
             ["/d", "/s", "/c", `call "${installedCommand}" --version`],
-            { cwd: temp, env, encoding: "utf8" },
+            {
+              cwd: temp,
+              env,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            },
           )
         : spawnSync(installedCommand, ["--version"], {
             cwd: temp,
@@ -142,7 +152,12 @@ describe("CLI", () => {
         ? spawnSync(
             "cmd.exe",
             ["/d", "/s", "/c", `call "${installedCommand}" --help`],
-            { cwd: temp, env, encoding: "utf8" },
+            {
+              cwd: temp,
+              env,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            },
           )
         : spawnSync(installedCommand, ["--help"], {
             cwd: temp,
@@ -183,7 +198,12 @@ describe("CLI", () => {
         ? spawnSync(
             "cmd.exe",
             ["/d", "/s", "/c", `call "${otherLauncher}" --smoke`],
-            { cwd: temp, env, encoding: "utf8" },
+            {
+              cwd: temp,
+              env,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            },
           )
         : spawnSync(otherLauncher, ["--smoke"], {
             cwd: temp,
@@ -258,7 +278,12 @@ describe("CLI", () => {
         ? spawnSync(
             "cmd.exe",
             ["/d", "/s", "/c", `call "${movedLauncher}" --smoke`],
-            { cwd: temp, env: movedEnv, encoding: "utf8" },
+            {
+              cwd: temp,
+              env: movedEnv,
+              encoding: "utf8",
+              windowsVerbatimArguments: true,
+            },
           )
         : spawnSync(movedLauncher, ["--smoke"], {
             cwd: temp,
@@ -313,6 +338,7 @@ describe("CLI", () => {
               cwd: temp,
               env,
               encoding: "utf8",
+              windowsVerbatimArguments: true,
             },
           )
         : spawnSync(command, ["--smoke"], { cwd: temp, env, encoding: "utf8" });

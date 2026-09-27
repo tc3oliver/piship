@@ -55,7 +55,11 @@ function runLauncher(
       ? spawnSync(
           "cmd.exe",
           ["/d", "/s", "/c", `call "${target}" ${args.join(" ")}`],
-          { encoding: "utf8", stdio: interactive ? "inherit" : "pipe" },
+          {
+            encoding: "utf8",
+            stdio: interactive ? "inherit" : "pipe",
+            windowsVerbatimArguments: true,
+          },
         )
       : spawnSync(target, args, {
           encoding: "utf8",
