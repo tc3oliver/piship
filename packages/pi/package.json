@@ -25,5 +25,10 @@
     "piship",
     "pi-coding-agent",
     "compatibility"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/pi"
+  }
 }

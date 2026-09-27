@@ -25,5 +25,10 @@
     "piship",
     "coding-agent",
     "cli"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/cli"
+  }
 }

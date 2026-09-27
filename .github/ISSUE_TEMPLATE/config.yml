@@ -1,2 +1,11 @@
 blank_issues_enabled: false
-# Add Discussions, security reporting, and documentation links after the repository URL exists.
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/tc3oliver/piship/discussions
+    about: Ask questions and discuss ideas before filing an issue.
+  - name: Security reporting
+    url: https://github.com/tc3oliver/piship/security
+    about: Use Security → Advisories → Report a vulnerability. Do not open a public issue.
+  - name: Documentation
+    url: https://github.com/tc3oliver/piship/tree/main/docs
+    about: Read the architecture, manifest, compatibility, and security guides.

@@ -6,7 +6,7 @@ PiShip is in early development. Security fixes currently target the main branch;
 
 ## Reporting a vulnerability
 
-Use GitHub's **Security → Advisories → Report a vulnerability** flow after the public repository is created and Private Vulnerability Reporting is enabled. Do not open a public Issue for a suspected vulnerability. If that option is unavailable, contact the maintainers privately through the contact method shown on the repository profile. See [maintainer setup](docs/maintainers/github.md).
+Use GitHub's **Security → Advisories → Report a vulnerability** flow. Do not open a public Issue for a suspected vulnerability. See [maintainer setup](docs/maintainers/github.md) for repository security settings.
 
 ## What must not be posted publicly
 

@@ -23,5 +23,10 @@
     "manifest",
     "schema",
     "coding-agent"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/schema"
+  }
 }

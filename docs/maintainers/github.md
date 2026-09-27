@@ -28,8 +28,8 @@ Keep it minimal and legible in dark and light GitHub themes and at thumbnail siz
 - Protect `main`: require a pull request, passing CI and Pi compatibility checks, and resolved conversations; block force pushes and branch deletion.
 - Enable Dependabot alerts and secret scanning where available.
 - Review Actions permissions and confirm CodeQL and Scorecard results after their first runs.
-- Add repository-specific Discussions and security links to the Issue chooser.
-- Provide a private contact route for Code of Conduct reports.
+- Verify the repository-specific Discussions, documentation, and security links in the Issue chooser.
+- Keep Private Vulnerability Reporting enabled: it is also the private contact route for Code of Conduct reports until a separate moderated channel is available.
 - Create the first distribution-core milestone and 3–5 real issues. Mark 1–2 small, approachable issues `good first issue` only after their acceptance criteria are clear.
 
 ## First issues to consider
