@@ -6,21 +6,17 @@ PiShip sits between upstream Pi and a distribution repository:
 Upstream Pi → PiShip → distribution repository → branded coding agent
 ```
 
-Pi owns the agent runtime, TUI, sessions, tools, model interaction, and extension execution. PiShip owns the description, reproduction, compatibility, and lifecycle of a distribution. The distribution repository owns its branding, chosen resources, and organization-specific integrations. PiShip does not fork or vendor Pi.
-
-## Where a change belongs
+Pi owns the agent loop, TUI, sessions, tools, model interaction, and extension execution. PiShip owns the distribution manifest, exact runtime pin, lock, controlled resources, build, and compatibility boundary. A distribution repository owns branding and chosen resources. PiShip does not fork or vendor Pi.
 
 | Change | Home |
 | --- | --- |
 | Generic agent or runtime behavior | Upstream Pi |
-| Distribution manifest, isolation, resolution, build, compatibility, or governance | PiShip |
-| Brand, private endpoint, organization policy, or custom resource | Distribution repository |
-
-A Pi extension adds behavior inside an existing Pi environment. PiShip aims to make the surrounding distribution reproducible. The first milestone is a manifest that leads to an exact Pi version, isolated state, controlled resources, and a branded launcher. That flow is not implemented yet.
+| Manifest, resource isolation, lock, build, compatibility | PiShip |
+| Brand, private endpoint, organization-specific resources | Distribution repository |
 
 ## Package dependencies
 
-Arrows point from the importing package to its allowed dependency:
+Arrows point from importer to dependency:
 
 ```text
 @piship/cli ───────→ @piship/pi ───────→ Pi public API
@@ -29,16 +25,14 @@ Arrows point from the importing package to its allowed dependency:
      └────────────────────────→ @piship/schema
 ```
 
-`schema` defines the experimental marker and minimal diagnostics. `core` owns distribution types and state path abstractions. `pi` is the sole adapter for upstream Pi. `cli` presents commands and keeps domain logic in other packages. These are allowed boundaries; packages declare only dependencies they currently use.
+`schema` parses and validates the alpha manifest. `core` resolves resources, locks their content, and builds the checkout-local output. `pi` alone imports `@earendil-works/pi-*`, using the public SDK entrypoint. `cli` presents commands. The boundary checker enforces these dependencies in CI.
 
-Only `packages/pi` may depend directly on or import `@earendil-works/pi-*`. It uses an exact Pi version pin and public package exports. No package may import Pi source files or private implementation paths. The boundary checker enforces these rules in CI. This keeps Pi upgrades localized and testable.
-
-## Intended data flow
+## First runnable flow
 
 ```text
-manifest → validation → resolved distribution → lock and build → Pi runtime
+piship.yaml → validate → piship.lock → build → branded command → Pi SDK/TUI
 ```
 
-Today, only the alpha schema marker, a small resolved distribution type, Pi compatibility metadata, and CLI help/version exist. Parsing YAML, producing a lockfile, building a distribution, and launching Pi are future work. Manifests and lockfiles must never contain secret values.
+The build output stores metadata, copied resources, and a thin launcher. The launcher resolves `@piship/pi` from the same repository; it requires the workspace's installed dependencies. It creates state under `~/.piship/<id>` by default (or `PISHIP_STATE_HOME/<id>`). Pi receives explicit `agentDir`, session directory, in-memory settings, and a resource loader whose discovery root is the built distribution. The user project remains the agent working directory, while Pi resource discovery does not use its `.pi` files. No source distribution directory receives runtime state.
 
-For the current contract, see [manifest status](manifest.md). For Pi upgrades, see [compatibility](compatibility.md). For trust boundaries, see [security architecture](security.md).
+For the current schema and lock contract see [manifest](manifest.md). For version upgrades see [compatibility](compatibility.md). For trust limits see [security](security.md).

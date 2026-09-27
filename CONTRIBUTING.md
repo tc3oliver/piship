@@ -25,7 +25,7 @@ npm run check
 
 Generic runtime behavior should be considered upstream in Pi first. Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing package boundaries or Pi integration. Small documentation and test changes do not require reading the full architecture first.
 
-The only current CLI behavior is help and version output. Other commands return an unavailable error. The manifest examples are fixtures, not runnable distributions.
+The CLI supports `validate`, `lock`, and `build` for the personal alpha example. Its branded command starts upstream Pi from this checkout; see [the runnable example](examples/personal/README.md). `init`, `dev`, and `inspect` remain unavailable.
 
 ## Pi compatibility
 

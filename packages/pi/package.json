@@ -19,7 +19,8 @@
     "dist"
   ],
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@piship/core": "0.0.0"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",
   "keywords": [

@@ -2,32 +2,27 @@
 
 ## Exact pin
 
-`packages/pi/package.json` pins `@earendil-works/pi-coding-agent` to exactly `0.87.1`. Its public entrypoint reports Node `>=22.19.0`. No other PiShip package may declare or import `@earendil-works/pi-*`. The lockfile records the complete transitive graph.
+`packages/pi/package.json` pins `@earendil-works/pi-coding-agent` to exactly `0.87.1`. Its public package entrypoint requires Node `>=22.19.0`. No other package may directly depend on or import `@earendil-works/pi-*`. A manifest requesting another Pi version fails; PiShip does not install arbitrary runtime versions. The npm lockfile fixes transitive dependency resolution.
 
 ## Status contract
 
-`compatibility/pi.json` maps a Pi version to one of:
+`compatibility/pi.json` maps a Pi version to:
 
-- `candidate`: public package API and compatibility metadata checks pass, but the complete distribution runtime gate has not passed.
-- `supported`: a real branded distribution launches on this Pi version and the required compatibility and end-to-end gates pass across CI platforms.
+- `candidate`: public API, metadata, and compatibility foundation checks pass, but the complete distribution runtime gate has not passed.
+- `supported`: a real branded distribution launches and all required compatibility and end-to-end gates pass across Ubuntu, macOS, and Windows CI.
 - `unsupported`: known incompatible or not accepted.
 
-The initial pinned version, `0.87.1`, is a `candidate`. The public package entrypoint, `createAgentSession` export, and version metadata are checked. PiShip does not yet build or launch a distribution, so this pin is not marked `supported`. A version is not supported just because it installs or passes a public import smoke test.
+The local personal example now validates, locks, builds, and initializes a real Pi SDK session through its branded launcher. `0.87.1` remains a **candidate** until the cross-platform CI gates for this change pass. The `--smoke` gate initializes Pi and loads resources without an LLM call; it does not prove live provider access or every interactive TUI path.
 
-## Public API only
+## Public API and upgrade policy
 
-Use exported package entrypoints. Never import `node_modules/.../src/*`, private or internal subpaths, GitHub source URLs, or Pi implementation files. Current integration uses the root public entrypoint. The boundary scanner enforces this for PiShip source and checks manifests; compatibility tests import the public entrypoint.
+Use only exported package entrypoints. Never import `node_modules/.../src/*`, private or internal subpaths, GitHub source URLs, or Pi implementation files. The adapter uses `createAgentSessionRuntime`, `createAgentSession`, `DefaultResourceLoader`, `ModelRuntime`, `SessionManager`, `SettingsManager`, and `InteractiveMode` from the public root entrypoint. The boundary scanner and compatibility tests guard against deep imports.
 
-## Upgrade workflow
+1. Record an upstream release and affected APIs in a compatibility change.
+2. Test through public exports before changing the exact pin.
+3. Update the pin, matrix, npm lockfile, and regression tests together.
+4. Launch a branded distribution and pass compatibility and end-to-end gates across Ubuntu, macOS, and Windows before declaring `supported`.
 
-1. Open a Pi compatibility change and record the upstream release and relevant API changes.
-2. Test the candidate through public exports before changing the exact dependency pin.
-3. Update the exact pin, compatibility matrix, and lockfile together.
-4. Add or update regression tests for affected behavior.
-5. Before changing status to `supported`, launch a real branded distribution on the pinned Pi version and pass the required compatibility and end-to-end gates across Ubuntu, macOS, and Windows CI.
+The scheduled latest-version canary is deferred. It must only signal and must never change the pinned runtime dependency, commit, merge, or publish.
 
-The scheduled canary is intentionally deferred until it can report latest-version failures reliably without changing the pinned runtime dependency. It must only signal; it must not commit, merge, or publish.
-
-## Temporary shims
-
-Prefer upstream fixes. Every temporary compatibility shim requires an owner, reason, expiration or removal condition, upstream issue or PR when appropriate, and a regression test. Remove the shim once the pinned Pi release supports the required public behavior.
+Each temporary shim requires an owner, reason, removal condition, upstream issue or PR when appropriate, and a regression test. Prefer an upstream fix.
