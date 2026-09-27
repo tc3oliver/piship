@@ -23,6 +23,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm run test:e2e
       - run: npm run test:compatibility
 # TODO: Add a read-only latest Pi canary once it can report failures reliably.
-# It must never change the production dependency, commit, merge, or publish.
+# It must never change the pinned runtime dependency, commit, merge, or publish.

@@ -29,5 +29,8 @@
     "type": "git",
     "url": "git+https://github.com/tc3oliver/piship.git",
     "directory": "packages/schema"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   }
 }

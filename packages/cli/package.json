@@ -31,5 +31,10 @@
     "type": "git",
     "url": "git+https://github.com/tc3oliver/piship.git",
     "directory": "packages/cli"
+  },
+  "dependencies": {
+    "@piship/core": "0.0.0",
+    "@piship/pi": "0.0.0",
+    "@piship/schema": "0.0.0"
   }
 }

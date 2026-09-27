@@ -2,32 +2,24 @@
 
 ## Trust boundaries
 
-Upstream Pi executes the agent runtime. PiShip will govern distribution configuration and selected capabilities. A distribution repository may contain company-specific adapters and resources. Local project content and user extensions are less trusted than a managed distribution. These boundaries do not imply enforcement in the current foundation.
+Upstream Pi executes the agent runtime. PiShip validates distribution inputs and controls the initial resource set. A distribution repository supplies executable extensions and instructions. Local project content remains less trusted than a curated distribution. The current slice is not a sandbox.
 
-## Pi extension execution risk
+## Current isolation
 
-Pi extensions can execute code with the process's privileges. Future capability governance must distinguish what is allowed from what is actually contained. Installing or loading an extension is a trust decision, and a policy label alone is not a sandbox.
+The launcher passes Pi an explicit state directory under `~/.piship/<id>` (or `PISHIP_STATE_HOME/<id>`), a separate session directory, in-memory settings, and a `DefaultResourceLoader` with Pi's ambient extension, skill, prompt, theme, and context discovery disabled. Only manifest-declared resource paths are added. Declared instructions, skills, extensions, and prompts are copied into the build; each resource file hash is checked at launch. Cross-platform E2E creates ambient resources in the isolated agent directory, personal Pi directories, `~/.agents/skills`, and project directories, then checks that the launch sees only declared resources.
 
-## Secret handling
+This is configuration and state isolation, not process containment. A declared extension executes with the user's process privileges and can read files available to that user. The user project remains the agent's working directory. Project content and tool execution may still affect the agent. Distributions must review extensions before declaring them.
 
-Manifests and `piship.lock` must never contain API keys, OIDC tokens, gateway credentials, or other secret values. Future manifests may reference secret names. Credentials should enter only through a dedicated future runtime boundary and should not be logged or embedded in artifacts.
+## Secrets
 
-## Governance versus containment
+The alpha schema permits only known fields, has no credential fields, and rejects `${...}` substitutions. It cannot identify arbitrary secret text in an allowed string. Maintainers must keep secrets out of the manifest and `piship.lock` before committing them. Do not include API keys, OIDC tokens, gateway credentials, proprietary source, or sensitive logs in issues or build resources. The alpha launcher has no credential broker; any provider setup is local to the isolated Pi state.
 
-Governance expresses allowed behavior; containment requires OS or platform enforcement. PiShip must not claim that an allowlist, policy check, or extension registry prevents malicious code from escaping process privileges. Sandbox support is future work and must state its actual guarantees.
+## Governance and containment
 
-## Pi public API boundary
+An allowlist or policy label does not contain malicious code. Future governance must distinguish approval from OS enforcement. PiShip does not yet sandbox extensions, enforce policy, or manage identity and credentials.
 
-Only `packages/pi` imports upstream Pi packages, using public exports and an exact pinned version. This is an upgrade and review boundary, not a security sandbox. The source scanner and compatibility test make accidental deep imports visible.
+## Pi public API and supply chain
 
-## Supply chain assumptions
+Only `packages/pi` imports upstream Pi, through the public entrypoint and an exact pin. This boundary localizes upgrades; it is not a security sandbox. `npm ci` fixes transitive resolution from `package-lock.json`. The current build is checkout-local and not signed or packaged. SBOM, provenance, signing, and release verification are future work.
 
-The npm lockfile fixes transitive dependency resolution for `npm ci`. CI runs on GitHub-hosted runners and uses maintained actions. Future builds should add integrity verification, SBOM, provenance, signing, and reviewed release processes. These controls are not implemented today.
-
-## Future identity and credential boundary
-
-Managed access may later use OIDC, a SecretStore, CredentialProvider, and an HTTP credential broker. PiShip should not become an identity provider or LLM gateway. The exact trust and failure behavior must be specified before implementation.
-
-## Current limitations
-
-This repository does not yet parse full manifests, validate a lockfile, launch Pi, isolate runtime state, sandbox extensions, enforce policy, manage credentials, or produce signed artifacts. Security reports should follow [SECURITY.md](../SECURITY.md).
+Security reports follow [SECURITY.md](../SECURITY.md).

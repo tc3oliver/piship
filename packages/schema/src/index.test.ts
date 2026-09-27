@@ -1,15 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { PISHIP_SCHEMA_VERSION, parseManifestHeader } from "./index.js";
-
-describe("experimental schema marker", () => {
-  it("accepts only the alpha marker", () => {
-    expect(PISHIP_SCHEMA_VERSION).toBe("piship/v1alpha1");
-    expect(parseManifestHeader({ schema: PISHIP_SCHEMA_VERSION })).toEqual({
+import {
+  PISHIP_SCHEMA_VERSION,
+  parseManifest,
+  parseManifestHeader,
+} from "./index.js";
+const valid = {
+  schema: PISHIP_SCHEMA_VERSION,
+  app: { id: "mypi", name: "My Pi", command: "mypi" },
+  runtime: { pi: "0.87.1" },
+  deployment: { mode: "personal" },
+};
+describe("alpha manifest", () => {
+  it("accepts the minimal distribution", () => {
+    expect(parseManifest(valid).resources.skills).toEqual([]);
+    expect(parseManifestHeader(valid)).toEqual({
       schema: PISHIP_SCHEMA_VERSION,
     });
-    expect(parseManifestHeader({ schema: "piship/v1" })).toEqual({
-      path: "schema",
-      message: "Expected piship/v1alpha1",
-    });
+  });
+  it("allows ordinary words that resemble credential names", () => {
+    expect(
+      parseManifest({ ...valid, app: { ...valid.app, name: "Secret Agent" } })
+        .app.name,
+    ).toBe("Secret Agent");
+  });
+  it.each([
+    [{ ...valid, schema: "piship/v1" }, "schema mismatch"],
+    [{ ...valid, app: { name: "My Pi", command: "mypi" } }, "app.id"],
+    [{ ...valid, app: { ...valid.app, command: "../pi" } }, "app.command"],
+    [{ ...valid, runtime: { pi: "latest" } }, "runtime.pi"],
+    [
+      { ...valid, resources: { skills: ["./../outside"] } },
+      "resources.skills[0]",
+    ],
+    [{ ...valid, app: { ...valid.app, apiKey: "secret" } }, "app.apiKey"],
+    [
+      { ...valid, app: { ...valid.app, name: "$" + "{SECRET_NAME}" } },
+      "app.name",
+    ],
+    [{ ...valid, deployment: { mode: "managed" } }, "deployment.mode"],
+  ])("rejects invalid fields with location", (input, expected) => {
+    expect(() => parseManifest(input)).toThrow(expected);
   });
 });

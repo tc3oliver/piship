@@ -1,0 +1,60 @@
+{
+  "schema": "piship-lock/v1alpha1",
+  "manifest": {
+    "schema": "piship/v1alpha1",
+    "sha256": "4c359b0f6621cafb4c6799cf2875a7f2ae41d1261dca19c3d326aa9c4c01f227"
+  },
+  "app": {
+    "id": "mypi",
+    "name": "MyPi",
+    "command": "mypi"
+  },
+  "deployment": {
+    "mode": "personal"
+  },
+  "runtime": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.87.1"
+  },
+  "resources": [
+    {
+      "kind": "extensions",
+      "path": "resources/extensions/demo/helper.ts",
+      "sha256": "d2c05b5da090318ed3bfd8404bbf200f588f720822df85df2e64d77151038b08"
+    },
+    {
+      "kind": "extensions",
+      "path": "resources/extensions/demo/index.ts",
+      "sha256": "802501af622f5f9397a7148a609a0a323bcec004c1477fbb6563737f3412a840"
+    },
+    {
+      "kind": "instructions",
+      "path": "resources/AGENTS.md",
+      "sha256": "abfc2051b0e2cde0e7aa768d4550a4c741a60d8304e9c18e1a537e9a5d27d2e6"
+    },
+    {
+      "kind": "prompts",
+      "path": "resources/prompts/demo.md",
+      "sha256": "a601f02a3a6cbfab9913f3baf5c3fa2329205981a993e96dcac14b08db672e9a"
+    },
+    {
+      "kind": "skills",
+      "path": "resources/skills/demo-skill/SKILL.md",
+      "sha256": "6397139648348790978542b25771055c61135399d1433b9e7072f063a440fb05"
+    }
+  ],
+  "declared": {
+    "instructions": [
+      "./resources/AGENTS.md"
+    ],
+    "skills": [
+      "./resources/skills"
+    ],
+    "extensions": [
+      "./resources/extensions/demo"
+    ],
+    "prompts": [
+      "./resources/prompts"
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 # Demo company distribution example
 
-Today, [piship.yaml](piship.yaml) is an alpha fixture with fictional branding and a managed deployment mode. It has no private company data, credentials, or working build path. The CLI cannot consume it yet.
+This is an illustrative alpha manifest with fictional branding and a managed deployment mode. `piship validate`, `lock`, and `build` intentionally reject it because managed runtime behavior is not implemented. It has no private data or credentials and is not a deployable company agent.
 
-A later milestone will use a neutral distribution like this to demonstrate the reusable build path. Managed identity, credentials, and policy are later work.
+For the first runnable flow, use the [personal example](../personal/README.md). Managed access is a later milestone.

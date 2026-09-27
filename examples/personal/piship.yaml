@@ -10,3 +10,13 @@ runtime:
 
 deployment:
   mode: personal
+
+resources:
+  instructions:
+    - ./resources/AGENTS.md
+  skills:
+    - ./resources/skills
+  extensions:
+    - ./resources/extensions/demo
+  prompts:
+    - ./resources/prompts
