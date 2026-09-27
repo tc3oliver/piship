@@ -2,7 +2,7 @@
 
 `piship/v1alpha1` is the personal distribution contract. It remains experimental. The [personal example](../examples/personal/piship.yaml) is runnable. Managed mode and unknown fields are rejected.
 
-Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `runtime.pi`, and `deployment.mode: personal`. `app.banner` is optional. `resources` can declare instruction files and skill, extension, or prompt roots. IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks. Credential fields and `${...}` substitutions are excluded.
+Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `runtime.pi`, and `deployment.mode: personal`. `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots. IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks. Credential fields and `${...}` substitutions are excluded.
 
 ```bash
 npm exec -- piship init ./my-agent
@@ -23,4 +23,4 @@ node ./dist/my-agent/piship.mjs purge my-agent --yes
 
 `piship.lock` records the normalized manifest digest, app identity, Pi package and version, PiShip version, committed npm lock digest, resolved package versions and npm integrity strings, declared roots, and SHA-256 hashes for every declared resource. It is deterministic and contains no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, or runtime files before Pi loads. There is no signature or trusted publisher verification in v0.1.
 
-Alpha migration: manifests from the checkout-local preview need `app.version` added; `app.banner` is optional. Regenerate `piship.lock` with the new PiShip CLI, then rebuild. The previous checkout-local output cannot be installed as a portable payload.
+Alpha migration: manifests from the checkout-local preview need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the new PiShip CLI, then rebuild. The previous checkout-local output cannot be installed as a portable payload.

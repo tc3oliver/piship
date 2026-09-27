@@ -1,6 +1,6 @@
 # Architecture
 
-PiShip assembles a personal coding-agent distribution from a strict manifest, a committed npm lock, and upstream Pi public packages. Pi owns the agent loop, TUI, sessions, tools, and extension execution. PiShip owns the manifest, dependency closure, resource selection, payload, installer, state locations, and diagnostics. Distribution repositories own their brand and declared resources. Pi source is neither forked nor patched.
+PiShip assembles a personal coding-agent distribution from a strict manifest, a committed npm lock, and upstream Pi public packages. Pi owns the agent loop, TUI, sessions, tools, and extension execution. PiShip owns the manifest, dependency closure, resource selection, payload, installer, state locations, and diagnostics. Distribution repositories own their brand and declared resources, including optional custom themes. Pi source is neither forked nor patched.
 
 | Change | Home |
 | --- | --- |

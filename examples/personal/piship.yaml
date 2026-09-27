@@ -6,6 +6,7 @@ app:
   command: mypi
   version: 1.0.0
   banner: MyPi personal distribution
+  theme: mypi
 
 runtime:
   pi: "0.87.1"
@@ -22,3 +23,5 @@ resources:
     - ./resources/extensions/demo
   prompts:
     - ./resources/prompts
+  themes:
+    - ./resources/themes/mypi.json

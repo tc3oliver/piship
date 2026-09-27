@@ -186,7 +186,7 @@ describe("CLI", () => {
       skills: ["demo-skill"],
       extensions: 1,
       prompts: ["demo"],
-      themes: [],
+      themes: ["mypi"],
     });
     expect(firstResult.extensionPaths[0]).toContain(join(temp, "install's"));
     const second = launch();
@@ -197,7 +197,7 @@ describe("CLI", () => {
       skills: ["demo-skill"],
       extensions: 1,
       prompts: ["demo"],
-      themes: [],
+      themes: ["mypi"],
     });
     const otherRoot = join(temp, "other-agent");
     const otherManifest = join(otherRoot, "piship.yaml");
@@ -390,7 +390,7 @@ describe("CLI", () => {
       skills: ["demo-skill"],
       extensions: 1,
       prompts: ["demo"],
-      themes: [],
+      themes: ["mypi"],
     });
     expect(result.agentDir).toContain(join(temp, "state", "mypi"));
     expect(result.instructions).toEqual([

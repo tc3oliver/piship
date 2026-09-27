@@ -21,6 +21,7 @@ export interface Manifest {
     readonly command: string;
     readonly version: string;
     readonly banner?: string;
+    readonly theme?: string;
   };
   readonly runtime: { readonly pi: string };
   readonly deployment: { readonly mode: "personal" };
@@ -29,6 +30,7 @@ export interface Manifest {
     readonly skills: readonly string[];
     readonly extensions: readonly string[];
     readonly prompts: readonly string[];
+    readonly themes: readonly string[];
   };
 }
 export class ManifestError extends Error {
@@ -166,6 +168,7 @@ export function parseManifest(value: unknown): Manifest {
     "command",
     "version",
     "banner",
+    "theme",
   ]);
   const runtime = record(root.runtime, "runtime", ["pi"]);
   const deployment = record(root.deployment, "deployment", ["mode"]);
@@ -174,6 +177,7 @@ export function parseManifest(value: unknown): Manifest {
     "skills",
     "extensions",
     "prompts",
+    "themes",
   ]);
   const mode = deployment.mode;
   if (mode === "managed")
@@ -214,6 +218,9 @@ export function parseManifest(value: unknown): Manifest {
       ...(app.banner === undefined
         ? {}
         : { banner: displayText(app.banner, "app.banner") }),
+      ...(app.theme === undefined
+        ? {}
+        : { theme: name(app.theme, "app.theme") }),
     },
     runtime: { pi },
     deployment: { mode },
@@ -222,6 +229,7 @@ export function parseManifest(value: unknown): Manifest {
       skills: paths(resources.skills, "resources.skills"),
       extensions: paths(resources.extensions, "resources.extensions"),
       prompts: paths(resources.prompts, "resources.prompts"),
+      themes: paths(resources.themes, "resources.themes"),
     },
   };
 }

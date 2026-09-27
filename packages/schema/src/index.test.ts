@@ -36,6 +36,11 @@ describe("alpha manifest", () => {
       "resources.skills[0]",
     ],
     [{ ...valid, app: { ...valid.app, apiKey: "secret" } }, "app.apiKey"],
+    [{ ...valid, app: { ...valid.app, theme: "../unsafe" } }, "app.theme"],
+    [
+      { ...valid, resources: { themes: ["../unsafe.json"] } },
+      "resources.themes[0]",
+    ],
     [
       { ...valid, app: { ...valid.app, banner: "unsafe\noutput" } },
       "app.banner",

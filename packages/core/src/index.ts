@@ -38,7 +38,12 @@ export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "0.87.1";
 export const PISHIP_VERSION = "0.1.0";
 export interface LockedResource {
-  readonly kind: "instructions" | "skills" | "extensions" | "prompts";
+  readonly kind:
+    | "instructions"
+    | "skills"
+    | "extensions"
+    | "prompts"
+    | "themes";
   readonly path: string;
   readonly sha256: string;
 }
@@ -158,6 +163,7 @@ export function resolveResources(
     "skills",
     "extensions",
     "prompts",
+    "themes",
   ] as const) {
     for (const declared of manifest.resources[kind]) {
       const absolute = resolve(base, declared);

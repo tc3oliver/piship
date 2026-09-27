@@ -1,6 +1,6 @@
 # Personal distribution example
 
-This runnable `piship/v1alpha1` example pins Pi 0.87.1 and declares instructions, a skill, a TypeScript extension, and a prompt. It is a keyless runtime demonstration; live model access requires credentials managed separately in the distribution's state.
+This runnable `piship/v1alpha1` example pins Pi 0.87.1 and declares instructions, a skill, a TypeScript extension, a prompt, and a branded theme. It is a keyless runtime demonstration; live model access requires credentials managed separately in the distribution's state.
 
 From the repository root with Node.js 22.19.0 or newer:
 

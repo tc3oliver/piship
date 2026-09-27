@@ -2,14 +2,15 @@
   "schema": "piship-lock/v1alpha1",
   "manifest": {
     "schema": "piship/v1alpha1",
-    "sha256": "e7ab3e34d9b74f3c4504f8f964dac31cc26892b163d0501ebde017d7b6ecb1e9"
+    "sha256": "fa00b29866d9a46cbf8c93b85d247d8050da0a836bb277d2a5fda7d264872d16"
   },
   "app": {
     "id": "mypi",
     "name": "MyPi",
     "command": "mypi",
     "version": "1.0.0",
-    "banner": "MyPi personal distribution"
+    "banner": "MyPi personal distribution",
+    "theme": "mypi"
   },
   "deployment": {
     "mode": "personal"
@@ -742,6 +743,11 @@
       "kind": "skills",
       "path": "resources/skills/demo-skill/SKILL.md",
       "sha256": "6397139648348790978542b25771055c61135399d1433b9e7072f063a440fb05"
+    },
+    {
+      "kind": "themes",
+      "path": "resources/themes/mypi.json",
+      "sha256": "85f67ef958ed0f263fc71478f1878847fd4242eb62d3e33eb92e65923e148e99"
     }
   ],
   "declared": {
@@ -756,6 +762,9 @@
     ],
     "prompts": [
       "./resources/prompts"
+    ],
+    "themes": [
+      "./resources/themes/mypi.json"
     ]
   }
 }

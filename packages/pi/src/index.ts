@@ -111,6 +111,7 @@ export async function launchPiDistribution(
       additionalExtensionPaths: resourcePaths("extensions"),
       additionalSkillPaths: resourcePaths("skills"),
       additionalPromptTemplatePaths: resourcePaths("prompts"),
+      additionalThemePaths: resourcePaths("themes"),
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -124,6 +125,19 @@ export async function launchPiDistribution(
       throw new Error(
         `Pi extension load failed: ${extensionErrors.map((item) => item.error).join("; ")}`,
       );
+    const themeDiagnostics = resourceLoader.getThemes().diagnostics;
+    if (themeDiagnostics.length)
+      throw new Error(
+        `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
+      );
+    if (
+      metadata.app.theme &&
+      !["dark", "light"].includes(metadata.app.theme) &&
+      !resourceLoader
+        .getThemes()
+        .themes.some((item) => item.name === metadata.app.theme)
+    )
+      throw new Error(`Declared theme is unavailable: ${metadata.app.theme}`);
     const result = await createAgentSession({
       cwd,
       agentDir,
@@ -223,7 +237,10 @@ export async function launchPiDistribution(
       throw new Error(
         `Unknown branded command option: ${options.args.join(" ")}`,
       );
-    await new InteractiveMode(runtime).run();
+    await new InteractiveMode(
+      runtime,
+      metadata.app.theme ? { initialThemeSetting: metadata.app.theme } : {},
+    ).run();
   } finally {
     await runtime.dispose();
   }
