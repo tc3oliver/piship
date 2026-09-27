@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdtempSync,
   mkdirSync,
@@ -17,6 +18,7 @@ import {
   requireCurrentLock,
   resolveLock,
   runtimeStateDirectory,
+  verifyPayload,
 } from "./index.js";
 const roots: string[] = [];
 function fixture() {
@@ -80,6 +82,22 @@ describe("distribution core", () => {
     );
     if (process.platform !== "win32")
       expect(statSync(join(output, "bin/mypi")).mode & 0o111).not.toBe(0);
+    expect(verifyPayload(output).app.id).toBe("mypi");
+    const targetPath = join(output, "metadata", "target.json");
+    writeFileSync(
+      targetPath,
+      JSON.stringify({ platform: "unsupported", arch: "unknown" }),
+    );
+    const inventoryPath = join(output, "metadata", "inventory.json");
+    const inventory = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
+      string,
+      string
+    >;
+    inventory["metadata/target.json"] = createHash("sha256")
+      .update(readFileSync(targetPath))
+      .digest("hex");
+    writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
+    expect(() => verifyPayload(output)).toThrow("does not match this machine");
   });
   it("rejects resource roots and nested symlinks during locking", () => {
     const { dir, path } = fixture();

@@ -306,6 +306,13 @@ export function verifyPayload(directory: string): DistributionLock {
     throw new Error(
       "Installed payload integrity mismatch; reinstall this distribution",
     );
+  const target = JSON.parse(
+    readFileSync(join(root, "metadata", "target.json"), "utf8"),
+  ) as { platform: string; arch: string };
+  if (target.platform !== process.platform || target.arch !== process.arch)
+    throw new Error(
+      `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
+    );
   const lock = JSON.parse(
     readFileSync(join(root, "metadata", "distribution.json"), "utf8"),
   ) as DistributionLock;
@@ -388,6 +395,10 @@ export function buildDistribution(
     writeFileSync(
       join(stage, "metadata", "distribution.json"),
       `${JSON.stringify(lock, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(stage, "metadata", "target.json"),
+      `${JSON.stringify({ platform: process.platform, arch: process.arch }, null, 2)}\n`,
     );
     const command = join(stage, "bin", lock.app.command);
     writeFileSync(command, launcherSource());
