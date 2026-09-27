@@ -54,7 +54,7 @@ function runLauncher(
     process.platform === "win32"
       ? spawnSync(
           "cmd.exe",
-          ["/d", "/s", "/c", `"${target}" ${args.join(" ")}`],
+          ["/d", "/s", "/c", `call "${target}" ${args.join(" ")}`],
           { encoding: "utf8", stdio: interactive ? "inherit" : "pipe" },
         )
       : spawnSync(target, args, {

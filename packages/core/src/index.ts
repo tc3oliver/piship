@@ -9,7 +9,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readlinkSync,
   readdirSync,
   rmSync,
   renameSync,
@@ -276,12 +275,9 @@ function inventory(root: string): Record<string, string> {
       const path = join(directory, name);
       const stat = lstatSync(path);
       const key = relative(root, path).split(sep).join("/");
-      if (stat.isSymbolicLink()) {
-        // npm workspaces are internal symlinks; no external path may be followed.
-        const target = resolve(dirname(path), readlinkSync(path));
-        if (!target.startsWith(`${root}${sep}`))
-          throw new Error(`Payload symlink escapes artifact: ${key}`);
-      } else if (stat.isDirectory()) visit(path);
+      if (stat.isSymbolicLink())
+        throw new Error(`Payload symlink is not allowed: ${key}`);
+      if (stat.isDirectory()) visit(path);
       else if (stat.isFile() && key !== "metadata/inventory.json")
         output[key] = hash(readFileSync(path));
       else if (!stat.isFile())
@@ -446,6 +442,16 @@ export function installDistribution(
     binHome(),
     process.platform === "win32" ? `${command}.cmd` : command,
   );
+  const targetScript = join(target, "bin", command);
+  if (
+    process.platform === "win32" &&
+    ["%", "!", '"', "\r", "\n"].some((character) =>
+      targetScript.includes(character),
+    )
+  )
+    throw new Error(
+      "Install path contains characters unsafe for a Windows command shim",
+    );
   if (
     existsSync(receiptPath(id)) ||
     existsSync(appDirectory) ||
@@ -467,12 +473,12 @@ export function installDistribution(
     if (process.platform === "win32")
       writeFileSync(
         commandPath,
-        `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${join(target, "bin", command)}" %*\r\n`,
+        `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${targetScript}" %*\r\n`,
       );
     else {
       writeFileSync(
         commandPath,
-        `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node "${join(target, "bin", command)}" "$@"\n`,
+        `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${targetScript.replaceAll("'", "'\"'\"'")}' "$@"\n`,
       );
       chmodSync(commandPath, 0o755);
     }

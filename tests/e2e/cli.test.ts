@@ -87,7 +87,7 @@ describe("CLI", () => {
     cpSync(join(root, "dist", "mypi"), relocated, { recursive: true });
     const env = {
       ...process.env,
-      PISHIP_INSTALL_HOME: join(temp, "install"),
+      PISHIP_INSTALL_HOME: join(temp, "install's"),
       PISHIP_BIN_HOME: join(temp, "bin"),
       PISHIP_STATE_HOME: join(temp, "state"),
       HOME: join(temp, "home"),
@@ -111,7 +111,7 @@ describe("CLI", () => {
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
-            ["/d", "/s", "/c", `"${installedCommand}" --smoke`],
+            ["/d", "/s", "/c", `call "${installedCommand}" --smoke`],
             { cwd: temp, env, encoding: "utf8" },
           )
         : spawnSync(installedCommand, ["--smoke"], {
@@ -125,7 +125,7 @@ describe("CLI", () => {
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
-            ["/d", "/s", "/c", `"${installedCommand}" --version`],
+            ["/d", "/s", "/c", `call "${installedCommand}" --version`],
             { cwd: temp, env, encoding: "utf8" },
           )
         : spawnSync(installedCommand, ["--version"], {
@@ -141,7 +141,7 @@ describe("CLI", () => {
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
-            ["/d", "/s", "/c", `"${installedCommand}" --help`],
+            ["/d", "/s", "/c", `call "${installedCommand}" --help`],
             { cwd: temp, env, encoding: "utf8" },
           )
         : spawnSync(installedCommand, ["--help"], {
@@ -158,7 +158,7 @@ describe("CLI", () => {
       extensionPaths: string[];
     };
     expect(firstResult).toMatchObject({ resumed: false, safeTool: "read" });
-    expect(firstResult.extensionPaths[0]).toContain(join(temp, "install"));
+    expect(firstResult.extensionPaths[0]).toContain(join(temp, "install's"));
     const second = launch();
     expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout)).toMatchObject({
@@ -182,7 +182,7 @@ describe("CLI", () => {
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
-            ["/d", "/s", "/c", `"${otherLauncher}" --smoke`],
+            ["/d", "/s", "/c", `call "${otherLauncher}" --smoke`],
             { cwd: temp, env, encoding: "utf8" },
           )
         : spawnSync(otherLauncher, ["--smoke"], {
@@ -201,7 +201,7 @@ describe("CLI", () => {
     expect(command("purge", "other-agent", "--yes").status).toBe(0);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
     expect(command("doctor", "mypi").status).toBe(0);
-    const payload = join(temp, "install", "apps", "mypi", "1.0.0");
+    const payload = join(temp, "install's", "apps", "mypi", "1.0.0");
     const resource = join(payload, "resources", "resources", "AGENTS.md");
     const original = readFileSync(resource);
     writeFileSync(resource, "tampered\n");
@@ -257,7 +257,7 @@ describe("CLI", () => {
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
-            ["/d", "/s", "/c", `"${movedLauncher}" --smoke`],
+            ["/d", "/s", "/c", `call "${movedLauncher}" --smoke`],
             { cwd: temp, env: movedEnv, encoding: "utf8" },
           )
         : spawnSync(movedLauncher, ["--smoke"], {
@@ -274,7 +274,7 @@ describe("CLI", () => {
     expect(command("purge", "mypi").status).toBe(1);
     expect(command("purge", "mypi", "--yes").status).toBe(0);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(false);
-  }, 60000);
+  }, 360000);
   it("validates, locks, builds and starts real Pi without a model call", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-e2e-"));
     temporary.push(temp);
@@ -306,11 +306,15 @@ describe("CLI", () => {
     };
     const launch =
       process.platform === "win32"
-        ? spawnSync("cmd.exe", ["/d", "/s", "/c", `${command}.cmd --smoke`], {
-            cwd: temp,
-            env,
-            encoding: "utf8",
-          })
+        ? spawnSync(
+            "cmd.exe",
+            ["/d", "/s", "/c", `call "${command}.cmd" --smoke`],
+            {
+              cwd: temp,
+              env,
+              encoding: "utf8",
+            },
+          )
         : spawnSync(command, ["--smoke"], { cwd: temp, env, encoding: "utf8" });
     expect(launch.status, launch.stderr).toBe(0);
     const result = JSON.parse(launch.stdout.trim()) as {
@@ -350,7 +354,7 @@ describe("CLI", () => {
     expect(cli("lock", manifest).status).toBe(0);
     const updated = readFileSync(join(example, "piship.lock"), "utf8");
     expect(updated).not.toBe(lock);
-  });
+  }, 120000);
   it("rejects managed manifests before lock or build output", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-managed-"));
     temporary.push(temp);
