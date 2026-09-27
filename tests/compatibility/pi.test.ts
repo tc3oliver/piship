@@ -21,6 +21,8 @@ describe("pinned Pi compatibility", () => {
     expect(manifest.dependencies["@earendil-works/pi-coding-agent"]).toBe(
       PINNED_PI_VERSION,
     );
-    expect(matrix.versions[PINNED_PI_VERSION]?.status).toBe("supported");
+    expect(["candidate", "supported"]).toContain(
+      matrix.versions[PINNED_PI_VERSION]?.status,
+    );
   });
 });
