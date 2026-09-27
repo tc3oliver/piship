@@ -18,7 +18,7 @@ Governance expresses allowed behavior; containment requires OS or platform enfor
 
 ## Pi public API boundary
 
-Only `packages/pi` imports upstream Pi packages, using public exports and an exact production version. This is an upgrade and review boundary, not a security sandbox. The source scanner and compatibility test make accidental deep imports visible.
+Only `packages/pi` imports upstream Pi packages, using public exports and an exact pinned version. This is an upgrade and review boundary, not a security sandbox. The source scanner and compatibility test make accidental deep imports visible.
 
 ## Supply chain assumptions
 

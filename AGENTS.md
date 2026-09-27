@@ -5,7 +5,7 @@ PiShip is an open-source framework for personal or managed Pi-based coding-agent
 ## Invariants
 
 1. Keep Pi upstream. Do not vendor, fork, or patch Pi here.
-2. Only `packages/pi` may import or depend directly on `@earendil-works/pi-*`; use public exports and exact production versions.
+2. Only `packages/pi` may import or depend directly on `@earendil-works/pi-*`; use public exports and exact pinned versions.
 3. Never import Pi private or internal paths. Every compatibility workaround needs a regression test.
 4. Keep the CLI thin. Put distribution logic in the appropriate package.
 5. Never put secrets in `piship.yaml` or `piship.lock`.
