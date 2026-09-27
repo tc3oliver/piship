@@ -59,7 +59,7 @@ function createAmbientResources(root: string): void {
 afterEach(() => {
   for (const path of temporary.splice(0))
     rmSync(path, { recursive: true, force: true });
-});
+}, 180000);
 describe("CLI", () => {
   it("prints help/version and requires init target", () => {
     expect(cli("--help").stdout).toContain("Usage: piship <command>");
