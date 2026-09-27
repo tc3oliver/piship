@@ -75,7 +75,7 @@ export function checkPiVersion(manifest: Manifest): void {
     throw new ManifestError(
       "invalid field",
       "runtime.pi",
-      `Pi ${manifest.runtime.pi} is not available in this PiShip build. Pinned candidate: ${PI_VERSION}.`,
+      `Pi ${manifest.runtime.pi} is not available in this PiShip build. Pinned runtime: ${PI_VERSION}.`,
     );
 }
 function walkResource(root: string, current: string, output: string[]): void {

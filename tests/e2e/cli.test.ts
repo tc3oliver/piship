@@ -105,7 +105,7 @@ describe("CLI", () => {
     const original = readFileSync(manifest, "utf8");
     writeFileSync(manifest, original.replace('"0.87.1"', '"0.88.0"'));
     expect(cli("validate", manifest).stderr).toContain(
-      "Pinned candidate: 0.87.1",
+      "Pinned runtime: 0.87.1",
     );
     writeFileSync(
       manifest,

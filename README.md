@@ -49,7 +49,7 @@ The [personal example](examples/personal/README.md) demonstrates exact Pi pinnin
 
 ## Pi compatibility
 
-The current integration is pinned to `@earendil-works/pi-coding-agent@0.87.1`. It remains a compatibility **candidate** until this slice's required cross-platform gates pass. Only `packages/pi` imports upstream Pi packages, through public exports. See the [compatibility policy](docs/compatibility.md).
+The current integration is pinned to `@earendil-works/pi-coding-agent@0.87.1`. It is **supported for this distribution slice** after Ubuntu, macOS, and Windows launch gates passed. This does not cover live model calls or future managed features. Only `packages/pi` imports upstream Pi packages, through public exports. See the [compatibility policy](docs/compatibility.md).
 
 ## Roadmap
 

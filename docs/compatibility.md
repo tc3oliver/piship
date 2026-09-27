@@ -12,7 +12,7 @@
 - `supported`: a real branded distribution launches and all required compatibility and end-to-end gates pass across Ubuntu, macOS, and Windows CI.
 - `unsupported`: known incompatible or not accepted.
 
-The local personal example now validates, locks, builds, and initializes a real Pi SDK session through its branded launcher. `0.87.1` remains a **candidate** until the cross-platform CI gates for this change pass. The `--smoke` gate initializes Pi and loads resources without an LLM call; it does not prove live provider access or every interactive TUI path.
+The personal example validates, locks, builds, and initializes a real Pi SDK session through its branded launcher. The Ubuntu, macOS, and Windows compatibility and end-to-end gates passed in PR #7, so `0.87.1` is **supported for this distribution slice**. The `--smoke` gate initializes Pi and loads resources without an LLM call; it does not prove live provider access or every interactive TUI path. A macOS PTY run also opened Pi's real interactive TUI.
 
 ## Public API and upgrade policy
 
