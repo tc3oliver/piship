@@ -8,11 +8,11 @@
 
 `compatibility/pi.json` maps a Pi version to one of:
 
-- `supported`: exact version tested in the pinned compatibility suite.
-- `candidate`: under evaluation; not a production pin.
+- `candidate`: public package API and compatibility metadata checks pass, but the complete distribution runtime gate has not passed.
+- `supported`: a real branded distribution launches on this Pi version and the required compatibility and end-to-end gates pass across CI platforms.
 - `unsupported`: known incompatible or not accepted.
 
-The initial supported version is `0.87.1`. A version is not supported just because it installs.
+The initial pinned version, `0.87.1`, is a `candidate`. The public package entrypoint, `createAgentSession` export, and version metadata are checked. PiShip does not yet build or launch a distribution, so this pin is not marked `supported`. A version is not supported just because it installs or passes a public import smoke test.
 
 ## Public API only
 
@@ -21,10 +21,10 @@ Use exported package entrypoints. Never import `node_modules/.../src/*`, private
 ## Upgrade workflow
 
 1. Open a Pi compatibility change and record the upstream release and relevant API changes.
-2. Test the candidate through public exports without changing the production pin.
+2. Test the candidate through public exports before changing the exact dependency pin.
 3. Update the exact pin, compatibility matrix, and lockfile together.
 4. Add or update regression tests for affected behavior.
-5. Run `npm run check` and `npm run test:compatibility` across CI platforms before changing status to supported.
+5. Before changing status to `supported`, launch a real branded distribution on the pinned Pi version and pass the required compatibility and end-to-end gates across Ubuntu, macOS, and Windows CI.
 
 The scheduled canary is intentionally deferred until it can report latest-version failures reliably without touching the production dependency. It must only signal; it must not commit, merge, or publish.
 

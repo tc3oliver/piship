@@ -12,7 +12,7 @@ PiShip is an open-source framework for personal or managed Pi-based coding-agent
 6. Put generic runtime improvements upstream in Pi and agent-specific behavior in its distribution repository.
 7. Add a package only for a real boundary. Do not silently weaken trust, security, or isolation semantics.
 
-Before architecture changes, read `docs/architecture.md` and, if present locally, `docs/spec/product-v1.0.md`. The latter is a maintainer-local product specification excluded from Git; public contributors can use the architecture and manifest docs as the public contract.
+Before architecture changes, use the public repository contract: this file, `docs/architecture.md`, `docs/manifest.md`, `docs/compatibility.md`, and `docs/security.md`. A maintainer-local product specification may exist, but it is not required for public contributions.
 
 Scope test: does the change help describe, build, govern, distribute, secure, diagnose, reproduce, or maintain a Pi-based coding-agent distribution?
 
