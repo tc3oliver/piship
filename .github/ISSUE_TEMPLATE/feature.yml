@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose distribution-focused functionality
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: "Describe the use case before the proposed design."
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: "What should a user be able to do?"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Why PiShip?
+      description: "Why does this belong in PiShip rather than upstream Pi or a distribution-specific repository?"
+  - type: textarea
+    id: context
+    attributes:
+      label: Alternatives or additional context

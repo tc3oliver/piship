@@ -1,0 +1,29 @@
+{
+  "name": "@piship/pi",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1"
+  },
+  "description": "Public Pi integration and compatibility boundary for PiShip.",
+  "keywords": [
+    "piship",
+    "pi-coding-agent",
+    "compatibility"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@piship/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "piship": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Command-line interface for PiShip distributions.",
+  "keywords": [
+    "piship",
+    "coding-agent",
+    "cli"
+  ]
+}

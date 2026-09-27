@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "versions": {
+    "0.87.1": {
+      "status": "supported"
+    }
+  }
+}

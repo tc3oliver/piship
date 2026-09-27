@@ -1,0 +1,27 @@
+{
+  "name": "@piship/schema",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Experimental manifest types and validation boundary for PiShip.",
+  "keywords": [
+    "piship",
+    "manifest",
+    "schema",
+    "coding-agent"
+  ]
+}

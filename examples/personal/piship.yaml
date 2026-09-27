@@ -1,0 +1,12 @@
+schema: piship/v1alpha1
+
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+
+runtime:
+  pi: "0.87.1"
+
+deployment:
+  mode: personal

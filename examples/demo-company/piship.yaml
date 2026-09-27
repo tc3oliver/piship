@@ -1,0 +1,12 @@
+schema: piship/v1alpha1
+
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+
+runtime:
+  pi: "0.87.1"
+
+deployment:
+  mode: managed

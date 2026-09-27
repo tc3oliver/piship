@@ -1,0 +1,32 @@
+{
+  "name": "piship-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b && node scripts/mark-cli-executable.mjs",
+    "clean": "node scripts/clean.mjs",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc -b",
+    "test": "npm run build && vitest run",
+    "test:e2e": "npm run build && vitest run tests/e2e",
+    "test:compatibility": "npm run check:boundaries && npm run build && vitest run packages/pi/src/compatibility.test.ts tests/compatibility",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@changesets/cli": "3.0.3",
+    "@types/node": "22.19.15",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

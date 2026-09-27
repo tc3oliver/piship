@@ -1,0 +1,58 @@
+name: Pi compatibility
+description: Report a public Pi API compatibility issue
+title: "[Pi compatibility]: "
+labels: ["compatibility", "upstream-pi"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include credentials, proprietary source code, or sensitive logs. Use SECURITY.md for vulnerabilities."
+  - type: input
+    id: pi_version
+    attributes:
+      label: Pi version
+    validations:
+      required: true
+  - type: input
+    id: piship_version
+    attributes:
+      label: PiShip version
+    validations:
+      required: true
+  - type: textarea
+    id: breaking_surface
+    attributes:
+      label: Breaking surface
+    validations:
+      required: true
+  - type: input
+    id: pi_api
+    attributes:
+      label: Affected public Pi API
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+    validations:
+      required: true
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream issue / PR
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
