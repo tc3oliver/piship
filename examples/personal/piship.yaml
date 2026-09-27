@@ -17,6 +17,6 @@ resources:
   skills:
     - ./resources/skills
   extensions:
-    - ./resources/extensions
+    - ./resources/extensions/demo
   prompts:
     - ./resources/prompts

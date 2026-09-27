@@ -21,7 +21,7 @@ export interface Manifest {
     readonly command: string;
   };
   readonly runtime: { readonly pi: string };
-  readonly deployment: { readonly mode: "personal" | "managed" };
+  readonly deployment: { readonly mode: "personal" };
   readonly resources: {
     readonly instructions: readonly string[];
     readonly skills: readonly string[];
@@ -80,15 +80,11 @@ function string(value: unknown, path: string): string {
       path,
       "Expected a non-empty string",
     );
-  if (
-    /\$\{|(?:api[_-]?key|access[_-]?token|password|secret|credential)/i.test(
-      value,
-    )
-  )
+  if (/\$\{/.test(value))
     throw new ManifestError(
       "invalid field",
       path,
-      "Secret values and environment substitutions are not allowed in this alpha manifest",
+      "Environment substitutions are not allowed in this alpha manifest",
     );
   return value;
 }
@@ -156,11 +152,17 @@ export function parseManifest(value: unknown): Manifest {
     "prompts",
   ]);
   const mode = deployment.mode;
-  if (mode !== "personal" && mode !== "managed")
+  if (mode === "managed")
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "Expected personal or managed",
+      "managed is not runnable in PiShip v1alpha1 yet. Managed access is planned for a later milestone",
+    );
+  if (mode !== "personal")
+    throw new ManifestError(
+      "invalid field",
+      "deployment.mode",
+      "Expected personal",
     );
   const pi = string(runtime.pi, "runtime.pi");
   if (!/^\d+\.\d+\.\d+$/.test(pi))

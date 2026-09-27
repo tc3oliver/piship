@@ -17,6 +17,12 @@ describe("alpha manifest", () => {
       schema: PISHIP_SCHEMA_VERSION,
     });
   });
+  it("allows ordinary words that resemble credential names", () => {
+    expect(
+      parseManifest({ ...valid, app: { ...valid.app, name: "Secret Agent" } })
+        .app.name,
+    ).toBe("Secret Agent");
+  });
   it.each([
     [{ ...valid, schema: "piship/v1" }, "schema mismatch"],
     [{ ...valid, app: { name: "My Pi", command: "mypi" } }, "app.id"],
@@ -27,6 +33,11 @@ describe("alpha manifest", () => {
       "resources.skills[0]",
     ],
     [{ ...valid, app: { ...valid.app, apiKey: "secret" } }, "app.apiKey"],
+    [
+      { ...valid, app: { ...valid.app, name: "$" + "{SECRET_NAME}" } },
+      "app.name",
+    ],
+    [{ ...valid, deployment: { mode: "managed" } }, "deployment.mode"],
   ])("rejects invalid fields with location", (input, expected) => {
     expect(() => parseManifest(input)).toThrow(expected);
   });

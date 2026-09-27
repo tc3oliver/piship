@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha1",
   "manifest": {
     "schema": "piship/v1alpha1",
-    "sha256": "9bdb67c8a69be10e50ac924d2444e6feebfa619be669a75d1e6f09af30db1d3d"
+    "sha256": "4c359b0f6621cafb4c6799cf2875a7f2ae41d1261dca19c3d326aa9c4c01f227"
   },
   "app": {
     "id": "mypi",
@@ -19,8 +19,13 @@
   "resources": [
     {
       "kind": "extensions",
-      "path": "resources/extensions/demo.ts",
-      "sha256": "09b96179a3f3c13209f34ba35010bf59d94d4a8114fbba086400463a4238a80a"
+      "path": "resources/extensions/demo/helper.ts",
+      "sha256": "d2c05b5da090318ed3bfd8404bbf200f588f720822df85df2e64d77151038b08"
+    },
+    {
+      "kind": "extensions",
+      "path": "resources/extensions/demo/index.ts",
+      "sha256": "802501af622f5f9397a7148a609a0a323bcec004c1477fbb6563737f3412a840"
     },
     {
       "kind": "instructions",
@@ -46,7 +51,7 @@
       "./resources/skills"
     ],
     "extensions": [
-      "./resources/extensions"
+      "./resources/extensions/demo"
     ],
     "prompts": [
       "./resources/prompts"

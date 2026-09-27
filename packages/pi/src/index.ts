@@ -90,15 +90,13 @@ export async function launchPiDistribution(
       cwd: distributionDir,
       agentDir,
       settingsManager,
-      additionalExtensionPaths: metadata.resources
-        .filter(
-          (resource) =>
-            resource.kind === "extensions" &&
-            /\.[cm]?[jt]s$/.test(resource.path),
-        )
-        .map((resource) => join(resourceDir, resource.path)),
+      additionalExtensionPaths: resourcePaths("extensions"),
       additionalSkillPaths: resourcePaths("skills"),
       additionalPromptTemplatePaths: resourcePaths("prompts"),
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
       noContextFiles: true,
       agentsFilesOverride: () => ({ agentsFiles: instructions }),
     });
@@ -145,7 +143,11 @@ export async function launchPiDistribution(
             .agentsFiles.map((item) => item.path),
           skills: resourceLoader.getSkills().skills.map((item) => item.name),
           extensions: resourceLoader.getExtensions().extensions.length,
+          extensionPaths: resourceLoader
+            .getExtensions()
+            .extensions.map((item) => item.path),
           prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
+          themes: resourceLoader.getThemes().themes.map((item) => item.name),
         }),
       );
       return;

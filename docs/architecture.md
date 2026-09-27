@@ -33,6 +33,6 @@ Arrows point from importer to dependency:
 piship.yaml → validate → piship.lock → build → branded command → Pi SDK/TUI
 ```
 
-The build output stores metadata, copied resources, and a thin launcher. The launcher resolves `@piship/pi` from the same repository; it requires the workspace's installed dependencies. It creates state under `~/.piship/<id>` by default (or `PISHIP_STATE_HOME/<id>`). Pi receives explicit `agentDir`, session directory, in-memory settings, and a resource loader whose discovery root is the built distribution. The user project remains the agent working directory, while Pi resource discovery does not use its `.pi` files. No source distribution directory receives runtime state.
+The build output stores metadata, copied resources, and a thin launcher. The launcher resolves `@piship/pi` from the same repository; it requires the workspace's installed dependencies. It creates state under `~/.piship/<id>` by default (or `PISHIP_STATE_HOME/<id>`). Pi receives explicit `agentDir`, session directory, in-memory settings, and a resource loader with ambient discovery disabled and declared paths added explicitly. The user project remains the agent working directory, while its `.pi` files are not loaded as distribution resources. No source distribution directory receives runtime state.
 
 For the current schema and lock contract see [manifest](manifest.md). For version upgrades see [compatibility](compatibility.md). For trust limits see [security](security.md).

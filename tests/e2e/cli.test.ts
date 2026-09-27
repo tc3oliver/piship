@@ -21,6 +21,41 @@ function cli(...args: string[]) {
     encoding: "utf8",
   });
 }
+function createAmbientResources(root: string): void {
+  const homes = [
+    join(root, "state", "mypi", "agent"),
+    join(root, "home", ".pi", "agent"),
+    join(root, ".pi"),
+  ];
+  for (const home of homes) {
+    const skill = join(home, "skills", "ambient");
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(
+      join(skill, "SKILL.md"),
+      "---\nname: ambient\ndescription: Must not load\n---\n",
+    );
+    for (const [directory, filename, content] of [
+      ["extensions", "ambient.ts", "export default function ambient() {}\n"],
+      ["prompts", "ambient.md", "Ambient prompt\n"],
+      ["themes", "ambient.json", "{}\n"],
+    ] as const) {
+      mkdirSync(join(home, directory), { recursive: true });
+      writeFileSync(join(home, directory, filename), content);
+    }
+    writeFileSync(join(home, "AGENTS.md"), "Ambient instructions\n");
+  }
+  for (const skill of [
+    join(root, "home", ".agents", "skills", "ambient"),
+    join(root, ".agents", "skills", "ambient"),
+  ]) {
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(
+      join(skill, "SKILL.md"),
+      "---\nname: ambient\ndescription: Must not load\n---\n",
+    );
+  }
+  writeFileSync(join(root, "AGENTS.md"), "Ambient project instructions\n");
+}
 afterEach(() => {
   for (const path of temporary.splice(0))
     rmSync(path, { recursive: true, force: true });
@@ -40,21 +75,19 @@ describe("CLI", () => {
     expect(cli("validate", manifest).stdout).toContain("Manifest is valid.");
     expect(cli("lock", manifest).status).toBe(0);
     const lock = readFileSync(join(example, "piship.lock"), "utf8");
+    expect(lock).toContain("resources/extensions/demo/index.ts");
+    expect(lock).toContain("resources/extensions/demo/helper.ts");
+    const lockedHelper = JSON.parse(lock).resources.find(
+      (item: { path: string; sha256: string }) =>
+        item.path === "resources/extensions/demo/helper.ts",
+    ) as { sha256: string } | undefined;
+    expect(lockedHelper?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(cli("lock", manifest).status).toBe(0);
     expect(readFileSync(join(example, "piship.lock"), "utf8")).toBe(lock);
     expect(cli("build", manifest).status).toBe(0);
     const command = join(root, "dist/mypi/bin/mypi");
     expect(existsSync(command)).toBe(true);
-    for (const skillPath of [
-      join(temp, "home", ".pi", "agent", "skills", "ambient"),
-      join(temp, ".pi", "skills", "ambient"),
-    ]) {
-      mkdirSync(skillPath, { recursive: true });
-      writeFileSync(
-        join(skillPath, "SKILL.md"),
-        "---\nname: ambient\ndescription: Must not load\n---\n",
-      );
-    }
+    createAmbientResources(temp);
     const env = {
       ...process.env,
       PISHIP_STATE_HOME: join(temp, "state"),
@@ -77,7 +110,9 @@ describe("CLI", () => {
       agentDir: string;
       skills: string[];
       extensions: number;
+      extensionPaths: string[];
       prompts: string[];
+      themes: string[];
       instructions: string[];
     };
     expect(result).toMatchObject({
@@ -86,15 +121,46 @@ describe("CLI", () => {
       skills: ["demo-skill"],
       extensions: 1,
       prompts: ["demo"],
+      themes: [],
     });
     expect(result.agentDir).toContain(join(temp, "state", "mypi"));
-    expect(result.instructions).toHaveLength(1);
-    expect(result.skills).not.toContain("ambient");
+    expect(result.instructions).toEqual([
+      join(root, "dist/mypi/resources/resources/AGENTS.md"),
+    ]);
+    expect(result.extensionPaths).toEqual([
+      join(root, "dist/mypi/resources/resources/extensions/demo"),
+    ]);
     expect(existsSync(join(temp, "home", ".pi", "agent", "auth.json"))).toBe(
       false,
     );
-    writeFileSync(join(example, "resources", "AGENTS.md"), "changed\n");
+    writeFileSync(
+      join(example, "resources", "extensions", "demo", "helper.ts"),
+      'export const helper = "changed";\n',
+    );
     expect(cli("build", manifest).stderr).toContain("stale");
+    expect(cli("lock", manifest).status).toBe(0);
+    const updated = readFileSync(join(example, "piship.lock"), "utf8");
+    expect(updated).not.toBe(lock);
+  });
+  it("rejects managed manifests before lock or build output", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-managed-"));
+    temporary.push(temp);
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(
+      manifest,
+      readFileSync(join(root, "examples/personal/piship.yaml"), "utf8")
+        .replace("id: mypi", "id: managedblocked")
+        .replace("command: mypi", "command: managedblocked")
+        .replace("mode: personal", "mode: managed"),
+    );
+    for (const command of ["validate", "lock", "build"]) {
+      const result = cli(command, manifest);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("deployment.mode");
+      expect(result.stderr).toContain("managed is not runnable");
+    }
+    expect(existsSync(join(temp, "piship.lock"))).toBe(false);
+    expect(existsSync(join(root, "dist/managedblocked"))).toBe(false);
   });
   it("reports invalid Pi, missing resources, and YAML errors without a stack trace", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-errors-"));

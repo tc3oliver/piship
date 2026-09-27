@@ -1,6 +1,6 @@
 # Personal distribution example
 
-This is the runnable `piship/v1alpha1` example. It declares a Pi 0.87.1 pin, brand, and four resource categories. The example extension is a no-op used to verify loading. It does not call a model or demonstrate managed access.
+This is the runnable personal `piship/v1alpha1` example. It declares a Pi 0.87.1 pin, brand, and four resource categories. The example extension directory has one `index.ts` entry and a hashed helper; the extension is a no-op used to verify loading. It does not call a model or demonstrate managed access.
 
 From the repository root after `npm ci` and `npm run build`:
 

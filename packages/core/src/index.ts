@@ -193,11 +193,11 @@ export function lockManifest(manifestPath: string): string {
 }
 export function requireCurrentLock(manifestPath: string): DistributionLock {
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
+  const expected = `${JSON.stringify(resolveLock(manifestPath), null, 2)}\n`;
   if (!existsSync(path))
     throw new Error(
       `Lockfile missing: ${path}. Run piship lock ${manifestPath}`,
     );
-  const expected = `${JSON.stringify(resolveLock(manifestPath), null, 2)}\n`;
   if (readFileSync(path, "utf8") !== expected)
     throw new Error(
       `Lockfile is stale: ${path}. Run piship lock ${manifestPath}`,
