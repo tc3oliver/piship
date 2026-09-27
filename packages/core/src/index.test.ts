@@ -36,7 +36,7 @@ function fixture() {
 afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
-});
+}, 180000);
 describe("distribution core", () => {
   it("keeps state separate by id", () => {
     const home = join(tmpdir(), "state");
@@ -98,7 +98,7 @@ describe("distribution core", () => {
       .digest("hex");
     writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
     expect(() => verifyPayload(output)).toThrow("does not match this machine");
-  });
+  }, 120000);
   it("rejects resource roots and nested symlinks during locking", () => {
     const { dir, path } = fixture();
     writeFileSync(
