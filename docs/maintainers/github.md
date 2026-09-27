@@ -46,6 +46,8 @@ These should be opened only when the maintainer is ready to review contributions
 
 GitHub does not automatically apply a labels file. Create `bug`, `enhancement`, `documentation`, `compatibility`, `upstream-pi`, `good first issue`, `help wanted`, `dependencies`, and `security`. Issue forms use the corresponding labels.
 
+Dependabot groups routine npm minor and patch updates. Major npm upgrades need a separate compatibility review; Pi upgrades always follow the [Pi compatibility process](../compatibility.md).
+
 ## Scorecard publishing
 
 The workflow uploads SARIF and does not publish to the public Scorecard API. If public publishing is desired, follow the official action's requirements and add `id-token: write` only to its job before setting `publish_results: true`.
