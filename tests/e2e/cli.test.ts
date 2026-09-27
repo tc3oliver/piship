@@ -74,7 +74,14 @@ describe("CLI", () => {
     expect(cli("validate", manifest).status).toBe(0);
     expect(cli("lock", manifest).status).toBe(0);
     expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
-  });
+    const acceptance = spawnSync(process.execPath, [bin, "test", manifest], {
+      cwd: temp,
+      env: { ...process.env, PISHIP_STATE_HOME: join(temp, "state") },
+      encoding: "utf8",
+    });
+    expect(acceptance.status, acceptance.stderr).toBe(0);
+    expect(acceptance.stdout).toContain("Personal acceptance passed");
+  }, 120000);
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-install-"));
     temporary.push(temp);
@@ -102,6 +109,7 @@ describe("CLI", () => {
     const installed = command("install", relocated);
     expect(installed.status, installed.stderr).toBe(0);
     expect(command("install", relocated).stderr).toContain("collision");
+    createAmbientResources(temp);
     const installedCommand = join(
       temp,
       "bin",
@@ -172,13 +180,24 @@ describe("CLI", () => {
       safeTool: string;
       extensionPaths: string[];
     };
-    expect(firstResult).toMatchObject({ resumed: false, safeTool: "read" });
+    expect(firstResult).toMatchObject({
+      resumed: false,
+      safeTool: "read",
+      skills: ["demo-skill"],
+      extensions: 1,
+      prompts: ["demo"],
+      themes: [],
+    });
     expect(firstResult.extensionPaths[0]).toContain(join(temp, "install's"));
     const second = launch();
     expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout)).toMatchObject({
       sessionId: firstResult.sessionId,
       resumed: true,
+      skills: ["demo-skill"],
+      extensions: 1,
+      prompts: ["demo"],
+      themes: [],
     });
     const otherRoot = join(temp, "other-agent");
     const otherManifest = join(otherRoot, "piship.yaml");
@@ -319,6 +338,17 @@ describe("CLI", () => {
     expect(cli("lock", manifest).status).toBe(0);
     expect(readFileSync(join(example, "piship.lock"), "utf8")).toBe(lock);
     expect(cli("build", manifest).status).toBe(0);
+    const inventory = readFileSync(
+      join(root, "dist", "mypi", "metadata", "inventory.json"),
+      "utf8",
+    );
+    expect(cli("build", manifest).status).toBe(0);
+    expect(
+      readFileSync(
+        join(root, "dist", "mypi", "metadata", "inventory.json"),
+        "utf8",
+      ),
+    ).toBe(inventory);
     const command = join(root, "dist/mypi/bin/mypi");
     expect(existsSync(command)).toBe(true);
     createAmbientResources(temp);
