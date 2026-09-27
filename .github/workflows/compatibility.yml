@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: 22.19.x
           cache: npm
+      - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       - run: npm ci
       - run: npm run build
       - run: npm run test:e2e

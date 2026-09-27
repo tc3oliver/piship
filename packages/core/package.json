@@ -1,6 +1,6 @@
 {
   "name": "@piship/core",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/schema": "0.0.0"
+    "@piship/schema": "0.1.0"
   },
   "description": "Distribution domain types and state paths for PiShip.",
   "keywords": [

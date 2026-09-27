@@ -1,77 +1,32 @@
 # PiShip
 
-**Ship your own coding agent on Pi — without forking Pi.**
+**Ship your own coding agent on Pi without forking Pi.** PiShip builds branded personal distributions around upstream Pi's public runtime.
 
-PiShip is an open-source framework for building branded, reproducible Pi-based coding-agent distributions.
+## Portable personal preview
 
-```text
-Pi → PiShip → Your Agent
-```
-
-**Early preview.** The first personal distribution can now validate, lock, build, and launch the pinned upstream Pi runtime from this checkout. It is a development slice, not a packaged release.
-
-## Why PiShip?
-
-[Pi](https://github.com/earendil-works/pi) gives you the agent runtime. Shipping your own coding agent is a different problem. You still need to:
-
-- pin and upgrade Pi without carrying a fork
-- control which skills, extensions, prompts, and instructions load
-- isolate state from a developer's personal Pi installation
-- brand, build, test, release, and eventually govern the distribution
-
-**Pi owns the agent. PiShip owns the distribution.**
-
-## Project status
-
-The `piship/v1alpha1` personal example now completes this checkout-local flow:
-
-```text
-piship.yaml → validate → piship.lock → build → branded command → Pi
-```
-
-The branded command starts a real Pi 0.87.1 SDK session and interactive TUI. CI uses `--smoke` to initialize the session and check controlled resources without a model call. The output requires this repository and `npm ci`; it is not an installer, a standalone executable, or a production release. Managed identity, credentials, policy, sandboxing, and release lifecycle are planned.
-
-## How it works
-
-```text
-Upstream Pi → PiShip → Your distribution → Your coding agent
-```
-
-The [personal example](examples/personal/README.md) demonstrates exact Pi pinning, a content-hashed lockfile, an isolated state directory, explicit distribution resources, and a branded command. PiShip keeps upstream Pi untouched. See the [architecture guide](docs/architecture.md) for boundaries and the build flow.
-
-## How PiShip differs
-
-| Approach | Focus | Relationship to upstream Pi |
-| --- | --- | --- |
-| Pi configuration, including [pi-distro](https://github.com/msdavid/pi-distro) | Reusable, composable configuration with version-aware updates | Configures an existing Pi environment |
-| PiShip | Distribution manifest, exact pin, lock, isolated state, controlled resources, and branded launcher; governance and portable releases are planned | Uses public Pi interfaces without a fork |
-| Pi fork | Direct control of runtime code | Requires maintaining changes across upstream releases |
-
-## Pi compatibility
-
-The current integration is pinned to `@earendil-works/pi-coding-agent@0.87.1`. It is **supported for this distribution slice** after Ubuntu, macOS, and Windows launch gates passed. This does not cover live model calls or future managed features. Only `packages/pi` imports upstream Pi packages, through public exports. See the [compatibility policy](docs/compatibility.md).
-
-## Roadmap
-
-[v0.1](docs/roadmap.md) continues from this runnable personal slice toward a portable distribution core. Later milestones cover managed access, governance, and production lifecycle. These are plans without dates.
-
-## Documentation
-
-- [Architecture](docs/architecture.md): product and package boundaries
-- [Manifest](docs/manifest.md): current alpha contract and lock
-- [Pi compatibility](docs/compatibility.md): pin and upgrade policy
-- [Security model](docs/security.md): trust boundaries and current limits
-- [Roadmap](docs/roadmap.md): milestones without dates
-
-## Contributing
-
-Use Node.js 22.19.0 or newer:
+The `piship/v1alpha1` personal flow builds a versioned, checkout-independent payload with pinned Pi 0.87.1, declared resources, isolated state, install/uninstall ownership, and a branded launcher. Node.js 22.19.0 or newer is a separately installed prerequisite. The payload is currently a development artifact, not a signed release or npm publication.
 
 ```bash
 npm ci
-npm run check
+npm run build
+npm exec -- piship validate examples/personal/piship.yaml
+npm exec -- piship lock examples/personal/piship.yaml
+npm exec -- piship test examples/personal/piship.yaml
+npm exec -- piship build examples/personal/piship.yaml
+node dist/mypi/piship.mjs install dist/mypi
+~/.local/bin/mypi --version
+~/.local/bin/mypi --smoke
+node dist/mypi/piship.mjs inspect mypi
+node dist/mypi/piship.mjs doctor mypi
+node dist/mypi/piship.mjs uninstall mypi
 ```
 
-The [personal example](examples/personal/README.md) has the runnable commands. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+On Windows use the installed `mypi.cmd` in the configured bin directory. Set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to change install paths and `PISHIP_STATE_HOME` to change the state root. `uninstall` preserves sessions and credentials. `node dist/mypi/piship.mjs purge mypi --yes` removes only that distribution's PiShip state after uninstall. `--smoke` tests Pi startup, a safe read tool, declared resources, and session resume without a model call. The plain branded command opens Pi's interactive TUI.
 
-PiShip is licensed under [MIT](LICENSE).
+The installer never fetches Node or Pi. `piship build` runs `npm ci --omit=dev` using the committed npm lock and may need package-registry access. Add the selected bin directory to your `PATH` yourself.
+
+## Scope
+
+Pi owns the agent loop, tools, sessions, and TUI. PiShip owns distribution manifests, resource selection, lock and payload assembly, installation, state isolation, and compatibility gates. Managed identity, credentials, policy, sandboxing, signing, updates, and production release channels are later work. Read the [architecture](docs/architecture.md), [manifest](docs/manifest.md), [compatibility](docs/compatibility.md), [security](docs/security.md), and [roadmap](docs/roadmap.md), and [portable payload decision](docs/portable-artifact.md) guides for the precise contract.
+
+The [personal example](examples/personal/README.md) contains the full walkthrough. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Security reports follow [SECURITY.md](SECURITY.md). PiShip is licensed under [MIT](LICENSE).

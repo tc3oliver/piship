@@ -6,7 +6,7 @@ import {
 } from "./index.js";
 const valid = {
   schema: PISHIP_SCHEMA_VERSION,
-  app: { id: "mypi", name: "My Pi", command: "mypi" },
+  app: { id: "mypi", name: "My Pi", command: "mypi", version: "0.1.0" },
   runtime: { pi: "0.87.1" },
   deployment: { mode: "personal" },
 };
@@ -25,7 +25,10 @@ describe("alpha manifest", () => {
   });
   it.each([
     [{ ...valid, schema: "piship/v1" }, "schema mismatch"],
-    [{ ...valid, app: { name: "My Pi", command: "mypi" } }, "app.id"],
+    [
+      { ...valid, app: { name: "My Pi", command: "mypi", version: "0.1.0" } },
+      "app.id",
+    ],
     [{ ...valid, app: { ...valid.app, command: "../pi" } }, "app.command"],
     [{ ...valid, runtime: { pi: "latest" } }, "runtime.pi"],
     [
@@ -33,6 +36,10 @@ describe("alpha manifest", () => {
       "resources.skills[0]",
     ],
     [{ ...valid, app: { ...valid.app, apiKey: "secret" } }, "app.apiKey"],
+    [
+      { ...valid, app: { ...valid.app, banner: "unsafe\noutput" } },
+      "app.banner",
+    ],
     [
       { ...valid, app: { ...valid.app, name: "$" + "{SECRET_NAME}" } },
       "app.name",

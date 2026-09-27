@@ -1,38 +1,32 @@
 # Architecture
 
-PiShip sits between upstream Pi and a distribution repository:
-
-```text
-Upstream Pi → PiShip → distribution repository → branded coding agent
-```
-
-Pi owns the agent loop, TUI, sessions, tools, model interaction, and extension execution. PiShip owns the distribution manifest, exact runtime pin, lock, controlled resources, build, and compatibility boundary. A distribution repository owns branding and chosen resources. PiShip does not fork or vendor Pi.
+PiShip assembles a personal coding-agent distribution from a strict manifest, a committed npm lock, and upstream Pi public packages. Pi owns the agent loop, TUI, sessions, tools, and extension execution. PiShip owns the manifest, dependency closure, resource selection, payload, installer, state locations, and diagnostics. Distribution repositories own their brand and declared resources. Pi source is neither forked nor patched.
 
 | Change | Home |
 | --- | --- |
 | Generic agent or runtime behavior | Upstream Pi |
-| Manifest, resource isolation, lock, build, compatibility | PiShip |
-| Brand, private endpoint, organization-specific resources | Distribution repository |
+| Manifest, lock, payload, installation | PiShip |
+| Brand and selected resources | Distribution repository |
 
-## Package dependencies
+`@piship/schema` validates `piship/v1alpha1`. `@piship/core` locks and assembles artifacts, verifies their files, and manages install ownership. `@piship/pi` is the only direct Pi dependency and uses public SDK exports. `@piship/cli` presents commands.
 
-Arrows point from importer to dependency:
+## Canonical payload
 
-```text
-@piship/cli ───────→ @piship/pi ───────→ Pi public API
-     │                   │
-     ├────→ @piship/core ┴────→ @piship/schema
-     └────────────────────────→ @piship/schema
-```
+`piship build` creates `dist/<id>` from the committed npm lock via `npm ci --omit=dev`. This directory contains `node_modules` (including Pi and PiShip), `bin/`, declared `resources/`, `piship.yaml`, `package-lock.json`, and `metadata/` with the distribution lock and SHA-256 inventory. The launcher resolves only packages inside this directory. A machine must have Node.js 22.19.0 or newer installed separately. Build-time npm access may be needed; installation and launch never install packages. The payload includes upstream package notices. It is the same unit future release verification and updates must consume.
 
-`schema` parses and validates the alpha manifest. `core` resolves resources, locks their content, and builds the checkout-local output. `pi` alone imports `@earendil-works/pi-*`, using the public SDK entrypoint. `cli` presents commands. The boundary checker enforces these dependencies in CI.
+The payload includes `piship.mjs`, so installation and diagnostics need no source checkout. `node <payload>/piship.mjs install <payload>` copies this payload into `~/.local/share/piship/apps/<id>/<version>` and writes a command shim in `~/.local/bin` by default. Set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. The receipt in `<install-home>/receipts/<id>.json` records owned paths. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, and payload; `purge <id> --yes` separately deletes the selected state after uninstall.
 
-## First runnable flow
+State defaults to `~/.piship/<id>` or `PISHIP_STATE_HOME/<id>`. The state path depends on the distribution ID, so relocation or reinstallation can resume the same session. State is never copied into the payload.
 
-```text
-piship.yaml → validate → piship.lock → build → branded command → Pi SDK/TUI
-```
+| State path | Scope and sensitivity | Retention and clearing |
+| --- | --- | --- |
+| `agent/` | Pi config, model metadata, and local auth file; sensitive | Kept by uninstall; selected distribution purge deletes it |
+| `sessions/user/` | Interactive Pi sessions; may contain private project content | Kept by uninstall; purge deletes it |
+| `sessions/acceptance/` | Labeled keyless smoke session | Kept by uninstall; purge deletes it |
+| `cache/` | Reserved per-distribution cache | Kept by uninstall; purge deletes it |
+| `logs/` | Reserved per-distribution diagnostics; may be sensitive | Kept by uninstall; purge deletes it |
+| `data/` | Reserved runtime-generated data | Kept by uninstall; purge deletes it |
 
-The build output stores metadata, copied resources, and a thin launcher. The launcher resolves `@piship/pi` from the same repository; it requires the workspace's installed dependencies. It creates state under `~/.piship/<id>` by default (or `PISHIP_STATE_HOME/<id>`). Pi receives explicit `agentDir`, session directory, in-memory settings, and a resource loader with ambient discovery disabled and declared paths added explicitly. The user project remains the agent working directory, while its `.pi` files are not loaded as distribution resources. No source distribution directory receives runtime state.
+These paths have no automatic migration in v0.1; reinstalling the same distribution ID reuses them. Pi's resource loader disables ambient extension, skill, prompt, theme, and context discovery and receives only declared packaged paths. The working directory remains the user's project; its `.pi` resources are not distribution resources.
 
-For the current schema and lock contract see [manifest](manifest.md). For version upgrades see [compatibility](compatibility.md). For trust limits see [security](security.md).
+See [manifest](manifest.md), [compatibility](compatibility.md), and [security](security.md).

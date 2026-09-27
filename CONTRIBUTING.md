@@ -25,7 +25,7 @@ npm run check
 
 Generic runtime behavior should be considered upstream in Pi first. Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing package boundaries or Pi integration. Small documentation and test changes do not require reading the full architecture first.
 
-The CLI supports `validate`, `lock`, and `build` for the personal alpha example. Its branded command starts upstream Pi from this checkout; see [the runnable example](examples/personal/README.md). `init`, `dev`, and `inspect` remain unavailable.
+The personal CLI supports `init`, `dev`, `validate`, `lock`, `build`, `test`, `inspect`, `doctor`, `install`, `uninstall`, and explicit `purge`; see [the runnable example](examples/personal/README.md).
 
 ## Pi compatibility
 
@@ -33,7 +33,7 @@ Keep Pi dependencies exact-pinned and confined to `packages/pi`. Use public expo
 
 ## Changesets and pull requests
 
-Packages are at `0.0.0` and are not published. Internal refactors need no changeset. Add a patch changeset for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change. The `piship/v1alpha1` schema is experimental.
+Packages are at `0.1.0` and are not published. Internal refactors need no changeset. Add a patch changeset for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change. The `piship/v1alpha1` schema is experimental.
 
 Use a descriptive PR title: `type(scope): concise summary`, or `type: concise summary` when a scope adds nothing. Common types are `feat`, `fix`, `perf`, `docs`, `test`, `refactor`, `ci`, and `chore`. Name the part changed, such as `schema`, `core`, `pi`, or `cli`; do not force a scope onto every PR. For example, `fix(pi): keep the compatibility check on public exports` or `docs: explain the alpha manifest status`.
 

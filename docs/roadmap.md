@@ -1,10 +1,10 @@
 # Roadmap
 
-PiShip is in early development. The personal alpha example now validates, locks, builds, and launches an upstream Pi session from this checkout. These milestones describe direction, without dates.
+PiShip is in early development. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
 
 ## Now: v0.1 — Distribution core
 
-The first runnable personal slice is present: manifest, exact Pi pin, content-hashed lock, isolated state/resources, branded command, and cross-platform launch smoke. Next work includes a portable installation/build artifact, richer diagnostics and inspection, and compatibility coverage beyond initialization. No managed access is included yet.
+The personal distribution core includes a portable payload, install/uninstall, state isolation, inspection, diagnostics, a safe tool smoke, and session resume. Cross-platform installed-surface CI remains the release gate. No managed access is included yet.
 
 ## Later: v0.2 — Managed access
 
@@ -16,4 +16,4 @@ Add policy, project and resource trust, MCP governance, diagnostics, and audit i
 
 ## Later: v0.4 — Production lifecycle
 
-Add install, update and rollback flows, SBOM, provenance, signing, and migration support. A future release pipeline may use Changesets, GitHub Releases, npm Trusted Publishing via OIDC, and npm provenance after ownership and release policy are settled.
+Add verified release wrappers, update and rollback flows, SBOM, provenance, signing, and migration support around the existing payload. A future release pipeline may use Changesets, GitHub Releases, npm Trusted Publishing via OIDC, and npm provenance after ownership and release policy are settled.

@@ -19,6 +19,8 @@ export interface Manifest {
     readonly id: string;
     readonly name: string;
     readonly command: string;
+    readonly version: string;
+    readonly banner?: string;
   };
   readonly runtime: { readonly pi: string };
   readonly deployment: { readonly mode: "personal" };
@@ -102,6 +104,22 @@ function name(value: unknown, path: string): string {
     );
   return result;
 }
+function displayText(value: unknown, path: string): string {
+  const result = string(value, path);
+  if (
+    result.length > 120 ||
+    [...result].some(
+      (character) =>
+        character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+    )
+  )
+    throw new ManifestError(
+      "invalid field",
+      path,
+      "Use a single display line of at most 120 characters",
+    );
+  return result;
+}
 function paths(value: unknown, path: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value))
@@ -142,7 +160,13 @@ export function parseManifest(value: unknown): Manifest {
       "schema",
       `Expected ${PISHIP_SCHEMA_VERSION}`,
     );
-  const app = record(root.app, "app", ["id", "name", "command"]);
+  const app = record(root.app, "app", [
+    "id",
+    "name",
+    "command",
+    "version",
+    "banner",
+  ]);
   const runtime = record(root.runtime, "runtime", ["pi"]);
   const deployment = record(root.deployment, "deployment", ["mode"]);
   const resources = record(root.resources ?? {}, "resources", [
@@ -175,8 +199,21 @@ export function parseManifest(value: unknown): Manifest {
     schema: PISHIP_SCHEMA_VERSION,
     app: {
       id: name(app.id, "app.id"),
-      name: string(app.name, "app.name"),
+      name: displayText(app.name, "app.name"),
       command: name(app.command, "app.command"),
+      version: (() => {
+        const version = string(app.version, "app.version");
+        if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
+          throw new ManifestError(
+            "invalid field",
+            "app.version",
+            "Expected a distribution semver version",
+          );
+        return version;
+      })(),
+      ...(app.banner === undefined
+        ? {}
+        : { banner: displayText(app.banner, "app.banner") }),
     },
     runtime: { pi },
     deployment: { mode },

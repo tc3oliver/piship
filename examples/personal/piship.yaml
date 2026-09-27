@@ -4,6 +4,8 @@ app:
   id: mypi
   name: MyPi
   command: mypi
+  version: 1.0.0
+  banner: MyPi personal distribution
 
 runtime:
   pi: "0.87.1"
