@@ -100,7 +100,7 @@ for (const name of packages) {
         dependency === "@earendil-works/pi-coding-agent" &&
         version !== "0.87.1"
       ) {
-        failures.push("Pi production dependency must be exactly 0.87.1");
+        failures.push("Pi pinned dependency must be exactly 0.87.1");
       }
     }
   }

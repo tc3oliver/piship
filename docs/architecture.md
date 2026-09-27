@@ -31,7 +31,7 @@ Arrows point from the importing package to its allowed dependency:
 
 `schema` defines the experimental marker and minimal diagnostics. `core` owns distribution types and state path abstractions. `pi` is the sole adapter for upstream Pi. `cli` presents commands and keeps domain logic in other packages. These are allowed boundaries; packages declare only dependencies they currently use.
 
-Only `packages/pi` may depend directly on or import `@earendil-works/pi-*`. It uses exact production pins and public package exports. No package may import Pi source files or private implementation paths. The boundary checker enforces these rules in CI. This keeps Pi upgrades localized and testable.
+Only `packages/pi` may depend directly on or import `@earendil-works/pi-*`. It uses an exact Pi version pin and public package exports. No package may import Pi source files or private implementation paths. The boundary checker enforces these rules in CI. This keeps Pi upgrades localized and testable.
 
 ## Intended data flow
 

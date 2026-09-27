@@ -26,7 +26,7 @@ Use exported package entrypoints. Never import `node_modules/.../src/*`, private
 4. Add or update regression tests for affected behavior.
 5. Before changing status to `supported`, launch a real branded distribution on the pinned Pi version and pass the required compatibility and end-to-end gates across Ubuntu, macOS, and Windows CI.
 
-The scheduled canary is intentionally deferred until it can report latest-version failures reliably without touching the production dependency. It must only signal; it must not commit, merge, or publish.
+The scheduled canary is intentionally deferred until it can report latest-version failures reliably without changing the pinned runtime dependency. It must only signal; it must not commit, merge, or publish.
 
 ## Temporary shims
 

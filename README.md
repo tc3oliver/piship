@@ -1,35 +1,86 @@
 # PiShip
 
-**Ship Pi as your coding agent distribution.**
+**Ship your own coding agent on Pi — without forking Pi.**
 
-PiShip is an open-source framework for turning upstream [Pi](https://github.com/earendil-works/pi) into a branded, reproducible coding agent without maintaining a Pi fork. It is designed for personal agents and team distributions.
+PiShip is an open-source framework for building branded, reproducible Pi-based coding-agent distributions.
+
+```text
+Pi → PiShip → Your Agent
+```
+
+**Early preview.** PiShip is building toward its first runnable distribution release: a pinned Pi runtime, isolated state, controlled resources, and a branded launcher.
+
+## Why PiShip?
+
+[Pi](https://github.com/earendil-works/pi) gives you the agent runtime. Shipping your own coding agent is a different problem. You still need to:
+
+- pin and upgrade Pi without carrying a fork
+- control exactly which skills, extensions, prompts, and settings load
+- isolate state from a developer's personal Pi installation
+- brand, build, test, release, and eventually govern the distribution
+
+**Pi owns the agent. PiShip owns the distribution.**
+
+## Project status
+
+PiShip is currently an early development preview. The foundation is in place:
+
+- a public Pi integration boundary and an exact version pin
+- cross-platform compatibility CI
+- an experimental `piship/v1alpha1` manifest marker
+- CLI help and version output, plus illustrative distribution examples
+
+The first runnable milestone is v0.1:
+
+```text
+piship.yaml
+    ↓
+pinned Pi
+    ↓
+isolated state + controlled resources
+    ↓
+branded agent command
+```
+
+The distribution builder and launcher are not implemented yet. The example manifests are fixtures; the CLI cannot build or launch them.
+
+## How it works
 
 ```text
 Upstream Pi → PiShip → Your distribution → Your coding agent
 ```
 
-**Status: early development.** The distribution builder and launcher do not exist yet. The first goal is a manifest that pins Pi, isolates state and resources, and launches a branded command.
+Pi provides the agent runtime. PiShip is designed to define and maintain the distribution around it. Your distribution repository will hold the branding and resources specific to your agent. See the [architecture guide](docs/architecture.md) for package boundaries and the intended flow.
 
-## Why PiShip
+## How PiShip differs
 
-Pi gives you the agent runtime. Shipping your own agent also means choosing a Pi version, controlling which resources load, separating its state, applying a brand, and repeating that setup across machines. A team may later need identity, credentials, policy, and a release process. Those are distribution concerns.
+| Approach | Focus | Relationship to upstream Pi |
+| --- | --- | --- |
+| Pi configuration, including [pi-distro](https://github.com/msdavid/pi-distro) | Reusable, composable configuration with version-aware updates | Configures an existing Pi environment |
+| PiShip | **Planned:** branded distribution, exact runtime pin, isolated state, controlled resources, and compatibility lifecycle | Keeps Pi upstream and uses public interfaces |
+| Pi fork | Direct control of runtime code | Requires maintaining changes across upstream releases |
 
-Forking Pi gives direct control, but each upstream release then becomes a merge task. PiShip keeps Pi upstream and puts distribution behavior around its public interfaces. Pi remains responsible for the agent runtime, TUI, and tools.
+PiShip's distribution capabilities are planned, not shipped. If shared configuration is all you need, a configuration tool may be enough.
 
-| Layer | Responsibility |
-| --- | --- |
-| Pi | Agent runtime and user experience |
-| Pi extensions or configuration | Customize an existing Pi installation |
-| PiShip | Define, reproduce, and maintain a Pi-based distribution |
-| Your distribution repository | Branding, resources, and integrations specific to your agent |
+## Pi compatibility
 
-[pi-distro](https://github.com/msdavid/pi-distro), for example, provides reusable, composable Pi configurations with version-aware updates. PiShip is designed around a branded distribution with a pinned runtime, isolated state, controlled resources, compatibility testing, and a release lifecycle. These capabilities are **planned**, not shipped. If you only need shared Pi configuration, pi-distro may be enough.
+The current Pi integration is pinned to `@earendil-works/pi-coding-agent@0.87.1`, currently classified as a compatibility **candidate**. Only `packages/pi` may import upstream Pi packages, through public exports. See the [compatibility policy](docs/compatibility.md).
 
-## What works today
+## Roadmap
 
-The repository has four small TypeScript packages, an experimental `piship/v1alpha1` schema marker, an exact Pi `0.87.1` dependency in the integration package, compatibility tests against Pi's public package entrypoint, and a CLI with help and version output. `init`, `validate`, `lock`, `dev`, `build`, and `inspect` are registered as planned commands and return an error when invoked.
+[v0.1](docs/roadmap.md) targets the first runnable personal distribution. Later milestones cover managed access, governance, and release lifecycle; they are plans, not available features.
 
-For contributors, use Node.js 22.19.0 or newer:
+## Documentation
+
+- [Architecture](docs/architecture.md): product and package boundaries
+- [Manifest](docs/manifest.md): current alpha contract
+- [Pi compatibility](docs/compatibility.md): pin and upgrade policy
+- [Security model](docs/security.md): trust boundaries and current limits
+- [Roadmap](docs/roadmap.md): milestones without dates
+
+## Contributing
+
+Use Node.js 22.19.0 or newer. To work on the repository:
 
 ```bash
 npm ci
@@ -38,33 +89,6 @@ npm exec -- piship --help
 npm exec -- piship --version
 ```
 
-The [personal](examples/personal/README.md) and [demo company](examples/demo-company/README.md) manifests illustrate the intended alpha shape. The CLI cannot read them yet.
-
-## First working milestone
-
-The first useful distribution should make this path real:
-
-```text
-piship.yaml → pinned Pi → isolated state → controlled resources → branded command
-```
-
-The branded command should launch upstream Pi. Managed access and governance come after this distribution core; see the [roadmap](docs/roadmap.md).
-
-## Pi compatibility
-
-Only `packages/pi` may import upstream Pi packages. The production dependency is pinned to `@earendil-works/pi-coding-agent@0.87.1`, and integration uses public exports. The [compatibility policy](docs/compatibility.md) explains upgrades and regression tests.
-
-## Documentation
-
-- [Architecture](docs/architecture.md): ownership and package boundaries
-- [Manifest](docs/manifest.md): current alpha contract
-- [Pi compatibility](docs/compatibility.md): pin and upgrade policy
-- [Security model](docs/security.md): trust boundaries and current limits
-- [Roadmap](docs/roadmap.md): milestones without dates
-- [Contributing](CONTRIBUTING.md): setup, tests, and pull requests
-
-## Community
-
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 PiShip is licensed under [MIT](LICENSE).

@@ -3,7 +3,7 @@
 ## Repository metadata
 
 - **Name:** PiShip (`piship` repository slug)
-- **Description:** Build branded, reproducible coding-agent distributions on Pi without maintaining a fork.
+- **Description:** Build and ship your own Pi-based coding agent — branded, reproducible, no fork required.
 - **Website:** Leave empty until a maintained project website exists.
 - **Topics:** `pi`, `pi-coding-agent`, `coding-agent`, `ai-agents`, `agent-distribution`, `developer-tools`, `typescript`, `llm`.
 
@@ -13,13 +13,11 @@ The description and topics help developers find the repository. They describe th
 
 Use a small, readable image with:
 
-```text
-PiShip
-Ship Pi as your coding agent distribution.
-Pi → PiShip → Your Agent
-```
+- **Headline:** PiShip — Ship your own coding agent on Pi.
+- **Subline:** No fork. Reproducible by design.
+- **Visual line:** Pi → PiShip → Your Agent
 
-Keep it minimal and legible in dark and light GitHub themes and at thumbnail size. Avoid feature lists and fake terminal output. No image has been generated yet.
+Keep it minimal and legible in dark and light GitHub themes and at thumbnail size. Avoid feature lists and fake terminal output. No image has been generated yet; set the social preview image manually in GitHub Settings.
 
 ## Launch checklist
 
