@@ -1,16 +1,13 @@
-## What changed and why
+## Problem
 
-## Testing
+<!-- What behavior or contributor problem prompted this change? Link an issue if there is one. -->
 
-<!-- For a docs-only change, say what you checked. -->
+## Change
 
-## Compatibility
+<!-- Describe the behavior changed and its scope. Keep this short for a small PR. -->
 
-<!-- Only if this changes Pi integration, the manifest, or a public API: version tested, public Pi API affected, and upstream issue/PR if relevant. -->
+## Verification
 
-## Checklist
+<!-- Give the commands and results, or the manual check for a docs-only change. Include a before/after measurement and setup only when claiming a performance improvement. -->
 
-- [ ] Pi imports remain in `packages/pi` and use public exports (if applicable)
-- [ ] No secrets or sensitive data are included
-- [ ] User-visible package changes have a changeset (if applicable)
-- [ ] Behavior changes have tests and documentation where needed
+<!-- If Pi integration, a manifest/schema, or a public API changes, also state the Pi version tested and the compatibility impact. Do not include secrets or sensitive data. -->

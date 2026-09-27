@@ -17,3 +17,5 @@ Before architecture changes, use the public repository contract: this file, `doc
 Scope test: does the change help describe, build, govern, distribute, secure, diagnose, reproduce, or maintain a Pi-based coding-agent distribution?
 
 Run `npm run check` before completion. For Pi-related changes, also run `npm run test:compatibility`.
+
+For pull requests, follow the title and evidence guidance in `CONTRIBUTING.md`.
