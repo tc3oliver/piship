@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { redact } from "@piship/contracts";
+import { parseDocument } from "yaml";
 import { describe, expect, it } from "vitest";
 import {
+  ManifestError,
+  PISHIP_SCHEMA_V1ALPHA4,
   PISHIP_SCHEMA_VERSION,
   parseManifest,
   parseManifestHeader,
+  readManifest,
 } from "./index.js";
 const valid = {
   schema: PISHIP_SCHEMA_VERSION,
@@ -68,5 +75,128 @@ describe("alpha manifest", () => {
     [{ ...valid, deployment: { mode: "managed" } }, "deployment.mode"],
   ])("rejects invalid fields with location", (input, expected) => {
     expect(() => parseManifest(input)).toThrow(expected);
+  });
+});
+
+// Built at runtime so no scanner flags the fixtures themselves.
+const fakeSecrets = {
+  openai: ["sk", "proj", "A1b2C3d4E5f6G7h8"].join("-"),
+  github: ["ghp", "A1b2C3d4E5f6G7h8I9j0"].join("_"),
+  jwt: ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiJ4In0", "c2lnbmF0dXJl"].join("."),
+  aws: `AKIA${"ABCDEFGHIJKLMNOP"}`,
+  key: `-----BEGIN ${"PRIVATE"} KEY-----`,
+  bearer: `Bearer ${"abc123def456ghi"}`,
+};
+function messageOf(action: () => unknown): string {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ManifestError);
+    return (error as Error).message;
+  }
+  throw new Error("expected a ManifestError");
+}
+const example = (name: string) =>
+  fileURLToPath(
+    new URL(`../../../examples/${name}/piship.yaml`, import.meta.url),
+  );
+describe("secret-looking values", () => {
+  it.each(Object.entries(fakeSecrets))(
+    "rejects a %s value in app.banner without echoing it",
+    (_kind, secret) => {
+      const message = messageOf(() =>
+        parseManifest({ ...valid, app: { ...valid.app, banner: secret } }),
+      );
+      expect(message).toContain("app.banner");
+      expect(message).toContain("looks like secret material");
+      expect(message).not.toContain(secret);
+    },
+  );
+  it("scans every string scalar, including nested lists and catalog entries", () => {
+    const managed = parseDocument(
+      readFileSync(example("demo-company"), "utf8"),
+    ).toJS() as {
+      models: { catalog: Record<string, { name: string }> };
+    };
+    const coder = managed.models.catalog["acme/coder"];
+    if (!coder) throw new Error("demo catalog changed");
+    coder.name = fakeSecrets.openai;
+    const catalog = messageOf(() => parseManifest(managed));
+    expect(catalog).toContain("models.catalog.acme/coder.name");
+    expect(catalog).not.toContain(fakeSecrets.openai);
+    const nested = {
+      ...valid,
+      resources: { skills: ["./resources/skills", fakeSecrets.github] },
+    };
+    const list = messageOf(() => parseManifest(nested));
+    expect(list).toContain("resources.skills[1]");
+    expect(list).not.toContain(fakeSecrets.github);
+  });
+  it("rejects a secret-looking mapping key without echoing it", () => {
+    const message = messageOf(() =>
+      parseManifest({
+        ...valid,
+        app: { ...valid.app, [fakeSecrets.github]: "x" },
+      }),
+    );
+    expect(message).toContain("at app");
+    expect(message).not.toContain(fakeSecrets.github);
+  });
+  it.each([
+    "Basic Agent",
+    "Bearer of good news",
+    "Task-runner sketch",
+    "risk-assessment helper",
+  ])("accepts ordinary display text %s", (name) => {
+    expect(
+      parseManifest({ ...valid, app: { ...valid.app, name } }).app.name,
+    ).toBe(name);
+  });
+  it("accepts both shipped examples", () => {
+    expect(readManifest(example("personal")).app.id).toBe("mypi");
+    expect(readManifest(example("demo-company")).schema).toBe(
+      PISHIP_SCHEMA_V1ALPHA4,
+    );
+  });
+});
+describe("secret-named unknown fields", () => {
+  it.each([
+    ["inference", "apiKey"],
+    ["app", "password"],
+    ["app", "clientSecret"],
+    ["runtime", "token"],
+  ])("reports %s.%s readably after redaction", (section, key) => {
+    const input = {
+      ...valid,
+      schema: "piship/v1alpha2",
+      identity: { mode: "none" },
+      credential: { provider: "pi-native" },
+      inference: { provider: "pi-native" },
+    } as Record<string, object>;
+    input[section] = { ...input[section], [key]: "plain-value-123" };
+    const message = redact(messageOf(() => parseManifest(input)));
+    expect(message).toContain(`${section}.${key}`);
+    expect(message).toContain(
+      "Unknown field; secrets are not allowed in piship.yaml",
+    );
+    expect(message).not.toContain("REDACTED");
+    expect(message).not.toContain("plain-value-123");
+  });
+  it("keeps other secret-named field diagnostics readable after redaction", () => {
+    const message = redact(
+      messageOf(() =>
+        parseManifest({
+          ...valid,
+          schema: "piship/v1alpha2",
+          identity: { mode: "none" },
+          credential: { provider: "pi-native", apiKey: "plain-value-123" },
+          inference: { provider: "pi-native" },
+        }),
+      ),
+    );
+    expect(message).toContain("credential.apiKey");
+    expect(message).toContain("Secrets are never declared");
+    expect(message).not.toContain("REDACTED");
+    expect(message).not.toContain("plain-value-123");
   });
 });

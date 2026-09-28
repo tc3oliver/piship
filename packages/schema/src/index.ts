@@ -95,9 +95,80 @@ export class ManifestError extends Error {
     readonly field: string,
     message: string,
   ) {
-    super(`${kind} at ${field}: ${message}`);
+    const unknownSecret =
+      message === "Unknown field" && SECRET_FIELD_NAME.test(lastSegment(field));
+    const text = unknownSecret
+      ? "Unknown field; secrets are not allowed in piship.yaml"
+      : message;
+    // Diagnostic redaction treats `<secret-like key>: <word>` as a secret
+    // assignment; keep such field paths readable by not following them with
+    // a colon. Values are never part of the message.
+    super(
+      REDACTION_KEY.test(field)
+        ? `${kind} at ${field} (${text})`
+        : `${kind} at ${field}: ${text}`,
+    );
     this.name = "ManifestError";
   }
+}
+/** Field names that indicate secret material; never valid manifest keys. */
+const SECRET_FIELD_NAME =
+  /(secret|token|password|passwd|api_?key|private_?key|client_?key|bearer|authorization|cookie|credentials)/i;
+/** Key endings that diagnostic redaction treats as a secret assignment. */
+const REDACTION_KEY =
+  /(?:access_token|refresh_token|id_token|credential|api_?key|client_secret|password|secret)"?$/i;
+function lastSegment(field: string): string {
+  return field.slice(
+    Math.max(field.lastIndexOf("."), field.lastIndexOf("]")) + 1,
+  );
+}
+/**
+ * Common secret value shapes. A static manifest never carries these, so every
+ * string scalar (and mapping key) is checked. Equivalent to the MCP value
+ * check in governance-parse, with the `Bearer`/`Basic` prefix narrowed to a
+ * credential-shaped token so display text such as "Basic Agent" stays valid.
+ */
+export const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
+  /^(?:bearer|basic)\s+(?=\S*[0-9+/=._~-])[A-Za-z0-9._~+/=-]{8,}\s*$/i,
+  /\bsk-[A-Za-z0-9_-]{6,}/,
+  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\./,
+  /\b(?:ghp|gho|ghs|ghu|github_pat|glpat|xox[abpsr])[-_][A-Za-z0-9_-]{8,}/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+];
+export function looksLikeSecretValue(value: string): boolean {
+  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value));
+}
+/**
+ * Reject secret-looking values anywhere in a manifest document. The error
+ * names the field path and never echoes the value.
+ */
+export function assertNoSecretValues(value: unknown, path = "manifest"): void {
+  if (typeof value === "string") {
+    if (looksLikeSecretValue(value))
+      throw new ManifestError(
+        "invalid field",
+        path,
+        "Value looks like secret material. Secrets are never declared in piship.yaml",
+      );
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      assertNoSecretValues(item, `${path}[${index}]`);
+    });
+    return;
+  }
+  if (isRecord(value))
+    for (const [key, item] of Object.entries(value)) {
+      if (looksLikeSecretValue(key))
+        throw new ManifestError(
+          "invalid field",
+          path,
+          "A key looks like secret material. Secrets are never declared in piship.yaml",
+        );
+      assertNoSecretValues(item, path === "manifest" ? key : `${path}.${key}`);
+    }
 }
 export function parseManifestHeader(
   value: unknown,
@@ -211,6 +282,7 @@ const V1ALPHA2_KEYS = [
   "variables",
 ];
 export function parseManifest(value: unknown): Manifest {
+  assertNoSecretValues(value);
   const schema = isRecord(value) ? value.schema : undefined;
   if (!(SUPPORTED_SCHEMAS as readonly unknown[]).includes(schema)) {
     if (!isRecord(value))
