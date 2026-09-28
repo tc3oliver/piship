@@ -40,6 +40,7 @@ import {
   treeDigest,
 } from "./trust.js";
 import { STATE_SCHEMAS, type StateSchemaSupport } from "./migration.js";
+import { PiShipError } from "@piship/contracts";
 
 export * from "./access.js";
 export * from "./archive.js";
@@ -678,9 +679,7 @@ export function verifyPayloadContents(
   >;
   const actual = inventory(root);
   if (JSON.stringify(actual) !== JSON.stringify(expected))
-    throw new Error(
-      "Installed payload integrity mismatch; reinstall this distribution",
-    );
+    throw payloadIntegrityError();
   const target = JSON.parse(
     readFileSync(join(root, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
@@ -699,14 +698,20 @@ export function verifyPayloadContents(
     manifestDigest(manifest) !== lock.manifest.sha256 ||
     JSON.stringify(manifest.app) !== JSON.stringify(lock.app)
   )
-    throw new Error(
+    throw new PiShipError(
+      "LOCK_INVALID",
       "Installed manifest and lock mismatch; reinstall this distribution",
+      { component: "payload" },
     );
   if (
     lock.runtime.npmLockSha256 !==
     hash(readFileSync(join(root, "package-lock.json")))
   )
-    throw new Error("Installed npm lock mismatch; reinstall this distribution");
+    throw new PiShipError(
+      "LOCK_INVALID",
+      "Installed npm lock mismatch; reinstall this distribution",
+      { component: "payload" },
+    );
   if (process.env.PISHIP_DEBUG_TIMING === "1")
     process.stderr.write(
       `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${Object.keys(actual).length} files)\n`,
@@ -726,8 +731,16 @@ export function payloadApp(directory: string): DistributionLock["app"] {
   } catch {
     // The launcher will verify the complete payload for a well-formed lock.
   }
-  throw new Error(
+  throw payloadIntegrityError();
+}
+// A payload file whose digest differs from the inventory: the same
+// INTEGRITY_FAILED a release artifact reports. A lock that no longer describes
+// the payload's manifest or npm lock is LOCK_INVALID, as at the release gate.
+function payloadIntegrityError(): PiShipError {
+  return new PiShipError(
+    "INTEGRITY_FAILED",
     "Installed payload integrity mismatch; reinstall this distribution",
+    { component: "payload" },
   );
 }
 export function buildDistribution(
