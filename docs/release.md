@@ -1,6 +1,6 @@
 # Releases, updates, and rollback
 
-v0.4 adds a production lifecycle for `piship/v1alpha4` distributions: a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. It is implemented as an unreleased preview. It wraps the v0.1 [portable payload](portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
+v0.4 adds a production lifecycle for `piship/v1alpha4` distributions: a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. Its current status and evidence are on the [status page](status.md); nothing is published. It wraps the v0.1 [portable payload](portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
 
 The flow for a distribution owner:
 
@@ -112,7 +112,7 @@ Release candidates for the PiShip demo are built by the `release-candidate` GitH
 
 - `build` builds every target twice, as `first` and `second`, on separate runners. Each does a fresh checkout, `npm ci`, `npm run build`, and `piship release --channel candidate` with `SOURCE_DATE_EPOCH` set to the commit time, and uploads the archive and its `.sha256` as the workflow artifact `release-<target>-<build>`.
 - `reproducibility` downloads both builds of a target and runs `piship reproducibility` on them. The job fails unless the payloads are equal, and it uploads the report as `reproducibility-<target>`.
-- `attest` creates a GitHub artifact attestation with `actions/attest-build-provenance` for the `first` archive of each target. This is a Sigstore keyless signature bound to the workflow identity and to the ref the run was for. The workflow runs only when started manually (`workflow_dispatch`); a run from a fork cannot obtain the signing token, so it skips this job.
+- `attest` creates a GitHub artifact attestation with `actions/attest-build-provenance` for the `first` archive of each target. This is a Sigstore keyless signature bound to the workflow identity and to the ref the run was for. The workflow runs only when a maintainer starts it (`workflow_dispatch`) on the exact candidate commit; it does not run for pull requests or `main` pushes. The job still carries a condition that skips it for pull requests from forks, which cannot obtain the signing token; it is left over from the earlier pull request trigger.
 - `verify` runs on a fresh runner per target that did not build the archive. It verifies the `first` archive with `piship verify-release --sha256`, and checks its attestation with `gh attestation verify --repo --signer-workflow --source-ref "$GITHUB_REF"` when one was made. It then requires rejection of tampered inputs: an archive with a flipped byte (by `verify-release` and by `gh attestation verify`), a wrong expected digest, and, each in a fresh extraction, a modified payload file, a modified `release.json`, and a modified `checksums.txt` line (`INTEGRITY_FAILED`). Finally it installs the archive with the shipped `install.sh` or `install.ps1` and runs `acmecode version`.
 
 Only the `first` build is attested, verified, and installed. The `second` build exists only for the comparison. Artifacts are kept only as workflow artifacts.
@@ -128,7 +128,7 @@ gh attestation verify acmecode-1.1.0-linux-x64.tar.gz --repo tc3oliver/piship \
 npm exec -- piship verify-release acmecode-1.1.0-linux-x64.tar.gz
 ```
 
-Pull request, branch, and manual builds carry valid attestations from the same workflow, but these attestations record their own ref (for example `refs/pull/<n>/merge` or `refs/heads/<branch>`). Accept an archive as a `main` build only when verification with `--source-ref refs/heads/main` passes. Without `--source-ref`, pull request and branch builds are accepted too. Without `--signer-workflow`, an attestation from any workflow in the repository is accepted.
+A run dispatched on another branch carries a valid attestation from the same workflow that records its own ref (`refs/heads/<branch>`), and runs from before v0.5, when the workflow also ran for pull requests, recorded `refs/pull/<n>/merge`. Accept an archive as a `main` build only when verification with `--source-ref refs/heads/main` passes. Without `--source-ref`, branch and pull request builds are accepted too. Without `--signer-workflow`, an attestation from any workflow in the repository is accepted.
 
 The attestation proves which workflow run built the archive and for which ref. It is not a code review of the archive's content, and it depends on the integrity of GitHub Actions and the repository's workflow files.
 
@@ -209,7 +209,7 @@ Verdicts are `safe`, `requires-review`, or `unsupported`; the report shows each 
 
 Before activating an update, PiShip copies `config/preferences.json` and `config/policy.json` into `<state>/migration/snapshots/<time>-<from>-to-<to>/` with a `piship-snapshot/v1` record that lists the credential paths it excluded. No command restores a snapshot; it is a manual recovery copy.
 
-Credentials are never snapshotted, copied into a release, or restored. Rollback switches only the immutable payload, so it cannot bring back a credential that was revoked or cleared: after `logout`, a rolled-back release requires `login` again. When a credential class is cleared because the target cannot read it, PiShip deletes the local secret-store entries it references and the metadata file; it does not call the broker's or identity provider's revocation endpoints. Run `logout` first when the credential must also be revoked remotely.
+Credentials are never snapshotted, copied into a release, or restored. Rollback switches only the immutable payload, so it cannot bring back a credential that was revoked or cleared: after `logout`, a rolled-back release requires `login` again. When a credential class is cleared because the target cannot read it, the switching release first revokes the runtime credential at the broker's revoke endpoint, best effort, when the distribution declares one (a failure is a notice, and local clearing still happens). It then deletes the local secret-store entries each cleared class references and the metadata file. Identity tokens are cleared only locally: the identity provider's revocation endpoint is not called. Run `logout` first when identity tokens must also be revoked remotely.
 
 ## Install layout and atomic activation
 
@@ -249,7 +249,7 @@ Every failure happens before activation and leaves the active release and state 
 
 ## Supported platforms
 
-Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64`, the targets with installed lifecycle evidence, and only when listed in `release.targets` (the default). `linux-arm64` and `darwin-x64` are accepted in the manifest but refused by the `target` gate. Node.js 22.19.0 or newer remains a separate prerequisite. A Windows release of a distribution that requires the OS sandbox is refused.
+Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64`, the targets that the lifecycle E2E and the Release candidate workflow cover (current results are on the [status page](status.md#recorded-evidence)), and only when listed in `release.targets` (the default). `linux-arm64` and `darwin-x64` are accepted in the manifest but refused by the `target` gate. Node.js 22.19.0 or newer remains a separate prerequisite. A Windows release of a distribution that requires the OS sandbox is refused.
 
 ## Known limitations
 
@@ -257,7 +257,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 - The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 0.87.1's own shrinkwrap omits integrity for five nested `@earendil-works` packages; the root npm lock records their registry integrity so `npm ci` verifies them, and a Pi upgrade must re-check this.
 - Packages that ship no license or notice file are listed with their declared license only.
 - The vulnerability verdict reflects `npm audit` and its advisory database at build time; it is not rechecked at install or update.
-- Clearing an unreadable credential during update or rollback revokes it only where the distribution declares a revoke endpoint, and only best effort.
+- Clearing an unreadable credential during update or rollback revokes the runtime credential only where the distribution declares a broker revoke endpoint, and only best effort; identity tokens are cleared locally without remote revocation.
 - `update --check` downloads and verifies the full archive and runs its launch check, so it costs as much network and time as an update.
 - A migration snapshot has no restore command.
 - The channel host is trusted for availability: it can withhold updates until the metadata expires, but it cannot forge, alter, or roll back signed metadata that a client has already seen.
@@ -267,7 +267,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 
 Nothing is published automatically: there is no GitHub Release, npm publication, or publish automation, and CI keeps artifacts only as workflow artifacts. The maintainer, Oliver, is the sole release approver. Before any publish step:
 
-1. Confirm the `release-candidate` run for the exact commit on `main` passed on `linux-x64`, `darwin-arm64`, and `win32-x64`. It must show two builds on separate runners with equal payloads (the `reproducibility-<target>` reports), `verify-release` on a fresh job, and rejection of the tampered archive, the wrong digest, and the modified payload, `release.json`, SBOM, and `checksums.txt`, and an install with the shipped script on a fresh job. Attestations must verify with `gh attestation verify --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`. Also confirm the lifecycle E2E scenarios (`tests/e2e/lifecycle-*.test.ts`) passed.
+1. Confirm the `release-candidate` run for the exact commit on `main` passed on `linux-x64`, `darwin-arm64`, and `win32-x64`. It must show two builds on separate runners with equal payloads (the `reproducibility-<target>` reports), `verify-release` on a fresh job, and rejection of the tampered archive, the wrong digest, and the modified payload, `release.json`, SBOM, and `checksums.txt`, and an install with the shipped script on a fresh job. Attestations must verify with `gh attestation verify --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`. Also confirm a Portable E2E run on the same commit passed on all three targets, including the lifecycle scenarios (`tests/e2e/lifecycle-*.test.ts` and `tests/e2e/personal-lifecycle.test.ts`), and that CodeQL is green on it.
 2. Confirm `examples/demo-company/piship.lock` was reviewed in the change that committed it, and that the Windows candidate is treated as the patched variant whose lock was generated in CI.
 3. Confirm `npm run check` and `npm run test:compatibility` passed, and review `piship diff` between the previous and new release for its risk and required tests.
 4. Review `vulnerabilities.json` and every `release.vulnerabilities.allow` exception and its expiry.

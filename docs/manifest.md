@@ -1,11 +1,11 @@
 # Experimental manifest and lock
 
-Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected.
+Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5 and the in-progress v0.6 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
 
-- `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The [personal example](../examples/personal/piship.yaml) uses it.
+- `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The personal example used it in v0.1; it now uses `piship/v1alpha4`.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
 - `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit.
-- `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha4 manifest.
+- `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha4 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha4 manifests.
 
 ## Common fields
 
@@ -305,3 +305,23 @@ The lock never contains tokens, credentials, private keys, or resolved endpoint 
 After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init` writes `piship/v1alpha4` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.keys` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.
 
 Earlier checkout-local preview manifests need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the current CLI, then rebuild. Checkout-local output cannot be installed as a portable payload.
+
+## Differences from the product specification
+
+A maintainer-local product specification (v1.0) guided the design; it is not required for contributions. Where its names or structure differ from what is implemented, this document and the schema in `packages/schema` are authoritative, and the specification is the side expected to change.
+
+| Area | Implemented in PiShip | Product specification |
+| --- | --- | --- |
+| Identity kind | `identity.mode`: `none`, `oidc`, or `adapter` | `identity.provider` |
+| Trust sections | `policy.resourceTrust`, `policy.providerTrust`, and `policy.projectTrust`, nested under `policy` | Top-level trust sections |
+| Policy rules | `policy.enforced` and `policy.defaults` rule lists, plus `policy.default` | `permissions.rules` |
+| Project origins | `policy.projectTrust.company`, `external`, and `unknown` | `companyRepo` and `externalRepo` |
+| Update source | `updates.source`: an `https` URL, a loopback `http` URL, or a `${NAME}` runtime reference; `update --from` also accepts a directory | A symbolic `company` or `self` source |
+| State location | `~/.piship/<id>` (or `PISHIP_STATE_HOME`); project restrictions in `.piship/policy.json`; no `app.configDir` or `branding` section | A branded configuration directory |
+| Data retention | No `data` section; `logs/audit.jsonl` is append-only | A `data` section with retention settings |
+| Pi packages as resources | No `resources.packages` class | `resources.packages` |
+| Distribution tests | `piship test` builds the payload and runs the branded `--smoke`; no `tests` section | A configured test suite |
+| Release provenance | GitHub artifact attestations made by CI, verified with `gh attestation verify`; no `provenance.json` in the archive; `install.sh` and `install.ps1` at the archive root | An embedded provenance file and an `installers/` directory |
+| Error codes | _Reserved: to be filled in by the v0.6 error-contract change._ | |
+
+Deferred items in this table are tracked on the [roadmap](roadmap.md#next).
