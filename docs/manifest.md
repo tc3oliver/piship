@@ -83,7 +83,7 @@ resources:
 - `upstream` (resources that ship with the pinned Pi package) and `project` (resources discovered in the workspace, governed by `policy.projectTrust`) cannot be declared.
 - A flat v1alpha2-style list is rejected; `piship migrate` converts it.
 
-A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `integrity`, `license` (SPDX expression), `pi` (the exact Pi versions it was reviewed against; required), and optional `platforms` (`linux`, `darwin`, `win32`). `integrity` is `sha256-` plus the SHA-256 of the sorted lines `<relative path> NUL <file sha256> LF` for every file under the root, so it is stable across checkouts and operating systems. `piship lock` fails if the computed digest differs, and the branded command recomputes it from the installed payload before loading the resource. Certified trees, and trees of non-builtin capability providers, may not contain a `package.json` with install-time scripts (`preinstall`, `install`, `postinstall`, `prepare`, `preprepare`, `postprepare`, or `prepublish`). A certified resource whose `pi` or `platforms` do not include the running Pi version and platform is not loaded.
+A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `integrity`, `license` (SPDX expression), `pi` (the exact Pi versions it was reviewed against; required), and optional `platforms` (`linux`, `darwin`, `win32`). `integrity` is `sha256-` plus the SHA-256 of the sorted lines `<relative path> NUL <file sha256> LF` for every file under the root, so it is stable across checkouts and operating systems. `piship lock` fails if the computed digest differs, and the branded command recomputes it from the installed payload before loading the resource. Certified trees, and trees of non-builtin capability providers, may not contain a `package.json` with install-time scripts (`preinstall`, `install`, `postinstall`, `prepare`, `preprepare`, `postprepare`, or `prepublish`) or a `binding.gyp`, which makes npm run `node-gyp rebuild` at install. A certified resource whose `pi` or `platforms` do not include the running Pi version and platform is not loaded.
 
 ### Capabilities
 
@@ -99,7 +99,7 @@ A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`
 
 The builtin workflow reads three settings: `defaultMode` (`plan`, the default, or `build`), `planPrompt`, and `buildPrompt`. The prompts are appended to the system prompt for the current mode; built-in defaults are used when they are omitted.
 
-The branded `capabilities [--json]` command reports six axes per capability (`supported`, `resolved`, `enabled`, `compatible`, `healthy`, `effective`) with a reason for every `no`. A non-builtin provider's extension is loaded only when its capability is effective: its provider class is trusted, its files match the lock, and its contract major version, Pi version, and platform match.
+The branded `capabilities [--json]` command reports six axes per capability (`supported`, `resolved`, `enabled`, `compatible`, `healthy`, `effective`) with a reason for every `no`. A non-builtin provider's extension is loaded only when its capability is effective: its provider class is trusted, its files match the lock, and its contract major version, Pi version, and platform match. The policy then decides `provider.load` for the provider ID and `extension.load` for `<class>:<path>`; a denial skips the provider and makes the capability not effective.
 
 ### Policy
 
@@ -121,15 +121,16 @@ A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, 
 | --- | --- |
 | `model.use` | `<provider>/<model>`; a managed gateway's provider is the app ID, as in `acmecode/acme/coder` |
 | `instruction.load`, `skill.load`, `extension.load`, `resource.load` (prompts, themes) | `<class>:<path>`, such as `company:./resources/skills`, `builtin:piship-workflow`, or `project:AGENTS.md` |
+| `provider.load` | Capability provider ID, such as `company/flow`; its extension is then decided as `extension.load` with `<class>:<path>` |
 | `mcp.server.start` | Server ID |
 | `mcp.tool.call` | `<server>:<tool>` |
 | `tool.execute` | Tool name, such as `read`, `bash`, or `mcp__docs__search` |
-| `shell.execute` | The command text of the `bash` tool or a user `!` command |
+| `shell.execute` | The command text of the `bash` tool or a user `!` command. `allow` and `ask` rules are prefix hints: they do not match a command with a shell metacharacter (`;` `&` `\|` `$` `` ` `` `<` `>` `(` `)`, a line break, `^`, `%`) that the pattern does not spell out, except the bare `**`; `deny` rules always match |
 | `filesystem.read`, `filesystem.write` | Absolute path, symlink-resolved, with `/` separators |
 
 Resource globs are anchored and case-sensitive. `*` matches any run of characters except `/`, `:`, and line breaks; `**` matches anything. A trailing `/**` also matches the directory itself (`~/.ssh/**` covers `~/.ssh`), and `/**/` also matches a single `/`. Filesystem rules may start with the path tokens `workspace` (the project root), `~/` (the home directory), and `tmp/` (the session temp directory, or the system one without a sandbox); they are expanded and symlink-resolved like the requested path.
 
-`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with exactly one of `remote` (a glob over `host/path`) or `path` (a glob over the absolute root); company is checked first, and anything else is `unknown`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved`:
+`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with `remote` (a glob over `host/path`), `path` (a glob over the absolute root), or both, in which case both must match; company is checked first, and anything else is `unknown`. The remote comes from the checkout's own git configuration, so `remote` alone is a claim, not proof; in managed distributions combine it with `path`, as in `{ remote: "git.acme.example/**", path: "/srv/src/**" }`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved`:
 
 | Dimension | Project items | Managed default (company / external / unknown) | Personal default (company, external / unknown) |
 | --- | --- | --- | --- |

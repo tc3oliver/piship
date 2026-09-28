@@ -3,12 +3,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import {
   type ExtensionContext,
   type InlineExtension,
@@ -25,7 +26,7 @@ import {
   workflowExtension,
 } from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
-import { governedTools } from "./governed-tools.js";
+import { governedTools, pathClass } from "./governed-tools.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -50,7 +51,13 @@ const POLICY = [
   '    - { id: tools, action: tool.execute, resource: "*", effect: allow }',
 ];
 
-async function open(extra: string[] = []) {
+async function open(
+  extra: string[] = [],
+  options: {
+    readonly userRules?: readonly unknown[];
+    readonly files?: Readonly<Record<string, string>>;
+  } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
   roots.push(root);
   const distribution = join(root, "distribution");
@@ -60,6 +67,17 @@ async function open(extra: string[] = []) {
     mkdirSync(path, { recursive: true });
   writeFileSync(join(home, ".ssh", "id_rsa"), "private-key-canary\n");
   writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
+  for (const [path, content] of Object.entries(options.files ?? {})) {
+    mkdirSync(dirname(join(distribution, path)), { recursive: true });
+    writeFileSync(join(distribution, path), content);
+  }
+  if (options.userRules) {
+    mkdirSync(join(root, "state", "config"), { recursive: true });
+    writeFileSync(
+      join(root, "state", "config", "policy.json"),
+      JSON.stringify(options.userRules),
+    );
+  }
   const manifest = join(distribution, "piship.yaml");
   writeFileSync(
     manifest,
@@ -91,13 +109,16 @@ async function open(extra: string[] = []) {
   return { session, workspace, home, root };
 }
 
-function context(answer?: boolean | string): ExtensionContext {
+function context(
+  answer?: boolean | string,
+  confirm?: (title: string, message: string) => Promise<boolean>,
+): ExtensionContext {
   const hasUI = answer !== undefined;
   return {
     hasUI,
     sessionManager: SessionManager.inMemory(tmpdir()),
     ui: {
-      confirm: async () => answer === true,
+      confirm: confirm ?? (async () => answer === true),
       select: async (_title: string, options: string[]) =>
         typeof answer === "string" && answer !== "cancel"
           ? options.find((item) => item === answer)
@@ -156,6 +177,185 @@ describe("governed built-in tools", () => {
     await expect(
       run(read, { path: join(home, ".ssh", "id_rsa") }),
     ).rejects.toThrow(/rule secrets/);
+  });
+
+  it("never reads a file swapped in through a directory symlink after the decision", async () => {
+    const { session, workspace, home } = await open([], {
+      userRules: [
+        {
+          id: "race",
+          action: "filesystem.read",
+          resource: "workspace/dir/**",
+          effect: "ask",
+        },
+      ],
+    });
+    mkdirSync(join(workspace, "dir"));
+    writeFileSync(join(workspace, "dir", "id_rsa"), "workspace copy\n");
+    // The approval of the second check (the read itself) is the window
+    // between decision and use: swap the directory for a link to ~/.ssh.
+    let calls = 0;
+    const swapping = context(true, async () => {
+      calls += 1;
+      if (calls === 2) {
+        renameSync(join(workspace, "dir"), join(workspace, "dir.bak"));
+        symlinkSync(join(home, ".ssh"), join(workspace, "dir"), "dir");
+      }
+      return true;
+    });
+    const read = tool(governedTools(session, workspace), "read");
+    const outcome = await run(read, { path: "dir/id_rsa" }, swapping).then(
+      (result) => text(result),
+      (error: Error) => `rejected: ${error.message}`,
+    );
+    expect(calls).toBe(2);
+    expect(outcome).not.toContain("private-key-canary");
+    expect(outcome).toMatch(/rejected: .*(rule secrets|changed while)/);
+  });
+
+  it("never writes through a directory swapped for a symlink after the decision", async () => {
+    const { session, workspace, home } = await open();
+    writeFileSync(join(home, ".ssh", "authorized_keys"), "keys-canary\n");
+    mkdirSync(join(workspace, "out"));
+    writeFileSync(join(workspace, "out", "authorized_keys"), "original\n");
+    let calls = 0;
+    const swapping = context(true, async () => {
+      calls += 1;
+      // First the parent directory is decided (mkdir), then the file.
+      if (calls === 2) {
+        renameSync(join(workspace, "out"), join(workspace, "out.bak"));
+        symlinkSync(join(home, ".ssh"), join(workspace, "out"), "dir");
+      }
+      return true;
+    });
+    const write = tool(governedTools(session, workspace), "write");
+    await expect(
+      run(
+        write,
+        { path: "out/authorized_keys", content: "attacker-key" },
+        swapping,
+      ),
+    ).rejects.toThrow(/builtin:default|changed while/);
+    expect(calls).toBe(2);
+    expect(readFileSync(join(home, ".ssh", "authorized_keys"), "utf8")).toBe(
+      "keys-canary\n",
+    );
+  });
+
+  it("classifies native paths against the POSIX policy context", async () => {
+    const { session, workspace, home } = await open();
+    expect(pathClass(session, join(workspace, "src", "a.ts"))).toBe(
+      "workspace",
+    );
+    // The test home sits in the temp directory, which is checked first.
+    expect(pathClass(session, join(home, ".ssh", "id_rsa"))).toBe("tmp");
+    expect(pathClass(session, `${workspace}-sibling`)).toBe("tmp");
+    expect(pathClass(session, join(parse(workspace).root, "piship-none"))).toBe(
+      "other",
+    );
+  });
+
+  it("never reads or writes the distribution state, whatever the policy allows", async () => {
+    const { session, workspace, root } = await open([], {
+      userRules: [
+        { id: "me.read", action: "filesystem.read", effect: "allow" },
+        { id: "me.write", action: "filesystem.write", effect: "allow" },
+      ],
+    });
+    expect(session.sandbox.report.level).not.toBe("enforced");
+    const tools = governedTools(session, workspace);
+    const policyFile = join(root, "state", "config", "policy.json");
+    await expect(
+      run(tool(tools, "read"), { path: policyFile }),
+    ).rejects.toThrow(/distribution state directory/);
+    await expect(
+      run(tool(tools, "write"), { path: policyFile, content: "[]" }),
+    ).rejects.toThrow(/distribution state directory/);
+    expect(readFileSync(policyFile, "utf8")).toContain("me.write");
+    // The same policy still lets tools write elsewhere.
+    await run(tool(tools, "write"), { path: "free.txt", content: "ok" });
+    expect(readFileSync(join(workspace, "free.txt"), "utf8")).toBe("ok");
+  });
+
+  it("does not let tools rewrite the git config that decides the project origin", async () => {
+    const { session, workspace } = await open();
+    mkdirSync(join(workspace, ".git"));
+    const config = join(workspace, ".git", "config");
+    writeFileSync(config, "[core]\n\tbare = false\n");
+    const write = tool(governedTools(session, workspace), "write");
+    await expect(
+      run(
+        write,
+        {
+          path: ".git/config",
+          content: '[remote "origin"]\n\turl = https://git.acme.example/x\n',
+        },
+        context(true),
+      ),
+    ).rejects.toThrow(/decides this project's origin/);
+    expect(readFileSync(config, "utf8")).not.toContain("acme");
+    const edit = tool(governedTools(session, workspace), "edit");
+    await expect(
+      run(
+        edit,
+        {
+          path: ".git/config",
+          edits: [{ oldText: "bare = false", newText: "bare = true" }],
+        },
+        context(true),
+      ),
+    ).rejects.toThrow(/decides this project's origin/);
+  });
+
+  it("shows the path or command in the approval prompt but keeps audit metadata-only", async () => {
+    const { session, workspace, root } = await open(
+      [
+        "audit:",
+        "  enabled: true",
+        "  sinks:",
+        "    - { id: local, type: file, required: false }",
+      ],
+      {
+        userRules: [
+          {
+            id: "me.echo",
+            action: "shell.execute",
+            resource: "echo *",
+            effect: "ask",
+          },
+        ],
+      },
+    );
+    const messages: string[] = [];
+    const capture = context(false, async (_title, message) => {
+      messages.push(message);
+      return false;
+    });
+    const tools = governedTools(session, workspace);
+    await expect(
+      run(
+        tool(tools, "write"),
+        { path: "prompt-canary/x.txt", content: "x" },
+        capture,
+      ),
+    ).rejects.toThrow(/not allowed/);
+    await expect(
+      run(tool(tools, "bash"), { command: "echo command-canary" }, capture),
+    ).rejects.toThrow(/not allowed/);
+    expect(
+      messages.some((message) =>
+        message.includes(join(workspace, "prompt-canary")),
+      ),
+    ).toBe(true);
+    expect(messages.at(-1)).toContain("echo command-canary");
+    await session.close();
+    const audit = readFileSync(
+      join(root, "state", "logs", "audit.jsonl"),
+      "utf8",
+    );
+    expect(audit).toContain("tool.denied");
+    expect(audit).not.toContain("prompt-canary");
+    expect(audit).not.toContain("command-canary");
   });
 
   it("resolves ask through the session UI and denies it headless", async () => {
@@ -269,5 +469,57 @@ describe("piship-workflow", () => {
     ).toBe("base\n\nCompany build rules.");
     await workflow.commands.get("plan")?.handler("", context(true));
     expect(session.workflowMode).toBe("plan");
+  });
+});
+
+describe("capability provider loading", () => {
+  const PROVIDER = [
+    "capabilities:",
+    "  workflow:",
+    "    enabled: true",
+    "    provider:",
+    "      id: company/flow",
+    "      version: 1.0.0",
+    "      implements: [piship.capability/workflow/v1]",
+    "      path: ./providers/flow",
+  ];
+  // The lock reads the source tree; the launch verifies the installed payload.
+  const files = {
+    "providers/flow/index.ts": "export default () => {};\n",
+    "resources/providers/flow/index.ts": "export default () => {};\n",
+  };
+  const allow = (action: string, resource: string) =>
+    `    - { id: allow-${action.replace(".", "-")}, action: ${action}, resource: "${resource}", effect: allow }`;
+
+  it("loads a trusted provider only when policy allows provider.load and extension.load", async () => {
+    const { session } = await open(
+      [
+        allow("provider.load", "company/flow"),
+        allow("extension.load", "company:./providers/flow"),
+        ...PROVIDER,
+      ],
+      { files },
+    );
+    expect(session.loader.extensions).toEqual([
+      expect.stringMatching(/providers[\\/]flow$/),
+    ]);
+    expect(session.effective("workflow")).toBe(true);
+  });
+
+  it.each([
+    [[] as string[], "provider.load"],
+    [[allow("provider.load", "company/flow")], "extension.load"],
+  ])("skips the provider when policy denies %j", async (rules, action) => {
+    const { session } = await open([...rules, ...PROVIDER], { files });
+    expect(session.loader.extensions).toEqual([]);
+    expect(session.effective("workflow")).toBe(false);
+    expect(session.resources).toContainEqual(
+      expect.objectContaining({
+        kind: "providers",
+        path: "company/flow",
+        loaded: false,
+        reason: `policy builtin:default (${action})`,
+      }),
+    );
   });
 });

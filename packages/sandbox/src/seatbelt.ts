@@ -1,7 +1,9 @@
 // macOS adapter: Seatbelt through /usr/bin/sandbox-exec and a generated SBPL
 // profile. SBPL evaluates the last matching rule, so the file-write allowlist
 // follows the blanket write deny and read denies come after both; a deny
-// nested inside a writable path therefore still wins.
+// nested inside a writable path therefore still wins. The profile starts
+// from `(allow default)`, so launch paths that leave the sandbox through
+// launchd are denied explicitly.
 import { existsSync } from "node:fs";
 import { PiShipError } from "@piship/contracts";
 import {
@@ -26,6 +28,25 @@ const DEVICE_WRITES = [
   '(literal "/dev/ptmx")',
   '(regex #"^/dev/fd/[0-9]+$")',
   '(regex #"^/dev/ttys[0-9]+$")',
+];
+
+/**
+ * Ways to start a process that launchd, not this sandbox, would parent:
+ * LaunchServices (`open`, `open -a Terminal`), Apple events (`osascript`
+ * telling another app to run a script), and launchd jobs (`launchctl`).
+ * Only these named services are denied; generic mach-lookup stays allowed so
+ * ordinary command-line tools keep working.
+ */
+const LAUNCH_ESCAPES = [
+  "(deny lsopen)",
+  "(deny appleevent-send)",
+  `(deny mach-lookup
+  (global-name "com.apple.coreservices.launchservicesd")
+  (global-name-regex #"^com\\.apple\\.lsd\\.")
+  (global-name "com.apple.coreservices.appleevents")
+  (global-name "com.apple.appleeventsd")
+  (global-name "com.apple.ScriptingAdditions"))`,
+  '(deny process-exec (literal "/bin/launchctl"))',
 ];
 
 /** Quote a path as an SBPL string literal. Control characters are refused. */
@@ -75,6 +96,7 @@ export function seatbeltProfile(
         .map((path) => denyFilter(path, exists, isDir))
         .join("\n  ")})`,
     );
+  lines.push(...LAUNCH_ESCAPES);
   if (profile.network === "deny") lines.push("(deny network*)");
   return `${lines.join("\n")}\n`;
 }

@@ -122,6 +122,28 @@ describe("identifyProject", () => {
       matchedBy: { remote: "git.acme.example/**" },
     });
   });
+  it("requires both the remote and the path when a matcher has both", () => {
+    const both: ProjectTrustPolicy = {
+      ...trust,
+      company: {
+        ...trust.company,
+        match: [
+          { remote: "git.acme.example/**", path: `${posix(base)}/*-managed` },
+        ],
+      },
+    };
+    const managed = dir("managed");
+    gitRepo(managed, "https://git.acme.example/team/app.git");
+    expect(identifyProject(managed, both).origin).toBe("company");
+    // A spoofed origin remote outside the managed path is not company.
+    const spoofed = dir("spoofed");
+    gitRepo(spoofed, "https://git.acme.example/team/app.git");
+    expect(identifyProject(spoofed, both).origin).toBe("unknown");
+    // The right path with another remote is not company either.
+    const other = dir("other-managed");
+    gitRepo(other, "https://elsewhere.example/team/app.git");
+    expect(identifyProject(other, both).origin).toBe("unknown");
+  });
   it("strips credentials from the remote", () => {
     const root = dir("creds");
     gitRepo(

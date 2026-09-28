@@ -240,6 +240,36 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       expect(readFileSync(join(home, ".netrc"), "utf8")).toBe(SECRET);
     });
 
+    it.runIf(process.platform === "darwin")(
+      "cannot start processes outside the sandbox through open or osascript",
+      async () => {
+        const marker = join(outside, "launched");
+        const script = join(ws, "escape.command");
+        writeFileSync(script, `#!/bin/sh\ntouch "${marker}"\n`, {
+          mode: 0o755,
+        });
+        for (const command of [
+          `open "${script}"`,
+          `open -a Terminal "${script}"`,
+          `osascript -e 'tell application "Terminal" to do script "touch ${marker}"'`,
+          `osascript -e 'do shell script "open ${script}"'`,
+        ]) {
+          const result = await run(sandbox, command);
+          expect(result.exitCode, command).not.toBe(0);
+        }
+        await sleep(2000);
+        expect(existsSync(marker)).toBe(false);
+        // Ordinary tools still run under the same profile.
+        const tools = await run(
+          sandbox,
+          `/bin/sh -c 'echo sh-ok' && "${node}" -e 'console.log("node-ok")'`,
+        );
+        expect(tools.exitCode).toBe(0);
+        expect(tools.output).toContain("sh-ok");
+        expect(tools.output).toContain("node-ok");
+      },
+    );
+
     it("denies external and host loopback network access", async () => {
       const listener = await listen();
       try {

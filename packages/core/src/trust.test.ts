@@ -162,6 +162,11 @@ describe("piship/v1alpha3 lock", () => {
     );
     expect(() => resolveLock(path)).toThrow(/install-time scripts/);
   });
+  it("rejects binding.gyp, which npm builds at install, in certified trees", () => {
+    const { dir, path } = distribution(CERTIFIED);
+    writeFileSync(join(dir, "certified", "notes", "binding.gyp"), "{}\n");
+    expect(() => resolveLock(path)).toThrow(/node-gyp rebuild/);
+  });
   it("locks non-builtin capability providers with a tree digest", () => {
     const { dir, path } = distribution([
       "capabilities:",

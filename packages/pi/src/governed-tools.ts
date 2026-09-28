@@ -4,7 +4,14 @@
 // command before it happens. Custom tools passed to the SDK take precedence
 // over any extension tool of the same name.
 import { constants } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  access,
+  type FileHandle,
+  mkdir,
+  open,
+  readlink,
+  stat,
+} from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import {
   type BashOperations,
@@ -22,6 +29,12 @@ import {
   redact,
 } from "@piship/contracts";
 import type { GovernedMcpTool } from "@piship/mcp";
+import {
+  isWithin as isWithinPosix,
+  normalizePathResource,
+  projectGitControlFiles,
+  toPosixPath,
+} from "@piship/policy";
 import { isWithin, realpathNearest } from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
 
@@ -53,12 +66,38 @@ function blocked(message: string): BlockedError {
 
 /** Workspace, home, temp, or other: audit records a path class, not the path. */
 export function pathClass(gov: GovernanceSession, path: string): string {
+  // The engine context is normalized to POSIX separators; compare alike.
   const { workspaceRoot, homeDir, tmpDir } = gov.engine.context;
-  const posix = path.split("\\").join("/");
-  if (inside(workspaceRoot, posix)) return "workspace";
-  if (inside(tmpDir, posix)) return "tmp";
-  if (inside(homeDir, posix)) return "home";
+  const posix = toPosixPath(path);
+  if (isWithinPosix(workspaceRoot, posix)) return "workspace";
+  if (isWithinPosix(tmpDir, posix)) return "tmp";
+  if (isWithinPosix(homeDir, posix)) return "home";
   return "other";
+}
+
+export const STATE_RULE = "piship.state";
+export const GIT_CONFIG_RULE = "piship.project.git-config";
+export const CHANGED_RULE = "piship.path-changed";
+
+/**
+ * Built-in denials that no policy or sandbox level relaxes: the distribution
+ * state (credentials metadata and the user policy file) is never read or
+ * written, and the git files that classify the project are never written.
+ */
+function builtinDenial(
+  gov: GovernanceSession,
+  action: "filesystem.read" | "filesystem.write",
+  paths: readonly string[],
+): string | undefined {
+  const posix = paths.map((path) => toPosixPath(path));
+  const state = normalizePathResource(gov.options.stateDir, {
+    workspaceRoot: gov.project.root,
+  });
+  if (posix.some((path) => isWithinPosix(state, path))) return STATE_RULE;
+  if (action !== "filesystem.write") return undefined;
+  const git = projectGitControlFiles(gov.project.root);
+  if (posix.some((path) => git.includes(path))) return GIT_CONFIG_RULE;
+  return undefined;
 }
 
 /**
@@ -71,7 +110,7 @@ export async function gatePath(
   action: Extract<PolicyAction, "filesystem.read" | "filesystem.write">,
   path: string,
   tool: string,
-): Promise<void> {
+): Promise<string> {
   const lexical = resolve(path);
   const real = realpathNearest(lexical);
   const classOf = pathClass(gov, real);
@@ -87,6 +126,23 @@ export async function gatePath(
     });
     throw blocked(
       `Plan mode does not change files. Switch to Build mode (/build) to write ${path}.`,
+    );
+  }
+  const builtin = builtinDenial(gov, action, [lexical, real]);
+  if (builtin) {
+    gov.metrics.recordPolicyDenial(action);
+    gov.emit("tool.denied", {
+      resource: tool,
+      decision: "denied",
+      policy: gov.policyId,
+      rule: builtin,
+      enforcement: "control-plane",
+      detail: { action, path: classOf },
+    });
+    throw blocked(
+      builtin === STATE_RULE
+        ? `${path} is in the distribution state directory, which tools never read or write.`
+        : `${path} decides this project's origin; tools may not change it.`,
     );
   }
   if (gov.sandbox.report.level === "enforced") {
@@ -123,6 +179,7 @@ export async function gatePath(
     {
       denied: "tool.denied",
       resource: tool,
+      prompt: `${tool}: ${path}`,
       detail: { path: classOf },
     },
   );
@@ -130,6 +187,83 @@ export async function gatePath(
     throw blocked(
       `${action} ${path} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.`,
     );
+  return real;
+}
+
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/** The path the kernel reports for an open file, where the platform has one. */
+async function openedPath(handle: FileHandle): Promise<string | undefined> {
+  if (process.platform !== "linux") return undefined;
+  try {
+    return await readlink(`/proc/self/fd/${handle.fd}`);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Open the decided path and confirm the handle is the file that was decided.
+ * A symlink or directory swapped in between the decision and the open is
+ * caught here: on Linux the opened file's own path is decided again; where
+ * the platform cannot name an open file, the handle must be the same file
+ * (device and inode) as the decided path, which must still resolve to itself.
+ * Reads and writes then go through this handle only.
+ */
+async function openDecided(
+  gov: GovernanceSession,
+  action: "filesystem.read" | "filesystem.write",
+  path: string,
+  tool: string,
+  flags: number,
+): Promise<FileHandle> {
+  const lexical = resolve(path);
+  const decided = await gatePath(gov, action, lexical, tool);
+  const handle = await openFile(decided, flags);
+  try {
+    const opened = await openedPath(handle);
+    if (opened !== undefined) {
+      if (opened !== decided) await gatePath(gov, action, opened, tool);
+      return handle;
+    }
+    const [held, current] = await Promise.all([
+      handle.stat({ bigint: true }),
+      stat(decided, { bigint: true }).catch(() => undefined),
+    ]);
+    const same =
+      current !== undefined &&
+      held.ino !== 0n &&
+      held.dev === current.dev &&
+      held.ino === current.ino &&
+      realpathNearest(lexical) === decided;
+    if (!same) {
+      gov.metrics.recordPolicyDenial(action);
+      gov.emit("tool.denied", {
+        resource: tool,
+        decision: "denied",
+        policy: gov.policyId,
+        rule: CHANGED_RULE,
+        enforcement: "control-plane",
+        detail: { action, path: pathClass(gov, decided) },
+      });
+      throw blocked(`${path} changed while it was being opened.`);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/** Open for writing without following a final symlink; create only when absent. */
+async function openFile(path: string, flags: number): Promise<FileHandle> {
+  if (!(flags & constants.O_WRONLY)) return open(path, flags | NOFOLLOW);
+  try {
+    return await open(path, flags | NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return open(path, flags | constants.O_CREAT | constants.O_EXCL | NOFOLLOW);
+  }
 }
 
 /** Decide a shell command; return a refusal message or undefined when allowed. */
@@ -158,6 +292,7 @@ async function gateCommand(
       allowed: "tool.allowed",
       denied: "tool.denied",
       resource: source,
+      prompt: `${source}: ${command}`,
       detail: { commandBytes: Buffer.byteLength(command) },
       content: { command },
     },
@@ -244,8 +379,33 @@ export function governedTools(
   const absolute = (path: string) =>
     isAbsolute(path) ? path : resolve(cwd, path);
   const read = async (path: string, tool: string) => {
-    await gatePath(gov, "filesystem.read", absolute(path), tool);
-    return readFile(path);
+    const handle = await openDecided(
+      gov,
+      "filesystem.read",
+      absolute(path),
+      tool,
+      constants.O_RDONLY,
+    );
+    try {
+      return await handle.readFile();
+    } finally {
+      await handle.close();
+    }
+  };
+  const write = async (path: string, content: string, tool: string) => {
+    const handle = await openDecided(
+      gov,
+      "filesystem.write",
+      absolute(path),
+      tool,
+      constants.O_WRONLY,
+    );
+    try {
+      await handle.truncate(0);
+      await handle.writeFile(content, "utf8");
+    } finally {
+      await handle.close();
+    }
   };
   const exists = async (path: string, tool: string) => {
     await gatePath(gov, "filesystem.read", absolute(path), tool);
@@ -260,10 +420,7 @@ export function governedTools(
     }) as ToolDefinition,
     createWriteToolDefinition(cwd, {
       operations: {
-        writeFile: async (path, content) => {
-          await gatePath(gov, "filesystem.write", absolute(path), "write");
-          await writeFile(path, content, "utf8");
-        },
+        writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
           await gatePath(gov, "filesystem.write", absolute(dir), "write");
           await mkdir(dir, { recursive: true });
@@ -277,10 +434,7 @@ export function governedTools(
           await gatePath(gov, "filesystem.write", absolute(path), "edit");
           await access(path, constants.R_OK | constants.W_OK);
         },
-        writeFile: async (path, content) => {
-          await gatePath(gov, "filesystem.write", absolute(path), "edit");
-          await writeFile(path, content, "utf8");
-        },
+        writeFile: (path, content) => write(path, content, "edit"),
       },
     }) as ToolDefinition,
     createBashToolDefinition(cwd, {

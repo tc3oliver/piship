@@ -175,6 +175,27 @@ function gitConfigPath(gitDir: string): string {
   return join(common, "config");
 }
 
+/**
+ * The git files that decide how `root` is classified: the `.git` entry
+ * itself (a `gitdir:` pointer when it is a file), the git directory's
+ * `config` and `commondir`, and the shared `config` a worktree points to.
+ * Rewriting any of them could change the origin remote a later launch
+ * reads. Paths are normalized (symlink-resolved, POSIX separators).
+ */
+export function projectGitControlFiles(root: string): string[] {
+  const dotGit = join(root, ".git");
+  const files = [real(dotGit), real(join(dotGit, "config"))];
+  const gitDir = gitDirectory(root);
+  if (gitDir) {
+    files.push(
+      real(join(gitDir, "config")),
+      real(join(gitDir, "commondir")),
+      real(gitConfigPath(gitDir)),
+    );
+  }
+  return [...new Set(files)];
+}
+
 function matcherMatches(
   matcher: ProjectMatcher,
   root: string,

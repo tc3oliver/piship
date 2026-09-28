@@ -1,8 +1,10 @@
 // Glob matching for policy rules and filesystem resource normalization.
 //
 // Patterns are anchored and case-sensitive. `*` matches any run of characters
-// except `/`, `:`, and line breaks (so `git *` cannot cover a second command
-// line); `**` matches anything, including separators. A trailing
+// except `/`, `:`, and line breaks; `**` matches anything, including
+// separators. Globs alone do not stop shell chaining (`git *` matches
+// `git status; rm -rf ~`); the policy engine refuses to let an allow or ask
+// shell rule match a command with shell metacharacters. A trailing
 // `/**` also matches the directory itself, and `/**/` also matches a single
 // `/`, so `~/.ssh/**` covers `~/.ssh` and `a/**/b` covers `a/b`.
 import { lstatSync, readlinkSync, realpathSync, type Stats } from "node:fs";

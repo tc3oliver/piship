@@ -88,6 +88,11 @@ export interface DecisionEvents {
   readonly denied: AuditEventType;
   /** Metadata-only resource for the audit record (defaults to the redacted resource). */
   readonly resource?: string;
+  /**
+   * What the approval prompt shows the person, such as the tool and its
+   * path or command. It is redacted and never written to audit.
+   */
+  readonly prompt?: string;
   readonly detail?: Readonly<Record<string, string | number | boolean | null>>;
   /** Content kept only for classes the distribution opted in to capture. */
   readonly content?: Readonly<Record<string, string>>;
@@ -120,6 +125,17 @@ const KIND_ACTION: Readonly<Record<string, PolicyAction>> = {
   prompts: "resource.load",
   themes: "resource.load",
 };
+
+/** Longest subject shown in an approval prompt. */
+const APPROVAL_SUBJECT_MAX = 2000;
+
+/** The redacted subject of an approval prompt, shortened for a dialog. */
+function approvalSubject(subject: string): string {
+  const shown = redact(subject);
+  return shown.length > APPROVAL_SUBJECT_MAX
+    ? `${shown.slice(0, APPROVAL_SUBJECT_MAX)}…`
+    : shown;
+}
 
 function sha256(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
@@ -305,6 +321,7 @@ function providerEvidence(options: GovernanceOptions): {
 function capabilityStates(
   options: GovernanceOptions,
   workflowLoaded: boolean,
+  policyDenied: Readonly<Record<string, string>> = {},
 ): CapabilityState[] {
   const manifest = options.lock.governance.manifest;
   const { trust, verification } = providerEvidence(options);
@@ -328,8 +345,42 @@ function capabilityStates(
                 },
           }
         : {}),
+      ...Object.fromEntries(
+        Object.entries(policyDenied).map(([name, reason]) => [
+          name,
+          { ok: false, reason: `the provider is not loaded: ${reason}` },
+        ]),
+      ),
     },
   });
+}
+
+/** Provider requests the policy decides before a provider's extension loads. */
+function providerRequests(
+  provider: GovernanceLock["providers"][number],
+): [PolicyAction, string][] {
+  const requests: [PolicyAction, string][] = [["provider.load", provider.id]];
+  if (provider.path)
+    requests.push(["extension.load", `${provider.class}:${provider.path}`]);
+  return requests;
+}
+
+/** Capabilities whose non-builtin provider the policy always denies. */
+function staticProviderDenials(
+  options: GovernanceOptions,
+  engine: PolicyEngine,
+): Record<string, string> {
+  const denied: Record<string, string> = {};
+  for (const provider of options.lock.governance.providers) {
+    if (provider.class === "builtin") continue;
+    for (const [action, resource] of providerRequests(provider)) {
+      const decision = engine.evaluate({ action, resource });
+      if (decision.effect !== "deny") continue;
+      denied[provider.capability] = `policy ${decision.ruleId} (${action})`;
+      break;
+    }
+  }
+  return denied;
 }
 
 export interface GovernanceInspection {
@@ -468,7 +519,11 @@ export async function inspectGovernance(
     sandbox: report,
     containment: describeContainment(report),
     engine,
-    capabilities: capabilityStates(options, workflowLoaded),
+    capabilities: capabilityStates(
+      options,
+      workflowLoaded,
+      staticProviderDenials(options, engine),
+    ),
     resources,
   };
 }
@@ -572,7 +627,7 @@ export class GovernanceSession {
       await session.#resolveResources();
       await session.#resolveProject();
       await session.#startMcp();
-      session.#computeCapabilities();
+      await session.#computeCapabilities();
       metrics.recordStartupLatency(Date.now() - started);
       metrics.save();
       return session;
@@ -625,7 +680,7 @@ export class GovernanceSession {
       );
     const resolved = await resolveDecision(decision, channel, {
       title: `${this.options.lock.app.name} policy approval`,
-      message: `${action} ${events?.resource ?? decision.resource}${decision.reason ? `\n${decision.reason}` : ""}`,
+      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
     });
     const fields = {
       resource: events?.resource ?? redact(decision.resource),
@@ -1054,25 +1109,74 @@ export class GovernanceSession {
   /** Current piship-workflow mode; null when the workflow is not active. */
   workflowMode: "plan" | "build" | null = null;
 
-  #computeCapabilities(): void {
-    this.capabilities = capabilityStates(
-      this.options,
+  async #computeCapabilities(): Promise<void> {
+    const workflowLoaded = () =>
       this.loader.builtin.has("piship-workflow") ||
-        this.#providerExtension("workflow") !== undefined,
-    );
-    for (const state of this.capabilities) {
+      this.#providerExtension("workflow") !== undefined;
+    const states = capabilityStates(this.options, workflowLoaded());
+    const denied: Record<string, string> = {};
+    const channel = this.startupChannel();
+    for (const state of states) {
       const provider = this.options.lock.governance.providers.find(
         (entry) => entry.capability === state.name,
       );
       if (!provider || provider.class === "builtin") continue;
-      const effective = state.axes.effective.value === "yes";
-      this.emit(effective ? "provider.load" : "provider.denied", {
+      if (state.axes.effective.value !== "yes") {
+        this.emit("provider.denied", {
+          resource: provider.id,
+          detail: { capability: state.name, version: provider.version },
+        });
+        continue;
+      }
+      // Provider trust made the capability effective; policy still decides
+      // whether the provider and its extension load.
+      const refusal = await this.#providerPolicy(provider, channel);
+      if (refusal) {
+        denied[state.name] = refusal.reason;
+        this.emit("provider.denied", {
+          resource: provider.id,
+          policy: refusal.policyId,
+          rule: refusal.ruleId,
+          detail: { capability: state.name, version: provider.version },
+        });
+        this.resources.push({
+          kind: "providers",
+          class: provider.class,
+          path: provider.id,
+          loaded: false,
+          reason: refusal.reason,
+        });
+        continue;
+      }
+      this.emit("provider.load", {
         resource: provider.id,
         detail: { capability: state.name, version: provider.version },
       });
       const extension = this.#providerExtension(state.name);
-      if (effective && extension) this.loader.extensions.push(extension);
+      if (extension) this.loader.extensions.push(extension);
     }
+    this.capabilities = capabilityStates(
+      this.options,
+      workflowLoaded() && denied.workflow === undefined,
+      denied,
+    );
+  }
+
+  /** `provider.load` for the provider ID, then `extension.load` for its extension. */
+  async #providerPolicy(
+    provider: GovernanceLock["providers"][number],
+    channel: ApprovalChannel | undefined,
+  ): Promise<{ reason: string; policyId: string; ruleId: string } | undefined> {
+    for (const [action, resource] of providerRequests(provider)) {
+      const decision = await this.decide(action, resource, channel);
+      if (decision.outcome !== "allow")
+        return {
+          reason: `policy ${decision.ruleId} (${action})`,
+          policyId: decision.policyId,
+          ruleId: decision.ruleId,
+        };
+    }
+    return undefined;
   }
 
   #providerExtension(capability: string): string | undefined {

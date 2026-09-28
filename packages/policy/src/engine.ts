@@ -93,6 +93,25 @@ export function strictest(
   return result;
 }
 
+/**
+ * Characters that chain, substitute, redirect, or group shell commands in
+ * POSIX shells and cmd.exe (`^` escapes and `%` expands there).
+ */
+const SHELL_METACHARACTERS = /[;&|$`<>()\r\n^%]/g;
+
+/**
+ * True when `command` uses a shell metacharacter that `pattern` does not
+ * spell out. An allow or ask rule such as `git *` is a prefix hint, not
+ * containment, so it must not cover `git status; rm -rf ~`. The bare `**`
+ * pattern means every command and is exempt.
+ */
+export function chainsBeyondPattern(pattern: string, command: string): boolean {
+  if (pattern === "**") return false;
+  for (const [char] of command.matchAll(SHELL_METACHARACTERS))
+    if (!pattern.includes(char)) return true;
+  return false;
+}
+
 export function isPathAction(action: string): boolean {
   return action === "filesystem.read" || action === "filesystem.write";
 }
@@ -395,6 +414,13 @@ export class PolicyEngine {
     const pattern = isPathAction(action)
       ? entry.pathPattern
       : entry.rule.resource;
+    // Deny rules still match chained commands: the strictest rule wins.
+    if (
+      action === "shell.execute" &&
+      entry.rule.effect !== "deny" &&
+      chainsBeyondPattern(pattern, resource)
+    )
+      return false;
     return matchGlob(pattern, resource);
   }
 

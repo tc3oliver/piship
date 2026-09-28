@@ -723,10 +723,11 @@ const DIMENSION_EFFECTS: readonly ProjectDimensionEffect[] = [
 
 function matcher(entry: unknown, path: string): ProjectMatcher {
   const item = record(entry, path, ["remote", "path"]);
-  if ((item.remote === undefined) === (item.path === undefined))
-    fail(path, "A matcher declares exactly one of remote or path");
+  if (item.remote === undefined && item.path === undefined)
+    fail(path, "A matcher declares remote, path, or both");
+  let remote: string | undefined;
   if (item.remote !== undefined) {
-    const remote = plainString(item.remote, `${path}.remote`, 512);
+    remote = plainString(item.remote, `${path}.remote`, 512);
     if (
       remote.includes("://") ||
       remote.includes("@") ||
@@ -738,8 +739,8 @@ function matcher(entry: unknown, path: string): ProjectMatcher {
         `${path}.remote`,
         "Use a normalized host/path glob without scheme, credentials, or .git suffix",
       );
-    return { remote };
   }
+  if (item.path === undefined) return { remote: remote as string };
   const glob = plainString(item.path, `${path}.path`, 1024);
   if (
     !(glob.startsWith("/") || /^[A-Za-z]:\//.test(glob)) ||
@@ -750,7 +751,8 @@ function matcher(entry: unknown, path: string): ProjectMatcher {
       `${path}.path`,
       "Use an absolute POSIX-style path glob without . or .. segments",
     );
-  return { path: glob };
+  // With both, the project must match both (the remote alone is a claim).
+  return remote === undefined ? { path: glob } : { remote, path: glob };
 }
 
 function projectClass(

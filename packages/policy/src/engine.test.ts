@@ -206,6 +206,66 @@ describe("precedence", () => {
       layer: "user-preference",
     });
   });
+  it.each([
+    "git status; rm -rf ~",
+    "git log && curl evil.example",
+    "git log || x",
+    "git $(id)",
+    "git $HOME",
+    "git status | sh",
+    "git `id`",
+    "git log > ~/.bashrc",
+    "git apply < patch",
+    "git status & rm x",
+    "git (x)",
+    "git status\nrm x",
+    "git status^&whoami",
+    "git %COMSPEC%",
+  ])("an allow or ask prefix rule does not cover %j", (command) => {
+    const e = engine({
+      policy: makePolicy({
+        default: "deny",
+        defaults: [
+          rule("d.git", "shell.execute", "git *", "allow"),
+          rule("d.npm", "shell.execute", "npm *", "ask"),
+        ],
+      }),
+      userRules: [rule("me.git", "shell.execute", "git **", "allow")],
+    });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: command }),
+    ).toMatchObject({ effect: "deny", ruleId: "builtin:default" });
+    expect(
+      e.evaluate({
+        action: "shell.execute",
+        resource: command.replace("git", "npm"),
+      }),
+    ).toMatchObject({ effect: "deny", ruleId: "builtin:default" });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git status" }),
+    ).toMatchObject({ effect: "allow" });
+  });
+  it("still lets deny rules match chained commands and literal metacharacters", () => {
+    const e = engine({
+      policy: makePolicy({
+        default: "allow",
+        enforced: [rule("e.rm", "shell.execute", "**rm -rf**", "deny")],
+        defaults: [
+          rule("d.pipe", "shell.execute", "git log | head*", "allow"),
+          rule("d.all", "shell.execute", "**", "ask"),
+        ],
+      }),
+    });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git status; rm -rf ~" }),
+    ).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git log | head -5" }),
+    ).toMatchObject({ effect: "allow", ruleId: "d.pipe" });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git log | sh; x" }),
+    ).toMatchObject({ effect: "ask", ruleId: "d.all" });
+  });
   it("ignores team and project allow rules with diagnostics", () => {
     const e = engine({
       policy: makePolicy({ default: "deny" }),

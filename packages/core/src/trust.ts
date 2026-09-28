@@ -94,7 +94,15 @@ export function assertNoInstallScripts(
   field: string,
 ): void {
   for (const file of files) {
-    if (file.path.split("/").at(-1) !== "package.json") continue;
+    const name = file.path.split("/").at(-1);
+    // npm runs `node-gyp rebuild` at install for a package with binding.gyp.
+    if (name === "binding.gyp")
+      throw new ManifestError(
+        "invalid field",
+        field,
+        `${file.path} makes npm build native code at install (node-gyp rebuild); certified and provider trees may not run code at install`,
+      );
+    if (name !== "package.json") continue;
     const path = join(root, file.path);
     if (!existsSync(path)) continue;
     let scripts: Record<string, unknown> = {};

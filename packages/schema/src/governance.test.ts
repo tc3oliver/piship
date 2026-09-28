@@ -1131,6 +1131,18 @@ describe("v1alpha3 policy", () => {
     expect(result.providerTrust.user).toBe("deny");
   });
   const trust = (value: Json) => policy({ projectTrust: value });
+  it("keeps a matcher that requires both a remote and a path", () => {
+    const result = governance(
+      trust({
+        company: {
+          match: [{ remote: "git.acme.example/**", path: "/srv/**" }],
+        },
+      }),
+    ).policy.projectTrust;
+    expect(result.company.match).toEqual([
+      { remote: "git.acme.example/**", path: "/srv/**" },
+    ]);
+  });
   it("fills partial project trust dimensions with mode defaults", () => {
     const result = governance(
       policy({ projectTrust: { unknown: { mcp: "deny" } } }),
@@ -1148,8 +1160,8 @@ describe("v1alpha3 policy", () => {
     [{ company: { plugins: "allow" } }, "policy.projectTrust.company.plugins"],
     [{ company: { match: [{}] } }, "policy.projectTrust.company.match[0]"],
     [
-      { company: { match: [{ remote: "a/**", path: "/a" }] } },
-      "policy.projectTrust.company.match[0]",
+      { company: { match: [{ remote: "a/**", path: "relative/**" }] } },
+      "policy.projectTrust.company.match[0].path",
     ],
     [
       { company: { match: [{ remote: "https://git.acme.example/**" }] } },

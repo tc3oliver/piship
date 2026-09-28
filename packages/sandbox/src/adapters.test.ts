@@ -180,6 +180,22 @@ describe("seatbelt profile", () => {
     expect(text).toContain('(subpath "/missing")');
     expect(text.trimEnd().endsWith("(deny network*)")).toBe(true);
   });
+  it("denies launching processes outside the sandbox through launchd", () => {
+    const deny = text.indexOf("(deny lsopen)");
+    expect(deny).toBeGreaterThan(text.indexOf("(allow default)"));
+    expect(text).toContain("(deny appleevent-send)");
+    expect(text).toContain(
+      '(global-name "com.apple.coreservices.launchservicesd")',
+    );
+    expect(text).toContain('(global-name-regex #"^com\\.apple\\.lsd\\.")');
+    expect(text).toContain(
+      '(global-name "com.apple.coreservices.appleevents")',
+    );
+    expect(text).toContain('(deny process-exec (literal "/bin/launchctl"))');
+    // Only named services are denied; tools still look up everything else.
+    expect(text).not.toMatch(/\(deny mach-lookup\)/);
+    expect(text).not.toContain("(deny process-exec)");
+  });
   it("omits the network deny in allow mode", () => {
     expect(seatbeltProfile(profile({ network: "allow" }), seams)).not.toContain(
       "network",
