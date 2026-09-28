@@ -9,9 +9,10 @@ declare module "vitest" {
   }
 }
 
-// Only reserves a per-run directory: the lifecycle releases are built lazily
-// by the first scenario that needs them (tests/helpers/lifecycle.ts), so runs
-// without lifecycle scenarios pay nothing.
+// Only reserves a per-run directory: each example distribution's lifecycle
+// releases are built lazily, in a subdirectory of their own, by the first
+// scenario that needs them (tests/helpers/lifecycle.ts), so runs without
+// lifecycle scenarios pay nothing.
 export default function setup(project: TestProject) {
   const directory = mkdtempSync(join(tmpdir(), "piship-lifecycle-fixtures-"));
   project.provide("lifecycleFixtures", directory);
