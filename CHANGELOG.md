@@ -56,6 +56,13 @@ Preview milestone; not published to npm.
 - **Behavior change:** A capability whose provider the policy refuses is reported as `enabled: no` instead of `healthy: no` in `capabilities`, `doctor`, and the session's capability state.
 - **Behavior change:** The `compatible` capability axis checks an enabled capability's model `requirements` against the selected model with the same comparison as the launch-time `MODEL_INCOMPATIBLE` check, so a running session's report and launch agree. Offline, `capabilities` and `doctor` use the model launch would select from the configuration and its manifest catalog metadata; they can differ from launch when `--model` or a credential entitlement changes the selected model.
 
+### Internal
+
+- Large modules are split with no behavior change: `@piship/core` `access`, `diff`, `release`, and `lifecycle` (now `release/`, `install/`, `update/`), the core index, `@piship/schema` governance parsing, and `@piship/pi` launch code and the governance session. No non-test source file exceeds 900 lines except `core/src/access/distribution-access.ts` (about 1,000 lines), whose `DistributionAccess` class shares private state across its identity and credential methods.
+- **API addition:** the Pi-free branded commands (login, logout, config, update, rollback, and the lifecycle doctor sections) move from `@piship/pi` to `@piship/core` (`branded/`). `@piship/core` additionally exports `runLogin`, `runLogout`, `runConfig`, `runUpdate`, `runRollback`, `lifecycleDoctor`, `undeclaredGovernanceHosts`, `openAccess`, `governedLock`, and the types `BrandedContext`, `DoctorLine`, and `GovernedLock`. No export was removed or renamed.
+- The boundary check discovers packages, rejects cross-package relative imports, flags unused workspace dependencies, reads the Pi version from `compatibility/pi.json`, and allowlists core's generated launcher imports. The CLI no longer declares the unused `@piship/pi` and `@piship/policy` dependencies, so the example locks record a new npm lock digest.
+- Tests keep `PISHIP_VERSION` equal to every workspace package version and the pinned Pi version equal across core, pi, `package-lock.json`, and `compatibility/pi.json`.
+
 ## v0.5
 
 Preview milestone; not published to npm. Commit `03c33cf` (#16), "close governance, access, supply-chain, and personal-profile gaps". Schema unchanged: `piship/v1alpha4` and `piship-lock/v1alpha4`.

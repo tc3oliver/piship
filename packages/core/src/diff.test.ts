@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DIFF_TESTS, diffLocks, formatDiff } from "./diff.js";
+import { DIFF_TESTS, diffLocks, formatDiff } from "./diff/index.js";
 import type { DistributionLock } from "./index.js";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));

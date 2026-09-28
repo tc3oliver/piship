@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PI_COMPATIBILITY } from "@piship/core";
+import { PI_COMPATIBILITY, PI_VERSION } from "@piship/core";
 import { PINNED_PI_VERSION } from "@piship/pi";
 
 const repoRoot = new URL("../../", import.meta.url);
@@ -25,6 +25,10 @@ describe("pinned Pi compatibility", () => {
     expect(["candidate", "supported"]).toContain(
       matrix.versions[PINNED_PI_VERSION]?.status,
     );
+  });
+
+  it("uses one pinned Pi version in core and the Pi seam", () => {
+    expect(PI_VERSION).toBe(PINNED_PI_VERSION);
   });
 
   it("records the same surfaces in releases as in the compatibility matrix", () => {
