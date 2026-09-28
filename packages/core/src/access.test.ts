@@ -540,10 +540,16 @@ describe("access metrics (fixtures)", () => {
     await DistributionAccess.open(options).login({
       openUrl: (url) => void services.approve(url),
     });
-    // Doctor probes after activation, which fetched the live catalog once.
+    // Doctor probes after activation, which already fetched the live
+    // catalog: one doctor run counts the gateway once.
     const doctor = DistributionAccess.open(options);
     await doctor.activate();
     expect(await doctor.probeGateway()).toContain("acme/coder");
+    expect(metrics.snapshot().gateway?.reachableCount).toBe(1);
+    // A probe on its own is recorded; a 401 answer is still reachable.
+    await expect(
+      DistributionAccess.open(options).probeGateway(),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_REVOKED" });
     expect(metrics.snapshot().gateway?.reachableCount).toBe(2);
     const unreachable = DistributionAccess.open({
       ...options,

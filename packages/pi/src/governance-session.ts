@@ -336,10 +336,12 @@ async function buildEngine(
 }
 
 /** Provider trust and payload verification, from the lock and the payload. */
-function providerEvidence(options: GovernanceOptions): {
+interface ProviderEvidence {
   trust: Record<string, ProviderTrustDecision>;
   verification: Record<string, VerificationResult>;
-} {
+}
+
+function providerEvidence(options: GovernanceOptions): ProviderEvidence {
   const { lock, distributionDir } = options;
   const resourceDir = join(distributionDir, "resources");
   const trust: Record<string, ProviderTrustDecision> = {};
@@ -364,9 +366,12 @@ function capabilityStates(
   options: GovernanceOptions,
   workflowLoaded: boolean,
   policyDenied: Readonly<Record<string, string>> = {},
+  // Hashing provider payloads is costly; a caller that needs the evidence too
+  // computes it once and passes it in.
+  evidence: ProviderEvidence = providerEvidence(options),
 ): CapabilityState[] {
   const manifest = options.lock.governance.manifest;
-  const { trust, verification } = providerEvidence(options);
+  const { trust, verification } = evidence;
   return computeCapabilityStates({
     capabilities: manifest.capabilities,
     providerTrust: trust,
@@ -1173,8 +1178,14 @@ export class GovernanceSession {
     const workflowLoaded = () =>
       this.loader.builtin.has("piship-workflow") ||
       this.#providerExtension("workflow") !== undefined;
-    const states = capabilityStates(this.options, workflowLoaded());
-    const { verification } = providerEvidence(this.options);
+    const evidence = providerEvidence(this.options);
+    const { verification } = evidence;
+    const states = capabilityStates(
+      this.options,
+      workflowLoaded(),
+      {},
+      evidence,
+    );
     const denied: Record<string, string> = {};
     const channel = this.startupChannel();
     for (const state of states) {
@@ -1226,6 +1237,7 @@ export class GovernanceSession {
       this.options,
       workflowLoaded() && denied.workflow === undefined,
       denied,
+      evidence,
     );
   }
 

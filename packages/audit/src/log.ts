@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import {
   chmod,
   mkdir,
   open,
+  readFile,
   rename,
   rm,
   stat,
@@ -201,23 +203,11 @@ class FileSinkWriter implements SinkWriter {
    */
   private async rotate(measured: number): Promise<void> {
     const lock = `${this.path}.rotate.lock`;
+    const token = `${process.pid}-${randomBytes(8).toString("hex")}\n`;
+    if (!(await this.acquireRotationLock(lock, token))) return;
     try {
-      await writeFile(lock, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
-      try {
-        if (Date.now() - (await stat(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
-          return;
-        await rm(lock, { force: true });
-        await writeFile(lock, `${process.pid}\n`, {
-          flag: "wx",
-          mode: 0o600,
-        });
-      } catch {
-        return;
-      }
-    }
-    try {
+      // Another process may have taken over a lock this one held too long.
+      if ((await readFile(lock, "utf8").catch(() => "")) !== token) return;
       // Another process may have rotated since this one measured the file.
       const current = await stat(this.path).catch(() => undefined);
       if (!current || (measured && current.ino !== measured)) return;
@@ -234,7 +224,42 @@ class FileSinkWriter implements SinkWriter {
     } catch {
       // Keep appending to the current file; rotation is retried later.
     } finally {
-      await rm(lock, { force: true }).catch(() => undefined);
+      // Release only a lock this process still owns.
+      if ((await readFile(lock, "utf8").catch(() => "")) === token)
+        await rm(lock, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Create the rotation lock holding `token`. A lock older than the stale
+   * limit is taken over by renaming it to a unique name first: only one
+   * process's rename of that file succeeds, and a lock that turns out to be
+   * fresh (another process took over in between) is given up, not reused.
+   */
+  private async acquireRotationLock(
+    lock: string,
+    token: string,
+  ): Promise<boolean> {
+    const create = async () => {
+      await writeFile(lock, token, { flag: "wx", mode: 0o600 });
+      return true;
+    };
+    try {
+      return await create();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
+    }
+    try {
+      if (Date.now() - (await stat(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
+        return false;
+      const taken = `${lock}.${randomBytes(6).toString("hex")}.stale`;
+      await rename(lock, taken);
+      const age = Date.now() - (await stat(taken)).mtimeMs;
+      await rm(taken, { force: true });
+      if (age <= ROTATION_LOCK_STALE_MS) return false;
+      return await create();
+    } catch {
+      return false;
     }
   }
 }

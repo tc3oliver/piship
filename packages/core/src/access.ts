@@ -283,9 +283,10 @@ const GATEWAY_UNREACHABLE_CODES = new Set<string>([
 ]);
 
 /**
- * Record the result of a gateway probe. A gateway that answered, even with a
- * rejection (401, 403, 429, a malformed list), is reachable; transport
- * failures, destination refusals, and timeouts are not.
+ * Record the result of a gateway probe. A gateway that answered with a
+ * rejection (401, 403, 404, 429, a malformed list) is reachable. Transport
+ * failures, destination refusals, TLS policy failures, timeouts, and 5xx
+ * answers (which map to GATEWAY_UNREACHABLE) are recorded as unreachable.
  */
 export function recordGatewayResult(
   metrics: Pick<AccessMetrics, "recordGatewayReachability"> | undefined,
@@ -434,6 +435,8 @@ export class DistributionAccess {
   #secret: SecretValue | null = null;
   /** The last acquire or refresh the credential manager reported. */
   #credentialChange: CredentialEvent["event"] | undefined;
+  /** Whether this instance already recorded gateway reachability. */
+  #gatewayRecorded = false;
   readonly #now: () => number;
 
   private constructor(readonly options: AccessOptions) {
@@ -573,6 +576,7 @@ export class DistributionAccess {
     try {
       const models = await inference.listModels(identity, credential);
       if (live) {
+        this.#gatewayRecorded = true;
         recordGatewayResult(this.options.metrics);
         this.#metric((metrics) =>
           metrics.recordModelCatalogFetch(models.length),
@@ -580,25 +584,32 @@ export class DistributionAccess {
       }
       return models;
     } catch (error) {
-      if (live) recordGatewayResult(this.options.metrics, error);
+      if (live) {
+        this.#gatewayRecorded = true;
+        recordGatewayResult(this.options.metrics, error);
+      }
       throw error;
     }
   }
 
   /**
-   * GET the gateway model list (doctor), recording reachability. Undefined
-   * when inference is not an OpenAI-compatible endpoint.
+   * GET the gateway model list (doctor). Undefined when inference is not an
+   * OpenAI-compatible endpoint. Reachability is recorded once per access
+   * instance: when activation already fetched the live catalog, the probe
+   * does not count the same gateway again.
    */
   async probeGateway(): Promise<string[] | undefined> {
     const inference = this.inferenceProvider();
     if (!(inference instanceof OpenAICompatibleInferenceProvider))
       return undefined;
+    const record = !this.#gatewayRecorded;
+    this.#gatewayRecorded = true;
     try {
       const listed = await inference.probe();
-      recordGatewayResult(this.options.metrics);
+      if (record) recordGatewayResult(this.options.metrics);
       return listed;
     } catch (error) {
-      recordGatewayResult(this.options.metrics, error);
+      if (record) recordGatewayResult(this.options.metrics, error);
       throw error;
     }
   }

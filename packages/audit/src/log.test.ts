@@ -2,9 +2,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -280,6 +282,41 @@ describe("AuditLog file sink retention", () => {
       [0, 1, 2, 3, 4, 5].flatMap((i) => [`a${i}`, `b${i}`]).sort(),
     );
     expect(existsSync(`${base}.rotate.lock`)).toBe(false);
+  });
+
+  it("takes over a stale rotation lock once, even with concurrent writers", async () => {
+    mkdirSync(join(temp, "logs"), { recursive: true });
+    const base = join(temp, "logs", "audit.jsonl");
+    const lock = `${base}.rotate.lock`;
+    writeFileSync(lock, "crashed\n");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const rotation = { maxBytes: 400, files: 9 };
+    const open = () =>
+      AuditLog.open({
+        config: config([...sink], 1000),
+        distribution: "acmecode",
+        stateDir: temp,
+        rotation,
+      });
+    const writers = await Promise.all([open(), open(), open()]);
+    for (let round = 0; round < 3; round += 1) {
+      for (const [index, log] of writers.entries())
+        log.emit({ event: "resource.load", resource: `w${index}-${round}` });
+      await Promise.all(writers.map((log) => log.flush()));
+    }
+    await Promise.all(writers.map((log) => log.close()));
+    // Rotated despite the abandoned lock; no lock or takeover file is left.
+    expect(existsSync(`${base}.1`)).toBe(true);
+    expect(
+      readdirSync(join(temp, "logs")).filter((name) => name.includes("lock")),
+    ).toEqual([]);
+    const all = auditLogFiles(temp, rotation).flatMap((path) =>
+      lines(path).map((line) => line.resource),
+    );
+    expect(all.sort()).toEqual(
+      [0, 1, 2].flatMap((w) => [0, 1, 2].map((r) => `w${w}-${r}`)).sort(),
+    );
   });
 
   it("appends without rotating while a live rotation lock is held", async () => {
