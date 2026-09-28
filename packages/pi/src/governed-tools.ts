@@ -32,6 +32,7 @@ import type { GovernedMcpTool } from "@piship/mcp";
 import {
   isWithin as isWithinPosix,
   normalizePathResource,
+  projectGitControlDirectories,
   projectGitControlFiles,
   toPosixPath,
 } from "@piship/policy";
@@ -82,7 +83,8 @@ export const CHANGED_RULE = "piship.path-changed";
 /**
  * Built-in denials that no policy or sandbox level relaxes: the distribution
  * state (credentials metadata and the user policy file) is never read or
- * written, and the git files that classify the project are never written.
+ * written, and the git files that classify the project and the git hooks
+ * and info trees are never written.
  */
 function builtinDenial(
   gov: GovernanceSession,
@@ -96,7 +98,14 @@ function builtinDenial(
   if (posix.some((path) => isWithinPosix(state, path))) return STATE_RULE;
   if (action !== "filesystem.write") return undefined;
   const git = projectGitControlFiles(gov.project.root);
-  if (posix.some((path) => git.includes(path))) return GIT_CONFIG_RULE;
+  const trees = projectGitControlDirectories(gov.project.root);
+  if (
+    posix.some(
+      (path) =>
+        git.includes(path) || trees.some((dir) => isWithinPosix(dir, path)),
+    )
+  )
+    return GIT_CONFIG_RULE;
   return undefined;
 }
 
@@ -142,7 +151,7 @@ export async function gatePath(
     throw blocked(
       builtin === STATE_RULE
         ? `${path} is in the distribution state directory, which tools never read or write.`
-        : `${path} decides this project's origin; tools may not change it.`,
+        : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
     );
   }
   if (gov.sandbox.report.level === "enforced") {

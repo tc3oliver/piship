@@ -312,6 +312,73 @@ describe("governed built-in tools", () => {
     ).rejects.toThrow(/decides this project's origin/);
   });
 
+  it("does not let tools plant git hooks or change git info files", async () => {
+    const { session, workspace, root } = await open([
+      "audit:",
+      "  enabled: true",
+      "  sinks:",
+      "    - { id: local, type: file, required: false }",
+    ]);
+    mkdirSync(join(workspace, ".git"));
+    writeFileSync(join(workspace, ".git", "config"), "[core]\n");
+    const tools = governedTools(session, workspace);
+    const write = tool(tools, "write");
+    // A missing hooks directory is refused before it is created.
+    await expect(
+      run(
+        write,
+        { path: ".git/hooks/pre-commit", content: "#!/bin/sh\ntouch pwned\n" },
+        context(true),
+      ),
+    ).rejects.toThrow(/what git runs/);
+    expect(existsSync(join(workspace, ".git", "hooks"))).toBe(false);
+    mkdirSync(join(workspace, ".git", "hooks"));
+    await expect(
+      run(
+        write,
+        { path: ".git/hooks/pre-commit", content: "#!/bin/sh\ntouch pwned\n" },
+        context(true),
+      ),
+    ).rejects.toThrow(/what git runs/);
+    expect(existsSync(join(workspace, ".git", "hooks", "pre-commit"))).toBe(
+      false,
+    );
+    mkdirSync(join(workspace, ".git", "info"));
+    writeFileSync(join(workspace, ".git", "info", "exclude"), "# none\n");
+    await expect(
+      run(
+        tool(tools, "edit"),
+        {
+          path: ".git/info/exclude",
+          edits: [{ oldText: "# none", newText: "*" }],
+        },
+        context(true),
+      ),
+    ).rejects.toThrow(/what git runs/);
+    expect(
+      readFileSync(join(workspace, ".git", "info", "exclude"), "utf8"),
+    ).toBe("# none\n");
+    // Other git files follow the policy as before (here: ask, approved).
+    writeFileSync(join(workspace, ".git", "description"), "unnamed\n");
+    await run(
+      tool(tools, "edit"),
+      {
+        path: ".git/description",
+        edits: [{ oldText: "unnamed", newText: "named" }],
+      },
+      context(true),
+    );
+    expect(readFileSync(join(workspace, ".git", "description"), "utf8")).toBe(
+      "named\n",
+    );
+    await session.close();
+    const audit = readFileSync(
+      join(root, "state", "logs", "audit.jsonl"),
+      "utf8",
+    );
+    expect(audit).toContain('"rule":"piship.project.git-config"');
+  });
+
   it("shows the path or command in the approval prompt but keeps audit metadata-only", async () => {
     const { session, workspace, root } = await open(
       [

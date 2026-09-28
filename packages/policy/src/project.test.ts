@@ -20,6 +20,8 @@ import {
   parseInstructionImports,
   parseOriginUrl,
   projectDimensionEffect,
+  projectGitControlDirectories,
+  projectGitControlFiles,
   readProjectRestrictions,
   type ProjectResourceCandidate,
 } from "./project.js";
@@ -198,6 +200,58 @@ describe("identifyProject", () => {
     const link = join(base, `link-${counter}`);
     if (!trySymlink(root, link, "dir")) return;
     expect(identifyProject(link, trust).root).toBe(posix(root));
+  });
+});
+
+describe("project git control paths", () => {
+  it("lists the config files and the hooks and info trees of a repository", () => {
+    const root = dir("control");
+    gitRepo(root, "https://git.acme.example/team/app");
+    const git = posix(join(root, ".git"));
+    expect(projectGitControlFiles(root)).toEqual([
+      git,
+      `${git}/config`,
+      `${git}/config.worktree`,
+      `${git}/commondir`,
+    ]);
+    expect(projectGitControlDirectories(root)).toEqual([
+      `${git}/hooks`,
+      `${git}/info`,
+    ]);
+  });
+  it("covers the worktree gitdir and the shared directory it names", () => {
+    const main = dir("control-main");
+    gitRepo(main, "https://git.acme.example/team/app");
+    const worktreeGit = join(main, ".git", "worktrees", "wt");
+    write(join(worktreeGit, "commondir"), "../..\n");
+    const worktree = dir("control-worktree");
+    write(join(worktree, ".git"), `gitdir: ${worktreeGit}\n`);
+    const common = posix(join(main, ".git"));
+    const own = posix(worktreeGit);
+    expect(projectGitControlFiles(worktree)).toEqual(
+      expect.arrayContaining([
+        posix(join(worktree, ".git")),
+        `${own}/config`,
+        `${own}/config.worktree`,
+        `${own}/commondir`,
+        `${common}/config`,
+      ]),
+    );
+    expect(projectGitControlDirectories(worktree)).toEqual([
+      posix(join(worktree, ".git", "hooks")),
+      posix(join(worktree, ".git", "info")),
+      `${own}/hooks`,
+      `${own}/info`,
+      `${common}/hooks`,
+      `${common}/info`,
+    ]);
+  });
+  it("still names the .git trees of a directory that is not a repository yet", () => {
+    const plain = dir("control-plain");
+    expect(projectGitControlDirectories(plain)).toEqual([
+      posix(join(plain, ".git", "hooks")),
+      posix(join(plain, ".git", "info")),
+    ]);
   });
 });
 
