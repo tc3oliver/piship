@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVIDENCED_TARGETS,
@@ -777,6 +777,70 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
     );
     expect(error.code).toBe("CONFIG_UNAVAILABLE");
+  });
+
+  it("applies the manifest source rules to the resolved updates.source", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    let requests = 0;
+    const fetcher = (async () => {
+      requests += 1;
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    const attempt = (source: string) =>
+      rejection(
+        updateDistribution(ID, {
+          runCheck: fakeRun,
+          fetcher,
+          env: { ACMEPI_UPDATE_SOURCE: source },
+        }),
+      );
+    for (const source of [
+      "http://updates.example.test/acmepi",
+      "ftp://updates.example.test/acmepi",
+      "file:///srv/acmepi",
+    ])
+      expect((await attempt(source)).code).toBe("NETWORK_DENIED");
+    expect(
+      (await attempt("https://updates.example.test/acmepi?x=1")).message,
+    ).toMatch(/query string or fragment/);
+    const relative = await attempt("channel");
+    expect(relative.code).toBe("CONFIG_INVALID");
+    expect(relative.message).toMatch(/absolute local directory/);
+    expect(requests).toBe(0);
+    // An absolute local directory is accepted after resolution.
+    const result = await updateDistribution(ID, {
+      runCheck: fakeRun,
+      env: { ACMEPI_UPDATE_SOURCE: channelDir },
+    });
+    expect(result.status).toBe("updated");
+  });
+
+  it("accepts a relative --from directory but not an unsupported scheme", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const denied = await rejection(
+      updateDistribution(ID, {
+        runCheck: fakeRun,
+        source: "ftp://updates.example.test/acmepi",
+      }),
+    );
+    expect(denied.code).toBe("NETWORK_DENIED");
+    const missing = await rejection(
+      updateDistribution(ID, { runCheck: fakeRun, source: join(temp(), "x") }),
+    );
+    expect(missing.message).toMatch(/does not exist/);
+    const cwd = process.cwd();
+    process.chdir(dirname(channelDir));
+    try {
+      const result = await updateDistribution(ID, {
+        runCheck: fakeRun,
+        source: basename(channelDir),
+      });
+      expect(result.status).toBe("updated");
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it("drops the previous release when the new release disables rollback", async () => {

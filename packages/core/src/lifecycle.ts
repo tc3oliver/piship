@@ -47,6 +47,7 @@ import {
   type MigrationReport,
 } from "./migration.js";
 import {
+  checkUpdateSource,
   downloadArchive,
   payloadStateSchemas,
   readChannel,
@@ -563,7 +564,7 @@ function resolveSource(
   override: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string {
-  if (override) return override;
+  if (override) return checkUpdateSource(override, "--from");
   const template = lock.updates?.source;
   if (!template)
     throw new PiShipError(
@@ -571,8 +572,9 @@ function resolveSource(
       `${lock.app.name} declares no update source; pass --from <directory|url>`,
       { component: "update" },
     );
+  let resolved: string;
   try {
-    return resolveTemplate(
+    resolved = resolveTemplate(
       "updates.source",
       template,
       lock.access?.variables ?? [],
@@ -583,6 +585,9 @@ function resolveSource(
       component: "update",
     });
   }
+  // The static check sees only the template; the resolved value gets the
+  // same URL rules at run time.
+  return checkUpdateSource(resolved, "updates.source");
 }
 
 /** Copy preferences and user policy (never credentials) before activation. */

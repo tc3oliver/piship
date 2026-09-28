@@ -394,7 +394,11 @@ describe("v1alpha4 updates validation", () => {
     [{ source: "http://updates.acme.example/" }, "updates.source", "https"],
     [{ source: "http://127.0.0.2/" }, "updates.source", "https"],
     [{ source: "ftp://updates.acme.example/" }, "updates.source", "https"],
-    [{ source: "updates.acme.example" }, "updates.source", "absolute URL"],
+    [
+      { source: "updates.acme.example" },
+      "updates.source",
+      `an https URL, an http URL on 127.0.0.1, localhost, or [::1], or a \${NAME} runtime reference`,
+    ],
     [
       { source: "https://user:pw@updates.acme.example/" },
       "updates.source",

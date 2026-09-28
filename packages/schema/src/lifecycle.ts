@@ -181,6 +181,7 @@ function publicKey(value: unknown, path: string): string {
   return text;
 }
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+const UPDATE_SOURCE_FORMS = `Expected an https URL, an http URL on 127.0.0.1, localhost, or [::1], or a \${NAME} runtime reference (which may also resolve to an absolute local directory)`;
 function updateSource(
   value: unknown,
   path: string,
@@ -198,7 +199,7 @@ function updateSource(
   try {
     url = new URL(text);
   } catch {
-    fail(path, `Expected an absolute URL or a \${NAME} runtime reference`);
+    fail(path, UPDATE_SOURCE_FORMS);
   }
   if (url.username || url.password)
     fail(path, "URLs must not embed credentials");
@@ -208,10 +209,7 @@ function updateSource(
     url.protocol !== "https:" &&
     !(url.protocol === "http:" && LOOPBACK_HOSTS.includes(url.hostname))
   )
-    fail(
-      path,
-      "Use https; plain http is accepted only for 127.0.0.1, localhost, or [::1]",
-    );
+    fail(path, UPDATE_SOURCE_FORMS);
   return text;
 }
 function parseUpdates(
