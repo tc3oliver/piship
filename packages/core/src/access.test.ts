@@ -28,6 +28,7 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   type AccessEvent,
   DistributionAccess,
+  accessStatePaths,
   configuredModel,
   explainConfiguration,
   networkPolicyFor,
@@ -912,6 +913,16 @@ describe("capability model requirements", () => {
           "capability workflow (structured output support is unknown)",
         ),
       });
+    });
+
+    it("refuses unreadable preferences offline, as launch does", () => {
+      const distribution = open([]);
+      const path = accessStatePaths(distribution.options.stateDir).preferences;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "{");
+      expect(() => configuredModel(distribution.options)).toThrow(
+        expect.objectContaining({ code: "CONFIG_INVALID" }),
+      );
     });
 
     it("ignores the requirements of a disabled capability", async () => {

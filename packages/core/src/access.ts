@@ -277,8 +277,8 @@ export interface AccessEvent {
  * The model launch would select, with its manifest catalog metadata, read
  * without contacting an identity provider, broker, or gateway. Offline reports
  * (`capabilities`, `doctor`) check capability requirements against it with the
- * same comparison launch uses; a live catalog or a credential entitlement can
- * still change what launch selects.
+ * same comparison launch uses; `--model`, a credential entitlement, or a live
+ * catalog can still change what launch selects or its metadata.
  */
 export function configuredModel(
   options: Pick<AccessOptions, "app" | "access" | "stateDir">,

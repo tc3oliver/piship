@@ -457,9 +457,12 @@ function selectedModelEvidence(
         access: ctx.metadata.access,
         stateDir: ctx.stateDir,
       });
-    } catch {
-      // Unreadable preferences: launch refuses them; the report knows no model.
-      return { id: "(unknown)" };
+    } catch (error) {
+      // Unreadable user preferences: launch refuses them too. The report then
+      // knows no model and says why instead of failing.
+      if (!(error instanceof PiShipError) || error.code !== "CONFIG_INVALID")
+        throw error;
+      return { id: `(unknown: ${error.message})` };
     }
   const selected = activated.selectedModel;
   const metadata = selected
