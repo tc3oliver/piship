@@ -200,16 +200,19 @@ export function pathDepth(path: string): number {
 }
 
 /**
- * Containment for adapter profiles, whose paths are always POSIX (bubblewrap
- * and Seatbelt run only on Linux and macOS), whatever the host running the
- * profile builder.
+ * Containment for protected paths. Adapter profiles hold POSIX paths
+ * (bubblewrap and Seatbelt run only on Linux and macOS), while a profile
+ * resolved on the host holds native ones, so either separator counts.
  */
-function withinPosix(path: string, root: string): boolean {
+function withinAnySep(path: string, root: string): boolean {
   if (path === root) return true;
-  return path.startsWith(root.endsWith("/") ? root : `${root}/`);
+  return [posix.sep, sep].some((separator) =>
+    path.startsWith(root.endsWith(separator) ? root : `${root}${separator}`),
+  );
 }
 
-const posixDepth = (path: string) => path.split("/").filter(Boolean).length;
+const anySepDepth = (path: string) =>
+  path.split(/[\\/]/).filter(Boolean).length;
 
 export interface ProtectedEntry {
   readonly path: string;
@@ -230,16 +233,16 @@ export function writableProtected(profile: SandboxProfile): ProtectedEntry[] {
     })),
   ]
     .filter(({ path }) =>
-      profile.writeAllow.some((allowed) => withinPosix(path, allowed)),
+      profile.writeAllow.some((allowed) => withinAnySep(path, allowed)),
     )
-    .sort((a, b) => posixDepth(a.path) - posixDepth(b.path));
+    .sort((a, b) => anySepDepth(a.path) - anySepDepth(b.path));
   const kept: ProtectedEntry[] = [];
   for (const entry of entries)
     if (
       !kept.some(
         (outer) =>
           outer.path === entry.path ||
-          (outer.directory && withinPosix(entry.path, outer.path)),
+          (outer.directory && withinAnySep(entry.path, outer.path)),
       )
     )
       kept.push(entry);
@@ -258,15 +261,15 @@ export function protectedAncestors(
   const ancestors = new Set<string>();
   for (const { path } of entries) {
     const roots = profile.writeAllow.filter((allowed) =>
-      withinPosix(path, allowed),
+      withinAnySep(path, allowed),
     );
     for (
-      let current = posix.dirname(path);
+      let current = dirname(path);
       !roots.includes(current) &&
-      roots.some((root) => withinPosix(current, root));
-      current = posix.dirname(current)
+      roots.some((root) => withinAnySep(current, root));
+      current = dirname(current)
     )
       ancestors.add(current);
   }
-  return [...ancestors].sort((a, b) => posixDepth(a) - posixDepth(b));
+  return [...ancestors].sort((a, b) => anySepDepth(a) - anySepDepth(b));
 }
