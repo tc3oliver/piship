@@ -40,6 +40,8 @@ export const GOVERNANCE_KEYS = [
 export const GOVERNANCE_RUNTIME_REFERENCE_FIELDS = [
   "mcp.servers.<id>.url",
   "audit.sinks[<index>].url",
+  "sandbox.endpoint",
+  "sandbox.router",
 ] as const;
 
 /**
@@ -58,7 +60,7 @@ export function parseGovernance(
     capabilities: parseCapabilities(root.capabilities),
     policy: parsePolicy(root.policy, mode, app),
     mcp: parseMcp(root.mcp, mode, variables),
-    sandbox: parseSandbox(root.sandbox),
+    sandbox: parseSandbox(root.sandbox, variables),
     audit: parseAudit(root.audit, mode, variables),
   };
 }
@@ -72,5 +74,7 @@ export function governanceReferences(governance: GovernanceManifest): string[] {
   for (const sink of governance.audit.sinks)
     if (sink.url)
       for (const name of referencedVariables(sink.url)) names.add(name);
+  for (const url of [governance.sandbox.endpoint, governance.sandbox.router])
+    if (url) for (const name of referencedVariables(url)) names.add(name);
   return [...names];
 }

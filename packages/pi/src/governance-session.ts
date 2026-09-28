@@ -42,6 +42,7 @@ import type {
 } from "./governance/options.js";
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
+import { sandboxBackend } from "./governance/sandbox.js";
 
 export { terminalApproval } from "./governance/approval.js";
 export {
@@ -113,7 +114,9 @@ export class GovernanceSession {
       // The distribution state holds sessions and credential metadata; tool
       // subprocesses never need to read it. The git files that classify the
       // project and the hooks git runs outside the sandbox stay read-only.
+      const backend = await sandboxBackend(options);
       sandbox = await activateSandbox(sandboxConfig(options), {
+        ...(backend ? { backend } : {}),
         workspace: project.root,
         homeDir,
         extraReadOnly: [options.distributionDir],
@@ -168,7 +171,7 @@ export class GovernanceSession {
         error instanceof PiShipError ? error.code : "CONFIG_UNAVAILABLE";
       metrics.recordStartupFailure(code);
       metrics.save();
-      sandbox?.dispose();
+      await sandbox?.dispose();
       await audit?.close();
       throw error;
     }
@@ -276,7 +279,7 @@ export class GovernanceSession {
     this.#closed = true;
     this.emit("session.end");
     await this.mcp?.close();
-    this.sandbox.dispose();
+    await this.sandbox.dispose();
     await this.audit.close();
     this.metrics.save();
   }

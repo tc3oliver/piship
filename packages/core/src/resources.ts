@@ -38,6 +38,8 @@ function adapterDeclarations(manifest: Manifest): [string, string][] {
   for (const server of governance?.mcp.servers ?? [])
     if (server.module)
       output.push([`mcp.servers.${server.id}.module`, server.module]);
+  if (governance?.sandbox.adapter)
+    output.push(["sandbox.adapter", governance.sandbox.adapter]);
   return output;
 }
 /** Declared roots per kind, including capability-provider roots for v1alpha3. */

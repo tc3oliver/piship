@@ -247,8 +247,11 @@ export function checkReleaseInputs(
         "certification",
         `${item.kind} ${item.path} is certified without certification evidence`,
       );
+  // Only the native backend depends on the target's OS sandbox.
+  const sandbox = lock.governance?.manifest.sandbox;
   if (
-    lock.governance?.manifest.sandbox.required &&
+    sandbox?.required &&
+    sandbox.provider === undefined &&
     !["linux", "darwin"].includes(target.split("-")[0] ?? "")
   )
     throw gate(

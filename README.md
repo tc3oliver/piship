@@ -1,8 +1,20 @@
 # PiShip
 
-**Ship Pi as your company's coding agent.** PiShip turns upstream Pi into a managed, branded coding-agent distribution without maintaining a Pi fork. Pi owns the agent runtime; PiShip owns the distribution: identity, runtime credentials, inference binding, managed resources, policy and trust, build, and lifecycle. It is an open-source, company-first distribution and governance framework: own the distribution, not the agent.
+**Ship Pi as your company's coding agent — without forking Pi.**
 
-Organizations plug in their existing single sign-on, credential broker, LLM gateway, policy, internal capabilities, and release process. Individuals use the same framework in personal mode to pin Pi, isolate its state, manage resources and models, and reproduce the setup on another machine.
+Pi stays upstream. Your company owns the distribution. PiShip turns the pinned, unmodified Pi into a branded coding agent that signs in with your identity provider, talks only to your LLM gateway, runs under your policy and sandbox, and ships through your release process. Individuals use the same framework in personal mode to pin Pi, isolate its state, and reproduce their setup on another machine.
+
+## Why PiShip?
+
+- **No Pi fork.** Pi stays upstream and pinned; PiShip owns distribution and governance through Pi's public SDK only.
+- **Bring your own identity.** Users sign in with your existing OIDC / SSO provider (Authorization Code + PKCE).
+- **Bring your own gateway.** Inference goes only to your company LLM gateway, so provider keys never reach developer machines.
+- **Short-lived credentials.** Your credential broker issues scoped runtime credentials; PiShip stores, renews, and revokes them.
+- **Enforced governance.** Models, tools, MCP servers, resources, and project trust are decided by policy before anything runs.
+- **Bring your own sandbox.** Native bubblewrap or Seatbelt, your internal sandbox, E2B-compatible services such as CubeSandbox, or Kubernetes Agent Sandbox, behind [one contract](docs/sandbox.md) that fails closed.
+- **A tested sandbox boundary.** The native sandbox is proven by a live probe at every launch, and boundary and escape regression tests (denied reads, writes outside the allowlist, network, environment, git hooks, process-tree cleanup, macOS launchd escapes) run in CI.
+- **Audit and diagnostics.** Metadata-first audit of policy decisions, plus `doctor`, `policy explain`, and `capabilities` for the effective runtime state.
+- **Controlled releases.** Pinned Pi, reproducible per-target artifacts, SBOM and notices, signed update channels, and rollback.
 
 An excerpt of the [demo company manifest](examples/demo-company/piship.yaml):
 
@@ -43,7 +55,7 @@ node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode
 ```
 
-The demo requires an OS sandbox (bubblewrap on Linux, Seatbelt on macOS) and a system secret store (Secret Service on Linux, Keychain, or Credential Manager). Windows has no sandbox adapter, so there the demo stops with `SANDBOX_UNAVAILABLE` unless a copy sets `sandbox.required: false`; use `acmecode.cmd` on Windows. The [demo README](examples/demo-company/README.md) has the full walkthrough and the file secret-store fallback.
+The demo requires an OS sandbox (bubblewrap on Linux, Seatbelt on macOS) and a system secret store (Secret Service on Linux, Keychain, or Credential Manager). Windows has no native sandbox adapter, so there the demo stops with `SANDBOX_UNAVAILABLE` unless a copy sets `sandbox.required: false` or uses a remote [sandbox backend](docs/sandbox.md); use `acmecode.cmd` on Windows. The [demo README](examples/demo-company/README.md) has the full walkthrough and the file secret-store fallback.
 
 **Powered by Pi, governed by you.**
 
@@ -78,7 +90,7 @@ The installer and launcher never fetch Node, Pi, or packages. `piship build` run
 
 ## Governance
 
-`piship/v1alpha3` adds governance to both deployment modes. A distribution declares resources by trust class (company, certified with a reviewed tree digest, or user), a policy with enforced rules and relaxable defaults, project trust by git origin, MCP servers with tool allowlists, an OS sandbox, and audit sinks. PiShip decides each resource load, tool call, governed file access, shell command, and MCP call before it happens, runs `bash`, `!` commands, and MCP stdio servers inside bubblewrap (Linux) or Seatbelt (macOS) when the sandbox is required, and fails closed when a required sandbox or audit sink is unavailable. Windows has no sandbox adapter. The Pi process and in-process extensions are not contained; see [security](docs/security.md#governance) for exactly what is enforced. Branded `policy explain`, `capabilities`, and governance sections in `doctor` show the effective state. `piship migrate` moves v1alpha1 and v1alpha2 manifests to v1alpha3 with behavior-preserving defaults, and on to v1alpha4.
+`piship/v1alpha3` adds governance to both deployment modes. A distribution declares resources by trust class (company, certified with a reviewed tree digest, or user), a policy with enforced rules and relaxable defaults, project trust by git origin, MCP servers with tool allowlists, an OS sandbox, and audit sinks. PiShip decides each resource load, tool call, governed file access, shell command, and MCP call before it happens, runs `bash`, `!` commands, and MCP stdio servers inside bubblewrap (Linux) or Seatbelt (macOS) when the sandbox is required, or runs commands in a custom, E2B-compatible, or Kubernetes Agent Sandbox backend ([sandbox backends](docs/sandbox.md), a preview), and fails closed when a required sandbox or audit sink is unavailable. Windows has no native sandbox adapter. The Pi process and in-process extensions are not contained; see [security](docs/security.md#governance) for exactly what is enforced. Branded `policy explain`, `capabilities`, and governance sections in `doctor` show the effective state. `piship migrate` moves v1alpha1 and v1alpha2 manifests to v1alpha3 with behavior-preserving defaults, and on to v1alpha4.
 
 ## Release and update preview
 
@@ -86,6 +98,6 @@ The installer and launcher never fetch Node, Pi, or packages. `piship build` run
 
 ## Scope
 
-Pi owns the agent loop, tools, sessions, TUI, and model/runtime behavior. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, identity/credential/inference integration, policy/trust and governance, and lifecycle/release. Start with the [status page](docs/status.md), then read the [architecture](docs/architecture.md), [manifest](docs/manifest.md), [release](docs/release.md), [compatibility](docs/compatibility.md), [security](docs/security.md), [identity](docs/identity.md), [credentials](docs/credentials.md), [inference](docs/inference.md), [enterprise integration contract](docs/enterprise-integration.md), [roadmap](docs/roadmap.md), [architecture decisions](docs/decisions.md), and [portable payload decision](docs/portable-artifact.md) for the precise contract.
+Pi owns the agent loop, tools, sessions, TUI, and model/runtime behavior. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, identity/credential/inference integration, policy/trust and governance, and lifecycle/release. Start with the [status page](docs/status.md), then read the [architecture](docs/architecture.md), [manifest](docs/manifest.md), [release](docs/release.md), [compatibility](docs/compatibility.md), [security](docs/security.md), [identity](docs/identity.md), [credentials](docs/credentials.md), [inference](docs/inference.md), [sandbox backends](docs/sandbox.md), [enterprise integration contract](docs/enterprise-integration.md), [roadmap](docs/roadmap.md), [architecture decisions](docs/decisions.md), and [portable payload decision](docs/portable-artifact.md) for the precise contract.
 
 The [personal example](examples/personal/README.md) contains the full walkthrough. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Security reports follow [SECURITY.md](SECURITY.md). PiShip is licensed under [MIT](LICENSE).

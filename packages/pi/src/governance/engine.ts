@@ -120,6 +120,22 @@ export function gitProtection(root: string): {
   };
 }
 
+/**
+ * What the sandbox contains, as the policy engine reports planes. Filesystem
+ * actions count as sandbox-enforced only when the backend enforces PiShip's
+ * path policy; a remote backend's host isolation does not count.
+ */
+export function policyContainment(report: ContainmentReport) {
+  const enforced = report.level === "enforced";
+  return {
+    filesystem:
+      enforced &&
+      report.planes.some((plane) => plane.startsWith("filesystem-")),
+    network: enforced && report.planes.includes("network-deny"),
+    shell: enforced,
+  };
+}
+
 export async function buildEngine(
   options: GovernanceOptions,
   project: ProjectIdentity,
@@ -129,7 +145,6 @@ export async function buildEngine(
   homeDir: string,
 ): Promise<PolicyEngine> {
   const manifest = options.lock.governance.manifest;
-  const enforced = report.level === "enforced";
   return new PolicyEngine({
     policy: manifest.policy,
     teamRules: await readTeamRules(
@@ -147,13 +162,7 @@ export async function buildEngine(
       workspaceRoot: project.root,
       homeDir,
       tmpDir,
-      containment: {
-        filesystem:
-          enforced &&
-          report.planes.some((plane) => plane.startsWith("filesystem")),
-        network: enforced && report.network === "deny",
-        shell: enforced,
-      },
+      containment: policyContainment(report),
     },
   });
 }

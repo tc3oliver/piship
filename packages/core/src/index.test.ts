@@ -111,6 +111,32 @@ describe("distribution core", () => {
   });
 });
 
+describe("sandbox adapter locking", () => {
+  it("locks a custom sandbox adapter module like other adapters", () => {
+    const dir = mkdtempSync(join(tmpdir(), "piship-core-"));
+    roots.push(dir);
+    mkdirSync(join(dir, "sandbox"));
+    writeFileSync(
+      join(dir, "sandbox", "acme.mjs"),
+      "export default () => ({});\n",
+    );
+    const path = join(dir, "piship.yaml");
+    writeFileSync(
+      path,
+      'schema: piship/v1alpha3\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "0.87.1"\ndeployment:\n  mode: personal\nsandbox:\n  required: true\n  provider: custom\n  adapter: ./sandbox/acme.mjs\n',
+    );
+    const locked = resolveLock(path).resources.find(
+      (item) => item.kind === "adapters",
+    );
+    expect(locked?.path).toBe("sandbox/acme.mjs");
+    writeFileSync(join(dir, "sandbox", "acme.mjs"), "export default 1;\n");
+    expect(
+      resolveLock(path).resources.find((item) => item.kind === "adapters")
+        ?.sha256,
+    ).not.toBe(locked?.sha256);
+  });
+});
+
 describe("init", () => {
   it.each([
     ["personal", false],

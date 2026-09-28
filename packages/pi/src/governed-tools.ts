@@ -196,7 +196,13 @@ export async function gatePath(
         rule: hidden
           ? "sandbox.filesystem.read.deny"
           : "sandbox.filesystem.write.allow",
-        enforcement: "sandbox",
+        // Only a backend that enforces the path policy itself contains the
+        // file; otherwise this refusal is PiShip's alone.
+        enforcement: gov.sandbox.report.planes.some((plane) =>
+          plane.startsWith("filesystem-"),
+        )
+          ? "sandbox"
+          : "control-plane",
         detail: { action, path: classOf },
       });
       throw blocked(

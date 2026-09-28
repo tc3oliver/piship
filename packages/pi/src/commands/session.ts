@@ -187,6 +187,7 @@ function governanceSummary(gov: GovernanceSession) {
     sandbox: {
       level: gov.sandbox.report.level,
       adapter: gov.sandbox.report.adapter,
+      provider: gov.sandbox.report.provider,
       planes: gov.sandbox.report.planes,
       network: gov.sandbox.report.network,
     },

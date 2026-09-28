@@ -27,6 +27,7 @@ import {
   type ResourceEvidence,
 } from "./options.js";
 import { payloadTree } from "./resources.js";
+import { sandboxBackend } from "./sandbox.js";
 
 export interface GovernanceInspection {
   readonly project: ProjectIdentity;
@@ -54,7 +55,9 @@ export async function inspectGovernance(
   let report: ContainmentReport;
   let tmpDir = tmpdir();
   try {
+    const backend = await sandboxBackend(options);
     const sandbox = await activateSandbox(sandboxConfig(options), {
+      ...(backend ? { backend } : {}),
       workspace: project.root,
       homeDir,
       // MCP modules run from the installed payload, which may sit under a
@@ -64,13 +67,15 @@ export async function inspectGovernance(
     });
     report = sandbox.report;
     tmpDir = sandbox.profile.tmpDir;
-    sandbox.dispose();
+    await sandbox.dispose();
   } catch (error) {
     report = {
       level: "unavailable",
-      adapter: adapterIdFor(process.platform),
+      adapter: manifest.sandbox.provider ?? adapterIdFor(process.platform),
+      provider: manifest.sandbox.provider ?? "native",
       required: manifest.sandbox.required,
       planes: [],
+      localProcesses: false,
       network: manifest.sandbox.network.mode,
       reason: redact(String((error as Error)?.message ?? error)),
       warnings: [],
