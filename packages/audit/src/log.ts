@@ -7,7 +7,6 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -209,7 +208,7 @@ class FileSinkWriter implements SinkWriter {
       // Another process may have taken over a lock this one held too long.
       if ((await readFile(lock, "utf8").catch(() => "")) !== token) return;
       // Another process may have rotated since this one measured the file.
-      const current = await stat(this.path).catch(() => undefined);
+      const current = await statOpen(this.path).catch(() => undefined);
       if (!current || (measured && current.ino !== measured)) return;
       const files = Math.max(1, Math.floor(this.rotation.files));
       await rm(`${this.path}.${files}`, { force: true });
@@ -250,11 +249,11 @@ class FileSinkWriter implements SinkWriter {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
     }
     try {
-      if (Date.now() - (await stat(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
+      if (Date.now() - (await statOpen(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
         return false;
       const taken = `${lock}.${randomBytes(6).toString("hex")}.stale`;
       await rename(lock, taken);
-      const age = Date.now() - (await stat(taken)).mtimeMs;
+      const age = Date.now() - (await statOpen(taken)).mtimeMs;
       await rm(taken, { force: true });
       if (age <= ROTATION_LOCK_STALE_MS) return false;
       return await create();
@@ -628,4 +627,17 @@ function markOpenFailure(sink: Sink, error: unknown): Sink {
   sink.state = "degraded";
   sink.lastError = reason;
   return sink;
+}
+
+/**
+ * Stat a file through an open read handle rather than by path, so the check
+ * describes the file that was opened and no later path lookup depends on it.
+ */
+async function statOpen(path: string) {
+  const handle = await open(path, "r");
+  try {
+    return await handle.stat();
+  } finally {
+    await handle.close();
+  }
 }
