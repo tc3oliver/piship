@@ -107,8 +107,9 @@ export interface SecretStore {
 
 // --------------------------------------------------------------- inference
 
+/** Verified model metadata. An absent field is unknown, never assumed. */
 export interface ModelCapabilities {
-  readonly input: readonly string[];
+  readonly input?: readonly string[];
   readonly reasoning?: boolean;
   readonly tools?: boolean;
   readonly streaming?: boolean;

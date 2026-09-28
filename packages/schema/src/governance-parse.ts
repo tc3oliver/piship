@@ -21,6 +21,7 @@ import {
   type BuiltinExtension,
   CAPABILITY_CONTRACTS,
   type CapabilityConfig,
+  type CapabilityModelRequirements,
   type CapabilityName,
   type CapabilityProviderRef,
   type CertifiedEvidence,
@@ -577,6 +578,56 @@ function parseSettings(value: unknown, path: string): Record<string, string> {
   return output;
 }
 
+const MODEL_INPUTS = ["text", "image"] as const;
+
+function parseRequirements(
+  value: unknown,
+  path: string,
+): CapabilityModelRequirements | undefined {
+  if (value === undefined) return undefined;
+  const item = record(value, path, [
+    "tools",
+    "structuredOutput",
+    "minContextWindow",
+    "input",
+  ]);
+  if (!Object.keys(item).length)
+    fail(path, "Declare at least one model requirement or omit the field");
+  const input =
+    item.input === undefined
+      ? undefined
+      : list(item.input, `${path}.input`, (entry, at) =>
+          oneOf(entry, at, MODEL_INPUTS),
+        );
+  if (input && !input.length)
+    fail(`${path}.input`, "Expected at least one input modality");
+  return {
+    ...(item.tools === undefined
+      ? {}
+      : { tools: bool(item.tools, `${path}.tools`, false) }),
+    ...(item.structuredOutput === undefined
+      ? {}
+      : {
+          structuredOutput: bool(
+            item.structuredOutput,
+            `${path}.structuredOutput`,
+            false,
+          ),
+        }),
+    ...(item.minContextWindow === undefined
+      ? {}
+      : {
+          minContextWindow: positiveInteger(
+            item.minContextWindow,
+            `${path}.minContextWindow`,
+            1,
+            100_000_000,
+          ),
+        }),
+    ...(input ? { input } : {}),
+  };
+}
+
 export function parseCapabilities(value: unknown): CapabilityConfig[] {
   const capabilities = optionalRecord(value, "capabilities", CAPABILITY_NAMES);
   return CAPABILITY_NAMES.map((name): CapabilityConfig => {
@@ -592,7 +643,12 @@ export function parseCapabilities(value: unknown): CapabilityConfig[] {
         };
       return { name, enabled: false, settings: {} };
     }
-    const item = record(source, path, ["enabled", "provider", "settings"]);
+    const item = record(source, path, [
+      "enabled",
+      "provider",
+      "settings",
+      "requirements",
+    ]);
     if (typeof item.enabled !== "boolean")
       fail(`${path}.enabled`, "Expected true or false");
     let provider: CapabilityProviderRef | undefined;
@@ -609,11 +665,16 @@ export function parseCapabilities(value: unknown): CapabilityConfig[] {
         );
       provider = parseProvider({ id: builtin }, `${path}.provider`, name);
     }
+    const requirements = parseRequirements(
+      item.requirements,
+      `${path}.requirements`,
+    );
     return {
       name,
       enabled: item.enabled,
       ...(provider ? { provider } : {}),
       settings: parseSettings(item.settings, `${path}.settings`),
+      ...(requirements ? { requirements } : {}),
     };
   });
 }

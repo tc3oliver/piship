@@ -210,7 +210,7 @@ function toPiModels(activated: ActivatedAccess) {
     id: model.id,
     name: model.name,
     reasoning: model.capabilities.reasoning ?? false,
-    input: model.capabilities.input.filter(
+    input: (model.capabilities.input ?? ["text"]).filter(
       (item): item is "text" | "image" => item === "text" || item === "image",
     ),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -119,12 +119,30 @@ export interface CapabilityProviderRef {
   readonly certified?: CertifiedEvidence;
 }
 
+/**
+ * Model capabilities an enabled capability needs. At launch they are compared
+ * with the selected model's verified catalog metadata; unknown metadata does
+ * not satisfy a requirement.
+ */
+export interface CapabilityModelRequirements {
+  /** The model must support tool calls. */
+  readonly tools?: boolean;
+  /** The model must accept structured (JSON schema) output. */
+  readonly structuredOutput?: boolean;
+  /** Smallest acceptable context window, in tokens. */
+  readonly minContextWindow?: number;
+  /** Input modalities the model must accept. */
+  readonly input?: readonly ("text" | "image")[];
+}
+
 export interface CapabilityConfig {
   readonly name: CapabilityName;
   readonly enabled: boolean;
   readonly provider?: CapabilityProviderRef;
   /** Non-secret provider settings, such as workflow prompts. */
   readonly settings: Readonly<Record<string, string>>;
+  /** Present only when declared. */
+  readonly requirements?: CapabilityModelRequirements;
 }
 
 // ------------------------------------------------------------------ policy
