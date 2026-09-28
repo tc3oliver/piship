@@ -24,6 +24,7 @@ const profile = (overrides: Partial<SandboxProfile> = {}): SandboxProfile => ({
   ],
   writeAllow: ["/work/ws", sessionTmp],
   readOnly: ["/opt/tools/node"],
+  writeProtect: { files: [], directories: [] },
   network: "deny",
   environmentAllow: ["PATH"],
   warnings: [],
@@ -150,6 +151,57 @@ describe.skipIf(!posix)("bubblewrap arguments", () => {
     expect(args).toContain("--remount-ro");
   });
 
+  it("keeps git control files and trees read-only inside the workspace", () => {
+    const args = bubblewrapArgs(
+      profile({
+        writeProtect: {
+          files: [
+            "/work/ws/.git/config",
+            "/work/ws/.git/commondir",
+            "/outside/.git/config",
+          ],
+          directories: [
+            "/work/ws/.git/hooks",
+            "/work/ws/.git/hooks",
+            "/work/ws/.git/info",
+          ],
+        },
+      }),
+      command,
+      {
+        ...seams,
+        exists: (path) =>
+          ![
+            "/missing",
+            "/work/ws/.git/commondir",
+            "/work/ws/.git/info",
+          ].includes(path),
+        isDir: (path) => path === "/work/ws/.git" || seams.isDir(path),
+      },
+    ).join(" ");
+    // .git is pinned read-write after the workspace bind, so it cannot be
+    // renamed away; its control files are bound read-only after it.
+    const pin = args.indexOf("--bind /work/ws/.git /work/ws/.git");
+    expect(pin).toBeGreaterThan(args.indexOf("--bind /work/ws /work/ws"));
+    expect(args).not.toContain("--ro-bind /work/ws/.git /work/ws/.git ");
+    const config = args.indexOf(
+      "--ro-bind /work/ws/.git/config /work/ws/.git/config",
+    );
+    expect(config).toBeGreaterThan(pin);
+    expect(args).toContain("--ro-bind /work/ws/.git/hooks /work/ws/.git/hooks");
+    expect(args.match(/\/work\/ws\/\.git\/hooks /g)).toHaveLength(2);
+    // A missing directory becomes an empty read-only one; a missing file is
+    // not given a mount point (it would be left on the host).
+    expect(args).toContain(
+      "--tmpfs /work/ws/.git/info --remount-ro /work/ws/.git/info",
+    );
+    expect(args).not.toContain("commondir");
+    // Outside every writable path it is read-only already.
+    expect(args).not.toContain("/outside");
+    // Read denies still come last.
+    expect(args.indexOf("/work/ws/.secrets")).toBeGreaterThan(config);
+  });
+
   it("hides host escape sockets unless they are explicitly writable", () => {
     const args = bubblewrapArgs(profile(), command, {
       ...seams,
@@ -179,6 +231,40 @@ describe("seatbelt profile", () => {
     expect(text).toContain('(subpath "/work/ws/.secrets")');
     expect(text).toContain('(subpath "/missing")');
     expect(text.trimEnd().endsWith("(deny network*)")).toBe(true);
+  });
+  it("denies writes to git control files and trees after the allowlist", () => {
+    const git = seatbeltProfile(
+      profile({
+        writeProtect: {
+          files: [
+            "/work/ws/.git/config",
+            "/work/ws/.git/commondir",
+            "/outside/.git/config",
+          ],
+          directories: ["/work/ws/.git/hooks", "/work/ws/.git/info"],
+        },
+      }),
+      {
+        ...seams,
+        exists: (path) => path !== "/work/ws/.git/commondir",
+        isDir: (path) => path !== "/work/ws/.git/config" && seams.isDir(path),
+      },
+    );
+    const allow = git.indexOf("(allow file-write*");
+    const protect = git.indexOf("(deny file-write*\n");
+    expect(protect).toBeGreaterThan(allow);
+    expect(git.indexOf("(deny file-read* file-write*")).toBeGreaterThan(
+      protect,
+    );
+    const block = git.slice(protect, git.indexOf(")\n(", protect));
+    expect(block).toContain('(literal "/work/ws/.git")');
+    expect(block).toContain('(literal "/work/ws/.git/config")');
+    // A missing file is denied as a subpath, so it cannot be created.
+    expect(block).toContain('(subpath "/work/ws/.git/commondir")');
+    expect(block).toContain('(subpath "/work/ws/.git/hooks")');
+    expect(block).toContain('(subpath "/work/ws/.git/info")');
+    expect(block).not.toContain("/outside");
+    expect(text).not.toContain(".git");
   });
   it("denies launching processes outside the sandbox through launchd", () => {
     const deny = text.indexOf("(deny lsopen)");

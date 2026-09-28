@@ -52,6 +52,7 @@ export {
   expandPathToken,
   isWithin,
   type ProfileContext,
+  type ProtectedPaths,
   realpathNearest,
   resolveProfile,
   type SandboxPolicy,

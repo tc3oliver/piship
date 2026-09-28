@@ -20,6 +20,7 @@ import { type ContainmentPlane, probeSandbox } from "./probe.js";
 import { spawnManaged, spawnProcess } from "./process.js";
 import {
   isWithin,
+  type ProtectedPaths,
   resolveProfile,
   type SandboxPolicy,
   type SandboxProfile,
@@ -47,6 +48,8 @@ export interface ActivationContext {
   readonly tmpDir?: string;
   readonly extraWritable?: readonly string[];
   readonly extraReadOnly?: readonly string[];
+  /** Paths kept read-only even inside a writable path. */
+  readonly protectedPaths?: ProtectedPaths;
   /** Activate even when not required; a failure then reports `unavailable`. */
   readonly enable?: boolean;
   readonly platform?: NodeJS.Platform;
@@ -301,6 +304,7 @@ export async function activateSandbox(
       tmpDir,
       ...(ctx.extraWritable ? { extraWritable: ctx.extraWritable } : {}),
       ...(ctx.extraReadOnly ? { extraReadOnly: ctx.extraReadOnly } : {}),
+      ...(ctx.protectedPaths ? { protectedPaths: ctx.protectedPaths } : {}),
     }),
   );
   const sourceEnv = ctx.env ?? process.env;

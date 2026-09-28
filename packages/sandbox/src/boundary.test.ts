@@ -32,6 +32,8 @@ const ready = availability?.available === true;
 const node = process.execPath;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const SECRET = "boundary-secret-7f3a9c";
+const GIT_CONFIG =
+  '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://elsewhere.example/app.git\n';
 
 const TREE = `
 const { spawn } = require("node:child_process");
@@ -160,6 +162,9 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       writeFileSync(join(ws, ".secrets", "key"), SECRET);
       writeFileSync(join(ws, "tree.js"), TREE);
       writeFileSync(join(ws, "connect.js"), CONNECT);
+      mkdirSync(join(ws, ".git", "info"), { recursive: true });
+      writeFileSync(join(ws, ".git", "config"), GIT_CONFIG);
+      writeFileSync(join(ws, ".git", "info", "exclude"), "# none\n");
       const env = {
         ...process.env,
         HOME: home,
@@ -170,6 +175,11 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         workspace: ws,
         homeDir: home,
         env,
+        // As the governance session passes them; hooks does not exist yet.
+        protectedPaths: {
+          files: [join(ws, ".git", "config"), join(ws, ".git", "commondir")],
+          directories: [join(ws, ".git", "hooks"), join(ws, ".git", "info")],
+        },
       });
       open = await activateSandbox(
         { ...config, network: { mode: "allow" } },
@@ -238,6 +248,37 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       expect(result.output).not.toContain(SECRET);
       expect(readFileSync(join(ws, ".secrets", "key"), "utf8")).toBe(SECRET);
       expect(readFileSync(join(home, ".netrc"), "utf8")).toBe(SECRET);
+    });
+
+    it("keeps git control files and hooks read-only inside the writable workspace", async () => {
+      const git = join(ws, ".git");
+      const attempts = [
+        `echo '[remote "origin"]' >> .git/config`,
+        `printf '\\turl = https://git.acme.example/app\\n' >> .git/config`,
+        "mkdir -p .git/hooks && printf '#!/bin/sh\\ntouch pwned\\n' > .git/hooks/pre-commit",
+        "echo '*' > .git/info/exclude",
+        "rm -f .git/info/exclude",
+        "mv .git .git-moved",
+        "mv .git/config .git/config.old",
+      ];
+      for (const command of attempts) {
+        const result = await run(sandbox, command);
+        expect(result.exitCode, command).not.toBe(0);
+      }
+      expect(readFileSync(join(git, "config"), "utf8")).toBe(GIT_CONFIG);
+      expect(readFileSync(join(git, "info", "exclude"), "utf8")).toBe(
+        "# none\n",
+      );
+      expect(existsSync(join(git, "hooks", "pre-commit"))).toBe(false);
+      expect(existsSync(join(ws, ".git-moved"))).toBe(false);
+      expect(existsSync(join(git, "config.old"))).toBe(false);
+      // The rest of the git directory stays writable, so git keeps working.
+      const allowed = await run(
+        sandbox,
+        "echo named > .git/description && mkdir -p .git/refs/heads && echo ok",
+      );
+      expect(allowed.exitCode, allowed.output).toBe(0);
+      expect(readFileSync(join(git, "description"), "utf8")).toBe("named\n");
     });
 
     it.runIf(process.platform === "darwin")(

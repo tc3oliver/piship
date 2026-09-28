@@ -10,9 +10,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   expandPathToken,
+  protectedAncestors,
   realpathNearest,
   resolveProfile,
   type SandboxPolicy,
+  writableProtected,
 } from "./profile.js";
 
 const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
@@ -95,6 +97,35 @@ describe("resolveProfile", () => {
     });
     expect(profile.writeAllow).toContain(join(root, "session"));
     expect(profile.writeAllow).not.toContain(realpathNearest(tmpdir()));
+  });
+
+  it("resolves protected paths and lists those inside a writable path with their parents", () => {
+    const ws = join(root, "ws");
+    mkdirSync(join(ws, ".git", "hooks"), { recursive: true });
+    symlinkSync(ws, join(root, "ws-link"));
+    const link = join(root, "ws-link", ".git");
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "t"),
+      protectedPaths: {
+        files: [join(link, "config"), join(root, "outside", "config")],
+        directories: [join(link, "hooks"), join(link, "hooks", "nested")],
+      },
+    });
+    expect(profile.writeProtect).toEqual({
+      files: [join(ws, ".git", "config"), join(root, "outside", "config")],
+      directories: [
+        join(ws, ".git", "hooks"),
+        join(ws, ".git", "hooks", "nested"),
+      ],
+    });
+    const entries = writableProtected(profile);
+    expect(entries).toEqual([
+      { path: join(ws, ".git", "config"), directory: false },
+      { path: join(ws, ".git", "hooks"), directory: true },
+    ]);
+    expect(protectedAncestors(profile, entries)).toEqual([join(ws, ".git")]);
   });
 
   it("warns when a deny hides a writable path", () => {
