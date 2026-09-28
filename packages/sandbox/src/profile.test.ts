@@ -30,11 +30,11 @@ describe("path tokens", () => {
   const ctx = { workspace: "/w", homeDir: "/h", tmpDir: "/t" };
   it("expands workspace, tmp, ~ and nested forms", () => {
     expect(expandPathToken("workspace", ctx)).toBe("/w");
-    expect(expandPathToken("workspace/build", ctx)).toBe("/w/build");
+    expect(expandPathToken("workspace/build", ctx)).toBe(join("/w", "build"));
     expect(expandPathToken("tmp", ctx)).toBe("/t");
-    expect(expandPathToken("tmp/cache", ctx)).toBe("/t/cache");
+    expect(expandPathToken("tmp/cache", ctx)).toBe(join("/t", "cache"));
     expect(expandPathToken("~", ctx)).toBe("/h");
-    expect(expandPathToken("~/.ssh", ctx)).toBe("/h/.ssh");
+    expect(expandPathToken("~/.ssh", ctx)).toBe(join("/h", ".ssh"));
     expect(expandPathToken("/etc/shadow", ctx)).toBe("/etc/shadow");
   });
   it("rejects relative paths and look-alike tokens", () => {

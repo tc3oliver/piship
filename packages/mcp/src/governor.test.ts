@@ -20,6 +20,26 @@ import type {
   SpawnRequest,
 } from "./types.js";
 
+// On Windows libuv always adds these to a child's environment, whatever the
+// parent passes, so they cannot be filtered and are not counted here.
+const WINDOWS_REQUIRED = new Set([
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "LOGONSERVER",
+  "PATH",
+  "SYSTEMDRIVE",
+  "SYSTEMROOT",
+  "TEMP",
+  "USERDOMAIN",
+  "USERNAME",
+  "USERPROFILE",
+  "WINDIR",
+]);
+const osAdded = (name: string) =>
+  name === "LC_CTYPE" ||
+  name === "__CF_USER_TEXT_ENCODING" ||
+  (process.platform === "win32" && WINDOWS_REQUIRED.has(name.toUpperCase()));
+
 const testingDir = fileURLToPath(new URL("./testing/", import.meta.url));
 const cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -562,7 +582,7 @@ describe("McpGovernor with the sandbox process runtime", () => {
     expect(names).toContain("DOCS_MODE");
     expect(names).not.toContain("ACME_API_TOKEN");
     expect(names).not.toContain("UNRELATED");
-    expect(names).not.toContain("PATH");
+    if (process.platform !== "win32") expect(names).not.toContain("PATH");
     expect(JSON.stringify(spawned)).not.toContain("opaque-value-123456");
   });
 });
@@ -580,10 +600,7 @@ describe("McpGovernor environment filtering (test runtime)", () => {
     await governor.start();
     const echo = governor.tools().find((t) => t.tool === "echo_env");
     const names = JSON.parse((await echo?.call({}))?.text ?? "[]") as string[];
-    // The OS may add LC_CTYPE or macOS's __CF_USER_TEXT_ENCODING itself.
-    expect(
-      names.filter((n) => n !== "LC_CTYPE" && n !== "__CF_USER_TEXT_ENCODING"),
-    ).toEqual(["DOCS_MODE", "LANG"]);
+    expect(names.filter((n) => !osAdded(n))).toEqual(["DOCS_MODE", "LANG"]);
   });
 });
 

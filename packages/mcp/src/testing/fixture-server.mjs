@@ -33,7 +33,10 @@ const stderrText = flag("--stderr");
 if (stderrText) process.stderr.write(`${stderrText}\n`);
 const failFirst = flag("--fail-first");
 if (failFirst) {
-  const [file, limit] = failFirst.split(":");
+  // Split at the last colon: a Windows path has a drive-letter colon.
+  const cut = failFirst.lastIndexOf(":");
+  const file = failFirst.slice(0, cut);
+  const limit = failFirst.slice(cut + 1);
   const count = existsSync(file) ? Number(readFileSync(file, "utf8")) + 1 : 1;
   writeFileSync(file, String(count));
   if (count <= Number(limit)) process.exit(1);

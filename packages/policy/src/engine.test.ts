@@ -379,7 +379,7 @@ describe("filesystem resources", () => {
       resource: "../outside.txt",
     });
     expect(outside.effect).toBe("deny");
-    expect(outside.resource).toBe(`${base}/outside.txt`);
+    expect(outside.resource).toBe(`${base.split("\\").join("/")}/outside.txt`);
   });
   it("does not expand tokens for non-filesystem actions", () => {
     const decision = engine({
