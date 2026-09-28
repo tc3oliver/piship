@@ -42,7 +42,6 @@ temp/
 # PiShip runtime state
 .piship/
 .mypi/
-.micode/
 
 # Product source specification is maintained outside the public repository
 docs/spec/product-v1.0.md
