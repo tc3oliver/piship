@@ -97,7 +97,7 @@ describe("formatDecision", () => {
     });
     const text = formatDecision(audit);
     expect(text).toContain(
-      "Enforcement:\n  audit-only (observed and recorded; not prevented)",
+      "Enforcement:\n  audit-only (not enforced: no runtime hook evaluates this action, so it is not prevented or recorded)",
     );
     expect(text).not.toContain("abcdefghijkl");
     expect(text).not.toContain("zzz123456");
