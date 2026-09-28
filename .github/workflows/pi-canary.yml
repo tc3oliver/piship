@@ -1,0 +1,82 @@
+name: Pi latest canary
+# Installs the newest published Pi over the pin in the runner's throwaway
+# checkout and runs the Pi compatibility suite against it. It is read-only:
+# it never changes the pinned dependency, commits, merges, or publishes.
+# A failure opens (or comments on) one tracking issue. It is early warning
+# for the next Pi upgrade, not a pull request gate (see AGENTS.md, CI
+# evidence tiers).
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  canary:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+          "npm_config_prefer_offline=true" >> $env:GITHUB_ENV
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      - run: npm ci
+      # --no-save leaves package.json and package-lock.json untouched; the
+      # latest Pi exists only in this runner's node_modules.
+      - name: Install the latest Pi
+        run: |
+          latest="$(npm view @earendil-works/pi-coding-agent version)"
+          echo "Pinned Pi: $(node -p 'require("./packages/pi/package.json").dependencies["@earendil-works/pi-coding-agent"]')"
+          echo "Latest Pi: $latest"
+          npm install --no-save --workspace @piship/pi "@earendil-works/pi-coding-agent@$latest"
+          installed="$(cd packages/pi && node --input-type=module -e 'import { VERSION } from "@earendil-works/pi-coding-agent"; console.log(VERSION)')"
+          test "$installed" = "$latest"
+          git diff --exit-code -- package.json package-lock.json packages/pi/package.json
+          echo "### Pi latest canary: $latest" >> "$GITHUB_STEP_SUMMARY"
+      - run: npm run build
+      - run: npm run test:compatibility
+        env:
+          PISHIP_PI_CANARY: "1"
+
+  report:
+    needs: canary
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: Pi latest canary is failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="The scheduled Pi latest canary failed: $RUN_URL. Check whether the newest Pi release changed a public seam PiShip uses before updating the pin (docs/compatibility.md)."
+          number="$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n 1)"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

@@ -42,6 +42,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { governModelRuntime, PINNED_PI_VERSION } from "./index.js";
 
+// The scheduled Pi latest canary installs the newest published Pi over the
+// pin in a throwaway checkout and runs this suite read-only. Only the
+// exact-version assertions are relaxed there; every seam is still checked.
+const CANARY = process.env.PISHIP_PI_CANARY === "1";
+const EXPECTED_PI_VERSION = CANARY ? VERSION : PINNED_PI_VERSION;
+
 // The tool definitions PiShip builds, called the way Pi's agent loop calls
 // them: execute(toolCallId, params, signal, onUpdate, ctx).
 type Execute = (
@@ -128,7 +134,8 @@ function write(path: string, content: string): string {
 describe("Pi public SDK", () => {
   it("imports createAgentSession from the public package entrypoint", () => {
     expect(typeof upstreamPi.createAgentSession).toBe("function");
-    expect(upstreamPi.VERSION).toBe(PINNED_PI_VERSION);
+    expect(upstreamPi.VERSION).toBe(EXPECTED_PI_VERSION);
+    expect(upstreamPi.VERSION).toMatch(/^\d+\.\d+\.\d+/);
     expect(PI_VERSION).toBe(PINNED_PI_VERSION);
   });
 
@@ -152,7 +159,7 @@ describe("Pi public SDK", () => {
       "createLocalBashOperations",
     ])
       expect(typeof exported[name], name).toBe("function");
-    expect(VERSION).toBe(PINNED_PI_VERSION);
+    expect(VERSION).toBe(EXPECTED_PI_VERSION);
     expect(typeof InteractiveMode.prototype.run).toBe("function");
     expect(typeof ModelRuntime.create).toBe("function");
     expect(typeof SettingsManager.inMemory).toBe("function");

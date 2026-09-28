@@ -67,5 +67,4 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:compatibility
-# TODO: Add a read-only latest Pi canary once it can report failures reliably.
-# It must never change the pinned runtime dependency, commit, merge, or publish.
+# The read-only latest Pi canary is pi-canary.yml (scheduled and manual).
