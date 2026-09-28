@@ -6,10 +6,9 @@ All notable changes to this project are documented in this file. Each section is
 
 Preview milestone; not published to npm.
 
-- Project consolidation in progress; see [docs/roadmap.md](docs/roadmap.md).
-
 ### Changed
 
+- Project consolidation in progress; see [docs/roadmap.md](docs/roadmap.md).
 - Documentation: a single [status page](docs/status.md) for what current `main` supports and the evidence behind it; stale CI tier, schema, and revocation claims corrected; the manifest guide lists its differences from the product specification.
 - Documentation: the release guide is split into [owner workflow](docs/release/owner-workflow.md), [artifact contract](docs/release/artifact-contract.md), and [update lifecycle](docs/release/update-lifecycle.md) pages; `docs/release.md` is an index that maps every former section to its new location.
 - This changelog is organized by milestone.
@@ -44,7 +43,7 @@ Preview milestone; not published to npm. Commit `03c33cf` (#16), "close governan
 - Whole-manifest secret scanning.
 - Supply chain: registry integrity for nested Pi packages, a `source` gate for packages without integrity, and a registry signature gate (`npm audit signatures`).
 
-External qualification evidence for this milestone is not yet independently qualified; see the [status page](docs/status.md#recorded-evidence).
+No three-target Portable E2E or Release Candidate run is recorded on `03c33cf`; see [docs/status.md](docs/status.md#recorded-evidence).
 
 ## v0.4
 
