@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
 import { inventory, removeNpmBins } from "./payload.js";
-import { checkPackageSources } from "./release.js";
+import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 
 /**

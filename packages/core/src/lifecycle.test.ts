@@ -29,20 +29,26 @@ import {
 } from "./index.js";
 import {
   RECEIPT_SCHEMA,
-  type UpdateOptions,
   installDistribution,
   lifecycleStatus,
   purgeDistributionState,
   readInstallReceipt,
   recoverInstallation,
+  uninstallDistribution,
+} from "./install/index.js";
+import { readStateMarker } from "./migration.js";
+import {
+  type CommandResult,
+  buildRelease,
+  signChannel,
+} from "./release/index.js";
+import { generateSigningKey } from "./signing.js";
+import {
+  type UpdateOptions,
   rollbackDistribution,
   selectChannel,
-  uninstallDistribution,
   updateDistribution,
-} from "./lifecycle.js";
-import { readStateMarker } from "./migration.js";
-import { type CommandResult, buildRelease, signChannel } from "./release.js";
-import { generateSigningKey } from "./signing.js";
+} from "./update/index.js";
 
 // ------------------------------------------------------------------ fixtures
 

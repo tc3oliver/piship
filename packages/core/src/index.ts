@@ -15,7 +15,8 @@ export * from "./diff/index.js";
 export { canonicalJson } from "./digest.js";
 export { checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
-export * from "./lifecycle.js";
+export * from "./install/index.js";
+export * from "./update/index.js";
 export {
   checkPiVersion,
   lockManifest,
@@ -42,7 +43,7 @@ export {
   verifyPayload,
   verifyPayloadContents,
 } from "./payload.js";
-export * from "./release.js";
+export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
 export * from "./signing.js";
 export {

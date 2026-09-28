@@ -42,7 +42,7 @@ import {
   readChannel,
   signChannel,
   verifyRelease,
-} from "./release.js";
+} from "./release/index.js";
 import { generateSigningKey } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
@@ -302,7 +302,7 @@ async function withNpmLock<T>(
   edit: (packages: Record<string, Record<string, unknown>>) => void,
   run: (
     core: typeof import("./index.js"),
-    release: typeof import("./release.js"),
+    release: typeof import("./release/index.js"),
   ) => T,
 ): Promise<T> {
   const input = temp("piship-build-input-");
@@ -317,7 +317,7 @@ async function withNpmLock<T>(
   process.env.PISHIP_BUILD_INPUT = input;
   vi.resetModules();
   try {
-    return run(await import("./index.js"), await import("./release.js"));
+    return run(await import("./index.js"), await import("./release/index.js"));
   } finally {
     process.env.PISHIP_BUILD_INPUT = BUILD_INPUT;
     vi.resetModules();
@@ -686,7 +686,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     vi.resetModules();
     try {
       const core = await import("./index.js");
-      const release = await import("./release.js");
+      const release = await import("./release/index.js");
       const { path } = project({ lock: false });
       core.lockManifest(path);
       const lock = core.requireCurrentLock(path);
@@ -840,7 +840,7 @@ policy:
       currentTarget: () => "win32-x64",
     }));
     try {
-      const release = await import("./release.js");
+      const release = await import("./release/index.js");
       const { path } = project({ extra: "sandbox:\n  required: true\n" });
       const error = caught(() => release.checkReleaseInputs(path, "win32-x64"));
       expect(error.code).toBe("SANDBOX_UNAVAILABLE");
