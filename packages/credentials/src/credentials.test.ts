@@ -43,6 +43,7 @@ import {
   toSecretValue,
   withFileLock,
 } from "./index.js";
+import { touchHeldLocks } from "./lock-heartbeat.js";
 
 let temp: string;
 beforeEach(() => {
@@ -646,6 +647,26 @@ describe("credential lifecycle", () => {
     }
     expect(ran).toBe(false);
     expect(existsSync(lock)).toBe(true);
+  });
+  it("breaks a stale lock without leaving files and releases only its own lock", async () => {
+    const path = join(temp, "stale.json");
+    const lock = `${path}.lock`;
+    writeFileSync(lock, "crashed-holder");
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lock, old, old);
+    await withFileLock(path, async () => {
+      expect(readFileSync(lock, "utf8")).not.toBe("crashed-holder");
+      // Blocking secret-store commands touch the held lock first.
+      utimesSync(lock, old, old);
+      touchHeldLocks();
+      expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(10_000);
+      // Another process took the lock over; it is not ours to remove.
+      writeFileSync(lock, "another-holder");
+    });
+    expect(readFileSync(lock, "utf8")).toBe("another-holder");
+    expect(readdirSync(temp).filter((name) => name.endsWith(".stale"))).toEqual(
+      [],
+    );
   });
   it("keeps its own lock fresh while a long task runs", async () => {
     const path = join(temp, "long.json");

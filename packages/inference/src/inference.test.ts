@@ -223,5 +223,26 @@ describe("OpenAI-compatible endpoint", () => {
       retryable: true,
       message: "The inference gateway did not answer within 15 s",
     });
+    const slowBody = new OpenAICompatibleInferenceProvider({
+      providerId: "acmecode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      catalog,
+      allowed: ["acme/coder"],
+      liveCatalog: true,
+      fetch: async () =>
+        ({
+          status: 200,
+          headers: new Headers(),
+          json: async () => {
+            throw new DOMException("The operation timed out", "TimeoutError");
+          },
+        }) as unknown as Response,
+      secret: () => null,
+    });
+    await expect(slowBody.probe()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+    });
   });
 });

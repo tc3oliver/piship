@@ -92,7 +92,7 @@ export function isPiShipError(value: unknown): value is PiShipError {
 export function formatError(error: unknown): string {
   if (error instanceof PiShipError)
     return redact(
-      `${error.code}: ${error.message}${error.retryAfterMs === undefined ? "" : `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s`}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
+      `${error.code}: ${error.message}${error.retryAfterMs !== undefined && error.retryAfterMs > 0 ? `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s` : ""}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
     );
   if (error instanceof Error) return redact(error.message);
   return redact(String(error));

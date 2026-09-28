@@ -112,9 +112,9 @@ function git(args: readonly string[], cwd: string) {
 
 /**
  * Classify a private-key output path: outside any git work tree, inside one
- * but git-ignored, or inside one where `git add` would pick it up. Without a
- * usable git, a `.git` entry in any ancestor counts as a work tree whose
- * ignore rules are unknown.
+ * but git-ignored, or inside one where `git add` would pick it up. When git
+ * is missing or exits with an error, a `.git` entry in any ancestor counts
+ * as a work tree whose ignore rules are unknown.
  */
 export function privateKeyLocation(path: string): KeyLocation {
   const target = resolve(path);
@@ -123,14 +123,18 @@ export function privateKeyLocation(path: string): KeyLocation {
     : dirname(target);
   const file = join(parent, basename(target));
   const inside = git(["rev-parse", "--is-inside-work-tree"], parent);
-  if (!inside.error) {
-    if (inside.status !== 0 || inside.stdout.trim() !== "true")
-      return "outside";
-    const ignored = git(["check-ignore", "--quiet", "--", file], parent);
-    return !ignored.error && ignored.status === 0
-      ? "ignored"
-      : "tracked-worktree";
+  if (!inside.error && inside.status === 0) {
+    const answer = inside.stdout.trim();
+    if (answer === "false") return "outside";
+    if (answer === "true") {
+      const ignored = git(["check-ignore", "--quiet", "--", file], parent);
+      return !ignored.error && ignored.status === 0
+        ? "ignored"
+        : "tracked-worktree";
+    }
   }
+  // Git is missing or could not answer (not a repository, dubious ownership,
+  // GIT_CEILING_DIRECTORIES, ...): fail closed on any .git above the path.
   for (let dir = parent; ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return "tracked-worktree";
     if (dirname(dir) === dir) return "outside";

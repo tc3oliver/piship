@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -139,6 +140,29 @@ describe("private key location", () => {
     const outside = mkdtempSync(join(tmpdir(), "piship-keygen-out-"));
     roots.push(outside);
     expect(privateKeyLocation(join(outside, "k.pem"))).toBe("outside");
+  });
+
+  it("fails closed when git exits with an error inside a work tree", () => {
+    const root = repo();
+    const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+    // git then refuses to find the repository and exits non-zero.
+    process.env.GIT_CEILING_DIRECTORIES = realpathSync(root);
+    try {
+      expect(
+        spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+          cwd: join(root, "secret"),
+        }).status,
+      ).not.toBe(0);
+      expect(privateKeyLocation(join(root, "secret", "k.pem"))).toBe(
+        "tracked-worktree",
+      );
+      expect(() => writePrivateKey(join(root, "src", "k.pem"), pem)).toThrow(
+        /not git-ignored/,
+      );
+    } finally {
+      if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = ceiling;
+    }
   });
 
   it("falls back to finding .git when git is unavailable", () => {

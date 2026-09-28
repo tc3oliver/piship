@@ -1361,7 +1361,10 @@ export async function readSourceFile(
 
 /**
  * A source written as `scheme:` (other than a Windows drive letter) is a URL;
- * anything else is a local directory path.
+ * anything else is a local directory path. A drive-relative Windows path such
+ * as `C:foo` (no separator after the colon) matches the scheme pattern, so it
+ * is treated as a URL and refused rather than resolved against the current
+ * directory of drive C; write `C:\foo` or `C:/foo` instead.
  */
 function isUrlSource(source: string): boolean {
   return (

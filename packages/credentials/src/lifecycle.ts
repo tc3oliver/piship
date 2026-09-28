@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -10,6 +11,7 @@ import {
   statSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
@@ -23,6 +25,7 @@ import {
   type SecretStore,
   SecretValue,
 } from "@piship/contracts";
+import { heldLocks } from "./lock-heartbeat.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 
@@ -240,7 +243,13 @@ export function normalizeCredential(value: unknown): RuntimeCredential {
 
 /** A held lock is refreshed this often, so only an abandoned one goes stale. */
 const LOCK_HEARTBEAT_MS = 5_000;
-const LOCK_STALE_MS = 30_000;
+/**
+ * Longer than the worst gap between refreshes: one blocking secret-store
+ * command (30 s timeout; locks are touched before each one) plus a missed
+ * heartbeat, with margin. Still below the wait, so an abandoned lock is
+ * broken before a waiter gives up.
+ */
+const LOCK_STALE_MS = 75_000;
 const LOCK_WAIT_MS = 90_000;
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -261,11 +270,43 @@ function lockAge(lock: string): number | undefined {
   }
 }
 
+function readToken(lock: string): string | undefined {
+  try {
+    return readFileSync(lock, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Break a stale lock without racing another waiter: move it aside under a
+ * unique name (atomic), re-check that what was moved is still stale, and only
+ * then delete it. A lock that turned out fresh is put back unless a new lock
+ * already took its place.
+ */
+function breakStaleLock(lock: string, staleMs: number): void {
+  const aside = `${lock}.${process.pid}-${randomBytes(6).toString("hex")}.stale`;
+  try {
+    renameSync(lock, aside);
+  } catch {
+    return;
+  }
+  const age = lockAge(aside);
+  if (age !== undefined && age <= staleMs)
+    try {
+      linkSync(aside, lock);
+    } catch {
+      // A new holder already created the lock.
+    }
+  rmSync(aside, { force: true });
+}
+
 /**
  * Cross-process lock beside the metadata file. The holder refreshes the
- * lock's mtime while its task runs, so a lock is broken only when it is stale
- * (its holder stopped refreshing it, such as a crashed process). A fresh lock
- * is never broken: after the wait, the caller fails with a retryable error.
+ * lock's mtime while its task runs (on an interval, and before each blocking
+ * secret-store command), so a lock is broken only when it is stale: its
+ * holder stopped refreshing it, such as a crashed process. A fresh lock is
+ * never broken: after the wait, the caller fails with a retryable error.
  */
 export async function withFileLock<T>(
   path: string,
@@ -277,20 +318,23 @@ export async function withFileLock<T>(
   const waitMs = timing.waitMs ?? LOCK_WAIT_MS;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const lock = `${path}.lock`;
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx", 0o600));
+      const fd = openSync(lock, "wx", 0o600);
+      try {
+        writeSync(fd, token);
+      } finally {
+        closeSync(fd);
+      }
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const age = lockAge(lock);
       if (age === undefined) continue;
       if (age > staleMs) {
-        // Re-check just before breaking, in case its holder just refreshed it.
-        const current = lockAge(lock);
-        if (current !== undefined && current > staleMs)
-          rmSync(lock, { force: true });
+        breakStaleLock(lock, staleMs);
         continue;
       }
       if (Date.now() > deadline)
@@ -307,6 +351,7 @@ export async function withFileLock<T>(
       await sleep(50);
     }
   }
+  heldLocks.add(lock);
   const heartbeat = setInterval(() => {
     try {
       const now = new Date();
@@ -320,7 +365,9 @@ export async function withFileLock<T>(
     return await task();
   } finally {
     clearInterval(heartbeat);
-    rmSync(lock, { force: true });
+    heldLocks.delete(lock);
+    // Release only this holder's lock, never one another process took over.
+    if (readToken(lock) === token) rmSync(lock, { force: true });
   }
 }
 

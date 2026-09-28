@@ -186,6 +186,12 @@ export interface OpenAICompatibleOptions {
 }
 
 const PROBE_TIMEOUT_MS = 15_000;
+const probeTimeout = () =>
+  new PiShipError(
+    "GATEWAY_UNREACHABLE",
+    `The inference gateway did not answer within ${PROBE_TIMEOUT_MS / 1000} s`,
+    { component: "inference", retryable: true },
+  );
 
 /** Explicit OpenAI-compatible endpoint (managed gateway or local server). */
 export class OpenAICompatibleInferenceProvider implements InferenceProvider {
@@ -208,12 +214,7 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
         },
       );
     } catch (error) {
-      if ((error as Error)?.name === "TimeoutError")
-        throw new PiShipError(
-          "GATEWAY_UNREACHABLE",
-          `The inference gateway did not answer within ${PROBE_TIMEOUT_MS / 1000} s`,
-          { component: "inference", retryable: true },
-        );
+      if ((error as Error)?.name === "TimeoutError") throw probeTimeout();
       throw error;
     }
     const failure = classifyGatewayStatus(
@@ -224,7 +225,9 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
     let body: { data?: { id?: unknown }[] };
     try {
       body = (await response.json()) as typeof body;
-    } catch {
+    } catch (error) {
+      // The deadline also covers reading the body.
+      if ((error as Error)?.name === "TimeoutError") throw probeTimeout();
       throw new PiShipError(
         "GATEWAY_PROTOCOL_ERROR",
         "The inference gateway model list is not JSON",

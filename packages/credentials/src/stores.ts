@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
+import { touchHeldLocks } from "./lock-heartbeat.js";
 
 export interface CommandResult {
   readonly status: number | null;
@@ -26,6 +27,8 @@ export type CommandRunner = (
 ) => CommandResult;
 
 export const runCommand: CommandRunner = (command, args, stdin) => {
+  // This blocks the event loop for up to 30 s; keep held locks fresh first.
+  touchHeldLocks();
   const result = spawnSync(command, [...args], {
     input: stdin ?? "",
     encoding: "utf8",

@@ -48,7 +48,7 @@ A `piship/v1alpha3` or `piship/v1alpha4` launch opens a governance session befor
 | --- | --- | --- |
 | `control-plane` | PiShip decides before the action runs, inside the Pi process | Model use, resource and extension loading, MCP server start and tool calls, tool calls; file access through the governed `read`, `write`, and `edit` tools and shell command gating when no sandbox is enforced |
 | `sandbox` | An OS sandbox proven by a live probe also contains the action | `filesystem.*` and `shell.execute` when the sandbox is enforced; `network.connect` when it is enforced in `deny` mode |
-| `audit-only` | Observed at best; never reported as prevented | `network.connect` without an enforced deny sandbox, `web.request`, `browser.execute` |
+| `audit-only` | Not enforced: no runtime hook evaluates the action, so it is neither prevented nor recorded, and never reported as prevented | `network.connect` without an enforced deny sandbox, `web.request`, `browser.execute` |
 
 `policy explain` prints the plane for any action and resource. This release has no runtime hook for `network.connect`, `web.request`, `browser.execute`, `agent.invoke`, or `memory.*`; `policy explain` reports these actions as `audit-only` unless an enforced deny sandbox contains `network.connect`. A non-builtin capability provider whose capability is effective is also decided as `provider.load` (the provider ID) and `extension.load` (`<class>:<path>`) before its extension loads; a denial skips the provider, records `provider.denied`, and makes the capability not effective.
 

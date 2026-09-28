@@ -163,6 +163,11 @@ describe("SecretValue", () => {
     expect(formatError(new PiShipError("UPDATE_FAILED", "x"))).toBe(
       "UPDATE_FAILED: x",
     );
+    expect(
+      formatError(
+        new PiShipError("GATEWAY_RATE_LIMITED", "x", { retryAfterMs: 0 }),
+      ),
+    ).toBe("GATEWAY_RATE_LIMITED: x");
   });
 });
 
