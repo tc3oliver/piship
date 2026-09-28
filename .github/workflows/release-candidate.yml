@@ -1,28 +1,10 @@
 name: Release candidate
 # Builds, verifies, and attests the demo distribution's release archives.
 # Output stays in workflow artifacts: nothing is published or released here.
+# Release qualification runs manually on the exact candidate HEAD before a
+# release; it is not triggered by pull requests or main pushes (see
+# AGENTS.md, CI evidence tiers).
 on:
-  pull_request:
-    paths:
-      - 'packages/**'
-      - 'examples/demo-company/**'
-      - 'scripts/**'
-      - 'compatibility/**'
-      - '.github/workflows/release-candidate.yml'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
-  push:
-    branches: [main]
-    paths:
-      - 'packages/**'
-      - 'examples/demo-company/**'
-      - 'scripts/**'
-      - 'compatibility/**'
-      - '.github/workflows/release-candidate.yml'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
   workflow_dispatch:
 permissions:
   contents: read

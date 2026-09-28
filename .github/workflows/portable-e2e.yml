@@ -1,34 +1,9 @@
 name: Portable E2E
+# Full three-target installed E2E is nightly and manual integration
+# evidence, not a pull request gate (see AGENTS.md, CI evidence tiers).
 on:
-  pull_request:
-    paths:
-      - 'packages/**'
-      - 'tests/e2e/**'
-      - 'tests/helpers/**'
-      - 'examples/personal/**'
-      - 'examples/demo-company/**'
-      - 'scripts/**'
-      - 'compatibility/**'
-      - '.github/workflows/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'vitest.config.ts'
-      - 'tsconfig*.json'
-  push:
-    branches: [main]
-    paths:
-      - 'packages/**'
-      - 'tests/e2e/**'
-      - 'tests/helpers/**'
-      - 'examples/personal/**'
-      - 'examples/demo-company/**'
-      - 'scripts/**'
-      - 'compatibility/**'
-      - '.github/workflows/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'vitest.config.ts'
-      - 'tsconfig*.json'
+  schedule:
+    - cron: "0 18 * * *"
   workflow_dispatch:
 permissions:
   contents: read
