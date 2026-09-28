@@ -6,6 +6,7 @@ export {
   type ContainmentReport,
   describeContainment,
   INJECTED_VARIABLES,
+  platformInjectedVariables,
   type SandboxExecOptions,
 } from "./activate.js";
 export {

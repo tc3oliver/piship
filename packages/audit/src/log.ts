@@ -168,7 +168,7 @@ function resolveHttpUrl(
 ): URL {
   if (!sink.url) throw new Error("HTTP sink has no url");
   const value = resolveUrl ? resolveUrl(sink.url) : sink.url;
-  if (/\$\{[^}]*\}/.test(value))
+  if (value.includes("${"))
     throw new Error("HTTP sink url has an unresolved reference");
   const url = new URL(value);
   if (url.username || url.password)

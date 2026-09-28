@@ -92,6 +92,17 @@ export interface ActiveSandbox {
 /** Variables the sandbox sets itself: the private session temp dir and the working directory. */
 export const INJECTED_VARIABLES = ["TMPDIR", "PWD"] as const;
 
+/**
+ * Variables the operating system adds to every new process by itself. macOS
+ * sets `__CF_USER_TEXT_ENCODING` (the user's text encoding id, not a secret)
+ * in each child even from an empty environment.
+ */
+export function platformInjectedVariables(
+  platform: NodeJS.Platform | string,
+): readonly string[] {
+  return platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : [];
+}
+
 function sessionEnvironment(
   profile: SandboxProfile,
   approved: Record<string, string>,
@@ -329,7 +340,10 @@ export async function activateSandbox(
       );
       const probe = await probeSandbox(adapter, profile, {
         env,
-        injected: INJECTED_VARIABLES,
+        injected: [
+          ...INJECTED_VARIABLES,
+          ...platformInjectedVariables(platform),
+        ],
         ...(ctx.probeTimeoutMs ? { timeoutMs: ctx.probeTimeoutMs } : {}),
       });
       report = probe.ok

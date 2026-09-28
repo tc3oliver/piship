@@ -87,7 +87,13 @@ function unquote(value: string): string {
   const trimmed = value.trim();
   const quoted = /^"((?:[^"\\]|\\.)*)"/.exec(trimmed);
   if (quoted) return (quoted[1] ?? "").replace(/\\(["\\])/g, "$1");
-  return trimmed.replace(/\s[#;].*$/, "").trim();
+  // Drop a trailing comment: whitespace followed by `#` or `;`.
+  for (let index = 1; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if ((char === "#" || char === ";") && /\s/.test(trimmed[index - 1] ?? ""))
+      return trimmed.slice(0, index).trim();
+  }
+  return trimmed;
 }
 
 /** Read `[remote "origin"] url` from git config text. */
@@ -104,9 +110,11 @@ export function parseOriginUrl(config: string): string | undefined {
       continue;
     }
     if (!inOrigin) continue;
-    const entry = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line);
-    if (entry?.[1]?.toLowerCase() === "url" && entry[2] !== undefined)
-      return unquote(entry[2]);
+    const equals = line.indexOf("=");
+    if (equals < 0) continue;
+    const key = line.slice(0, equals).trim();
+    if (/^[A-Za-z][A-Za-z0-9-]*$/.test(key) && key.toLowerCase() === "url")
+      return unquote(line.slice(equals + 1));
   }
   return undefined;
 }
@@ -120,29 +128,44 @@ export function normalizeRemote(url: string): string | undefined {
   const value = url.trim();
   let host: string;
   let path: string;
-  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)(.*)$/.exec(value);
-  if (scheme) {
-    if (scheme[1]?.toLowerCase() === "file") return undefined;
-    const authority = scheme[2] ?? "";
+  const separator = value.indexOf("://");
+  const schemeName = separator > 0 ? value.slice(0, separator) : "";
+  if (/^[A-Za-z][A-Za-z0-9+.-]*$/.test(schemeName)) {
+    if (schemeName.toLowerCase() === "file") return undefined;
+    const rest = value.slice(separator + 3);
+    const slash = rest.indexOf("/");
+    const authority = slash < 0 ? rest : rest.slice(0, slash);
     const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
     host = hostPort.startsWith("[")
       ? hostPort.slice(0, hostPort.indexOf("]") + 1)
       : (hostPort.split(":")[0] ?? "");
-    path = scheme[3] ?? "";
+    path = slash < 0 ? "" : rest.slice(slash);
   } else {
-    const scp = /^(?:[^@/]+@)?([^:/]+):(?!\/\/)(.*)$/.exec(value);
-    if (!scp || /^[A-Za-z]$/.test(scp[1] ?? "")) return undefined;
-    host = scp[1] ?? "";
-    path = scp[2] ?? "";
+    // scp-like `[user@]host:path`, parsed without a backtracking pattern.
+    const colon = value.indexOf(":");
+    const head = colon > 0 ? value.slice(0, colon) : "";
+    const tail = value.slice(colon + 1);
+    if (!head || head.includes("/") || tail.startsWith("//")) return undefined;
+    const at = head.indexOf("@");
+    host = at > 0 ? head.slice(at + 1) : head;
+    // A single letter is a Windows drive, not a host.
+    if (!host || /^[A-Za-z]$/.test(host)) return undefined;
+    path = tail;
   }
   host = host.toLowerCase();
   if (host === "") return undefined;
-  path = path
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "")
-    .replace(/\.git$/, "")
-    .replace(/\/+$/, "");
+  path = trimSlashes(path);
+  if (path.endsWith(".git")) path = trimSlashes(path.slice(0, -4));
   return path === "" ? host : `${host}/${path}`;
+}
+
+/** Remove leading and trailing `/` without a backtracking regular expression. */
+function trimSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "/") start += 1;
+  while (end > start && value[end - 1] === "/") end -= 1;
+  return value.slice(start, end);
 }
 
 function gitConfigPath(gitDir: string): string {

@@ -580,10 +580,10 @@ describe("McpGovernor environment filtering (test runtime)", () => {
     await governor.start();
     const echo = governor.tools().find((t) => t.tool === "echo_env");
     const names = JSON.parse((await echo?.call({}))?.text ?? "[]") as string[];
-    expect(names.filter((n) => n !== "LC_CTYPE")).toEqual([
-      "DOCS_MODE",
-      "LANG",
-    ]);
+    // The OS may add LC_CTYPE or macOS's __CF_USER_TEXT_ENCODING itself.
+    expect(
+      names.filter((n) => n !== "LC_CTYPE" && n !== "__CF_USER_TEXT_ENCODING"),
+    ).toEqual(["DOCS_MODE", "LANG"]);
   });
 });
 
