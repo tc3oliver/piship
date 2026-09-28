@@ -3,16 +3,16 @@
 // such as E2B or CubeSandbox, works through this one compatibility layer.
 import { randomBytes } from "node:crypto";
 import type { AdapterAvailability } from "../adapter.js";
-import type {
-  SandboxBackend,
-  SandboxCapabilities,
-  SandboxExecIO,
-  SandboxExecRequest,
-  SandboxExecResult,
-  SandboxInstance,
-  SandboxPrepareRequest,
+import {
+  HOST_FILESYSTEM_ISOLATION,
+  type SandboxBackend,
+  type SandboxCapabilities,
+  type SandboxExecIO,
+  type SandboxExecRequest,
+  type SandboxExecResult,
+  type SandboxInstance,
+  type SandboxPrepareRequest,
 } from "../backend.js";
-import { CONTAINMENT_PLANES } from "../probe.js";
 import {
   describeFailure,
   errorText,
@@ -30,7 +30,10 @@ export interface E2bCompatibleOptions extends RemoteBackendOptions {
    * session's sandbox expires on its own. Default 3600.
    */
   readonly lifetimeSeconds?: number;
-  /** The user commands run as inside the sandbox. Default `user`. */
+  /**
+   * The user commands run as inside the sandbox (envd's Basic user). Default
+   * `user`, as E2B templates expect; CubeSandbox runs commands as `root`.
+   */
   readonly user?: string;
   /** Test seam: the envd base URL for a created sandbox. */
   readonly envdUrl?: (sandbox: {
@@ -45,9 +48,12 @@ const SANDBOX_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/;
 const DOMAIN = /^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
 const SIGNAL_TIMEOUT_MS = 5000;
 
+// A remote VM: the host's files are out of reach, but PiShip's path rules
+// are not mapped into it, so no filesystem-* plane is claimed. The network
+// is denied at creation (allow_internet_access) and checked before use.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
-  planes: CONTAINMENT_PLANES,
+  planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
   network: ["deny", "allow"],
   localProcesses: false,
 };

@@ -23,14 +23,18 @@ export {
 } from "./adapter.js";
 export {
   capabilityMismatch,
+  claimedGuarantees,
+  HOST_FILESYSTEM_ISOLATION,
   isBackendId,
   requiredPlanes,
+  SANDBOX_GUARANTEES,
   SANDBOX_PROVIDERS,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecIO,
   type SandboxExecRequest,
   type SandboxExecResult,
+  type SandboxGuarantee,
   type SandboxInstance,
   type SandboxPrepareRequest,
   type SandboxProvider,

@@ -2,11 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type ContainmentReport,
   E2bCompatibleBackend,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { policyContainment } from "./engine.js";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -84,6 +86,52 @@ describe("the declared sandbox backend", () => {
         }),
       ),
     ).toBeInstanceOf(KubernetesAgentSandboxBackend);
+  });
+
+  it("passes sandbox.user to the e2b-compatible data plane", async () => {
+    const seen: string[] = [];
+    const fetch = async (url: string | URL, init: RequestInit = {}) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/process.Process/Start"))
+        seen.push(new Headers(init.headers).get("authorization") ?? "");
+      if (path.endsWith("/sandboxes"))
+        return Response.json({
+          sandboxID: "sbx1",
+          domain: "cube.acme.example",
+        });
+      return new Response(null, { status: 204 });
+    };
+    for (const [user, expected] of [
+      [undefined, "user:"],
+      ["root", "root:"],
+    ] as const) {
+      const backend = await sandboxBackend(
+        options(
+          {
+            provider: "e2b-compatible",
+            endpoint: "https://cube.acme.example",
+            ...(user ? { user } : {}),
+          },
+          { fetch } as Partial<GovernanceOptions>,
+        ),
+      );
+      const instance = await backend?.prepare({
+        profile: { network: "deny" } as never,
+      });
+      await instance
+        ?.exec(
+          { command: "true", cwd: "/w", workspacePath: ".", env: {} },
+          {
+            signal: new AbortController().signal,
+            onStdout: () => {},
+            onStderr: () => {},
+          },
+        )
+        .catch(() => undefined);
+      expect(seen.at(-1)).toBe(
+        `Basic ${Buffer.from(expected).toString("base64")}`,
+      );
+    }
   });
 
   it("fails closed when an endpoint variable is not set", async () => {
@@ -239,6 +287,50 @@ describe("the declared sandbox backend", () => {
       await expect(sandboxBackend(options(adapter))).rejects.toMatchObject({
         code: "SANDBOX_UNAVAILABLE",
       });
+    });
+  });
+});
+
+describe("policy containment from a sandbox report", () => {
+  const report = (planes: readonly string[]): ContainmentReport =>
+    ({
+      level: "enforced",
+      adapter: "x",
+      provider: "e2b-compatible",
+      required: true,
+      planes,
+      network: "deny",
+      localProcesses: false,
+      warnings: [],
+    }) as ContainmentReport;
+
+  it("does not count a remote backend's host isolation as filesystem containment", () => {
+    expect(
+      policyContainment(
+        report([
+          "network-deny",
+          "environment-filter",
+          "host-filesystem-isolation",
+        ]),
+      ),
+    ).toEqual({ filesystem: false, network: true, shell: true });
+  });
+
+  it("keeps the native planes as before", () => {
+    expect(
+      policyContainment(
+        report([
+          "filesystem-read-deny",
+          "filesystem-write-allowlist",
+          "network-deny",
+          "environment-filter",
+        ]),
+      ),
+    ).toEqual({ filesystem: true, network: true, shell: true });
+    expect(policyContainment({ ...report([]), level: "unavailable" })).toEqual({
+      filesystem: false,
+      network: false,
+      shell: false,
     });
   });
 });

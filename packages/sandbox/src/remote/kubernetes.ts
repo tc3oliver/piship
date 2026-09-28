@@ -5,16 +5,16 @@
 // images, NetworkPolicy, and isolation stay with the cluster.
 import { randomBytes } from "node:crypto";
 import type { AdapterAvailability } from "../adapter.js";
-import type {
-  SandboxBackend,
-  SandboxCapabilities,
-  SandboxExecIO,
-  SandboxExecRequest,
-  SandboxExecResult,
-  SandboxInstance,
-  SandboxPrepareRequest,
+import {
+  HOST_FILESYSTEM_ISOLATION,
+  type SandboxBackend,
+  type SandboxCapabilities,
+  type SandboxExecIO,
+  type SandboxExecRequest,
+  type SandboxExecResult,
+  type SandboxInstance,
+  type SandboxPrepareRequest,
 } from "../backend.js";
-import { CONTAINMENT_PLANES } from "../probe.js";
 import {
   describeFailure,
   errorText,
@@ -38,6 +38,13 @@ export interface KubernetesAgentSandboxOptions extends RemoteBackendOptions {
   readonly readyTimeoutMs?: number;
   /** Poll interval while waiting. Default 1 s. */
   readonly pollMs?: number;
+  /**
+   * The claim's bounded lifetime in seconds (`spec.lifecycle.shutdownTime`),
+   * renewed while the session uses it. Default 3600.
+   */
+  readonly lifetimeSeconds?: number;
+  /** Test seam: the clock `shutdownTime` is computed from. */
+  readonly now?: () => number;
 }
 
 const GROUP = "extensions.agents.x-k8s.io/v1beta1";
@@ -55,11 +62,13 @@ const TERMINAL_REASONS = new Set([
   "InvalidConfiguration",
 ]);
 
-// Network denial is the SandboxTemplate's NetworkPolicy: the backend
-// declares it, and PiShip checks an outbound connection before use.
+// A pod on the cluster: the host's files are out of reach, but PiShip's path
+// rules are not mapped into it, so no filesystem-* plane is claimed. Network
+// denial is the SandboxTemplate's NetworkPolicy: the backend declares it, and
+// PiShip checks an outbound connection before use.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
-  planes: CONTAINMENT_PLANES,
+  planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
   network: ["deny", "allow"],
   localProcesses: false,
 };
@@ -67,6 +76,18 @@ const CAPABILITIES: SandboxCapabilities = {
 interface Claim {
   readonly claim: string;
   readonly sandbox: string;
+  /** When the cluster deletes the claim unless it is renewed (epoch ms). */
+  expiresAt: number;
+}
+
+/** The claim no longer exists (deleted or expired). */
+class ClaimGone extends Error {}
+
+/** RFC 3339 at whole seconds, rounded up so the lifetime is never shorter. */
+function shutdownTime(ms: number): string {
+  return new Date(Math.ceil(ms / 1000) * 1000)
+    .toISOString()
+    .replace(".000Z", "Z");
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -162,47 +183,70 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       readonly claim: Promise<Claim>;
       users: number;
       retired: boolean;
+      keepalive: NodeJS.Timeout | undefined;
     }
     const lease = (claim: Promise<Claim>): Lease => {
       claim.catch(() => undefined);
-      return { claim, users: 0, retired: false };
+      return { claim, users: 0, retired: false, keepalive: undefined };
     };
     let current: Lease | undefined = lease(
       Promise.resolve(await this.#claim(signal)),
     );
     let disposed = false;
     const release = async (entry: Lease) => {
-      if (!entry.retired || entry.users > 0) return;
+      if (entry.users > 0) return;
+      if (entry.keepalive) clearInterval(entry.keepalive);
+      entry.keepalive = undefined;
+      if (!entry.retired) return;
       const claim = await entry.claim.catch(() => undefined);
+      // Normal cleanup. If it fails, the claim's shutdownTime still removes
+      // it, at most one lifetime after its last renewal.
       if (claim) await this.#delete(claim);
+    };
+    const retire = (entry: Lease) => {
+      entry.retired = true;
+      if (current === entry) current = undefined;
+    };
+    /** The live claim for a command, renewed or replaced as needed. */
+    const acquire = async (io: SandboxExecIO): Promise<[Lease, Claim]> => {
+      for (let attempt = 0; ; attempt++) {
+        current ??= lease(this.#claim(io.signal));
+        const entry = current;
+        let claim: Claim;
+        try {
+          claim = await entry.claim;
+        } catch (error) {
+          // A claim that failed to become ready is not reused.
+          if (current === entry) current = undefined;
+          throw error;
+        }
+        try {
+          await this.#renewIfDue(claim, io.signal);
+          return [entry, claim];
+        } catch (error) {
+          // An expired claim is replaced once; any other renewal failure
+          // fails the command rather than run it in a sandbox about to go.
+          if (!(error instanceof ClaimGone) || attempt > 0) throw error;
+          retire(entry);
+        }
+      }
     };
     return {
       exec: async (request, io) => {
         if (disposed) throw new Error("the sandbox was disposed");
+        const [entry, claim] = await acquire(io);
+        entry.users++;
+        entry.keepalive ??= setInterval(() => {
+          if (!entry.retired) void this.#renew(claim).catch(() => undefined);
+        }, this.#renewEveryMs());
+        entry.keepalive.unref?.();
         // The runtime cannot stop a running command. A cancelled command
         // retires its claim: the next command gets a fresh sandbox, and the
         // retired claim is deleted once no command uses it any more.
-        current ??= lease(this.#claim(io.signal));
-        const entry = current;
-        entry.users++;
-        const onAbort = () => {
-          entry.retired = true;
-          if (current === entry) current = undefined;
-        };
+        const onAbort = () => retire(entry);
         io.signal.addEventListener("abort", onAbort, { once: true });
         try {
-          return await this.#execute(await entry.claim, request, io);
-        } catch (error) {
-          // A claim that failed to become ready is not reused.
-          if (
-            current === entry &&
-            !(await entry.claim.then(
-              () => true,
-              () => false,
-            ))
-          )
-            current = undefined;
-          throw error;
+          return await this.#execute(claim, request, io);
         } finally {
           io.signal.removeEventListener("abort", onAbort);
           entry.users--;
@@ -222,6 +266,48 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     };
   }
 
+  #lifetimeMs(): number {
+    const value = this.#options.lifetimeSeconds ?? 3600;
+    return (Number.isFinite(value) && value > 0 ? value : 3600) * 1000;
+  }
+
+  /** While a command runs, renew four times per lifetime. */
+  #renewEveryMs(): number {
+    return Math.max(250, Math.floor(this.#lifetimeMs() / 4));
+  }
+
+  #now(): number {
+    return this.#options.now?.() ?? Date.now();
+  }
+
+  async #renewIfDue(claim: Claim, signal: AbortSignal): Promise<void> {
+    if (claim.expiresAt - this.#now() >= this.#lifetimeMs() / 2) return;
+    await this.#renew(claim, signal);
+  }
+
+  /** Move the claim's shutdownTime one lifetime ahead. */
+  async #renew(claim: Claim, signal?: AbortSignal): Promise<void> {
+    const expiresAt = this.#now() + this.#lifetimeMs();
+    const response = await this.#request(`${this.#claims()}/${claim.claim}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/merge-patch+json" },
+      body: JSON.stringify({
+        spec: { lifecycle: { shutdownTime: shutdownTime(expiresAt) } },
+      }),
+      ...(signal ? { signal } : {}),
+    });
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new ClaimGone("the SandboxClaim no longer exists");
+    }
+    if (!response.ok)
+      throw new Error(
+        `renewing the SandboxClaim failed: ${await describeFailure(response)}`,
+      );
+    await response.body?.cancel().catch(() => undefined);
+    claim.expiresAt = Math.max(claim.expiresAt, expiresAt);
+  }
+
   #claims(): string {
     return `${this.#api}/apis/${GROUP}/namespaces/${this.#namespace}/sandboxclaims`;
   }
@@ -239,6 +325,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
 
   async #claim(signal: AbortSignal | undefined): Promise<Claim> {
     const name = `piship-${randomBytes(6).toString("hex")}`;
+    const expiresAt = this.#now() + this.#lifetimeMs();
     const created = await this.#request(this.#claims(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -249,7 +336,15 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
           name,
           labels: { "agents.x-k8s.io/created-by": "piship" },
         },
-        spec: { warmPoolRef: { name: this.#options.template } },
+        spec: {
+          warmPoolRef: { name: this.#options.template },
+          // The safety net: the cluster deletes the claim at shutdownTime
+          // even if PiShip's DELETE never arrives.
+          lifecycle: {
+            shutdownTime: shutdownTime(expiresAt),
+            shutdownPolicy: "Delete",
+          },
+        },
       }),
       ...(signal ? { signal } : {}),
     });
@@ -259,14 +354,17 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       );
     await created.body?.cancel().catch(() => undefined);
     try {
-      return await this.#ready(name, signal);
+      return { ...(await this.#ready(name, signal)), expiresAt };
     } catch (error) {
-      await this.#delete({ claim: name, sandbox: name });
+      await this.#delete({ claim: name, sandbox: name, expiresAt });
       throw error;
     }
   }
 
-  async #ready(name: string, signal: AbortSignal | undefined): Promise<Claim> {
+  async #ready(
+    name: string,
+    signal: AbortSignal | undefined,
+  ): Promise<Omit<Claim, "expiresAt">> {
     const deadline = Date.now() + (this.#options.readyTimeoutMs ?? 120_000);
     for (;;) {
       const response = await this.#request(`${this.#claims()}/${name}`, {

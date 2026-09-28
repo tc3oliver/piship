@@ -1700,6 +1700,25 @@ describe("sandbox backends", () => {
       network: { mode: "deny" },
     });
   });
+  it("accepts an e2b-compatible user, such as root for CubeSandbox, and keeps the E2B default otherwise", () => {
+    const cube = governance(
+      withSandbox({
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://cube.acme.example",
+        user: "root",
+      }),
+    ).sandbox;
+    expect(cube.user).toBe("root");
+    const e2bDefault = governance(
+      withSandbox({
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://api.e2b.app",
+      }),
+    ).sandbox;
+    expect(e2bDefault).not.toHaveProperty("user");
+  });
   it("accepts a kubernetes-agent-sandbox backend and a custom adapter", () => {
     expect(
       governance(
@@ -1850,6 +1869,44 @@ describe("sandbox backends", () => {
       },
       "sandbox.apiKey",
       "Secrets are never declared",
+    ],
+    [{ required: true, user: "root" }, "sandbox.user", "e2b-compatible"],
+    [
+      { required: true, provider: "native", user: "root" },
+      "sandbox.user",
+      "e2b-compatible",
+    ],
+    [
+      {
+        required: true,
+        provider: "custom",
+        adapter: "./sandbox/a.mjs",
+        user: "root",
+      },
+      "sandbox.user",
+      "e2b-compatible",
+    ],
+    [
+      {
+        required: true,
+        provider: "kubernetes-agent-sandbox",
+        endpoint: "https://k.example.com",
+        router: "https://r.example.com",
+        template: "pool",
+        user: "root",
+      },
+      "sandbox.user",
+      "e2b-compatible",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        user: "Root User",
+      },
+      "sandbox.user",
+      "POSIX user name",
     ],
   ])("rejects %j at %s", (value, field, message) => {
     rejects(withSandbox(value as Json), field, message);

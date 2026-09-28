@@ -8,7 +8,7 @@ import type {
   SandboxCommand,
   WrappedCommand,
 } from "./adapter.js";
-import type { ContainmentPlane } from "./probe.js";
+import { CONTAINMENT_PLANES } from "./probe.js";
 import type { SandboxProfile } from "./profile.js";
 
 export const SANDBOX_PROVIDERS = [
@@ -19,6 +19,21 @@ export const SANDBOX_PROVIDERS = [
 ] as const;
 export type SandboxProvider = (typeof SANDBOX_PROVIDERS)[number];
 
+/**
+ * A remote-only guarantee: commands run on another machine or VM, so the
+ * host's files are not reachable at all. It says nothing about PiShip's
+ * path policy (`filesystem.read.deny`, `filesystem.write.allow`), which only
+ * the `filesystem-*` planes claim.
+ */
+export const HOST_FILESYSTEM_ISOLATION = "host-filesystem-isolation";
+
+/** Everything a backend can claim: PiShip's planes plus the remote guarantee. */
+export const SANDBOX_GUARANTEES = [
+  ...CONTAINMENT_PLANES,
+  HOST_FILESYSTEM_ISOLATION,
+] as const;
+export type SandboxGuarantee = (typeof SANDBOX_GUARANTEES)[number];
+
 /** What a backend declares it can enforce. PiShip checks it before use. */
 export interface SandboxCapabilities {
   /**
@@ -27,8 +42,13 @@ export interface SandboxCapabilities {
    * loopback services, and the host environment are not reachable.
    */
   readonly isolation: "local" | "remote";
-  /** Containment planes the backend enforces. */
-  readonly planes: readonly ContainmentPlane[];
+  /**
+   * Guarantees the backend enforces. Claim `filesystem-read-deny` and
+   * `filesystem-write-allowlist` only when the backend applies the profile's
+   * `readDeny` and `writeAllow` paths itself; a remote backend that merely
+   * cannot see the host claims `host-filesystem-isolation` instead.
+   */
+  readonly planes: readonly SandboxGuarantee[];
   /** Network modes the backend can enforce. */
   readonly network: readonly ("deny" | "allow")[];
   /**
@@ -108,16 +128,44 @@ export function isBackendId(value: unknown): value is string {
   return typeof value === "string" && IDENTIFIER.test(value);
 }
 
-/** Planes a required sandbox must enforce for a network mode. */
+/**
+ * Guarantees a required sandbox must enforce. A local backend runs commands
+ * against the host's files, so it must apply PiShip's path policy. A remote
+ * backend must keep the host's files out of reach; PiShip's path rules then
+ * still govern the local file tools, not the remote sandbox.
+ */
 export function requiredPlanes(
   network: "deny" | "allow",
-): readonly ContainmentPlane[] {
+  isolation: "local" | "remote" = "local",
+): readonly SandboxGuarantee[] {
   return [
-    "filesystem-read-deny",
-    "filesystem-write-allowlist",
+    ...(isolation === "remote"
+      ? ([HOST_FILESYSTEM_ISOLATION] as const)
+      : (["filesystem-read-deny", "filesystem-write-allowlist"] as const)),
     ...(network === "deny" ? (["network-deny"] as const) : []),
     "environment-filter",
   ];
+}
+
+/**
+ * The guarantees a report may show: those declared, known, meaningful for
+ * the isolation kind (a local backend cannot isolate the host filesystem),
+ * and, for `network-deny`, only when the policy denies the network.
+ */
+export function claimedGuarantees(
+  capabilities: SandboxCapabilities,
+  network: "deny" | "allow",
+): SandboxGuarantee[] {
+  const declared = Array.isArray(capabilities?.planes)
+    ? capabilities.planes
+    : [];
+  return SANDBOX_GUARANTEES.filter(
+    (plane) =>
+      declared.includes(plane) &&
+      (plane !== HOST_FILESYSTEM_ISOLATION ||
+        capabilities.isolation === "remote") &&
+      (plane !== "network-deny" || network === "deny"),
+  );
 }
 
 /**
@@ -128,20 +176,21 @@ export function capabilityMismatch(
   capabilities: SandboxCapabilities,
   network: "deny" | "allow",
 ): string | undefined {
-  const planes = Array.isArray(capabilities?.planes) ? capabilities.planes : [];
-  const modes = Array.isArray(capabilities?.network)
-    ? capabilities.network
-    : [];
-  const missing = requiredPlanes(network).filter(
-    (plane) => !planes.includes(plane),
-  );
-  if (network === "deny" && !modes.includes("deny"))
-    if (!missing.includes("network-deny")) missing.push("network-deny");
   if (
     capabilities?.isolation !== "local" &&
     capabilities?.isolation !== "remote"
   )
     return "it declares no isolation kind";
+  const planes = claimedGuarantees(capabilities, network);
+  const modes = Array.isArray(capabilities?.network)
+    ? capabilities.network
+    : [];
+  const missing: string[] = requiredPlanes(
+    network,
+    capabilities.isolation,
+  ).filter((plane) => !planes.includes(plane));
+  if (network === "deny" && !modes.includes("deny"))
+    if (!missing.includes("network-deny")) missing.push("network-deny");
   if (missing.length) return `it does not provide ${missing.join(", ")}`;
   return undefined;
 }

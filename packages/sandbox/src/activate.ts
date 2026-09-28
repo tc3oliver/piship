@@ -16,6 +16,9 @@ import { PiShipError, redact } from "@piship/contracts";
 import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
 import {
   capabilityMismatch,
+  claimedGuarantees,
+  HOST_FILESYSTEM_ISOLATION,
+  type SandboxGuarantee,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecRequest,
@@ -25,12 +28,7 @@ import {
 } from "./backend.js";
 import { filterEnvironment, stripCredentials } from "./environment.js";
 import { NativeBackend } from "./native.js";
-import {
-  CONTAINMENT_PLANES,
-  type ContainmentPlane,
-  type ProbeTarget,
-  probeSandbox,
-} from "./probe.js";
+import { type ProbeTarget, probeSandbox } from "./probe.js";
 import { spawnProcess } from "./process.js";
 import {
   isWithin,
@@ -59,8 +57,13 @@ export interface ContainmentReport {
   readonly adapter: string;
   readonly provider: SandboxProvider;
   readonly required: boolean;
-  /** Planes enforced by the backend; empty unless enforced. */
-  readonly planes: readonly ContainmentPlane[];
+  /**
+   * Guarantees enforced by the backend; empty unless enforced. The
+   * `filesystem-*` planes mean PiShip's path policy is enforced;
+   * `host-filesystem-isolation` means only that a remote backend cannot
+   * reach the host's files.
+   */
+  readonly planes: readonly SandboxGuarantee[];
   readonly network: "deny" | "allow";
   /** Set when enforced. */
   readonly verification?: ContainmentVerification;
@@ -600,18 +603,6 @@ async function checkAttested(
   };
 }
 
-/** Planes the report claims: those the policy needs and the backend declares. */
-function declaredPlanes(
-  capabilities: SandboxCapabilities,
-  network: "deny" | "allow",
-): ContainmentPlane[] {
-  return CONTAINMENT_PLANES.filter(
-    (plane) =>
-      capabilities.planes.includes(plane) &&
-      (plane !== "network-deny" || network === "deny"),
-  );
-}
-
 /** A probe target that prepares a separate wrapping instance per probe. */
 function probeTarget(backend: SandboxBackend): ProbeTarget {
   return {
@@ -739,7 +730,7 @@ export async function activateSandbox(
     const live =
       capabilities.isolation === "local" && typeof instance.wrap === "function";
     let verification: ContainmentVerification;
-    let planes: readonly ContainmentPlane[];
+    let planes: readonly SandboxGuarantee[];
     const warnings = [...profile.warnings];
     if (live) {
       const env = sessionEnvironment(
@@ -783,7 +774,7 @@ export async function activateSandbox(
         );
       warnings.push(...check.warnings);
       verification = "backend-attested";
-      planes = declaredPlanes(capabilities, config.network.mode);
+      planes = claimedGuarantees(capabilities, config.network.mode);
     }
     return createActiveSandbox({
       ...session,
@@ -821,7 +812,14 @@ export function describeContainment(report: ContainmentReport): string {
       const scope = report.localProcesses
         ? "Contains tool subprocesses and MCP stdio servers"
         : "Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start";
-      return `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions`;
+      const paths = report.planes.some((plane) =>
+        plane.startsWith("filesystem-"),
+      )
+        ? ""
+        : report.planes.includes(HOST_FILESYSTEM_ISOLATION)
+          ? " The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools."
+          : " sandbox.filesystem path rules are not enforced by the backend.";
+      return `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
     }
     case "unavailable":
       return `unavailable on ${report.adapter} (${requirement}): ${redact(report.reason ?? "unknown reason")}. Tool subprocesses run with the user's privileges`;

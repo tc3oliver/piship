@@ -282,6 +282,8 @@ export interface SandboxConfig {
   readonly template?: string;
   /** Remote providers: the remote directory that maps to the workspace. */
   readonly workdir?: string;
+  /** `e2b-compatible`: the sandbox user commands run as (default `user`). */
+  readonly user?: string;
   /** Sent to the endpoint: only `runtime` sends the runtime credential. */
   readonly credential?: "runtime";
   readonly filesystem: {

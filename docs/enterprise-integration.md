@@ -211,14 +211,15 @@ sandbox:
   provider: e2b-compatible
   endpoint: ${ACMECODE_SANDBOX_URL}
   template: acmecode-workspace
-  credential: runtime
+  credential: runtime   # the sandbox API is behind the LLM gateway's origin
+  # user: root          # for CubeSandbox; E2B uses the default, user
 ```
 
 | PiShip does | Your sandbox service owns |
 | --- | --- |
-| Decides every command against the policy before the backend sees it | Isolating the command: filesystem, network, processes, and resource limits |
+| Decides every command against the policy before the backend sees it; enforces `sandbox.filesystem` path rules for its local file tools | Isolating the command: filesystem inside the sandbox, network, processes, and resource limits. Remote backends do not apply PiShip's path rules; the template or image decides what commands can read and write |
 | Sends one command, its workspace-relative directory, and the approved environment; never files, host paths such as `PATH` or `HOME`, or credential-looking variables | Providing the workspace contents (template, image, volume, or clone) and a usable shell |
-| Sends the runtime credential only with `credential: runtime`, and only to the inference gateway origin | Authenticating that credential, or fronting E2B or Kubernetes with the company gateway |
+| Sends the inference runtime credential only with `credential: runtime`, and only to the inference gateway origin; there is no separate sandbox credential yet ([limits](sandbox.md#credentials)) | Authenticating that credential by fronting the sandbox API with the company gateway, or exposing an endpoint that needs no client credential |
 | Checks declared capabilities and fails closed on a gap, an unavailable service, or a failed check | Honoring the declared capabilities, including network denial for `sandbox.network.mode: deny` |
 | Times out and cancels commands, then kills the remote process or deletes the claim | Stopping commands promptly and removing sandboxes that are deleted or expire |
 

@@ -10,6 +10,7 @@ import {
 } from "./activate.js";
 import {
   capabilityMismatch,
+  claimedGuarantees,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecIO,
@@ -34,15 +35,14 @@ const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
 
 const REMOTE: SandboxCapabilities = {
   isolation: "remote",
-  planes: [
-    "filesystem-read-deny",
-    "filesystem-write-allowlist",
-    "network-deny",
-    "environment-filter",
-  ],
+  planes: ["host-filesystem-isolation", "network-deny", "environment-filter"],
   network: ["deny", "allow"],
   localProcesses: false,
 };
+const PATH_PLANES = [
+  "filesystem-read-deny",
+  "filesystem-write-allowlist",
+] as const;
 
 /** Answer PiShip's check command the way a contained shell would. */
 function answerCheck(request: SandboxExecRequest, io: SandboxExecIO): void {
@@ -160,10 +160,9 @@ describe("custom adapter lifecycle", () => {
       verification: "backend-attested",
       localProcesses: false,
       planes: [
-        "filesystem-read-deny",
-        "filesystem-write-allowlist",
         "network-deny",
         "environment-filter",
+        "host-filesystem-isolation",
       ],
     });
     expect(describeContainment(sandbox.report)).toContain(
@@ -399,10 +398,9 @@ describe("capability mismatch", () => {
   it.each([
     ["network-deny", "deny"],
     ["environment-filter", "deny"],
-    ["filesystem-read-deny", "allow"],
-    ["filesystem-write-allowlist", "allow"],
+    ["host-filesystem-isolation", "allow"],
   ] as const)(
-    "fails closed when the backend does not provide %s (network %s)",
+    "fails closed when a remote backend does not provide %s (network %s)",
     async (plane, mode) => {
       const { backend, events } = fakeBackend({ capabilities: without(plane) });
       await expect(
@@ -414,6 +412,95 @@ describe("capability mismatch", () => {
       expect(events).not.toContain("prepare");
     },
   );
+
+  it.each(PATH_PLANES)(
+    "fails closed when a local backend does not provide %s",
+    async (plane) => {
+      const { backend, events } = fakeBackend({
+        capabilities: {
+          isolation: "local",
+          planes: [...PATH_PLANES, "network-deny", "environment-filter"].filter(
+            (item) => item !== plane,
+          ),
+          network: ["deny", "allow"],
+          localProcesses: false,
+        },
+      });
+      await expect(activate(backend)).rejects.toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining(`does not provide ${plane}`),
+      });
+      expect(events).not.toContain("prepare");
+    },
+  );
+
+  it("does not accept filesystem path planes in place of host isolation for a remote backend", async () => {
+    // A remote backend that claims PiShip's path planes but not host
+    // isolation cannot run: the path planes are not what a remote run needs.
+    const { backend } = fakeBackend({
+      capabilities: {
+        ...REMOTE,
+        planes: [...PATH_PLANES, "network-deny", "environment-filter"],
+      },
+    });
+    await expect(activate(backend)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining(
+        "does not provide host-filesystem-isolation",
+      ),
+    });
+  });
+
+  it("never lets host isolation stand in for a local backend's path policy", () => {
+    expect(
+      capabilityMismatch(
+        {
+          isolation: "local",
+          planes: [
+            "host-filesystem-isolation",
+            "network-deny",
+            "environment-filter",
+          ],
+          network: ["deny"],
+          localProcesses: false,
+        },
+        "deny",
+      ),
+    ).toBe(
+      "it does not provide filesystem-read-deny, filesystem-write-allowlist",
+    );
+    expect(
+      claimedGuarantees(
+        {
+          ...REMOTE,
+          isolation: "local",
+          planes: ["host-filesystem-isolation"],
+        },
+        "deny",
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports path planes for a remote backend only when it declares them", async () => {
+    const plain = fakeBackend();
+    const sandbox = await activate(plain.backend);
+    for (const plane of PATH_PLANES)
+      expect(sandbox.report.planes).not.toContain(plane);
+    expect(describeContainment(sandbox.report)).toContain(
+      "does not enforce sandbox.filesystem path rules",
+    );
+    await sandbox.dispose();
+    // A company backend that maps the path policy into its sandbox may say so.
+    const mapped = fakeBackend({
+      capabilities: { ...REMOTE, planes: [...REMOTE.planes, ...PATH_PLANES] },
+    });
+    const withPaths = await activate(mapped.backend);
+    expect(withPaths.report.planes).toEqual(
+      expect.arrayContaining([...PATH_PLANES, "host-filesystem-isolation"]),
+    );
+    expect(describeContainment(withPaths.report)).not.toContain("path rules");
+    await withPaths.dispose();
+  });
 
   it("fails closed when a network deny mode is not among the backend's modes", async () => {
     const { backend } = fakeBackend({
@@ -593,8 +680,9 @@ const requireSandbox = process.env.PISHIP_REQUIRE_SANDBOX === "1";
 
 describe("a local custom backend is proven by the live probe", () => {
   const LOCAL: SandboxCapabilities = {
-    ...REMOTE,
     isolation: "local",
+    planes: [...PATH_PLANES, "network-deny", "environment-filter"],
+    network: ["deny", "allow"],
     localProcesses: true,
   };
   /** A company wrapper around a local mechanism; `contain: false` wraps nothing. */

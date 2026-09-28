@@ -9,7 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activateSandbox, SANDBOX_READY_MARKER } from "./activate.js";
+import {
+  activateSandbox,
+  describeContainment,
+  SANDBOX_READY_MARKER,
+} from "./activate.js";
 import type { SandboxPolicy } from "./profile.js";
 import {
   connectEnvelope,
@@ -127,6 +131,8 @@ interface StartRequest {
 
 interface E2bScript {
   health?: number;
+  /** The envd user the sandbox accepts; others are refused. Default `user`. */
+  user?: string;
   create?: number;
   /** Stdout and exit code for a command; `hang` keeps the stream open. */
   command?: (start: StartRequest) => {
@@ -171,6 +177,15 @@ async function e2bServer(script: E2bScript = {}) {
       return void response.end("{}");
     }
     if (path === "/process.Process/Start") {
+      // envd authenticates the process user with HTTP Basic `<user>:`.
+      const expected = `Basic ${Buffer.from(`${script.user ?? "user"}:`).toString("base64")}`;
+      if (request.headers.authorization !== expected) {
+        response.statusCode = 401;
+        response.setHeader("Content-Type", "application/json");
+        return void response.end(
+          '{"code":"unauthenticated","message":"invalid user"}',
+        );
+      }
       const [frame] = new EnvelopeReader().push(request.body);
       const start = frame?.message as StartRequest;
       const script_ = start.process.args[2] ?? "";
@@ -259,6 +274,44 @@ const starts = (requests: Recorded[]) =>
       (request) =>
         new EnvelopeReader().push(request.body)[0]?.message as StartRequest,
     );
+
+describe("remote capability reporting", () => {
+  const backends = () => [
+    e2b("http://127.0.0.1:1"),
+    kubernetes("http://127.0.0.1:1"),
+  ];
+
+  it("never declares PiShip's filesystem path planes for a remote backend", () => {
+    for (const backend of backends()) {
+      const capabilities = backend.capabilities();
+      expect(capabilities.isolation).toBe("remote");
+      expect(capabilities.planes).toEqual([
+        "host-filesystem-isolation",
+        "network-deny",
+        "environment-filter",
+      ]);
+      expect(capabilities.planes).not.toContain("filesystem-read-deny");
+      expect(capabilities.planes).not.toContain("filesystem-write-allowlist");
+      expect(capabilities.localProcesses).toBe(false);
+    }
+  });
+
+  it("reports only enforced guarantees in the containment report and doctor line", async () => {
+    const mock = await e2bServer();
+    const sandbox = await activate(e2b(mock.url));
+    expect(sandbox.report.planes).toEqual([
+      "network-deny",
+      "environment-filter",
+      "host-filesystem-isolation",
+    ]);
+    const line = describeContainment(sandbox.report);
+    expect(line).toBe(
+      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools.",
+    );
+    expect(line).not.toMatch(/filesystem-read-deny|filesystem-write-allowlist/);
+    await sandbox.dispose();
+  });
+});
 
 describe("e2b-compatible backend against a mock server", () => {
   it("creates, checks, runs, and deletes a sandbox", async () => {
@@ -417,6 +470,37 @@ describe("e2b-compatible backend against a mock server", () => {
     await sandbox.dispose();
   });
 
+  it("runs commands as the E2B default user", async () => {
+    const mock = await e2bServer();
+    const sandbox = await activate(e2b(mock.url));
+    await run(sandbox, "whoami");
+    await sandbox.dispose();
+    for (const request of mock.requests.filter(
+      (item) => item.path === "/process.Process/Start",
+    ))
+      expect(request.headers.authorization).toBe(
+        `Basic ${Buffer.from("user:").toString("base64")}`,
+      );
+  });
+
+  it("runs commands as root for a CubeSandbox-style service when configured", async () => {
+    const cube = await e2bServer({ user: "root" });
+    // Without the setting, the service refuses the E2B default user.
+    await expect(activate(e2b(cube.url))).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("HTTP 401"),
+    });
+    const sandbox = await activate(e2b(cube.url, { user: "root" }));
+    expect((await run(sandbox, "whoami")).exitCode).toBe(0);
+    await sandbox.dispose();
+    const starts = cube.requests.filter(
+      (item) => item.path === "/process.Process/Start",
+    );
+    expect(starts.at(-1)?.headers.authorization).toBe(
+      `Basic ${Buffer.from("root:").toString("base64")}`,
+    );
+  });
+
   it("surfaces a failed command stream", async () => {
     const mock = await e2bServer({
       command: () => ({ streamError: "process exploded" }),
@@ -468,12 +552,21 @@ describe("e2b-compatible backend against a mock server", () => {
 const CLAIMS =
   "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agents/sandboxclaims";
 
+/** Cluster behavior a test can change while the mock runs. */
+interface Cluster {
+  /** Status for DELETE; 500 simulates an API outage during cleanup. */
+  deleteStatus?: number;
+  /** Claims the cluster already removed (their shutdownTime passed). */
+  expired?: Set<string>;
+}
+
 async function kubernetesServer(
   execute?: (command: string) => {
     stdout?: string;
     exit_code?: number;
     hang?: boolean;
   },
+  cluster: Cluster = {},
 ) {
   const polls = new Map<string, number>();
   const started = await serve((request, response) => {
@@ -487,7 +580,16 @@ async function kubernetesServer(
     }
     if (path.startsWith(`${CLAIMS}/`)) {
       const name = path.slice(CLAIMS.length + 1);
-      if (request.method === "DELETE") return void response.end("{}");
+      if (request.method === "DELETE") {
+        response.statusCode = cluster.deleteStatus ?? 200;
+        return void response.end(
+          response.statusCode >= 400 ? '{"message":"etcd unavailable"}' : "{}",
+        );
+      }
+      if (request.method === "PATCH") {
+        response.statusCode = cluster.expired?.has(name) ? 404 : 200;
+        return void response.end("{}");
+      }
       const seen = (polls.get(name) ?? 0) + 1;
       polls.set(name, seen);
       return void response.end(
@@ -654,6 +756,188 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect(claims()).toBe(2);
     await sandbox.dispose();
     expect(deletes()).toBe(2);
+  });
+
+  const claimNames = (requests: Recorded[]) =>
+    requests
+      .filter((request) => request.method === "POST" && request.path === CLAIMS)
+      .map(
+        (request) =>
+          (
+            JSON.parse(request.body.toString()) as {
+              metadata: { name: string };
+            }
+          ).metadata.name,
+      );
+  const lifecycleOf = (request: Recorded | undefined) =>
+    (
+      JSON.parse(request?.body.toString() ?? "{}") as {
+        spec?: {
+          lifecycle?: { shutdownTime?: string; shutdownPolicy?: string };
+        };
+      }
+    ).spec?.lifecycle;
+
+  it("creates every claim with a bounded, deterministic lifecycle", async () => {
+    const start = Date.parse("2026-09-28T18:00:00.250Z");
+    const mock = await kubernetesServer();
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 900, now: () => start }),
+    );
+    await sandbox.dispose();
+    const created = mock.requests.find(
+      (request) => request.method === "POST" && request.path === CLAIMS,
+    );
+    // Rounded up to the second: never shorter than the lifetime.
+    expect(lifecycleOf(created)).toEqual({
+      shutdownTime: "2026-09-28T18:15:01Z",
+      shutdownPolicy: "Delete",
+    });
+  });
+
+  it("deletes the claim when a command is cancelled", async () => {
+    const mock = await kubernetesServer((command) =>
+      command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+    );
+    const sandbox = await activate(kubernetes(mock.url));
+    const [first] = claimNames(mock.requests);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    await expect(
+      sandbox.exec("sleep 600", workspace, {
+        onData: () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("aborted");
+    expect(
+      mock.requests
+        .filter((request) => request.method === "DELETE")
+        .map((request) => request.path),
+    ).toEqual([`${CLAIMS}/${first}`]);
+    await sandbox.dispose();
+  });
+
+  it("stays fail closed when cleanup fails, and the claim still expires on its own", async () => {
+    const cluster: Cluster = { deleteStatus: 500 };
+    const mock = await kubernetesServer(
+      (command) =>
+        command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+      cluster,
+    );
+    const now = Date.parse("2026-09-28T18:00:00Z");
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 600, now: () => now }),
+    );
+    await expect(run(sandbox, "sleep 600", { timeout: 0.2 })).rejects.toThrow(
+      "timeout:0.2",
+    );
+    const [retired] = claimNames(mock.requests);
+    // The DELETE was attempted and failed; nothing about it leaked back.
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" &&
+          request.path === `${CLAIMS}/${retired}`,
+      ),
+    ).toBe(true);
+    // The retired claim carries the safety net and is never renewed again.
+    expect(
+      lifecycleOf(
+        mock.requests.find(
+          (request) => request.method === "POST" && request.path === CLAIMS,
+        ),
+      ),
+    ).toEqual({
+      shutdownTime: "2026-09-28T18:10:00Z",
+      shutdownPolicy: "Delete",
+    });
+    // The next command runs in a fresh claim, never the retired one.
+    expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "PATCH" && request.path === `${CLAIMS}/${retired}`,
+      ),
+    ).toBe(false);
+    const execute = mock.requests.filter(
+      (request) => request.path === "/execute",
+    );
+    expect(execute.at(-1)?.headers["x-sandbox-id"]).toBe(`pool-${names[1]}`);
+    await sandbox.dispose();
+  });
+
+  it("renews the claim so a long session is not expired early", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    const mock = await kubernetesServer((command) =>
+      command.includes("slow") ? { hang: true } : { stdout: "ok\n" },
+    );
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 1, now: () => now }),
+    );
+    const patches = () =>
+      mock.requests.filter((request) => request.method === "PATCH");
+    // Fresh claim: nothing to renew yet.
+    await run(sandbox, "echo a");
+    expect(patches()).toHaveLength(0);
+    // Past half the lifetime, the next command renews first.
+    now += 600;
+    await run(sandbox, "echo b");
+    expect(patches()).toHaveLength(1);
+    expect(lifecycleOf(patches()[0])).toEqual({
+      shutdownTime: "2026-09-28T18:00:02Z",
+    });
+    expect(patches()[0]?.headers["content-type"]).toBe(
+      "application/merge-patch+json",
+    );
+    // A command that runs longer than the lifetime is kept alive while it runs.
+    const controller = new AbortController();
+    const slow = sandbox
+      .exec("slow job", workspace, {
+        onData: () => {},
+        signal: controller.signal,
+      })
+      .catch(() => undefined);
+    // With a one-second lifetime the claim is renewed every 250 ms while
+    // the command runs; wait for two renewals beyond the one above.
+    const deadline = Date.now() + 10_000;
+    while (patches().length < 3 && Date.now() < deadline)
+      await new Promise((done) => setTimeout(done, 50));
+    expect(patches().length).toBeGreaterThanOrEqual(3);
+    controller.abort();
+    await slow;
+    await sandbox.dispose();
+  });
+
+  it("replaces a claim the cluster already expired before running", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    const cluster: Cluster = { expired: new Set() };
+    const mock = await kubernetesServer(undefined, cluster);
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+    );
+    const [first] = claimNames(mock.requests);
+    cluster.expired?.add(first ?? "");
+    now += 120_000;
+    expect((await run(sandbox, "echo ok")).exitCode).toBe(0);
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    expect(
+      mock.requests.filter((request) => request.path === "/execute").at(-1)
+        ?.headers["x-sandbox-id"],
+    ).toBe(`pool-${names[1]}`);
+    await sandbox.dispose();
+  });
+
+  it("disposes idempotently", async () => {
+    const mock = await kubernetesServer();
+    const sandbox = await activate(kubernetes(mock.url));
+    await Promise.all([sandbox.dispose(), sandbox.dispose()]);
+    await sandbox.dispose();
+    expect(
+      mock.requests.filter((request) => request.method === "DELETE"),
+    ).toHaveLength(1);
   });
 
   it("sends a bearer to the API and the router only when a credential is given", async () => {

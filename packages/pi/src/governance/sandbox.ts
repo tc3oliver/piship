@@ -125,6 +125,7 @@ export async function sandboxBackend(
           ...remote,
           endpoint: endpoint ?? "",
           ...(config.template ? { template: config.template } : {}),
+          ...(config.user ? { user: config.user } : {}),
         });
       case "kubernetes-agent-sandbox":
         return new KubernetesAgentSandboxBackend({

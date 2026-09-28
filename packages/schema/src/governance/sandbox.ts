@@ -80,10 +80,12 @@ const BACKEND_FIELDS: Readonly<
   namespace: ["kubernetes-agent-sandbox"],
   template: ["e2b-compatible", "kubernetes-agent-sandbox"],
   workdir: ["e2b-compatible", "kubernetes-agent-sandbox"],
+  user: ["e2b-compatible"],
   credential: ["custom", "e2b-compatible", "kubernetes-agent-sandbox"],
 };
 const KUBERNETES_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const TEMPLATE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const SANDBOX_USER = /^[a-z_][a-z0-9_-]{0,31}$/;
 
 function remoteWorkdir(value: unknown, path: string): string {
   const item = plainString(value, path, 1024);
@@ -200,6 +202,15 @@ function parseBackend(
     ...(sandbox.workdir === undefined
       ? {}
       : { workdir: remoteWorkdir(sandbox.workdir, "sandbox.workdir") }),
+    ...(sandbox.user === undefined
+      ? {}
+      : {
+          user: text(
+            "user",
+            SANDBOX_USER,
+            "Use a POSIX user name such as user or root",
+          ),
+        }),
     ...(credential === "runtime" ? { credential } : {}),
   };
 }

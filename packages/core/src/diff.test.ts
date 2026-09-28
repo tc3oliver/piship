@@ -278,6 +278,31 @@ describe("diffLocks", () => {
     );
   });
 
+  it("reports a sandbox backend switch and its user", () => {
+    const after = clone(base);
+    Object.assign(after.governance.manifest.sandbox, {
+      provider: "e2b-compatible",
+      endpoint: "https://cube.acme.example",
+      user: "root",
+    });
+    const report = diffLocks(base, after);
+    expect(report.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          item: "sandbox provider",
+          before: "native",
+          after: "e2b-compatible",
+          risk: "high",
+        }),
+        expect.objectContaining({
+          item: "sandbox user",
+          after: "root",
+          risk: "medium",
+        }),
+      ]),
+    );
+  });
+
   it("classifies a model allowlist addition as medium", () => {
     const after = clone(base);
     after.access.models.allowed.push("acme/large");

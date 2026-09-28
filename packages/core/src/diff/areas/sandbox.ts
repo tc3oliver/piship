@@ -27,6 +27,7 @@ export function sandbox(
     "namespace",
     "template",
     "workdir",
+    "user",
   ] as const)
     out.scalar("sandbox", `sandbox ${field}`, x?.[field], y?.[field], () => [
       "medium",
