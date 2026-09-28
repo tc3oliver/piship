@@ -46,4 +46,4 @@ The workflow uploads SARIF and does not publish to the public Scorecard API. If 
 
 ## Release setup
 
-The `release-candidate` workflow builds, verifies, and attests release archives and keeps them only as workflow artifacts; no publishing workflow exists. Any publish step follows the [release checklist](../release.md#release-checklist), including the maintainer's explicit approval. npm publication or GitHub Releases would additionally need confirmed package ownership and a release policy.
+The `release-candidate` workflow builds, verifies, and attests release archives and keeps them only as workflow artifacts; no publishing workflow exists. Any publish step follows the [release checklist](../release/owner-workflow.md#release-checklist), including the maintainer's explicit approval. npm publication or GitHub Releases would additionally need confirmed package ownership and a release policy.

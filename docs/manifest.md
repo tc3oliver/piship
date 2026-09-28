@@ -271,7 +271,7 @@ v1alpha3 and v1alpha4 branded commands add:
 - `doctor` sections for Policy, Project (origin and each discovered project item with its effect), Resources (trust class, integrity, and whether each loads), Capabilities, Sandbox (the containment level proven by a live probe, network mode, and scope), MCP and audit (server health and sink state), and local metrics.
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
-Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` adds Supply Chain and Update sections ([release](release.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` adds Supply Chain and Update sections ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
 
 ## Lock
 
@@ -290,7 +290,7 @@ A v1alpha4 manifest produces `piship-lock/v1alpha4`, which keeps every v1alpha3 
 | `updates` | The parsed `updates` section, including the pinned public keys |
 | `release` | The `release` section with defaults applied |
 
-Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([release](release.md#reviewing-a-change)).
+Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
 
 The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 

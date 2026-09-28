@@ -28,7 +28,7 @@ Out of scope for v0.6, and candidates for v0.7 or later:
 - The remaining git control-file hardening listed in [security](security.md#limits).
 - Verification against live identity providers, gateways, and platform secret stores; macOS and Windows code signing; a Windows sandbox adapter.
 - Runtime hooks for actions that have none yet: `network.connect`, `web.request`, `browser.execute`, `agent.invoke`, and `memory.*`.
-- Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([release checklist](release.md#release-checklist)); more targets once each has installed lifecycle evidence.
+- Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([release checklist](release/owner-workflow.md#release-checklist)); more targets once each has installed lifecycle evidence.
 
 ## Considered: remote execution backends
 

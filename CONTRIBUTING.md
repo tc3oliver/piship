@@ -49,7 +49,7 @@ Keep Pi dependencies exact-pinned and confined to `packages/pi`. Use public expo
 
 ## Changesets and pull requests
 
-Packages are at `0.1.0` and are not published. Internal refactors need no changeset. Add a patch changeset for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change. The `piship/v1alpha1` through `piship/v1alpha4` schemas are experimental; both examples use `piship/v1alpha4`. The [changesets README](.changeset/README.md) records how changesets are used while packages are unpublished.
+Packages are at `0.1.0`, private, and not published. Record every user-visible change under `Unreleased` in [CHANGELOG.md](CHANGELOG.md), and mark a behavior change as such. Changesets are optional until a publish policy exists; if you add one, use patch for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change, and never run `changeset version`. The `piship/v1alpha1` through `piship/v1alpha4` schemas are experimental; both examples use `piship/v1alpha4`. The [changesets README](.changeset/README.md) records this decision.
 
 Use a descriptive PR title: `type(scope): concise summary`, or `type: concise summary` when a scope adds nothing. Common types are `feat`, `fix`, `perf`, `docs`, `test`, `refactor`, `ci`, and `chore`. Name the part changed, such as `schema`, `core`, `pi`, or `cli`; do not force a scope onto every PR. For example, `fix(pi): keep the compatibility check on public exports` or `docs: explain the alpha manifest status`.
 
