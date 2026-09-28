@@ -46,6 +46,7 @@ Preview milestone; not published to npm.
 
 ### Fixed
 
+- Filesystem enforcement is reported as sandbox-enforced only when a sandbox backend reports both `filesystem-read-deny` and `filesystem-write-allowlist`. A custom backend that declares only one of them no longer makes `policy explain` or file-tool denials say `sandbox`, and `doctor` says the path rules are only partly enforced ([#25](https://github.com/tc3oliver/piship/issues/25)).
 - **Behavior change:** `update` validates the resolved `updates.source` (after `${NAME}` resolution) and `--from` with the same rules as the manifest: `https`, or `http` on `127.0.0.1`, `localhost`, or `[::1]`, with no credentials, query string, or fragment. Other schemes (`ftp:`, `file:`, public `http:`) are refused with `NETWORK_DENIED` instead of being read as a local directory. A local directory resolved from `updates.source` must be absolute; `--from` still accepts a relative directory. The manifest validation hint now lists the accepted forms.
 - The inference gateway now parses `Retry-After` HTTP-dates as well as seconds, using one shared `parseRetryAfter` from `@piship/contracts` (also used by the credential broker). Error output (`formatError`) shows `Retry after: <n> s` when an error carries a positive wait.
 - **Behavior change:** `piship keygen` refuses to write the private key inside a git work tree unless the path is git-ignored; `--force-in-worktree` overrides this explicitly. When git is missing or exits with an error, a `.git` entry in any parent directory counts as a work tree.

@@ -8,6 +8,8 @@ import {
 } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { GovernanceSession } from "../governance-session.js";
+import { gatePath } from "../governed-tools.js";
 import { policyContainment } from "./engine.js";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
@@ -316,6 +318,20 @@ describe("policy containment from a sandbox report", () => {
     ).toEqual({ filesystem: false, network: true, shell: true });
   });
 
+  it("counts the path policy only with both path planes", () => {
+    for (const plane of ["filesystem-read-deny", "filesystem-write-allowlist"])
+      expect(
+        policyContainment(
+          report([
+            plane,
+            "network-deny",
+            "environment-filter",
+            "host-filesystem-isolation",
+          ]),
+        ).filesystem,
+      ).toBe(false);
+  });
+
   it("keeps the native planes as before", () => {
     expect(
       policyContainment(
@@ -333,4 +349,56 @@ describe("policy containment from a sandbox report", () => {
       shell: false,
     });
   });
+});
+
+describe("file-tool denial labels", () => {
+  const fakeSession = (planes: readonly string[]) => {
+    const root = mkdtempSync(join(tmpdir(), "piship-gate-"));
+    const workspace = join(root, "ws");
+    const secret = join(workspace, ".secrets");
+    mkdirSync(secret, { recursive: true });
+    const events: { rule?: string; enforcement?: string }[] = [];
+    const gov = {
+      workflowMode: "build",
+      policyId: "acme@1",
+      metrics: { recordPolicyDenial: () => {} },
+      emit: (_event: string, fields: { rule?: string; enforcement?: string }) =>
+        events.push(fields),
+      engine: {
+        context: { workspaceRoot: workspace, homeDir: root, tmpDir: root },
+      },
+      options: { stateDir: join(root, "state") },
+      project: { root: workspace },
+      sandbox: {
+        report: { level: "enforced", planes },
+        profile: { readDeny: [secret], writeAllow: [workspace] },
+      },
+    } as unknown as GovernanceSession;
+    return { gov, events, secret, root };
+  };
+
+  it.each([
+    [["filesystem-read-deny", "filesystem-write-allowlist"], "sandbox"],
+    [["filesystem-read-deny"], "control-plane"],
+    [["filesystem-write-allowlist"], "control-plane"],
+    [["host-filesystem-isolation"], "control-plane"],
+  ])(
+    "labels a path-rule denial with planes %j as %s",
+    async (planes, label) => {
+      const { gov, events, secret, root } = fakeSession(planes);
+      try {
+        await expect(
+          gatePath(gov, "filesystem.read", join(secret, "key"), "read"),
+        ).rejects.toThrow(/outside what this distribution lets tools read/);
+        expect(events).toEqual([
+          expect.objectContaining({
+            rule: "sandbox.filesystem.read.deny",
+            enforcement: label,
+          }),
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
