@@ -1,14 +1,26 @@
 # Demo company distribution example
 
-AcmeCode is a fictional managed distribution on `piship/v1alpha2`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
+AcmeCode is a fictional managed distribution on `piship/v1alpha3`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. On top of that access layer it declares governance: a company policy, trust-classed resources, a governed MCP server, a Plan/Build workflow, a required OS sandbox, and audit. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
 
-The managed surface is a **candidate**: it is verified with the deterministic local fixtures below, not with a live identity provider or gateway. See [compatibility](../../docs/compatibility.md).
+The managed surface is a **candidate** and governance is a preview: both are verified with the deterministic local fixtures below, not with a live identity provider or gateway. See [compatibility](../../docs/compatibility.md).
+
+## What the demo shows
+
+- **Policy.** `acme-engineering@1` defaults to `ask`. Enforced rules deny reading `~/.ssh/**` and calling `docs:delete_*`; defaults allow the gateway models, skill, instruction, and extension loading, workspace reads, tool calls, and the handbook MCP server and tools, and ask before workspace writes and shell commands. Headless runs have no approval channel, so every `ask` becomes deny there.
+- **Resources by trust class.** Company instructions, skills, and the `enterprise-context` extension; a certified `release-notes` skill whose tree digest is checked at lock and launch; and the builtin `piship-ask-user` and `piship-workflow` extensions.
+- **Project trust.** Repositories whose origin is on `git.acme.example` are company projects; every other workspace is unknown and keeps the managed defaults (no project extensions, hooks, agents, MCP, or providers).
+- **Governed MCP.** `resources/mcp/docs-server.mjs` is a small handbook server started over stdio with `expectedServerName: acme-docs`. It offers `search`, `get_document`, and `delete_document`. The first two reach the model as `mcp__docs__search` and `mcp__docs__get_document`. `delete_document` is on the server's tool list but denied by the enforced policy, so it is never offered to the model and a call to it never reaches the server.
+- **Plan and Build.** Sessions start in Plan mode: the model can read and search the handbook but cannot write, edit, or run commands. `/build` switches to Build mode, where tools follow the policy; `/plan` switches back.
+- **Sandbox.** `sandbox.required: true` with network `deny`, `~/.ssh`, `~/.aws`, and `~/.gnupg` hidden, and writes limited to the workspace and a private temp directory. `bash`, `!` commands, and the MCP stdio server run inside it. The launch fails with `SANDBOX_UNAVAILABLE` if it cannot be enforced.
+- **Audit.** An optional local file sink records metadata-only events in the distribution state under `logs/audit.jsonl`.
 
 ## Deterministic local path
 
 `fixtures/local-services.mjs` starts a loopback OIDC provider, credential broker, and gateway. It auto-approves every sign-in for a fictional demo user and returns canned replies. It is test infrastructure, not a real identity provider, and not evidence of a live integration.
 
 The demo uses the system secret store (`credential.storage.provider: system`). On Linux this needs a running, unlocked Secret Service and `secret-tool`; macOS uses Keychain and Windows uses Credential Manager. Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the plaintext file fallback instead, edit a copy of this example to set `storage: {provider: file, acknowledgePlaintext: true}`; the example itself does not opt in.
+
+The required sandbox needs bubblewrap (`bwrap`) with unprivileged user namespaces on Linux, or `/usr/bin/sandbox-exec` on macOS. Windows has no sandbox adapter, so the demo refuses to start there with `SANDBOX_UNAVAILABLE`; to try the rest of the demo on Windows, set `sandbox.required: false` in a copy.
 
 In a first terminal, from the repository root with Node.js 22.19.0 or newer:
 
@@ -33,13 +45,26 @@ node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode --model acme/review --smoke   # MODEL_UNAVAILABLE: not entitled
 ~/.local/bin/acmecode doctor
 ~/.local/bin/acmecode config explain
+~/.local/bin/acmecode capabilities
+~/.local/bin/acmecode policy explain mcp.tool.call docs:delete_document
+~/.local/bin/acmecode policy explain filesystem.read ~/.ssh/id_ed25519 --json
+~/.local/bin/acmecode policy explain shell.execute "git status"
 ~/.local/bin/acmecode logout
 node dist/acmecode/piship.mjs uninstall acmecode
 ```
 
-`login` prints the sign-in URL and opens a browser; the fixture approves it at once and redirects to `http://127.0.0.1:8765/callback`, so that port must be free. Set `PISHIP_NO_BROWSER=1` to only print the URL. Before `login`, `--smoke` fails with `IDENTITY_REQUIRED`. `--smoke` checks Pi startup, declared resources, the read tool, session resume, and the access summary without a model call; `--smoke-model` sends one prompt through the fixture gateway. The declared `enterprise-context` extension adds a `demo_context` tool that reads the token-free enterprise context. `config set theme light` is refused because the theme is enforced; `config set model acme/general` is permitted.
+`login` prints the sign-in URL and opens a browser; the fixture approves it at once and redirects to `http://127.0.0.1:8765/callback`, so that port must be free. Set `PISHIP_NO_BROWSER=1` to only print the URL. Before `login`, `--smoke` fails with `IDENTITY_REQUIRED`. `--smoke` checks Pi startup, declared resources, the read tool, session resume, and the access summary without a model call, and adds a `governance` summary: policy, project origin, sandbox level and planes, workflow mode, capabilities, resource decisions, MCP servers and their exposed tools, and audit state. `--smoke-model` sends one prompt through the fixture gateway. The declared `enterprise-context` extension adds a `demo_context` tool that reads the token-free enterprise context. `config set theme light` is refused because the theme is enforced; `config set model acme/general` is permitted.
 
-Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state after uninstall.
+What to look for:
+
+- `doctor` adds Policy, Project, Resources, Capabilities, Sandbox, and MCP and audit sections. On Linux with bubblewrap, the sandbox line reads `enforced (linux-bubblewrap: filesystem-read-deny, filesystem-write-allowlist, network-deny, environment-filter)`, proven by a live probe, and `mcp docs` is `healthy (stdio; 2 tool(s))`. The certified skill shows `integrity verified`.
+- `capabilities` shows `permissions` and `workflow` effective through their builtin providers; `checkpoint`, `subagents`, `code-intel`, and `acp` are not supported in this release.
+- `policy explain mcp.tool.call docs:delete_document` prints `DENIED` by the enforced rule `acme.docs.destructive`, with the default `acme.docs.read` allow listed as another matching rule. `filesystem.read ~/.ssh/id_ed25519` is denied by `acme.secrets.read` with enforcement `sandbox` when the sandbox is enforced. `shell.execute "git status"` needs approval under `acme.shell`.
+- In the interactive TUI (`~/.local/bin/acmecode`), the session starts in Plan mode. Ask for a plan that searches the handbook; writes and commands are refused until you type `/build`. In Build mode, writes and commands ask for approval, and approved `!` commands run inside the sandbox: `!cat ~/.ssh/config` finds nothing to read and `!curl https://example.org` has no network.
+
+To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. A user rule can relax a default such as `acme.shell` from `ask` to `allow`; neither file can relax the enforced rules, and project `allow` rules are ignored and reported. `policy explain` shows which layer decided.
+
+Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall.
 
 ## Authorized live path
 

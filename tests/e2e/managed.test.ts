@@ -116,7 +116,15 @@ function prepare(example: string, patch: (source: string) => string) {
   const directory = join(temp, "distribution");
   cpSync(join(root, "examples", example), directory, { recursive: true });
   const manifest = join(directory, "piship.yaml");
-  writeFileSync(manifest, patch(readFileSync(manifest, "utf8")));
+  let source = readFileSync(manifest, "utf8");
+  // Windows has no sandbox adapter, so a required sandbox refuses to launch
+  // there (covered by the governance E2E); this flow tests managed access.
+  if (process.platform === "win32")
+    source = source.replace(
+      "  required: true\n  filesystem:",
+      "  required: false\n  filesystem:",
+    );
+  writeFileSync(manifest, patch(source));
   const cli = (env: NodeJS.ProcessEnv, ...args: string[]) =>
     spawnSync(process.execPath, [bin, ...args], {
       cwd: temp,
@@ -205,7 +213,7 @@ describe("managed distribution (local fixtures)", () => {
     const firstResult = JSON.parse(first.stdout);
     expect(firstResult).toMatchObject({
       resumed: false,
-      skills: ["acme-review"],
+      skills: ["release-notes", "acme-review"],
       extensions: 1,
       access: {
         mode: "managed",

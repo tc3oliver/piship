@@ -1,13 +1,41 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/schema" },
-    { "path": "./packages/contracts" },
-    { "path": "./packages/identity" },
-    { "path": "./packages/credentials" },
-    { "path": "./packages/inference" },
-    { "path": "./packages/core" },
-    { "path": "./packages/pi" },
-    { "path": "./packages/cli" }
+    {
+      "path": "./packages/schema"
+    },
+    {
+      "path": "./packages/contracts"
+    },
+    {
+      "path": "./packages/policy"
+    },
+    {
+      "path": "./packages/audit"
+    },
+    {
+      "path": "./packages/sandbox"
+    },
+    {
+      "path": "./packages/mcp"
+    },
+    {
+      "path": "./packages/identity"
+    },
+    {
+      "path": "./packages/credentials"
+    },
+    {
+      "path": "./packages/inference"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/pi"
+    },
+    {
+      "path": "./packages/cli"
+    }
   ]
 }

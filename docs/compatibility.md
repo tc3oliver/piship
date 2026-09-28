@@ -19,10 +19,24 @@ Still pending:
 - Three-target installed E2E results for the managed surface.
 - Real platform secret-store results. Unit tests use a command-runner double; an opt-in live Keychain and Credential Manager test is wired into CI with no recorded result; Linux Secret Service has no live coverage.
 
+## Managed governance surface: in preview
+
+Governance (`piship/v1alpha3`) is implemented on Pi 0.87.1 as a preview; it is not yet a separate surface in `compatibility/pi.json`. The end-to-end governance test drives a real Pi session with scripted tool calls from the local fixture gateway and checks Plan mode, MCP policy (a denied tool is never offered or sent), project trust and symlinked instruction imports, certified integrity, user and project rule precedence in `policy explain`, sandboxed Build-mode commands, a required audit sink that fails the launch, and metadata-only audit content.
+
+| Target | Status |
+| --- | --- |
+| Linux | Tested locally and in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270268) on Ubuntu with real bubblewrap: the live probe enforces filesystem read deny, write allowlist, network deny, and the environment filter, and the governance E2E passes |
+| macOS | Tested in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270268) on macOS 26 arm64 with Seatbelt: the live probe and the boundary tests, including refused launchd, `open`, and `osascript` escapes |
+| Windows | No sandbox adapter. A distribution with `sandbox.required: true` fails closed with `SANDBOX_UNAVAILABLE`, which the governance E2E checks; with the sandbox optional, the governance E2E passes in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270287) |
+
+The fixtures prove PiShip's governance contracts, not a production deployment. The [portable E2E run](https://github.com/tc3oliver/piship/actions/runs/36389270287) passed on Ubuntu, macOS, and Windows. Still pending: live company services.
+
 ## Public API used
 
 PiShip uses the public SDK entrypoint: `createAgentSessionRuntime`, `createAgentSession`, `DefaultResourceLoader`, `ModelRuntime`, `SessionManager`, `SettingsManager`, `InteractiveMode`, `createReadTool`, `VERSION`, and the `AgentSessionServices`, `CreateAgentSessionRuntimeFactory`, and `InlineExtension` types.
 
 The managed runtime calls `ModelRuntime.create` with an in-memory credential store and no models file, then `ModelRuntime.registerProvider` for the declared gateway. Governance replaces these public methods on the `ModelRuntime` instance PiShip creates: `getModel`, `getModels`, `getAvailable`, `getAvailableSnapshot`, `checkAuth`, `getAuth`, `stream`, `streamSimple`, `complete`, `completeSimple`, `login`, and `setRuntimeApiKey`. An inline `piship-governance` extension listens to `message_end`, to detect credential rejections, and to `model_select`, to update the enterprise context. The compatibility test fails if any of these methods disappears, so an upgrade cannot silently bypass governance.
+
+Governance additionally depends on these public exports and extension hooks: `createAgentSession` options `noTools: "builtin"` and `customTools`; `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, and `createBashToolDefinition` with their `operations` overrides; `createLocalBashOperations`; the `tool_call`, `user_bash`, `before_agent_start`, `before_provider_request`, and `session_start` events; `registerTool` and `registerCommand`; and the extension context's `hasUI` and `ui` dialogs. Governed tools replace Pi's built-in tools of the same names, so a rename of a tool or an operation hook would surface as a type-check or end-to-end failure. The compatibility test does not yet assert these governance seams individually.
 
 There are no Pi private imports or source patches. A future Pi upgrade must update the exact pin, npm lock, matrix, and compatibility tests together, then pass the installed E2E gate. Temporary shims need a regression test and an owner.

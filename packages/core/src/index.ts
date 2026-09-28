@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import {
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA2,
+  PISHIP_SCHEMA_V1ALPHA3,
   checkVariableName,
   readManifest,
   type AccessManifest,
@@ -28,8 +29,17 @@ import {
   type PishipSchemaVersion,
 } from "@piship/schema";
 
+import {
+  type GovernanceLock,
+  assertIntegrity,
+  assertNoInstallScripts,
+  filesUnder,
+  treeDigest,
+} from "./trust.js";
+
 export * from "./access.js";
 export * from "./config.js";
+export * from "./trust.js";
 
 export interface DistributionId {
   readonly value: string;
@@ -42,9 +52,12 @@ export interface ResolvedDistribution {
 export const LOCK_SCHEMA_VERSION = "piship-lock/v1alpha1";
 /** Lock schema for piship/v1alpha2 manifests; adds the static access envelope. */
 export const LOCK_SCHEMA_V1ALPHA2 = "piship-lock/v1alpha2";
+/** Lock schema for piship/v1alpha3 manifests; adds trust classes and governance. */
+export const LOCK_SCHEMA_V1ALPHA3 = "piship-lock/v1alpha3";
 export type LockSchemaVersion =
   | typeof LOCK_SCHEMA_VERSION
-  | typeof LOCK_SCHEMA_V1ALPHA2;
+  | typeof LOCK_SCHEMA_V1ALPHA2
+  | typeof LOCK_SCHEMA_V1ALPHA3;
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "0.87.1";
 export const PISHIP_VERSION = "0.1.0";
@@ -55,9 +68,12 @@ export interface LockedResource {
     | "extensions"
     | "prompts"
     | "themes"
-    | "adapters";
+    | "adapters"
+    | "providers";
   readonly path: string;
   readonly sha256: string;
+  /** v1alpha3 only: the declared trust class (`certified`, `company`, or `user`). */
+  readonly class?: string;
 }
 export interface DistributionLock {
   readonly schema: LockSchemaVersion;
@@ -86,6 +102,11 @@ export interface DistributionLock {
    * machine-specific values.
    */
   readonly access?: AccessManifest;
+  /**
+   * v1alpha3 governance intent plus static trust evidence: certified tree
+   * digests and exact provider/contract versions.
+   */
+  readonly governance?: GovernanceLock;
 }
 // This input is prepared with the @piship/core build, and travels with that package.
 const buildInput =
@@ -94,6 +115,10 @@ const buildInput =
 const workspacePackages = [
   "schema",
   "contracts",
+  "policy",
+  "audit",
+  "sandbox",
+  "mcp",
   "identity",
   "credentials",
   "inference",
@@ -195,6 +220,43 @@ function adapterDeclarations(manifest: Manifest): [string, string][] {
     output.push(["identity.adapter", access.identity.adapter]);
   if (access?.credential.adapter)
     output.push(["credential.adapter", access.credential.adapter]);
+  const governance = manifest.governance;
+  if (governance?.policy.adapter)
+    output.push(["policy.adapter", governance.policy.adapter]);
+  for (const server of governance?.mcp.servers ?? [])
+    if (server.module)
+      output.push([`mcp.servers.${server.id}.module`, server.module]);
+  return output;
+}
+/** Declared roots per kind, including capability-provider roots for v1alpha3. */
+function declaredRoots(
+  manifest: Manifest,
+): [LockedResource["kind"], string, string | undefined][] {
+  const output: [LockedResource["kind"], string, string | undefined][] = [];
+  const governance = manifest.governance;
+  for (const kind of [
+    "instructions",
+    "skills",
+    "extensions",
+    "prompts",
+    "themes",
+  ] as const) {
+    if (governance)
+      for (const item of governance.resources.declared.filter(
+        (entry) => entry.kind === kind,
+      ))
+        output.push([kind, item.path, item.class]);
+    else
+      for (const declared of manifest.resources[kind])
+        output.push([kind, declared, undefined]);
+  }
+  for (const capability of governance?.capabilities ?? [])
+    if (capability.provider?.path)
+      output.push([
+        "providers",
+        capability.provider.path,
+        capability.provider.class,
+      ]);
   return output;
 }
 export function resolveResources(
@@ -203,67 +265,60 @@ export function resolveResources(
 ): LockedResource[] {
   const base = dirname(resolve(manifestPath));
   const output: LockedResource[] = [];
-  for (const kind of [
-    "instructions",
-    "skills",
-    "extensions",
-    "prompts",
-    "themes",
-  ] as const) {
-    for (const declared of manifest.resources[kind]) {
-      const absolute = resolve(base, declared);
-      if (!absolute.startsWith(`${base}${sep}`))
+  for (const [kind, declared, cls] of declaredRoots(manifest)) {
+    const absolute = resolve(base, declared);
+    if (!absolute.startsWith(`${base}${sep}`))
+      throw new ManifestError(
+        "unsafe path/name",
+        `resources.${kind}`,
+        `Path escapes manifest directory: ${declared}`,
+      );
+    if (!existsSync(absolute))
+      throw new ManifestError(
+        "missing resource",
+        `resources.${kind}`,
+        `${declared} does not exist`,
+      );
+    let component = base;
+    for (const segment of relative(base, absolute).split(sep)) {
+      component = join(component, segment);
+      if (lstatSync(component).isSymbolicLink())
         throw new ManifestError(
           "unsafe path/name",
           `resources.${kind}`,
-          `Path escapes manifest directory: ${declared}`,
+          `Resource symlinks are not allowed: ${declared}`,
         );
-      if (!existsSync(absolute))
-        throw new ManifestError(
-          "missing resource",
-          `resources.${kind}`,
-          `${declared} does not exist`,
-        );
-      let component = base;
-      for (const segment of relative(base, absolute).split(sep)) {
-        component = join(component, segment);
-        if (lstatSync(component).isSymbolicLink())
-          throw new ManifestError(
-            "unsafe path/name",
-            `resources.${kind}`,
-            `Resource symlinks are not allowed: ${declared}`,
-          );
-      }
-      if (kind === "instructions" && !lstatSync(absolute).isFile())
-        throw new ManifestError(
-          "invalid field",
-          `resources.${kind}`,
-          `${declared} must be a file`,
-        );
-      const files: string[] = [];
-      walkResource(base, absolute, files);
-      if (files.length === 0)
-        throw new ManifestError(
-          "missing resource",
-          `resources.${kind}`,
-          `${declared} is empty`,
-        );
-      if (
-        kind === "extensions" &&
-        !files.some((file) => /\.[cm]?[jt]s$/.test(file))
-      )
-        throw new ManifestError(
-          "invalid field",
-          `resources.${kind}`,
-          `${declared} has no JavaScript or TypeScript extension entry`,
-        );
-      for (const file of files)
-        output.push({
-          kind,
-          path: file,
-          sha256: hash(readFileSync(join(base, file))),
-        });
     }
+    if (kind === "instructions" && !lstatSync(absolute).isFile())
+      throw new ManifestError(
+        "invalid field",
+        `resources.${kind}`,
+        `${declared} must be a file`,
+      );
+    const files: string[] = [];
+    walkResource(base, absolute, files);
+    if (files.length === 0)
+      throw new ManifestError(
+        "missing resource",
+        `resources.${kind}`,
+        `${declared} is empty`,
+      );
+    if (
+      (kind === "extensions" || kind === "providers") &&
+      !files.some((file) => /\.[cm]?[jt]s$/.test(file))
+    )
+      throw new ManifestError(
+        "invalid field",
+        `resources.${kind}`,
+        `${declared} has no JavaScript or TypeScript extension entry`,
+      );
+    for (const file of files)
+      output.push({
+        kind,
+        path: file,
+        sha256: hash(readFileSync(join(base, file))),
+        ...(cls ? { class: cls } : {}),
+      });
   }
   for (const [field, declared] of adapterDeclarations(manifest)) {
     const absolute = resolve(base, declared);
@@ -318,21 +373,82 @@ export function resolveResources(
   }
   return output;
 }
+/** Certified digests and provider versions; any tampering or install script fails. */
+function governanceLock(
+  manifest: Manifest,
+  base: string,
+  resources: readonly LockedResource[],
+): GovernanceLock | undefined {
+  const governance = manifest.governance;
+  if (!governance) return undefined;
+  const certified = governance.resources.declared
+    .filter((item) => item.class === "certified" && item.certified)
+    .map((item) => {
+      const field = `resources.${item.kind}.certified`;
+      const files = filesUnder(
+        resources.filter((entry) => entry.kind === item.kind),
+        item.path,
+      );
+      assertNoInstallScripts(resolve(base, item.path), files, field);
+      const integrity = treeDigest(files);
+      const evidence = item.certified as NonNullable<typeof item.certified>;
+      assertIntegrity(integrity, evidence.integrity, field);
+      return { kind: item.kind, path: item.path, evidence, integrity };
+    });
+  const providers = governance.capabilities.flatMap((capability) => {
+    const provider = capability.provider;
+    if (!provider) return [];
+    const field = `capabilities.${capability.name}.provider`;
+    let integrity: string | undefined;
+    if (provider.path) {
+      const files = filesUnder(
+        resources.filter((entry) => entry.kind === "providers"),
+        provider.path,
+      );
+      assertNoInstallScripts(resolve(base, provider.path), files, field);
+      integrity = treeDigest(files);
+      if (provider.certified)
+        assertIntegrity(integrity, provider.certified.integrity, field);
+    }
+    return [
+      {
+        capability: capability.name,
+        id: provider.id,
+        class: provider.class,
+        version: provider.version,
+        implements: provider.implements,
+        ...(provider.path ? { path: provider.path } : {}),
+        ...(integrity ? { integrity } : {}),
+        ...(provider.certified ? { certified: provider.certified } : {}),
+      },
+    ];
+  });
+  return { manifest: governance, certified, providers };
+}
 export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
+  const resources = resolveResources(manifest, manifestPath);
+  const governance = governanceLock(
+    manifest,
+    dirname(resolve(manifestPath)),
+    resources,
+  );
   return {
     schema:
-      manifest.schema === PISHIP_SCHEMA_V1ALPHA2
-        ? LOCK_SCHEMA_V1ALPHA2
-        : LOCK_SCHEMA_VERSION,
+      manifest.schema === PISHIP_SCHEMA_V1ALPHA3
+        ? LOCK_SCHEMA_V1ALPHA3
+        : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
+          ? LOCK_SCHEMA_V1ALPHA2
+          : LOCK_SCHEMA_VERSION,
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,
     runtime: runtimeDependencies(),
-    resources: resolveResources(manifest, manifestPath),
+    resources,
     declared: manifest.resources,
     ...(manifest.access ? { access: manifest.access } : {}),
+    ...(governance ? { governance } : {}),
   };
 }
 export function lockManifest(manifestPath: string): string {

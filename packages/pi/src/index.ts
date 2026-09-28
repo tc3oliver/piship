@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
@@ -19,11 +20,16 @@ import {
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import {
+  createManagedFetch,
+  DEFAULT_NETWORK_POLICY,
   ENTERPRISE_CONTEXT_SYMBOL,
   type EnterpriseContext,
   PiShipError,
+  type PolicyAction,
+  POLICY_ACTIONS,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
+  type AuditEventType,
   formatError,
   redact,
   sanitizeManagedEnvironment,
@@ -38,18 +44,44 @@ import {
   runtimeStateDirectory,
   setPreference,
 } from "@piship/core";
+import { AuditLog, describeAuditStatus, LocalMetrics } from "@piship/audit";
+import {
+  decisionToJSON,
+  formatCapabilities,
+  formatDecision,
+} from "@piship/policy";
+import { resolveTemplate } from "@piship/schema";
+import {
+  askUserExtension,
+  governanceHooks,
+  workflowExtension,
+} from "./builtins.js";
 import {
   governModelRuntime,
   isCredentialRejection,
   type GovernedRuntime,
+  type ModelPolicy,
 } from "./governance.js";
+import {
+  type GovernanceOptions,
+  GovernanceSession,
+  inspectGovernance,
+} from "./governance-session.js";
+import { governedTools } from "./governed-tools.js";
 
 export {
   governModelRuntime,
   isCredentialRejection,
   type ModelGovernance,
+  type ModelPolicy,
   type GovernedRuntime,
 } from "./governance.js";
+export {
+  GovernanceSession,
+  inspectGovernance,
+  type GovernanceInspection,
+  type GovernanceOptions,
+} from "./governance-session.js";
 
 export const PINNED_PI_VERSION = "0.87.1" as const;
 export type PiVersion = typeof PINNED_PI_VERSION;
@@ -235,6 +267,7 @@ async function prepareAccess(
 async function createModelRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
+  policy?: ModelPolicy,
 ): Promise<{ modelRuntime: ModelRuntime; governed: GovernedRuntime | null }> {
   const { activated, access } = prepared;
   if (!activated || !access || activated.runtime.kind === "pi-native") {
@@ -245,15 +278,20 @@ async function createModelRuntime(
     // The effective allowlist includes an enforced model and user narrowing,
     // not only the manifest's list.
     const effective = activated?.config;
-    const governed = ctx.metadata.access
-      ? governModelRuntime(modelRuntime, {
-          kind: "pi-native",
-          allowedModelKeys: effective
-            ? effective.allowedModels
-            : ctx.metadata.access.models.allowed,
-          restricted: effective?.modelsRestricted ?? false,
-        })
-      : null;
+    const governed =
+      ctx.metadata.access || policy
+        ? governModelRuntime(
+            modelRuntime,
+            {
+              kind: "pi-native",
+              allowedModelKeys: effective
+                ? effective.allowedModels
+                : (ctx.metadata.access?.models.allowed ?? []),
+              restricted: effective?.modelsRestricted ?? false,
+            },
+            policy,
+          )
+        : null;
     return { modelRuntime, governed };
   }
   const modelRuntime = await ModelRuntime.create({
@@ -268,27 +306,31 @@ async function createModelRuntime(
     api: activated.runtime.api ?? "openai-completions",
     models: toPiModels(activated),
   });
-  const governed = governModelRuntime(modelRuntime, {
-    kind: "managed-endpoint",
-    providerId: activated.runtime.providerId,
-    allowedModelIds: activated.runtime.models
-      .map((model) => model.id)
-      .filter((id) => activated.config.allowedModels.includes(id)),
-    apiKey: async ({ force }) => {
-      if (!activated.runtime.requiresCredential)
-        return NO_CREDENTIAL_PLACEHOLDER;
-      const secret = await access.requestSecret({ force });
-      if (!secret)
-        throw new PiShipError(
-          "CREDENTIAL_REQUIRED",
-          "No runtime credential is available",
-          {
-            userAction: `Run ${ctx.metadata.app.command} login`,
-          },
-        );
-      return secret.reveal();
+  const governed = governModelRuntime(
+    modelRuntime,
+    {
+      kind: "managed-endpoint",
+      providerId: activated.runtime.providerId,
+      allowedModelIds: activated.runtime.models
+        .map((model) => model.id)
+        .filter((id) => activated.config.allowedModels.includes(id)),
+      apiKey: async ({ force }) => {
+        if (!activated.runtime.requiresCredential)
+          return NO_CREDENTIAL_PLACEHOLDER;
+        const secret = await access.requestSecret({ force });
+        if (!secret)
+          throw new PiShipError(
+            "CREDENTIAL_REQUIRED",
+            "No runtime credential is available",
+            {
+              userAction: `Run ${ctx.metadata.app.command} login`,
+            },
+          );
+        return secret.reveal();
+      },
     },
-  });
+    policy,
+  );
   return { modelRuntime, governed };
 }
 
@@ -298,17 +340,186 @@ function publishContext(context: EnterpriseContext | null): void {
   else delete holder[ENTERPRISE_CONTEXT_SYMBOL];
 }
 
+type GovernedLock = GovernanceOptions["lock"];
+
+function governedLock(ctx: LaunchContext): GovernedLock | null {
+  return ctx.metadata.governance ? (ctx.metadata as GovernedLock) : null;
+}
+
+function governanceOptions(
+  ctx: LaunchContext,
+  lock: GovernedLock,
+  prepared: PreparedAccess | null,
+  interactive: boolean,
+): GovernanceOptions {
+  const { access, activated } = prepared ?? {};
+  return {
+    lock,
+    distributionDir: ctx.distributionDir,
+    stateDir: ctx.stateDir,
+    cwd: process.cwd(),
+    piVersion: VERSION,
+    interactive,
+    fetch: createManagedFetch(
+      access?.network ?? DEFAULT_NETWORK_POLICY,
+      "governance",
+    ),
+    resolveTemplate: (key, template) =>
+      resolveTemplate(
+        key,
+        template,
+        ctx.metadata.access?.variables ?? [],
+        process.env,
+      ),
+    user: activated?.identity?.subject ?? null,
+    ...(access && activated?.runtime.requiresCredential
+      ? {
+          credential: async () =>
+            (await access.requestSecret({ force: false }))?.reveal(),
+        }
+      : {}),
+  };
+}
+
+async function openGovernance(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  interactive: boolean,
+): Promise<GovernanceSession | null> {
+  const lock = governedLock(ctx);
+  if (!lock) return null;
+  const gov = await GovernanceSession.open(
+    governanceOptions(ctx, lock, prepared, interactive),
+  );
+  const { access, activated } = prepared;
+  if (access && activated?.credential.ref)
+    gov.emit("credential.acquire", {
+      detail: {
+        mode: access.credentialMode,
+        renewed: activated.notices.some((notice) =>
+          notice.includes("new credential"),
+        ),
+      },
+    });
+  return gov;
+}
+
+/**
+ * Identity lifecycle events outside a session. Best effort: signing out must
+ * work while the company sink is down, so a failure is reported, not fatal.
+ */
+async function auditAccess(
+  ctx: LaunchContext,
+  access: DistributionAccess,
+  user: string | null,
+  events: readonly AuditEventType[],
+): Promise<void> {
+  const lock = governedLock(ctx);
+  if (!lock) return;
+  try {
+    const log = await AuditLog.open({
+      config: lock.governance.manifest.audit,
+      distribution: lock.app.id,
+      stateDir: ctx.stateDir,
+      fetch: createManagedFetch(access.network, "audit"),
+      resolveUrl: (template) =>
+        resolveTemplate(
+          "audit.sinks.url",
+          template,
+          ctx.metadata.access?.variables ?? [],
+          process.env,
+        ),
+    });
+    for (const event of events)
+      log.emit({
+        event,
+        user,
+        session: null,
+        detail: { mode: access.credentialMode },
+      });
+    await log.close();
+  } catch (error) {
+    ctx.err(`Warning: audit events were not recorded: ${formatError(error)}`);
+  }
+}
+
+/** PiShip's inline extensions for a governed session. */
+function governanceExtensions(gov: GovernanceSession): InlineExtension[] {
+  const extensions = [governanceHooks(gov)];
+  if (gov.loader.builtin.has("piship-ask-user"))
+    extensions.push(askUserExtension(gov));
+  const workflow = gov.manifest.capabilities.find(
+    (item) => item.name === "workflow",
+  );
+  if (
+    workflow &&
+    gov.loader.builtin.has("piship-workflow") &&
+    gov.effective("workflow") &&
+    (workflow.provider?.id ?? "builtin/workflow") === "builtin/workflow"
+  )
+    extensions.push(workflowExtension(gov, workflow.settings));
+  return extensions;
+}
+
+/**
+ * model.use from the distribution policy. `ask` is resolved before the
+ * session starts for the model it starts with; other models that need
+ * approval are not offered for switching mid-session.
+ */
+async function modelPolicy(
+  gov: GovernanceSession,
+  selected: string | undefined,
+): Promise<ModelPolicy> {
+  const approved = new Set<string>();
+  if (selected) {
+    const decision = await gov.decide(
+      "model.use",
+      selected,
+      gov.startupChannel(),
+      { denied: "model.denied" },
+    );
+    if (decision.outcome !== "allow")
+      throw new PiShipError(
+        "MODEL_DENIED",
+        `Model ${selected} is not allowed by ${decision.policyId} rule ${decision.ruleId}`,
+        { component: "policy" },
+      );
+    approved.add(selected);
+  }
+  return {
+    allows: (provider, id) => {
+      const key = `${provider}/${id}`;
+      const effect = gov.engine.evaluate({
+        action: "model.use",
+        resource: key,
+      }).effect;
+      return effect === "allow" || (effect === "ask" && approved.has(key));
+    },
+    denied: (provider, id) =>
+      gov.emit("model.denied", { resource: `${provider}/${id}` }),
+  };
+}
+
 async function startRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
   sessionDir: string,
+  gov: GovernanceSession | null = null,
 ) {
   verifyBuiltResources(ctx);
-  const instructions = resourcePaths(ctx, "instructions").map((path) => ({
-    path,
-    content: readFileSync(path, "utf8"),
-  }));
+  const instructions = gov
+    ? gov.loader.instructions
+    : resourcePaths(ctx, "instructions").map((path) => ({
+        path,
+        content: readFileSync(path, "utf8"),
+      }));
   const { activated, access } = prepared;
+  const selectedKey =
+    activated?.selectedModel && activated.runtime.kind === "managed-endpoint"
+      ? `${activated.runtime.providerId}/${activated.selectedModel}`
+      : activated?.selectedModel;
+  const policy = gov ? await modelPolicy(gov, selectedKey) : undefined;
+  const builtinExtensions = gov ? governanceExtensions(gov) : [];
   const theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
   const thinkingLevel = activated?.config.values.thinkingLevel;
   const context =
@@ -339,19 +550,36 @@ async function startRuntime(
     sessionManager,
   }) => {
     const settingsManager = SettingsManager.inMemory();
-    const { modelRuntime, governed } = await createModelRuntime(ctx, prepared);
+    const { modelRuntime, governed } = await createModelRuntime(
+      ctx,
+      prepared,
+      policy,
+    );
     governedRef = governed;
     // Discovery uses the built distribution, never the user's cwd or personal ~/.pi.
     const resourceLoader = new DefaultResourceLoader({
       cwd: ctx.distributionDir,
       agentDir: ctx.agentDir,
       settingsManager,
-      additionalExtensionPaths: resourcePaths(ctx, "extensions"),
-      additionalSkillPaths: resourcePaths(ctx, "skills"),
-      additionalPromptTemplatePaths: resourcePaths(ctx, "prompts"),
-      additionalThemePaths: resourcePaths(ctx, "themes"),
-      ...(ctx.metadata.access
-        ? { extensionFactories: [governanceExtension] }
+      additionalExtensionPaths: gov
+        ? gov.loader.extensions
+        : resourcePaths(ctx, "extensions"),
+      additionalSkillPaths: gov
+        ? gov.loader.skills
+        : resourcePaths(ctx, "skills"),
+      additionalPromptTemplatePaths: gov
+        ? gov.loader.prompts
+        : resourcePaths(ctx, "prompts"),
+      additionalThemePaths: gov
+        ? gov.loader.themes
+        : resourcePaths(ctx, "themes"),
+      ...(ctx.metadata.access || builtinExtensions.length
+        ? {
+            extensionFactories: [
+              ...(ctx.metadata.access ? [governanceExtension] : []),
+              ...builtinExtensions,
+            ],
+          }
         : {}),
       noExtensions: true,
       noSkills: true,
@@ -399,6 +627,11 @@ async function startRuntime(
       sessionManager,
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
+      // Governed sessions replace Pi's built-in tools with governed ones of
+      // the same names; SDK custom tools also win over extension tools.
+      ...(gov
+        ? { noTools: "builtin" as const, customTools: governedTools(gov, cwd) }
+        : {}),
     });
     const current = result.session.model;
     if (
@@ -481,7 +714,8 @@ async function runSmoke(
   for (const path of [cacheDir, logsDir, dataDir, sessionDir])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
-  const { runtime } = await startRuntime(ctx, prepared, sessionDir);
+  const gov = await openGovernance(ctx, prepared, false);
+  const { runtime } = await startGoverned(ctx, prepared, sessionDir, gov);
   try {
     const { resourceLoader } = runtime.services;
     const sessionManager = runtime.session.sessionManager;
@@ -572,6 +806,7 @@ async function runSmoke(
         prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
         themes: resourceLoader.getThemes().themes.map((item) => item.name),
         ...(access ? { access } : {}),
+        ...(gov ? { governance: governanceSummary(gov) } : {}),
         ...(modelRequest ? { modelRequest } : {}),
       }),
     );
@@ -586,8 +821,58 @@ async function runSmoke(
       );
   } finally {
     await runtime.dispose();
+    await gov?.close();
     publishContext(null);
   }
+}
+
+async function startGoverned(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  sessionDir: string,
+  gov: GovernanceSession | null,
+) {
+  try {
+    return await startRuntime(ctx, prepared, sessionDir, gov);
+  } catch (error) {
+    await gov?.close();
+    throw error;
+  }
+}
+
+function governanceSummary(gov: GovernanceSession) {
+  return {
+    policy: gov.policyId,
+    project: { origin: gov.project.origin },
+    sandbox: {
+      level: gov.sandbox.report.level,
+      adapter: gov.sandbox.report.adapter,
+      planes: gov.sandbox.report.planes,
+      network: gov.sandbox.report.network,
+    },
+    workflowMode: gov.workflowMode,
+    capabilities: gov.capabilities.map((state) => ({
+      name: state.name,
+      effective: state.axes.effective.value,
+      ...(state.axes.effective.value === "no"
+        ? { reason: state.axes.effective.reason }
+        : {}),
+    })),
+    resources: gov.resources.map((item) => ({
+      kind: item.kind,
+      class: item.class,
+      path: item.path,
+      loaded: item.loaded,
+      ...(item.loaded ? {} : { reason: item.reason }),
+    })),
+    mcp: gov.mcpReports.map((report) => ({
+      id: report.id,
+      state: report.state,
+      tools: report.tools,
+      ...(report.reason ? { reason: report.reason } : {}),
+    })),
+    audit: gov.audit.status().state,
+  };
 }
 
 async function runInteractive(
@@ -601,7 +886,17 @@ async function runInteractive(
   const prepared = await prepareAccess(ctx, requestedModel);
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
-  const { runtime, theme } = await startRuntime(ctx, prepared, sessionDir);
+  const gov = await openGovernance(
+    ctx,
+    prepared,
+    !!process.stdin.isTTY && !!process.stderr.isTTY,
+  );
+  const { runtime, theme } = await startGoverned(
+    ctx,
+    prepared,
+    sessionDir,
+    gov,
+  );
   try {
     await new InteractiveMode(
       runtime,
@@ -609,6 +904,7 @@ async function runInteractive(
     ).run();
   } finally {
     await runtime.dispose();
+    await gov?.close();
     publishContext(null);
   }
 }
@@ -638,6 +934,12 @@ async function runLogin(ctx: LaunchContext): Promise<void> {
     },
     readSecret: readSecretInput,
   });
+  await auditAccess(ctx, access, result.identity?.subject ?? null, [
+    ...(result.identity ? (["identity.login"] as const) : []),
+    ...(result.credential.state === "delegated"
+      ? []
+      : (["credential.acquire"] as const)),
+  ]);
   const identity = result.identity
     ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
     : "No identity provider is configured.";
@@ -671,11 +973,56 @@ async function runLogout(ctx: LaunchContext): Promise<void> {
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
+  const signedIn = (await access.status().catch(() => undefined))?.identity;
   const problems = await access.logout();
+  await auditAccess(ctx, access, signedIn?.subject ?? null, [
+    "identity.logout",
+    "credential.revoke",
+  ]);
   ctx.out(
     `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; sessions were preserved.`,
   );
   for (const problem of problems) ctx.err(`Warning: ${problem}`);
+}
+
+/** Governance settings as `config explain` rows; all distribution-enforced. */
+function governanceRows(ctx: LaunchContext) {
+  const lock = governedLock(ctx);
+  if (!lock) return [];
+  const { policy, mcp, sandbox, audit } = lock.governance.manifest;
+  const row = (key: string, value: unknown, note?: string) => ({
+    key,
+    value,
+    source: "distribution-enforced" as const,
+    overridable: false,
+    ...(note ? { note } : {}),
+  });
+  return [
+    row(
+      "policy",
+      `${policy.id}@${policy.version}`,
+      `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); user rules in config/policy.json may only relax defaults`,
+    ),
+    row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
+    row(
+      "sandbox.required",
+      sandbox.required,
+      "run doctor for the effective containment level",
+    ),
+    row("sandbox.network", sandbox.network.mode),
+    row(
+      "audit.sinks",
+      audit.enabled
+        ? audit.sinks.map(
+            (sink) =>
+              `${sink.id} (${sink.type}${sink.required ? ", required" : ""})`,
+          )
+        : [],
+      audit.enabled
+        ? "metadata only unless content capture is opted in"
+        : "disabled",
+    ),
+  ];
 }
 
 async function runConfig(
@@ -685,13 +1032,16 @@ async function runConfig(
   const [action, key, ...rest] = args;
   const paths = accessStatePaths(ctx.stateDir);
   if (action === "explain") {
-    const rows = await explainConfiguration({
-      app: ctx.metadata.app,
-      mode: ctx.mode,
-      access: ctx.metadata.access,
-      stateDir: ctx.stateDir,
-      distributionDir: ctx.distributionDir,
-    });
+    const rows = [
+      ...(await explainConfiguration({
+        app: ctx.metadata.app,
+        mode: ctx.mode,
+        access: ctx.metadata.access,
+        stateDir: ctx.stateDir,
+        distributionDir: ctx.distributionDir,
+      })),
+      ...governanceRows(ctx),
+    ];
     if (key === "--json") ctx.out(redact(JSON.stringify(rows, null, 2)));
     else ctx.out(formatExplanation(ctx.metadata.app.name, rows));
     return;
@@ -740,6 +1090,186 @@ async function runModels(ctx: LaunchContext): Promise<void> {
   }
 }
 
+function requireGovernedLock(
+  ctx: LaunchContext,
+  command: string,
+): GovernedLock {
+  const lock = governedLock(ctx);
+  if (!lock)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `${ctx.metadata.app.command} ${command} needs a piship/v1alpha3 distribution`,
+    );
+  return lock;
+}
+
+async function runPolicy(
+  ctx: LaunchContext,
+  args: readonly string[],
+): Promise<void> {
+  const json = args.includes("--json");
+  const words = args.filter((arg) => arg !== "--json");
+  if (words[0] !== "explain" || words.length !== 3)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Usage: ${ctx.metadata.app.command} policy explain <action> <resource> [--json]`,
+    );
+  const [, requested, target] = words as [string, string, string];
+  if (!(POLICY_ACTIONS as readonly string[]).includes(requested))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Unknown policy action ${requested}. Actions: ${POLICY_ACTIONS.join(", ")}`,
+    );
+  const lock = requireGovernedLock(ctx, "policy explain");
+  const inspection = await inspectGovernance(
+    governanceOptions(ctx, lock, null, false),
+  );
+  // Paths are explained as tools see them: `~` is the home directory and
+  // relative paths are resolved against the working directory.
+  const resource = requested.startsWith("filesystem.")
+    ? target === "~" || target.startsWith("~/")
+      ? join(homedir(), target.slice(2))
+      : resolve(target)
+    : target;
+  const explanation = inspection.engine.explain({
+    action: requested as PolicyAction,
+    resource,
+  });
+  ctx.out(
+    json
+      ? redact(JSON.stringify(decisionToJSON(explanation), null, 2))
+      : redact(formatDecision(explanation)),
+  );
+}
+
+async function runCapabilities(
+  ctx: LaunchContext,
+  args: readonly string[],
+): Promise<void> {
+  if (args.some((arg) => arg !== "--json"))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Usage: ${ctx.metadata.app.command} capabilities [--json]`,
+    );
+  const lock = requireGovernedLock(ctx, "capabilities");
+  const inspection = await inspectGovernance(
+    governanceOptions(ctx, lock, null, false),
+  );
+  ctx.out(
+    args.includes("--json")
+      ? JSON.stringify(inspection.capabilities, null, 2)
+      : formatCapabilities(inspection.capabilities),
+  );
+}
+
+type DoctorLine = (label: string, value: string) => void;
+
+async function governanceDoctor(
+  ctx: LaunchContext,
+  lines: string[],
+  ok: DoctorLine,
+  bad: DoctorLine,
+  warn: DoctorLine,
+): Promise<void> {
+  const lock = governedLock(ctx);
+  if (!lock) return;
+  const manifest = lock.governance.manifest;
+  const options = governanceOptions(ctx, lock, null, false);
+  let inspection: Awaited<ReturnType<typeof inspectGovernance>> | undefined;
+  lines.push("", "Policy");
+  try {
+    inspection = await inspectGovernance(options);
+    const policy = manifest.policy;
+    ok("policy", `${inspection.engine.id}; default ${policy.default}`);
+    ok(
+      "rules",
+      `${policy.enforced.length} enforced, ${policy.defaults.length} defaults${policy.adapter ? ", team adapter" : ""}`,
+    );
+    for (const diagnostic of inspection.engine.diagnostics)
+      warn(diagnostic.source, diagnostic.message);
+  } catch (error) {
+    bad("policy", formatError(error));
+  }
+  if (!inspection) return;
+  lines.push("", "Project");
+  ok("origin", `${inspection.project.origin} (${inspection.project.root})`);
+  for (const candidate of inspection.candidates) {
+    if (candidate.dimension === "restrictions") continue;
+    const line = `${candidate.path}: ${candidate.effect} (${candidate.reason})`;
+    if (candidate.effect === "deny") warn(candidate.kind, line);
+    else ok(candidate.kind, line);
+  }
+  lines.push("", "Resources");
+  for (const item of inspection.resources) {
+    const label = `${item.class} ${item.kind}`;
+    const detail = `${item.path}${item.integrity === "verified" ? " (integrity verified)" : ""}`;
+    if (item.loaded) ok(label, detail);
+    else if (item.class === "certified" && item.integrity !== "verified")
+      bad(label, `${detail}: ${item.reason}`);
+    else warn(label, `${detail}: not loaded, ${item.reason}`);
+  }
+  lines.push("", "Capabilities");
+  for (const state of inspection.capabilities) {
+    const effective = state.axes.effective;
+    const provider = state.provider ? ` via ${state.provider}` : "";
+    if (effective.value === "yes") ok(state.name, `effective${provider}`);
+    else if (state.axes.enabled.value === "no")
+      ok(state.name, `disabled${provider}`);
+    else bad(state.name, `not effective${provider}: ${effective.reason ?? ""}`);
+  }
+  lines.push("", "Sandbox");
+  const report = inspection.sandbox;
+  const containment = `${report.level} (${report.adapter}${report.planes.length ? `: ${report.planes.join(", ")}` : ""})`;
+  if (report.level === "enforced") ok("containment", containment);
+  else if (report.required)
+    bad("containment", `${containment}: ${report.reason ?? "required"}`);
+  else
+    warn(
+      "containment",
+      `${containment}${report.reason ? `: ${report.reason}` : ""}`,
+    );
+  ok("network", report.network);
+  ok(
+    "scope",
+    "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",
+  );
+  for (const warning of report.warnings) warn("sandbox", warning);
+  lines.push("", "MCP and audit");
+  let session: GovernanceSession | undefined;
+  try {
+    session = await GovernanceSession.open(options);
+    for (const server of session.mcpReports) {
+      const label = `mcp ${server.id}`;
+      const detail = `${server.state} (${server.transport}${server.tools.length ? `; ${server.tools.length} tool(s)` : ""})${server.reason ? `: ${server.reason}` : ""}`;
+      if (server.state === "healthy") ok(label, detail);
+      else if (server.state === "denied") warn(label, detail);
+      else if (server.required) bad(label, detail);
+      else warn(label, detail);
+    }
+    if (!manifest.mcp.servers.length) ok("mcp", "no servers declared");
+    await session.audit.flush();
+    const status = session.audit.status();
+    for (const line of describeAuditStatus(status))
+      if (status.state === "failed") bad("audit", line);
+      else if (status.state === "degraded") warn("audit", line);
+      else ok("audit", line);
+  } catch (error) {
+    bad("launch controls", formatError(error));
+  } finally {
+    await session?.close();
+  }
+  const metrics = LocalMetrics.load(ctx.stateDir).snapshot();
+  const denials = Object.values(metrics.policyDenials).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  const failures = Object.entries(metrics.startupFailures);
+  ok(
+    "local metrics",
+    `${denials} policy denial(s)${failures.length ? `; startup failures ${failures.map(([code, count]) => `${code}=${count}`).join(", ")}` : ""}`,
+  );
+}
+
 async function runDoctor(ctx: LaunchContext): Promise<void> {
   const lines: string[] = [];
   let failed = false;
@@ -759,7 +1289,13 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
   if (!ctx.metadata.access) {
     lines.push("", "Access");
     ok("mode", "personal Pi-native (no identity; Pi auth in isolated state)");
+    await governanceDoctor(ctx, lines, ok, bad, warn);
     ctx.out(lines.join("\n"));
+    if (failed)
+      throw new PiShipError(
+        "CONFIG_UNAVAILABLE",
+        `${app.name} doctor found problems`,
+      );
     return;
   }
   const access = ctx.metadata.access;
@@ -870,6 +1406,7 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
   ok("enterprise CA", `${access.network.tls.additionalCA.length} bundle(s)`);
   if (ctx.mode === "managed")
     ok("ambient credentials", "removed from the managed runtime environment");
+  await governanceDoctor(ctx, lines, ok, bad, warn);
   ctx.out(lines.join("\n"));
   if (failed)
     throw new PiShipError(
@@ -924,9 +1461,14 @@ export async function launchPiDistribution(
     return;
   }
   if (!requestedModel && args.length === 1 && command === "--help") {
-    const managedHelp = metadata.access
-      ? "\n\nCommands:\n  login | logout | doctor | models | version\n  config explain [--json] | config set <key> <value> | config unset <key>\n  [--model <id>] [--smoke | --smoke-model]"
+    const governanceHelp = metadata.governance
+      ? "\n  policy explain <action> <resource> [--json] | capabilities [--json]"
       : "";
+    const managedHelp = metadata.access
+      ? `\n\nCommands:\n  login | logout | doctor | models | version\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--smoke | --smoke-model]`
+      : metadata.governance
+        ? `\n\nCommands:\n  doctor | version${governanceHelp}\n  [--smoke]`
+        : "";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
@@ -938,6 +1480,8 @@ export async function launchPiDistribution(
     if (args.length === 1 && command === "doctor") return runDoctor(ctx);
     if (args.length === 1 && command === "models") return runModels(ctx);
     if (command === "config") return runConfig(ctx, rest);
+    if (command === "policy") return runPolicy(ctx, rest);
+    if (command === "capabilities") return runCapabilities(ctx, rest);
   }
   if (
     args.length === 1 &&

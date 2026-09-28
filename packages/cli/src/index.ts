@@ -223,6 +223,7 @@ export async function runCli(
               runtime: lock.runtime,
               resources: lock.resources,
               ...(lock.access ? { access: lock.access } : {}),
+              ...(lock.governance ? { governance: lock.governance } : {}),
               state: runtimeStateDirectory({ value: lock.app.id }),
             },
             null,
@@ -240,6 +241,7 @@ export async function runCli(
               runtime: lock.runtime,
               resources: lock.resources,
               ...(lock.access ? { access: lock.access } : {}),
+              ...(lock.governance ? { governance: lock.governance } : {}),
               artifact,
               state: runtimeStateDirectory({ value: lock.app.id }),
             },
@@ -269,7 +271,7 @@ export async function runCli(
       const artifact = artifactFor(target);
       const app = payloadApp(artifact);
       const lock = verifyPayload(artifact);
-      if (lock.access) {
+      if (lock.access || lock.governance) {
         const report = runLauncher(artifact, app.command, ["doctor"]);
         output.stdout(report.stdout.trimEnd());
         if (report.status !== 0)
