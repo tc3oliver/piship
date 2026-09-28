@@ -182,10 +182,11 @@ describe("the declared sandbox backend", () => {
     });
 
     it("passes the credential only when declared and on an allowed origin", async () => {
+      // The adapter records its context on globalThis: the test must not
+      // depend on importing the same module instance PiShip loaded.
       write(`
-        export let seen;
         export default (context) => {
-          seen = context;
+          globalThis.__pishipSandboxContext = context;
           return {
             id: "acme-sandbox",
             available: async () => ({ available: true }),
@@ -194,20 +195,19 @@ describe("the declared sandbox backend", () => {
           };
         };
       `);
-      const url = join(distributionDir, "resources", "sandbox", "acme.mjs");
+      const seen = () =>
+        (globalThis as { __pishipSandboxContext?: Record<string, unknown> })
+          .__pishipSandboxContext ?? {};
       await sandboxBackend(
         options({ ...adapter, endpoint: `\${ACME_SANDBOX_URL}` }, gateway),
       );
-      const { seen } = (await import(url)) as {
-        seen: Record<string, unknown>;
-      };
-      expect(Object.keys(seen).sort()).toEqual([
+      expect(Object.keys(seen()).sort()).toEqual([
         "distributionId",
         "endpoint",
         "fetch",
       ]);
-      expect(seen.distributionId).toBe("acmecode");
-      expect(seen.endpoint).toBe("https://gateway.acme.example/sandbox");
+      expect(seen().distributionId).toBe("acmecode");
+      expect(seen().endpoint).toBe("https://gateway.acme.example/sandbox");
       await sandboxBackend(
         options(
           {
@@ -218,10 +218,12 @@ describe("the declared sandbox backend", () => {
           gateway,
         ),
       );
-      const again = (await import(url)) as {
-        seen: { credential?: () => Promise<string> };
-      };
-      expect(await again.seen.credential?.()).toBe("runtime-credential");
+      const credential = seen().credential as
+        | (() => Promise<string>)
+        | undefined;
+      expect(await credential?.()).toBe("runtime-credential");
+      delete (globalThis as { __pishipSandboxContext?: unknown })
+        .__pishipSandboxContext;
     });
 
     it.each([
