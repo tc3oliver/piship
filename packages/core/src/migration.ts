@@ -166,7 +166,7 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     sensitivity: "private",
     retention: "kept by uninstall",
     clear: "purge",
-    migration: "kept in place; append-only",
+    migration: "kept in place; audit.jsonl is rotated by size, never rewritten",
     schema: "audit",
   },
   {

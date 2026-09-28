@@ -8,7 +8,7 @@ Preview milestone; not published to npm.
 
 ### Added
 
-- Local metrics (`<state>/logs/metrics.json`) are now recorded at their real call sites: identity sign-in and session-check durations, broker and adapter credential acquire and refresh durations, gateway reachability (from the live catalog fetch at launch and the `doctor` probe, once per run), live model catalog fetches (time and model count), resource and provider load failures by error code, and the running distribution, PiShip, Pi, and Node versions. Access and the governed session share one metrics instance per launch, so neither save overwrites the other. Metrics remain metadata-only: numbers, times, error codes, and version strings, never a URL, token, subject, model ID, or content.
+- Local metrics (`<state>/logs/metrics.json`) are now recorded at their real call sites: identity sign-in and session-check durations, broker and adapter credential acquire and refresh durations, gateway reachability (from each live catalog fetch and the `doctor` probe; the probe is not recorded again when activation already fetched the catalog), live model catalog fetches (time and model count), resource and provider load failures by error code, and the running distribution, PiShip, Pi, and Node versions. Access and the governed session share one metrics instance per launch, so neither save overwrites the other. Metrics remain metadata-only: numbers, times, error codes, and version strings, never a URL, token, subject, model ID, or content.
 
 ### Changed
 
