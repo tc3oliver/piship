@@ -1,5 +1,13 @@
-import { constants } from "node:fs";
-import { chmod, mkdir, open } from "node:fs/promises";
+import { constants, existsSync } from "node:fs";
+import {
+  chmod,
+  mkdir,
+  open,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
   type AuditCapture,
@@ -72,13 +80,50 @@ export interface AuditLogOptions {
   readonly onStateChange?: (state: AuditLogState, status: AuditStatus) => void;
   /** Per-request timeout for HTTP sinks. Default 10 s. */
   readonly requestTimeoutMs?: number;
+  /**
+   * File sink retention. Fixed defaults (AUDIT_ROTATION); not a manifest
+   * setting. Tests pass smaller limits.
+   */
+  readonly rotation?: AuditRotation;
 }
+
+/** Size-based retention of the file sink: `audit.jsonl` plus `.1`..`.<files>`. */
+export interface AuditRotation {
+  /** Rotate before an append would grow `audit.jsonl` past this size. */
+  readonly maxBytes: number;
+  /** Rotated files kept (`audit.jsonl.1` is the newest); older ones are deleted. */
+  readonly files: number;
+}
+
+/** 10 MB per file, five rotated files: at most about 60 MB of local audit. */
+export const AUDIT_ROTATION: AuditRotation = Object.freeze({
+  maxBytes: 10 * 1024 * 1024,
+  files: 5,
+});
 
 /** Input accepted by `emit`; distribution and schema are filled by the log. */
 export type AuditEmitInput = Omit<AuditEventInput, "distribution">;
 
 export const AUDIT_BATCH_SCHEMA = "piship-audit-batch/v1" as const;
 export const AUDIT_LOG_FILE = join("logs", "audit.jsonl");
+/** A rotation older than this is treated as abandoned by a crashed process. */
+const ROTATION_LOCK_STALE_MS = 30_000;
+
+/**
+ * The file sink's files that exist, newest first: `logs/audit.jsonl`, then
+ * `logs/audit.jsonl.1` and so on. Readers that need the newest event use the
+ * first non-empty one; a rotation leaves `audit.jsonl` briefly absent or empty.
+ */
+export function auditLogFiles(
+  stateDir: string,
+  rotation: AuditRotation = AUDIT_ROTATION,
+): string[] {
+  const base = join(stateDir, AUDIT_LOG_FILE);
+  const paths = [base];
+  for (let index = 1; index <= rotation.files; index += 1)
+    paths.push(`${base}.${index}`);
+  return paths.filter((path) => existsSync(path));
+}
 /** Events per write (one HTTP POST or one file append). */
 const BATCH_LIMIT = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -99,7 +144,10 @@ interface SinkWriter {
 class FileSinkWriter implements SinkWriter {
   readonly path: string;
 
-  constructor(readonly stateDir: string) {
+  constructor(
+    readonly stateDir: string,
+    readonly rotation: AuditRotation = AUDIT_ROTATION,
+  ) {
     this.path = join(stateDir, AUDIT_LOG_FILE);
   }
 
@@ -118,18 +166,75 @@ class FileSinkWriter implements SinkWriter {
     const directory = join(this.stateDir, "logs");
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(directory, 0o700);
+    const bytes = Buffer.byteLength(data, "utf8");
+    let handle = await this.open();
+    try {
+      const { size, ino } = await handle.stat();
+      if (bytes > 0 && size > 0 && size + bytes > this.rotation.maxBytes) {
+        await handle.close();
+        await this.rotate(ino);
+        handle = await this.open();
+      }
+      if (process.platform !== "win32") await handle.chmod(0o600);
+      if (data) await handle.appendFile(data, "utf8");
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+
+  private open() {
     // O_NOFOLLOW refuses a planted symlink; it is 0 where unsupported.
     const flags =
       constants.O_WRONLY |
       constants.O_APPEND |
       constants.O_CREAT |
       (constants.O_NOFOLLOW ?? 0);
-    const handle = await open(this.path, flags, 0o600);
+    return open(this.path, flags, 0o600);
+  }
+
+  /**
+   * Shift `audit.jsonl` to `.1` (and `.1` to `.2`, …), deleting the oldest.
+   * Only renames are used: a process still appending through an open handle
+   * keeps writing into the renamed file, so no line is lost. One process
+   * rotates at a time; the others append to the current file and retry on a
+   * later write. Best effort: a failed rotation never fails the append.
+   */
+  private async rotate(measured: number): Promise<void> {
+    const lock = `${this.path}.rotate.lock`;
     try {
-      if (process.platform !== "win32") await handle.chmod(0o600);
-      if (data) await handle.appendFile(data, "utf8");
+      await writeFile(lock, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
+      try {
+        if (Date.now() - (await stat(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
+          return;
+        await rm(lock, { force: true });
+        await writeFile(lock, `${process.pid}\n`, {
+          flag: "wx",
+          mode: 0o600,
+        });
+      } catch {
+        return;
+      }
+    }
+    try {
+      // Another process may have rotated since this one measured the file.
+      const current = await stat(this.path).catch(() => undefined);
+      if (!current || (measured && current.ino !== measured)) return;
+      const files = Math.max(1, Math.floor(this.rotation.files));
+      await rm(`${this.path}.${files}`, { force: true });
+      for (let index = files - 1; index >= 1; index -= 1)
+        await rename(
+          `${this.path}.${index}`,
+          `${this.path}.${index + 1}`,
+        ).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
+      await rename(this.path, `${this.path}.1`);
+    } catch {
+      // Keep appending to the current file; rotation is retried later.
     } finally {
-      await handle.close();
+      await rm(lock, { force: true }).catch(() => undefined);
     }
   }
 }
@@ -455,7 +560,7 @@ async function openSink(
   options: AuditLogOptions,
 ): Promise<Sink> {
   if (config.type === "file") {
-    const writer = new FileSinkWriter(options.stateDir);
+    const writer = new FileSinkWriter(options.stateDir, options.rotation);
     const sink = new Sink(config, writer, undefined);
     try {
       await writer.prepare();

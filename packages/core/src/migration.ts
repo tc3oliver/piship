@@ -4,6 +4,7 @@
 // reacquired, never copied.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { auditLogFiles } from "@piship/audit";
 
 /**
  * State marker naming the release that last used this state; written at
@@ -302,17 +303,18 @@ export function readStateMarker(stateDir: string): StateMarker | null {
 }
 
 function newestAuditSchema(stateDir: string): string | null | "unreadable" {
-  const path = join(stateDir, "logs", "audit.jsonl");
-  if (!existsSync(path)) return null;
-  const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-  const last = lines.at(-1);
-  if (!last) return null;
-  try {
-    const value = JSON.parse(last) as { schema?: unknown };
-    return typeof value.schema === "string" ? value.schema : "unreadable";
-  } catch {
-    return "unreadable";
+  // Right after a size rotation the newest events are in `audit.jsonl.1`.
+  for (const path of auditLogFiles(stateDir)) {
+    const last = readFileSync(path, "utf8").trimEnd().split("\n").at(-1);
+    if (!last) continue;
+    try {
+      const value = JSON.parse(last) as { schema?: unknown };
+      return typeof value.schema === "string" ? value.schema : "unreadable";
+    } catch {
+      return "unreadable";
+    }
   }
+  return null;
 }
 
 function worst(verdicts: readonly MigrationVerdict[]): MigrationVerdict {

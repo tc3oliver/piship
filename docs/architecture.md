@@ -103,7 +103,7 @@ State defaults to `~/.piship/<id>` or `PISHIP_STATE_HOME/<id>`. The state path d
 | `sessions/user/` | Interactive Pi sessions; may contain private project content | Kept by uninstall and logout; purge deletes it | Kept in place; Pi migrates them forward; a target with an older Pi needs review |
 | `sessions/acceptance/` | Labeled smoke session | Kept by uninstall and logout; purge deletes it | As `sessions/user/` |
 | `cache/` | Reserved per-distribution cache | Kept by uninstall; purge deletes it | Not migrated; safe to delete |
-| `logs/` | Audit file sink `audit.jsonl` (metadata-first events, v1alpha3 and later) and local counters `metrics.json`; may be sensitive | Kept by uninstall; purge deletes it | Kept in place, append-only; an unreadable audit schema stops the switch |
+| `logs/` | Audit file sink `audit.jsonl` (metadata-first events, v1alpha3 and later) and local counters `metrics.json`; may be sensitive | Size-based retention: before `audit.jsonl` would pass 10 MB it is renamed to `audit.jsonl.1` (older files shift to `.2`…`.5`, and the previous `.5` is deleted), so at most about 60 MB is kept; fixed defaults, not configurable. Kept by uninstall; purge deletes it | Kept in place, append-only; an unreadable audit schema, read from the newest non-empty file, stops the switch |
 | `data/` | Reserved runtime-generated data | Kept by uninstall; purge deletes it | Kept in place |
 | `migration/snapshots/` | Non-secret pre-update copies of preferences and user policy (`piship-snapshot/v1`); never credentials | Last three kept; purge deletes them | Written before each update activation |
 
