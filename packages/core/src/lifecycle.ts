@@ -27,7 +27,7 @@ import { dirname, join, resolve } from "node:path";
 import { PiShipError, redact, type SecretStore } from "@piship/contracts";
 import { createSecretStore, metadataSecretRefs } from "@piship/credentials";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
-import { accessStatePaths } from "./access.js";
+import { accessStatePaths } from "./access/index.js";
 import { sha256File } from "./archive.js";
 import {
   binHome,

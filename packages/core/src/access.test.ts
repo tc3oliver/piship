@@ -35,7 +35,7 @@ import {
   networkPolicyFor,
   recordGatewayResult,
   resolveRuntimeReferences,
-} from "./access.js";
+} from "./access/index.js";
 import {
   readPreferences,
   resolveEffectiveConfig,
