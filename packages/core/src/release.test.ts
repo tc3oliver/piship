@@ -16,6 +16,7 @@ import {
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
+  PI_COMPATIBILITY,
   currentTarget,
   lockManifest,
   payloadInventory,
@@ -447,6 +448,21 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(caught(() => checkReleaseInputs(path, other)).message).toMatch(
       /Release gate target: releases are built on their target/,
     );
+  });
+
+  it("pi: refuses a pinned Pi this PiShip records as unsupported", () => {
+    const { path } = project();
+    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const saved = { ...known };
+    try {
+      for (const surface of Object.keys(known)) known[surface] = "unsupported";
+      const error = caught(() => checkReleaseInputs(path));
+      expect(error.message).toMatch(/Release gate pi: /);
+      expect(error.message).toMatch(/0\.87\.1/);
+    } finally {
+      Object.assign(known, saved);
+    }
+    expect(() => checkReleaseInputs(path)).not.toThrow();
   });
 
   it("pi: an unpinned Pi cannot reach the compatibility gate; locking and the lock gate reject it", () => {
@@ -972,6 +988,20 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       await expect(verifyRelease(built.directory)).rejects.toThrow(
         /release.json does not match the payload: distribution version/,
       );
+    });
+    it("release metadata missing a required field", async () => {
+      const built = await fresh();
+      const path = join(built.directory, "release.json");
+      const metadata = JSON.parse(readFileSync(path, "utf8"));
+      delete metadata.tests;
+      writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`);
+      writeFileSync(
+        join(built.directory, "checksums.txt"),
+        formatChecksums(built.directory, [...RELEASE_FILES]),
+      );
+      const error = await rejection(verifyRelease(built.directory));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(/malformed release metadata/);
     });
     it("an SBOM entry removed", async () => {
       const built = await fresh();

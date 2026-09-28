@@ -857,6 +857,19 @@ function verifyReleaseDirectory(
   directory: string,
   requireTarget = false,
 ): Omit<VerifiedRelease, "cleanup"> {
+  try {
+    return checkReleaseDirectory(directory, requireTarget);
+  } catch (error) {
+    // Malformed metadata is an integrity failure, not a crash.
+    if (error instanceof PiShipError) throw error;
+    throw fail(`malformed release metadata: ${(error as Error).message}`);
+  }
+}
+
+function checkReleaseDirectory(
+  directory: string,
+  requireTarget: boolean,
+): Omit<VerifiedRelease, "cleanup"> {
   const checksums = join(directory, "checksums.txt");
   if (!existsSync(checksums)) throw fail("checksums.txt is missing");
   try {
@@ -1055,6 +1068,76 @@ export async function signChannel(
 }
 
 /** Reads a small file from a directory or an https (or loopback http) source. */
+/** Channel metadata and signatures are small; anything larger is refused. */
+const MAX_METADATA_BYTES = 1024 * 1024;
+const METADATA_TIMEOUT_MS = 30_000;
+const ARCHIVE_TIMEOUT_MS = 30 * 60_000;
+
+function tooLarge(name: string, limit: number): PiShipError {
+  return new PiShipError(
+    "INTEGRITY_FAILED",
+    `${name} from the update source exceeds ${limit} bytes`,
+    {
+      userAction:
+        "Do not install it; report the update source to the distribution owner",
+    },
+  );
+}
+
+/** Stream a response body into `destination`, stopping past `limit` bytes. */
+async function saveBody(
+  response: Response,
+  destination: string,
+  name: string,
+  limit: number,
+): Promise<void> {
+  const { Readable, Transform } = await import("node:stream");
+  const { pipeline } = await import("node:stream/promises");
+  const { createWriteStream } = await import("node:fs");
+  let received = 0;
+  await pipeline(
+    Readable.fromWeb(response.body as never),
+    new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        callback(received > limit ? tooLarge(name, limit) : null, chunk);
+      },
+    }),
+    createWriteStream(destination, { flags: "wx" }),
+  );
+}
+
+async function fetchSource(
+  url: URL,
+  name: string,
+  fetcher: typeof fetch,
+  timeout: number,
+): Promise<Response> {
+  checkSourceUrl(url);
+  let response: Response;
+  try {
+    response = await fetcher(url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(timeout),
+    });
+  } catch (error) {
+    if ((error as Error).name === "TimeoutError")
+      throw new PiShipError(
+        "UPDATE_FAILED",
+        `Update source did not answer for ${name} within ${timeout / 1000} s`,
+        { retryable: true },
+      );
+    throw error;
+  }
+  if (!response.ok || !response.body)
+    throw new PiShipError(
+      "UPDATE_FAILED",
+      `Update source returned HTTP ${response.status} for ${name}`,
+      { retryable: response.status >= 500 },
+    );
+  return response;
+}
+
 export async function readSourceFile(
   source: string,
   name: string,
@@ -1062,19 +1145,24 @@ export async function readSourceFile(
 ): Promise<Buffer> {
   if (/^https?:\/\//.test(source)) {
     const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
-    checkSourceUrl(url);
-    const response = await fetcher(url, { redirect: "error" });
-    if (!response.ok)
-      throw new PiShipError(
-        "UPDATE_FAILED",
-        `Update source returned HTTP ${response.status} for ${name}`,
-        { retryable: response.status >= 500 },
-      );
-    return Buffer.from(await response.arrayBuffer());
+    const response = await fetchSource(url, name, fetcher, METADATA_TIMEOUT_MS);
+    const declared = Number(response.headers.get("content-length"));
+    if (declared > MAX_METADATA_BYTES) throw tooLarge(name, MAX_METADATA_BYTES);
+    const chunks: Buffer[] = [];
+    let received = 0;
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      received += chunk.length;
+      if (received > MAX_METADATA_BYTES)
+        throw tooLarge(name, MAX_METADATA_BYTES);
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
   }
   const path = join(resolve(source), name);
   if (!existsSync(path))
     throw new PiShipError("UPDATE_FAILED", `Update source has no ${name}`);
+  if (statSync(path).size > MAX_METADATA_BYTES)
+    throw tooLarge(name, MAX_METADATA_BYTES);
   return readFileSync(path);
 }
 
@@ -1179,22 +1267,19 @@ export async function downloadArchive(
       entry.archive,
       source.endsWith("/") ? source : `${source}/`,
     );
-    checkSourceUrl(url);
-    const response = await fetcher(url, { redirect: "error" });
-    if (!response.ok || !response.body)
-      throw new PiShipError(
-        "UPDATE_FAILED",
-        `Update source returned HTTP ${response.status} for ${entry.archive}`,
-        { retryable: response.status >= 500 },
-      );
-    const { Readable } = await import("node:stream");
-    const { pipeline } = await import("node:stream/promises");
-    const { createWriteStream } = await import("node:fs");
-    await pipeline(
-      Readable.fromWeb(response.body as never),
-      createWriteStream(destination, { flags: "wx" }),
+    const response = await fetchSource(
+      url,
+      entry.archive,
+      fetcher,
+      ARCHIVE_TIMEOUT_MS,
     );
-  } else cpSync(join(resolve(source), entry.archive), destination);
+    await saveBody(response, destination, entry.archive, entry.bytes);
+  } else {
+    const path = join(resolve(source), entry.archive);
+    if (statSync(path).size > entry.bytes)
+      throw tooLarge(entry.archive, entry.bytes);
+    cpSync(path, destination);
+  }
   const size = statSync(destination).size;
   const actual = await sha256File(destination);
   if (size !== entry.bytes || actual !== entry.sha256)

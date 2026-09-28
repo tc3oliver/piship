@@ -22,6 +22,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
@@ -155,6 +156,52 @@ function writeFileAtomic(path: string, content: string): void {
     } catch {
       // Directory fsync is best effort on filesystems that refuse it.
     }
+}
+
+/** Flush a directory entry; best effort where the filesystem refuses it. */
+function syncDirectory(path: string): void {
+  if (process.platform === "win32") return;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Some filesystems refuse fsync on directories.
+  }
+}
+
+/**
+ * Flush every file and directory of a release to stable storage, so a power
+ * loss after the receipt switch cannot leave the receipt pointing at a
+ * missing or truncated payload. Windows needs write access to flush a file
+ * and cannot flush directories; there it is best effort.
+ */
+function syncTree(root: string): void {
+  const visit = (path: string) => {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) visit(child);
+      else if (entry.isFile()) {
+        let fd: number;
+        try {
+          fd = openSync(child, process.platform === "win32" ? "r+" : "r");
+        } catch (error) {
+          if (process.platform === "win32") continue;
+          throw error;
+        }
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      }
+    }
+    syncDirectory(path);
+  };
+  visit(root);
 }
 
 function writeReceipt(receipt: InstallReceipt): void {
@@ -328,6 +375,9 @@ export async function installDistribution(
       verifyPayload(target);
       writeFileSync(launcher, launcherSource(id));
       writeShim(commandPath, launcher);
+      syncTree(apps);
+      syncDirectory(dirname(apps));
+      syncDirectory(dirname(commandPath));
       const receipt: InstallReceipt = {
         schema: RECEIPT_SCHEMA,
         app: lock.app,
@@ -343,7 +393,9 @@ export async function installDistribution(
             ...(info ? { release: info } : {}),
           },
         ],
-        ...(info ? { channel: info.channel } : {}),
+        // Users start on the distribution's default channel, whatever
+        // channel the installed archive was built for.
+        ...(lock.updates ? { channel: lock.updates.channel } : {}),
       };
       writeReceipt(receipt);
       return receipt;
@@ -643,7 +695,18 @@ function checkPayload(
   env: NodeJS.ProcessEnv,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED",
 ): void {
-  const result = runCheck(payload, lock.app.command, ["version"], env);
+  // The candidate is not active yet: it runs against throwaway state, never
+  // the user's.
+  const state = mkdtempSync(join(tmpdir(), "piship-launch-check-"));
+  let result: ReturnType<ReleaseTestRunner>;
+  try {
+    result = runCheck(payload, lock.app.command, ["version"], {
+      ...env,
+      PISHIP_STATE_HOME: state,
+    });
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+  }
   if (
     result.status !== 0 ||
     !result.stdout.includes(`Pi ${lock.runtime.version}`)
@@ -695,12 +758,13 @@ export async function updateDistribution(
   id: string,
   options: UpdateOptions = {},
 ): Promise<UpdateResult> {
-  const receipt = readInstallReceipt(id);
-  requireManaged(receipt);
+  requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
   const release = acquireLock(id);
   try {
+    // Read under the lock, so a concurrent commit cannot leave it stale.
+    const receipt = readInstallReceipt(id);
     recoverInstallation(id);
     const lock = activeLock(receipt);
     if (!options.check) repairStateMarker(id, lock);
@@ -862,6 +926,8 @@ export async function updateDistribution(
       rmSync(destination, { recursive: true, force: true });
       renameSync(verified.payload, destination);
       verifyPayload(destination);
+      syncTree(destination);
+      syncDirectory(apps);
       options.faults?.("installed");
       notices.push(
         ...(await clearCredentials(stateDir, migration, options.deleteSecret)),
@@ -944,11 +1010,11 @@ export async function rollbackDistribution(
   id: string,
   options: LifecycleOptions = {},
 ): Promise<RollbackResult> {
-  const receipt = readInstallReceipt(id);
-  requireManaged(receipt);
+  requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const release = acquireLock(id, "ROLLBACK_FAILED");
   try {
+    const receipt = readInstallReceipt(id);
     recoverInstallation(id);
     const current = activeLock(receipt);
     repairStateMarker(id, current);

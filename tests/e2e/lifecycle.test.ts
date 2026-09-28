@@ -162,6 +162,26 @@ describe("production lifecycle (local fixtures)", () => {
       );
     };
     const first = release("1.0.0");
+    // The release wraps exactly the payload `piship build` produces.
+    const built = cli("build", manifest);
+    expect(built.status, built.stderr).toBe(0);
+    expect(
+      readFileSync(
+        join(
+          temp,
+          "1.0.0",
+          "releases",
+          `acmecode-1.0.0-${target}`,
+          "payload",
+          "metadata",
+          "inventory.json",
+        ),
+      ),
+    ).toEqual(
+      readFileSync(
+        join(temp, "dist", "acmecode", "metadata", "inventory.json"),
+      ),
+    );
     const second = release("1.1.0");
     const verified = cli("verify-release", first, "--json");
     expect(verified.status, verified.stderr).toBe(0);
@@ -283,22 +303,53 @@ describe("production lifecycle (local fixtures)", () => {
     expect(doctor.stdout).toMatch(/release\s+verified/);
     expect(doctor.stdout).toMatch(/rollback\s+1\.0\.0 retained/);
 
-    // Sign out, roll back, and confirm no credential survived anywhere.
+    // Roll back while signed in: sessions come back, credentials are never
+    // restored from anywhere.
     const secrets = [
       ...services.state.credentials.keys(),
       ...services.state.accessTokens.keys(),
       ...services.state.refreshTokens.keys(),
     ];
     expect(secrets.length).toBeGreaterThan(2);
-    const logout = await run(["logout"]);
-    expect(logout.status, logout.stderr).toBe(0);
     const rollback = await run(["rollback"]);
     expect(rollback.status, rollback.stderr).toBe(0);
     expect(rollback.stdout).toContain("Rolled back AcmeCode 1.1.0 -> 1.0.0");
     expect((await run(["version"])).stdout).toContain("AcmeCode 1.0.0");
+    const afterRollback = await run(["--smoke"]);
+    expect(afterRollback.status, afterRollback.stderr).toBe(0);
+    expect(JSON.parse(afterRollback.stdout)).toMatchObject({
+      sessionId,
+      resumed: true,
+    });
+
+    // The company revokes every credential and token server-side, without a
+    // local logout: the rolled-back release cannot use or renew them.
+    for (const entry of services.state.credentials.values())
+      entry.revoked = true;
+    services.state.accessTokens.clear();
+    services.state.refreshTokens.clear();
+    const revoked = await run(["--smoke-model"]);
+    expect(revoked.status).toBe(1);
+    expect(revoked.stderr).toMatch(/IDENTITY_|CREDENTIAL_/);
+    expect(revoked.stderr).toMatch(/login/);
+
+    // Signing in again works and still resumes the same session.
+    const relogin = await run(["login"]);
+    expect(relogin.status, relogin.stderr).toBe(0);
+    const again = await run(["--smoke-model"]);
+    expect(again.status, again.stderr).toBe(0);
+    secrets.push(
+      ...services.state.credentials.keys(),
+      ...services.state.accessTokens.keys(),
+      ...services.state.refreshTokens.keys(),
+    );
+    const logout = await run(["logout"]);
+    expect(logout.status, logout.stderr).toBe(0);
     expect((await run(["--smoke"])).stderr).toContain("IDENTITY_REQUIRED");
     expect(scan(join(temp, "state"), secrets)).toEqual([]);
     expect(scan(join(temp, "install"), secrets)).toEqual([]);
+    // The user's personal Pi configuration is never touched.
+    expect(existsSync(join(home, ".pi"))).toBe(false);
 
     // After a newer sequence is seen, replaying older signed metadata is refused.
     const signature = `${metadata}.sig`;
@@ -316,5 +367,12 @@ describe("production lifecycle (local fixtures)", () => {
     expect(uninstall.status, uninstall.stderr).toBe(0);
     expect(existsSync(command)).toBe(false);
     expect(existsSync(join(temp, "install", "apps", "acmecode"))).toBe(false);
+    // Uninstall keeps sessions and settings for a later reinstall.
+    expect(
+      readdirSync(join(temp, "state", "acmecode", "sessions")).length,
+    ).toBeGreaterThan(0);
+    expect(existsSync(join(temp, "state", "acmecode", "state.json"))).toBe(
+      true,
+    );
   }, 900000);
 });

@@ -85,6 +85,8 @@ These checks prove the release is complete and internally consistent. They do no
 
 `piship reproducibility <release-a> <release-b> [--out report.json]` verifies both releases, refuses to compare different distributions, versions, or targets, and writes a `piship-reproducibility/v1` report. Payload equality is the claim: every declared payload path and SHA-256 must match, and the command exits 1 otherwise, listing the differing paths. Wrapper files (`release.json`, SBOM, notices, scan result, install scripts) and whole-archive equality are reported separately. A new vulnerability advisory published between two builds changes `vulnerabilities.json` without changing the payload. Equality is claimed only per target: `metadata/target.json` and native package files differ between targets by design.
 
+In CI, the `release-candidate` workflow builds each target twice on separate runners, each from a fresh checkout and `npm ci`, with the same `SOURCE_DATE_EPOCH`, and fails unless `piship reproducibility` passes on the two archives ([Build provenance](#build-provenance)).
+
 ## Reviewing a change
 
 `piship diff <before> <after> [--json]` compares two distribution locks, taken from manifests (which must have a current lock), lock files, payloads, releases, archives, or installed IDs; older lock schemas compare too. It reports each change by area (distribution, schema, Pi, PiShip, packages, resources, extensions, providers, capabilities, policy, MCP, sandbox, audit, access, models, network, updates, and release) as added, removed, or changed, with a `low`, `medium`, or `high` risk and a reason; for example, a policy effect that loosens or a new pinned key. It ends with the highest risk and the tests a reviewer should require, such as the Pi compatibility suite or the release update and rollback E2E. Values are versions, IDs, effects, templates, and shortened digests; environment values, settings text, and key material are not shown. The report is `piship-diff/v1` with `--json`.
@@ -106,16 +108,29 @@ The dependency scan runs `npm audit --omit=dev --json` over the payload's npm lo
 
 ## Build provenance
 
-Release candidates for the PiShip demo are built by the `release-candidate` GitHub Actions workflow on each evidenced target. Per target it builds the demo release twice and compares the builds with `piship reproducibility`; verifies the archive on a separate fresh job with `piship verify-release` and rejects tampered copies; creates a GitHub artifact attestation for the archive with `actions/attest-build-provenance`, a Sigstore keyless signature bound to the workflow identity; and checks it on a separate job with `gh attestation verify`, including a tampered archive that must be rejected. Artifacts are kept only as workflow artifacts.
+Release candidates for the PiShip demo are built by the `release-candidate` GitHub Actions workflow on each evidenced target (`linux-x64`, `darwin-arm64`, `win32-x64`). Its jobs:
+
+- `build` builds every target twice, as `first` and `second`, on separate runners. Each does a fresh checkout, `npm ci`, `npm run build`, and `piship release --channel candidate` with `SOURCE_DATE_EPOCH` set to the commit time, and uploads the archive and its `.sha256` as the workflow artifact `release-<target>-<build>`.
+- `reproducibility` downloads both builds of a target and runs `piship reproducibility` on them. The job fails unless the payloads are equal, and it uploads the report as `reproducibility-<target>`.
+- `attest` creates a GitHub artifact attestation with `actions/attest-build-provenance` for the `first` archive of each target. This is a Sigstore keyless signature bound to the workflow identity and to the ref the run was for. It runs for pushes to `main`, manual runs, and pull requests from this repository. Pull requests from forks cannot obtain the signing token, so they skip it.
+- `verify` runs on a fresh runner per target that did not build the archive. It verifies the `first` archive with `piship verify-release --sha256`, and checks its attestation with `gh attestation verify --repo --signer-workflow --source-ref "$GITHUB_REF"` when one was made. It then requires rejection of tampered inputs: an archive with a flipped byte (by `verify-release` and by `gh attestation verify`), a wrong expected digest, and, each in a fresh extraction, a modified payload file, a modified `release.json`, and a modified `checksums.txt` line (`INTEGRITY_FAILED`). Finally it installs the archive with the shipped `install.sh` or `install.ps1` and runs `acmecode version`.
+
+Only the `first` build is attested, verified, and installed. The `second` build exists only for the comparison. Artifacts are kept only as workflow artifacts.
+
+On `linux-x64` and `darwin-arm64` the workflow builds from a copy of `examples/demo-company` with its committed, reviewed `piship.lock` and does not run `piship lock`, so the release `lock` gate proves that the committed lock is current. The demo requires the OS sandbox, which the `sandbox` gate refuses on `win32-x64`. The Windows candidate is therefore a variant built from a patched copy with `sandbox.required: false`, as the lifecycle E2E does, and its lock is generated in CI rather than reviewed and committed.
 
 To check a downloaded candidate yourself:
 
 ```bash
-gh attestation verify acmecode-1.1.0-linux-x64.tar.gz --repo tc3oliver/piship
+gh attestation verify acmecode-1.1.0-linux-x64.tar.gz --repo tc3oliver/piship \
+  --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml \
+  --source-ref refs/heads/main
 npm exec -- piship verify-release acmecode-1.1.0-linux-x64.tar.gz
 ```
 
-The attestation proves which workflow run built the archive; it is not a code review of its content, and it depends on the integrity of GitHub Actions and the repository's workflow files. The demo requires the OS sandbox, which the `sandbox` gate refuses on `win32-x64`, so a Windows build of it uses a copy with `sandbox.required: false`, as the lifecycle E2E does.
+Pull request, branch, and manual builds carry valid attestations from the same workflow, but these attestations record their own ref (for example `refs/pull/<n>/merge` or `refs/heads/<branch>`). Accept an archive as a `main` build only when verification with `--source-ref refs/heads/main` passes. Without `--source-ref`, pull request and branch builds are accepted too. Without `--signer-workflow`, an attestation from any workflow in the repository is accepted.
+
+The attestation proves which workflow run built the archive and for which ref. It is not a code review of the archive's content, and it depends on the integrity of GitHub Actions and the repository's workflow files.
 
 ## Channels and signed metadata
 
@@ -252,10 +267,11 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 
 Nothing is published automatically: there is no GitHub Release, npm publication, or publish automation, and CI keeps artifacts only as workflow artifacts. The maintainer, Oliver, is the sole release approver. Before any publish step:
 
-1. Confirm the `release-candidate` run for the exact commit passed on `linux-x64`, `darwin-arm64`, and `win32-x64`: two builds with equal payloads, `verify-release` on a fresh job with tampered copies rejected, attestations verified with `gh attestation verify`, and the lifecycle E2E (`tests/e2e/lifecycle.test.ts`).
-2. Confirm `npm run check` and `npm run test:compatibility` passed, and review `piship diff` between the previous and new release for its risk and required tests.
-3. Review `vulnerabilities.json` and every `release.vulnerabilities.allow` exception and its expiry.
-4. Confirm the pinned release keys, and that the private key is held outside the repository and CI.
-5. Record the archive SHA-256 values and attestation results.
-6. Obtain the maintainer's explicit written approval for this specific commit and these artifacts. Without it, nothing is signed into a channel or published anywhere.
-7. Only then sign the channel with a higher sequence and publish its directory. Rolling back a bad release means signing a channel that offers a newer, fixed version; clients refuse downgrades, and users can run `rollback` locally.
+1. Confirm the `release-candidate` run for the exact commit on `main` passed on `linux-x64`, `darwin-arm64`, and `win32-x64`. It must show two builds on separate runners with equal payloads (the `reproducibility-<target>` reports), `verify-release` on a fresh job, and rejection of the tampered archive, the wrong digest, and the modified payload, `release.json`, and `checksums.txt`. Attestations must verify with `gh attestation verify --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`. Also confirm the lifecycle E2E (`tests/e2e/lifecycle.test.ts`) passed.
+2. Confirm `examples/demo-company/piship.lock` was reviewed in the change that committed it, and that the Windows candidate is treated as the patched variant whose lock was generated in CI.
+3. Confirm `npm run check` and `npm run test:compatibility` passed, and review `piship diff` between the previous and new release for its risk and required tests.
+4. Review `vulnerabilities.json` and every `release.vulnerabilities.allow` exception and its expiry.
+5. Confirm the pinned release keys, and that the private key is held outside the repository and CI.
+6. Record the archive SHA-256 values and attestation results.
+7. Obtain the maintainer's explicit written approval for this specific commit and these artifacts. Without it, nothing is signed into a channel or published anywhere.
+8. Only then sign the channel with a higher sequence and publish its directory. Rolling back a bad release means signing a channel that offers a newer, fixed version; clients refuse downgrades, and users can run `rollback` locally.

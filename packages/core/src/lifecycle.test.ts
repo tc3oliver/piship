@@ -1196,3 +1196,104 @@ describe("selectChannel", () => {
     );
   });
 });
+
+// ------------------------------------------------------- update hardening
+
+describe.runIf(HOST_EVIDENCED)("update hardening", () => {
+  it("starts an install of a candidate-built archive on the default channel", async () => {
+    const path = project("1.0.0");
+    const built = await buildRelease(path, {
+      outputRoot: join(dirname(path), "dist"),
+      channel: "candidate",
+      assemble: fakeAssemble,
+      runTest: fakeRun,
+      scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+    });
+    expect(built.metadata.channel).toBe("candidate");
+    const receipt = await installDistribution(built.archive);
+    expect(receipt.channel).toBe("stable");
+    expect(readInstallReceipt(ID).channel).toBe("stable");
+  });
+
+  it("runs the candidate's launch check against throwaway state", async () => {
+    const { a, opts } = await fixture();
+    seedState();
+    await installDistribution(a.archive, true);
+    const homes: (string | undefined)[] = [];
+    const result = await updateDistribution(ID, {
+      ...opts,
+      runCheck: (payload, command, args, env) => {
+        homes.push(env.PISHIP_STATE_HOME);
+        return fakeRun(payload, command, args);
+      },
+    });
+    expect(result.status).toBe("updated");
+    expect(homes).toHaveLength(1);
+    expect(homes[0]).not.toBe(process.env.PISHIP_STATE_HOME);
+    expect(existsSync(homes[0] as string)).toBe(false);
+  });
+
+  it("stops a download that grows past the signed size", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const serve = (padArchive: number, padMetadata: number) =>
+      (async (input: URL | string) => {
+        const name = new URL(String(input)).pathname.split("/").pop() as string;
+        const file = join(channelDir, name);
+        if (!existsSync(file)) return new Response("", { status: 404 });
+        const bytes = readFileSync(file);
+        const pad = name.endsWith(".tar.gz")
+          ? padArchive
+          : name === "stable.json"
+            ? padMetadata
+            : 0;
+        return new Response(Buffer.concat([bytes, Buffer.alloc(pad)]));
+      }) as typeof fetch;
+    const env = { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" };
+    const archive = await rejection(
+      updateDistribution(ID, {
+        runCheck: fakeRun,
+        fetcher: serve(4096, 0),
+        env,
+      }),
+    );
+    expect(archive.code).toBe("INTEGRITY_FAILED");
+    expect(archive.message).toMatch(/exceeds \d+ bytes/);
+    const metadata = await rejection(
+      updateDistribution(ID, {
+        runCheck: fakeRun,
+        fetcher: serve(0, 2 * 1024 * 1024),
+        env,
+      }),
+    );
+    expect(metadata.code).toBe("INTEGRITY_FAILED");
+    expect(metadata.message).toMatch(/stable\.json .*exceeds/);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("gives up on an update source that does not answer", async () => {
+    const { a } = await fixture();
+    await installDistribution(a.archive);
+    const signals: (AbortSignal | null | undefined)[] = [];
+    // Every request carries a deadline; a timed-out request is a retryable failure.
+    const fetcher = (async (_input: URL | string, init?: RequestInit) => {
+      signals.push(init?.signal);
+      throw new DOMException("The operation timed out", "TimeoutError");
+    }) as typeof fetch;
+    const error = await rejection(
+      updateDistribution(ID, {
+        runCheck: fakeRun,
+        fetcher,
+        env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+      }),
+    );
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toMatch(
+      /did not answer for stable\.json within 30 s/,
+    );
+    expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
+  });
+});
