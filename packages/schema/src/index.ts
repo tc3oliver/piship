@@ -125,7 +125,7 @@ function lastSegment(field: string): string {
 /**
  * Common secret value shapes. A static manifest never carries these, so every
  * string scalar (and mapping key) is checked. Equivalent to the MCP value
- * check in governance-parse, narrowed so ordinary names stay valid: the
+ * check in governance/fields, narrowed so ordinary names stay valid: the
  * `Bearer`/`Basic` prefix needs a credential-shaped token ("Basic Agent" is
  * display text), and an `sk-` key needs 16+ characters including a digit
  * (`sk-helper` is a distribution id).
