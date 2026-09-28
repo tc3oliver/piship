@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -6,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1295,5 +1298,64 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
       /did not answer for stable\.json within 30 s/,
     );
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------- installed launcher
+
+describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
+  const launch = (launcher: string) =>
+    spawnSync(process.execPath, [launcher], { encoding: "utf8" });
+
+  it.runIf(process.platform !== "win32")(
+    "launches when the receipt records a symlinked install path",
+    async () => {
+      // The receipt records the configured (alias) path; Node resolves the
+      // launcher to its real path, as with macOS /var -> /private/var.
+      const real = temp("piship-real-home-");
+      const alias = join(temp("piship-alias-"), "home");
+      symlinkSync(real, alias);
+      process.env.PISHIP_INSTALL_HOME = join(alias, "install");
+      process.env.PISHIP_BIN_HOME = join(alias, "bin");
+      const { a } = await fixture();
+      const receipt = await installDistribution(a.archive);
+      const launcher = receipt.launcher as string;
+      expect(receipt.payload.startsWith(alias)).toBe(true);
+      expect(realpathSync(launcher)).not.toBe(launcher);
+      for (const path of [launcher, realpathSync(launcher)]) {
+        const result = launch(path);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("payload");
+      }
+    },
+  );
+
+  it("fails closed for a payload outside the install tree or a missing payload", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    const launcher = receipt.launcher as string;
+    expect(launch(launcher).status).toBe(0);
+    const path = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `${ID}.json`,
+    );
+    const original = readFileSync(path, "utf8");
+    // A payload elsewhere, even a valid copy, is not this installation's.
+    const outside = join(temp("piship-outside-"), "1.0.0");
+    cpSync(receipt.payload, outside, { recursive: true });
+    const moved = JSON.parse(original);
+    moved.releases[0].payload = outside;
+    writeFileSync(path, JSON.stringify(moved));
+    const escaped = launch(launcher);
+    expect(escaped.status).toBe(1);
+    expect(escaped.stderr).toContain("install receipt is missing or damaged");
+    expect(escaped.stdout).not.toContain("payload");
+    // A missing payload fails the same way.
+    writeFileSync(path, original);
+    rmSync(receipt.payload, { recursive: true, force: true });
+    const missing = launch(launcher);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("install receipt is missing or damaged");
   });
 });

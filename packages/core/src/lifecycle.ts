@@ -260,25 +260,33 @@ export function readInstallReceipt(id: string): InstallReceipt {
 
 function launcherSource(id: string): string {
   return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-// Payloads are resolved next to this file, so a symlinked home (macOS /var)
-// cannot make the receipt's recorded path disagree with where it runs.
+// Node resolves this module to its real path, while the receipt records the
+// install path as configured (on macOS /var is a symlink to /private/var).
+// Both sides are canonicalized before comparing; a missing payload or one
+// outside this directory still fails closed.
 const home = dirname(fileURLToPath(import.meta.url));
-let version;
+let payload;
 let command;
 try {
   const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
   const release = receipt.releases.find((item) => item.version === receipt.active);
   command = receipt.app.command;
-  if (release && ${VERSION_NAME.toString()}.test(release.version) && /^[a-z][a-z0-9-]*$/.test(command)) version = release.version;
+  if (
+    release &&
+    ${VERSION_NAME.toString()}.test(release.version) &&
+    /^[a-z][a-z0-9-]*$/.test(command) &&
+    realpathSync(release.payload) === realpathSync(join(home, release.version))
+  )
+    payload = realpathSync(release.payload);
 } catch {}
-if (!version) {
+if (!payload) {
   console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
   process.exit(1);
 }
-await import(pathToFileURL(join(home, version, "bin", command)).href);
+await import(pathToFileURL(join(payload, "bin", command)).href);
 `;
 }
 
