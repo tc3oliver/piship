@@ -35,6 +35,8 @@ import {
   compareReleases,
   downloadArchive,
   evaluateVulnerabilities,
+  piCompatibility,
+  piCompatibilitySurfaces,
   readChannel,
   signChannel,
   verifyRelease,
@@ -898,6 +900,94 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
   });
 });
 
+describe("release Pi compatibility", () => {
+  const lockFor = (mode: "personal" | "managed", version = "0.87.1") => ({
+    deployment: { mode },
+    runtime: { version } as never,
+  });
+
+  it("records the weakest of the deployment and lifecycle surfaces", () => {
+    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const saved = { ...known };
+    try {
+      const cases: [Record<string, string>, string, string][] = [
+        [
+          { personal: "supported", lifecycle: "supported" },
+          "personal",
+          "supported",
+        ],
+        [
+          { personal: "supported", lifecycle: "candidate" },
+          "personal",
+          "candidate",
+        ],
+        [
+          { personal: "candidate", lifecycle: "supported" },
+          "personal",
+          "candidate",
+        ],
+        [
+          { managed: "supported", lifecycle: "unsupported" },
+          "managed",
+          "unsupported",
+        ],
+        [
+          { managed: "unsupported", lifecycle: "supported" },
+          "managed",
+          "unsupported",
+        ],
+        [
+          { managed: "candidate", lifecycle: "candidate" },
+          "managed",
+          "candidate",
+        ],
+        [
+          { managed: "retired", lifecycle: "supported" },
+          "managed",
+          "unsupported",
+        ],
+      ];
+      for (const [statuses, mode, expected] of cases) {
+        Object.assign(known, saved, statuses);
+        const lock = lockFor(mode as "personal" | "managed");
+        expect(piCompatibility(lock)).toBe(expected);
+        expect(piCompatibilitySurfaces(lock)).toEqual({
+          [mode]: statuses[mode],
+          lifecycle: statuses.lifecycle,
+        });
+      }
+    } finally {
+      Object.assign(known, saved);
+    }
+  });
+
+  it("records an unknown Pi version as unsupported on every surface", () => {
+    const lock = lockFor("personal", "0.0.0");
+    expect(piCompatibility(lock)).toBe("unsupported");
+    expect(piCompatibilitySurfaces(lock)).toEqual({
+      personal: "unsupported",
+      lifecycle: "unsupported",
+    });
+  });
+
+  it.runIf(HOST_EVIDENCED)(
+    "pi: refuses a release when only the lifecycle surface is unsupported",
+    () => {
+      const { path } = project();
+      const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+      const saved = { ...known };
+      try {
+        known.personal = "supported";
+        known.lifecycle = "unsupported";
+        const error = caught(() => checkReleaseInputs(path));
+        expect(error.message).toMatch(/Release gate pi: Pi 0\.87\.1/);
+      } finally {
+        Object.assign(known, saved);
+      }
+    },
+  );
+});
+
 describe("evaluateVulnerabilities", () => {
   const policy = {
     failOn: "high" as const,
@@ -1020,7 +1110,15 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         command: "acmepi",
         mode: "personal",
       },
-      pi: { version: "0.87.1", compatibility: "supported" },
+      // The weaker of the personal surface and the lifecycle surface.
+      pi: {
+        version: "0.87.1",
+        compatibility: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+        surfaces: {
+          personal: PI_COMPATIBILITY["0.87.1"]?.personal,
+          lifecycle: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+        },
+      },
       manifestSchema: "piship/v1alpha4",
       lockSchema: LOCK_SCHEMA_V1ALPHA4,
       target,

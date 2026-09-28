@@ -97,8 +97,13 @@ export interface ReleaseMetadata {
   readonly pi: {
     readonly package: string;
     readonly version: string;
-    /** Compatibility status of this Pi version for the distribution's surface. */
+    /**
+     * Compatibility status of this Pi version for the release: the weakest of
+     * the distribution's deployment surface and the `lifecycle` surface.
+     */
     readonly compatibility: string;
+    /** Per-surface statuses behind `compatibility` (absent in older releases). */
+    readonly surfaces?: Readonly<Record<string, string>>;
   };
   readonly manifestSchema: string;
   readonly lockSchema: string;
@@ -222,9 +227,35 @@ function createdTime(): string {
   return new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
 }
 
-function piCompatibility(lock: DistributionLock): string {
+const COMPATIBILITY_ORDER = ["unsupported", "candidate", "supported"];
+
+/**
+ * Status of each surface a release depends on: its deployment surface
+ * (`personal` or `managed`) and the `lifecycle` surface every release uses.
+ */
+export function piCompatibilitySurfaces(
+  lock: Pick<DistributionLock, "deployment" | "runtime">,
+): Readonly<Record<string, string>> {
   const surface = lock.deployment.mode === "managed" ? "managed" : "personal";
-  return PI_COMPATIBILITY[lock.runtime.version]?.[surface] ?? "unsupported";
+  const known = PI_COMPATIBILITY[lock.runtime.version];
+  return {
+    [surface]: known?.[surface] ?? "unsupported",
+    lifecycle: known?.lifecycle ?? "unsupported",
+  };
+}
+
+/**
+ * The weakest status among the surfaces a release depends on
+ * (unsupported < candidate < supported); an unknown status counts as
+ * unsupported.
+ */
+export function piCompatibility(
+  lock: Pick<DistributionLock, "deployment" | "runtime">,
+): string {
+  const ranks = Object.values(piCompatibilitySurfaces(lock)).map((status) =>
+    Math.max(0, COMPATIBILITY_ORDER.indexOf(status)),
+  );
+  return COMPATIBILITY_ORDER[Math.min(...ranks)] as string;
 }
 
 /** Enforced rules that contradict each other or a declared trust class. */
@@ -734,6 +765,7 @@ export async function buildRelease(
         package: lock.runtime.package,
         version: lock.runtime.version,
         compatibility: piCompatibility(lock),
+        surfaces: piCompatibilitySurfaces(lock),
       },
       manifestSchema: lock.manifest.schema,
       lockSchema: lock.schema,
