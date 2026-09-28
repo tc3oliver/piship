@@ -1,3 +1,4 @@
+import type { ModelDefinition } from "@piship/contracts";
 import type { CapabilityConfig, CapabilityProviderRef } from "@piship/schema";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +9,7 @@ import {
   type CapabilityStateInput,
 } from "./capabilities.js";
 import { makePolicy } from "./fixtures.test-helpers.js";
+import { incompatibleCapabilities } from "./model-requirements.js";
 import { providerTrustDecision } from "./trust.js";
 
 const builtinPermissions: CapabilityProviderRef = {
@@ -306,25 +308,103 @@ describe("computeCapabilityStates", () => {
       "unsupported major version",
     );
   });
-  it("reports missing model tool support for tool-dependent capabilities", () => {
-    const provider = {
-      ...builtinPermissions,
-      id: "company/agents",
-      class: "company" as const,
-      implements: ["piship.capability/agents/v1"],
-    };
+  describe("checks model requirements as launch does", () => {
+    const requiring = (enabled = true): CapabilityConfig => ({
+      ...capability("permissions", enabled, builtinPermissions),
+      requirements: { tools: true, minContextWindow: 100000 },
+    });
+    const model = (capabilities: ModelDefinition["capabilities"]) => ({
+      id: "acme/coder",
+      metadata: {
+        id: "coder",
+        name: "Coder",
+        provider: "acme",
+        capabilities,
+        policyTags: [],
+        availability: { available: true },
+      },
+    });
+    const compatible = (overrides: Partial<CapabilityStateInput>) =>
+      state(
+        computeCapabilityStates(
+          input({ capabilities: [requiring()], ...overrides }),
+        ),
+        "permissions",
+      ).axes.compatible;
+
+    it.each([
+      [
+        "a model that meets them",
+        model({ tools: true, contextWindow: 200000 }),
+        { value: "yes" },
+      ],
+      [
+        "a model without tool calls",
+        model({ tools: false, contextWindow: 200000 }),
+        {
+          value: "no",
+          reason:
+            "Model acme/coder does not meet the model requirements: tool calling is not supported",
+        },
+      ],
+      [
+        "a model without verified metadata",
+        { id: "(selected by Pi)" },
+        {
+          value: "no",
+          reason:
+            "Model (selected by Pi) does not meet the model requirements: tool calling support is unknown; the context window is unknown",
+        },
+      ],
+      [
+        "no known model",
+        undefined,
+        {
+          value: "no",
+          reason:
+            "Model (unknown) does not meet the model requirements: tool calling support is unknown; the context window is unknown",
+        },
+      ],
+    ])("%s", (_label, evidence, expected) => {
+      expect(compatible(evidence ? { model: evidence } : {})).toEqual(expected);
+    });
+
+    it("gives the same reasons as the launch comparison", () => {
+      const evidence = model({ tools: false, contextWindow: 500 });
+      const gaps = incompatibleCapabilities(evidence.metadata, [requiring()]);
+      expect(compatible({ model: evidence }).reason).toBe(
+        `Model acme/coder does not meet the model requirements: ${gaps[0]?.reasons.join("; ")}`,
+      );
+    });
+
+    it("ignores the requirements of a disabled capability", () => {
+      expect(
+        state(
+          computeCapabilityStates(input({ capabilities: [requiring(false)] })),
+          "permissions",
+        ).axes.compatible,
+      ).toEqual({ value: "yes" });
+    });
+  });
+  it("reports a provider the policy refused as not enabled, not unhealthy", () => {
     const item = state(
       computeCapabilityStates(
         input({
-          capabilities: [capability("subagents", true, provider)],
-          verification: { "company/agents": { ok: true } },
-          modelToolSupport: false,
+          capabilities: [capability("workflow", true, certified())],
+          verification: {
+            "certified/workflow-plus": { ok: true },
+          },
+          policyDenied: { workflow: "policy team (provider.load)" },
         }),
       ),
-      "subagents",
+      "workflow",
     );
-    expect(item.axes.compatible.reason).toBe(
-      "The selected model does not support tool calls",
+    expect(values(item)).toBe("yes yes no yes n/a no");
+    expect(item.axes.enabled.reason).toBe(
+      "The policy does not allow its provider: policy team (provider.load)",
+    );
+    expect(item.axes.effective.reason).toBe(
+      "enabled: The policy does not allow its provider: policy team (provider.load)",
     );
   });
   it("reports an unhealthy provider", () => {
