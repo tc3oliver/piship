@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1361,4 +1362,18 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       ),
     ).rejects.toThrow(/does not match the signed channel metadata/);
   });
+});
+
+describe("committed example locks", () => {
+  // The release lock gate refuses a stale lock, so a dependency or resource
+  // change must re-lock the examples in the same change.
+  it.each(["demo-company", "personal"])(
+    "keeps examples/%s/piship.lock current",
+    (name) => {
+      const manifest = fileURLToPath(
+        new URL(`../../../examples/${name}/piship.yaml`, import.meta.url),
+      );
+      expect(() => requireCurrentLock(manifest)).not.toThrow();
+    },
+  );
 });

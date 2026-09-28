@@ -184,7 +184,9 @@ export function createManagedFetch(
       return response as unknown as Response;
     } catch (error) {
       if (error instanceof PiShipError) throw error;
-      if ((error as Error)?.name === "AbortError") throw error;
+      // Caller cancellations and deadlines stay recognizable to the caller.
+      if (["AbortError", "TimeoutError"].includes((error as Error)?.name))
+        throw error;
       const cause = (error as { cause?: { code?: string; message?: string } })
         ?.cause;
       throw new PiShipError(

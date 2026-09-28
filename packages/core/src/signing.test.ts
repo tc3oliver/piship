@@ -77,11 +77,11 @@ describe("signing", () => {
   });
 
   it("rejects non-Ed25519 private keys and invalid key ids", () => {
-    const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 })
+    const ecdsa = generateKeyPairSync("ec", { namedCurve: "P-256" })
       .privateKey.export({ type: "pkcs8", format: "pem" })
       .toString();
-    expect(() => signBytes(bytes, rsa, "acme")).toThrow(/must be Ed25519/);
-    expect(() => publicKeyFromPrivate(rsa)).toThrow(/must be Ed25519/);
+    expect(() => signBytes(bytes, ecdsa, "acme")).toThrow(/must be Ed25519/);
+    expect(() => publicKeyFromPrivate(ecdsa)).toThrow(/must be Ed25519/);
     expect(() => signBytes(bytes, "nope", "acme")).toThrow(/PEM/);
     expect(() => generateSigningKey("Bad Id")).toThrow(/key id/);
   });

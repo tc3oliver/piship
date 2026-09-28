@@ -1067,7 +1067,6 @@ export async function signChannel(
   return { path, metadata };
 }
 
-/** Reads a small file from a directory or an https (or loopback http) source. */
 /** Channel metadata and signatures are small; anything larger is refused. */
 const MAX_METADATA_BYTES = 1024 * 1024;
 const METADATA_TIMEOUT_MS = 30_000;
@@ -1095,16 +1094,26 @@ async function saveBody(
   const { pipeline } = await import("node:stream/promises");
   const { createWriteStream } = await import("node:fs");
   let received = 0;
-  await pipeline(
-    Readable.fromWeb(response.body as never),
-    new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        received += chunk.length;
-        callback(received > limit ? tooLarge(name, limit) : null, chunk);
-      },
-    }),
-    createWriteStream(destination, { flags: "wx" }),
-  );
+  try {
+    await pipeline(
+      Readable.fromWeb(response.body as never),
+      new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          received += chunk.length;
+          callback(received > limit ? tooLarge(name, limit) : null, chunk);
+        },
+      }),
+      createWriteStream(destination, { flags: "wx" }),
+    );
+  } catch (error) {
+    if (["TimeoutError", "AbortError"].includes((error as Error).name))
+      throw new PiShipError(
+        "UPDATE_FAILED",
+        `Update source stopped sending ${name} before the deadline`,
+        { retryable: true },
+      );
+    throw error;
+  }
 }
 
 async function fetchSource(
@@ -1138,6 +1147,7 @@ async function fetchSource(
   return response;
 }
 
+/** Reads a small file from a directory or an https (or loopback http) source. */
 export async function readSourceFile(
   source: string,
   name: string,
