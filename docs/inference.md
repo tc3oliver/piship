@@ -46,8 +46,8 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 | 401 | `CREDENTIAL_REVOKED` |
 | 403 | `MODEL_DENIED` |
 | 404 | `MODEL_UNAVAILABLE` |
-| 429 | `GATEWAY_RATE_LIMITED`, retryable, with `Retry-After` |
-| 5xx, network failure | `GATEWAY_UNREACHABLE`, retryable |
+| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
+| 5xx, network failure, timeout (15 s, including the body) | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, malformed list | `GATEWAY_PROTOCOL_ERROR` |
 
 During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation. `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.

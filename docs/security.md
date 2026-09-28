@@ -4,7 +4,7 @@ Upstream Pi runs the agent. PiShip validates distribution inputs, locks declared
 
 ## Payload and state
 
-The installer owns only its receipt, installed payload, and command shim. Existing install, command, and state collisions fail by default. `uninstall` preserves `~/.piship/<id>`; `purge <id> --yes` removes that one distribution's state after uninstall. The payload is separate from mutable config, sessions, cache, logs, credential metadata, and other runtime data. There is no shared runtime cache.
+The installer owns only its receipt, installed payload, and command shim. Existing install, command, and state collisions fail by default. `uninstall` preserves `~/.piship/<id>`; `purge <id> --yes` removes that one distribution's state after uninstall, and deletes, best effort, the platform secret-store entries its identity and credential metadata reference. The payload is separate from mutable config, sessions, cache, logs, credential metadata, and other runtime data. There is no shared runtime cache.
 
 Pi receives a dedicated agent directory, user and acceptance session directories, in-memory settings, and a loader with ambient extension, skill, prompt, theme, and context discovery disabled. Only declared resources are packaged. Packaging rejects symlinks in resource roots, nested files, and adapter paths. For v1alpha1 and v1alpha2 distributions, project files remain accessible to Pi tools and trusted extensions, and PiShip does not enforce project trust or tool policy.
 
@@ -35,7 +35,7 @@ PiShip-managed requests (OIDC, broker, gateway probes, Streamable HTTP MCP serve
 - TLS verification is always on. A launch with `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION`, and the manifest cannot disable verification.
 - Plain HTTP is accepted only for loopback hosts, intended for local fixtures. Endpoint URLs may not embed credentials, query strings, or fragments.
 - `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are honored when inherited. `network.tls.additionalCA` bundles are added to, never replace, the default roots.
-- With `network.privateOnly`, only the declared issuer, broker, and gateway hosts and `network.allowHosts` may be contacted; anything else fails with `NETWORK_DENIED`. OIDC endpoints that discovery returns on other hosts, and Streamable HTTP MCP servers or HTTP audit sinks on other hosts, must be listed in `allowHosts`. Managed mode requires `network.publicFallback: deny`, which turns private-only on for every managed launch; `doctor` shows the effective outbound state and warns about HTTP MCP servers and audit sinks whose hosts are not declared. Such hosts are never allowed implicitly.
+- With `network.privateOnly`, only the declared issuer, broker, and gateway hosts, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; anything else fails with `NETWORK_DENIED`. OIDC endpoints that discovery returns on other hosts, and Streamable HTTP MCP servers or HTTP audit sinks on other hosts, must be listed in `allowHosts`. Managed mode requires `network.publicFallback: deny`, which turns private-only on for every managed launch; `doctor` shows the effective outbound state and warns about HTTP MCP servers and audit sinks whose hosts are not declared. Such hosts are never allowed implicitly.
 - Redirects are not followed.
 
 The proxy, CA, and `privateOnly` policy is also applied to the Pi process's default HTTP dispatcher, so Pi's provider requests and extensions' in-process `fetch` calls to undeclared hosts fail too. It does not cover raw sockets, other HTTP clients, or child processes; it is not an egress firewall. Child processes are covered only by the OS sandbox's `deny` or `allow` network mode.
@@ -143,7 +143,7 @@ Limits: release archives carry no macOS notarization or code signature and no Wi
 
 ## Logout and revocation
 
-`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files but cannot revoke credentials; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback revoke, best effort, a credential they must clear because the target cannot read it.
+`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files and deletes, best effort, the secret-store entries its metadata references, but it revokes nothing; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback revoke, best effort, a credential they must clear because the target cannot read it.
 
 ## Guarantees and their limits
 
