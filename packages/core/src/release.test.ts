@@ -34,6 +34,7 @@ import {
   checkSourceUrl,
   compareReleases,
   downloadArchive,
+  evaluateSignatures,
   evaluateVulnerabilities,
   piCompatibility,
   piCompatibilitySurfaces,
@@ -225,6 +226,16 @@ function fakeRun(
 
 const cleanScanner = () => ({ auditReportVersion: 2, vulnerabilities: {} });
 
+/** `npm audit signatures --json` output. */
+function signatureOutput(
+  invalid: readonly object[] = [],
+  missing: readonly object[] = [],
+  status = invalid.length || missing.length ? 1 : 0,
+): CommandResult {
+  return { status, stdout: JSON.stringify({ invalid, missing }), stderr: "" };
+}
+const cleanSignatures = () => signatureOutput();
+
 function advisory(severity: string, id = ADVISORY) {
   return {
     auditReportVersion: 2,
@@ -250,6 +261,7 @@ function build(path: string, options: Parameters<typeof buildRelease>[1] = {}) {
     assemble: fakeAssemble,
     runTest: fakeRun,
     scanner: cleanScanner,
+    signatureAuditor: cleanSignatures,
     now: () => new Date("2026-06-01T00:00:00Z"),
     ...options,
   });
@@ -892,6 +904,143 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     ).rejects.toThrow("registry unreachable");
   });
 
+  it("signature: records a passing check and the packages without a registry signature", async () => {
+    const { path } = project();
+    const built = await build(path, {
+      signatureAuditor: () =>
+        signatureOutput(
+          [],
+          [
+            {
+              name: "zeta",
+              version: "1.0.0",
+              registry: "https://registry.npmjs.org/",
+            },
+            {
+              name: "alpha",
+              version: "1.0.0",
+              registry: "https://registry.npmjs.org/",
+            },
+          ],
+        ),
+    });
+    expect(built.metadata.signatures).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "passed",
+      missing: ["alpha@1.0.0", "zeta@1.0.0"],
+    });
+    const verified = await verifyRelease(built.archive);
+    expect(verified.metadata.signatures?.verdict).toBe("passed");
+    verified.cleanup();
+  });
+
+  it("signature: runs over the assembled payload", async () => {
+    const { path } = project();
+    const seen: string[] = [];
+    await build(path, {
+      signatureAuditor: (payload) => {
+        seen.push(payload);
+        expect(existsSync(join(payload, "node_modules", "alpha"))).toBe(true);
+        expect(existsSync(join(payload, "package-lock.json"))).toBe(true);
+        return signatureOutput();
+      },
+    });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("signature: an invalid registry signature fails the build and leaves no output", async () => {
+    const { dir, path } = project();
+    const error = await rejection(
+      build(path, {
+        signatureAuditor: () =>
+          signatureOutput([
+            {
+              name: "alpha",
+              version: "1.0.0",
+              code: "EINTEGRITYSIGNATURE",
+              message: "alpha@1.0.0 has an invalid registry signature",
+            },
+          ]),
+      }),
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toBe(
+      "Release gate signature: invalid registry signatures or attestations: alpha@1.0.0 (EINTEGRITYSIGNATURE)",
+    );
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("signature: an invalid attestation fails the build", async () => {
+    const { path } = project();
+    const error = await rejection(
+      build(path, {
+        signatureAuditor: () =>
+          signatureOutput(
+            [
+              {
+                name: "@scope/beta",
+                version: "2.0.0",
+                code: "EATTESTATIONVERIFY",
+              },
+            ],
+            [{ name: "alpha", version: "1.0.0" }],
+          ),
+      }),
+    );
+    expect(error.message).toMatch(
+      /Release gate signature: .*@scope\/beta@2\.0\.0 \(EATTESTATIONVERIFY\)/,
+    );
+  });
+
+  it("signature: a check npm reports it could not run is recorded as unavailable", async () => {
+    const { path } = project();
+    const built = await build(path, {
+      signatureAuditor: () => ({
+        status: 1,
+        stdout: JSON.stringify({
+          error: { summary: "Failed to download", detail: "" },
+        }),
+        stderr: "npm error Failed to download\n",
+      }),
+    });
+    expect(built.metadata.signatures).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "unavailable",
+      missing: [],
+      reason: "Failed to download",
+    });
+  });
+
+  it.each([
+    [
+      "no output (npm could not start)",
+      { status: null, stdout: "", stderr: "spawn npm ENOENT" },
+    ],
+    ["plain text", { status: 1, stdout: "npm ERR! something", stderr: "" }],
+    [
+      "a report without missing",
+      { status: 0, stdout: '{"invalid":[]}', stderr: "" },
+    ],
+    [
+      "malformed entries",
+      { status: 1, stdout: '{"invalid":[1],"missing":[]}', stderr: "" },
+    ],
+    [
+      "an error without a summary",
+      { status: 1, stdout: '{"error":{}}', stderr: "" },
+    ],
+  ])("signature: %s fails closed", async (_label, output) => {
+    const { dir, path } = project();
+    const error = await rejection(
+      build(path, { signatureAuditor: () => output }),
+    );
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.message).toMatch(
+      /^Release gate signature: the registry signature check returned no report/,
+    );
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
   it("channel: refuses an unknown channel", async () => {
     const { path } = project();
     await expect(build(path, { channel: "nightly" })).rejects.toThrow(
@@ -986,6 +1135,57 @@ describe("release Pi compatibility", () => {
       }
     },
   );
+});
+
+describe("evaluateSignatures", () => {
+  it("passes a clean report and sorts missing signatures", () => {
+    expect(
+      evaluateSignatures(
+        signatureOutput(
+          [],
+          [
+            { name: "b", version: "1.0.0" },
+            { name: "a", version: "2.0.0" },
+          ],
+        ),
+      ),
+    ).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "passed",
+      missing: ["a@2.0.0", "b@1.0.0"],
+    });
+  });
+
+  it("never records content beyond package names, versions, and npm's summary", () => {
+    const report = evaluateSignatures({
+      status: 1,
+      stdout: JSON.stringify({
+        error: {
+          summary: "  found no dependencies\n  to audit  ",
+          detail: "secret-ish detail",
+        },
+      }),
+      stderr: "",
+    });
+    expect(report).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "unavailable",
+      missing: [],
+      reason: "found no dependencies to audit",
+    });
+  });
+
+  it("fails on invalid entries even when npm exits 0", () => {
+    expect(() =>
+      evaluateSignatures(
+        signatureOutput(
+          [{ name: "a", version: "1.0.0", code: "EINTEGRITYSIGNATURE" }],
+          [],
+          0,
+        ),
+      ),
+    ).toThrow(/Release gate signature: invalid registry signatures/);
+  });
 });
 
 describe("evaluateVulnerabilities", () => {

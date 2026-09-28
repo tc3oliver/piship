@@ -131,8 +131,30 @@ export interface ReleaseMetadata {
     readonly verdict: "passed";
     readonly counts: Readonly<Record<string, number>>;
   };
+  /** Registry signature check of the payload packages (absent in older releases). */
+  readonly signatures?: SignatureReport;
   readonly attribution: string;
 }
+
+/**
+ * Result of `npm audit signatures` over the installed payload packages.
+ * `passed`: no invalid signature or attestation (packages without a registry
+ * signature are listed in `missing`). `unavailable`: the check could not run,
+ * for example because the Sigstore trust root or the registry keys could not
+ * be fetched; `reason` says why. Invalid signatures never produce a release.
+ */
+export interface SignatureReport {
+  readonly tool: string;
+  readonly verdict: "passed" | "unavailable";
+  /** `name@version` of packages without a registry signature. */
+  readonly missing: readonly string[];
+  readonly reason?: string;
+}
+
+/** Runs the registry signature check in the payload directory. */
+export type SignatureAuditor = (
+  payloadDirectory: string,
+) => Promise<CommandResult> | CommandResult;
 
 export interface VulnerabilityFinding {
   readonly id: string;
@@ -179,6 +201,8 @@ export interface ReleaseOptions {
   /** Build target; defaults to this machine. Cross-target builds are refused. */
   readonly target?: string;
   readonly scanner?: VulnerabilityScanner;
+  /** Registry signature check (defaults to `npm audit signatures`). */
+  readonly signatureAuditor?: SignatureAuditor;
   readonly runTest?: ReleaseTestRunner;
   /** Injectable clock for vulnerability exception expiry. */
   readonly now?: () => Date;
@@ -542,6 +566,113 @@ export function npmAuditScanner(lockDirectory: string): unknown {
   }
 }
 
+const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
+
+/**
+ * `npm audit signatures` over the installed payload. It reads the payload's
+ * `node_modules` and needs the registry and the Sigstore trust root.
+ */
+export function npmSignatureAuditor(payloadDirectory: string): CommandResult {
+  const args = ["audit", "signatures", "--omit=dev", "--json"];
+  const options = {
+    cwd: payloadDirectory,
+    encoding: "utf8" as const,
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 300_000,
+  };
+  const result =
+    process.platform === "win32"
+      ? spawnSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", `npm ${args.join(" ")}`],
+          options,
+        )
+      : spawnSync("npm", args, options);
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr || result.error?.message || "",
+  };
+}
+
+interface SignatureEntry {
+  readonly name: string;
+  readonly version: string;
+  readonly code: string;
+}
+
+function signatureEntries(value: unknown): SignatureEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries: SignatureEntry[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const entry = item as { name?: unknown; version?: unknown; code?: unknown };
+    if (typeof entry.name !== "string") return null;
+    entries.push({
+      name: entry.name,
+      version: typeof entry.version === "string" ? entry.version : "",
+      code: typeof entry.code === "string" ? entry.code : "",
+    });
+  }
+  return entries;
+}
+
+/**
+ * Apply the release signature policy to `npm audit signatures --json`
+ * output. An invalid registry signature or attestation fails the build. A
+ * missing signature is recorded. When npm reports that the check itself
+ * could not run, the release records `unavailable` with npm's reason.
+ * Output that is neither a report nor an npm error fails closed.
+ */
+export function evaluateSignatures(result: CommandResult): SignatureReport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    parsed = undefined;
+  }
+  const value = (parsed && typeof parsed === "object" ? parsed : {}) as {
+    invalid?: unknown;
+    missing?: unknown;
+    error?: { summary?: unknown };
+  };
+  const invalid = signatureEntries(value.invalid);
+  const missing = signatureEntries(value.missing);
+  if (invalid && missing) {
+    if (invalid.length)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "signature",
+        `invalid registry signatures or attestations: ${invalid
+          .map(
+            (item) =>
+              `${item.name}@${item.version}${item.code ? ` (${item.code})` : ""}`,
+          )
+          .join(", ")}`,
+        "Do not release this payload; reinstall the dependency from the trusted registry and investigate its source",
+      );
+    return {
+      tool: SIGNATURE_TOOL,
+      verdict: "passed",
+      missing: missing.map((item) => `${item.name}@${item.version}`).sort(),
+    };
+  }
+  const summary = value.error?.summary;
+  if (typeof summary === "string" && summary.trim())
+    return {
+      tool: SIGNATURE_TOOL,
+      verdict: "unavailable",
+      missing: [],
+      reason: summary.trim().replace(/\s+/g, " ").slice(0, 300),
+    };
+  throw gate(
+    "UPDATE_FAILED",
+    "signature",
+    `the registry signature check returned no report: ${(result.stderr || result.stdout || "no output").trim().slice(0, 300)}`,
+    "Restore npm and registry access for the build; releases are not produced from an unreadable signature check",
+  );
+}
+
 /** Apply the release vulnerability policy to npm-audit-v2-shaped JSON. */
 export function evaluateVulnerabilities(
   audit: unknown,
@@ -660,8 +791,9 @@ function writeJson(path: string, value: unknown): void {
 
 /**
  * Build a verified release: static gates, the canonical payload, required
- * tests, dependency scan, SBOM, notices, metadata, checksums, and a
- * deterministic archive. Any failure removes the partial output.
+ * tests, dependency scan, registry signature check, SBOM, notices,
+ * metadata, checksums, and a deterministic archive. Any failure removes
+ * the partial output.
  */
 export async function buildRelease(
   manifestPath: string,
@@ -727,6 +859,9 @@ export async function buildRelease(
           .join(", ")}`,
         "Update the dependency, or record a reviewed exception with an expiry in release.vulnerabilities.allow",
       );
+    const signatures = evaluateSignatures(
+      await (options.signatureAuditor ?? npmSignatureAuditor)(payload),
+    );
     const created = createdTime();
     const packages = listPayloadPackages(payload);
     const sbom = generateSbom({
@@ -795,6 +930,7 @@ export async function buildRelease(
         verdict: "passed",
         counts: report.counts,
       },
+      signatures,
       attribution: `${lock.app.name} ${lock.app.version}, built with PiShip ${lock.runtime.pishipVersion} on Pi ${lock.runtime.version} by Earendil Works`,
     };
     writeJson(join(root, "release.json"), metadata);
@@ -977,6 +1113,12 @@ function checkReleaseDirectory(
     report.verdict !== "passed"
   )
     throw fail("the recorded vulnerability scan did not pass");
+  if (
+    metadata.signatures !== undefined &&
+    metadata.signatures?.verdict !== "passed" &&
+    metadata.signatures?.verdict !== "unavailable"
+  )
+    throw fail("the recorded registry signature check did not pass");
   if (
     !metadata.tests.length ||
     metadata.tests.some((t) => t.result !== "passed")
