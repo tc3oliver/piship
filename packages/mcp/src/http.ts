@@ -26,9 +26,29 @@ export interface StreamableHttpTransportOptions {
   readonly fetch: McpFetch;
   /** Present only for `credential: runtime`; the bearer is never logged. */
   readonly credential?: McpCredentialProvider;
+  /**
+   * Origins the runtime credential is issued for (the inference gateway).
+   * With `credential`, the server URL must be on one of them, or the
+   * transport refuses to start rather than send the bearer elsewhere.
+   */
+  readonly credentialOrigins?: readonly string[];
   readonly maxMessageBytes?: number;
   /** Upper bound on a whole response body or event stream. */
   readonly maxResponseBytes?: number;
+}
+
+/** Normalized origins; entries that are not URLs are dropped. */
+function credentialOrigins(values: readonly string[]): string[] {
+  const origins: string[] = [];
+  for (const value of values) {
+    try {
+      const { origin } = new URL(value);
+      if (origin !== "null") origins.push(origin);
+    } catch {
+      // Not a URL: it cannot authorize any origin.
+    }
+  }
+  return origins;
 }
 
 const SESSION_ID = /^[\x21-\x7e]{1,512}$/;
@@ -61,6 +81,13 @@ export class StreamableHttpTransport implements McpTransport {
       throw mcpUnhealthy(
         `MCP server ${options.serverId} URL must not embed credentials`,
       );
+    if (options.credential) {
+      const allowed = credentialOrigins(options.credentialOrigins ?? []);
+      if (!allowed.includes(url.origin))
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} is at ${url.origin}, but the runtime credential is only sent to ${allowed.length ? allowed.join(", ") : "the inference gateway origin, which is not configured"}`,
+        );
+    }
     this.#url = url;
     this.#maxMessage = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     this.#maxResponse = options.maxResponseBytes ?? this.#maxMessage * 4;

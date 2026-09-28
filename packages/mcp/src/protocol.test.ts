@@ -253,6 +253,22 @@ describe("tool filtering and results", () => {
       renderToolResult({ content: [], structuredContent: { a: 1 } }).text,
     ).toBe('{"a":1}');
   });
+
+  it("redacts vendor token shapes from output sent to the model", () => {
+    const tokens = [
+      `ghp_${"a".repeat(36)}`,
+      `xoxb-${"1".repeat(12)}-abcdef`,
+      "AKIAABCDEFGHIJKLMNOP",
+      `AIza${"b".repeat(35)}`,
+      `glpat-${"c".repeat(20)}`,
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----",
+    ];
+    const { text } = renderToolResult({
+      content: tokens.map((token) => ({ type: "text", text: `x ${token} y` })),
+    });
+    for (const token of tokens) expect(text).not.toContain(token);
+    expect(text.match(/\[REDACTED\]/g)).toHaveLength(tokens.length);
+  });
 });
 
 describe("Streamable HTTP transport limits", () => {

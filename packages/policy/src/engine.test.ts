@@ -206,6 +206,77 @@ describe("precedence", () => {
       layer: "user-preference",
     });
   });
+  describe("managed user rules only narrow", () => {
+    const managed = (
+      input: Partial<ConstructorParameters<typeof PolicyEngine>[0]> = {},
+    ) => engine({ userRuleMode: "narrowing", ...input });
+    it("ignores a user allow that would relax a default and reports it", () => {
+      const policyEngine = managed({
+        policy: makePolicy({
+          defaults: [rule("acme.shell.ask", "shell.execute", "**", "ask")],
+        }),
+        userRules: [rule("me.git", "shell.execute", "git *", "allow")],
+      });
+      const decision = policyEngine.evaluate({
+        action: "shell.execute",
+        resource: "git status",
+      });
+      expect(decision).toMatchObject({
+        effect: "ask",
+        ruleId: "acme.shell.ask",
+        layer: "distribution-default",
+      });
+      expect(policyEngine.diagnostics).toEqual([
+        expect.objectContaining({
+          level: "warning",
+          source: "user",
+          ruleId: "me.git",
+        }),
+      ]);
+      const explanation = policyEngine.explain({
+        action: "shell.execute",
+        resource: "git status",
+      });
+      expect(explanation.ignored).toEqual([
+        expect.objectContaining({
+          source: "user",
+          layer: "user-preference",
+          matches: true,
+        }),
+      ]);
+    });
+    it("a user allow cannot relax the policy default", () => {
+      const decision = managed({
+        userRules: [rule("me.model", "model.use", "acme/*", "allow")],
+      }).evaluate({ action: "model.use", resource: "acme/general" });
+      expect(decision).toMatchObject({
+        effect: "ask",
+        ruleId: "builtin:default",
+      });
+    });
+    it("a user ask cannot relax a default deny", () => {
+      const decision = managed({
+        policy: makePolicy({
+          defaults: [rule("acme.curl", "shell.execute", "curl *", "deny")],
+        }),
+        userRules: [rule("me.curl", "shell.execute", "curl *", "ask")],
+      }).evaluate({ action: "shell.execute", resource: "curl x" });
+      expect(decision).toMatchObject({ effect: "deny", ruleId: "acme.curl" });
+    });
+    it("a user rule still narrows a default allow", () => {
+      const decision = managed({
+        policy: makePolicy({
+          defaults: [rule("acme.all", "shell.execute", "**", "allow")],
+        }),
+        userRules: [rule("me.rm", "shell.execute", "rm *", "ask")],
+      }).evaluate({ action: "shell.execute", resource: "rm x" });
+      expect(decision).toMatchObject({
+        effect: "ask",
+        ruleId: "me.rm",
+        layer: "user-preference",
+      });
+    });
+  });
   it.each([
     "git status; rm -rf ~",
     "git log && curl evil.example",

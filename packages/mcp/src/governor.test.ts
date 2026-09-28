@@ -663,6 +663,7 @@ describe("McpGovernor over Streamable HTTP", () => {
     cleanup.push(() => fixture.close());
     const good = harness({
       credential: async () => new SecretValue(token),
+      credentialOrigins: [fixture.url],
       servers: [httpServer("tickets", fixture.url, { credential: "runtime" })],
     });
     expect((await good.governor.start())[0]?.state).toBe("healthy");
@@ -673,6 +674,7 @@ describe("McpGovernor over Streamable HTTP", () => {
     const wrong = "wrong-bearer-0a1b2c3d4e";
     const bad = harness({
       credential: async () => wrong,
+      credentialOrigins: [new URL(fixture.url).origin],
       servers: [
         httpServer("tickets", fixture.url, {
           credential: "runtime",
@@ -695,6 +697,46 @@ describe("McpGovernor over Streamable HTTP", () => {
     expect(surfaces).toContain("HTTP 401");
     expect(surfaces).not.toContain(token);
     expect(surfaces).not.toContain(wrong);
+  });
+
+  it("sends the runtime bearer only to the inference gateway origin", async () => {
+    const credential = vi.fn(async () => "gateway-bearer-5e6f7a8b9c");
+    const fixture = await startFixtureHttpServer({});
+    cleanup.push(() => fixture.close());
+    const other = new URL(fixture.url);
+    other.hostname = "localhost";
+    for (const credentialOrigins of [
+      ["https://gateway.acme.example/v1"],
+      [],
+      undefined,
+    ]) {
+      const { governor } = harness({
+        credential,
+        ...(credentialOrigins ? { credentialOrigins } : {}),
+        servers: [
+          httpServer("tickets", fixture.url, { credential: "runtime" }),
+        ],
+      });
+      const [report] = await governor.start();
+      expect(report).toMatchObject({ state: "failed" });
+      expect(report?.reason).toContain("runtime credential is only sent to");
+    }
+    // The same port on another host name is another origin: still refused.
+    const { governor } = harness({
+      credential,
+      credentialOrigins: [other.origin],
+      servers: [
+        httpServer("tickets", fixture.url, {
+          credential: "runtime",
+          required: true,
+        }),
+      ],
+    });
+    await expect(governor.start()).rejects.toMatchObject({
+      code: "MCP_UNHEALTHY",
+    });
+    expect(credential).not.toHaveBeenCalled();
+    expect(fixture.requests).toEqual([]);
   });
 
   it("does not bind the credential to a server without credential: runtime", async () => {

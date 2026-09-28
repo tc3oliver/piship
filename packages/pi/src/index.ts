@@ -45,6 +45,7 @@ import {
   DistributionAccess,
   type DistributionLock,
   accessStatePaths,
+  effectivePrivateOnly,
   explainConfiguration,
   formatExplanation,
   formatMigrationReport,
@@ -428,6 +429,10 @@ function governanceOptions(
       ? {
           credential: async () =>
             (await access.requestSecret({ force: false }))?.reveal(),
+          // The runtime credential is issued for the inference gateway only.
+          credentialOrigins: activated.runtime.baseUrl
+            ? [activated.runtime.baseUrl]
+            : [],
         }
       : {}),
   };
@@ -1743,18 +1748,22 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
   lines.push("", "Security");
   if (tlsError) bad("TLS verification", "DISABLED in environment");
   else ok("TLS verification", "on");
-  ok(
-    "public fallback",
-    access.network.publicFallback === "deny"
-      ? "denied"
-      : "allowed (personal owner policy)",
-  );
-  ok(
-    "private-only",
-    access.network.privateOnly
-      ? `on (${opened?.network.allowHosts.join(", ") ?? ""})`
-      : "off",
-  );
+  // The effective outbound state is what the managed fetch enforces.
+  const privateOnly = opened
+    ? opened.network.privateOnly
+    : effectivePrivateOnly(access, ctx.mode);
+  const hosts = opened?.network.allowHosts.join(", ") ?? "";
+  if (privateOnly)
+    ok(
+      "outbound",
+      `private-only: declared hosts only${hosts ? ` (${hosts})` : ""}; public fallback denied`,
+    );
+  else if (ctx.mode === "managed")
+    bad("outbound", "not private-only; public fallback is not enforced");
+  else
+    lines.push(
+      `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
+    );
   ok(
     "proxy environment",
     access.network.proxy.inheritEnvironment ? "inherited" : "ignored",

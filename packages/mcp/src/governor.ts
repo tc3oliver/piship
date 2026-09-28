@@ -53,6 +53,11 @@ export interface McpGovernorOptions {
   /** Runtime bearer for `credential: runtime` servers. */
   readonly credential?: McpCredentialProvider;
   /**
+   * Origins the runtime bearer is issued for (the inference gateway). A
+   * `credential: runtime` server on any other origin fails to start.
+   */
+  readonly credentialOrigins?: readonly string[];
+  /**
    * Resolve a Streamable HTTP server's `url` (for example its `${NAME}`
    * runtime references) just before connecting. A throw fails that server:
    * CONFIG_UNAVAILABLE for a required one, unhealthy for an optional one.
@@ -316,7 +321,10 @@ export class McpGovernor {
       url: this.#resolveUrl(config),
       fetch: this.#options.fetch,
       ...(config.credential === "runtime" && this.#options.credential
-        ? { credential: this.#options.credential }
+        ? {
+            credential: this.#options.credential,
+            credentialOrigins: this.#options.credentialOrigins ?? [],
+          }
         : {}),
     });
   }

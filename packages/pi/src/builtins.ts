@@ -6,7 +6,7 @@ import type {
   ExtensionContext,
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { redact } from "@piship/contracts";
+import { PiShipError, redact } from "@piship/contracts";
 import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
@@ -23,6 +23,31 @@ function attach(gov: GovernanceSession, ctx: ExtensionContext): void {
   gov.toolApproval = uiChannel(ctx);
 }
 
+async function decideToolCall(
+  gov: GovernanceSession,
+  tool: string,
+  ctx: ExtensionContext,
+): Promise<{ block: true; reason: string } | undefined> {
+  attach(gov, ctx);
+  const refusal = planRefusal(gov, tool);
+  if (refusal) return { block: true, reason: refusal };
+  gov.emit("tool.request", { resource: tool });
+  const decision = await gov.withChannel(uiChannel(ctx), () =>
+    gov.decide("tool.execute", tool, gov.currentChannel(), {
+      allowed: "tool.allowed",
+      denied: "tool.denied",
+      resource: tool,
+    }),
+  );
+  if (decision.outcome === "allow") return undefined;
+  return {
+    block: true,
+    reason: redact(
+      `${tool} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}`,
+    ),
+  };
+}
+
 /** Tool-call policy, `!` shell containment, and model request audit. */
 export function governanceHooks(gov: GovernanceSession): InlineExtension {
   return {
@@ -30,25 +55,27 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
     factory: (pi) => {
       pi.on("session_start", (_event, ctx) => attach(gov, ctx));
       pi.on("tool_call", async (event, ctx) => {
-        attach(gov, ctx);
         const tool = event.toolName;
-        const refusal = planRefusal(gov, tool);
-        if (refusal) return { block: true, reason: refusal };
-        gov.emit("tool.request", { resource: tool });
-        const decision = await gov.withChannel(uiChannel(ctx), () =>
-          gov.decide("tool.execute", tool, gov.currentChannel(), {
-            allowed: "tool.allowed",
-            denied: "tool.denied",
-            resource: tool,
-          }),
-        );
-        if (decision.outcome === "allow") return undefined;
-        return {
-          block: true,
-          reason: redact(
-            `${tool} is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}`,
-          ),
-        };
+        try {
+          return await decideToolCall(gov, tool, ctx);
+        } catch (error) {
+          // Fail closed: a tool call whose decision failed never runs.
+          const code = error instanceof PiShipError ? error.code : undefined;
+          try {
+            gov.emit("tool.denied", {
+              resource: tool,
+              detail: { error: code ?? "internal" },
+            });
+          } catch {
+            // Audit failure must not turn the block into an allow.
+          }
+          return {
+            block: true,
+            reason: redact(
+              `${tool} was blocked because the policy check failed${code ? ` (${code})` : ""}`,
+            ),
+          };
+        }
       });
       pi.on("user_bash", (_event, ctx) => {
         attach(gov, ctx);

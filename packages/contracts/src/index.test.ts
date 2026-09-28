@@ -51,6 +51,28 @@ describe("SecretValue", () => {
       nested: { value: "[REDACTED]" },
     });
   });
+  it("uses one pattern set that includes vendor token shapes", () => {
+    const tokens = [
+      `github_pat_${"a".repeat(30)}`,
+      `ghs_${"b".repeat(36)}`,
+      `xoxp-${"2".repeat(14)}`,
+      "ASIAABCDEFGHIJKLMNOP",
+      `AIza${"c".repeat(35)}`,
+      `glpat-${"d".repeat(20)}`,
+      `Basic ${"QWxhZGRpbjpvcGVu".repeat(2)}`,
+      `eyAbcdefghijkl.eyMnopqrstuvwx.sig`,
+      "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----",
+    ];
+    for (const token of tokens)
+      expect(redact(`before ${token} after`)).toBe("before [REDACTED] after");
+    // Ordinary words that start with "ey" survive.
+    expect(redact("eyebrows.eyelashes")).toBe("eyebrows.eyelashes");
+    expect(redactValue({ token: "t", cookie: "c", passwd: "p" })).toEqual({
+      token: "[REDACTED]",
+      cookie: "[REDACTED]",
+      passwd: "[REDACTED]",
+    });
+  });
   it("sanitizes PiShipError message, action, and detail", () => {
     const secret = new SecretValue("token-material-4242");
     const error = new PiShipError(

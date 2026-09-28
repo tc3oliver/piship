@@ -301,6 +301,14 @@ export interface PolicyEngineInput {
   readonly projectRules?: readonly PolicyRule[];
   /** Rules from the user's `config/policy.json` (lowest precedence). */
   readonly userRules?: readonly PolicyRule[];
+  /**
+   * How user rules combine with the distribution. `replace-default` (the
+   * default; personal mode, where the local owner owns the policy) lets a
+   * matching user rule take the place of the matching distribution default.
+   * `narrowing` (managed mode) treats user rules like team and project rules:
+   * `allow` rules are ignored and reported, and the rest can only tighten.
+   */
+  readonly userRuleMode?: "replace-default" | "narrowing";
   readonly context: PolicyContext;
 }
 
@@ -342,6 +350,7 @@ export class PolicyEngine {
   readonly #policy: PolicyConfig;
   readonly #layers: Readonly<Record<PolicyLayer, readonly LayerRule[]>>;
   readonly #ignored: readonly IgnoredRule[];
+  readonly #userNarrowing: boolean;
 
   constructor(input: PolicyEngineInput) {
     this.#policy = input.policy;
@@ -366,6 +375,7 @@ export class PolicyEngine {
     const narrowing = (
       rules: readonly PolicyRule[],
       source: string,
+      layer: PolicyLayer = "team-project",
     ): LayerRule[] => {
       const kept: PolicyRule[] = [];
       for (const rule of rules) {
@@ -373,8 +383,11 @@ export class PolicyEngine {
           kept.push(rule);
           continue;
         }
-        const why = `${source} rules are narrowing only; allow is ignored`;
-        ignored.push({ source, layer: "team-project", rule, why });
+        const why =
+          layer === "user-preference"
+            ? `${source} rules are narrowing only in managed mode; allow is ignored`
+            : `${source} rules are narrowing only; allow is ignored`;
+        ignored.push({ source, layer, rule, why });
         diagnostics.push({
           level: "warning",
           source,
@@ -382,8 +395,9 @@ export class PolicyEngine {
           message: `Ignored allow rule ${rule.id}: ${why}`,
         });
       }
-      return wrap(kept, "team-project", source);
+      return wrap(kept, layer, source);
     };
+    this.#userNarrowing = input.userRuleMode === "narrowing";
     this.#layers = {
       "distribution-enforced": wrap(
         input.policy.enforced,
@@ -399,7 +413,9 @@ export class PolicyEngine {
         "distribution-default",
         "defaults",
       ),
-      "user-preference": wrap(input.userRules ?? [], "user-preference", "user"),
+      "user-preference": this.#userNarrowing
+        ? narrowing(input.userRules ?? [], "user", "user-preference")
+        : wrap(input.userRules ?? [], "user-preference", "user"),
     };
     this.#ignored = ignored;
     this.diagnostics = diagnostics;
@@ -463,16 +479,21 @@ export class PolicyEngine {
       resource,
     );
     const team = this.#firstMatch("team-project", action, resource);
+    const userRule = this.#firstMatch("user-preference", action, resource);
+    // In managed mode a user rule only narrows; otherwise it replaces the
+    // matching distribution default.
+    const narrowingUser = this.#userNarrowing ? userRule : undefined;
     const base =
-      this.#firstMatch("user-preference", action, resource) ??
+      (this.#userNarrowing ? undefined : userRule) ??
       this.#firstMatch("distribution-default", action, resource);
     const baseEffect = base?.rule.effect ?? this.#policy.default;
     const effect = strictest(
       enforced?.rule.effect,
       team?.rule.effect,
+      narrowingUser?.rule.effect,
       baseEffect,
     );
-    const deciding = [enforced, team, base].find(
+    const deciding = [enforced, team, base, narrowingUser].find(
       (entry) => entry?.rule.effect === effect,
     );
     const enforcement = enforcementPlane(action, this.context.containment);
