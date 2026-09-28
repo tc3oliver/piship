@@ -4,6 +4,7 @@ import {
   type IdentitySession,
   type ManagedFetch,
   PiShipError,
+  parseRetryAfter,
   type RuntimeCredential,
   type RuntimeCredentialKind,
   SecretValue,
@@ -16,15 +17,6 @@ export interface HttpBrokerOptions {
   /** Declared gateway; a broker-returned base_url must match it. */
   readonly expectedBaseUrl?: string;
   readonly timeoutMs?: number;
-}
-
-function retryAfter(response: Response): number | undefined {
-  const header = response.headers.get("retry-after");
-  if (!header) return undefined;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(header);
-  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
 /** Broker transport failures are credential acquisition failures, not gateway ones. */
@@ -132,7 +124,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         },
       );
     if (response.status === 429) {
-      const after = retryAfter(response);
+      const after = parseRetryAfter(response.headers.get("retry-after"));
       throw new PiShipError(
         "CREDENTIAL_ACQUIRE_FAILED",
         "The credential broker is rate limiting requests",

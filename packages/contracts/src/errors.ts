@@ -92,8 +92,26 @@ export function isPiShipError(value: unknown): value is PiShipError {
 export function formatError(error: unknown): string {
   if (error instanceof PiShipError)
     return redact(
-      `${error.code}: ${error.message}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
+      `${error.code}: ${error.message}${error.retryAfterMs !== undefined && error.retryAfterMs > 0 ? `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s` : ""}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,
     );
   if (error instanceof Error) return redact(error.message);
   return redact(String(error));
+}
+
+/**
+ * Parse an HTTP `Retry-After` value (RFC 9110: delay-seconds or an HTTP-date)
+ * into a non-negative wait in milliseconds, or `undefined` when absent or
+ * malformed.
+ */
+export function parseRetryAfter(
+  header: string | null | undefined,
+  now: number = Date.now(),
+): number | undefined {
+  const text = header?.trim();
+  if (!text) return undefined;
+  if (/^\d+(\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000);
+  // An HTTP-date names its weekday and month; bare numbers are not dates.
+  if (!/[a-z]/i.test(text)) return undefined;
+  const date = Date.parse(text);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }

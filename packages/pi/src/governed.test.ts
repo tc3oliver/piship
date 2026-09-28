@@ -17,7 +17,7 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { ManagedFetch } from "@piship/contracts";
+import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
@@ -60,6 +60,7 @@ async function open(
     readonly files?: Readonly<Record<string, string>>;
     readonly fetch?: ManagedFetch;
     readonly resolveTemplate?: (key: string, template: string) => string;
+    readonly mode?: "managed" | "personal";
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -95,7 +96,15 @@ async function open(
       "",
     ].join("\n"),
   );
-  const lock = resolveLock(manifest);
+  const resolved = resolveLock(manifest);
+  // A managed manifest needs identity and access; the policy engine only
+  // reads the deployment mode, so tests switch it on the resolved lock.
+  const lock = options.mode
+    ? {
+        ...resolved,
+        deployment: { ...resolved.deployment, mode: options.mode },
+      }
+    : resolved;
   const session = await GovernanceSession.open({
     lock: lock as Parameters<typeof GovernanceSession.open>[0]["lock"],
     distributionDir: distribution,
@@ -287,6 +296,55 @@ describe("governed built-in tools", () => {
     expect(readFileSync(join(workspace, "free.txt"), "utf8")).toBe("ok");
   });
 
+  it("in managed mode ignores a user allow rule, reports it, and audits a violation", async () => {
+    const audit = [
+      "audit:",
+      "  enabled: true",
+      "  sinks:",
+      "    - { id: local, type: file, required: false }",
+    ];
+    const userRules = [
+      { id: "me.shell", action: "shell.execute", effect: "allow" },
+      {
+        id: "me.rm",
+        action: "tool.execute",
+        resource: "write",
+        effect: "deny",
+      },
+    ];
+    const managed = await open(audit, { userRules, mode: "managed" });
+    expect(
+      managed.session.engine.evaluate({
+        action: "shell.execute",
+        resource: "ls",
+      }),
+    ).toMatchObject({ effect: "deny", ruleId: "shell" });
+    expect(
+      managed.session.engine.evaluate({
+        action: "tool.execute",
+        resource: "write",
+      }),
+    ).toMatchObject({ effect: "deny", ruleId: "me.rm" });
+    expect(managed.session.engine.diagnostics).toEqual([
+      expect.objectContaining({ source: "user", ruleId: "me.shell" }),
+    ]);
+    await managed.session.close();
+    const log = readFileSync(
+      join(managed.root, "state", "logs", "audit.jsonl"),
+      "utf8",
+    );
+    expect(log).toMatch(/"event":"policy\.violation"[^\n]*"rule":"me\.shell"/);
+    // Personal mode keeps the local owner's user rule in place of the default.
+    const personal = await open([], { userRules });
+    expect(
+      personal.session.engine.evaluate({
+        action: "shell.execute",
+        resource: "ls",
+      }),
+    ).toMatchObject({ effect: "allow", ruleId: "me.shell" });
+    expect(personal.session.engine.diagnostics).toEqual([]);
+  });
+
   it("does not let tools rewrite the git config that decides the project origin", async () => {
     const { session, workspace } = await open();
     mkdirSync(join(workspace, ".git"));
@@ -465,6 +523,29 @@ describe("governed built-in tools", () => {
       run(bash, { command: "echo ran > marker.txt" }, context(true)),
     ).rejects.toThrow(/rule shell/);
     expect(existsSync(join(workspace, "marker.txt"))).toBe(false);
+  });
+
+  it("blocks a tool call when the policy decision throws", async () => {
+    const { session } = await open();
+    const call = load(governanceHooks(session)).handlers.get("tool_call");
+    session.decide = (async () => {
+      throw new Error("engine exploded token=sk-live-canary-1234567890");
+    }) as typeof session.decide;
+    const result = (await call?.({ toolName: "read", input: {} }, context())) as
+      | { block: boolean; reason: string }
+      | undefined;
+    expect(result).toEqual({
+      block: true,
+      reason: "read was blocked because the policy check failed",
+    });
+    session.decide = (async () => {
+      throw new PiShipError("AUDIT_UNAVAILABLE", "sink down");
+    }) as typeof session.decide;
+    expect(await call?.({ toolName: "read", input: {} }, context())).toEqual({
+      block: true,
+      reason:
+        "read was blocked because the policy check failed (AUDIT_UNAVAILABLE)",
+    });
   });
 
   it("blocks writes and commands in Plan mode even when policy allows them", async () => {

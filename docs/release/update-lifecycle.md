@@ -37,7 +37,7 @@ npm exec -- piship migrate-check acmecode <archive|release-dir|payload>
 `update` needs a release-tracking install of a `piship/v1alpha4` release with at least one pinned key. It locks the installation against a concurrent update, rollback, or uninstall, repairs a state marker left behind by an interrupted operation, then:
 
 1. Selects the channel: `--channel` must be in `updates.channels` (`POLICY_DENIED` otherwise) and is remembered after an update, not after `--check`; a remembered channel that is no longer allowed falls back to `updates.channel` with a notice.
-2. Resolves `updates.source` from the environment, or uses `--from`. Only `https` sources, `http` on a loopback host, and local directories are accepted. Requests use the managed fetch with the distribution's proxy and CA settings, and never follow redirects. Only the host of the declared `updates.source` is added to a `privateOnly` allow list; a `--from` URL gets no such exception.
+2. Resolves `updates.source` from the environment, or uses `--from`. The resolved value and `--from` are checked like the manifest: `https`, or `http` on `127.0.0.1`, `localhost`, or `[::1]`, with no credentials, query string, or fragment; any other scheme is refused with `NETWORK_DENIED`. A local directory from `updates.source` must be absolute; `--from` also accepts a relative one. Requests use the managed fetch with the distribution's proxy and CA settings, and never follow redirects. Only the host of the declared `updates.source` is added to a `privateOnly` allow list; a `--from` URL gets no such exception.
 3. Reads and verifies the signed channel metadata as above.
 4. Picks the newest release for this machine's target. If it equals the active version, reports up to date; if the channel lists no release for this target, reports up to date with a notice; if it is older, refuses the downgrade.
 5. Downloads the archive into a staging directory and checks its size and SHA-256 against the signed entry, then runs `verify-release` for this target and checks that the release matches the signed entry (distribution, command, version, Pi version, lock digest). A release that records its Pi version as unsupported is refused.
@@ -107,7 +107,8 @@ Every failure happens before activation and leaves the active release and state 
 | Signature by an unpinned key, altered metadata, wrong distribution or channel, expired metadata, or a replayed lower sequence | `INTEGRITY_FAILED` |
 | Channel not in `updates.channels` | `POLICY_DENIED` |
 | `updates.source` variable unset | `CONFIG_UNAVAILABLE` |
-| Plain `http` to a non-loopback source | `NETWORK_DENIED` |
+| Plain `http` to a non-loopback source, or another scheme | `NETWORK_DENIED` |
+| Update source URL with credentials, query, or fragment, or `updates.source` resolving to a relative directory | `CONFIG_INVALID` |
 | Downloaded archive differs from its signed entry | `INTEGRITY_FAILED` |
 | Older release offered, target Pi recorded unsupported, launch check fails, migration `unsupported`, or `requires-review` without `--accept-review` | `UPDATE_FAILED` |
 | Another update or rollback is running | `UPDATE_FAILED` (retryable) |

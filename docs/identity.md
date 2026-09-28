@@ -36,7 +36,7 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
 
-Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`). The tokens are one secret in the configured secret store, under a generation reference.
+Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The tokens are one secret in the configured secret store, under a generation reference.
 
 ## Errors
 
@@ -46,7 +46,7 @@ Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `ia
 | Denied or rejected authorization, failed ID token or discovery check, revocation failure | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |
 
-Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`). When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.
+Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`); an OIDC request that times out (30 s) is a retryable `GATEWAY_UNREACHABLE`. When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.
 
 ## Extension context
 

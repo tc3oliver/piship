@@ -102,6 +102,10 @@ describe("model catalog", () => {
       retryable: true,
       retryAfterMs: 3000,
     });
+    const inAMinute = new Date(Date.now() + 60_000).toUTCString();
+    const dated = classifyGatewayStatus(429, { "retry-after": inAMinute });
+    expect(dated?.retryAfterMs).toBeGreaterThan(55_000);
+    expect(dated?.retryAfterMs).toBeLessThanOrEqual(60_000);
     expect(classifyGatewayStatus(503)).toMatchObject({
       code: "GATEWAY_UNREACHABLE",
       retryable: true,
@@ -200,5 +204,45 @@ describe("OpenAI-compatible endpoint", () => {
       provider(new SecretValue("sk-local-owner-key")).probe(),
     ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
     services = await startLocalServices();
+  });
+  it("reports a gateway that does not answer in time as unreachable", async () => {
+    const timedOut = new OpenAICompatibleInferenceProvider({
+      providerId: "acmecode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      catalog,
+      allowed: ["acme/coder"],
+      liveCatalog: true,
+      fetch: async () => {
+        throw new DOMException("The operation timed out", "TimeoutError");
+      },
+      secret: () => null,
+    });
+    await expect(timedOut.probe()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      message: "The inference gateway did not answer within 15 s",
+    });
+    const slowBody = new OpenAICompatibleInferenceProvider({
+      providerId: "acmecode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      catalog,
+      allowed: ["acme/coder"],
+      liveCatalog: true,
+      fetch: async () =>
+        ({
+          status: 200,
+          headers: new Headers(),
+          json: async () => {
+            throw new DOMException("The operation timed out", "TimeoutError");
+          },
+        }) as unknown as Response,
+      secret: () => null,
+    });
+    await expect(slowBody.probe()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+    });
   });
 });

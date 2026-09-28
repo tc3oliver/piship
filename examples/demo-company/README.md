@@ -63,15 +63,15 @@ What to look for:
 - `policy explain mcp.tool.call docs:delete_document` prints `DENIED` by the enforced rule `acme.docs.destructive`, with the default `acme.docs.read` allow listed as another matching rule. `filesystem.read ~/.ssh/id_ed25519` is denied by `acme.secrets.read` with enforcement `sandbox` when the sandbox is enforced. `shell.execute "git status"` needs approval under `acme.shell`.
 - In the interactive TUI (`~/.local/bin/acmecode`), the session starts in Plan mode. Ask for a plan that searches the handbook; writes and commands are refused until you type `/build`. In Build mode, writes and commands ask for approval, and approved `!` commands run inside the sandbox: `!cat ~/.ssh/config` finds nothing to read and `!curl https://example.org` has no network.
 
-To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. A user rule can relax a default such as `acme.shell` from `ask` to `allow`; neither file can relax the enforced rules, and project `allow` rules are ignored and reported. `policy explain` shows which layer decided.
+To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. This is a managed distribution, so both files are narrowing only: a user or project rule can tighten a default such as `acme.shell` from `ask` to `deny`, their `allow` rules are ignored and reported, and neither can relax the enforced rules. `policy explain` shows which layer decided.
 
-Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall.
+Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, and deletes the secret-store entries it references (best effort, without revoking) after uninstall.
 
 ## Release, update, and rollback
 
 This walkthrough plays both the owner and the user on one machine, with a local directory as the channel. `ACMECODE_UPDATE_SOURCE` is read only by `update`, never at launch, so the steps above work without it. Run these commands from the repository root, and work in a copy of the example so the demo stays unchanged.
 
-1. As the owner, create a release key outside the repository. `keygen` refuses to overwrite a file and prints the public key and fingerprint:
+1. As the owner, create a release key outside the repository. `keygen` refuses to overwrite a file or to write inside a git work tree unless the path is git-ignored, and prints the public key and fingerprint:
 
    ```bash
    cp -r examples/demo-company /tmp/acmecode
@@ -136,4 +136,4 @@ To try AcmeCode against real services you are authorized to use, set the same va
 | `ACMECODE_LLM_GATEWAY_URL` | An OpenAI-compatible gateway base URL that serves `GET /models` and the allowed model IDs |
 | `ACMECODE_UPDATE_SOURCE` | Optional, read only by `update`: the HTTPS URL of a channel directory signed with a key pinned in your copy |
 
-All URLs must use HTTPS. Because `network.privateOnly` is on, OIDC endpoints that discovery returns on other hosts must be added to `network.allowHosts`, and an enterprise CA goes in `network.tls.additionalCA`; make these changes, and any model ID changes, in a copy, then lock and build it. The project has not yet recorded such a live run.
+All URLs must use HTTPS. Managed mode is always private-only, so OIDC endpoints that discovery returns on other hosts, and any Streamable HTTP MCP server or HTTP audit sink on another host, must be added to `network.allowHosts`, and an enterprise CA goes in `network.tls.additionalCA`; make these changes, and any model ID changes, in a copy, then lock and build it. The project has not yet recorded such a live run.

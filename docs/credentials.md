@@ -73,7 +73,7 @@ A 401 or 404 from the revoke endpoint counts as already revoked. Broker response
 | --- | --- |
 | 401 | `IDENTITY_EXPIRED`; PiShip refreshes the identity once and retries |
 | 403 | `CREDENTIAL_ACQUIRE_FAILED`: user or distribution denied |
-| 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` when present |
+| 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
 | Other 3xx, 4xx, or 5xx | `CREDENTIAL_ACQUIRE_FAILED`; retryable for 5xx |
 | Malformed body, undeclared `base_url` | `CREDENTIAL_ACQUIRE_FAILED` |
 
@@ -98,7 +98,7 @@ The macOS and Windows stores limit the size of one item, so values larger than o
 - Replacement is crash-safe: the new secret is written under the next generation before metadata switches to it, then older generations are deleted. A crash leaves metadata pointing at the previous or the new complete credential; references that could not be deleted are retried later.
 - A credential is refreshed when it is within `refresh.beforeExpiry` of expiry. If refresh fails while the credential is still valid, PiShip continues with a notice. An expired credential that cannot be renewed fails closed with `CREDENTIAL_EXPIRED`.
 - A gateway rejection of a broker or adapter credential marks the metadata `rejected_at`, so this and later processes renew before reuse. If renewal fails, the result is `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED` or `NETWORK_DENIED` are kept. A rejected `local-secret` cannot be renewed automatically, so it is left in place and the launch fails with `CREDENTIAL_REVOKED` and guidance to replace it with `login`.
-- Refreshes are serialized within a process and across processes by a lock file beside the metadata, so concurrent launches share one renewal instead of racing. A lock older than two minutes is treated as abandoned.
+- Refreshes are serialized within a process and across processes by a lock file beside the metadata, so concurrent launches share one renewal instead of racing. The holder refreshes the lock as a heartbeat and before each blocking secret-store command, so a live holder's lock is never broken; only a lock left unrefreshed for 75 s is taken over (moved aside atomically after a re-check). A holder releases only its own lock, and a waiter that runs out of time fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 - Metadata from an incompatible version, or metadata whose secret is missing, is cleared rather than reused, together with every secret it references, and the user must sign in again.
 - `logout` revokes when supported, then deletes the current, orphaned, and possibly pending next-generation secrets and the metadata. The revocation outcome is audited as `credential.revoke` (`revoked`, `failed`, `unsupported`, or `skipped`), and `login` revokes the credential it replaces. `credential.acquire` is recorded only for a new acquisition, and renewals as `credential.refresh`.
 - When update, rollback, or migration must clear a credential the target cannot read, the switching release first revokes it where supported (best effort; a failure is a warning), then deletes every reference, including orphaned and pending generations.

@@ -1,6 +1,6 @@
 // Project identity, origin classification, and project resource discovery.
 // No git binary is executed: the origin remote is read from the git config.
-import { readFileSync, statSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
 import type {
@@ -581,6 +581,51 @@ function discoverImports(
   }
 }
 
+/** Bounds for the walk of a project resource directory. */
+const MAX_WALK_ENTRIES = 50_000;
+const MAX_WALK_DEPTH = 32;
+
+/**
+ * Walk a project resource directory, following links that stay inside the
+ * root, and return the first entry whose link target leaves the root (or a
+ * reason the walk could not finish within its bounds). Pi's loaders follow
+ * links inside these directories, so a nested link must meet the same rule
+ * as the directory itself.
+ */
+function escapingEntry(root: string, directory: string): string | undefined {
+  const visited = new Set<string>([directory]);
+  const pending: { readonly path: string; readonly depth: number }[] = [
+    { path: directory, depth: 0 },
+  ];
+  let entries = 0;
+  for (let next = pending.pop(); next; next = pending.pop()) {
+    let children: Dirent[];
+    try {
+      children = readdirSync(next.path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      entries += 1;
+      if (entries > MAX_WALK_ENTRIES)
+        return `has more than ${MAX_WALK_ENTRIES} entries to check for links; keep large trees (such as dependencies) out of project resource directories`;
+      const path = joinPosix(next.path, child.name);
+      let target = path;
+      if (child.isSymbolicLink()) {
+        target = real(path);
+        if (!isWithin(root, target))
+          return `contains a link that leaves the project root (${path.slice(root.length).replace(/^\//, "")})`;
+        if (!isDirectory(target) || visited.has(target)) continue;
+      } else if (!child.isDirectory()) continue;
+      if (next.depth + 1 > MAX_WALK_DEPTH)
+        return `nests deeper than ${MAX_WALK_DEPTH} levels to check for links; flatten it to load it`;
+      visited.add(target);
+      pending.push({ path: target, depth: next.depth + 1 });
+    }
+  }
+  return undefined;
+}
+
 /**
  * Discover project-supplied resources and decide each by its trust
  * dimension. Only existing candidates are returned. Every candidate is
@@ -613,14 +658,28 @@ export function discoverProjectResources(
     }
     const resolvedPath = real(path);
     const inside = isWithin(identity.root, resolvedPath);
-    const candidate = toCandidate(
-      spec,
-      path,
-      resolvedPath,
-      evaluateCandidate(policy, identity, spec.dimension, inside),
+    // A directory is only inside the root when every link within it is too.
+    const escaping =
+      inside && isDirectory(resolvedPath)
+        ? escapingEntry(identity.root, resolvedPath)
+        : undefined;
+    let evaluation = evaluateCandidate(
+      policy,
+      identity,
+      spec.dimension,
+      inside && escaping === undefined,
     );
+    if (escaping !== undefined)
+      evaluation = {
+        ...evaluation,
+        reason: evaluation.reason.replace(
+          /^Resolves outside the project root/,
+          `The directory ${escaping}`,
+        ),
+      };
+    const candidate = toCandidate(spec, path, resolvedPath, evaluation);
     out.push(candidate);
-    if (spec.kind === "instructions" && inside) {
+    if (spec.kind === "instructions" && inside && escaping === undefined) {
       seen.add(resolvedPath);
       discoverImports(candidate, identity, policy, homeDir, seen, 1, out);
     }

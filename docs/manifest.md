@@ -34,7 +34,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `config.userOverridable` | Keys users may set; defaults to every key not enforced |
 | `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`) |
 | `network.tls.additionalCA` | PEM bundle paths added to the default trust roots |
-| `network.publicFallback` | `deny` or `allow`; managed requires `deny` |
+| `network.publicFallback` | `deny` or `allow`; managed requires `deny`, which makes managed launches private-only whatever `network.privateOnly` says |
 | `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
 
 The IdP, broker, and gateway these fields point to must implement the [enterprise integration contract](enterprise-integration.md).
@@ -116,7 +116,7 @@ The branded `capabilities [--json]` command reports six axes per capability (`su
 | `policy.providerTrust` | same as resource trust, without `project` | Capability-provider trust per class; independent of resource trust |
 | `policy.projectTrust` | see below | Project origin matchers and per-dimension effects |
 | `policy.enforced` | `[]` | Rules that nothing below can relax |
-| `policy.defaults` | `[]` | Distribution rules a user may relax |
+| `policy.defaults` | `[]` | Distribution rules a personal user may relax; managed user rules only narrow |
 
 A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, `resource` (default `**`), `effect` (`allow`, `ask`, or `deny`), and an optional `reason` shown in denials. `action` is one action, a known prefix such as `mcp.*`, or `*`. The actions are `model.use`, `resource.load`, `extension.load`, `skill.load`, `instruction.load`, `provider.load`, `agent.invoke`, `mcp.server.start`, `mcp.tool.call`, `tool.execute`, `shell.execute`, `filesystem.read`, `filesystem.write`, `network.connect`, `memory.read`, `memory.write`, `web.request`, and `browser.execute`. This release evaluates the resources below at runtime; the other actions are accepted in rules and by `policy explain` but no runtime hook evaluates them yet.
 
@@ -150,7 +150,7 @@ Resource globs are anchored and case-sensitive. `*` matches any run of character
 
 Two JSON files add rules at launch. Each is a list of rules or `{"rules": [...]}` with the same rule fields.
 
-- `<state>/config/policy.json` holds user rules. For a request, a matching user rule takes the place of the matching distribution default, so a user may relax a default (for example `ask` to `allow`) but never an enforced or team/project rule.
+- `<state>/config/policy.json` holds user rules. In personal mode, where the local owner owns the policy, a matching user rule takes the place of the matching distribution default, so a user may relax a default (for example `ask` to `allow`) but never an enforced or team/project rule. In managed mode user rules are narrowing only, like project restrictions: they can tighten any decision, and `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event.
 - `.piship/policy.json` in the project holds project restrictions. It is narrowing only: `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event. It is not read if it resolves outside the project root.
 
 ### MCP
@@ -167,7 +167,7 @@ A server declares `transport`:
 - `stdio`: exactly one of `module` (a `./` `.mjs` or `.js` file in the distribution, run with the distribution's Node.js) or `command` (a bare executable name found on `PATH`), plus `args` and `env` (`allow`: variable names inherited from the launch environment; `set`: fixed non-secret values). Credential-looking names are rejected.
 - `streamable-http`: `url`, which may be a `${NAME}` runtime reference resolved from the launch environment at startup. An unset variable fails a required server with `CONFIG_UNAVAILABLE` and marks an optional one failed (`MCP_UNHEALTHY`). Project `.mcp.json` URLs are never interpolated. The legacy HTTP+SSE transport is rejected.
 
-Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both). Exposed tools are named `mcp__<server>__<tool>`.
+Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only, and only when the server URL has the same origin as `inference.baseUrl`, otherwise the server fails to start), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both). Exposed tools are named `mcp__<server>__<tool>`.
 
 ### Sandbox
 
@@ -238,7 +238,7 @@ The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribu
 
 `${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url` and `audit.sinks[].url`, and in v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
 
-The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `updates.source` is resolved only when `update` runs, not at launch; its resolved value may also be a local directory. `piship validate` lists the variables and notes which are unset in the current shell.
+The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `updates.source` is resolved only when `update` runs, not at launch; its resolved value must pass the same URL checks or be an absolute local directory (`--from` also accepts a relative directory). `piship validate` lists the variables and notes which are unset in the current shell.
 
 ## Commands
 
@@ -301,7 +301,7 @@ The lock never contains tokens, credentials, private keys, or resolved endpoint 
 `piship migrate <manifest>` prints a dry-run plan and the migrated YAML; `--write` applies it in place. It migrates step by step to `piship/v1alpha4`; an existing v1alpha4 manifest is left unchanged.
 
 - v1alpha1 to v1alpha2: an equivalent personal profile with `identity.mode: none`, `credential.provider: pi-native`, and `inference.provider: pi-native`. v1alpha1 never had a runnable managed mode, so a v1alpha1 manifest with `deployment.mode: managed` is rejected and must be rewritten with access sections (see `piship init --managed`).
-- v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies all dimensions except `passiveContext`; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
+- v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies every dimension, including `passiveContext` (project themes), since v1alpha2 loaded no project resources; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
 - v1alpha3 to v1alpha4: adds `updates: {channel: stable, channels: [stable], rollback: true}` with no `source` and no trust keys, so updates stay disabled until a source and at least one key are added. `release` is not written; its defaults apply (the three evidenced targets, `https://registry.npmjs.org`, and `failOn: high`). Nothing else changes.
 
 After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init` writes `piship/v1alpha4` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.keys` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.

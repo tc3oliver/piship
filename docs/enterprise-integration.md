@@ -73,10 +73,10 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 | Scopes | `identity.oidc.scopes`, default `[openid, profile, email]`; `openid` is required. Add whatever your IdP needs to issue a refresh token (often `offline_access`) and any scope the broker requires in the access token |
 | Audience | Optional `identity.oidc.audience`, sent as the `audience` authorization request parameter when set. Use it if your IdP issues broker-scoped access tokens this way |
 | ID token | Required at login. PiShip checks signature (JWKS), `iss`, `aud`, `azp`, `exp`, `nbf` (30 s clock tolerance), and `nonce`. The `alg` must be in `id_token_signing_alg_values_supported`, or `RS256` when that is absent. On refresh an ID token is optional; if returned, `sub` and `iss` must not change |
-| Claims | `sub` and `iss` are required. PiShip keeps only `sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, and `groups`, for display. It makes no authorization decision from claims; that is the broker's job |
+| Claims | `sub` and `iss` are required. PiShip keeps only `sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, and `groups` (scalar or string-array values only), for display; claims from an identity adapter are filtered to the same allowlist. It makes no authorization decision from claims; that is the broker's job |
 | Refresh | `grant_type=refresh_token` when the access token has less than 60 s left (from `expires_in`) or after the broker returns 401. A rotated refresh token is stored; refresh is serialized across processes. Without a refresh token, the user must run `login` again when the access token expires |
 | Revocation | On `logout`, if discovery advertises `revocation_endpoint`: the refresh token, then the access token (RFC 7009 with `token_type_hint`). A failure is a warning; local state is still cleared |
-| Timeouts | 30 s per OIDC HTTP request; the browser sign-in waits up to 5 minutes |
+| Timeouts | 30 s per OIDC HTTP request; a timeout fails with retryable `GATEWAY_UNREACHABLE`. The browser sign-in waits up to 5 minutes |
 
 ## Credential broker (`http-broker`)
 
@@ -120,7 +120,7 @@ Accept: application/json
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
 | 403 | `CREDENTIAL_ACQUIRE_FAILED`: user or distribution denied |
-| 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` (seconds or HTTP date) reported. No automatic retry |
+| 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. No automatic retry |
 | 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable. No automatic retry |
 | 3xx, other 4xx, malformed JSON, contract violation | `CREDENTIAL_ACQUIRE_FAILED`. Redirects are never followed |
 | Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
@@ -148,7 +148,7 @@ The bearer is the **runtime credential**, not the identity token; `credential_id
 - If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`, or with the identity error when sign-in is needed.
 - A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
-- Concurrent launches share one renewal through a lock file.
+- Concurrent launches share one renewal through a lock file. A live holder refreshes the lock, so it is never broken while held; only a lock left unrefreshed for 75 s is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 
 ## LLM gateway (OpenAI-compatible)
 
@@ -178,7 +178,7 @@ Accept: application/json
 {"object": "list", "data": [{"id": "acme/coder", "object": "model"}, {"id": "acme/general", "object": "model"}]}
 ```
 
-PiShip reads **only** `data[].id`. A model missing from the list becomes `MODEL_UNAVAILABLE`. Capability metadata (`contextWindow`, `maxOutputTokens`, `input`, `reasoning`, `tools`, `streaming`, `structuredOutput`, `policyTags`) comes from `models.catalog` in `piship.yaml`, never from the gateway; capability `requirements` are checked against that catalog, and missing metadata never satisfies a requirement. Timeout: 15 s.
+PiShip reads **only** `data[].id`. A model missing from the list becomes `MODEL_UNAVAILABLE`. Capability metadata (`contextWindow`, `maxOutputTokens`, `input`, `reasoning`, `tools`, `streaming`, `structuredOutput`, `policyTags`) comes from `models.catalog` in `piship.yaml`, never from the gateway; capability `requirements` are checked against that catalog, and missing metadata never satisfies a requirement. Timeout: 15 s, covering connection and body.
 
 The effective catalog is `models.allowed` ∩ broker `models` ∩ gateway `data[].id` (when `liveCatalog: true`) ∩ the user's narrowing ([inference](inference.md#model-catalog)).
 
@@ -191,8 +191,8 @@ For `GET /models` at launch and in `doctor`:
 | 401 | `CREDENTIAL_REVOKED`; PiShip renews the credential once and retries the launch |
 | 403 | `MODEL_DENIED` |
 | 404 | `MODEL_UNAVAILABLE` |
-| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` in seconds is reported |
-| 5xx, unreachable | `GATEWAY_UNREACHABLE`, retryable |
+| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
+| 5xx, unreachable, timeout | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, non-JSON, no `data` array | `GATEWAY_PROTOCOL_ERROR` |
 
 During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed.
@@ -206,8 +206,8 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION` |
 | Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots |
 | Proxy | `HTTP(S)_PROXY` and `NO_PROXY` are honored unless `network.proxy.inheritEnvironment: false` |
-| `network.privateOnly: true` | Only the hosts of the issuer, broker, revoke, and gateway URLs plus `network.allowHosts` may be contacted; others fail with `NETWORK_DENIED`. Add OIDC endpoints that discovery returns on another host (token, JWKS, revocation) to `allowHosts`. The authorization page opens in the browser and is not subject to this rule |
-| `network.publicFallback` | Must be `deny` in managed mode: there is no fallback to a public or personal provider |
+| Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The authorization page opens in the browser and is not subject to this rule |
+| MCP and the runtime credential | A `credential: runtime` Streamable HTTP MCP server must have the same origin (scheme, host, port) as `inference.baseUrl`; otherwise it fails to start with `MCP_UNHEALTHY` and never receives the credential |
 | Redirects | Not followed; serve each endpoint directly |
 | Ambient keys | In managed mode, provider keys such as `OPENAI_*` are removed from the runtime environment |
 
@@ -227,7 +227,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | `logout` | Revoked at IdP (if advertised) | Revoked at broker (if configured) | Deleted |
 | `update`, `rollback` | Kept if the target release can read them; otherwise cleared without IdP revocation | Kept if readable; otherwise revoked best effort, then cleared | Cleared only when unreadable |
 | `uninstall` | Kept | Kept, not revoked | Kept |
-| `purge` | Not revoked | Not revoked | State directory deleted; entries in the system secret store are not removed. Run `logout` first |
+| `purge` | Not revoked | Not revoked | State directory deleted; secret-store entries its metadata references are deleted best effort (failures are warnings). Run `logout` first to revoke |
 
 ## Responsibility boundary
 

@@ -364,6 +364,152 @@ describe("discoverProjectResources", () => {
     expect(skills?.reason).toContain("outside the project root");
   });
 
+  it("denies a skills directory with a nested link that points outside the root", () => {
+    const outside = dir("outside-nested");
+    write(join(outside, "SKILL.md"), "x");
+    const root = dir("nested-link");
+    const personal = makePolicy({}, "personal");
+    write(join(root, ".pi", "skills", "good", "SKILL.md"), "x");
+    const clean = discoverProjectResources(
+      identifyProject(root, personal.projectTrust),
+      personal,
+      { homeDir: home },
+    );
+    expect(byKind(clean, ".pi/skills")?.effect).not.toBe("deny");
+    if (
+      !trySymlink(
+        outside,
+        join(root, ".pi", "skills", "good", "deep", "evil"),
+        "dir",
+      )
+    )
+      return;
+    const found = discoverProjectResources(
+      identifyProject(root, personal.projectTrust),
+      personal,
+      { homeDir: home },
+    );
+    const skills = byKind(found, ".pi/skills");
+    expect(skills).toMatchObject({ effect: "deny", origin: "unknown" });
+    expect(skills?.reason).toContain(
+      "The directory contains a link that leaves the project root (.pi/skills/good/deep/evil)",
+    );
+  });
+
+  it("evaluates a prompts directory with a nested outside link as unknown origin", () => {
+    const outside = dir("outside-prompt");
+    write(join(outside, "p.md"), "x");
+    const root = dir("nested-prompt");
+    gitRepo(root, "https://git.acme.example/team/prompts");
+    write(join(root, ".pi", "prompts", "ok.md"), "x");
+    if (
+      !trySymlink(
+        join(outside, "p.md"),
+        join(root, ".pi", "prompts", "p.md"),
+        "file",
+      )
+    )
+      return;
+    const personal = makePolicy({}, "personal");
+    const found = discoverProjectResources(
+      identifyProject(root, personal.projectTrust),
+      personal,
+      { homeDir: home },
+    );
+    expect(byKind(found, ".pi/prompts")).toMatchObject({ origin: "unknown" });
+  });
+
+  it("follows nested links that stay inside the root and stops at cycles", () => {
+    const root = dir("inner-links");
+    const personal = makePolicy({}, "personal");
+    write(join(root, "shared", "SKILL.md"), "x");
+    write(join(root, ".pi", "skills", "a", "SKILL.md"), "x");
+    if (
+      !trySymlink(join(root, "shared"), join(root, ".pi", "skills", "s"), "dir")
+    )
+      return;
+    trySymlink(
+      join(root, ".pi", "skills"),
+      join(root, "shared", "loop"),
+      "dir",
+    );
+    const inside = discoverProjectResources(
+      identifyProject(root, personal.projectTrust),
+      personal,
+      { homeDir: home },
+    );
+    expect(byKind(inside, ".pi/skills")?.effect).not.toBe("deny");
+    // A link that leaves the root behind an inside link is still found.
+    trySymlink(dir("outside-behind"), join(root, "shared", "out"), "dir");
+    const found = discoverProjectResources(
+      identifyProject(root, personal.projectTrust),
+      personal,
+      { homeDir: home },
+    );
+    expect(byKind(found, ".pi/skills")).toMatchObject({ effect: "deny" });
+  });
+
+  it("does not trust a resource directory nested deeper than the walk limit", () => {
+    const personal = makePolicy({}, "personal");
+    const shallow = dir("walk-shallow");
+    write(
+      join(shallow, ".pi", "skills", ...Array(31).fill("d"), "SKILL.md"),
+      "x",
+    );
+    expect(
+      byKind(
+        discoverProjectResources(
+          identifyProject(shallow, personal.projectTrust),
+          personal,
+          { homeDir: home },
+        ),
+        ".pi/skills",
+      )?.effect,
+    ).not.toBe("deny");
+    const deep = dir("walk-deep");
+    write(join(deep, ".pi", "skills", ...Array(33).fill("d"), "SKILL.md"), "x");
+    const skills = byKind(
+      discoverProjectResources(
+        identifyProject(deep, personal.projectTrust),
+        personal,
+        { homeDir: home },
+      ),
+      ".pi/skills",
+    );
+    expect(skills).toMatchObject({ effect: "deny", origin: "unknown" });
+    expect(skills?.reason).toContain("nests deeper than 32 levels");
+  });
+
+  it("stops at a link cycle inside a resource directory", () => {
+    const personal = makePolicy({}, "personal");
+    const root = dir("walk-cycle");
+    write(join(root, ".pi", "prompts", "a", "p.md"), "x");
+    const discover = () =>
+      byKind(
+        discoverProjectResources(
+          identifyProject(root, personal.projectTrust),
+          personal,
+          { homeDir: home },
+        ),
+        ".pi/prompts",
+      );
+    const clean = discover();
+    if (
+      !trySymlink(
+        join(root, ".pi", "prompts"),
+        join(root, ".pi", "prompts", "a", "up"),
+        "dir",
+      )
+    )
+      return;
+    trySymlink(
+      join(root, ".pi", "prompts", "a"),
+      join(root, ".pi", "prompts", "a", "self"),
+      "dir",
+    );
+    expect(discover()).toEqual(clean);
+  });
+
   it("re-evaluates an outside instruction link as unknown and never reads it", () => {
     const outside = dir("outside-instructions");
     write(join(outside, "AGENTS.md"), "@inside.md\n");

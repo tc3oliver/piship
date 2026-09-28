@@ -14,7 +14,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { SecretValue } from "@piship/contracts";
+import { MemorySecretStore } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVIDENCED_TARGETS,
@@ -779,6 +781,70 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(error.code).toBe("CONFIG_UNAVAILABLE");
   });
 
+  it("applies the manifest source rules to the resolved updates.source", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    let requests = 0;
+    const fetcher = (async () => {
+      requests += 1;
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    const attempt = (source: string) =>
+      rejection(
+        updateDistribution(ID, {
+          runCheck: fakeRun,
+          fetcher,
+          env: { ACMEPI_UPDATE_SOURCE: source },
+        }),
+      );
+    for (const source of [
+      "http://updates.example.test/acmepi",
+      "ftp://updates.example.test/acmepi",
+      "file:///srv/acmepi",
+    ])
+      expect((await attempt(source)).code).toBe("NETWORK_DENIED");
+    expect(
+      (await attempt("https://updates.example.test/acmepi?x=1")).message,
+    ).toMatch(/query string or fragment/);
+    const relative = await attempt("channel");
+    expect(relative.code).toBe("CONFIG_INVALID");
+    expect(relative.message).toMatch(/absolute local directory/);
+    expect(requests).toBe(0);
+    // An absolute local directory is accepted after resolution.
+    const result = await updateDistribution(ID, {
+      runCheck: fakeRun,
+      env: { ACMEPI_UPDATE_SOURCE: channelDir },
+    });
+    expect(result.status).toBe("updated");
+  });
+
+  it("accepts a relative --from directory but not an unsupported scheme", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const denied = await rejection(
+      updateDistribution(ID, {
+        runCheck: fakeRun,
+        source: "ftp://updates.example.test/acmepi",
+      }),
+    );
+    expect(denied.code).toBe("NETWORK_DENIED");
+    const missing = await rejection(
+      updateDistribution(ID, { runCheck: fakeRun, source: join(temp(), "x") }),
+    );
+    expect(missing.message).toMatch(/does not exist/);
+    const cwd = process.cwd();
+    process.chdir(dirname(channelDir));
+    try {
+      const result = await updateDistribution(ID, {
+        runCheck: fakeRun,
+        source: basename(channelDir),
+      });
+      expect(result.status).toBe("updated");
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it("drops the previous release when the new release disables rollback", async () => {
     const { a, opts } = await fixture({ rollbackB: false });
     await installDistribution(a.archive);
@@ -1244,7 +1310,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     const receipt = await installDistribution(a.archive, true);
     await updateDistribution(ID, opts);
     const state = treeHash(stateDir());
-    expect(() => purgeDistributionState(ID)).toThrow(
+    await expect(purgeDistributionState(ID)).rejects.toThrow(
       /Uninstall acmepi before purging its state/,
     );
     expect(uninstallDistribution(ID)).toBe(stateDir());
@@ -1268,8 +1334,67 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       tracked: false,
       leftovers: [],
     });
-    expect(purgeDistributionState(ID)).toBe(stateDir());
+    // The seeded state uses the file fallback, which goes with the directory.
+    expect(await purgeDistributionState(ID)).toEqual({
+      state: stateDir(),
+      deletedSecrets: [],
+      problems: [],
+    });
     expect(existsSync(stateDir())).toBe(false);
+  });
+
+  it("purge deletes the platform secret-store entries the metadata references", async () => {
+    const state = stateDir();
+    write(
+      join(state, "identity", "session.json"),
+      JSON.stringify({
+        schema: "piship-identity-metadata/v1",
+        subject: "user-1",
+        secretRef: `piship:${ID}:identity#2`,
+      }),
+    );
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#3`,
+        orphans: [`piship:${ID}:inference#1`, "piship:other:inference#1"],
+      }),
+    );
+    const store = new MemorySecretStore();
+    const refs = [
+      `piship:${ID}:identity#2`,
+      `piship:${ID}:inference#1`,
+      `piship:${ID}:inference#3`,
+      "piship:other:inference#1",
+    ];
+    for (const ref of refs) await store.put(ref, new SecretValue("s3cret-v"));
+    const deleted: string[] = [];
+    const tracking = {
+      kind: store.kind,
+      description: "test store",
+      put: store.put.bind(store),
+      get: store.get.bind(store),
+      async delete(ref: string) {
+        deleted.push(ref);
+        if (ref.endsWith("identity#3")) throw new Error("locked keychain");
+        await store.delete(ref);
+      },
+    };
+    const result = await purgeDistributionState(ID, { secretStore: tracking });
+    // Current, adjacent, and orphaned generations of this distribution only.
+    expect(deleted).toEqual([
+      `piship:${ID}:identity#1`,
+      `piship:${ID}:identity#2`,
+      `piship:${ID}:identity#3`,
+      `piship:${ID}:inference#1`,
+      `piship:${ID}:inference#3`,
+    ]);
+    expect(store.refs()).toEqual(["piship:other:inference#1"]);
+    expect(result.problems).toEqual([
+      `Could not delete piship:${ID}:identity#3 from the test store: locked keychain`,
+    ]);
+    expect(existsSync(state)).toBe(false);
   });
 });
 

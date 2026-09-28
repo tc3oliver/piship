@@ -692,6 +692,46 @@ describe("Pi session seams used by governance", () => {
     agent.dispose();
   });
 
+  it("a tool_call handler that throws does not let the tool run", async () => {
+    // PiShip's own hook fails closed with a block result; this pins that Pi
+    // also refuses the call when a handler throws instead of returning.
+    const writes: string[] = [];
+    const customTools = [
+      createWriteToolDefinition(temp, {
+        operations: {
+          mkdir: async () => {},
+          writeFile: async (path) => {
+            writes.push(path);
+          },
+        },
+      }),
+    ] as ToolDefinition[];
+    const thrower: InlineExtension = {
+      name: "piship-policy-throws",
+      factory: (pi) => {
+        pi.on("tool_call", () => {
+          throw new Error("decision failed");
+        });
+      },
+    };
+    services.knobs.gatewayMode = "script";
+    services.knobs.toolScript = [
+      { name: "write", arguments: { path: "thrown.txt", content: "x" } },
+    ];
+    const { session: agent } = await session({
+      extensions: [thrower],
+      customTools,
+    });
+    await agent.bindExtensions({});
+    await agent.prompt("write");
+    expect(writes).toEqual([]);
+    expect((services.state.toolResults as string[])[0]).toContain(
+      "decision failed",
+    );
+    expect(readdirSync(temp)).toEqual([]);
+    agent.dispose();
+  });
+
   it("resumes a persisted session through createAgentSessionRuntime and SessionManager", async () => {
     const sessionDir = join(temp, "sessions");
     const first = await session({

@@ -447,12 +447,21 @@ describe("governed distribution (local fixtures)", () => {
         .replace(
           "    - id: local\n      type: file\n      required: false",
           `    - id: local\n      type: file\n      required: false\n    - id: company\n      type: http\n      url: \${ACMECODE_AUDIT_URL}\n      required: true`,
+        )
+        // Only the distribution can relax its managed `ask` defaults.
+        .replace(
+          '      resource: "workspace/**"\n      effect: ask',
+          '      resource: "workspace/**"\n      effect: allow',
+        )
+        .replace(
+          '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
+          '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: allow',
         ),
     );
     dist.env.ACMECODE_AUDIT_URL = sinkUrl;
     const project = plainProject(dist.temp);
     await login(dist, project);
-    // The user relaxes the distribution's `ask` defaults for this workspace.
+    // A managed user's allow rules are narrowing only: ignored and audited.
     mkdirSync(join(dist.state, "config"), { recursive: true });
     writeFileSync(
       join(dist.state, "config", "policy.json"),
@@ -553,6 +562,12 @@ describe("governed distribution (local fixtures)", () => {
           event.rule === "piship-workflow.plan",
       ),
     ).toBe(false);
+    expect(
+      received.some(
+        (event) =>
+          event.event === "policy.violation" && event.rule === "me.write",
+      ),
+    ).toBe(true);
     const delivered = JSON.stringify(received);
     expect(delivered).not.toContain(SECRET);
     expect(delivered).not.toContain("echo sandboxed");

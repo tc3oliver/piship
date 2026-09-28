@@ -287,6 +287,36 @@ describe("runtime references and network policy", () => {
       }),
     ).toThrow("unacceptable URL");
   });
+
+  it("enforces publicFallback: deny as private-only in managed mode", () => {
+    const endpoints = {
+      additionalCA: [],
+      baseUrl: "https://llm.corp.example/v1",
+    };
+    const declared = (
+      privateOnly: boolean,
+      publicFallback: "deny" | "allow",
+    ): AccessManifest => ({
+      ...access,
+      network: { ...access.network, privateOnly, publicFallback },
+    });
+    // Managed mode requires deny, so it is always private-only.
+    expect(
+      networkPolicyFor(declared(false, "deny"), endpoints, "managed"),
+    ).toMatchObject({ privateOnly: true, allowHosts: ["llm.corp.example"] });
+    // Personal mode keeps network.privateOnly as declared.
+    expect(
+      networkPolicyFor(declared(false, "allow"), endpoints, "personal")
+        .privateOnly,
+    ).toBe(false);
+    expect(
+      networkPolicyFor(declared(false, "deny"), endpoints).privateOnly,
+    ).toBe(false);
+    expect(
+      networkPolicyFor(declared(true, "allow"), endpoints, "personal")
+        .privateOnly,
+    ).toBe(true);
+  });
 });
 
 function secretScan(root: string, secrets: readonly string[]): string[] {

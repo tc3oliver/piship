@@ -511,9 +511,11 @@ function migrateToV1alpha3(
       `resources.${kind}: flat list -> ${trust} trust class (${mode} distribution resources)`,
     );
   }
-  // v1alpha2 never loaded project resources; only tool access to project files.
+  // v1alpha2 never loaded project resources, not even themes (its resource
+  // loader ran with noThemes against the distribution directory); only tool
+  // access to project files.
   const closed = {
-    passiveContext: "allow",
+    passiveContext: "deny",
     instructions: "deny",
     skills: "deny",
     agents: "deny",
@@ -538,7 +540,7 @@ function migrateToV1alpha3(
   document.set("mcp", document.createNode({ mode: "off" }));
   changes.push(
     "policy.default: allow (v1alpha2 had no tool policy)",
-    "policy.projectTrust: project files stay tool-readable; project instructions, skills, extensions, and MCP stay unloaded (as in v1alpha2)",
+    "policy.projectTrust: project files stay tool-readable; project instructions, skills, extensions, themes, and MCP stay unloaded (as in v1alpha2)",
     "sandbox.required: false (v1alpha2 had no OS sandbox)",
     "audit.enabled: false (v1alpha2 had no audit log)",
     "mcp.mode: off (v1alpha2 had no MCP servers)",

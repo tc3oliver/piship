@@ -15,6 +15,7 @@ import {
   checkDestination,
   createManagedFetch,
   formatError,
+  parseRetryAfter,
   redact,
   redactValue,
   sanitizeManagedEnvironment,
@@ -51,6 +52,83 @@ describe("SecretValue", () => {
       nested: { value: "[REDACTED]" },
     });
   });
+  it("uses one pattern set that includes vendor token shapes", () => {
+    const tokens = [
+      `github_pat_${"a".repeat(30)}`,
+      `ghs_${"b".repeat(36)}`,
+      `xoxp-${"2".repeat(14)}`,
+      "ASIAABCDEFGHIJKLMNOP",
+      `AIza${"c".repeat(35)}`,
+      `glpat-${"d".repeat(20)}`,
+      `Basic ${"QWxhZGRpbjpvcGVu".repeat(2)}`,
+      `eyAbcdefghijkl.eyMnopqrstuvwx.sig`,
+      "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----",
+    ];
+    for (const token of tokens)
+      expect(redact(`before ${token} after`)).toBe("before [REDACTED] after");
+    // Ordinary words that start with "ey" survive.
+    expect(redact("eyebrows.eyelashes")).toBe("eyebrows.eyelashes");
+    expect(redactValue({ token: "t", cookie: "c", passwd: "p" })).toEqual({
+      token: "[REDACTED]",
+      cookie: "[REDACTED]",
+      passwd: "[REDACTED]",
+    });
+  });
+  it("redacts adversarial 1 MB inputs in linear time", () => {
+    const size = 1 << 20;
+    const fill = (unit: string, tail = "") =>
+      unit.repeat(Math.ceil(size / unit.length)) + tail;
+    const inputs = [
+      fill("ey-"),
+      fill("eyJ-"),
+      fill("ey_a"),
+      `ey${fill("a")}`,
+      `eyJ${fill("a")}.`,
+      fill("eyaaaaaaaaaaa."),
+      fill("sk-"),
+      fill("ghp_"),
+      fill("github_pat_-"),
+      fill("xoxb-"),
+      fill("AKIA"),
+      fill("AIza-"),
+      fill("glpat-"),
+      fill("basic "),
+      `Basic ${fill("a")}`,
+      fill("bearer "),
+      `bearer${fill(" ")}`,
+      fill("authorization: "),
+      `authorization${fill(" ")}`,
+      fill("secret "),
+      `password${fill(" ")}`,
+      fill('"secret"'),
+      fill("-----BEGIN "),
+      fill("-----BEGIN PRIVATE KEY-----"),
+      `-----BEGIN ${fill("A")}`,
+    ];
+    for (const input of inputs) {
+      const started = performance.now();
+      redact(input);
+      const elapsed = performance.now() - started;
+      expect(
+        elapsed,
+        `${input.slice(0, 16)}... took ${elapsed} ms`,
+      ).toBeLessThan(1000);
+    }
+  });
+  it("keeps plain English that mentions basic", () => {
+    for (const text of [
+      "Use basic authentication for the proxy",
+      "Basic configuration applies to every workspace",
+      "BASIC INSTRUCTIONS",
+      "the basic understanding",
+    ])
+      expect(redact(text)).toBe(text);
+    expect(redact("send Basic dXNlcjpwYXNz now")).toBe("send [REDACTED] now");
+    expect(redact("Basic YWxhZGRpbjpvcGVuc2VzYW1l")).toBe("[REDACTED]");
+    expect(redact("Authorization: Basic anything")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
   it("sanitizes PiShipError message, action, and detail", () => {
     const secret = new SecretValue("token-material-4242");
     const error = new PiShipError(
@@ -64,6 +142,32 @@ describe("SecretValue", () => {
     const rendered = `${formatError(error)} ${JSON.stringify(error)}`;
     expect(rendered).not.toContain(secret.reveal());
     expect(error.code).toBe("CREDENTIAL_ACQUIRE_FAILED");
+  });
+
+  it("parses Retry-After seconds and HTTP-dates and shows the wait", () => {
+    const now = Date.parse("Wed, 21 Oct 2015 07:28:00 GMT");
+    expect(parseRetryAfter("120", now)).toBe(120_000);
+    expect(parseRetryAfter(" 1.5 ", now)).toBe(1500);
+    expect(parseRetryAfter("Wed, 21 Oct 2015 07:28:30 GMT", now)).toBe(30_000);
+    expect(parseRetryAfter("Wed, 21 Oct 2015 07:00:00 GMT", now)).toBe(0);
+    for (const value of [undefined, null, "", "-5", "soon", "12abc"])
+      expect(parseRetryAfter(value, now)).toBeUndefined();
+    const limited = new PiShipError(
+      "GATEWAY_RATE_LIMITED",
+      "The inference gateway is rate limiting requests",
+      { retryable: true, retryAfterMs: 29_100, userAction: "Wait" },
+    );
+    expect(formatError(limited)).toBe(
+      "GATEWAY_RATE_LIMITED: The inference gateway is rate limiting requests\nRetry after: 30 s\nAction: Wait",
+    );
+    expect(formatError(new PiShipError("UPDATE_FAILED", "x"))).toBe(
+      "UPDATE_FAILED: x",
+    );
+    expect(
+      formatError(
+        new PiShipError("GATEWAY_RATE_LIMITED", "x", { retryAfterMs: 0 }),
+      ),
+    ).toBe("GATEWAY_RATE_LIMITED: x");
   });
 });
 

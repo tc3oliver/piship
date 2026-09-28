@@ -1847,7 +1847,7 @@ describe("migration to piship/v1alpha3", () => {
       "resources.skills: flat list -> company trust class (managed distribution resources)",
       "resources.prompts: flat list -> company trust class (managed distribution resources)",
       "policy.default: allow (v1alpha2 had no tool policy)",
-      "policy.projectTrust: project files stay tool-readable; project instructions, skills, extensions, and MCP stay unloaded (as in v1alpha2)",
+      "policy.projectTrust: project files stay tool-readable; project instructions, skills, extensions, themes, and MCP stay unloaded (as in v1alpha2)",
       "sandbox.required: false (v1alpha2 had no OS sandbox)",
       "audit.enabled: false (v1alpha2 had no audit log)",
       "mcp.mode: off (v1alpha2 had no MCP servers)",
@@ -1871,7 +1871,7 @@ describe("migration to piship/v1alpha3", () => {
       expect(
         manifest.governance?.policy.projectTrust[origin].dimensions,
       ).toEqual({
-        passiveContext: "allow",
+        passiveContext: "deny",
         instructions: "deny",
         skills: "deny",
         agents: "deny",

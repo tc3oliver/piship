@@ -45,6 +45,7 @@ import {
   DistributionAccess,
   type DistributionLock,
   accessStatePaths,
+  effectivePrivateOnly,
   explainConfiguration,
   formatExplanation,
   formatMigrationReport,
@@ -428,6 +429,10 @@ function governanceOptions(
       ? {
           credential: async () =>
             (await access.requestSecret({ force: false }))?.reveal(),
+          // The runtime credential is issued for the inference gateway only.
+          credentialOrigins: activated.runtime.baseUrl
+            ? [activated.runtime.baseUrl]
+            : [],
         }
       : {}),
   };
@@ -1625,6 +1630,54 @@ function lifecycleDoctor(
     );
 }
 
+/**
+ * Streamable HTTP MCP servers and HTTP audit sinks whose resolved host a
+ * private-only network policy would refuse. A warning only: hosts are never
+ * allowed implicitly. URLs that do not resolve are reported elsewhere.
+ */
+function undeclaredGovernanceHosts(
+  ctx: LaunchContext,
+  allowHosts: readonly string[],
+): { label: string; host: string }[] {
+  const manifest = ctx.metadata.governance?.manifest;
+  if (!manifest) return [];
+  const targets = [
+    ...manifest.mcp.servers
+      .filter((server) => server.transport === "streamable-http")
+      .map((server) => ({
+        label: `mcp ${server.id}`,
+        key: `mcp.servers.${server.id}.url`,
+        url: server.url,
+      })),
+    ...manifest.audit.sinks
+      .filter((sink) => sink.type === "http")
+      .map((sink) => ({
+        label: `audit ${sink.id}`,
+        key: "audit.sinks.url",
+        url: sink.url,
+      })),
+  ];
+  const found: { label: string; host: string }[] = [];
+  for (const target of targets) {
+    if (!target.url) continue;
+    let host: string;
+    try {
+      host = new URL(
+        resolveTemplate(
+          target.key,
+          target.url,
+          ctx.metadata.access?.variables ?? [],
+          process.env,
+        ),
+      ).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    if (!allowHosts.includes(host)) found.push({ label: target.label, host });
+  }
+  return found;
+}
+
 async function runDoctor(ctx: LaunchContext): Promise<void> {
   const lines: string[] = [];
   let failed = false;
@@ -1743,18 +1796,31 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
   lines.push("", "Security");
   if (tlsError) bad("TLS verification", "DISABLED in environment");
   else ok("TLS verification", "on");
-  ok(
-    "public fallback",
-    access.network.publicFallback === "deny"
-      ? "denied"
-      : "allowed (personal owner policy)",
-  );
-  ok(
-    "private-only",
-    access.network.privateOnly
-      ? `on (${opened?.network.allowHosts.join(", ") ?? ""})`
-      : "off",
-  );
+  // The effective outbound state is what the managed fetch enforces.
+  const privateOnly = opened
+    ? opened.network.privateOnly
+    : effectivePrivateOnly(access, ctx.mode);
+  const hosts = opened?.network.allowHosts.join(", ") ?? "";
+  if (privateOnly)
+    ok(
+      "outbound",
+      `private-only: declared hosts only${hosts ? ` (${hosts})` : ""}; public fallback denied`,
+    );
+  else if (ctx.mode === "managed")
+    bad("outbound", "not private-only; public fallback is not enforced");
+  else
+    lines.push(
+      `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
+    );
+  if (privateOnly && opened)
+    for (const item of undeclaredGovernanceHosts(
+      ctx,
+      opened.network.allowHosts,
+    ))
+      warn(
+        item.label,
+        `host ${item.host} is not a declared endpoint or in network.allowHosts; private-only requests to it fail with NETWORK_DENIED`,
+      );
   ok(
     "proxy environment",
     access.network.proxy.inheritEnvironment ? "inherited" : "ignored",

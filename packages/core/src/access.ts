@@ -145,9 +145,27 @@ export function resolveRuntimeReferences(
   return output as unknown as ResolvedEndpoints;
 }
 
+/**
+ * Whether only declared endpoint hosts and `network.allowHosts` may be
+ * contacted. In managed mode `publicFallback: deny` (which managed mode
+ * requires) implies it, so the declaration is enforced by the managed fetch
+ * rather than only displayed. Personal mode uses `network.privateOnly` as
+ * declared.
+ */
+export function effectivePrivateOnly(
+  access: AccessManifest,
+  mode: "personal" | "managed",
+): boolean {
+  return (
+    access.network.privateOnly ||
+    (mode === "managed" && access.network.publicFallback === "deny")
+  );
+}
+
 export function networkPolicyFor(
   access: AccessManifest | undefined,
   endpoints?: ResolvedEndpoints,
+  mode: "personal" | "managed" = "personal",
 ): NetworkPolicy {
   if (!access) return DEFAULT_NETWORK_POLICY;
   const hosts = new Set(access.network.allowHosts);
@@ -161,7 +179,7 @@ export function networkPolicyFor(
   return {
     inheritProxyEnvironment: access.network.proxy.inheritEnvironment,
     additionalCA: endpoints?.additionalCA ?? [],
-    privateOnly: access.network.privateOnly,
+    privateOnly: effectivePrivateOnly(access, mode),
     allowHosts: [...hosts].sort(),
   };
 }
@@ -411,7 +429,11 @@ export class DistributionAccess {
     this.endpoints = options.access
       ? resolveRuntimeReferences(options.access, env)
       : { additionalCA: [] };
-    this.network = networkPolicyFor(options.access, this.endpoints);
+    this.network = networkPolicyFor(
+      options.access,
+      this.endpoints,
+      options.mode,
+    );
     this.#fetch = createManagedFetch(this.network, "access");
     this.paths = accessStatePaths(options.stateDir);
     const needsStore =
@@ -1339,7 +1361,7 @@ export async function explainConfiguration(
       },
       {
         key: "network.privateOnly",
-        value: access.network.privateOnly,
+        value: effectivePrivateOnly(access, options.mode),
         source: "distribution-enforced",
         overridable: false,
       },

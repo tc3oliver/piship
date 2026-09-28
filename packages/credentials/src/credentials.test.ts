@@ -41,7 +41,9 @@ import {
   createSecretStore,
   metadataSecretRefs,
   toSecretValue,
+  withFileLock,
 } from "./index.js";
+import { touchHeldLocks } from "./lock-heartbeat.js";
 
 let temp: string;
 beforeEach(() => {
@@ -613,6 +615,82 @@ describe("credential lifecycle", () => {
       credentials.ensure(null, ctx, { allowAcquire: false }),
     ).resolves.toMatchObject({ secret: expect.anything() });
     expect(existsSync(lock)).toBe(false);
+  });
+  it("never breaks a fresh lock; it fails retryably after the wait", async () => {
+    const path = join(temp, "held.json");
+    const lock = `${path}.lock`;
+    writeFileSync(lock, "");
+    // Another live holder keeps the lock fresh.
+    const holder = setInterval(() => {
+      const now = new Date();
+      utimesSync(lock, now, now);
+    }, 20);
+    let ran = false;
+    try {
+      const error = await withFileLock(
+        path,
+        async () => {
+          ran = true;
+        },
+        { staleMs: 150, waitMs: 400 },
+      ).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+      });
+      expect((error as Error).message).toMatch(
+        /Another process is still updating held\.json/,
+      );
+    } finally {
+      clearInterval(holder);
+    }
+    expect(ran).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+  });
+  it("breaks a stale lock without leaving files and releases only its own lock", async () => {
+    const path = join(temp, "stale.json");
+    const lock = `${path}.lock`;
+    writeFileSync(lock, "crashed-holder");
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lock, old, old);
+    await withFileLock(path, async () => {
+      expect(readFileSync(lock, "utf8")).not.toBe("crashed-holder");
+      // Blocking secret-store commands touch the held lock first.
+      utimesSync(lock, old, old);
+      touchHeldLocks();
+      expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(10_000);
+      // Another process took the lock over; it is not ours to remove.
+      writeFileSync(lock, "another-holder");
+    });
+    expect(readFileSync(lock, "utf8")).toBe("another-holder");
+    expect(readdirSync(temp).filter((name) => name.endsWith(".stale"))).toEqual(
+      [],
+    );
+  });
+  it("keeps its own lock fresh while a long task runs", async () => {
+    const path = join(temp, "long.json");
+    const order: string[] = [];
+    const timing = { heartbeatMs: 20, staleMs: 150, waitMs: 2_000 };
+    const first = withFileLock(
+      path,
+      async () => {
+        order.push("first:start");
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        order.push("first:end");
+      },
+      timing,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await withFileLock(
+      path,
+      async () => {
+        order.push("second");
+      },
+      timing,
+    );
+    await first;
+    expect(order).toEqual(["first:start", "first:end", "second"]);
   });
   it("revokes, then clears secrets and metadata on logout", async () => {
     const revoked: string[] = [];

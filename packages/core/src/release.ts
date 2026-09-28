@@ -18,8 +18,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { PiShipError, redact } from "@piship/contracts";
 import {
   DEFAULT_RELEASE_TARGETS,
   RELEASE_CHANNELS,
@@ -1336,7 +1336,7 @@ export async function readSourceFile(
   name: string,
   fetcher: typeof fetch = fetch,
 ): Promise<Buffer> {
-  if (/^https?:\/\//.test(source)) {
+  if (isUrlSource(source)) {
     const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
     const response = await fetchSource(url, name, fetcher, METADATA_TIMEOUT_MS);
     const declared = Number(response.headers.get("content-length"));
@@ -1357,6 +1357,63 @@ export async function readSourceFile(
   if (statSync(path).size > MAX_METADATA_BYTES)
     throw tooLarge(name, MAX_METADATA_BYTES);
   return readFileSync(path);
+}
+
+/**
+ * A source written as `scheme:` (other than a Windows drive letter) is a URL;
+ * anything else is a local directory path. A drive-relative Windows path such
+ * as `C:foo` (no separator after the colon) matches the scheme pattern, so it
+ * is treated as a URL and refused rather than resolved against the current
+ * directory of drive C; write `C:\foo` or `C:/foo` instead.
+ */
+function isUrlSource(source: string): boolean {
+  return (
+    /^[a-z][a-z0-9+.-]*:/i.test(source) && !/^[a-z]:([\\/]|$)/i.test(source)
+  );
+}
+
+/**
+ * Validate an update source after `${NAME}` resolution or from `--from`, with
+ * the same URL rules as the manifest: https, or http to a loopback host, with
+ * no credentials, query string, or fragment. Any other value is a local
+ * directory; one resolved from `updates.source` must be absolute, while a
+ * `--from` directory may be relative to the working directory. Returns the
+ * URL unchanged or the absolute directory path.
+ */
+export function checkUpdateSource(
+  source: string,
+  origin: "updates.source" | "--from",
+): string {
+  if (isUrlSource(source)) {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${origin} is not a valid URL: ${redact(source)}`,
+      );
+    }
+    checkSourceUrl(url);
+    if (url.search || url.hash)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `${origin} may not contain a query string or fragment`,
+      );
+    return source;
+  }
+  if (origin === "updates.source" && !isAbsolute(source))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `updates.source resolved to ${redact(source)}, which is neither an https URL, an http URL on 127.0.0.1, localhost, or [::1], nor an absolute local directory`,
+    );
+  const directory = resolve(source);
+  if (!existsSync(directory) || !statSync(directory).isDirectory())
+    throw new PiShipError(
+      "UPDATE_FAILED",
+      `Update source directory ${directory} does not exist`,
+    );
+  return directory;
 }
 
 /** Only https, or http to a loopback host, may serve updates. */
@@ -1455,7 +1512,7 @@ export async function downloadArchive(
       "INTEGRITY_FAILED",
       `Unsafe archive name ${entry.archive}`,
     );
-  if (/^https?:\/\//.test(source)) {
+  if (isUrlSource(source)) {
     const url = new URL(
       entry.archive,
       source.endsWith("/") ? source : `${source}/`,

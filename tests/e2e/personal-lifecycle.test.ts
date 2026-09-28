@@ -156,6 +156,8 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(doctor.stdout).toMatch(/mcp notes\s+healthy \(stdio; 2 tool\(s\)\)/);
     expect(doctor.stdout).toMatch(/audit\s+audit: disabled/);
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
+    expect(doctor.stdout).toMatch(/- outbound\s+any host \(personal mode/);
+    expect(doctor.stdout).not.toContain("personal owner policy");
 
     // The installed lock declares no enterprise endpoint: no identity,
     // broker, or gateway, and the update source is the only variable.

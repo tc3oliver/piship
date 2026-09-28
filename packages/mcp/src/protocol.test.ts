@@ -253,6 +253,64 @@ describe("tool filtering and results", () => {
       renderToolResult({ content: [], structuredContent: { a: 1 } }).text,
     ).toBe('{"a":1}');
   });
+
+  it("redacts vendor token shapes from output sent to the model", () => {
+    const tokens = [
+      `ghp_${"a".repeat(36)}`,
+      `xoxb-${"1".repeat(12)}-abcdef`,
+      "AKIAABCDEFGHIJKLMNOP",
+      `AIza${"b".repeat(35)}`,
+      `glpat-${"c".repeat(20)}`,
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----",
+    ];
+    const { text } = renderToolResult({
+      content: tokens.map((token) => ({ type: "text", text: `x ${token} y` })),
+    });
+    for (const token of tokens) expect(text).not.toContain(token);
+    expect(text.match(/\[REDACTED\]/g)).toHaveLength(tokens.length);
+  });
+});
+
+describe("runtime credential origin binding", () => {
+  const transport = (url: string, credentialOrigins: readonly string[]) =>
+    new StreamableHttpTransport({
+      serverId: "tickets",
+      url,
+      fetch: async () => {
+        throw new Error("not called");
+      },
+      credential: async () => "gateway-bearer-1234567",
+      credentialOrigins,
+    });
+  it("matches origins with and without an explicit default port", () => {
+    expect(() =>
+      transport("https://gw.acme.example/mcp", [
+        "https://gw.acme.example:443/v1",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      transport("https://gw.acme.example:443/mcp", [
+        "https://gw.acme.example/v1",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      transport("https://GW.acme.example/mcp", ["https://gw.acme.example/v1"]),
+    ).not.toThrow();
+  });
+  it("refuses another scheme, port, or host", () => {
+    for (const url of [
+      "http://gw.acme.example/mcp",
+      "https://gw.acme.example:8443/mcp",
+      "https://mcp.acme.example/mcp",
+      "https://gw.acme.example.evil.example/mcp",
+    ])
+      expect(() => transport(url, ["https://gw.acme.example/v1"])).toThrow(
+        /runtime credential is only sent to https:\/\/gw\.acme\.example$/,
+      );
+    expect(() =>
+      transport("https://gw.acme.example/mcp", ["not a url"]),
+    ).toThrow(/inference gateway origin, which is not configured/);
+  });
 });
 
 describe("Streamable HTTP transport limits", () => {

@@ -120,6 +120,20 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     expect((error as Error).message).toMatch(message);
   });
 
+  it("reports an identity provider that does not answer in time as retryable", async () => {
+    const timedOut = provider({
+      fetch: (async () => {
+        throw new DOMException("The operation timed out", "TimeoutError");
+      }) as ManagedFetch,
+    });
+    await expect(timedOut.configuration()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      component: "identity",
+      message:
+        "OIDC discovery failed: the identity provider did not respond in time",
+    });
+  });
   it("reports a denied sign-in, cancellation, and timeout visibly", async () => {
     services.knobs.denyLogin = true;
     await expect(provider().login({ openUrl: approve })).rejects.toMatchObject({

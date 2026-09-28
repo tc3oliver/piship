@@ -8,6 +8,7 @@ import {
   PiShipError,
   SecretValue,
 } from "@piship/contracts";
+import { retainClaims } from "./claims.js";
 import { startLoopbackReceiver } from "./loopback.js";
 
 export interface OidcIdentityOptions {
@@ -23,22 +24,6 @@ export interface OidcIdentityOptions {
   readonly clockToleranceSeconds?: number;
 }
 
-/** Only non-secret, display-relevant claims are retained in session state. */
-const RETAINED_CLAIMS = [
-  "sub",
-  "iss",
-  "aud",
-  "azp",
-  "exp",
-  "iat",
-  "auth_time",
-  "name",
-  "preferred_username",
-  "email",
-  "email_verified",
-  "groups",
-];
-
 function mapError(error: unknown, action: string): PiShipError {
   for (
     let current: unknown = error;
@@ -46,6 +31,22 @@ function mapError(error: unknown, action: string): PiShipError {
     current = (current as { cause?: unknown }).cause
   )
     if (current instanceof PiShipError) return current;
+  // A deadline is an unavailable identity provider, not an invalid identity.
+  for (
+    let current: unknown = error;
+    current;
+    current = (current as { cause?: unknown }).cause
+  )
+    if ((current as Error)?.name === "TimeoutError")
+      return new PiShipError(
+        "GATEWAY_UNREACHABLE",
+        `${action}: the identity provider did not respond in time`,
+        {
+          component: "identity",
+          retryable: true,
+          userAction: "Check the network connection, then try again",
+        },
+      );
   const code = (error as { code?: string })?.code ?? "";
   const cause = (error as { cause?: unknown })?.cause;
   // oauth4webapi puts the precise failed check (claim, state, signature) in the cause.
@@ -109,9 +110,7 @@ function session(
       "Refreshed identity does not match the signed-in subject",
       { component: "identity" },
     );
-  const retained: Record<string, unknown> = {};
-  for (const name of RETAINED_CLAIMS)
-    if (claims?.[name] !== undefined) retained[name] = claims[name];
+  const retained = retainClaims(claims);
   const expiresIn = tokens.expiresIn();
   const displayName =
     (claims?.name as string | undefined) ??

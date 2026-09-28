@@ -77,6 +77,8 @@ export interface GovernanceOptions {
   readonly user?: string | null;
   /** Bearer for `credential: runtime` MCP servers. */
   readonly credential?: () => Promise<string | undefined>;
+  /** Origins the runtime credential is issued for (the inference gateway). */
+  readonly credentialOrigins?: readonly string[];
   readonly homeDir?: string;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
@@ -302,6 +304,11 @@ async function buildEngine(
     ),
     projectRules: withIgnored(readProjectRestrictions(candidates)),
     userRules: readUserRules(options.stateDir),
+    // Managed: the distribution owns the policy, so user rules only narrow.
+    userRuleMode:
+      options.lock.deployment.mode === "managed"
+        ? "narrowing"
+        : "replace-default",
     context: {
       workspaceRoot: project.root,
       homeDir,
@@ -644,7 +651,8 @@ export class GovernanceSession {
         policy: engine.id,
         detail: { diagnostics: engine.diagnostics.length },
       });
-      // A team or project file that tries to widen the policy is recorded.
+      // A team, project, or managed user file that tries to widen the policy
+      // is recorded.
       for (const diagnostic of engine.diagnostics)
         session.emit("policy.violation", {
           policy: engine.id,
@@ -1079,6 +1087,7 @@ export class GovernanceSession {
         : {}),
       ...(this.options.credential
         ? {
+            credentialOrigins: this.options.credentialOrigins ?? [],
             credential: async () => {
               const value = await this.options.credential?.();
               if (!value)

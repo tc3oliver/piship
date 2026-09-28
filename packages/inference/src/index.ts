@@ -6,6 +6,7 @@ import {
   type ManagedFetch,
   type ModelDefinition,
   PiShipError,
+  parseRetryAfter,
   type ResolvedModel,
   type RuntimeConfigurationContext,
   type RuntimeProviderConfiguration,
@@ -116,11 +117,7 @@ export function classifyGatewayStatus(
   headers: Readonly<Record<string, string>> = {},
 ): PiShipError | null {
   if (status < 400) return null;
-  const retryAfterHeader = headers["retry-after"];
-  const retryAfterMs =
-    retryAfterHeader && Number.isFinite(Number(retryAfterHeader))
-      ? Number(retryAfterHeader) * 1000
-      : undefined;
+  const retryAfterMs = parseRetryAfter(headers["retry-after"]);
   if (status === 401)
     return new PiShipError(
       "CREDENTIAL_REVOKED",
@@ -188,6 +185,14 @@ export interface OpenAICompatibleOptions {
   readonly secret: () => SecretValue | null;
 }
 
+const PROBE_TIMEOUT_MS = 15_000;
+const probeTimeout = () =>
+  new PiShipError(
+    "GATEWAY_UNREACHABLE",
+    `The inference gateway did not answer within ${PROBE_TIMEOUT_MS / 1000} s`,
+    { component: "inference", retryable: true },
+  );
+
 /** Explicit OpenAI-compatible endpoint (managed gateway or local server). */
 export class OpenAICompatibleInferenceProvider implements InferenceProvider {
   readonly kind = "openai-compatible";
@@ -196,16 +201,22 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
   /** GET {baseUrl}/models, used for live availability and gateway reachability. */
   async probe(): Promise<string[]> {
     const secret = this.options.secret();
-    const response = await this.options.fetch(
-      `${this.options.baseUrl.replace(/\/+$/, "")}/models`,
-      {
-        headers: {
-          accept: "application/json",
-          ...(secret ? { authorization: `Bearer ${secret.reveal()}` } : {}),
+    let response: Response;
+    try {
+      response = await this.options.fetch(
+        `${this.options.baseUrl.replace(/\/+$/, "")}/models`,
+        {
+          headers: {
+            accept: "application/json",
+            ...(secret ? { authorization: `Bearer ${secret.reveal()}` } : {}),
+          },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         },
-        signal: AbortSignal.timeout(15_000),
-      },
-    );
+      );
+    } catch (error) {
+      if ((error as Error)?.name === "TimeoutError") throw probeTimeout();
+      throw error;
+    }
     const failure = classifyGatewayStatus(
       response.status,
       Object.fromEntries(response.headers),
@@ -214,7 +225,9 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
     let body: { data?: { id?: unknown }[] };
     try {
       body = (await response.json()) as typeof body;
-    } catch {
+    } catch (error) {
+      // The deadline also covers reading the body.
+      if ((error as Error)?.name === "TimeoutError") throw probeTimeout();
       throw new PiShipError(
         "GATEWAY_PROTOCOL_ERROR",
         "The inference gateway model list is not JSON",

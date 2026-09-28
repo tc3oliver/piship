@@ -7,6 +7,7 @@ import {
   PiShipError,
   REDACTED_TEXT,
   redact,
+  SECRET_KEY_PATTERN,
   SecretValue,
 } from "@piship/contracts";
 
@@ -29,24 +30,9 @@ export const AUDIT_LIMITS = Object.freeze({
 
 const TRUNCATED = "…[truncated]";
 const DETAIL_KEY = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
-const SECRET_KEY =
-  /^(?:access_?token|refresh_?token|id_?token|token|credential|secret|client_?secret|api_?key|password|passwd|authorization|cookie|bearer)$/i;
 const DECISIONS = new Set(["allowed", "denied", "asked", "approved"]);
 const ENFORCEMENT = new Set(["control-plane", "sandbox", "audit-only"]);
 const EVENT_TYPES = new Set<string>(AUDIT_EVENT_TYPES);
-
-// Token shapes beyond the shared redaction patterns: vendor-prefixed API keys
-// and access tokens that appear without an Authorization or key=value context.
-const EXTRA_TOKEN_PATTERNS: readonly RegExp[] = [
-  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
-  /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
-  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
-  /\bAIza[A-Za-z0-9_-]{30,}/g,
-  /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\b(basic)\s+[A-Za-z0-9+/=]{12,}/gi,
-  /\bey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.?[A-Za-z0-9_-]*/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-];
 
 /** Raw input accepted by `sanitizeEvent`. Anything unexpected is dropped. */
 export interface AuditEventInput {
@@ -65,12 +51,13 @@ export interface AuditEventInput {
   readonly content?: Readonly<Partial<Record<AuditContentClass, unknown>>>;
 }
 
-/** Redact shared and vendor token shapes from text. */
+/**
+ * Redact secret values and token shapes from text. This is `redact` from
+ * `@piship/contracts`: audit uses the same pattern set as every other
+ * redaction path.
+ */
 export function scrubText(text: string): string {
-  let output = redact(text);
-  for (const pattern of EXTRA_TOKEN_PATTERNS)
-    output = output.replace(pattern, REDACTED_TEXT);
-  return output;
+  return redact(text);
 }
 
 function cap(text: string, limit: number): string {
@@ -110,7 +97,7 @@ function detailValue(
 ): string | number | boolean | null | undefined {
   if (value instanceof SecretValue) return undefined;
   if (value === null) return null;
-  if (SECRET_KEY.test(key)) return REDACTED_TEXT;
+  if (SECRET_KEY_PATTERN.test(key)) return REDACTED_TEXT;
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string")
