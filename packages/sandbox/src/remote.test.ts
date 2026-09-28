@@ -397,13 +397,23 @@ describe("e2b-compatible backend against a mock server", () => {
     for (let attempt = 0; attempt < 100 && !find(); attempt++)
       await new Promise((done) => setTimeout(done, 20));
     const signal = find();
+    const tag = (starts(mock.requests).at(-1) as StartRequest & { tag: string })
+      .tag;
+    expect(tag).toMatch(/^piship-[0-9a-f]{16}$/);
     expect(JSON.parse(signal?.body.toString() ?? "{}")).toEqual({
-      process: { pid: 42 },
+      process: { tag },
       signal: "SIGNAL_SIGKILL",
     });
     expect(signal?.headers["content-type"]).toBe("application/json");
     // The sandbox settled the cancelled stream, so it stays usable.
     expect((await run(sandbox, "true")).exitCode).toBe(0);
+    await sandbox.dispose();
+  });
+
+  it("maps envd's -1 for a signalled process to a signal exit", async () => {
+    const mock = await e2bServer({ command: () => ({ exitCode: -1 }) });
+    const sandbox = await activate(e2b(mock.url));
+    expect((await run(sandbox, "kill -9 $$")).exitCode).toBe(1);
     await sandbox.dispose();
   });
 
@@ -602,6 +612,48 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     );
     expect(created).toHaveLength(2);
     expect(deleted).toHaveLength(2);
+  });
+
+  it("shares one claim between concurrent commands and keeps it for the others when one is cancelled", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => {
+      release = done;
+    });
+    const mock = await kubernetesServer((command) =>
+      command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+    );
+    const sandbox = await activate(kubernetes(mock.url));
+    const claims = () =>
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ).length;
+    const deletes = () =>
+      mock.requests.filter((request) => request.method === "DELETE").length;
+    const controller = new AbortController();
+    const slow = sandbox.exec("sleep 600", workspace, {
+      onData: () => {},
+      signal: controller.signal,
+    });
+    const quick = Promise.all([run(sandbox, "echo a"), run(sandbox, "echo b")]);
+    expect((await quick).map((result) => result.output)).toEqual([
+      "ok\n",
+      "ok\n",
+    ]);
+    controller.abort();
+    await expect(slow).rejects.toThrow("aborted");
+    release();
+    await gate;
+    expect(claims()).toBe(1);
+    // The cancelled command's claim is deleted once nothing uses it.
+    expect(deletes()).toBe(1);
+    const after = await Promise.all([
+      run(sandbox, "echo c"),
+      run(sandbox, "echo d"),
+    ]);
+    expect(after.map((result) => result.output)).toEqual(["ok\n", "ok\n"]);
+    expect(claims()).toBe(2);
+    await sandbox.dispose();
+    expect(deletes()).toBe(2);
   });
 
   it("sends a bearer to the API and the router only when a credential is given", async () => {

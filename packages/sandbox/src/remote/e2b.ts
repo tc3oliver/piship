@@ -1,6 +1,7 @@
 // The e2b-compatible backend: the E2B sandbox API (control plane) and the
 // envd process service (data plane). Any service that implements that API,
 // such as E2B or CubeSandbox, works through this one compatibility layer.
+import { randomBytes } from "node:crypto";
 import type { AdapterAvailability } from "../adapter.js";
 import type {
   SandboxBackend,
@@ -251,6 +252,24 @@ export class E2bCompatibleBackend implements SandboxBackend {
         `the sandbox is no longer available: ${await describeFailure(renewed)}`,
       );
     await renewed.body?.cancel().catch(() => undefined);
+    // The tag lets PiShip kill the command even before its pid is known.
+    const tag = `piship-${randomBytes(8).toString("hex")}`;
+    const kill = () => void this.#kill(sandbox, tag);
+    io.signal.addEventListener("abort", kill, { once: true });
+    try {
+      return await this.#stream(sandbox, workdir, request, io, tag);
+    } finally {
+      io.signal.removeEventListener("abort", kill);
+    }
+  }
+
+  async #stream(
+    sandbox: CreatedSandbox,
+    workdir: string,
+    request: SandboxExecRequest,
+    io: SandboxExecIO,
+    tag: string,
+  ): Promise<SandboxExecResult> {
     const headers = this.#envdHeaders(sandbox, "application/connect+json");
     headers.set("Keepalive-Ping-Interval", "50");
     headers.set(
@@ -270,6 +289,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
             cwd: remoteDirectory(workdir, request.workspacePath),
           },
           stdin: false,
+          tag,
         }),
         signal: io.signal,
       },
@@ -278,12 +298,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
       throw new Error(
         `starting the command failed: ${await describeFailure(response)}`,
       );
-    let pid: number | undefined;
-    const kill = () => {
-      if (pid !== undefined) void this.#kill(sandbox, pid);
-    };
-    io.signal.addEventListener("abort", kill, { once: true });
-    try {
+    {
       const reader = new EnvelopeReader();
       let result: SandboxExecResult | undefined;
       for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
@@ -302,8 +317,6 @@ export class E2bCompatibleBackend implements SandboxBackend {
             return result;
           }
           const event = record(message.event);
-          const start = record(event.start);
-          if (typeof start.pid === "number") pid = start.pid;
           const data = record(event.data);
           if (typeof data.stdout === "string")
             io.onStdout(Buffer.from(data.stdout, "base64"));
@@ -314,8 +327,11 @@ export class E2bCompatibleBackend implements SandboxBackend {
             const end = record(event.end);
             const status = typeof end.status === "string" ? end.status : "";
             result = {
+              // envd reports a signalled process as -1.
               exitCode: Number.isInteger(end.exitCode)
-                ? (end.exitCode as number)
+                ? (end.exitCode as number) >= 0
+                  ? (end.exitCode as number)
+                  : null
                 : /signal|killed/i.test(status)
                   ? null
                   : 0,
@@ -326,12 +342,10 @@ export class E2bCompatibleBackend implements SandboxBackend {
       if (!result)
         throw new Error("the command stream ended without an exit status");
       return result;
-    } finally {
-      io.signal.removeEventListener("abort", kill);
     }
   }
 
-  async #kill(sandbox: CreatedSandbox, pid: number): Promise<void> {
+  async #kill(sandbox: CreatedSandbox, tag: string): Promise<void> {
     try {
       const response = await this.#options.fetch(
         `${sandbox.envd}/process.Process/SendSignal`,
@@ -339,7 +353,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
           method: "POST",
           headers: this.#envdHeaders(sandbox, "application/json"),
           body: JSON.stringify({
-            process: { pid },
+            process: { tag },
             signal: "SIGNAL_SIGKILL",
           }),
           signal: AbortSignal.timeout(SIGNAL_TIMEOUT_MS),

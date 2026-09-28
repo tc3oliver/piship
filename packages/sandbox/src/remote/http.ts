@@ -36,14 +36,23 @@ export async function describeFailure(response: Response): Promise<string> {
   return `HTTP ${response.status}${detail ? `: ${detail}` : ""}`;
 }
 
-/** Read a JSON object body of at most 1 MiB. */
+/** Read a JSON object body, stopping as soon as it exceeds `maxBytes`. */
 export async function readJson(
   response: Response,
+  maxBytes = MAX_RESPONSE_BYTES,
 ): Promise<Record<string, unknown>> {
-  const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES)
-    throw new Error("the response is too large");
-  const value = JSON.parse(text) as unknown;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  if (response.body)
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      size += chunk.byteLength;
+      if (size > maxBytes) {
+        await response.body.cancel().catch(() => undefined);
+        throw new Error("the response is too large");
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+  const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("the response is not a JSON object");
   return value as Record<string, unknown>;

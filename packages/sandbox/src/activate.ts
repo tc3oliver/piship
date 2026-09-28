@@ -524,7 +524,8 @@ function checkCommand(network: "deny" | "allow", externalHost: string): string {
   ];
   if (network === "deny")
     lines.push(
-      `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${externalHost}/443' >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; else echo piship-network-unchecked; fi`,
+      // bash's /dev/tcp, else nc: whichever the image has decides.
+      `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${externalHost}/443' >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; elif command -v nc >/dev/null 2>&1; then if nc -z -w 5 ${externalHost} 443 >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; else echo piship-network-unchecked; fi`,
     );
   return lines.join("\n");
 }
@@ -591,10 +592,11 @@ async function checkAttested(
       warnings: [],
     };
   if (lines.includes("piship-network-blocked")) return { warnings: [] };
+  // Network denial is a required plane: a check that cannot run proves nothing.
   return {
-    warnings: [
-      "the outbound connection check could not run inside the sandbox; network denial is attested by the backend only",
-    ],
+    failure:
+      "the outbound connection check could not run inside the sandbox (it needs bash and timeout, or nc), so network denial cannot be confirmed",
+    warnings: [],
   };
 }
 
@@ -697,12 +699,30 @@ export async function activateSandbox(
           warnings: profile.warnings,
         },
       });
-    const availability = await backend.available().catch((error: unknown) => ({
-      available: false as const,
-      reason: message(error),
-    }));
-    if (!availability.available) return await fail(availability.reason);
-    const capabilities = backend.capabilities();
+    const availability = await Promise.resolve()
+      .then(() => backend.available())
+      .catch((error: unknown) => ({
+        available: false as const,
+        reason: message(error),
+      }));
+    if (
+      !availability ||
+      typeof availability !== "object" ||
+      (availability.available !== true && availability.available !== false)
+    )
+      return await fail(
+        `the ${backend.id} sandbox backend reported no availability`,
+      );
+    if (!availability.available)
+      return await fail(message(availability.reason));
+    let capabilities: SandboxCapabilities;
+    try {
+      capabilities = backend.capabilities();
+    } catch (error) {
+      return await fail(
+        `the ${backend.id} sandbox backend reported no capabilities: ${message(error)}`,
+      );
+    }
     const mismatch = capabilityMismatch(capabilities, config.network.mode);
     if (mismatch)
       return await fail(

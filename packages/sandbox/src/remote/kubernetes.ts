@@ -41,6 +41,8 @@ export interface KubernetesAgentSandboxOptions extends RemoteBackendOptions {
 }
 
 const GROUP = "extensions.agents.x-k8s.io/v1beta1";
+/** The runtime returns output in one response; larger output fails the command. */
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Ready reasons after which a claim never becomes ready. */
@@ -156,31 +158,66 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
   }
 
   async prepare({ signal }: SandboxPrepareRequest): Promise<SandboxInstance> {
-    let current: Claim | undefined = await this.#claim(signal);
+    interface Lease {
+      readonly claim: Promise<Claim>;
+      users: number;
+      retired: boolean;
+    }
+    const lease = (claim: Promise<Claim>): Lease => {
+      claim.catch(() => undefined);
+      return { claim, users: 0, retired: false };
+    };
+    let current: Lease | undefined = lease(
+      Promise.resolve(await this.#claim(signal)),
+    );
     let disposed = false;
+    const release = async (entry: Lease) => {
+      if (!entry.retired || entry.users > 0) return;
+      const claim = await entry.claim.catch(() => undefined);
+      if (claim) await this.#delete(claim);
+    };
     return {
       exec: async (request, io) => {
         if (disposed) throw new Error("the sandbox was disposed");
-        // A cancelled command may still run in its pod: its claim was
-        // deleted, and the next command gets a fresh sandbox.
-        current ??= await this.#claim(io.signal);
-        const claim = current;
+        // The runtime cannot stop a running command. A cancelled command
+        // retires its claim: the next command gets a fresh sandbox, and the
+        // retired claim is deleted once no command uses it any more.
+        current ??= lease(this.#claim(io.signal));
+        const entry = current;
+        entry.users++;
         const onAbort = () => {
-          if (current === claim) current = undefined;
-          void this.#delete(claim);
+          entry.retired = true;
+          if (current === entry) current = undefined;
         };
         io.signal.addEventListener("abort", onAbort, { once: true });
         try {
-          return await this.#execute(claim, request, io);
+          return await this.#execute(await entry.claim, request, io);
+        } catch (error) {
+          // A claim that failed to become ready is not reused.
+          if (
+            current === entry &&
+            !(await entry.claim.then(
+              () => true,
+              () => false,
+            ))
+          )
+            current = undefined;
+          throw error;
         } finally {
           io.signal.removeEventListener("abort", onAbort);
+          entry.users--;
+          await release(entry);
         }
       },
       dispose: async () => {
         if (disposed) return;
         disposed = true;
-        if (current) await this.#delete(current);
+        const entry = current;
         current = undefined;
+        if (entry) {
+          entry.retired = true;
+          await release(entry);
+        }
       },
     };
   }
@@ -297,7 +334,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       throw new Error(
         `running the command failed: ${await describeFailure(response)}`,
       );
-    const body = await readJson(response);
+    const body = await readJson(response, MAX_OUTPUT_BYTES);
     if (typeof body.stdout === "string" && body.stdout)
       io.onStdout(Buffer.from(body.stdout, "utf8"));
     if (typeof body.stderr === "string" && body.stderr)

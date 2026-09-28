@@ -316,6 +316,53 @@ describe("a required backend that is unavailable fails closed", () => {
     });
   });
 
+  it("fails closed in deny mode when the outbound check cannot run", async () => {
+    const { backend } = fakeBackend({
+      check: (request, io) =>
+        io.onStdout(
+          Buffer.from(
+            `${SANDBOX_READY_MARKER} unset\n${request.command.includes("piship-network") ? "piship-network-unchecked\n" : ""}`,
+          ),
+        ),
+    });
+    await expect(activate(backend)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("network denial cannot be confirmed"),
+    });
+    // With the network allowed there is nothing to confirm.
+    const sandbox = await activate(
+      backend,
+      policy({ network: { mode: "allow" } }),
+    );
+    expect(sandbox.report.level).toBe("enforced");
+    await sandbox.dispose();
+  });
+
+  it("fails closed when capabilities() throws or availability is malformed", async () => {
+    const throwing = customBackend({
+      id: "acme",
+      available: async () => ({ available: true }),
+      capabilities: () => {
+        throw new Error("not configured");
+      },
+      prepare: async () => ({}),
+    });
+    await expect(activate(throwing)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("reported no capabilities"),
+    });
+    const malformed = customBackend({
+      id: "acme",
+      available: async () => "yes",
+      capabilities: () => REMOTE,
+      prepare: async () => ({}),
+    });
+    await expect(activate(malformed)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("reported no availability"),
+    });
+  });
+
   it("fails closed when the check sees a variable PiShip never sent", async () => {
     const { backend } = fakeBackend({
       check: (_request, io) =>
