@@ -1,4 +1,4 @@
-schema: piship/v1alpha2
+schema: piship/v1alpha3
 
 app:
   id: acmecode
@@ -87,8 +87,123 @@ network:
 
 resources:
   instructions:
-    - ./resources/AGENTS.md
+    company: [./resources/AGENTS.md]
   skills:
-    - ./resources/skills
+    company: [./resources/skills]
+    certified:
+      - path: ./resources/certified/release-notes
+        id: release-notes
+        version: 1.0.0
+        source: https://example.org/acme/release-notes
+        integrity: sha256-a8c5c2e41d4ef17370f6fe6d7036cd36a781c2114eb1ed99fdc63b18676f2047
+        license: MIT
+        pi: ["0.87.1"]
   extensions:
-    - ./resources/extensions/enterprise-context
+    builtin: [piship-ask-user, piship-workflow]
+    company: [./resources/extensions/enterprise-context]
+
+capabilities:
+  permissions:
+    enabled: true
+    provider: { id: builtin/permissions }
+  workflow:
+    enabled: true
+    provider: { id: builtin/workflow }
+    settings:
+      defaultMode: plan
+      planPrompt: Plan mode. Investigate and propose a plan; do not change files or run commands.
+      buildPrompt: Build mode. Implement the approved plan with the smallest safe change.
+
+# Fictional policy for the demo. Headless runs have no approval channel, so
+# every `ask` below resolves to deny there.
+policy:
+  id: acme-engineering
+  version: 1
+  default: ask
+  # Repositories on the (fictional) company Git host are company projects;
+  # every other workspace is unknown. Unlisted dimensions keep the managed
+  # defaults: no project extensions, hooks, agents, MCP, or providers.
+  projectTrust:
+    company:
+      match:
+        - remote: "git.acme.example/**"
+  enforced:
+    - id: acme.secrets.read
+      action: filesystem.read
+      resource: "~/.ssh/**"
+      effect: deny
+      reason: Credentials stay outside the agent
+    - id: acme.docs.destructive
+      action: mcp.tool.call
+      resource: "docs:delete_*"
+      effect: deny
+      reason: Destructive handbook operations are not delegated to the agent
+  defaults:
+    - id: acme.models
+      action: model.use
+      resource: "acmecode/**"
+      effect: allow
+    - id: acme.skills
+      action: skill.load
+      resource: "**"
+      effect: allow
+    - id: acme.instructions
+      action: instruction.load
+      resource: "**"
+      effect: allow
+    - id: acme.extensions
+      action: extension.load
+      resource: "**"
+      effect: allow
+    - id: acme.workspace.read
+      action: filesystem.read
+      resource: "workspace/**"
+      effect: allow
+    - id: acme.workspace.write
+      action: filesystem.write
+      resource: "workspace/**"
+      effect: ask
+    - id: acme.shell
+      action: shell.execute
+      resource: "**"
+      effect: ask
+    - id: acme.tools
+      action: tool.execute
+      resource: "*"
+      effect: allow
+    - id: acme.docs.read
+      action: mcp.tool.call
+      resource: "docs:*"
+      effect: allow
+    - id: acme.docs.start
+      action: mcp.server.start
+      resource: docs
+      effect: allow
+
+mcp:
+  mode: allowlist
+  servers:
+    docs:
+      transport: stdio
+      module: ./resources/mcp/docs-server.mjs
+      expectedServerName: acme-docs
+      timeout: 30s
+      tools:
+        allow: [search, get_document, delete_document]
+
+sandbox:
+  required: true
+  filesystem:
+    read:
+      deny: [~/.ssh, ~/.aws, ~/.gnupg]
+    write:
+      allow: [workspace, tmp]
+  network:
+    mode: deny
+
+audit:
+  enabled: true
+  sinks:
+    - id: local
+      type: file
+      required: false

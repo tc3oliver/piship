@@ -7,6 +7,10 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const packages = [
   "schema",
   "contracts",
+  "policy",
+  "audit",
+  "sandbox",
+  "mcp",
   "identity",
   "credentials",
   "inference",
@@ -16,9 +20,15 @@ const packages = [
 ];
 // Identity, credentials, and inference are separate contracts: none of them
 // may import another, and only core orchestrates them.
+// Policy, audit, sandbox, and MCP are governance leaves: MCP spawns stdio
+// servers through the sandbox, and only core and pi compose them.
 const allowedLocal = {
-  schema: [],
+  schema: ["@piship/contracts"],
   contracts: [],
+  policy: ["@piship/contracts", "@piship/schema"],
+  audit: ["@piship/contracts"],
+  sandbox: ["@piship/contracts"],
+  mcp: ["@piship/contracts", "@piship/sandbox"],
   identity: ["@piship/contracts"],
   credentials: ["@piship/contracts"],
   inference: ["@piship/contracts"],
@@ -28,9 +38,25 @@ const allowedLocal = {
     "@piship/identity",
     "@piship/credentials",
     "@piship/inference",
+    "@piship/policy",
+    "@piship/audit",
   ],
-  pi: ["@piship/core", "@piship/schema", "@piship/contracts"],
-  cli: ["@piship/core", "@piship/pi", "@piship/schema", "@piship/contracts"],
+  pi: [
+    "@piship/core",
+    "@piship/schema",
+    "@piship/contracts",
+    "@piship/policy",
+    "@piship/sandbox",
+    "@piship/mcp",
+    "@piship/audit",
+  ],
+  cli: [
+    "@piship/core",
+    "@piship/pi",
+    "@piship/schema",
+    "@piship/contracts",
+    "@piship/policy",
+  ],
   tests: [
     "@piship/core",
     "@piship/pi",
@@ -39,6 +65,10 @@ const allowedLocal = {
     "@piship/identity",
     "@piship/credentials",
     "@piship/inference",
+    "@piship/policy",
+    "@piship/audit",
+    "@piship/sandbox",
+    "@piship/mcp",
   ],
 };
 const failures = [];

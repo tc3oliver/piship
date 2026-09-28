@@ -13,6 +13,21 @@
     },
     {
       "path": "../contracts"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../sandbox"
+    },
+    {
+      "path": "../mcp"
+    },
+    {
+      "path": "../audit"
+    },
+    {
+      "path": "../schema"
     }
   ]
 }

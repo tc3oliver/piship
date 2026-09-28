@@ -19,10 +19,12 @@
     "dist"
   ],
   "dependencies": {
+    "@piship/audit": "0.1.0",
     "@piship/contracts": "0.1.0",
     "@piship/credentials": "0.1.0",
     "@piship/identity": "0.1.0",
     "@piship/inference": "0.1.0",
+    "@piship/policy": "0.1.0",
     "@piship/schema": "0.1.0"
   },
   "description": "Distribution domain types and state paths for PiShip.",

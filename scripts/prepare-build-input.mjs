@@ -11,6 +11,10 @@ for (const name of ["package.json", "package-lock.json"])
 for (const name of [
   "schema",
   "contracts",
+  "policy",
+  "audit",
+  "sandbox",
+  "mcp",
   "identity",
   "credentials",
   "inference",

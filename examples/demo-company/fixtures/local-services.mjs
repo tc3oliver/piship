@@ -88,6 +88,8 @@ export async function startLocalServices(options = {}) {
     entitledModels: ["acme/coder", "acme/general"],
     gatewayModels: ["acme/coder", "acme/general", "acme/review"],
     gatewayMode: "text",
+    // With gatewayMode "script": one tool call per model turn, in order.
+    toolScript: [],
     gatewayStatus: undefined,
     gatewayDelayMs: 0,
     acceptedKeys: [],
@@ -101,6 +103,7 @@ export async function startLocalServices(options = {}) {
     revokedTokens: [],
     revokedCredentials: [],
     requests: [],
+    toolResults: [],
     authorizations: [],
     credentialCount: 0,
   };
@@ -364,6 +367,46 @@ export async function startLocalServices(options = {}) {
       const toolMessages = messages.filter(
         (message) => message.role === "tool",
       );
+      if (
+        knobs.gatewayMode === "script" &&
+        toolMessages.length < knobs.toolScript.length
+      ) {
+        const step = knobs.toolScript[toolMessages.length];
+        const id = `call_script_${toolMessages.length + 1}`;
+        return sse(response, [
+          completion(model, {
+            role: "assistant",
+            tool_calls: [
+              {
+                index: 0,
+                id,
+                type: "function",
+                function: { name: step.name, arguments: "" },
+              },
+            ],
+          }),
+          completion(model, {
+            tool_calls: [
+              {
+                index: 0,
+                function: { arguments: JSON.stringify(step.arguments ?? {}) },
+              },
+            ],
+          }),
+          completion(model, {}, "tool_calls"),
+        ]);
+      }
+      if (knobs.gatewayMode === "script") {
+        state.toolResults = toolMessages.map((message) =>
+          Array.isArray(message.content)
+            ? message.content.map((part) => part.text ?? "").join("")
+            : String(message.content ?? ""),
+        );
+        const reply = `Script finished with ${toolMessages.length} tool result(s).`;
+        return sse(response, [
+          completion(model, { role: "assistant", content: reply }, "stop"),
+        ]);
+      }
       if (knobs.gatewayMode === "malformed")
         return sse(response, ["data: {not json\n\n"]);
       if (knobs.gatewayMode === "tool" && toolMessages.length === 0) {

@@ -1,0 +1,36 @@
+{
+  "name": "@piship/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@piship/contracts": "0.1.0",
+    "@piship/sandbox": "0.1.0"
+  },
+  "description": "Governed Model Context Protocol client (stdio and Streamable HTTP) for PiShip.",
+  "keywords": [
+    "piship",
+    "mcp",
+    "governance"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/mcp"
+  }
+}

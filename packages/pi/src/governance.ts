@@ -23,6 +23,13 @@ export interface PiNativeGovernance {
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
 
+/** A further model.use check from the distribution policy (v1alpha3). */
+export interface ModelPolicy {
+  allows(provider: string, id: string): boolean;
+  /** Called when a request for a disallowed model is refused. */
+  denied?(provider: string, id: string): void;
+}
+
 export interface GovernedRuntime {
   isAllowed(provider: string, id: string): boolean;
   /** Mark the current credential as rejected so the next request re-acquires. */
@@ -50,6 +57,7 @@ function denied(provider: string, id: string): PiShipError {
 export function governModelRuntime(
   runtime: ModelRuntime,
   governance: ModelGovernance,
+  policy?: ModelPolicy,
 ): GovernedRuntime {
   const original = {
     getModel: runtime.getModel.bind(runtime),
@@ -74,11 +82,12 @@ export function governModelRuntime(
     !governance.restricted &&
     !governance.allowedModelKeys.length;
   const isAllowed = (provider: string, id: string): boolean =>
-    managed
+    (managed
       ? provider === managed.providerId && managed.allowedModelIds.includes(id)
       : governance.kind === "pi-native" &&
         (unrestricted ||
-          governance.allowedModelKeys.includes(`${provider}/${id}`));
+          governance.allowedModelKeys.includes(`${provider}/${id}`))) &&
+    (policy?.allows(provider, id) ?? true);
   const providerHasAllowed = (provider: string): boolean =>
     managed
       ? provider === managed.providerId
@@ -94,8 +103,10 @@ export function governModelRuntime(
           .filter((model) => isAllowed(model.provider, model.id))
       : [];
   const guard = (model: { provider: string; id: string }) => {
-    if (!isAllowed(model.provider, model.id))
+    if (!isAllowed(model.provider, model.id)) {
+      policy?.denied?.(model.provider, model.id);
       throw denied(model.provider, model.id);
+    }
   };
 
   const target = runtime as unknown as Record<string, unknown>;

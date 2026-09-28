@@ -256,7 +256,8 @@ export function parseDuration(value: unknown, path: string): number {
   return amount * (match[2] === "h" ? 3600 : match[2] === "m" ? 60 : 1);
 }
 
-function parseVariables(value: unknown): string[] {
+/** Parse the declared runtime variable names (`variables`). */
+export function parseVariables(value: unknown): string[] {
   return stringList(value, "variables", (entry, path) => {
     const name = plainString(entry, path);
     const problem = checkVariableName(name);
@@ -826,8 +827,16 @@ const ACCESS_KEYS = [
   "variables",
 ] as const;
 
-/** Parse the v1alpha2 access sections of a manifest root. */
-export function parseAccess(root: Json, mode: DeploymentMode): AccessManifest {
+/**
+ * Parse the v1alpha2 access sections of a manifest root. `extraReferences`
+ * are variables referenced by other sections (v1alpha3 governance) so they
+ * count as used.
+ */
+export function parseAccess(
+  root: Json,
+  mode: DeploymentMode,
+  extraReferences: readonly string[] = [],
+): AccessManifest {
   const variables = parseVariables(root.variables);
   const identity = parseIdentity(root.identity, mode, variables);
   const inference = parseInference(root.inference, mode, variables);
@@ -841,7 +850,7 @@ export function parseAccess(root: Json, mode: DeploymentMode): AccessManifest {
   const models = parseModels(root.models, mode, inference);
   const config = parseConfig(root.config, models);
   const network = parseNetwork(root.network, mode, variables);
-  const used = new Set<string>();
+  const used = new Set<string>(extraReferences);
   const collect = (text: string | undefined) => {
     if (text) for (const name of referencedVariables(text)) used.add(name);
   };

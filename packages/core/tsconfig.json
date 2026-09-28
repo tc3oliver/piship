@@ -8,10 +8,26 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
-    { "path": "../schema" },
-    { "path": "../contracts" },
-    { "path": "../identity" },
-    { "path": "../credentials" },
-    { "path": "../inference" }
+    {
+      "path": "../schema"
+    },
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../identity"
+    },
+    {
+      "path": "../credentials"
+    },
+    {
+      "path": "../inference"
+    },
+    {
+      "path": "../policy"
+    },
+    {
+      "path": "../audit"
+    }
   ]
 }

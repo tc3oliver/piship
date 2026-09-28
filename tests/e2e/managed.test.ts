@@ -205,7 +205,7 @@ describe("managed distribution (local fixtures)", () => {
     const firstResult = JSON.parse(first.stdout);
     expect(firstResult).toMatchObject({
       resumed: false,
-      skills: ["acme-review"],
+      skills: ["release-notes", "acme-review"],
       extensions: 1,
       access: {
         mode: "managed",

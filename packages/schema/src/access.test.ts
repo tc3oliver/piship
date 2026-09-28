@@ -334,11 +334,13 @@ describe("alpha migration", () => {
   it("migrates v1alpha1 to an equivalent v1alpha2 personal profile", () => {
     const source =
       'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "0.87.1"\ndeployment:\n  mode: personal\n';
-    const plan = migrateManifestSource(source);
+    const plan = migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA2);
     expect(plan.from).toBe("piship/v1alpha1");
     expect(plan.to).toBe("piship/v1alpha2");
     expect(plan.source).toContain("# keep comments");
     expect(plan.source).toContain("provider: pi-native");
-    expect(migrateManifestSource(plan.source).changes).toEqual([]);
+    expect(
+      migrateManifestSource(plan.source, PISHIP_SCHEMA_V1ALPHA2).changes,
+    ).toEqual([]);
   });
 });
