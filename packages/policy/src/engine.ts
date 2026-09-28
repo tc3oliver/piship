@@ -38,6 +38,11 @@ export const NO_CONTAINMENT: PolicyContainment = {
   shell: false,
 };
 
+/**
+ * Actions PiShip decides at a runtime hook before they happen. Actions
+ * without such a hook (`agent.invoke`, `memory.read`, `memory.write`) are
+ * evaluated for explanation and audit only, so they are not listed here.
+ */
 const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
   "model.use",
   "resource.load",
@@ -45,12 +50,9 @@ const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
   "skill.load",
   "instruction.load",
   "provider.load",
-  "agent.invoke",
   "mcp.server.start",
   "mcp.tool.call",
   "tool.execute",
-  "memory.read",
-  "memory.write",
 ]);
 
 /**
@@ -58,7 +60,8 @@ const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
  * actions fall back to the control plane (built-in file tools are gated
  * in-process); shell command gating falls back to the control plane (the
  * tool call is intercepted before it runs); network connections without a
- * sandbox and web/browser actions are audit-only.
+ * sandbox, web/browser actions, and actions no runtime hook evaluates are
+ * audit-only.
  */
 export function enforcementPlane(
   action: PolicyAction,
