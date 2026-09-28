@@ -618,10 +618,19 @@ describe("CLI", () => {
     const manifest = join(temp, "piship.yaml");
     writeFileSync(
       manifest,
-      readFileSync(join(root, "examples/personal/piship.yaml"), "utf8")
-        .replace("id: mypi", "id: managedblocked")
-        .replace("command: mypi", "command: managedblocked")
-        .replace("mode: personal", "mode: managed"),
+      [
+        "schema: piship/v1alpha1",
+        "app:",
+        "  id: managedblocked",
+        "  name: Managed Blocked",
+        "  command: managedblocked",
+        "  version: 1.0.0",
+        "runtime:",
+        '  pi: "0.87.1"',
+        "deployment:",
+        "  mode: managed",
+        "",
+      ].join("\n"),
     );
     for (const command of ["validate", "lock", "build"]) {
       const result = cli(command, manifest);
