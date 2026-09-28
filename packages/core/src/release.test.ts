@@ -279,6 +279,36 @@ function flipByte(path: string, offset?: number): void {
   writeFileSync(path, bytes);
 }
 
+/**
+ * Lock and check a project against a copy of the build input whose npm lock
+ * `edit` changed, with fresh module instances that read that input.
+ */
+async function withNpmLock<T>(
+  edit: (packages: Record<string, Record<string, unknown>>) => void,
+  run: (
+    core: typeof import("./index.js"),
+    release: typeof import("./release.js"),
+  ) => T,
+): Promise<T> {
+  const input = temp("piship-build-input-");
+  const npmLock = JSON.parse(
+    readFileSync(join(BUILD_INPUT, "package-lock.json"), "utf8"),
+  ) as { packages: Record<string, Record<string, unknown>> };
+  edit(npmLock.packages);
+  writeFileSync(
+    join(input, "package-lock.json"),
+    JSON.stringify(npmLock, null, 2),
+  );
+  process.env.PISHIP_BUILD_INPUT = input;
+  vi.resetModules();
+  try {
+    return run(await import("./index.js"), await import("./release.js"));
+  } finally {
+    process.env.PISHIP_BUILD_INPUT = BUILD_INPUT;
+    vi.resetModules();
+  }
+}
+
 // --------------------------------------------------------------------- lock
 
 describe("lock piship-lock/v1alpha4", () => {
@@ -290,8 +320,10 @@ describe("lock piship-lock/v1alpha4", () => {
     const lock = requireCurrentLock(path);
     expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA4);
     expect(lock.runtime.stateSchemas).toEqual(STATE_SCHEMAS);
-    for (const item of lock.runtime.packages)
+    for (const item of lock.runtime.packages) {
       expect(item.resolved).toMatch(/^https:\/\//);
+      expect(item.integrity).toMatch(/^sha512-/);
+    }
     expect(
       lock.runtime.packages
         .filter((item) => item.installScript)
@@ -333,6 +365,59 @@ describe("lock piship-lock/v1alpha4", () => {
         ],
       },
     });
+  });
+
+  it("keeps every registry package and leaves out only workspace links", () => {
+    const npmLock = JSON.parse(
+      readFileSync(join(BUILD_INPUT, "package-lock.json"), "utf8"),
+    ) as { packages: Record<string, { dev?: boolean; link?: boolean }> };
+    const entries = Object.entries(npmLock.packages).filter(
+      ([path, value]) => path.startsWith("node_modules/") && !value.dev,
+    );
+    const links = entries.filter(([, value]) => value.link);
+    expect(links.map(([path]) => path).sort()).toEqual(
+      [
+        "audit",
+        "cli",
+        "contracts",
+        "core",
+        "credentials",
+        "identity",
+        "inference",
+        "mcp",
+        "pi",
+        "policy",
+        "sandbox",
+        "schema",
+      ].map((name) => `node_modules/@piship/${name}`),
+    );
+    const { path } = project();
+    const locked = resolveLock(path).runtime.packages;
+    expect(locked.map((item) => item.path)).toEqual(
+      entries
+        .filter(([, value]) => !value.link)
+        .map(([path]) => path)
+        .sort((a, b) => a.localeCompare(b)),
+    );
+    expect(
+      locked.some((item) => item.path.startsWith("node_modules/@piship/")),
+    ).toBe(false);
+    // The Pi packages nested in pi-coding-agent carry registry integrity.
+    const prefix =
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/";
+    const nested = locked.filter(
+      (item) =>
+        item.path.startsWith(prefix) &&
+        !item.path.slice(prefix.length).includes("/"),
+    );
+    expect(nested.map((item) => item.path.split("/").pop())).toEqual([
+      "chord",
+      "pi-agent-core",
+      "pi-ai",
+      "pi-telemetry",
+      "pi-tui",
+    ]);
+    for (const item of nested) expect(item.integrity).toMatch(/^sha512-/);
   });
 
   it("changes the resource digest when a resource changes", () => {
@@ -500,6 +585,60 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.code).toBe("POLICY_DENIED");
     expect(error.message).toMatch(
       /Release gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources \(https:\/\/npm.internal.example\)/,
+    );
+  });
+
+  it("source: refuses a registry package the npm lock records without integrity", async () => {
+    let victim = "";
+    const error = await withNpmLock(
+      (packages) => {
+        const entry = Object.entries(packages).find(
+          ([path, value]) =>
+            path.startsWith("node_modules/") && !value.dev && !value.link,
+        ) as [string, Record<string, unknown>];
+        victim = `${entry[0]}@${String(entry[1].version)}`;
+        delete entry[1].integrity;
+      },
+      (core, release) => {
+        const { path } = project({ lock: false });
+        core.lockManifest(path);
+        // The entry is kept in the lock, so the gate can see it.
+        expect(
+          core
+            .requireCurrentLock(path)
+            .runtime.packages.map((item) => `${item.path}@${item.version}`),
+        ).toContain(victim);
+        return caught(() => release.checkReleaseInputs(path));
+      },
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(
+      `Release gate source: ${victim} is missing integrity`,
+    );
+  });
+
+  it("source: a link outside the workspace packages is not treated as a workspace package", async () => {
+    const error = await withNpmLock(
+      (packages) => {
+        packages["node_modules/@piship/extra"] = {
+          resolved: "../elsewhere/extra",
+          link: true,
+        };
+      },
+      (core, release) => {
+        const { path } = project({ lock: false });
+        core.lockManifest(path);
+        expect(
+          core
+            .requireCurrentLock(path)
+            .runtime.packages.map((item) => item.path),
+        ).toContain("node_modules/@piship/extra");
+        return caught(() => release.checkReleaseInputs(path));
+      },
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(
+      /Release gate source: node_modules\/@piship\/extra@ is missing integrity/,
     );
   });
 

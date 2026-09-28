@@ -329,6 +329,15 @@ export function checkReleaseInputs(
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
   for (const item of lock.runtime.packages) {
+    // The lock keeps every registry entry, so one the npm lock records
+    // without integrity is refused here instead of going unchecked.
+    if (!item.integrity)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} is missing integrity in the npm lock`,
+        "Record the registry dist.integrity for this package in package-lock.json and lock again",
+      );
     if (!item.resolved)
       throw gate(
         "INTEGRITY_FAILED",

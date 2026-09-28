@@ -198,6 +198,14 @@ const workspacePackages = [
   "pi",
   "cli",
 ] as const;
+/** A package-lock link from `node_modules/@piship/<name>` to `packages/<name>`. */
+function isWorkspaceLink(path: string, resolved: string | undefined): boolean {
+  return workspacePackages.some(
+    (name) =>
+      path === `node_modules/@piship/${name}` &&
+      resolved === `packages/${name}`,
+  );
+}
 function runtimeDependencies(detailed = false): DistributionLock["runtime"] {
   const source = readFileSync(join(buildInput, "package-lock.json"));
   const npmLock = JSON.parse(source.toString()) as {
@@ -209,13 +217,20 @@ function runtimeDependencies(detailed = false): DistributionLock["runtime"] {
         dev?: boolean;
         resolved?: string;
         hasInstallScript?: boolean;
+        link?: boolean;
       }
     >;
   };
+  // Workspace links are PiShip's own packages, covered by the payload
+  // inventory rather than registry integrity. Every other runtime entry is
+  // kept, including one without integrity, so the release `source` gate
+  // sees it and fails instead of the entry silently disappearing.
   const packages: LockedPackage[] = Object.entries(npmLock.packages)
     .filter(
       ([path, value]) =>
-        path.startsWith("node_modules/") && !value.dev && value.integrity,
+        path.startsWith("node_modules/") &&
+        !value.dev &&
+        !(value.link && isWorkspaceLink(path, value.resolved)),
     )
     .map(([path, value]) => ({
       path,
