@@ -26,6 +26,8 @@ The evidence column names the [CI tier](#ci-evidence-tiers) that produces the ev
 | Lifecycle: `piship release`, `verify-release`, signed channels, `update`, `rollback`, migration check | Managed | **candidate** (Pi surface `lifecycle`) | Portable E2E: `lifecycle-install`, `lifecycle-integrity`, `lifecycle-update`, and `lifecycle-rollback` with the demo on all three targets (Windows with the sandbox optional). Release candidate: two builds per target, reproducibility, `verify-release` on a fresh runner, tamper rejection, attestation, and install with the shipped script, for the demo only. |
 | Lifecycle | Personal | **candidate** (Pi surface `lifecycle`) | Portable E2E: [`personal-lifecycle`](../tests/e2e/personal-lifecycle.test.ts) covers signed update and rollback of the personal example. The personal example has never gone through the Release candidate workflow. |
 
+The endpoints a company must provide for managed access, and how PiShip calls them, are in the [enterprise integration contract](enterprise-integration.md).
+
 Not claimed anywhere: a live OIDC login, live gateway inference, a real authenticated model request, a Windows sandbox, macOS notarization or code signing, Windows Authenticode signing, targets other than the three above, or an npm publication.
 
 ## Pi compatibility

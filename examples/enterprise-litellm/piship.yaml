@@ -1,0 +1,86 @@
+# Access sections for a managed distribution behind a company broker and a
+# LiteLLM gateway. Endpoints are runtime references resolved from the launch
+# environment; no secret belongs in this file.
+schema: piship/v1alpha4
+
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+  version: 1.0.0
+
+runtime:
+  pi: "0.87.1"
+
+deployment:
+  mode: managed
+
+variables:
+  - ACMECODE_OIDC_ISSUER
+  - ACMECODE_OIDC_CLIENT_ID
+  - ACMECODE_CREDENTIAL_BROKER_URL
+  - ACMECODE_CREDENTIAL_REVOKE_URL
+  - ACMECODE_LLM_GATEWAY_URL
+
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${ACMECODE_OIDC_ISSUER}
+    clientId: ${ACMECODE_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    # Add the scope your IdP needs for a refresh token (often offline_access)
+    # and, if required, a broker API scope or `audience`.
+    scopes: [openid, profile, email, offline_access]
+    redirectUri: http://127.0.0.1:8765/callback
+
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage:
+    provider: system
+  refresh:
+    beforeExpiry: 5m
+
+inference:
+  provider: openai-compatible
+  # The LiteLLM proxy base URL including /v1, for example
+  # https://llm.corp.example/v1.
+  baseUrl: ${ACMECODE_LLM_GATEWAY_URL}
+  api: openai-completions
+  liveCatalog: true
+
+# IDs must equal the LiteLLM model_name values. Capability metadata lives
+# here because PiShip reads only the model IDs from GET /models.
+models:
+  default: acme/coder
+  allowed: [acme/coder, acme/general]
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+      policyTags: [code]
+    acme/general:
+      name: Acme General
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [general]
+
+network:
+  publicFallback: deny
+  privateOnly: true
+  # Hosts that OIDC discovery returns outside the issuer host, such as a
+  # separate token or JWKS host.
+  allowHosts: []
+  tls:
+    additionalCA: []
+
+# Required by piship/v1alpha4; add a pinned release key before using update.
+updates:
+  channel: stable
+  trust:
+    keys: []

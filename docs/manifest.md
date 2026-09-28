@@ -37,6 +37,8 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `network.publicFallback` | `deny` or `allow`; managed requires `deny` |
 | `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
 
+The IdP, broker, and gateway these fields point to must implement the [enterprise integration contract](enterprise-integration.md).
+
 Secret-looking fields such as `credential.apiKey`, `credential.secret`, `credential.token`, `identity.oidc.clientSecret`, and `network.tls.rejectUnauthorized` or `insecure` are rejected. Every string value and key is also checked for common secret shapes (`sk-` keys, GitHub, GitLab, and Slack tokens, JWTs, AWS access key IDs, PEM private keys, and `Bearer` or `Basic` credentials); a match fails with the field path and never prints the value. The check cannot detect every secret.
 
 ## Validation rules
