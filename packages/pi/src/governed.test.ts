@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -243,7 +244,11 @@ describe("governed built-in tools", () => {
   });
 
   it("classifies native paths against the POSIX policy context", async () => {
-    const { session, workspace, home } = await open();
+    const opened = await open();
+    const { session } = opened;
+    // Callers pass symlink-resolved paths (macOS temp lives under /private).
+    const workspace = realpathSync(opened.workspace);
+    const home = realpathSync(opened.home);
     expect(pathClass(session, join(workspace, "src", "a.ts"))).toBe(
       "workspace",
     );

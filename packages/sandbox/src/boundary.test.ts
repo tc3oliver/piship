@@ -254,8 +254,16 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
           `osascript -e 'tell application "Terminal" to do script "touch ${marker}"'`,
           `osascript -e 'do shell script "open ${script}"'`,
         ]) {
-          const result = await run(sandbox, command);
-          expect(result.exitCode, command).not.toBe(0);
+          // A denied Apple event can leave the client waiting; a command
+          // killed by the timeout inside the sandbox did not escape either.
+          const exitCode = await run(sandbox, command, 5).then(
+            (result) => result.exitCode,
+            (error: Error) => {
+              if (!error.message.startsWith("timeout:")) throw error;
+              return "timed out";
+            },
+          );
+          expect(exitCode, command).not.toBe(0);
         }
         await sleep(2000);
         expect(existsSync(marker)).toBe(false);
@@ -268,6 +276,7 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         expect(tools.output).toContain("sh-ok");
         expect(tools.output).toContain("node-ok");
       },
+      60_000,
     );
 
     it("denies external and host loopback network access", async () => {
