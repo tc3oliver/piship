@@ -116,7 +116,8 @@ export async function startLocalServices(options = {}) {
     try {
       await route(url, request, response, text);
     } catch (error) {
-      json(response, 500, { error: "fixture_error", detail: String(error) });
+      console.error("fixture error:", error);
+      json(response, 500, { error: "fixture_error" });
     }
   });
   await new Promise((resolve) =>

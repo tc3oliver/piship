@@ -15,7 +15,9 @@ export const RUNTIME_REFERENCE_FIELDS = [
 ] as const;
 export type RuntimeReferenceField = (typeof RUNTIME_REFERENCE_FIELDS)[number];
 
-const REFERENCE = /\$\{([^}]*)\}/g;
+// Linear-time pattern: a reference body is only name characters, so malformed
+// input (for example repeated "${{") cannot trigger backtracking.
+const REFERENCE = /\$\{([A-Za-z0-9_]*)\}/g;
 const VARIABLE_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 /** Names that indicate secret material can never be runtime references. */
 const SECRET_NAME =

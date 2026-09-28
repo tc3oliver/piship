@@ -179,16 +179,9 @@ describe("network policy", () => {
         additionalCA: [join(directory, "empty.pem")],
       }),
     ).toThrow("contains no PEM certificate");
-    const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    cleanup.push(() => {
-      if (previous === undefined)
-        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
-    });
-    await expect(withCa(url)).rejects.toMatchObject({
-      code: "TLS_POLICY_VIOLATION",
-    });
+    // Refusal of a disabled-TLS environment is covered by the
+    // assertTlsVerificationEnabled test above and, end to end, by the managed
+    // E2E launch; this test never disables verification in its own process.
   });
   it("applies private-only policy to in-process fetch used by Pi and extensions", async () => {
     const { Agent, setGlobalDispatcher } = await import("undici");
