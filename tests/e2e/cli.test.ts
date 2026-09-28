@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const bin = join(root, "packages/cli/dist/bin.js");
@@ -70,15 +71,148 @@ describe("CLI", () => {
     expect(cli("--version").stdout.trim()).toBe("0.1.0");
     expect(cli("init").status).toBe(2);
   });
-  it("initializes a valid personal distribution", () => {
-    const temp = mkdtempSync(join(tmpdir(), "piship-init-"));
+  it.each([
+    ["personal", []],
+    ["managed", ["--managed"]],
+  ])(
+    "initializes a valid %s distribution on the latest schema",
+    (mode, flags) => {
+      const temp = mkdtempSync(join(tmpdir(), "piship-init-"));
+      temporary.push(temp);
+      const manifest = join(temp, "new-agent", "piship.yaml");
+      expect(cli("init", join(temp, "new-agent"), ...flags).status).toBe(0);
+      expect(readFileSync(manifest, "utf8")).toMatch(
+        new RegExp(`^schema: ${LATEST_SCHEMA}\n`),
+      );
+      const validated = cli("validate", manifest);
+      expect(validated.status, validated.stderr).toBe(0);
+      expect(validated.stdout).toContain(
+        `Schema ${LATEST_SCHEMA}, mode ${mode}.`,
+      );
+      const locked = cli("lock", manifest);
+      expect(locked.status, locked.stderr).toBe(0);
+      const lock = JSON.parse(
+        readFileSync(join(temp, "new-agent", "piship.lock"), "utf8"),
+      ) as {
+        schema: string;
+        manifest: { schema: string };
+        governance?: unknown;
+        updates?: { trust: { keys: unknown[] }; source?: string };
+      };
+      expect(lock.schema).toBe("piship-lock/v1alpha4");
+      expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
+      expect(lock.governance).toBeDefined();
+      expect(lock.updates?.trust.keys).toEqual([]);
+      expect(lock.updates?.source).toBeUndefined();
+      expect(cli("migrate", manifest).stdout).toContain(
+        `Already ${LATEST_SCHEMA}`,
+      );
+      expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
+    },
+    180000,
+  );
+  it("diffs the locks of two builds of a distribution", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-diff-"));
     temporary.push(temp);
-    const manifest = join(temp, "new-agent", "piship.yaml");
-    expect(cli("init", join(temp, "new-agent")).status).toBe(0);
-    expect(cli("validate", manifest).status).toBe(0);
-    expect(cli("lock", manifest).status).toBe(0);
-    expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
-  });
+    const before = join(temp, "before");
+    const after = join(temp, "after");
+    for (const target of [before, after])
+      cpSync(join(root, "examples/demo-company"), target, { recursive: true });
+    const manifest = join(after, "piship.yaml");
+    const source = readFileSync(manifest, "utf8");
+    const bumped = source.replace(
+      /^ {2}version: 1\.0\.0$/m,
+      "  version: 1.1.0",
+    );
+    expect(bumped).not.toBe(source);
+    writeFileSync(manifest, bumped);
+    writeFileSync(
+      join(after, "resources", "AGENTS.md"),
+      `${readFileSync(join(after, "resources", "AGENTS.md"), "utf8")}\nChanged.\n`,
+    );
+    for (const target of [before, after])
+      expect(cli("lock", join(target, "piship.yaml")).status).toBe(0);
+    const beforeLock = join(before, "piship.lock");
+    const afterLock = join(after, "piship.lock");
+    const text = cli("diff", beforeLock, afterLock);
+    expect(text.status, text.stderr).toBe(0);
+    expect(text.stdout).toContain("acmecode 1.0.0 -> 1.1.0");
+    expect(text.stdout).toContain("resources/AGENTS.md");
+    const json = cli("diff", beforeLock, afterLock, "--json");
+    expect(json.status, json.stderr).toBe(0);
+    const report = JSON.parse(json.stdout) as {
+      schema: string;
+      before: { id: string; version: string };
+      after: { id: string; version: string };
+      risk: string;
+      changes: { area: string; kind: string; item: string }[];
+    };
+    expect(report.schema).toBe("piship-diff/v1");
+    expect(report.before).toMatchObject({ id: "acmecode", version: "1.0.0" });
+    expect(report.after).toMatchObject({ id: "acmecode", version: "1.1.0" });
+    expect(report.risk).not.toBe("none");
+    expect(report.changes).toContainEqual(
+      expect.objectContaining({
+        kind: "changed",
+        item: expect.stringContaining("resources/AGENTS.md"),
+      }),
+    );
+    const same = cli("diff", beforeLock, beforeLock, "--json");
+    expect(same.status).toBe(0);
+    expect(JSON.parse(same.stdout)).toMatchObject({
+      risk: "none",
+      changes: [],
+    });
+    // Manifests resolve through their current lock.
+    expect(cli("diff", join(before, "piship.yaml"), manifest).stdout).toContain(
+      "1.0.0 -> 1.1.0",
+    );
+    expect(cli("diff", beforeLock).status).toBe(2);
+    expect(cli("diff", beforeLock, afterLock, "--yaml").status).toBe(2);
+  }, 180000);
+  it("dev validates, builds from source, and launches the isolated command headlessly", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-dev-"));
+    temporary.push(temp);
+    const manifest = join(temp, "dev-agent", "piship.yaml");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PISHIP_STATE_HOME: join(temp, "state"),
+      HOME: join(temp, "home"),
+      USERPROFILE: join(temp, "home"),
+    };
+    delete env.PISHIP_BUILD_INPUT;
+    const dev = (...args: string[]) =>
+      spawnSync(process.execPath, [bin, ...args], {
+        cwd: temp,
+        env,
+        encoding: "utf8",
+      });
+    expect(dev("init", join(temp, "dev-agent")).status).toBe(0);
+    expect(dev("dev", manifest, "--unknown").status).toBe(2);
+    // The lock is validated first: without it nothing is built or launched.
+    const unlocked = dev("dev", manifest, "--smoke");
+    expect(unlocked.status).toBe(1);
+    expect(unlocked.stderr).toContain("Lockfile missing");
+    expect(existsSync(join(temp, "dist", "dev-agent"))).toBe(false);
+    expect(dev("lock", manifest).status).toBe(0);
+    // Ambient Pi and workspace resources must not reach the isolated launch.
+    createAmbientResources(temp);
+    const result = dev("dev", manifest, "--smoke");
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      skills: [],
+      extensions: 0,
+    });
+    expect(
+      existsSync(join(temp, "dist", "dev-agent", "metadata", "inventory.json")),
+    ).toBe(true);
+    expect(existsSync(join(temp, "state", "dev-agent"))).toBe(true);
+    // A resource change after locking is caught before anything launches.
+    writeFileSync(join(temp, "dev-agent", "resources", "AGENTS.md"), "edit\n");
+    const stale = dev("dev", manifest, "--smoke");
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain("Lockfile is stale");
+  }, 360000);
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";
     const temp = mkdtempSync(join(tmpdir(), "piship-install-"));
@@ -524,7 +658,7 @@ describe("CLI", () => {
     writeFileSync(manifest, original);
     expect(cli("validate", manifest).status).toBe(0);
     expect(existsSync(join(example, "piship.lock"))).toBe(false);
-  });
+  }, 180000);
   it("reports invalid Pi, missing resources, and YAML errors without a stack trace", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-errors-"));
     temporary.push(temp);
