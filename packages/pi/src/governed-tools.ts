@@ -36,7 +36,7 @@ import {
   projectGitControlFiles,
   toPosixPath,
 } from "@piship/policy";
-import { isWithin, realpathNearest } from "@piship/sandbox";
+import { enforcesPathPolicy, isWithin, realpathNearest } from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
 
 /** True when `path` is `root` or below it. */
@@ -198,9 +198,7 @@ export async function gatePath(
           : "sandbox.filesystem.write.allow",
         // Only a backend that enforces the path policy itself contains the
         // file; otherwise this refusal is PiShip's alone.
-        enforcement: gov.sandbox.report.planes.some((plane) =>
-          plane.startsWith("filesystem-"),
-        )
+        enforcement: enforcesPathPolicy(gov.sandbox.report.planes)
           ? "sandbox"
           : "control-plane",
         detail: { action, path: classOf },

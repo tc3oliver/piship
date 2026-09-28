@@ -15,7 +15,7 @@ import {
   projectGitControlFiles,
   readProjectRestrictions,
 } from "@piship/policy";
-import type { ContainmentReport } from "@piship/sandbox";
+import { type ContainmentReport, enforcesPathPolicy } from "@piship/sandbox";
 import type { PolicyRule } from "@piship/schema";
 import type { GovernanceOptions } from "./options.js";
 
@@ -123,14 +123,13 @@ export function gitProtection(root: string): {
 /**
  * What the sandbox contains, as the policy engine reports planes. Filesystem
  * actions count as sandbox-enforced only when the backend enforces PiShip's
- * path policy; a remote backend's host isolation does not count.
+ * whole path policy (both path planes); one plane alone, or a remote
+ * backend's host isolation, does not count.
  */
 export function policyContainment(report: ContainmentReport) {
   const enforced = report.level === "enforced";
   return {
-    filesystem:
-      enforced &&
-      report.planes.some((plane) => plane.startsWith("filesystem-")),
+    filesystem: enforced && enforcesPathPolicy(report.planes),
     network: enforced && report.planes.includes("network-deny"),
     shell: enforced,
   };

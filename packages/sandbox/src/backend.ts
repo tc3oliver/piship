@@ -147,6 +147,23 @@ export function requiredPlanes(
   ];
 }
 
+/** The planes that together enforce PiShip's path policy. */
+export const PATH_POLICY_PLANES = [
+  "filesystem-read-deny",
+  "filesystem-write-allowlist",
+] as const;
+
+/**
+ * Whether `sandbox.filesystem` path rules are enforced by the backend: only
+ * with both path planes. One plane alone (possible for a custom remote
+ * backend) is a partial guarantee and never counts as the whole policy.
+ */
+export function enforcesPathPolicy(
+  planes: readonly string[] | undefined,
+): boolean {
+  return PATH_POLICY_PLANES.every((plane) => planes?.includes(plane) ?? false);
+}
+
 /**
  * The guarantees a report may show: those declared, known, meaningful for
  * the isolation kind (a local backend cannot isolate the host filesystem),

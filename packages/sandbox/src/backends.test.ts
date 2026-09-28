@@ -11,6 +11,7 @@ import {
 import {
   capabilityMismatch,
   claimedGuarantees,
+  enforcesPathPolicy,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecIO,
@@ -501,6 +502,22 @@ describe("capability mismatch", () => {
     expect(describeContainment(withPaths.report)).not.toContain("path rules");
     await withPaths.dispose();
   });
+
+  it.each(PATH_PLANES)(
+    "reports a remote backend with only %s as partly enforcing the path policy",
+    async (plane) => {
+      const { backend } = fakeBackend({
+        capabilities: { ...REMOTE, planes: [...REMOTE.planes, plane] },
+      });
+      const sandbox = await activate(backend);
+      expect(sandbox.report.planes).toContain(plane);
+      expect(enforcesPathPolicy(sandbox.report.planes)).toBe(false);
+      expect(describeContainment(sandbox.report)).toContain(
+        `sandbox.filesystem path rules are only partly enforced by the backend (${plane} only)`,
+      );
+      await sandbox.dispose();
+    },
+  );
 
   it("fails closed when a network deny mode is not among the backend's modes", async () => {
     const { backend } = fakeBackend({

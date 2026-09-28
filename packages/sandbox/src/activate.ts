@@ -17,7 +17,9 @@ import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
 import {
   capabilityMismatch,
   claimedGuarantees,
+  enforcesPathPolicy,
   HOST_FILESYSTEM_ISOLATION,
+  PATH_POLICY_PLANES,
   type SandboxGuarantee,
   type SandboxBackend,
   type SandboxCapabilities,
@@ -812,13 +814,16 @@ export function describeContainment(report: ContainmentReport): string {
       const scope = report.localProcesses
         ? "Contains tool subprocesses and MCP stdio servers"
         : "Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start";
-      const paths = report.planes.some((plane) =>
-        plane.startsWith("filesystem-"),
-      )
+      const partial = PATH_POLICY_PLANES.filter((plane) =>
+        report.planes.includes(plane),
+      );
+      const paths = enforcesPathPolicy(report.planes)
         ? ""
-        : report.planes.includes(HOST_FILESYSTEM_ISOLATION)
-          ? " The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools."
-          : " sandbox.filesystem path rules are not enforced by the backend.";
+        : partial.length
+          ? ` sandbox.filesystem path rules are only partly enforced by the backend (${partial.join(", ")} only); PiShip's local file tools still apply them in full.`
+          : report.planes.includes(HOST_FILESYSTEM_ISOLATION)
+            ? " The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools."
+            : " sandbox.filesystem path rules are not enforced by the backend.";
       return `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
     }
     case "unavailable":

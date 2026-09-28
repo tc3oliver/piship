@@ -24,8 +24,10 @@ export {
 export {
   capabilityMismatch,
   claimedGuarantees,
+  enforcesPathPolicy,
   HOST_FILESYSTEM_ISOLATION,
   isBackendId,
+  PATH_POLICY_PLANES,
   requiredPlanes,
   SANDBOX_GUARANTEES,
   SANDBOX_PROVIDERS,
