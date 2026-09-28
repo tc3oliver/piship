@@ -27,7 +27,7 @@ import {
   governanceHooks,
   workflowExtension,
 } from "./builtins.js";
-import { GovernanceSession } from "./governance-session.js";
+import { GovernanceSession, inspectGovernance } from "./governance-session.js";
 import { governedTools, pathClass } from "./governed-tools.js";
 
 const roots: string[] = [];
@@ -753,5 +753,19 @@ describe("capability provider loading", () => {
         reason: `policy builtin:default (${action})`,
       }),
     );
+    // A policy refusal is a matter of `enabled`, not of health; the static
+    // inspection behind `capabilities` agrees with the running session.
+    const inspection = await inspectGovernance(session.options);
+    for (const states of [session.capabilities, inspection.capabilities])
+      expect(
+        states.find((state) => state.name === "workflow")?.axes,
+      ).toMatchObject({
+        enabled: {
+          value: "no",
+          reason: expect.stringContaining(`policy builtin:default (${action})`),
+        },
+        healthy: { value: "n/a" },
+        effective: { value: "no" },
+      });
   });
 });

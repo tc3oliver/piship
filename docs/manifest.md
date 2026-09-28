@@ -102,7 +102,7 @@ A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`
 
 The builtin workflow reads three settings: `defaultMode` (`plan`, the default, or `build`), `planPrompt`, and `buildPrompt`. The prompts are appended to the system prompt for the current mode; built-in defaults are used when they are omitted.
 
-The branded `capabilities [--json]` command reports six axes per capability (`supported`, `resolved`, `enabled`, `compatible`, `healthy`, `effective`) with a reason for every `no`. A non-builtin provider's extension is loaded only when its capability is effective: its provider class is trusted, its files match the lock, and its contract major version, Pi version, and platform match. The policy then decides `provider.load` for the provider ID and `extension.load` for `<class>:<path>`; a denial skips the provider and makes the capability not effective.
+The branded `capabilities [--json]` command reports six axes per capability (`supported`, `resolved`, `enabled`, `compatible`, `healthy`, `effective`) with a reason for every `no`. A non-builtin provider's extension is loaded only when its capability is effective: its provider class is trusted, its files match the lock, and its contract major version, Pi version, and platform match. The policy then decides `provider.load` for the provider ID and `extension.load` for `<class>:<path>`; a denial skips the provider and is reported as `enabled: no`, not as a health failure, so the capability is not effective. `compatible` also checks an enabled capability's `requirements` against the selected model with the same comparison as the launch check, so a running session's report and `MODEL_INCOMPATIBLE` agree. Offline, `capabilities` and `doctor` use the model launch would select from the configuration and its manifest catalog metadata; they can differ from launch when `--model` or a credential entitlement changes the selected model.
 
 ### Policy
 
@@ -294,7 +294,7 @@ A v1alpha4 manifest produces `piship-lock/v1alpha4`, which keeps every v1alpha3 
 
 Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
 
-The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
+The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 
 ## Migration
 
@@ -324,6 +324,16 @@ A maintainer-local product specification (v1.0) guided the design; it is not req
 | Pi packages as resources | No `resources.packages` class | `resources.packages` |
 | Distribution tests | `piship test` builds the payload and runs the branded `--smoke`; no `tests` section | A configured test suite |
 | Release provenance | GitHub artifact attestations made by CI, verified with `gh attestation verify`; no `provenance.json` in the archive; `install.sh` and `install.ps1` at the archive root | An embedded provenance file and an `installers/` directory |
-| Error codes | _Reserved: to be filled in by the v0.6 error-contract change._ | |
+| Error codes | `PISHIP_ERROR_CODES` in `@piship/contracts`; a unit test requires every code to have a producing path. Five specification codes that nothing produced are not defined ([below](#removed-error-codes)). `PiShipError` has no `correlationId`, and its JSON form names the sanitized detail `detail` | Also `APPROVAL_REQUIRED`, `RESOURCE_DENIED`, `PROVIDER_UNRESOLVED`, `PROVIDER_UNHEALTHY`, and `SANDBOX_REQUIRED`; `correlationId` and `sanitizedDetail` |
 
 Deferred items in this table are tracked on the [roadmap](roadmap.md#next).
+
+### Removed error codes
+
+| Specification code | What PiShip does instead |
+| --- | --- |
+| `APPROVAL_REQUIRED` | An `ask` decision prompts the person; without an approval channel (headless) it resolves to deny and is recorded as a denial |
+| `RESOURCE_DENIED` | A denied tool call is refused to the model and a denied resource is not loaded, both recorded as denials; a refused command or setting fails with `POLICY_DENIED` |
+| `PROVIDER_UNRESOLVED` | Reported on the `resolved` axis of `capabilities`; the capability is not effective |
+| `PROVIDER_UNHEALTHY` | Reported on the `healthy` axis; a provider the policy refuses is reported on the `enabled` axis |
+| `SANDBOX_REQUIRED` | A required sandbox that cannot be enforced fails with `SANDBOX_UNAVAILABLE` |

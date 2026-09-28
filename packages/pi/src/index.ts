@@ -45,6 +45,7 @@ import {
   DistributionAccess,
   type DistributionLock,
   accessStatePaths,
+  configuredModel,
   effectivePrivateOnly,
   explainConfiguration,
   formatExplanation,
@@ -58,6 +59,7 @@ import {
 } from "@piship/core";
 import { AuditLog, describeAuditStatus, LocalMetrics } from "@piship/audit";
 import {
+  type ModelEvidence,
   decisionToJSON,
   formatCapabilities,
   formatDecision,
@@ -425,6 +427,7 @@ function governanceOptions(
         process.env,
       ),
     user: activated?.identity?.subject ?? null,
+    model: selectedModelEvidence(ctx, prepared),
     ...(access && activated?.runtime.requiresCredential
       ? {
           credential: async () =>
@@ -435,6 +438,44 @@ function governanceOptions(
             : [],
         }
       : {}),
+  };
+}
+
+/**
+ * The model capability requirements are checked against: the one launch
+ * selected, or, for offline reports, the one it would select.
+ */
+function selectedModelEvidence(
+  ctx: LaunchContext,
+  prepared: PreparedAccess | null,
+): ModelEvidence {
+  const activated = prepared?.activated;
+  if (!activated)
+    try {
+      return configuredModel({
+        app: ctx.metadata.app,
+        access: ctx.metadata.access,
+        stateDir: ctx.stateDir,
+      });
+    } catch (error) {
+      // Unreadable user preferences: launch refuses them too. The report then
+      // knows no model and says why instead of failing.
+      if (!(error instanceof PiShipError) || error.code !== "CONFIG_INVALID")
+        throw error;
+      return { id: `(unknown: ${error.message})` };
+    }
+  const selected = activated.selectedModel;
+  const metadata = selected
+    ? activated.models.find((model) => model.id === selected)
+    : undefined;
+  return {
+    id:
+      selected === undefined
+        ? "(selected by Pi)"
+        : activated.runtime.kind === "pi-native"
+          ? selected
+          : `${ctx.metadata.app.id}/${selected}`,
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -1265,9 +1306,11 @@ async function governanceDoctor(
   for (const state of inspection.capabilities) {
     const effective = state.axes.effective;
     const provider = state.provider ? ` via ${state.provider}` : "";
+    const declared = manifest.capabilities.find(
+      (item) => item.name === state.name,
+    );
     if (effective.value === "yes") ok(state.name, `effective${provider}`);
-    else if (state.axes.enabled.value === "no")
-      ok(state.name, `disabled${provider}`);
+    else if (!declared?.enabled) ok(state.name, `disabled${provider}`);
     else bad(state.name, `not effective${provider}: ${effective.reason ?? ""}`);
   }
   lines.push("", "Sandbox");

@@ -11,6 +11,10 @@ import {
   type CapabilityProviderRef,
   type PolicyConfig,
 } from "@piship/schema";
+import {
+  modelRequirementGaps,
+  type ModelEvidence,
+} from "./model-requirements.js";
 import { providerTrustDecision, type ProviderTrustDecision } from "./trust.js";
 
 export type AxisValue = "yes" | "no" | "n/a";
@@ -58,14 +62,18 @@ export interface CapabilityStateInput {
   readonly health?: Readonly<
     Partial<Record<CapabilityName, VerificationResult>>
   >;
-  /** Whether the selected model supports tool calls; absent means unknown. */
-  readonly modelToolSupport?: boolean;
+  /**
+   * Capabilities whose provider the policy refused to load, with the reason.
+   * A policy refusal is reported on the `enabled` axis, not as ill health.
+   */
+  readonly policyDenied?: Readonly<Partial<Record<CapabilityName, string>>>;
+  /**
+   * The selected model that enabled capabilities' `requirements` are checked
+   * against, with the comparison launch uses. Absent: no model is known, which,
+   * like unknown metadata, meets no requirement.
+   */
+  readonly model?: ModelEvidence;
 }
-
-/** Capabilities that cannot work without model tool calls. */
-export const TOOL_DEPENDENT_CAPABILITIES: ReadonlySet<CapabilityName> = new Set(
-  ["subagents", "code-intel"],
-);
 
 interface ContractId {
   readonly name: string;
@@ -113,9 +121,17 @@ function supportedAxis(
   );
 }
 
-function enabledAxis(config: CapabilityConfig | undefined): AxisState {
+function enabledAxis(
+  name: CapabilityName,
+  config: CapabilityConfig | undefined,
+  input: CapabilityStateInput,
+): AxisState {
   if (!config) return no("Not declared in the manifest");
-  return config.enabled ? yes : no("Disabled in the manifest");
+  if (!config.enabled) return no("Disabled in the manifest");
+  const denied = input.policyDenied?.[name];
+  return denied === undefined
+    ? yes
+    : no(`The policy does not allow its provider: ${denied}`);
 }
 
 function implementsContract(
@@ -165,11 +181,21 @@ function resolvedAxis(
 }
 
 function compatibleAxis(
-  name: CapabilityName,
   config: CapabilityConfig | undefined,
   contract: string,
   input: CapabilityStateInput,
 ): AxisState {
+  // The same comparison as the launch check, so the report and launch agree.
+  if (config?.enabled && config.requirements) {
+    const gaps = modelRequirementGaps(
+      input.model?.metadata,
+      config.requirements,
+    );
+    if (gaps.length)
+      return no(
+        `Model ${input.model?.id ?? "(unknown)"} does not meet the model requirements: ${gaps.join("; ")}`,
+      );
+  }
   const provider = config?.provider;
   if (!provider) return na("No provider is selected");
   const declared =
@@ -200,8 +226,6 @@ function compatibleAxis(
         `Provider ${provider.id} does not support platform ${input.platform}`,
       );
   }
-  if (TOOL_DEPENDENT_CAPABILITIES.has(name) && input.modelToolSupport === false)
-    return no("The selected model does not support tool calls");
   return yes;
 }
 
@@ -241,8 +265,8 @@ export function computeCapabilityStates(
     const axes = {
       supported: supportedAxis(contract, supported),
       resolved: resolvedAxis(config, contract, input),
-      enabled: enabledAxis(config),
-      compatible: compatibleAxis(name, config, contract, input),
+      enabled: enabledAxis(name, config, input),
+      compatible: compatibleAxis(config, contract, input),
       healthy: healthyAxis(name, input),
     };
     return {

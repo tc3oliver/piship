@@ -18,6 +18,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { SecretValue } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PiShipError } from "@piship/contracts";
 import {
   EVIDENCED_TARGETS,
   currentTarget,
@@ -1609,5 +1610,60 @@ describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
     const missing = launch(launcher);
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain("install receipt is missing or damaged");
+  });
+});
+
+describe("launch-time payload verification", () => {
+  function payload(): string {
+    return fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+  }
+  function thrown(action: () => unknown): Error & { code?: string } {
+    try {
+      action();
+    } catch (error) {
+      return error as Error & { code?: string };
+    }
+    throw new Error("expected a throw");
+  }
+  function reinventory(directory: string): void {
+    write(
+      join(directory, "metadata", "inventory.json"),
+      `${JSON.stringify(payloadInventory(directory), null, 2)}\n`,
+    );
+  }
+
+  it("verifies an untouched payload", () => {
+    expect(verifyPayload(payload()).app.id).toBe(ID);
+  });
+
+  it("reports a modified payload file as INTEGRITY_FAILED", () => {
+    const directory = payload();
+    write(join(directory, "resources", "resources", "AGENTS.md"), "# evil\n");
+    const error = thrown(() => verifyPayload(directory));
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(/payload integrity mismatch/);
+  });
+
+  it("reports a lock tampered behind a rewritten inventory as LOCK_INVALID", () => {
+    const directory = payload();
+    const path = join(directory, "piship.lock");
+    const lock = JSON.parse(readFileSync(path, "utf8"));
+    lock.manifest.sha256 = "0".repeat(64);
+    writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
+    reinventory(directory);
+    const error = thrown(() => verifyPayload(directory));
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(error.message).toMatch(/manifest and lock mismatch/);
+  });
+
+  it("reports an npm lock that the lock does not record as LOCK_INVALID", () => {
+    const directory = payload();
+    writeFileSync(join(directory, "package-lock.json"), "{}\n");
+    reinventory(directory);
+    const error = thrown(() => verifyPayload(directory));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(error.message).toMatch(/npm lock mismatch/);
   });
 });

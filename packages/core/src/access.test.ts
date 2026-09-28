@@ -11,12 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
-import {
-  type ModelDefinition,
-  PiShipError,
-  SecretValue,
-} from "@piship/contracts";
+import { PiShipError, SecretValue } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
+import { computeCapabilityStates } from "@piship/policy";
 import {
   type CapabilityConfig,
   parseManifest,
@@ -31,9 +28,9 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   type AccessEvent,
   DistributionAccess,
+  accessStatePaths,
+  configuredModel,
   explainConfiguration,
-  incompatibleCapabilities,
-  modelRequirementGaps,
   networkPolicyFor,
   resolveRuntimeReferences,
 } from "./access.js";
@@ -796,79 +793,6 @@ describe("capability model requirements", () => {
     settings: {},
     ...(requirements ? { requirements } : {}),
   });
-  const model = (capabilities: ModelDefinition["capabilities"]) =>
-    ({
-      id: "m",
-      name: "M",
-      provider: "p",
-      capabilities,
-      policyTags: [],
-      availability: { available: true },
-    }) satisfies ModelDefinition;
-
-  it("treats unknown metadata as not meeting a requirement", () => {
-    expect(
-      modelRequirementGaps(model({}), {
-        tools: true,
-        structuredOutput: true,
-        minContextWindow: 1000,
-        input: ["image"],
-      }),
-    ).toEqual([
-      "tool calling support is unknown",
-      "structured output support is unknown",
-      "the context window is unknown",
-      "the accepted input types are unknown",
-    ]);
-    expect(
-      modelRequirementGaps(
-        model({
-          tools: false,
-          structuredOutput: false,
-          contextWindow: 500,
-          input: ["text"],
-        }),
-        {
-          tools: true,
-          structuredOutput: true,
-          minContextWindow: 1000,
-          input: ["text", "image"],
-        },
-      ),
-    ).toEqual([
-      "tool calling is not supported",
-      "structured output is not supported",
-      "the context window 500 is below the required 1000",
-      "image input is not accepted",
-    ]);
-    expect(
-      modelRequirementGaps(
-        model({
-          tools: true,
-          structuredOutput: true,
-          contextWindow: 2000,
-          input: ["text", "image"],
-        }),
-        {
-          tools: true,
-          structuredOutput: true,
-          minContextWindow: 1000,
-          input: ["image"],
-        },
-      ),
-    ).toEqual([]);
-    expect(modelRequirementGaps(undefined, { tools: true })).toEqual([
-      "tool calling support is unknown",
-    ]);
-    // Disabled capabilities and capabilities without requirements never block.
-    expect(
-      incompatibleCapabilities(model({}), [
-        capability({ tools: true }, false),
-        capability(undefined),
-      ]),
-    ).toEqual([]);
-  });
-
   describe("at launch (fixtures)", () => {
     let services: Awaited<ReturnType<typeof startLocalServices>>;
     beforeEach(async () => {
@@ -955,6 +879,50 @@ describe("capability model requirements", () => {
           "capabilities.workflow.requirements",
         ),
       });
+    });
+
+    it("gives the capability report the same verdict as launch", async () => {
+      const compatible = (distribution: DistributionAccess) =>
+        computeCapabilityStates({
+          capabilities: distribution.options.capabilities ?? [],
+          policy: { providerTrust: {} } as never,
+          piVersion: "0.87.1",
+          platform: process.platform,
+          model: configuredModel(distribution.options),
+        }).find((state) => state.name === "workflow")?.axes.compatible;
+      const meets = open([capability({ minContextWindow: 100000 })]);
+      expect(configuredModel(meets.options)).toMatchObject({
+        id: "acmecode/acme/coder",
+        metadata: { id: "acme/coder" },
+      });
+      expect(compatible(meets)?.value).not.toBe("no");
+      await meets.login({ openUrl: (url) => void services.approve(url) });
+      await expect(meets.activate()).resolves.toMatchObject({
+        selectedModel: "acme/coder",
+      });
+      const fails = open([capability({ structuredOutput: true })]);
+      expect(compatible(fails)).toEqual({
+        value: "no",
+        reason:
+          "Model acmecode/acme/coder does not meet the model requirements: structured output support is unknown",
+      });
+      await fails.login({ openUrl: (url) => void services.approve(url) });
+      await expect(fails.activate()).rejects.toMatchObject({
+        code: "MODEL_INCOMPATIBLE",
+        message: expect.stringContaining(
+          "capability workflow (structured output support is unknown)",
+        ),
+      });
+    });
+
+    it("refuses unreadable preferences offline, as launch does", () => {
+      const distribution = open([]);
+      const path = accessStatePaths(distribution.options.stateDir).preferences;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "{");
+      expect(() => configuredModel(distribution.options)).toThrow(
+        expect.objectContaining({ code: "CONFIG_INVALID" }),
+      );
     });
 
     it("ignores the requirements of a disabled capability", async () => {

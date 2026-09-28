@@ -33,6 +33,7 @@ import {
 } from "@piship/mcp";
 import {
   type CapabilityState,
+  type ModelEvidence,
   type ProjectIdentity,
   type ProjectResourceCandidate,
   PolicyEngine,
@@ -82,6 +83,11 @@ export interface GovernanceOptions {
   readonly homeDir?: string;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
+  /**
+   * The selected model, which the `compatible` axis checks capability
+   * requirements against; absent means unknown and meets no requirement.
+   */
+  readonly model?: ModelEvidence;
 }
 
 /** Evidence for one declared, builtin, or project resource. */
@@ -362,11 +368,14 @@ function capabilityStates(
     verification,
     piVersion: options.piVersion,
     platform: process.platform,
+    policyDenied,
+    ...(options.model ? { model: options.model } : {}),
     health: {
       permissions: { ok: true },
+      // A workflow provider the policy refused is reported as not enabled.
       ...(manifest.capabilities.some(
         (item) => item.name === "workflow" && item.enabled,
-      )
+      ) && policyDenied.workflow === undefined
         ? {
             workflow: workflowLoaded
               ? { ok: true }
@@ -376,12 +385,6 @@ function capabilityStates(
                 },
           }
         : {}),
-      ...Object.fromEntries(
-        Object.entries(policyDenied).map(([name, reason]) => [
-          name,
-          { ok: false, reason: `the provider is not loaded: ${reason}` },
-        ]),
-      ),
     },
   });
 }
