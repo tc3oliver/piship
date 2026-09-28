@@ -13,7 +13,7 @@ npm run check
 
 `npm run check` covers formatting, lint, types, package boundaries, tests, and build. For CLI changes, run `npm run test:e2e`. For Pi integration changes, run `npm run test:compatibility`.
 
-Every PR runs fast CI. The three-target portable E2E and Pi compatibility workflows run when package, installer, launcher, payload, resource, state, compatibility metadata, test, or relevant workflow inputs change; documentation-only PRs skip both matrices and the large payload assembly. `workflow_dispatch` can force each workflow on the exact final release-candidate HEAD. Pi compatibility does not repeat portable E2E. Final v0.1 qualification requires both three-target workflows and CodeQL green on the candidate HEAD.
+Every PR runs CI on Ubuntu, macOS, and Windows. Formatting, lint, types, and boundaries run once on Ubuntu; build and unit tests run on every target. The three-target portable E2E and Pi compatibility workflows run when package, installer, launcher, payload, resource, state, compatibility metadata, test, or relevant workflow inputs change; documentation-only PRs skip both. The real macOS Keychain and Windows Credential Manager tests run only when `packages/credentials` or `packages/contracts` change. `workflow_dispatch` can force each workflow on an exact release-candidate HEAD. Superseded PR runs are cancelled. Windows jobs disable Defender real-time scanning on the ephemeral runner and keep temp output and the npm cache on the runner's work drive, which is much faster than C: for npm installs. Pi compatibility does not repeat portable E2E. Release qualification requires both three-target workflows and CodeQL green on the candidate HEAD.
 
 ## Choose the right place
 

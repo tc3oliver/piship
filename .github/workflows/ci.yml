@@ -3,8 +3,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
     runs-on: ${{ matrix.os }}
@@ -13,6 +17,17 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      # Windows runners are ephemeral VMs whose C: drive is slow for the many
+      # small files npm writes. Skip Defender scanning and keep temp output and
+      # the npm cache on the runner's work drive.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+          "npm_config_prefer_offline=true" >> $env:GITHUB_ENV
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -22,31 +37,14 @@ jobs:
           cache: npm
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       - run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run check:boundaries
+      # Formatting, lint, types, and boundaries do not depend on the OS.
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run format:check
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run lint
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run typecheck
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run check:boundaries
       - run: npm run build
       - run: npm test
-  secret-store:
-    # Real platform secret stores (Keychain, Credential Manager). Linux runners
-    # have no unlocked Secret Service session; its backend is covered by the
-    # command-runner tests in the check job.
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: 22.19.x
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npx vitest run packages/credentials/src/platform-store.test.ts
-        env:
-          PISHIP_LIVE_SECRET_STORE: "1"
