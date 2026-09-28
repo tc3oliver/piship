@@ -263,20 +263,22 @@ function launcherSource(id: string): string {
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// Payloads are resolved next to this file, so a symlinked home (macOS /var)
+// cannot make the receipt's recorded path disagree with where it runs.
 const home = dirname(fileURLToPath(import.meta.url));
-let release;
+let version;
 let command;
 try {
   const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
-  release = receipt.releases.find((item) => item.version === receipt.active);
+  const release = receipt.releases.find((item) => item.version === receipt.active);
   command = receipt.app.command;
-  if (!release || release.payload !== join(home, release.version) || !/^[a-z][a-z0-9-]*$/.test(command)) release = undefined;
+  if (release && ${VERSION_NAME.toString()}.test(release.version) && /^[a-z][a-z0-9-]*$/.test(command)) version = release.version;
 } catch {}
-if (!release) {
+if (!version) {
   console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
   process.exit(1);
 }
-await import(pathToFileURL(join(release.payload, "bin", command)).href);
+await import(pathToFileURL(join(home, version, "bin", command)).href);
 `;
 }
 

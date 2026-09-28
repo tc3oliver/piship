@@ -1,7 +1,13 @@
 /** The only Pi package integration boundary. All imports use the public package entrypoint. */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -1279,7 +1285,10 @@ async function governanceDoctor(
 function installedHere(ctx: LaunchContext) {
   try {
     const receipt = readInstallReceipt(ctx.metadata.app.id);
-    return resolve(receipt.payload) === ctx.distributionDir ? receipt : null;
+    // Compare real paths: on macOS the install home may sit behind /var.
+    return realpathSync(receipt.payload) === realpathSync(ctx.distributionDir)
+      ? receipt
+      : null;
   } catch {
     return null;
   }

@@ -9,6 +9,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -92,6 +93,13 @@ describe("production lifecycle (local fixtures)", () => {
     });
     const home = join(temp, "home");
     mkdirSync(home, { recursive: true });
+    // On POSIX the install home is reached through a symlink, as macOS
+    // temporary directories are (/var -> /private/var).
+    const installHome = join(temp, "install");
+    if (!windows) {
+      mkdirSync(join(temp, "install-real"));
+      symlinkSync(join(temp, "install-real"), installHome);
+    }
     const channelDir = join(temp, "channel");
     mkdirSync(channelDir);
     const env: NodeJS.ProcessEnv = {
@@ -99,7 +107,7 @@ describe("production lifecycle (local fixtures)", () => {
       ...services.env(),
       ACMECODE_UPDATE_SOURCE: await serve(channelDir),
       PISHIP_STATE_HOME: join(temp, "state"),
-      PISHIP_INSTALL_HOME: join(temp, "install"),
+      PISHIP_INSTALL_HOME: installHome,
       PISHIP_BIN_HOME: join(temp, "bin"),
       PISHIP_NO_BROWSER: "1",
       HOME: home,
