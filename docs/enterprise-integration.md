@@ -20,7 +20,7 @@ PiShip ──POST broker (Bearer identity access token)──▶ runtime credent
 Pi ──POST gateway (Bearer runtime credential)──▶ completions
 ```
 
-The identity token goes only to the broker. The gateway sees only the runtime credential.
+The identity token goes only to the broker (and to the IdP revocation endpoint on logout). The gateway sees only the runtime credential.
 
 ## Manifest snippet
 
@@ -145,7 +145,7 @@ The bearer is the **runtime credential**, not the identity token; `credential_id
 
 - The credential is stored in the platform secret store (Keychain, Secret Service, Credential Manager); non-secret metadata (`credential_id`, `expires_at`, `models`) is kept in distribution state.
 - It is reused until it is within `credential.refresh.beforeExpiry` (default `5m`) of `expires_at`, then renewed with the acquire call. Choose a lifetime well above that window, or every request renews.
-- If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`.
+- If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`, or with the identity error when sign-in is needed.
 - A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
 - Concurrent launches share one renewal through a lock file.
@@ -215,7 +215,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 
 | Token | Issued by | Lifetime | Renewal | Sent to |
 | --- | --- | --- | --- | --- |
-| Identity access token | IdP | `expires_in` | Refresh grant under 60 s left, or after broker 401 | Broker only |
+| Identity access token | IdP | `expires_in` | Refresh grant under 60 s left, or after broker 401 | Broker; IdP revocation endpoint on logout |
 | Refresh token | IdP | IdP policy | Rotation honored | IdP token and revocation endpoints |
 | ID token | IdP | Checked at login | Optional on refresh | Nowhere |
 | Runtime credential | Broker | `expires_at` (optional) | Acquire call within `beforeExpiry`, when expired, or after a gateway 401 | Gateway; revoke endpoint |
