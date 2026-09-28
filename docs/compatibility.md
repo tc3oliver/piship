@@ -21,7 +21,7 @@ Still pending:
 
 ## Managed governance surface: in preview
 
-Governance (`piship/v1alpha3`) is implemented on Pi 0.87.1 as a preview; it is not yet a separate surface in `compatibility/pi.json`. The end-to-end governance test drives a real Pi session with scripted tool calls from the local fixture gateway and checks Plan mode, MCP policy (a denied tool is never offered or sent), project trust and symlinked instruction imports, certified integrity, user and project rule precedence in `policy explain`, sandboxed Build-mode commands, a required audit sink that fails the launch, and metadata-only audit content.
+Governance (`piship/v1alpha3`) is implemented on Pi 0.87.1 as a preview; it is not yet a separate surface in `compatibility/pi.json`. The end-to-end governance test drives a real Pi session with scripted tool calls from the local fixture gateway and checks Plan mode (only `read` and `ask_user` run; MCP tools are refused before reaching the server), MCP policy in Build mode (a denied tool is never offered or sent), project trust and symlinked instruction imports, certified integrity, user and project rule precedence in `policy explain`, sandboxed Build-mode commands, a required audit sink that fails the launch, and metadata-only audit content.
 
 | Target | Status |
 | --- | --- |
