@@ -289,10 +289,10 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
           ],
           [
             "copied launchctl",
-            `cp /bin/launchctl ./lc && ./lc submit -l ${label("copy")} -- /usr/bin/touch "${marker}"`,
+            `cp /bin/launchctl ./lc; echo cp=$?; ./lc submit -l ${label("copy")} -- /usr/bin/touch "${marker}"`,
           ],
           ["open", `/usr/bin/open -g "${script}"`],
-          ["open via copy", `cp /usr/bin/open ./op && ./op -g "${script}"`],
+          ["open via copy", `cp /usr/bin/open ./op; echo cp=$?; ./op -g "${script}"`],
           [
             "osascript",
             `/usr/bin/osascript -e 'do shell script "/usr/bin/open -g ${script}"'`,

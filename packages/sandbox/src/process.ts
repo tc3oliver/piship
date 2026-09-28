@@ -1,4 +1,4 @@
-// Governed child processes (§41): approved environment only, process-group
+// Governed child processes: approved environment only, process-group
 // lifetime, timeout with grace, AbortSignal cancellation, orphan cleanup.
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";

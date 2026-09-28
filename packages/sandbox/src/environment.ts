@@ -1,4 +1,4 @@
-// Environment and diagnostic hygiene for governed child processes (§41).
+// Environment and diagnostic hygiene for governed child processes.
 import {
   DEFAULT_NETWORK_POLICY,
   PiShipError,

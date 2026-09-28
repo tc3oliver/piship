@@ -1,4 +1,4 @@
-// Resource trust (§11) and capability-provider trust (§12) decisions. The two
+// Resource trust and capability-provider trust decisions. The two
 // tables are independent: allowing a class for resources says nothing about
 // the same class for providers.
 import type {

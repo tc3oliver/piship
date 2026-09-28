@@ -1,4 +1,4 @@
-// Capability state (§13): six independent axes per capability. An axis is
+// Capability state: six independent axes per capability. An axis is
 // computed from its own evidence only, so combinations such as
 // `compatible: no` with `healthy: yes` stay representable.
 import { redact } from "@piship/contracts";

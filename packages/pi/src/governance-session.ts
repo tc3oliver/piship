@@ -218,7 +218,7 @@ async function readTeamRules(
     const source = module.rules ?? module.default;
     exported = typeof source === "function" ? await source() : source;
   } catch (error) {
-    // A required policy that cannot load fails closed (§61).
+    // A required policy that cannot load fails closed.
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
       `The policy adapter could not be loaded: ${redact(String((error as Error)?.message ?? error))}`,

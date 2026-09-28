@@ -16,7 +16,7 @@ export const RESOURCE_KINDS = [
 ] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
-/** Pi resource trust classes (§11). `project` is discovered, never declared. */
+/** Pi resource trust classes. `project` is discovered, never declared. */
 export const RESOURCE_TRUST_CLASSES = [
   "upstream",
   "builtin",
@@ -27,7 +27,7 @@ export const RESOURCE_TRUST_CLASSES = [
 ] as const;
 export type ResourceTrustClass = (typeof RESOURCE_TRUST_CLASSES)[number];
 
-/** Capability-provider trust classes (§12); deliberately separate from resource trust. */
+/** Capability-provider trust classes; deliberately separate from resource trust. */
 export const PROVIDER_TRUST_CLASSES = [
   "upstream",
   "builtin",

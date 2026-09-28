@@ -25,11 +25,11 @@ Governance (`piship/v1alpha3`) is implemented on Pi 0.87.1 as a preview; it is n
 
 | Target | Status |
 | --- | --- |
-| Linux | Tested locally with real bubblewrap: the live probe enforces filesystem read deny, write allowlist, network deny, and the environment filter |
-| macOS | Seatbelt adapter implemented; the result depends on the CI sandbox run, which is pending |
-| Windows | No sandbox adapter. A distribution with `sandbox.required: true` fails closed with `SANDBOX_UNAVAILABLE`; the remaining governance result is pending CI |
+| Linux | Tested locally and in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270268) on Ubuntu with real bubblewrap: the live probe enforces filesystem read deny, write allowlist, network deny, and the environment filter, and the governance E2E passes |
+| macOS | Tested in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270268) on macOS 26 arm64 with Seatbelt: the live probe and the boundary tests, including refused launchd, `open`, and `osascript` escapes |
+| Windows | No sandbox adapter. A distribution with `sandbox.required: true` fails closed with `SANDBOX_UNAVAILABLE`, which the governance E2E checks; with the sandbox optional, the governance E2E passes in [PR CI](https://github.com/tc3oliver/piship/actions/runs/36389270287) |
 
-The fixtures prove PiShip's governance contracts, not a production deployment. Still pending: recorded three-target CI results for this surface and live company services.
+The fixtures prove PiShip's governance contracts, not a production deployment. The [portable E2E run](https://github.com/tc3oliver/piship/actions/runs/36389270287) passed on Ubuntu, macOS, and Windows. Still pending: live company services.
 
 ## Public API used
 
