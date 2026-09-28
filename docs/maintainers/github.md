@@ -23,22 +23,16 @@ Keep it minimal and legible in dark and light GitHub themes and at thumbnail siz
 
 - Set the description, topics, and social preview.
 - Enable Discussions and Private Vulnerability Reporting.
-- Protect `main`: require a pull request, passing CI and Pi compatibility checks, and resolved conversations; block force pushes and branch deletion.
+- Protect `main`: require a pull request, the `CI` check jobs on all three targets and `CodeQL`, and resolved conversations; block force pushes and branch deletion. Do not mark `Pi compatibility` or `Secret store` as required checks: they are path-scoped, so a pull request that does not touch their paths never reports them and would wait forever. Review their results on every pull request that does run them. Portable E2E and Release candidate are not pull request checks ([CI evidence tiers](../../AGENTS.md#ci-evidence-tiers)).
 - Enable Dependabot alerts and secret scanning where available.
 - Review Actions permissions and confirm CodeQL and Scorecard results after their first runs.
 - Verify the repository-specific Discussions, documentation, and security links in the Issue chooser.
 - Keep Private Vulnerability Reporting enabled: it is also the private contact route for Code of Conduct reports until a separate moderated channel is available.
-- Create the first distribution-core milestone and 3–5 real issues. Mark 1–2 small, approachable issues `good first issue` only after their acceptance criteria are clear.
+- Keep a milestone for the current roadmap work ([roadmap](../roadmap.md)) with real issues. Mark small, approachable issues `good first issue` only after their acceptance criteria are clear.
 
-## First issues to consider
+## Issues to consider
 
-These should be opened only when the maintainer is ready to review contributions:
-
-1. Parse and validate the minimal `piship/v1alpha1` manifest fields.
-2. Resolve the exact Pi version and write a deterministic lockfile.
-3. Isolate Pi state for a personal distribution.
-4. Load only resources declared by the distribution through a managed Pi integration.
-5. Build and launch the first branded personal distribution on pinned upstream Pi.
+The original first-issue list (the v0.1 manifest, lock, state isolation, declared resources, and first branded distribution) is complete. Draw new issues from the current [roadmap](../roadmap.md) and the gaps on the [status page](../status.md), and open them only when the maintainer is ready to review contributions.
 
 ## Labels
 
@@ -52,4 +46,4 @@ The workflow uploads SARIF and does not publish to the public Scorecard API. If 
 
 ## Release setup
 
-The `release-candidate` workflow builds, verifies, and attests release archives and keeps them only as workflow artifacts; no publishing workflow exists. Any publish step follows the [release checklist](../release.md#release-checklist), including the maintainer's explicit approval. npm publication or GitHub Releases would additionally need confirmed package ownership and a release policy.
+The `release-candidate` workflow builds, verifies, and attests release archives and keeps them only as workflow artifacts; no publishing workflow exists. Any publish step follows the [release checklist](../release/owner-workflow.md#release-checklist), including the maintainer's explicit approval. npm publication or GitHub Releases would additionally need confirmed package ownership and a release policy.
