@@ -241,42 +241,95 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
     });
 
     it.runIf(process.platform === "darwin")(
-      "cannot start processes outside the sandbox through open or osascript",
-      async () => {
+      "cannot start processes outside the sandbox through launchd, open, or osascript",
+      async (ctx) => {
+        const waitFor = async (file: string, ms: number) => {
+          for (let waited = 0; waited < ms; waited += 250) {
+            if (existsSync(file)) return true;
+            await sleep(250);
+          }
+          return existsSync(file);
+        };
+        const label = (name: string) =>
+          `dev.piship.boundary.${name}.${process.pid}`;
+        const remove = (name: string) => {
+          try {
+            execFileSync("/bin/launchctl", ["remove", label(name)], {
+              stdio: "ignore",
+            });
+          } catch {
+            // not submitted
+          }
+        };
+        // Control: outside the sandbox, a launchd job does run. Without this
+        // the absence of the marker below would prove nothing.
+        const control = join(outside, "control");
+        execFileSync("/bin/launchctl", [
+          "submit",
+          "-l",
+          label("control"),
+          "--",
+          "/usr/bin/touch",
+          control,
+        ]);
+        const controlRan = await waitFor(control, 15_000);
+        remove("control");
+        if (!controlRan)
+          ctx.skip("launchd did not run a submitted job on this host");
+
         const marker = join(outside, "launched");
         const script = join(ws, "escape.command");
         writeFileSync(script, `#!/bin/sh\ntouch "${marker}"\n`, {
           mode: 0o755,
         });
-        for (const command of [
-          `open "${script}"`,
-          `open -a Terminal "${script}"`,
-          `osascript -e 'tell application "Terminal" to do script "touch ${marker}"'`,
-          `osascript -e 'do shell script "open ${script}"'`,
-        ]) {
-          // A denied Apple event can leave the client waiting; a command
-          // killed by the timeout inside the sandbox did not escape either.
-          const exitCode = await run(sandbox, command, 5).then(
-            (result) => result.exitCode,
-            (error: Error) => {
-              if (!error.message.startsWith("timeout:")) throw error;
-              return "timed out";
-            },
-          );
-          expect(exitCode, command).not.toBe(0);
+        const attempts: [string, string][] = [
+          [
+            "launchctl",
+            `/bin/launchctl submit -l ${label("direct")} -- /usr/bin/touch "${marker}"`,
+          ],
+          [
+            "copied launchctl",
+            `cp /bin/launchctl ./lc && ./lc submit -l ${label("copy")} -- /usr/bin/touch "${marker}"`,
+          ],
+          ["open", `/usr/bin/open -g "${script}"`],
+          ["open via copy", `cp /usr/bin/open ./op && ./op -g "${script}"`],
+          [
+            "osascript",
+            `/usr/bin/osascript -e 'do shell script "/usr/bin/open -g ${script}"'`,
+          ],
+          [
+            "osascript from node",
+            `"${node}" -e 'require("node:child_process").execFileSync("/usr/bin/osascript", ["-e", "tell application \\"Terminal\\" to do script \\"touch ${marker}\\""])'`,
+          ],
+        ];
+        try {
+          for (const [name, command] of attempts) {
+            const started = Date.now();
+            // Denial must be a prompt refusal, not a hang.
+            const result = await run(sandbox, command, 10).catch(
+              (error: Error) => {
+                throw new Error(`${name}: ${error.message}`);
+              },
+            );
+            console.info(
+              `seatbelt ${name}: exit ${result.exitCode} after ${Date.now() - started} ms: ${result.output.trim().slice(0, 200)}`,
+            );
+            expect(result.exitCode, name).not.toBe(0);
+          }
+          expect(await waitFor(marker, 15_000)).toBe(false);
+        } finally {
+          for (const name of ["direct", "copy"]) remove(name);
         }
-        await sleep(2000);
-        expect(existsSync(marker)).toBe(false);
         // Ordinary tools still run under the same profile.
         const tools = await run(
           sandbox,
-          `/bin/sh -c 'echo sh-ok' && "${node}" -e 'console.log("node-ok")'`,
+          `/bin/sh -c 'echo sh-ok' && "${node}" -e 'console.log("node-ok")' && git --version`,
         );
-        expect(tools.exitCode).toBe(0);
+        expect(tools.exitCode, tools.output).toBe(0);
         expect(tools.output).toContain("sh-ok");
         expect(tools.output).toContain("node-ok");
       },
-      60_000,
+      120_000,
     );
 
     it("denies external and host loopback network access", async () => {

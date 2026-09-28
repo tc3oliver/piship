@@ -191,7 +191,8 @@ describe("seatbelt profile", () => {
     expect(text).toContain(
       '(global-name "com.apple.coreservices.appleevents")',
     );
-    expect(text).toContain('(deny process-exec (literal "/bin/launchctl"))');
+    expect(text).toContain('(literal "/bin/launchctl")');
+    expect(text).toContain('(signing-identifier "com.apple.xpc.launchctl")');
     // Only named services are denied; tools still look up everything else.
     expect(text).not.toMatch(/\(deny mach-lookup\)/);
     expect(text).not.toContain("(deny process-exec)");

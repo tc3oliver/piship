@@ -46,7 +46,15 @@ const LAUNCH_ESCAPES = [
   (global-name "com.apple.coreservices.appleevents")
   (global-name "com.apple.appleeventsd")
   (global-name "com.apple.ScriptingAdditions"))`,
-  '(deny process-exec (literal "/bin/launchctl"))',
+  // The launch tools themselves may not run, matched by path and by code
+  // signature so a copy of the binary is refused too.
+  `(deny process-exec
+  (literal "/bin/launchctl")
+  (literal "/usr/bin/open")
+  (literal "/usr/bin/osascript")
+  (signing-identifier "com.apple.xpc.launchctl")
+  (signing-identifier "com.apple.open")
+  (signing-identifier "com.apple.osascript"))`,
 ];
 
 /** Quote a path as an SBPL string literal. Control characters are refused. */
