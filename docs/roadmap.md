@@ -21,3 +21,7 @@ Status: Linux is tested locally with real bubblewrap and end-to-end local fixtur
 ## Later: v0.4 — Production lifecycle
 
 Add verified release wrappers, update and rollback flows, SBOM, provenance, signing, and migration support around the existing payload. A future release pipeline may use Changesets, GitHub Releases, npm Trusted Publishing via OIDC, and npm provenance after ownership and release policy are settled.
+
+## Considered: remote execution backends
+
+v0.3 contains tool subprocesses with the host OS sandbox (bubblewrap on Linux, Seatbelt on macOS) so that commands run on the developer's machine against the local workspace. A company that wants commands to run on its own infrastructure instead could later add an optional remote execution backend, for example a KVM microVM service such as CubeSandbox. That needs workspace synchronization and a server deployment, so it is outside v0.3 and not scheduled.
