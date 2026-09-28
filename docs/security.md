@@ -61,7 +61,7 @@ For each request the policy engine takes the first matching rule of each layer a
 3. Distribution Defaults (`policy.defaults`), or
 4. a matching User rule from `<state>/config/policy.json`, which takes the default's place.
 
-When nothing matches, `policy.default` applies. A user may relax a default but never an enforced rule, and no team or project file can widen anything. `ask` needs an approval channel: before Pi starts, a y/N prompt on an interactive terminal; during a session, Pi's confirmation dialog. Headless runs (`--smoke`, piped input, no UI) have no channel, so `ask` resolves to deny. Denials name the policy, rule, and reason.
+When nothing matches, `policy.default` applies. A user may relax a default but never an enforced rule, and no team or project file can widen anything. `ask` needs an approval channel: before Pi starts, a y/N prompt on an interactive terminal; during a session, Pi's confirmation dialog. Launches without an interactive terminal or UI (`--smoke`, `--smoke-model`, or standard input that is not a TTY) have no channel, so `ask` resolves to deny. Denials name the policy, rule, and reason.
 
 ### Tools, shell, and Plan mode
 
@@ -143,6 +143,21 @@ Limits: release archives carry no macOS notarization or code signature and no Wi
 ## Logout and revocation
 
 `logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files but cannot revoke credentials; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback do not call revocation endpoints; run `logout` first when a credential must be revoked remotely.
+
+## Guarantees and their limits
+
+Within the enforcement plane each control names, PiShip provides: deterministic loading of only declared and admitted resources; resource, provider, and project trust decisions; model allowlist enforcement in managed mode; MCP governance for declared servers; static version and integrity verification of the payload and releases; storage and process-scoped injection of the credentials PiShip manages; inspectable configuration and explainable policy decisions; metadata-first audit where enabled; activation checks for a required sandbox; and reproducible static builds.
+
+PiShip does not and cannot guarantee:
+
+- protection from a machine administrator or anyone who can modify the installed payload, state, or inventory;
+- isolation that the configured OS sandbox does not provide, or any OS isolation on Windows;
+- that approved third-party code (extensions, providers, MCP servers) is trustworthy; loading it is a code-trust decision;
+- the correctness or security of the organization's identity provider, credential broker, inference gateway, upstream model providers, or external MCP servers;
+- prevention of every prompt-injection attack; project instructions are model input, not an enforcement mechanism;
+- endpoint controls that MDM, EDR, or network infrastructure normally provide.
+
+The two deployment modes have different credential trust models. In a managed gateway profile the organization keeps upstream provider and gateway administration credentials server-side, and the developer machine holds only the scoped runtime credential the broker issues. In personal mode the owner may intentionally keep personal provider credentials on the machine, either delegated to Pi-native auth in the distribution's isolated `agent/` directory or stored through a `local-secret` secret store; PiShip then protects the machine-local copy only as described under [Secrets](#secrets).
 
 ## Not covered
 

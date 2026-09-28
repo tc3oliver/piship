@@ -1,6 +1,40 @@
 # PiShip
 
-**Ship Pi as your company's coding agent, without forking Pi.** PiShip is an open-source, company-first distribution and governance framework around upstream Pi. It provides generic building blocks for branded, managed distributions; personal use is supported by the same architecture.
+**Ship Pi as your company's coding agent.** PiShip turns upstream Pi into a managed, branded coding-agent distribution without maintaining a Pi fork. Pi owns the agent runtime; PiShip owns the distribution: identity, runtime credentials, inference binding, managed resources, policy and trust, build, and lifecycle. It is an open-source, company-first distribution and governance framework: own the distribution, not the agent.
+
+Organizations plug in their existing single sign-on, credential broker, LLM gateway, policy, internal capabilities, and release process. Individuals use the same framework in personal mode to pin Pi, isolate its state, manage resources and models, and reproduce the setup on another machine.
+
+An excerpt of the [demo company manifest](examples/demo-company/piship.yaml):
+
+```yaml
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+runtime:
+  pi: "0.87.1"
+deployment:
+  mode: managed
+identity:
+  mode: oidc
+credential:
+  provider: http-broker
+inference:
+  provider: openai-compatible
+  baseUrl: ${ACMECODE_LLM_GATEWAY_URL}
+models:
+  default: acme/coder
+  allowed: [acme/coder, acme/general, acme/review]
+```
+
+```bash
+npm exec -- piship build examples/demo-company/piship.yaml
+node dist/acmecode/piship.mjs install dist/acmecode
+acmecode login
+acmecode
+```
+
+**Powered by Pi, governed by you.**
 
 **Current implementation:** v0.1 delivers the portable personal distribution core. v0.2 managed access and configuration is in preview: OIDC sign-in, broker-issued runtime credentials in the platform secret store, an explicit OpenAI-compatible gateway, model governance on the pinned Pi runtime, and layered configuration. It is verified with deterministic local fixtures only. v0.3 governance is implemented as an unreleased preview: a layered policy engine, resource and project trust, governed MCP, a Plan/Build workflow, an OS sandbox for tool subprocesses on Linux and macOS, and metadata-first audit. v0.4 production lifecycle is also an unreleased preview: per-target release archives with an SBOM, notices, and a vulnerability gate, Ed25519-signed update channels, verified update with atomic activation, and rollback. Nothing is published yet, and release archives carry no macOS or Windows code signature.
 
