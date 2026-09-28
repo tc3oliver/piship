@@ -38,6 +38,49 @@ export interface StartupLatencyMetric {
   readonly totalMs: number;
 }
 
+/** Operations whose duration is recorded, by fixed name. */
+export type LatencyMetricKind =
+  | "identity"
+  | "credential.acquire"
+  | "credential.refresh";
+const LATENCY_KINDS = new Set<string>([
+  "identity",
+  "credential.acquire",
+  "credential.refresh",
+]);
+
+export interface GatewayReachabilityMetric {
+  /** Result of the most recent gateway request or probe. */
+  readonly reachable: boolean;
+  /** PiShip error code of the most recent failure, when it was unreachable. */
+  readonly code?: string;
+  readonly reachableCount: number;
+  readonly unreachableCount: number;
+  /** Time of the most recent result. */
+  readonly checkedAt: string;
+  /** Time of the most recent reachable result. */
+  readonly lastReachableAt?: string;
+}
+
+export interface ModelCatalogMetric {
+  /** Time of the most recent successful catalog fetch. */
+  readonly fetchedAt: string;
+  /** Number of models in that catalog. */
+  readonly models: number;
+}
+
+/** Versions of the running distribution; semantic versions only. */
+export interface VersionsMetric {
+  readonly distribution: string;
+  readonly piship: string;
+  readonly pi: string;
+  readonly node?: string;
+  readonly updatedAt: string;
+}
+
+/** Load failures by component class: `resource` or `provider`. */
+export type LoadFailureKind = "resource" | "provider";
+
 /** Metadata-only operational signals. Every string is an identifier or code. */
 export interface MetricsSnapshot {
   readonly schema: typeof METRICS_SCHEMA;
@@ -49,6 +92,17 @@ export interface MetricsSnapshot {
   readonly startupLatency?: StartupLatencyMetric;
   /** Update, check, and rollback outcomes: `<kind>:ok` or `<kind>:<error code>`. */
   readonly lifecycle?: Readonly<Record<string, number>>;
+  /** Identity and credential durations, by operation. */
+  readonly latency?: Readonly<
+    Partial<Record<LatencyMetricKind, StartupLatencyMetric>>
+  >;
+  readonly gateway?: GatewayReachabilityMetric;
+  readonly modelCatalog?: ModelCatalogMetric;
+  /** Resource load failures by PiShip error code (`UNKNOWN` otherwise). */
+  readonly resourceLoadFailures?: Readonly<Record<string, number>>;
+  /** Provider load failures by PiShip error code (`UNKNOWN` otherwise). */
+  readonly providerLoadFailures?: Readonly<Record<string, number>>;
+  readonly versions?: VersionsMetric;
 }
 
 export type LifecycleMetricKind = "update" | "check" | "rollback";
@@ -90,6 +144,53 @@ function isTime(value: unknown): value is string {
   );
 }
 
+const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,32})?$/;
+
+function isVersion(value: unknown): value is string {
+  return typeof value === "string" && VERSION.test(value);
+}
+
+function isErrorKey(key: string): boolean {
+  return ERROR_CODES.has(key) || key === "UNKNOWN";
+}
+
+function durationStat(value: unknown): StartupLatencyMetric | undefined {
+  const item = value as Record<string, unknown> | null | undefined;
+  if (
+    item &&
+    typeof item === "object" &&
+    isCount(item.count) &&
+    isCount(item.lastMs) &&
+    isCount(item.minMs) &&
+    isCount(item.maxMs) &&
+    isCount(item.totalMs)
+  )
+    return {
+      count: item.count,
+      lastMs: item.lastMs,
+      minMs: item.minMs,
+      maxMs: item.maxMs,
+      totalMs: item.totalMs,
+    };
+  return undefined;
+}
+
+function addDuration(
+  current: StartupLatencyMetric | undefined,
+  ms: number,
+): StartupLatencyMetric {
+  const value = Math.round(ms);
+  return current
+    ? {
+        count: current.count + 1,
+        lastMs: value,
+        minMs: Math.min(current.minMs, value),
+        maxMs: Math.max(current.maxMs, value),
+        totalMs: current.totalMs + value,
+      }
+    : { count: 1, lastMs: value, minMs: value, maxMs: value, totalMs: value };
+}
+
 function counters(
   value: unknown,
   accept: (key: string) => boolean,
@@ -114,6 +215,12 @@ export class LocalMetrics {
   #startupFailures: Record<string, number> = {};
   #startupLatency: StartupLatencyMetric | undefined;
   #lifecycle: Record<string, number> = {};
+  #latency: Partial<Record<LatencyMetricKind, StartupLatencyMetric>> = {};
+  #gateway: GatewayReachabilityMetric | undefined;
+  #modelCatalog: ModelCatalogMetric | undefined;
+  #resourceLoadFailures: Record<string, number> = {};
+  #providerLoadFailures: Record<string, number> = {};
+  #versions: VersionsMetric | undefined;
   #updatedAt: string;
 
   constructor(stateDir: string, options: { readonly now?: () => Date } = {}) {
@@ -176,18 +283,93 @@ export class LocalMetrics {
 
   recordStartupLatency(ms: number): void {
     if (!Number.isFinite(ms) || ms < 0) return;
-    const value = Math.round(ms);
-    const current = this.#startupLatency;
-    this.#startupLatency = current
-      ? {
-          count: current.count + 1,
-          lastMs: value,
-          minMs: Math.min(current.minMs, value),
-          maxMs: Math.max(current.maxMs, value),
-          totalMs: current.totalMs + value,
-        }
-      : { count: 1, lastMs: value, minMs: value, maxMs: value, totalMs: value };
+    this.#startupLatency = addDuration(this.#startupLatency, ms);
     this.#touch();
+  }
+
+  /**
+   * Duration of an identity sign-in or session check (`identity`), or of a
+   * credential acquisition or refresh (`credential.acquire`,
+   * `credential.refresh`), in milliseconds.
+   */
+  recordLatency(kind: LatencyMetricKind, ms: number): void {
+    if (!LATENCY_KINDS.has(kind) || !Number.isFinite(ms) || ms < 0) return;
+    this.#latency[kind] = addDuration(this.#latency[kind], ms);
+    this.#touch();
+  }
+
+  recordIdentityLatency(ms: number): void {
+    this.recordLatency("identity", ms);
+  }
+
+  recordCredentialLatency(operation: "acquire" | "refresh", ms: number): void {
+    if (operation !== "acquire" && operation !== "refresh") return;
+    this.recordLatency(`credential.${operation}`, ms);
+  }
+
+  /**
+   * Result of a gateway request or probe. Unreachable results carry a PiShip
+   * error code (`UNKNOWN` otherwise); never a URL, host, or response.
+   */
+  recordGatewayReachability(reachable: boolean, code?: string): void {
+    if (typeof reachable !== "boolean") return;
+    const current = this.#gateway;
+    const checkedAt = this.#touch();
+    const lastReachableAt = reachable ? checkedAt : current?.lastReachableAt;
+    this.#gateway = {
+      reachable,
+      ...(reachable
+        ? {}
+        : { code: code && ERROR_CODES.has(code) ? code : "UNKNOWN" }),
+      reachableCount: (current?.reachableCount ?? 0) + (reachable ? 1 : 0),
+      unreachableCount: (current?.unreachableCount ?? 0) + (reachable ? 0 : 1),
+      checkedAt,
+      ...(lastReachableAt ? { lastReachableAt } : {}),
+    };
+  }
+
+  /** A successful model catalog fetch and its model count; never model data. */
+  recordModelCatalogFetch(models: number): void {
+    if (!isCount(models)) return;
+    this.#modelCatalog = { fetchedAt: this.#touch(), models };
+  }
+
+  /** Count a resource or provider load failure by PiShip error code. */
+  recordLoadFailure(kind: LoadFailureKind, code: string): void {
+    const target =
+      kind === "resource"
+        ? this.#resourceLoadFailures
+        : kind === "provider"
+          ? this.#providerLoadFailures
+          : undefined;
+    if (!target) return;
+    this.#increment(target, ERROR_CODES.has(code) ? code : "UNKNOWN");
+  }
+
+  /**
+   * Distribution, PiShip, Pi, and Node versions of the running release.
+   * Ignored unless every given value is a semantic version.
+   */
+  recordVersions(versions: {
+    readonly distribution: string;
+    readonly piship: string;
+    readonly pi: string;
+    readonly node?: string;
+  }): void {
+    if (
+      !isVersion(versions.distribution) ||
+      !isVersion(versions.piship) ||
+      !isVersion(versions.pi) ||
+      (versions.node !== undefined && !isVersion(versions.node))
+    )
+      return;
+    this.#versions = {
+      distribution: versions.distribution,
+      piship: versions.piship,
+      pi: versions.pi,
+      ...(versions.node !== undefined ? { node: versions.node } : {}),
+      updatedAt: this.#touch(),
+    };
   }
 
   /** Count an update, check, or rollback by outcome (`ok` or an error code). */
@@ -212,6 +394,20 @@ export class LocalMetrics {
       ...(Object.keys(this.#lifecycle).length
         ? { lifecycle: { ...this.#lifecycle } }
         : {}),
+      ...(Object.keys(this.#latency).length
+        ? { latency: structuredClone(this.#latency) }
+        : {}),
+      ...(this.#gateway ? { gateway: { ...this.#gateway } } : {}),
+      ...(this.#modelCatalog
+        ? { modelCatalog: { ...this.#modelCatalog } }
+        : {}),
+      ...(Object.keys(this.#resourceLoadFailures).length
+        ? { resourceLoadFailures: { ...this.#resourceLoadFailures } }
+        : {}),
+      ...(Object.keys(this.#providerLoadFailures).length
+        ? { providerLoadFailures: { ...this.#providerLoadFailures } }
+        : {}),
+      ...(this.#versions ? { versions: { ...this.#versions } } : {}),
     };
   }
 
@@ -297,21 +493,67 @@ export class LocalMetrics {
         ...(isIdentifier(sandbox.adapter) ? { adapter: sandbox.adapter } : {}),
         updatedAt: sandbox.updatedAt,
       };
-    const latency = value.startupLatency as Record<string, unknown> | undefined;
+    this.#startupLatency = durationStat(value.startupLatency);
+    if (value.latency && typeof value.latency === "object")
+      for (const [kind, entry] of Object.entries(value.latency)) {
+        const stat = durationStat(entry);
+        if (LATENCY_KINDS.has(kind) && stat)
+          this.#latency[kind as LatencyMetricKind] = stat;
+      }
+    const gateway = value.gateway as Record<string, unknown> | undefined;
     if (
-      latency &&
-      isCount(latency.count) &&
-      isCount(latency.lastMs) &&
-      isCount(latency.minMs) &&
-      isCount(latency.maxMs) &&
-      isCount(latency.totalMs)
+      gateway &&
+      typeof gateway.reachable === "boolean" &&
+      isCount(gateway.reachableCount) &&
+      isCount(gateway.unreachableCount) &&
+      isTime(gateway.checkedAt)
+    ) {
+      const code =
+        typeof gateway.code === "string" && isErrorKey(gateway.code)
+          ? gateway.code
+          : undefined;
+      this.#gateway = {
+        reachable: gateway.reachable,
+        ...(!gateway.reachable ? { code: code ?? "UNKNOWN" } : {}),
+        reachableCount: gateway.reachableCount,
+        unreachableCount: gateway.unreachableCount,
+        checkedAt: gateway.checkedAt,
+        ...(isTime(gateway.lastReachableAt)
+          ? { lastReachableAt: gateway.lastReachableAt }
+          : {}),
+      };
+    }
+    const catalog = value.modelCatalog as Record<string, unknown> | undefined;
+    if (catalog && isTime(catalog.fetchedAt) && isCount(catalog.models))
+      this.#modelCatalog = {
+        fetchedAt: catalog.fetchedAt,
+        models: catalog.models,
+      };
+    this.#resourceLoadFailures = counters(
+      value.resourceLoadFailures,
+      isErrorKey,
+    );
+    this.#providerLoadFailures = counters(
+      value.providerLoadFailures,
+      isErrorKey,
+    );
+    const versions = value.versions as Record<string, unknown> | undefined;
+    if (
+      versions &&
+      isVersion(versions.distribution) &&
+      isVersion(versions.piship) &&
+      isVersion(versions.pi) &&
+      (versions.node === undefined || isVersion(versions.node)) &&
+      isTime(versions.updatedAt)
     )
-      this.#startupLatency = {
-        count: latency.count,
-        lastMs: latency.lastMs,
-        minMs: latency.minMs,
-        maxMs: latency.maxMs,
-        totalMs: latency.totalMs,
+      this.#versions = {
+        distribution: versions.distribution,
+        piship: versions.piship,
+        pi: versions.pi,
+        ...(versions.node !== undefined
+          ? { node: versions.node as string }
+          : {}),
+        updatedAt: versions.updatedAt,
       };
   }
 }

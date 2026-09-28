@@ -116,6 +116,219 @@ describe("LocalMetrics", () => {
     });
   });
 
+  it("records identity and credential latency by fixed operation", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    expect(metrics.snapshot()).not.toHaveProperty("latency");
+    metrics.recordIdentityLatency(120.6);
+    metrics.recordIdentityLatency(80);
+    metrics.recordCredentialLatency("acquire", 40);
+    metrics.recordCredentialLatency("refresh", 15);
+    metrics.recordCredentialLatency("refresh", 25);
+    metrics.recordLatency("identity", -1);
+    metrics.recordLatency("identity", Number.POSITIVE_INFINITY);
+    metrics.recordLatency("token sk-abc" as never, 5);
+    metrics.recordCredentialLatency("revoke" as never, 5);
+    metrics.save();
+    const expected = {
+      identity: { count: 2, lastMs: 80, minMs: 80, maxMs: 121, totalMs: 201 },
+      "credential.acquire": {
+        count: 1,
+        lastMs: 40,
+        minMs: 40,
+        maxMs: 40,
+        totalMs: 40,
+      },
+      "credential.refresh": {
+        count: 2,
+        lastMs: 25,
+        minMs: 15,
+        maxMs: 25,
+        totalMs: 40,
+      },
+    };
+    expect(metrics.snapshot().latency).toEqual(expected);
+    expect(LocalMetrics.load(temp, { now }).snapshot().latency).toEqual(
+      expected,
+    );
+  });
+
+  it("records gateway reachability as the last result, its time, and counts", () => {
+    let clock = new Date("2026-09-28T10:00:00.000Z");
+    const metrics = new LocalMetrics(temp, { now: () => clock });
+    expect(metrics.snapshot()).not.toHaveProperty("gateway");
+    metrics.recordGatewayReachability(true);
+    clock = new Date("2026-09-28T10:05:00.000Z");
+    metrics.recordGatewayReachability(false, "NETWORK_DENIED");
+    expect(metrics.snapshot().gateway).toEqual({
+      reachable: false,
+      code: "NETWORK_DENIED",
+      reachableCount: 1,
+      unreachableCount: 1,
+      checkedAt: "2026-09-28T10:05:00.000Z",
+      lastReachableAt: "2026-09-28T10:00:00.000Z",
+    });
+    clock = new Date("2026-09-28T10:06:00.000Z");
+    metrics.recordGatewayReachability(
+      false,
+      "connect ECONNREFUSED https://gateway.acme.example/v1",
+    );
+    expect(metrics.snapshot().gateway?.code).toBe("UNKNOWN");
+    clock = new Date("2026-09-28T10:07:00.000Z");
+    metrics.recordGatewayReachability(true);
+    metrics.save();
+    const expected = {
+      reachable: true,
+      reachableCount: 2,
+      unreachableCount: 2,
+      checkedAt: "2026-09-28T10:07:00.000Z",
+      lastReachableAt: "2026-09-28T10:07:00.000Z",
+    };
+    expect(metrics.snapshot().gateway).toEqual(expected);
+    expect(LocalMetrics.load(temp, { now }).snapshot().gateway).toEqual(
+      expected,
+    );
+  });
+
+  it("records model catalog freshness without model data", () => {
+    let clock = new Date("2026-09-28T09:00:00.000Z");
+    const metrics = new LocalMetrics(temp, { now: () => clock });
+    expect(metrics.snapshot()).not.toHaveProperty("modelCatalog");
+    metrics.recordModelCatalogFetch(3);
+    clock = new Date("2026-09-28T10:00:00.000Z");
+    metrics.recordModelCatalogFetch(4);
+    metrics.recordModelCatalogFetch(-1);
+    metrics.recordModelCatalogFetch(1.5);
+    metrics.save();
+    const expected = { fetchedAt: "2026-09-28T10:00:00.000Z", models: 4 };
+    expect(metrics.snapshot().modelCatalog).toEqual(expected);
+    expect(LocalMetrics.load(temp, { now }).snapshot().modelCatalog).toEqual(
+      expected,
+    );
+  });
+
+  it("counts resource and provider load failures separately by error code", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    expect(metrics.snapshot()).not.toHaveProperty("resourceLoadFailures");
+    expect(metrics.snapshot()).not.toHaveProperty("providerLoadFailures");
+    metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+    metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+    metrics.recordLoadFailure("resource", "ENOENT /home/alice/AGENTS.md");
+    metrics.recordLoadFailure("provider", "CONFIG_INVALID");
+    metrics.recordLoadFailure("extension" as never, "CONFIG_INVALID");
+    metrics.save();
+    const reloaded = LocalMetrics.load(temp, { now }).snapshot();
+    expect(reloaded.resourceLoadFailures).toEqual({
+      INTEGRITY_FAILED: 2,
+      UNKNOWN: 1,
+    });
+    expect(reloaded.providerLoadFailures).toEqual({ CONFIG_INVALID: 1 });
+    expect(reloaded.startupFailures).toEqual({});
+  });
+
+  it("records runtime and distribution versions only as semantic versions", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    expect(metrics.snapshot()).not.toHaveProperty("versions");
+    metrics.recordVersions({
+      distribution: "1.1.0",
+      piship: "0.1.0",
+      pi: "0.87.1",
+      node: "22.19.0",
+    });
+    metrics.recordVersions({
+      distribution: "1.2.0 built from /home/alice",
+      piship: "0.1.0",
+      pi: "0.87.1",
+    });
+    metrics.recordVersions({
+      distribution: "1.2.0",
+      piship: "0.1.0",
+      pi: "0.87.1",
+      node: "v22",
+    });
+    metrics.save();
+    const expected = {
+      distribution: "1.1.0",
+      piship: "0.1.0",
+      pi: "0.87.1",
+      node: "22.19.0",
+      updatedAt: "2026-09-28T10:00:00.000Z",
+    };
+    expect(metrics.snapshot().versions).toEqual(expected);
+    expect(LocalMetrics.load(temp, { now }).snapshot().versions).toEqual(
+      expected,
+    );
+    metrics.recordVersions({
+      distribution: "2.0.0-rc.1",
+      piship: "0.2.0",
+      pi: "0.88.0",
+    });
+    expect(metrics.snapshot().versions).toEqual({
+      distribution: "2.0.0-rc.1",
+      piship: "0.2.0",
+      pi: "0.88.0",
+      updatedAt: "2026-09-28T10:00:00.000Z",
+    });
+  });
+
+  it("drops tampered observability entries when loading", () => {
+    const path = join(temp, "logs", "metrics.json");
+    new LocalMetrics(temp, { now }).save();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: METRICS_SCHEMA,
+        updatedAt: "2026-09-28T09:00:00.000Z",
+        policyDenials: {},
+        mcpHealth: {},
+        startupFailures: {},
+        latency: {
+          identity: { count: 1, lastMs: 5, minMs: 5, maxMs: 5, totalMs: 5 },
+          "credential.acquire": { count: -1 },
+          "token sk-abc": {
+            count: 1,
+            lastMs: 5,
+            minMs: 5,
+            maxMs: 5,
+            totalMs: 5,
+          },
+        },
+        gateway: {
+          reachable: false,
+          code: "https://gateway.acme.example rejected bearer sk-abc",
+          reachableCount: 0,
+          unreachableCount: 1,
+          checkedAt: "2026-09-28T09:00:00.000Z",
+          lastReachableAt: "yesterday",
+        },
+        modelCatalog: { fetchedAt: "2026-09-28T09:00:00.000Z", models: "gpt" },
+        resourceLoadFailures: { CONFIG_INVALID: 1, "/home/alice": 1 },
+        providerLoadFailures: { "prompt text": 3 },
+        versions: {
+          distribution: "1.0.0",
+          piship: "0.1.0",
+          pi: "secret",
+          updatedAt: "2026-09-28T09:00:00.000Z",
+        },
+      }),
+    );
+    const snapshot = LocalMetrics.load(temp, { now }).snapshot();
+    expect(snapshot.latency).toEqual({
+      identity: { count: 1, lastMs: 5, minMs: 5, maxMs: 5, totalMs: 5 },
+    });
+    expect(snapshot.gateway).toEqual({
+      reachable: false,
+      code: "UNKNOWN",
+      reachableCount: 0,
+      unreachableCount: 1,
+      checkedAt: "2026-09-28T09:00:00.000Z",
+    });
+    expect(snapshot).not.toHaveProperty("modelCatalog");
+    expect(snapshot.resourceLoadFailures).toEqual({ CONFIG_INVALID: 1 });
+    expect(snapshot).not.toHaveProperty("providerLoadFailures");
+    expect(snapshot).not.toHaveProperty("versions");
+    expect(JSON.stringify(snapshot)).not.toMatch(/sk-|alice|acme|prompt/);
+  });
+
   it("never stores content-like strings", () => {
     const metrics = new LocalMetrics(temp, { now });
     metrics.recordPolicyDenial("cat ~/.ssh/id_rsa");
