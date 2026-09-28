@@ -12,16 +12,10 @@
       "path": "../core"
     },
     {
-      "path": "../pi"
-    },
-    {
       "path": "../schema"
     },
     {
       "path": "../contracts"
-    },
-    {
-      "path": "../policy"
     }
   ]
 }
