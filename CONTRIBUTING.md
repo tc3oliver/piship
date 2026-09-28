@@ -13,6 +13,8 @@ npm run check
 
 `npm run check` covers formatting, lint, types, package boundaries, tests, and build. For CLI changes, run `npm run test:e2e`. For Pi integration changes, run `npm run test:compatibility`.
 
+Every PR runs fast CI. The three-target portable E2E workflow runs when package, installer, launcher, payload, resource, state, compatibility metadata, test, or relevant workflow inputs change; documentation-only PRs skip the large payload assembly. `workflow_dispatch` can force portable E2E on the exact final release-candidate HEAD. Pi compatibility runs separately and does not repeat portable E2E. Final v0.1 qualification requires both three-target workflows and CodeQL green on the candidate HEAD.
+
 ## Choose the right place
 
 | Change | Start in |

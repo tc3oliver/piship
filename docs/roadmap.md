@@ -1,6 +1,6 @@
 # Roadmap
 
-PiShip is in early development. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
+PiShip is a company-first open-source distribution and governance framework around upstream Pi. The current v0.1 implementation is the portable personal foundation; managed access, governance/security, and production lifecycle follow in later milestones. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
 
 ## Now: v0.1 — Distribution core
 

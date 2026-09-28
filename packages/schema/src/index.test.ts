@@ -23,6 +23,22 @@ describe("alpha manifest", () => {
         .app.name,
     ).toBe("Secret Agent");
   });
+  it.each(["1.0.0", "1.2.3-alpha.1", "1.2.3+build.5", "1.2.3-alpha.1+build.5"])(
+    "accepts SemVer 2.0.0 version %s",
+    (version) => {
+      expect(
+        parseManifest({ ...valid, app: { ...valid.app, version } }).app.version,
+      ).toBe(version);
+    },
+  );
+  it.each(["1.2.3-", "1.2.3-alpha..1", "1.2.3-01", "1.2.3+", "01.2.3"])(
+    "rejects invalid SemVer version %s",
+    (version) => {
+      expect(() =>
+        parseManifest({ ...valid, app: { ...valid.app, version } }),
+      ).toThrow("app.version");
+    },
+  );
   it.each([
     [{ ...valid, schema: "piship/v1" }, "schema mismatch"],
     [

@@ -69,10 +69,13 @@ export interface DistributionLock {
   readonly resources: readonly LockedResource[];
   readonly declared: Manifest["resources"];
 }
-const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+// This input is prepared with the @piship/core build, and travels with that package.
+const buildInput =
+  process.env.PISHIP_BUILD_INPUT ??
+  fileURLToPath(new URL("./build-input/", import.meta.url));
 const workspacePackages = ["schema", "core", "pi", "cli"] as const;
 function runtimeDependencies(): DistributionLock["runtime"] {
-  const source = readFileSync(join(workspaceRoot, "package-lock.json"));
+  const source = readFileSync(join(buildInput, "package-lock.json"));
   const npmLock = JSON.parse(source.toString()) as {
     packages: Record<
       string,
@@ -301,6 +304,7 @@ function removeNpmBins(directory: string): void {
   }
 }
 export function verifyPayload(directory: string): DistributionLock {
+  const started = process.hrtime.bigint();
   const root = resolve(directory);
   const inventoryPath = join(root, "metadata", "inventory.json");
   const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
@@ -320,7 +324,7 @@ export function verifyPayload(directory: string): DistributionLock {
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
     );
   const lock = JSON.parse(
-    readFileSync(join(root, "metadata", "distribution.json"), "utf8"),
+    readFileSync(join(root, "piship.lock"), "utf8"),
   ) as DistributionLock;
   const manifest = readManifest(join(root, "piship.yaml"));
   if (
@@ -335,7 +339,28 @@ export function verifyPayload(directory: string): DistributionLock {
     hash(readFileSync(join(root, "package-lock.json")))
   )
     throw new Error("Installed npm lock mismatch; reinstall this distribution");
+  if (process.env.PISHIP_DEBUG_TIMING === "1")
+    process.stderr.write(
+      `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${Object.keys(actual).length} files)\n`,
+    );
   return lock;
+}
+// Doctor only needs the command name here. The launcher performs the complete
+// integrity verification before importing Pi, including this lockfile.
+export function payloadApp(directory: string): DistributionLock["app"] {
+  try {
+    const lock = JSON.parse(
+      readFileSync(join(resolve(directory), "piship.lock"), "utf8"),
+    ) as DistributionLock;
+    const command = lock.app?.command;
+    if (command && /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(command))
+      return lock.app;
+  } catch {
+    // The launcher will verify the complete payload for a well-formed lock.
+  }
+  throw new Error(
+    "Installed payload integrity mismatch; reinstall this distribution",
+  );
 }
 export function buildDistribution(
   manifestPath: string,
@@ -347,26 +372,21 @@ export function buildDistribution(
   mkdirSync(outputRoot, { recursive: true });
   const stage = mkdtempSync(join(outputRoot, `.piship-${lock.app.id}-`));
   try {
+    copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
     copyFileSync(
-      join(workspaceRoot, "package.json"),
-      join(stage, "package.json"),
-    );
-    copyFileSync(
-      join(workspaceRoot, "package-lock.json"),
+      join(buildInput, "package-lock.json"),
       join(stage, "package-lock.json"),
     );
     for (const name of workspacePackages) {
       const folder = join(stage, "packages", name);
       mkdirSync(folder, { recursive: true });
       copyFileSync(
-        join(workspaceRoot, "packages", name, "package.json"),
+        join(buildInput, "packages", name, "package.json"),
         join(folder, "package.json"),
       );
-      cpSync(
-        join(workspaceRoot, "packages", name, "dist"),
-        join(folder, "dist"),
-        { recursive: true },
-      );
+      cpSync(join(buildInput, "packages", name, "dist"), join(folder, "dist"), {
+        recursive: true,
+      });
     }
     const install =
       process.platform === "win32"
@@ -388,6 +408,11 @@ export function buildDistribution(
       rmSync(target, { recursive: true, force: true });
       cpSync(join(stage, "packages", name), target, { recursive: true });
     }
+    cpSync(
+      buildInput,
+      join(stage, "node_modules", "@piship", "core", "dist", "build-input"),
+      { recursive: true },
+    );
     rmSync(join(stage, "packages"), { recursive: true, force: true });
     removeNpmBins(join(stage, "node_modules"));
     mkdirSync(join(stage, "bin"), { recursive: true });
@@ -398,10 +423,7 @@ export function buildDistribution(
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(join(base, resource.path), target);
     }
-    writeFileSync(
-      join(stage, "metadata", "distribution.json"),
-      `${JSON.stringify(lock, null, 2)}\n`,
-    );
+    copyFileSync(join(base, "piship.lock"), join(stage, "piship.lock"));
     writeFileSync(
       join(stage, "metadata", "target.json"),
       `${JSON.stringify({ platform: process.platform, arch: process.arch }, null, 2)}\n`,

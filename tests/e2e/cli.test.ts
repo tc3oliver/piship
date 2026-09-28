@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -74,34 +75,75 @@ describe("CLI", () => {
     expect(cli("validate", manifest).status).toBe(0);
     expect(cli("lock", manifest).status).toBe(0);
     expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
-    const acceptance = spawnSync(process.execPath, [bin, "test", manifest], {
-      cwd: temp,
-      env: { ...process.env, PISHIP_STATE_HOME: join(temp, "state") },
-      encoding: "utf8",
-    });
-    expect(acceptance.status, acceptance.stderr).toBe(0);
-    expect(acceptance.stdout).toContain("Personal acceptance passed");
-  }, 120000);
+  });
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-install-"));
     temporary.push(temp);
     const example = join(temp, "example");
     cpSync(join(root, "examples/personal"), example, { recursive: true });
     const manifest = join(example, "piship.yaml");
+    expect(cli("validate", manifest).stdout).toContain("Manifest is valid.");
     expect(cli("lock", manifest).status).toBe(0);
-    expect(cli("build", manifest).status).toBe(0);
-    const relocated = join(temp, "relocated");
-    cpSync(join(root, "dist", "mypi"), relocated, { recursive: true });
-    const env = {
+    const originalLock = readFileSync(join(example, "piship.lock"), "utf8");
+    expect(originalLock).toContain("resources/extensions/demo/helper.ts");
+    expect(cli("lock", manifest).status).toBe(0);
+    expect(readFileSync(join(example, "piship.lock"), "utf8")).toBe(
+      originalLock,
+    );
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       PISHIP_INSTALL_HOME: join(temp, "install's"),
       PISHIP_BIN_HOME: join(temp, "bin"),
       PISHIP_STATE_HOME: join(temp, "state"),
       HOME: join(temp, "home"),
       USERPROFILE: join(temp, "home"),
+      PISHIP_DEBUG_TIMING: "1",
     };
+    delete env.PISHIP_BUILD_INPUT;
+    const localCli = (...args: string[]) =>
+      spawnSync(process.execPath, [bin, ...args], {
+        cwd: temp,
+        env,
+        encoding: "utf8",
+      });
+    const acceptance = spawnSync(process.execPath, [bin, "test", manifest], {
+      cwd: temp,
+      env: { ...env, PISHIP_STATE_HOME: join(temp, "acceptance-state") },
+      encoding: "utf8",
+    });
+    expect(acceptance.status, acceptance.stderr).toBe(0);
+    expect(acceptance.stdout).toContain("Personal acceptance passed");
+    const built = join(temp, "dist", "mypi");
+    const firstInventory = readFileSync(
+      join(built, "metadata", "inventory.json"),
+    );
+    const spare = join(temp, "spare-build");
+    renameSync(built, spare);
+    expect(localCli("build", manifest).status).toBe(0);
+    expect(readFileSync(join(built, "metadata", "inventory.json"))).toEqual(
+      firstInventory,
+    );
+    const helper = join(
+      example,
+      "resources",
+      "extensions",
+      "demo",
+      "helper.ts",
+    );
+    const originalHelper = readFileSync(helper);
+    writeFileSync(helper, 'export const helper = "changed";\n');
+    expect(localCli("build", manifest).stderr).toContain("stale");
+    expect(localCli("lock", manifest).status).toBe(0);
+    expect(readFileSync(join(example, "piship.lock"), "utf8")).not.toBe(
+      originalLock,
+    );
+    writeFileSync(helper, originalHelper);
+    expect(localCli("lock", manifest).status).toBe(0);
+    const relocated = join(temp, "relocated");
+    renameSync(built, relocated);
+    let manager = join(relocated, "piship.mjs");
     const command = (...args: string[]) =>
-      spawnSync(process.execPath, [join(relocated, "piship.mjs"), ...args], {
+      spawnSync(process.execPath, [manager, ...args], {
         cwd: temp,
         env,
         encoding: "utf8",
@@ -109,6 +151,10 @@ describe("CLI", () => {
     const installed = command("install", relocated);
     expect(installed.status, installed.stderr).toBe(0);
     expect(command("install", relocated).stderr).toContain("collision");
+    rmSync(relocated, { recursive: true, force: true });
+    rmSync(example, { recursive: true, force: true });
+    manager = join(temp, "install's", "apps", "mypi", "1.0.0", "piship.mjs");
+    expect(command("inspect", "mypi").status).toBe(0);
     createAmbientResources(temp);
     const installedCommand = join(
       temp,
@@ -134,6 +180,8 @@ describe("CLI", () => {
           });
     const first = launch();
     expect(first.status, first.stderr).toBe(0);
+    expect(first.stderr).toContain("verifyPayload:");
+    console.info(first.stderr.trim());
     const brandedVersion =
       process.platform === "win32"
         ? spawnSync(
@@ -199,12 +247,20 @@ describe("CLI", () => {
       prompts: ["demo"],
       themes: ["mypi"],
     });
+    expect(command("doctor", "mypi").status).toBe(0);
     const otherRoot = join(temp, "other-agent");
     const otherManifest = join(otherRoot, "piship.yaml");
-    expect(cli("init", otherRoot).status).toBe(0);
-    expect(cli("lock", otherManifest).status).toBe(0);
-    expect(cli("build", otherManifest).status).toBe(0);
-    expect(command("install", join(root, "dist", "other-agent")).status).toBe(
+    const relocatedBuilder = (...args: string[]) =>
+      spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
+        cwd: temp,
+        env,
+        encoding: "utf8",
+      });
+    expect(relocatedBuilder("init", otherRoot).status).toBe(0);
+    expect(relocatedBuilder("lock", otherManifest).status).toBe(0);
+    const otherBuild = relocatedBuilder("build", otherManifest);
+    expect(otherBuild.status, otherBuild.stderr).toBe(0);
+    expect(command("install", join(temp, "dist", "other-agent")).status).toBe(
       0,
     );
     const otherLauncher = join(
@@ -241,13 +297,24 @@ describe("CLI", () => {
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
     expect(command("doctor", "mypi").status).toBe(0);
     const payload = join(temp, "install's", "apps", "mypi", "1.0.0");
+    expect(readFileSync(join(payload, "piship.lock"), "utf8")).toBe(
+      originalLock,
+    );
+    expect(
+      JSON.parse(
+        readFileSync(join(payload, "metadata", "inventory.json"), "utf8"),
+      )["piship.lock"],
+    ).toMatch(/^[a-f0-9]{64}$/);
+    expect(existsSync(join(payload, "metadata", "distribution.json"))).toBe(
+      false,
+    );
     const resource = join(payload, "resources", "resources", "AGENTS.md");
     const original = readFileSync(resource);
     writeFileSync(resource, "tampered\n");
     expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
     writeFileSync(resource, original);
     for (const path of [
-      join(payload, "metadata", "distribution.json"),
+      join(payload, "piship.lock"),
       join(payload, "piship.yaml"),
       join(
         payload,
@@ -264,6 +331,8 @@ describe("CLI", () => {
         Buffer.concat([content, Buffer.from("\n// altered\n")]),
       );
       expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
+      if (path === join(payload, "piship.lock"))
+        expect(launch().stderr).toContain("integrity mismatch");
       writeFileSync(path, content);
     }
     expect(command("uninstall", "mypi").status).toBe(0);
@@ -276,17 +345,17 @@ describe("CLI", () => {
       PISHIP_BIN_HOME: join(temp, "moved-bin"),
     };
     const movedCommand = (...args: string[]) =>
-      spawnSync(process.execPath, [join(relocated, "piship.mjs"), ...args], {
+      spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
         cwd: temp,
         env: movedEnv,
         encoding: "utf8",
       });
-    expect(movedCommand("install", relocated).stderr).toContain(
+    expect(movedCommand("install", spare).stderr).toContain(
       "State already exists",
     );
-    expect(
-      movedCommand("install", relocated, "--use-existing-state").status,
-    ).toBe(0);
+    expect(movedCommand("install", spare, "--use-existing-state").status).toBe(
+      0,
+    );
     const movedLauncher = join(
       temp,
       "moved-bin",
@@ -315,102 +384,10 @@ describe("CLI", () => {
       resumed: true,
     });
     expect(movedCommand("uninstall", "mypi").status).toBe(0);
-    expect(command("purge", "mypi").status).toBe(1);
-    expect(command("purge", "mypi", "--yes").status).toBe(0);
+    expect(movedCommand("purge", "mypi").status).toBe(1);
+    expect(movedCommand("purge", "mypi", "--yes").status).toBe(0);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(false);
   }, 360000);
-  it("validates, locks, builds and starts real Pi without a model call", () => {
-    const temp = mkdtempSync(join(tmpdir(), "piship-e2e-"));
-    temporary.push(temp);
-    const example = join(temp, "personal");
-    cpSync(join(root, "examples/personal"), example, { recursive: true });
-    const manifest = join(example, "piship.yaml");
-    expect(cli("validate", manifest).stdout).toContain("Manifest is valid.");
-    expect(cli("lock", manifest).status).toBe(0);
-    const lock = readFileSync(join(example, "piship.lock"), "utf8");
-    expect(lock).toContain("resources/extensions/demo/index.ts");
-    expect(lock).toContain("resources/extensions/demo/helper.ts");
-    const lockedHelper = JSON.parse(lock).resources.find(
-      (item: { path: string; sha256: string }) =>
-        item.path === "resources/extensions/demo/helper.ts",
-    ) as { sha256: string } | undefined;
-    expect(lockedHelper?.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(cli("lock", manifest).status).toBe(0);
-    expect(readFileSync(join(example, "piship.lock"), "utf8")).toBe(lock);
-    expect(cli("build", manifest).status).toBe(0);
-    const inventory = readFileSync(
-      join(root, "dist", "mypi", "metadata", "inventory.json"),
-      "utf8",
-    );
-    expect(cli("build", manifest).status).toBe(0);
-    expect(
-      readFileSync(
-        join(root, "dist", "mypi", "metadata", "inventory.json"),
-        "utf8",
-      ),
-    ).toBe(inventory);
-    const command = join(root, "dist/mypi/bin/mypi");
-    expect(existsSync(command)).toBe(true);
-    createAmbientResources(temp);
-    const env = {
-      ...process.env,
-      PISHIP_STATE_HOME: join(temp, "state"),
-      HOME: join(temp, "home"),
-      USERPROFILE: join(temp, "home"),
-      PI_CODING_AGENT_DIR: join(temp, "hostile-pi"),
-    };
-    const launch =
-      process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${command}.cmd" --smoke`],
-            {
-              cwd: temp,
-              env,
-              encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
-        : spawnSync(command, ["--smoke"], { cwd: temp, env, encoding: "utf8" });
-    expect(launch.status, launch.stderr).toBe(0);
-    const result = JSON.parse(launch.stdout.trim()) as {
-      initialized: boolean;
-      piVersion: string;
-      agentDir: string;
-      skills: string[];
-      extensions: number;
-      extensionPaths: string[];
-      prompts: string[];
-      themes: string[];
-      instructions: string[];
-    };
-    expect(result).toMatchObject({
-      initialized: true,
-      piVersion: "0.87.1",
-      skills: ["demo-skill"],
-      extensions: 1,
-      prompts: ["demo"],
-      themes: ["mypi"],
-    });
-    expect(result.agentDir).toContain(join(temp, "state", "mypi"));
-    expect(result.instructions).toEqual([
-      join(root, "dist/mypi/resources/resources/AGENTS.md"),
-    ]);
-    expect(result.extensionPaths).toEqual([
-      join(root, "dist/mypi/resources/resources/extensions/demo"),
-    ]);
-    expect(existsSync(join(temp, "home", ".pi", "agent", "auth.json"))).toBe(
-      false,
-    );
-    writeFileSync(
-      join(example, "resources", "extensions", "demo", "helper.ts"),
-      'export const helper = "changed";\n',
-    );
-    expect(cli("build", manifest).stderr).toContain("stale");
-    expect(cli("lock", manifest).status).toBe(0);
-    const updated = readFileSync(join(example, "piship.lock"), "utf8");
-    expect(updated).not.toBe(lock);
-  }, 120000);
   it("rejects managed manifests before lock or build output", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-managed-"));
     temporary.push(temp);

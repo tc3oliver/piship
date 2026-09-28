@@ -1,6 +1,8 @@
 # Architecture
 
-PiShip assembles a personal coding-agent distribution from a strict manifest, a committed npm lock, and upstream Pi public packages. Pi owns the agent loop, TUI, sessions, tools, and extension execution. PiShip owns the manifest, dependency closure, resource selection, payload, installer, state locations, and diagnostics. Distribution repositories own their brand and declared resources, including optional custom themes. Pi source is neither forked nor patched.
+PiShip is an open-source, company-first distribution and governance framework for branded Pi-based coding agents. Pi owns the agent loop, TUI, sessions, tools, model/runtime behavior, and extension execution. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, and progressively identity/credential/inference integration, policy/trust, and lifecycle/release. Distribution repositories own their brand and declared resources. Pi source is neither forked nor patched.
+
+The current v0.1 implementation is the portable personal foundation. Managed access, governance/security, and production lifecycle arrive in later milestones; none is claimed for this payload.
 
 | Change | Home |
 | --- | --- |
@@ -12,7 +14,7 @@ PiShip assembles a personal coding-agent distribution from a strict manifest, a 
 
 ## Canonical payload
 
-`piship build` creates `dist/<id>` from the committed npm lock via `npm ci --omit=dev`. This directory contains `node_modules` (including Pi and PiShip), `bin/`, declared `resources/`, `piship.yaml`, `package-lock.json`, and `metadata/` with the distribution lock, build target (OS/CPU), and SHA-256 inventory. The launcher checks the recorded target against the host before entering Pi and resolves only packages inside this directory. A machine must have Node.js 22.19.0 or newer installed separately. Build-time npm access may be needed; installation and launch never install packages. The payload includes upstream package notices. It is the same unit future release verification and updates must consume.
+`piship build` creates `dist/<id>` from package-owned build inputs prepared with `@piship/core`, using `npm ci --omit=dev` and exact locked dependencies. It does not infer the PiShip source repository from its module path. The payload contains `node_modules` (including Pi and PiShip), `bin/`, declared `resources/`, the exact source `piship.yaml` and `piship.lock`, `package-lock.json`, and `metadata/target.json` and `metadata/inventory.json`. The inventory covers the canonical lock and all payload files. The launcher checks the recorded target and integrity before entering Pi and resolves only packages inside this directory. A machine must have Node.js 22.19.0 or newer installed separately. Build-time registry access may be needed; installation and launch do not fetch Node, Pi, or packages. The payload includes upstream package notices. It is the same unit future release verification and updates must consume.
 
 The payload includes `piship.mjs`, so installation and diagnostics need no source checkout. `node <payload>/piship.mjs install <payload>` copies this payload into `~/.local/share/piship/apps/<id>/<version>` and writes a command shim in `~/.local/bin` by default. Set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. The receipt in `<install-home>/receipts/<id>.json` records owned paths. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, and payload; `purge <id> --yes` separately deletes the selected state after uninstall.
 

@@ -1,6 +1,8 @@
 # PiShip
 
-**Ship your own coding agent on Pi without forking Pi.** PiShip builds branded personal distributions around upstream Pi's public runtime.
+**Ship Pi as your company's coding agent, without forking Pi.** PiShip is an open-source, company-first distribution and governance framework around upstream Pi. It provides generic building blocks for branded, managed distributions; personal use is supported by the same architecture.
+
+**Current implementation:** v0.1 delivers the portable personal distribution core. Managed access, governance and security, then production lifecycle are later milestones. The current artifact has no managed identity, policy, sandbox, signing, or update channel.
 
 ## Portable personal preview
 
@@ -23,10 +25,10 @@ node dist/mypi/piship.mjs uninstall mypi
 
 On Windows use the installed `mypi.cmd` in the configured bin directory. Set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to change install paths and `PISHIP_STATE_HOME` to change the state root. `uninstall` preserves sessions and credentials. `node dist/mypi/piship.mjs purge mypi --yes` removes only that distribution's PiShip state after uninstall. `--smoke` tests Pi startup, a safe read tool, declared resources, and session resume without a model call. The plain branded command opens Pi's interactive TUI.
 
-The installer never fetches Node or Pi. `piship build` runs `npm ci --omit=dev` using the committed npm lock and may need package-registry access. Add the selected bin directory to your `PATH` yourself.
+The installer and launcher never fetch Node, Pi, or packages. `piship build` runs `npm ci --omit=dev` from exact locked inputs and may access a package registry. Add the selected bin directory to your `PATH` yourself.
 
 ## Scope
 
-Pi owns the agent loop, tools, sessions, and TUI. PiShip owns distribution manifests, resource selection, lock and payload assembly, installation, state isolation, and compatibility gates. Managed identity, credentials, policy, sandboxing, signing, updates, and production release channels are later work. Read the [architecture](docs/architecture.md), [manifest](docs/manifest.md), [compatibility](docs/compatibility.md), [security](docs/security.md), and [roadmap](docs/roadmap.md), and [portable payload decision](docs/portable-artifact.md) guides for the precise contract.
+Pi owns the agent loop, tools, sessions, TUI, and model/runtime behavior. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, and progressively identity/credential/inference integration, policy/trust, and lifecycle/release. The v0.1 implementation covers the portable personal subset. Read the [architecture](docs/architecture.md), [manifest](docs/manifest.md), [compatibility](docs/compatibility.md), [security](docs/security.md), [roadmap](docs/roadmap.md), and [portable payload decision](docs/portable-artifact.md) for the precise contract.
 
 The [personal example](examples/personal/README.md) contains the full walkthrough. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Security reports follow [SECURITY.md](SECURITY.md). PiShip is licensed under [MIT](LICENSE).

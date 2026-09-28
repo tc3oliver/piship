@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseDocument } from "yaml";
+import { valid as validSemver } from "semver";
 
 export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
 export type PishipSchemaVersion = typeof PISHIP_SCHEMA_VERSION;
@@ -207,7 +208,7 @@ export function parseManifest(value: unknown): Manifest {
       command: name(app.command, "app.command"),
       version: (() => {
         const version = string(app.version, "app.version");
-        if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
+        if (!/^[0-9]/.test(version) || validSemver(version) === null)
           throw new ManifestError(
             "invalid field",
             "app.version",

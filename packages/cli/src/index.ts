@@ -8,6 +8,7 @@ import {
   initDistribution,
   installDistribution,
   lockManifest,
+  payloadApp,
   PISHIP_VERSION,
   purgeDistributionState,
   readInstallReceipt,
@@ -182,12 +183,12 @@ export function runCli(args: readonly string[], output: CliOutput): number {
         output.stdout(`Personal acceptance passed: ${result.stdout.trim()}`);
     } else if (command === "doctor") {
       const artifact = artifactFor(target);
-      const lock = verifyPayload(artifact);
-      const result = runLauncher(artifact, lock.app.command, ["--smoke"]);
+      const app = payloadApp(artifact);
+      const result = runLauncher(artifact, app.command, ["--smoke"]);
       if (result.status !== 0)
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
       output.stdout(
-        `Healthy ${lock.app.id}@${lock.app.version}: ${result.stdout.trim()}`,
+        `Healthy ${app.id}@${app.version}: ${result.stdout.trim()}`,
       );
     }
     return 0;
