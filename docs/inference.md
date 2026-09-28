@@ -62,7 +62,8 @@ During a session, Pi performs the request. PiShip recognizes an authentication r
 | Broker unreachable or timed out | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
 | No stored `local-secret` | `CREDENTIAL_REQUIRED` |
 | Credential expired and cannot be renewed | `CREDENTIAL_EXPIRED` |
-| Gateway rejects the credential | One automatic renewal; if renewal fails, `CREDENTIAL_REVOKED` |
+| Gateway rejects the credential | One automatic renewal; if renewal fails, `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED`, `NETWORK_DENIED`, and `TLS_POLICY_VIOLATION` are kept |
+| Selected model misses an enabled capability's `requirements`, or its metadata is unknown | `MODEL_INCOMPATIBLE`; no substitution |
 | Gateway outage | `GATEWAY_UNREACHABLE` at launch with `liveCatalog: true` and in `doctor`; otherwise Pi reports the failed request |
 | Model outside the allowlist | `MODEL_DENIED` |
 | Model unentitled, unlisted, or narrowed out | `MODEL_UNAVAILABLE` |

@@ -29,7 +29,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `inference.baseUrl`, `api`, `liveCatalog` | For `openai-compatible`: gateway base URL, `openai-completions` (default) or `openai-responses`, and whether to query `GET {baseUrl}/models` at launch (default `false`) |
 | `models.default` | Default model ID; must be in `models.allowed` |
 | `models.allowed` | Distribution allowlist. For `pi-native`, entries use `provider/model` |
-| `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, and `policyTags` |
+| `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, `structuredOutput`, and `policyTags` |
 | `config.enforced`, `config.defaults` | Values for `model`, `theme`, and `thinkingLevel` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `models.default` rather than `config.defaults.model` |
 | `config.userOverridable` | Keys users may set; defaults to every key not enforced |
 | `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`) |
@@ -88,7 +88,7 @@ A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `
 
 ### Capabilities
 
-`capabilities` configures named capability contracts, each with `enabled`, an optional `provider`, and string `settings` (lowerCamelCase keys):
+`capabilities` configures named capability contracts, each with `enabled`, an optional `provider`, string `settings` (lowerCamelCase keys), and optional model `requirements` (`tools`, `structuredOutput`, `minContextWindow`, and `input`). At launch, a selected model whose verified catalog metadata does not meet the requirements of an enabled capability, or whose metadata is unknown, fails with `MODEL_INCOMPATIBLE`; no other model is substituted, and Pi-native models count as unverified:
 
 | Capability | Contract | This release |
 | --- | --- | --- |

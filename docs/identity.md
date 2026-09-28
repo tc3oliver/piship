@@ -31,7 +31,7 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 - Authorization Code with PKCE `S256`, `state`, and `nonce`. `audience` is sent when configured.
 - ID token checks: issuer, audience, authorized party, signature (`enableNonRepudiationChecks`), expiry and not-before with 30 seconds of clock tolerance, and nonce.
 - A loopback redirect (RFC 8252). PiShip listens on the registered `redirectUri`, for example `http://127.0.0.1:8765/callback`, answers only that path, accepts the first callback, and closes the listener after completion, a 5-minute timeout, or cancellation. Register the exact URI with the provider.
-- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer.
+- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
 - On `logout`, refresh and access tokens are revoked when the provider advertises a revocation endpoint.
 
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.

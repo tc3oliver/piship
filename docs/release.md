@@ -257,7 +257,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 - The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 0.87.1's own shrinkwrap omits integrity for five nested `@earendil-works` packages; the root npm lock records their registry integrity so `npm ci` verifies them, and a Pi upgrade must re-check this.
 - Packages that ship no license or notice file are listed with their declared license only.
 - The vulnerability verdict reflects `npm audit` and its advisory database at build time; it is not rechecked at install or update.
-- Clearing an unreadable credential during update or rollback deletes local secrets only; it does not revoke them remotely.
+- Clearing an unreadable credential during update or rollback revokes it only where the distribution declares a revoke endpoint, and only best effort.
 - `update --check` downloads and verifies the full archive and runs its launch check, so it costs as much network and time as an update.
 - A migration snapshot has no restore command.
 - The channel host is trusted for availability: it can withhold updates until the metadata expires, but it cannot forge, alter, or roll back signed metadata that a client has already seen.
