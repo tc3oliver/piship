@@ -6,6 +6,7 @@
 // from `(allow default)`, so launch paths that leave the sandbox through
 // launchd are denied explicitly.
 import { existsSync } from "node:fs";
+import { posix } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   type AdapterAvailability,
@@ -108,11 +109,11 @@ export function seatbeltProfile(
   // Protected paths stay read-only inside the write allowlist. The
   // directories above them may not be renamed, removed, or created, so a
   // protected path cannot be moved aside for a replacement.
-  const protect = writableProtected(profile);
+  const protect = writableProtected(profile, posix);
   if (protect.length)
     lines.push(
       `(deny file-write*\n  ${[
-        ...protectedAncestors(profile, protect).map(
+        ...protectedAncestors(profile, protect, posix).map(
           (path) => `(literal ${sbplString(path)})`,
         ),
         ...protect.map(({ path, directory }) =>

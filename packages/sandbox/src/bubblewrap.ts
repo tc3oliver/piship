@@ -10,7 +10,7 @@
 //   5. read-denied directories replaced by an empty, mode 0000, read-only
 //      tmpfs and read-denied files by /dev/null, last, so a deny always wins
 //      over an allow, including a deny nested inside a writable workspace.
-import { dirname } from "node:path";
+import { dirname, posix } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   type AdapterAvailability,
@@ -84,10 +84,10 @@ export function bubblewrapArgs(
   const privateTmp = ![...profile.writeAllow, ...profile.readOnly].some(
     (path) => isWithin(tmpRoot, path),
   );
-  const protect = writableProtected(profile);
+  const protect = writableProtected(profile, posix);
   // A directory bound onto itself is a mount point, which cannot be renamed
   // or removed, so a protected path below it cannot be moved aside.
-  const pins = protectedAncestors(profile, protect).filter(
+  const pins = protectedAncestors(profile, protect, posix).filter(
     (path) => exists(path) && isDir(path),
   );
   const binds = byDepth([

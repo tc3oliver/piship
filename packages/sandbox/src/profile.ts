@@ -6,7 +6,7 @@ import {
   dirname,
   isAbsolute,
   join,
-  posix,
+  type PlatformPath,
   resolve,
   sep,
 } from "node:path";
@@ -200,19 +200,22 @@ export function pathDepth(path: string): number {
 }
 
 /**
- * Containment for protected paths. Adapter profiles hold POSIX paths
- * (bubblewrap and Seatbelt run only on Linux and macOS), while a profile
- * resolved on the host holds native ones, so either separator counts.
+ * The path semantics protected-path matching uses. A resolved profile holds
+ * host-native paths; an adapter that emits a POSIX profile (bubblewrap,
+ * Seatbelt) passes `posix`.
  */
-function withinAnySep(path: string, root: string): boolean {
+export type ProfilePaths = Pick<PlatformPath, "sep" | "dirname">;
+const NATIVE_PATHS: ProfilePaths = { sep, dirname };
+
+function within(paths: ProfilePaths, path: string, root: string): boolean {
   if (path === root) return true;
-  return [posix.sep, sep].some((separator) =>
-    path.startsWith(root.endsWith(separator) ? root : `${root}${separator}`),
+  return path.startsWith(
+    root.endsWith(paths.sep) ? root : `${root}${paths.sep}`,
   );
 }
 
-const anySepDepth = (path: string) =>
-  path.split(/[\\/]/).filter(Boolean).length;
+const depth = (paths: ProfilePaths, path: string) =>
+  path.split(paths.sep).filter(Boolean).length;
 
 export interface ProtectedEntry {
   readonly path: string;
@@ -224,7 +227,10 @@ export interface ProtectedEntry {
  * another protected directory is covered by it and left out. Protected
  * paths outside every writable path are read-only already.
  */
-export function writableProtected(profile: SandboxProfile): ProtectedEntry[] {
+export function writableProtected(
+  profile: SandboxProfile,
+  paths: ProfilePaths = NATIVE_PATHS,
+): ProtectedEntry[] {
   const entries = [
     ...profile.writeProtect.files.map((path) => ({ path, directory: false })),
     ...profile.writeProtect.directories.map((path) => ({
@@ -233,16 +239,16 @@ export function writableProtected(profile: SandboxProfile): ProtectedEntry[] {
     })),
   ]
     .filter(({ path }) =>
-      profile.writeAllow.some((allowed) => withinAnySep(path, allowed)),
+      profile.writeAllow.some((allowed) => within(paths, path, allowed)),
     )
-    .sort((a, b) => anySepDepth(a.path) - anySepDepth(b.path));
+    .sort((a, b) => depth(paths, a.path) - depth(paths, b.path));
   const kept: ProtectedEntry[] = [];
   for (const entry of entries)
     if (
       !kept.some(
         (outer) =>
           outer.path === entry.path ||
-          (outer.directory && withinAnySep(entry.path, outer.path)),
+          (outer.directory && within(paths, entry.path, outer.path)),
       )
     )
       kept.push(entry);
@@ -257,19 +263,20 @@ export function writableProtected(profile: SandboxProfile): ProtectedEntry[] {
 export function protectedAncestors(
   profile: SandboxProfile,
   entries: readonly ProtectedEntry[],
+  paths: ProfilePaths = NATIVE_PATHS,
 ): string[] {
   const ancestors = new Set<string>();
   for (const { path } of entries) {
     const roots = profile.writeAllow.filter((allowed) =>
-      withinAnySep(path, allowed),
+      within(paths, path, allowed),
     );
     for (
-      let current = dirname(path);
+      let current = paths.dirname(path);
       !roots.includes(current) &&
-      roots.some((root) => withinAnySep(current, root));
-      current = dirname(current)
+      roots.some((root) => within(paths, current, root));
+      current = paths.dirname(current)
     )
       ancestors.add(current);
   }
-  return [...ancestors].sort((a, b) => anySepDepth(a) - anySepDepth(b));
+  return [...ancestors].sort((a, b) => depth(paths, a) - depth(paths, b));
 }
