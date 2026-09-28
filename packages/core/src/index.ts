@@ -12,7 +12,6 @@ import {
   readdirSync,
   rmSync,
   renameSync,
-  rmdirSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -22,11 +21,14 @@ import {
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
+  PISHIP_SCHEMA_V1ALPHA4,
   checkVariableName,
   readManifest,
   type AccessManifest,
   type Manifest,
   type PishipSchemaVersion,
+  type ReleaseManifest,
+  type UpdatesManifest,
 } from "@piship/schema";
 
 import {
@@ -36,9 +38,17 @@ import {
   filesUnder,
   treeDigest,
 } from "./trust.js";
+import { STATE_SCHEMAS, type StateSchemaSupport } from "./migration.js";
 
 export * from "./access.js";
+export * from "./archive.js";
 export * from "./config.js";
+export * from "./diff.js";
+export * from "./lifecycle.js";
+export * from "./migration.js";
+export * from "./release.js";
+export * from "./signing.js";
+export * from "./supply-chain.js";
 export * from "./trust.js";
 
 export interface DistributionId {
@@ -54,13 +64,51 @@ export const LOCK_SCHEMA_VERSION = "piship-lock/v1alpha1";
 export const LOCK_SCHEMA_V1ALPHA2 = "piship-lock/v1alpha2";
 /** Lock schema for piship/v1alpha3 manifests; adds trust classes and governance. */
 export const LOCK_SCHEMA_V1ALPHA3 = "piship-lock/v1alpha3";
+/**
+ * Lock schema for piship/v1alpha4 manifests: package sources and install
+ * scripts, static digests, update and release inputs, and state schemas.
+ */
+export const LOCK_SCHEMA_V1ALPHA4 = "piship-lock/v1alpha4";
 export type LockSchemaVersion =
   | typeof LOCK_SCHEMA_VERSION
   | typeof LOCK_SCHEMA_V1ALPHA2
-  | typeof LOCK_SCHEMA_V1ALPHA3;
+  | typeof LOCK_SCHEMA_V1ALPHA3
+  | typeof LOCK_SCHEMA_V1ALPHA4;
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "0.87.1";
 export const PISHIP_VERSION = "0.1.0";
+/** OS/CPU targets with installed lifecycle evidence; others are never advertised. */
+export const EVIDENCED_TARGETS = ["linux-x64", "darwin-arm64", "win32-x64"];
+/**
+ * Pi versions this PiShip build knows, per surface; mirrors
+ * compatibility/pi.json (a test keeps them equal).
+ */
+export const PI_COMPATIBILITY: Readonly<
+  Record<string, Readonly<Record<"personal" | "managed" | "lifecycle", string>>>
+> = {
+  "0.87.1": {
+    personal: "supported",
+    managed: "candidate",
+    lifecycle: "candidate",
+  },
+};
+/**
+ * Production packages whose npm lifecycle scripts were reviewed for the
+ * pinned Pi closure (`path@version`). Any other install script stops a
+ * release build.
+ */
+export const REVIEWED_INSTALL_SCRIPTS: readonly string[] = [
+  // preinstall is an echo; prepare does not run for registry installs.
+  "node_modules/@earendil-works/pi-coding-agent/node_modules/@google/genai@2.21.0",
+  // Validates the platform binary from its optional @esbuild/* package.
+  "node_modules/@earendil-works/pi-coding-agent/node_modules/esbuild@0.28.2",
+  // Prints a version compatibility notice for protobufjs CLI users.
+  "node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs@7.6.6",
+];
+/** `<platform>-<arch>` of this machine. */
+export function currentTarget(): string {
+  return `${process.platform}-${process.arch}`;
+}
 export interface LockedResource {
   readonly kind:
     | "instructions"
@@ -75,6 +123,25 @@ export interface LockedResource {
   /** v1alpha3 only: the declared trust class (`certified`, `company`, or `user`). */
   readonly class?: string;
 }
+export interface LockedPackage {
+  readonly path: string;
+  readonly version: string;
+  readonly integrity: string;
+  /** v1alpha4: the package-lock `resolved` source URL. */
+  readonly resolved?: string;
+  /** v1alpha4: npm reports lifecycle scripts for this package. */
+  readonly installScript?: true;
+}
+/** v1alpha4 static digests (`sha256-<hex>` of canonical JSON). */
+export interface LockDigests {
+  readonly resources: string;
+  readonly policy: string;
+  readonly capabilities: string;
+  readonly mcp: string;
+  readonly sandbox: string;
+  readonly audit: string;
+  readonly access: string;
+}
 export interface DistributionLock {
   readonly schema: LockSchemaVersion;
   readonly manifest: {
@@ -88,11 +155,9 @@ export interface DistributionLock {
     readonly version: string;
     readonly pishipVersion: string;
     readonly npmLockSha256: string;
-    readonly packages: readonly {
-      path: string;
-      version: string;
-      integrity: string;
-    }[];
+    readonly packages: readonly LockedPackage[];
+    /** v1alpha4: state file schemas this PiShip version reads. */
+    readonly stateSchemas?: StateSchemaSupport;
   };
   readonly resources: readonly LockedResource[];
   readonly declared: Manifest["resources"];
@@ -107,6 +172,12 @@ export interface DistributionLock {
    * digests and exact provider/contract versions.
    */
   readonly governance?: GovernanceLock;
+  /** v1alpha4: digests of the static policy bundle and capability graph. */
+  readonly digests?: LockDigests;
+  /** v1alpha4: channel policy and trusted release keys. */
+  readonly updates?: UpdatesManifest;
+  /** v1alpha4: release targets, approved sources, and vulnerability policy. */
+  readonly release?: ReleaseManifest;
 }
 // This input is prepared with the @piship/core build, and travels with that package.
 const buildInput =
@@ -126,15 +197,21 @@ const workspacePackages = [
   "pi",
   "cli",
 ] as const;
-function runtimeDependencies(): DistributionLock["runtime"] {
+function runtimeDependencies(detailed = false): DistributionLock["runtime"] {
   const source = readFileSync(join(buildInput, "package-lock.json"));
   const npmLock = JSON.parse(source.toString()) as {
     packages: Record<
       string,
-      { version?: string; integrity?: string; dev?: boolean }
+      {
+        version?: string;
+        integrity?: string;
+        dev?: boolean;
+        resolved?: string;
+        hasInstallScript?: boolean;
+      }
     >;
   };
-  const packages = Object.entries(npmLock.packages)
+  const packages: LockedPackage[] = Object.entries(npmLock.packages)
     .filter(
       ([path, value]) =>
         path.startsWith("node_modules/") && !value.dev && value.integrity,
@@ -143,6 +220,10 @@ function runtimeDependencies(): DistributionLock["runtime"] {
       path,
       version: value.version ?? "",
       integrity: value.integrity ?? "",
+      ...(detailed && value.resolved ? { resolved: value.resolved } : {}),
+      ...(detailed && value.hasInstallScript
+        ? { installScript: true as const }
+        : {}),
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
   const pi = packages.find(
@@ -156,7 +237,23 @@ function runtimeDependencies(): DistributionLock["runtime"] {
     pishipVersion: PISHIP_VERSION,
     npmLockSha256: hash(source),
     packages,
+    ...(detailed ? { stateSchemas: STATE_SCHEMAS } : {}),
   };
+}
+/** JSON with object keys sorted, for digests that must not depend on key order. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : item,
+  );
+}
+function digest(value: unknown): string {
+  return `sha256-${hash(canonicalJson(value ?? null))}`;
 }
 export function distributionStateDirectory(id: DistributionId): string {
   if (!/^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id.value))
@@ -434,9 +531,12 @@ export function resolveLock(manifestPath: string): DistributionLock {
     dirname(resolve(manifestPath)),
     resources,
   );
+  const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4;
+  const policy = governance?.manifest;
   return {
-    schema:
-      manifest.schema === PISHIP_SCHEMA_V1ALPHA3
+    schema: v4
+      ? LOCK_SCHEMA_V1ALPHA4
+      : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
         ? LOCK_SCHEMA_V1ALPHA3
         : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
           ? LOCK_SCHEMA_V1ALPHA2
@@ -444,11 +544,32 @@ export function resolveLock(manifestPath: string): DistributionLock {
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,
-    runtime: runtimeDependencies(),
+    runtime: runtimeDependencies(v4),
     resources,
     declared: manifest.resources,
     ...(manifest.access ? { access: manifest.access } : {}),
     ...(governance ? { governance } : {}),
+    ...(v4 && manifest.lifecycle
+      ? {
+          digests: {
+            resources: digest(
+              resources.map((item) => [item.kind, item.path, item.sha256]),
+            ),
+            policy: digest(policy?.policy),
+            capabilities: digest({
+              capabilities: policy?.capabilities,
+              providers: governance?.providers,
+              certified: governance?.certified,
+            }),
+            mcp: digest(policy?.mcp),
+            sandbox: digest(policy?.sandbox),
+            audit: digest(policy?.audit),
+            access: digest(manifest.access),
+          },
+          updates: manifest.lifecycle.updates,
+          release: manifest.lifecycle.release,
+        }
+      : {}),
   };
 }
 export function lockManifest(manifestPath: string): string {
@@ -475,6 +596,10 @@ function launcherSource(): string {
 }
 function portableCliSource(): string {
   return `const version = process.versions.node.split(".").map(Number);\nif (version[0] < 22 || (version[0] === 22 && version[1] < 19)) { console.error("Node.js 22.19.0 or newer is required. Install Node separately."); process.exitCode = 1; } else { const { runCli } = await import("@piship/cli"); process.exitCode = await runCli(process.argv.slice(2), { stdout: (message) => console.log(message), stderr: (message) => console.error(message) }); }\n`;
+}
+/** SHA-256 of every payload file except the inventory itself, by `/` path. */
+export function payloadInventory(root: string): Record<string, string> {
+  return inventory(root);
 }
 function inventory(root: string): Record<string, string> {
   const output: Record<string, string> = {};
@@ -503,6 +628,16 @@ function removeNpmBins(directory: string): void {
   }
 }
 export function verifyPayload(directory: string): DistributionLock {
+  return verifyPayloadContents(directory, { requireTarget: true });
+}
+/**
+ * Inventory, manifest, lock, and npm lock verification of a payload. Without
+ * `requireTarget`, a consumer on another OS/CPU can still verify it.
+ */
+export function verifyPayloadContents(
+  directory: string,
+  options: { readonly requireTarget?: boolean } = {},
+): DistributionLock {
   const started = process.hrtime.bigint();
   const root = resolve(directory);
   const inventoryPath = join(root, "metadata", "inventory.json");
@@ -518,7 +653,10 @@ export function verifyPayload(directory: string): DistributionLock {
   const target = JSON.parse(
     readFileSync(join(root, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
-  if (target.platform !== process.platform || target.arch !== process.arch)
+  if (
+    options.requireTarget &&
+    (target.platform !== process.platform || target.arch !== process.arch)
+  )
     throw new Error(
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
     );
@@ -659,11 +797,6 @@ export function buildDistribution(
     throw error;
   }
 }
-export interface InstallReceipt {
-  readonly app: DistributionLock["app"];
-  readonly payload: string;
-  readonly commandPath: string;
-}
 export function installHome(): string {
   return resolve(
     process.env.PISHIP_INSTALL_HOME ??
@@ -674,111 +807,6 @@ export function binHome(): string {
   return resolve(
     process.env.PISHIP_BIN_HOME ?? join(homedir(), ".local", "bin"),
   );
-}
-function receiptPath(id: string): string {
-  distributionStateDirectory({ value: id });
-  return join(installHome(), "receipts", `${id}.json`);
-}
-export function installDistribution(
-  artifact: string,
-  useExistingState = false,
-): InstallReceipt {
-  const source = resolve(artifact);
-  const lock = verifyPayload(source);
-  const { id, command, version } = lock.app;
-  const appDirectory = join(installHome(), "apps", id);
-  const target = join(appDirectory, version);
-  const commandPath = join(
-    binHome(),
-    process.platform === "win32" ? `${command}.cmd` : command,
-  );
-  const targetScript = join(target, "bin", command);
-  if (
-    process.platform === "win32" &&
-    ["%", "!", '"', "\r", "\n"].some((character) =>
-      targetScript.includes(character),
-    )
-  )
-    throw new Error(
-      "Install path contains characters unsafe for a Windows command shim",
-    );
-  if (
-    existsSync(receiptPath(id)) ||
-    existsSync(appDirectory) ||
-    existsSync(commandPath)
-  )
-    throw new Error(
-      `Install collision for ${id}/${command}; uninstall the existing distribution first`,
-    );
-  if (!useExistingState && existsSync(runtimeStateDirectory({ value: id })))
-    throw new Error(
-      `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
-    );
-  mkdirSync(dirname(target), { recursive: true });
-  mkdirSync(dirname(commandPath), { recursive: true });
-  mkdirSync(dirname(receiptPath(id)), { recursive: true });
-  try {
-    const copyStarted = process.hrtime.bigint();
-    cpSync(source, target, { recursive: true });
-    debugTiming("install payload copy", copyStarted);
-    verifyPayload(target);
-    if (process.platform === "win32")
-      writeFileSync(
-        commandPath,
-        `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${targetScript}" %*\r\n`,
-      );
-    else {
-      writeFileSync(
-        commandPath,
-        `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${targetScript.replaceAll("'", "'\"'\"'")}' "$@"\n`,
-      );
-      chmodSync(commandPath, 0o755);
-    }
-    const receipt = { app: lock.app, payload: target, commandPath };
-    writeFileSync(receiptPath(id), `${JSON.stringify(receipt, null, 2)}\n`);
-    return receipt;
-  } catch (error) {
-    rmSync(commandPath, { force: true });
-    rmSync(target, { recursive: true, force: true });
-    if (existsSync(appDirectory)) rmdirSync(appDirectory);
-    throw error;
-  }
-}
-export function readInstallReceipt(id: string): InstallReceipt {
-  const path = receiptPath(id);
-  if (!existsSync(path))
-    throw new Error(`No PiShip installation recorded for ${id}`);
-  const receipt = JSON.parse(readFileSync(path, "utf8")) as InstallReceipt;
-  const expectedPayload = join(installHome(), "apps", id, receipt.app.version);
-  const expectedCommand = join(
-    binHome(),
-    process.platform === "win32"
-      ? `${receipt.app.command}.cmd`
-      : receipt.app.command,
-  );
-  if (
-    receipt.app.id !== id ||
-    receipt.payload !== expectedPayload ||
-    receipt.commandPath !== expectedCommand
-  )
-    throw new Error(`Unsafe installation receipt for ${id}`);
-  return receipt;
-}
-export function uninstallDistribution(id: string): string {
-  const receipt = readInstallReceipt(id);
-  rmSync(receipt.commandPath, { force: true });
-  rmSync(receipt.payload, { recursive: true, force: true });
-  if (existsSync(dirname(receipt.payload))) rmdirSync(dirname(receipt.payload));
-  rmSync(receiptPath(id), { force: true });
-  return runtimeStateDirectory({ value: id });
-}
-export function purgeDistributionState(id: string): string {
-  distributionStateDirectory({ value: id });
-  if (existsSync(receiptPath(id)))
-    throw new Error(`Uninstall ${id} before purging its state`);
-  const state = runtimeStateDirectory({ value: id });
-  rmSync(state, { recursive: true, force: true });
-  return state;
 }
 export function initDistribution(
   directory: string,

@@ -14,11 +14,20 @@ import {
   governanceReferences,
   parseGovernance,
 } from "./governance-parse.js";
+import {
+  DEFAULT_PACKAGE_SOURCES,
+  DEFAULT_RELEASE_TARGETS,
+  LIFECYCLE_KEYS,
+  lifecycleReferences,
+  parseLifecycle,
+  type LifecycleManifest,
+} from "./lifecycle.js";
 
 export * from "./access.js";
 export * from "./variables.js";
 export * from "./governance.js";
 export * from "./governance-parse.js";
+export * from "./lifecycle.js";
 
 /** The v0.1 personal alpha schema; still accepted for personal pi-native distributions. */
 export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
@@ -26,13 +35,16 @@ export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
 export const PISHIP_SCHEMA_V1ALPHA2 = "piship/v1alpha2" as const;
 /** The v0.3 alpha schema: v1alpha2 access plus governance sections. */
 export const PISHIP_SCHEMA_V1ALPHA3 = "piship/v1alpha3" as const;
+/** The v0.4 alpha schema: v1alpha3 plus update channels and release policy. */
+export const PISHIP_SCHEMA_V1ALPHA4 = "piship/v1alpha4" as const;
 export const SUPPORTED_SCHEMAS = [
   PISHIP_SCHEMA_VERSION,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
+  PISHIP_SCHEMA_V1ALPHA4,
 ] as const;
 /** The newest schema; `migrateManifestSource` targets it by default. */
-export const LATEST_SCHEMA = PISHIP_SCHEMA_V1ALPHA3;
+export const LATEST_SCHEMA = PISHIP_SCHEMA_V1ALPHA4;
 export type PishipSchemaVersion = (typeof SUPPORTED_SCHEMAS)[number];
 export interface ValidationDiagnostic {
   readonly path: string;
@@ -63,10 +75,12 @@ export interface Manifest {
     readonly prompts: readonly string[];
     readonly themes: readonly string[];
   };
-  /** Present for piship/v1alpha2 and piship/v1alpha3 manifests. */
+  /** Present for piship/v1alpha2, piship/v1alpha3, and piship/v1alpha4 manifests. */
   readonly access?: AccessManifest;
-  /** Present exactly for piship/v1alpha3 manifests. */
+  /** Present for piship/v1alpha3 and piship/v1alpha4 manifests. */
   readonly governance?: GovernanceManifest;
+  /** Present exactly for piship/v1alpha4 manifests (release defaults applied). */
+  readonly lifecycle?: LifecycleManifest;
 }
 export class ManifestError extends Error {
   constructor(
@@ -211,7 +225,8 @@ export function parseManifest(value: unknown): Manifest {
       `Expected ${SUPPORTED_SCHEMAS.join(" or ")}`,
     );
   }
-  const v3 = schema === PISHIP_SCHEMA_V1ALPHA3;
+  const v4 = schema === PISHIP_SCHEMA_V1ALPHA4;
+  const v3 = schema === PISHIP_SCHEMA_V1ALPHA3 || v4;
   const v2 = schema === PISHIP_SCHEMA_V1ALPHA2 || v3;
   const root = record(value, "manifest", [
     "schema",
@@ -221,6 +236,7 @@ export function parseManifest(value: unknown): Manifest {
     "resources",
     ...(v2 ? V1ALPHA2_KEYS : []),
     ...(v3 ? GOVERNANCE_KEYS : []),
+    ...(v4 ? LIFECYCLE_KEYS : []),
   ]);
   const app = record(root.app, "app", [
     "id",
@@ -246,7 +262,7 @@ export function parseManifest(value: unknown): Manifest {
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "managed requires schema piship/v1alpha2 or piship/v1alpha3 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
+      "managed requires schema piship/v1alpha2, piship/v1alpha3, or piship/v1alpha4 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
     );
   if (mode !== "personal" && mode !== "managed")
     throw new ManifestError(
@@ -256,6 +272,7 @@ export function parseManifest(value: unknown): Manifest {
     );
   let access: AccessManifest | undefined;
   let governance: GovernanceManifest | undefined;
+  let lifecycle: LifecycleManifest | undefined;
   if (v2)
     try {
       if (v3) {
@@ -263,12 +280,12 @@ export function parseManifest(value: unknown): Manifest {
         governance = parseGovernance(root, mode, variables, {
           id: name(app.id, "app.id"),
         });
+        if (v4) lifecycle = parseLifecycle(root, variables);
       }
-      access = parseAccess(
-        root,
-        mode,
-        governance ? governanceReferences(governance) : [],
-      );
+      access = parseAccess(root, mode, [
+        ...(governance ? governanceReferences(governance) : []),
+        ...(lifecycle ? lifecycleReferences(lifecycle) : []),
+      ]);
     } catch (error) {
       if (error instanceof AccessFieldError)
         throw new ManifestError(error.kind, error.field, error.message);
@@ -282,11 +299,13 @@ export function parseManifest(value: unknown): Manifest {
       "Expected an exact Pi version",
     );
   return {
-    schema: v3
-      ? PISHIP_SCHEMA_V1ALPHA3
-      : v2
-        ? PISHIP_SCHEMA_V1ALPHA2
-        : PISHIP_SCHEMA_VERSION,
+    schema: v4
+      ? PISHIP_SCHEMA_V1ALPHA4
+      : v3
+        ? PISHIP_SCHEMA_V1ALPHA3
+        : v2
+          ? PISHIP_SCHEMA_V1ALPHA2
+          : PISHIP_SCHEMA_VERSION,
     app: {
       id: name(app.id, "app.id"),
       name: displayText(app.name, "app.name"),
@@ -321,6 +340,7 @@ export function parseManifest(value: unknown): Manifest {
         },
     ...(access ? { access } : {}),
     ...(governance ? { governance } : {}),
+    ...(lifecycle ? { lifecycle } : {}),
   };
 }
 /** Declared paths per kind in certified, company, user order. */
@@ -454,6 +474,28 @@ function migrateToV1alpha3(
 }
 
 /**
+ * v1alpha3 -> v1alpha4: adds the required update channel section with no
+ * trust keys and no source, so updates stay disabled; release policy defaults.
+ */
+function migrateToV1alpha4(document: YamlDocument): string[] {
+  document.set("schema", PISHIP_SCHEMA_V1ALPHA4);
+  document.set(
+    "updates",
+    document.createNode({
+      channel: "stable",
+      channels: ["stable"],
+      rollback: true,
+    }),
+  );
+  return [
+    "schema: piship/v1alpha3 -> piship/v1alpha4",
+    "updates.channel: stable, updates.channels: [stable], updates.rollback: true",
+    "Updates stay disabled until updates.trust.keys and updates.source are configured",
+    `release defaults apply: targets ${DEFAULT_RELEASE_TARGETS.join(", ")}; package sources ${DEFAULT_PACKAGE_SOURCES.join(", ")}; vulnerabilities.failOn high`,
+  ];
+}
+
+/**
  * Versioned, step-wise migration. The default target is the latest schema;
  * pass `to` to stop at an earlier one (for example piship/v1alpha2). Each
  * step is behavior-preserving and comments are kept.
@@ -479,10 +521,15 @@ export function migrateManifestSource(
     );
   if (from === to) return { from, to, changes: [], source };
   const changes: string[] = [];
-  if (from === PISHIP_SCHEMA_VERSION)
+  const steps = (target: PishipSchemaVersion) =>
+    SCHEMA_ORDER.indexOf(from) < SCHEMA_ORDER.indexOf(target) &&
+    SCHEMA_ORDER.indexOf(target) <= SCHEMA_ORDER.indexOf(to);
+  if (steps(PISHIP_SCHEMA_V1ALPHA2))
     changes.push(...migrateToV1alpha2(document));
-  if (to === PISHIP_SCHEMA_V1ALPHA3)
+  if (steps(PISHIP_SCHEMA_V1ALPHA3))
     changes.push(...migrateToV1alpha3(document, current.deployment.mode));
+  if (steps(PISHIP_SCHEMA_V1ALPHA4))
+    changes.push(...migrateToV1alpha4(document));
   const migrated = document.toString();
   parseManifest(parseDocument(migrated).toJS() as unknown);
   changes.push("Regenerate piship.lock with piship lock, then rebuild");

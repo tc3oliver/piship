@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { PI_COMPATIBILITY } from "@piship/core";
 import { PINNED_PI_VERSION } from "@piship/pi";
 
 const repoRoot = new URL("../../", import.meta.url);
@@ -23,6 +24,20 @@ describe("pinned Pi compatibility", () => {
     );
     expect(["candidate", "supported"]).toContain(
       matrix.versions[PINNED_PI_VERSION]?.status,
+    );
+  });
+
+  it("records the same surfaces in releases as in the compatibility matrix", () => {
+    const matrix = jsonAt("compatibility/pi.json") as {
+      versions: Record<string, { surfaces: Record<string, string> }>;
+    };
+    expect(PI_COMPATIBILITY).toEqual(
+      Object.fromEntries(
+        Object.entries(matrix.versions).map(([version, entry]) => [
+          version,
+          entry.surfaces,
+        ]),
+      ),
     );
   });
 });

@@ -1,6 +1,6 @@
 # Roadmap
 
-PiShip is a company-first open-source distribution and governance framework around upstream Pi. v0.1, the portable personal foundation, is complete; v0.2 managed access and v0.3 governance are implemented as previews and not released; production lifecycle follows. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
+PiShip is a company-first open-source distribution and governance framework around upstream Pi. v0.1, the portable personal foundation, is complete; v0.2 managed access, v0.3 governance, and v0.4 production lifecycle are implemented as previews and not released. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
 
 ## Done: v0.1 — Distribution core
 
@@ -18,9 +18,13 @@ Implemented: the `piship/v1alpha3` schema and migration; a layered policy engine
 
 Status: Linux is tested locally with real bubblewrap and end-to-end local fixtures. macOS and Windows results are pending CI; Windows has no sandbox adapter and fails closed when a sandbox is required. Not yet released.
 
-## Later: v0.4 — Production lifecycle
+## Implemented (preview, not released): v0.4 — Production lifecycle
 
-Add verified release wrappers, update and rollback flows, SBOM, provenance, signing, and migration support around the existing payload. A future release pipeline may use Changesets, GitHub Releases, npm Trusted Publishing via OIDC, and npm provenance after ownership and release policy are settled.
+Implemented: the `piship/v1alpha4` schema with `updates` and `release` sections and migration from v1alpha3; `piship-lock/v1alpha4` with package sources, install-script flags, static policy and capability digests, and state schemas; `piship release` with failing gates for stale locks, unapproved sources, unreviewed install scripts, unsupported Pi, policy conflicts, missing certification, missing sandbox adapters, unsupported targets, failed tests, and blocking vulnerabilities; one deterministic archive per target wrapping the unchanged payload with release metadata, an SPDX SBOM, third-party notices, the scan result, and checksums; `verify-release`, `reproducibility`, and `diff`; Ed25519-signed stable, candidate, and dev channels with pinned keys, expiry, and a replay guard; branded `update` and `rollback` with atomic activation, a retained known-good release, a non-mutating migration check, and no credential snapshots; and Supply Chain and Update sections in `doctor` with audit events and local metrics. See [release](release.md).
+
+Status: an unreleased preview. The evidence is defined by the lifecycle E2E (install from a release archive with its install script, login, session, update through a signed loopback channel, tamper and replay rejection, rollback, logout, uninstall) and a release-candidate CI workflow that builds each target twice, verifies on a fresh job, and creates and verifies GitHub artifact attestations. Recorded results for `linux-x64`, `darwin-arm64`, and `win32-x64` are pending. There is no macOS notarization or Windows Authenticode signing. Nothing is published: artifacts stay in CI as workflow artifacts, and any publish step needs the maintainer's explicit approval ([release checklist](release.md#release-checklist)).
+
+Later: publish automation (for example GitHub Releases or npm Trusted Publishing with provenance) only after package ownership and release policy are settled; platform code signing; more targets once each has installed lifecycle evidence.
 
 ## Considered: remote execution backends
 

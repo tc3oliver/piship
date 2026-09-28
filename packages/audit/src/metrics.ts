@@ -47,6 +47,21 @@ export interface MetricsSnapshot {
   readonly sandbox?: SandboxMetric;
   readonly startupFailures: Readonly<Record<string, number>>;
   readonly startupLatency?: StartupLatencyMetric;
+  /** Update, check, and rollback outcomes: `<kind>:ok` or `<kind>:<error code>`. */
+  readonly lifecycle?: Readonly<Record<string, number>>;
+}
+
+export type LifecycleMetricKind = "update" | "check" | "rollback";
+const LIFECYCLE_KINDS = new Set<string>(["update", "check", "rollback"]);
+function lifecycleKey(key: string): boolean {
+  const [kind, outcome, extra] = key.split(":");
+  return (
+    extra === undefined &&
+    LIFECYCLE_KINDS.has(kind ?? "") &&
+    (outcome === "ok" ||
+      outcome === "UNKNOWN" ||
+      ERROR_CODES.has(outcome ?? ""))
+  );
 }
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
@@ -98,6 +113,7 @@ export class LocalMetrics {
   #sandbox: SandboxMetric | undefined;
   #startupFailures: Record<string, number> = {};
   #startupLatency: StartupLatencyMetric | undefined;
+  #lifecycle: Record<string, number> = {};
   #updatedAt: string;
 
   constructor(stateDir: string, options: { readonly now?: () => Date } = {}) {
@@ -174,6 +190,14 @@ export class LocalMetrics {
     this.#touch();
   }
 
+  /** Count an update, check, or rollback by outcome (`ok` or an error code). */
+  recordLifecycle(kind: LifecycleMetricKind, outcome: string): void {
+    if (!LIFECYCLE_KINDS.has(kind)) return;
+    const code =
+      outcome === "ok" || ERROR_CODES.has(outcome) ? outcome : "UNKNOWN";
+    this.#increment(this.#lifecycle, `${kind}:${code}`);
+  }
+
   snapshot(): MetricsSnapshot {
     return {
       schema: METRICS_SCHEMA,
@@ -184,6 +208,9 @@ export class LocalMetrics {
       startupFailures: { ...this.#startupFailures },
       ...(this.#startupLatency
         ? { startupLatency: { ...this.#startupLatency } }
+        : {}),
+      ...(Object.keys(this.#lifecycle).length
+        ? { lifecycle: { ...this.#lifecycle } }
         : {}),
     };
   }
@@ -258,6 +285,7 @@ export class LocalMetrics {
             updatedAt: item.updatedAt,
           };
       }
+    this.#lifecycle = counters(value.lifecycle, lifecycleKey);
     const sandbox = value.sandbox as Record<string, unknown> | undefined;
     if (
       sandbox &&

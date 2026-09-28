@@ -1,16 +1,17 @@
 # Experimental manifest and lock
 
-Three alpha schemas are accepted. All remain experimental, and unknown fields are rejected.
+Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected.
 
 - `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The [personal example](../examples/personal/piship.yaml) uses it.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
-- `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha3 manifest.
+- `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit.
+- `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha4 manifest.
 
 ## Common fields
 
-Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `runtime.pi`, and `deployment.mode`. `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (in v1alpha3, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
+Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`, `runtime.pi`, and `deployment.mode`. `app.banner` and `app.theme` are optional. `app.theme` selects a built-in or declared custom theme through Pi's public interactive API. `resources` can declare instruction files and skill, extension, prompt, or theme roots (in v1alpha3 and v1alpha4, grouped by trust class; see below). IDs and commands use safe lowercase names; `app.version` is a distribution semver independent of PiShip and Pi versions. Resource paths start with `./`, stay inside the manifest directory, and may not contain symlinks.
 
-## Access fields (v1alpha2 and v1alpha3)
+## Access fields (v1alpha2 and later)
 
 | Field | Values |
 | --- | --- |
@@ -54,7 +55,7 @@ A personal manifest defaults to `identity.mode: none` with `pi-native` credentia
 
 ## piship/v1alpha3 governance fields
 
-Every governance section is optional; the defaults below apply when it is omitted, and several depend on `deployment.mode`. Governance fields never hold secrets: secret-looking keys, credential-looking environment variable names, and values shaped like tokens or private keys are rejected. What each control actually enforces is described in [security](security.md#governance).
+These fields apply unchanged to `piship/v1alpha4`. Every governance section is optional; the defaults below apply when it is omitted, and several depend on `deployment.mode`. Governance fields never hold secrets: secret-looking keys, credential-looking environment variable names, and values shaped like tokens or private keys are rejected. What each control actually enforces is described in [security](security.md#governance).
 
 ### Resources and trust classes
 
@@ -187,15 +188,55 @@ Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or
 | `audit.buffer` | `maxEvents: 1000`, `flushInterval: 2s` | Bounded in-memory buffer per sink |
 | `audit.capture` | all `false` | `promptContent`, `responseContent`, `commandText`, `sourceContent`: opt-in content classes. Events are metadata only otherwise |
 
+## Lifecycle fields (v1alpha4)
+
+`piship/v1alpha4` requires `updates` and accepts an optional `release`; both are rejected in earlier schemas. What they control is described in [release](release.md).
+
+```yaml
+variables: [ACME_UPDATE_SOURCE]
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${ACME_UPDATE_SOURCE}
+  rollback: true
+  trust:
+    keys:
+      - id: acme-release-2026
+        publicKey: MCowBQYDK2VwAyEA...   # base64 Ed25519 public key from piship keygen
+release:
+  targets: [linux-x64, darwin-arm64, win32-x64]
+  sources: [https://registry.npmjs.org]
+  vulnerabilities:
+    failOn: high
+    allow:
+      - id: GHSA-xxxx-xxxx-xxxx
+        reason: Not reachable from the packaged runtime
+        expires: 2026-12-31
+```
+
+| Field | Default | Values |
+| --- | --- | --- |
+| `updates.channel` | `stable` | Channel for new installs: `stable`, `candidate`, or `dev` |
+| `updates.channels` | `[<channel>]` | Channels a user may select with `update --channel`; unique and must include `updates.channel` |
+| `updates.source` | none | Where channel metadata and archives are read: an `https` URL, an `http` URL on `127.0.0.1`, `localhost`, or `[::1]`, or a `${NAME}` runtime reference. Resolved only when `update` runs; without it, `update` needs `--from`. No credentials, query string, or fragment |
+| `updates.rollback` | `true` | Retain the previous release on update so `rollback` can return to it |
+| `updates.trust.keys` | `[]` | Pinned release keys: `id` (lowercase letters, digits, dots, and hyphens, unique) and `publicKey` (base64 of the 44-byte Ed25519 SubjectPublicKeyInfo DER). With no keys, no update can be verified, so `update` fails |
+| `release.targets` | `[linux-x64, darwin-arm64, win32-x64]` | Non-empty, unique subset of `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, `win32-x64`. Only the three defaults pass the release `target` gate in this version |
+| `release.sources` | `[https://registry.npmjs.org]` | Approved npm package origins: `https`, no path, query, fragment, or credentials; non-empty and unique |
+| `release.vulnerabilities.failOn` | `high` | `low`, `moderate`, `high`, or `critical`: the lowest severity that blocks a release |
+| `release.vulnerabilities.allow` | `[]` | Reviewed exceptions: `id` (advisory ID such as a GHSA ID, unique), `reason` (at most 240 characters), and `expires` (a real calendar date, `YYYY-MM-DD`; the exception applies through that day) |
+
+Only public keys go in the manifest; secret-looking field names are rejected. When `release` is omitted, its defaults are applied and locked.
+
 ## Configuration layers
 
-The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribution Enforced, then a permitted User Preference, then Distribution Defaults. An enforced value always wins, and a preference for a key that is enforced or not user-overridable is ignored with a visible notice. Users set preferences with the branded `config set <key> <value>` and `config unset <key>`, stored in `config/preferences.json`. Security-sensitive keys are refused with `POLICY_DENIED`, and a model outside the allowlist with `MODEL_DENIED`. `config set models.allowed a,b` may only narrow the allowlist. `config explain [--json]` prints every effective value with its source, runtime references with whether they resolve, and non-secret identity and credential state. For v1alpha3 it adds distribution-enforced rows for the policy ID and rule counts, `mcp.mode`, `sandbox.required`, `sandbox.network`, and `audit.sinks`.
+The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribution Enforced, then a permitted User Preference, then Distribution Defaults. An enforced value always wins, and a preference for a key that is enforced or not user-overridable is ignored with a visible notice. Users set preferences with the branded `config set <key> <value>` and `config unset <key>`, stored in `config/preferences.json`. Security-sensitive keys are refused with `POLICY_DENIED`, and a model outside the allowlist with `MODEL_DENIED`. `config set models.allowed a,b` may only narrow the allowlist. `config explain [--json]` prints every effective value with its source, runtime references with whether they resolve, and non-secret identity and credential state. For v1alpha3 and later it adds distribution-enforced rows for the policy ID and rule counts, `mcp.mode`, `sandbox.required`, `sandbox.network`, and `audit.sinks`.
 
 ## Runtime references
 
-`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, and, in v1alpha3, `mcp.servers.<id>.url` and `audit.sinks[].url`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
+`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url` and `audit.sinks[].url`, and in v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
 
-The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `piship validate` lists the variables and notes which are unset in the current shell.
+The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `updates.source` is resolved only when `update` runs, not at launch; its resolved value may also be a local directory. `piship validate` lists the variables and notes which are unset in the current shell.
 
 ## Commands
 
@@ -217,16 +258,20 @@ node ./dist/my-agent/piship.mjs uninstall my-agent
 node ./dist/my-agent/piship.mjs purge my-agent --yes
 ```
 
-`dev` builds and starts the interactive branded command with the same resource and state isolation. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and v1alpha3 payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
+v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
+
+`dev` builds and starts the interactive branded command with the same resource and state isolation. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
 
 v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint.
 
-v1alpha3 branded commands add:
+v1alpha3 and v1alpha4 branded commands add:
 
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
 - `doctor` sections for Policy, Project (origin and each discovered project item with its effect), Resources (trust class, integrity, and whether each loads), Capabilities, Sandbox (the containment level proven by a live probe, network mode, and scope), MCP and audit (server health and sink state), and local metrics.
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
+
+Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` adds Supply Chain and Update sections ([release](release.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
 
 ## Lock
 
@@ -234,15 +279,29 @@ v1alpha3 branded commands add:
 
 A v1alpha3 manifest produces `piship-lock/v1alpha3`. Each locked resource also records its trust class; capability-provider roots are locked as kind `providers`; the policy adapter and stdio MCP modules are locked as `adapters`. A `governance` section holds the parsed governance intent, each certified root with its evidence and computed tree digest, and each capability provider with its class, version, implemented contracts, and tree digest.
 
-The lock never contains tokens, credentials, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads. There is no signature or trusted publisher verification.
+A v1alpha4 manifest produces `piship-lock/v1alpha4`, which keeps every v1alpha3 field and adds:
+
+| Field | Content |
+| --- | --- |
+| `runtime.packages[].resolved` | The npm lock's source URL for each package, checked against `release.sources` by `piship release` |
+| `runtime.packages[].installScript` | `true` when npm reports lifecycle scripts for the package; `piship release` stops unless PiShip reviewed that package and version |
+| `runtime.stateSchemas` | The local state schemas this PiShip version reads (`state`, `identity`, `credential`, `preferences`, `metrics`, `audit`), used by the migration check |
+| `digests` | `sha256-<hex>` of the canonical JSON (sorted keys) of `resources` (kind, path, and hash of each locked resource), `policy`, `capabilities` (capabilities, providers, and certified evidence), `mcp`, `sandbox`, `audit`, and `access` |
+| `updates` | The parsed `updates` section, including the pinned public keys |
+| `release` | The `release` section with defaults applied |
+
+Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([release](release.md#reviewing-a-change)).
+
+The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 
 ## Migration
 
-`piship migrate <manifest>` prints a dry-run plan and the migrated YAML; `--write` applies it in place. It migrates step by step to `piship/v1alpha3`; an existing v1alpha3 manifest is left unchanged.
+`piship migrate <manifest>` prints a dry-run plan and the migrated YAML; `--write` applies it in place. It migrates step by step to `piship/v1alpha4`; an existing v1alpha4 manifest is left unchanged.
 
 - v1alpha1 to v1alpha2: an equivalent personal profile with `identity.mode: none`, `credential.provider: pi-native`, and `inference.provider: pi-native`. v1alpha1 never had a runnable managed mode, so a v1alpha1 manifest with `deployment.mode: managed` is rejected and must be rewritten with access sections (see `piship init --managed`).
 - v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies all dimensions except `passiveContext`; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
+- v1alpha3 to v1alpha4: adds `updates: {channel: stable, channels: [stable], rollback: true}` with no `source` and no trust keys, so updates stay disabled until a source and at least one key are added. `release` is not written; its defaults apply (the three evidenced targets, `https://registry.npmjs.org`, and `failOn: high`). Nothing else changes.
 
-After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 remains accepted. `piship init --managed` still writes a v1alpha2 template; migrate it to adopt governance.
+After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init --managed` still writes a v1alpha2 template; migrate it to adopt governance and the lifecycle.
 
 Earlier checkout-local preview manifests need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the current CLI, then rebuild. Checkout-local output cannot be installed as a portable payload.
