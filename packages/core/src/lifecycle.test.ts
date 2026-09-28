@@ -15,6 +15,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { SecretValue } from "@piship/contracts";
+import { MemorySecretStore } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVIDENCED_TARGETS,
@@ -1308,7 +1310,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     const receipt = await installDistribution(a.archive, true);
     await updateDistribution(ID, opts);
     const state = treeHash(stateDir());
-    expect(() => purgeDistributionState(ID)).toThrow(
+    await expect(purgeDistributionState(ID)).rejects.toThrow(
       /Uninstall acmepi before purging its state/,
     );
     expect(uninstallDistribution(ID)).toBe(stateDir());
@@ -1332,8 +1334,67 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       tracked: false,
       leftovers: [],
     });
-    expect(purgeDistributionState(ID)).toBe(stateDir());
+    // The seeded state uses the file fallback, which goes with the directory.
+    expect(await purgeDistributionState(ID)).toEqual({
+      state: stateDir(),
+      deletedSecrets: [],
+      problems: [],
+    });
     expect(existsSync(stateDir())).toBe(false);
+  });
+
+  it("purge deletes the platform secret-store entries the metadata references", async () => {
+    const state = stateDir();
+    write(
+      join(state, "identity", "session.json"),
+      JSON.stringify({
+        schema: "piship-identity-metadata/v1",
+        subject: "user-1",
+        secretRef: `piship:${ID}:identity#2`,
+      }),
+    );
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#3`,
+        orphans: [`piship:${ID}:inference#1`, "piship:other:inference#1"],
+      }),
+    );
+    const store = new MemorySecretStore();
+    const refs = [
+      `piship:${ID}:identity#2`,
+      `piship:${ID}:inference#1`,
+      `piship:${ID}:inference#3`,
+      "piship:other:inference#1",
+    ];
+    for (const ref of refs) await store.put(ref, new SecretValue("s3cret-v"));
+    const deleted: string[] = [];
+    const tracking = {
+      kind: store.kind,
+      description: "test store",
+      put: store.put.bind(store),
+      get: store.get.bind(store),
+      async delete(ref: string) {
+        deleted.push(ref);
+        if (ref.endsWith("identity#3")) throw new Error("locked keychain");
+        await store.delete(ref);
+      },
+    };
+    const result = await purgeDistributionState(ID, { secretStore: tracking });
+    // Current, adjacent, and orphaned generations of this distribution only.
+    expect(deleted).toEqual([
+      `piship:${ID}:identity#1`,
+      `piship:${ID}:identity#2`,
+      `piship:${ID}:identity#3`,
+      `piship:${ID}:inference#1`,
+      `piship:${ID}:inference#3`,
+    ]);
+    expect(store.refs()).toEqual(["piship:other:inference#1"]);
+    expect(result.problems).toEqual([
+      `Could not delete piship:${ID}:identity#3 from the test store: locked keychain`,
+    ]);
+    expect(existsSync(state)).toBe(false);
   });
 });
 

@@ -43,7 +43,7 @@ The payload includes `piship.mjs`, so installation and diagnostics need no sourc
 <bin-home>/<command>                  shim that runs launch.mjs with Node (<command>.cmd on Windows)
 ```
 
-`<install-home>` defaults to `~/.local/share/piship` and `<bin-home>` to `~/.local/bin`; set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, launcher, and every retained payload; `purge <id> --yes` separately deletes the selected state after uninstall. A receipt written by an earlier PiShip still launches and uninstalls, but update and rollback need a reinstall.
+`<install-home>` defaults to `~/.local/share/piship` and `<bin-home>` to `~/.local/bin`; set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, launcher, and every retained payload; `purge <id> --yes` separately deletes the selected state after uninstall, together with the platform secret-store entries that its identity and credential metadata reference (a secret that cannot be deleted is reported, and the state is still removed). A receipt written by an earlier PiShip still launches and uninstalls, but update and rollback need a reinstall.
 
 ## Lifecycle
 
