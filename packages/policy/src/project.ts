@@ -582,7 +582,7 @@ function discoverImports(
 }
 
 /** Bounds for the walk of a project resource directory. */
-const MAX_WALK_ENTRIES = 10_000;
+const MAX_WALK_ENTRIES = 50_000;
 const MAX_WALK_DEPTH = 32;
 
 /**
@@ -608,7 +608,7 @@ function escapingEntry(root: string, directory: string): string | undefined {
     for (const child of children) {
       entries += 1;
       if (entries > MAX_WALK_ENTRIES)
-        return `has more than ${MAX_WALK_ENTRIES} entries to check for links`;
+        return `has more than ${MAX_WALK_ENTRIES} entries to check for links; keep large trees (such as dependencies) out of project resource directories`;
       const path = joinPosix(next.path, child.name);
       let target = path;
       if (child.isSymbolicLink()) {
@@ -618,7 +618,7 @@ function escapingEntry(root: string, directory: string): string | undefined {
         if (!isDirectory(target) || visited.has(target)) continue;
       } else if (!child.isDirectory()) continue;
       if (next.depth + 1 > MAX_WALK_DEPTH)
-        return `nests deeper than ${MAX_WALK_DEPTH} levels to check for links`;
+        return `nests deeper than ${MAX_WALK_DEPTH} levels to check for links; flatten it to load it`;
       visited.add(target);
       pending.push({ path: target, depth: next.depth + 1 });
     }
@@ -679,7 +679,7 @@ export function discoverProjectResources(
       };
     const candidate = toCandidate(spec, path, resolvedPath, evaluation);
     out.push(candidate);
-    if (spec.kind === "instructions" && inside) {
+    if (spec.kind === "instructions" && inside && escaping === undefined) {
       seen.add(resolvedPath);
       discoverImports(candidate, identity, policy, homeDir, seen, 1, out);
     }

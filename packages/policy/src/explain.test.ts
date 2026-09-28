@@ -122,3 +122,28 @@ describe("formatDecision", () => {
     expect(text).toContain("Rule:\n  builtin:default");
   });
 });
+
+describe("managed user rules in explain", () => {
+  it("reports an ignored user allow rule in text and JSON", () => {
+    const engine = new PolicyEngine({
+      policy: makePolicy({
+        defaults: [rule("acme.shell", "shell.execute", "**", "ask")],
+      }),
+      userRules: [rule("me.shell", "shell.execute", "**", "allow")],
+      userRuleMode: "narrowing",
+      context,
+    });
+    const explanation = engine.explain({
+      action: "shell.execute",
+      resource: "ls",
+    });
+    expect(explanation.decision).toMatchObject({
+      effect: "ask",
+      ruleId: "acme.shell",
+    });
+    expect(formatDecision(explanation)).toContain(
+      "me.shell (user): user rules are narrowing only in managed mode; allow is ignored",
+    );
+    expect(JSON.stringify(decisionToJSON(explanation))).toContain("me.shell");
+  });
+});

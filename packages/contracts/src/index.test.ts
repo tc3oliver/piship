@@ -73,6 +73,61 @@ describe("SecretValue", () => {
       passwd: "[REDACTED]",
     });
   });
+  it("redacts adversarial 1 MB inputs in linear time", () => {
+    const size = 1 << 20;
+    const fill = (unit: string, tail = "") =>
+      unit.repeat(Math.ceil(size / unit.length)) + tail;
+    const inputs = [
+      fill("ey-"),
+      fill("eyJ-"),
+      fill("ey_a"),
+      `ey${fill("a")}`,
+      `eyJ${fill("a")}.`,
+      fill("eyaaaaaaaaaaa."),
+      fill("sk-"),
+      fill("ghp_"),
+      fill("github_pat_-"),
+      fill("xoxb-"),
+      fill("AKIA"),
+      fill("AIza-"),
+      fill("glpat-"),
+      fill("basic "),
+      `Basic ${fill("a")}`,
+      fill("bearer "),
+      `bearer${fill(" ")}`,
+      fill("authorization: "),
+      `authorization${fill(" ")}`,
+      fill("secret "),
+      `password${fill(" ")}`,
+      fill('"secret"'),
+      fill("-----BEGIN "),
+      fill("-----BEGIN PRIVATE KEY-----"),
+      `-----BEGIN ${fill("A")}`,
+    ];
+    for (const input of inputs) {
+      const started = performance.now();
+      redact(input);
+      const elapsed = performance.now() - started;
+      expect(
+        elapsed,
+        `${input.slice(0, 16)}... took ${elapsed} ms`,
+      ).toBeLessThan(1000);
+    }
+  });
+  it("keeps plain English that mentions basic", () => {
+    for (const text of [
+      "Use basic authentication for the proxy",
+      "Basic configuration applies to every workspace",
+      "BASIC INSTRUCTIONS",
+      "the basic understanding",
+    ])
+      expect(redact(text)).toBe(text);
+    expect(redact("send Basic dXNlcjpwYXNz now")).toBe("send [REDACTED] now");
+    expect(redact("Basic YWxhZGRpbjpvcGVuc2VzYW1l")).toBe("[REDACTED]");
+    expect(redact("Authorization: Basic anything")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
   it("sanitizes PiShipError message, action, and detail", () => {
     const secret = new SecretValue("token-material-4242");
     const error = new PiShipError(

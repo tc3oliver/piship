@@ -271,6 +271,48 @@ describe("tool filtering and results", () => {
   });
 });
 
+describe("runtime credential origin binding", () => {
+  const transport = (url: string, credentialOrigins: readonly string[]) =>
+    new StreamableHttpTransport({
+      serverId: "tickets",
+      url,
+      fetch: async () => {
+        throw new Error("not called");
+      },
+      credential: async () => "gateway-bearer-1234567",
+      credentialOrigins,
+    });
+  it("matches origins with and without an explicit default port", () => {
+    expect(() =>
+      transport("https://gw.acme.example/mcp", [
+        "https://gw.acme.example:443/v1",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      transport("https://gw.acme.example:443/mcp", [
+        "https://gw.acme.example/v1",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      transport("https://GW.acme.example/mcp", ["https://gw.acme.example/v1"]),
+    ).not.toThrow();
+  });
+  it("refuses another scheme, port, or host", () => {
+    for (const url of [
+      "http://gw.acme.example/mcp",
+      "https://gw.acme.example:8443/mcp",
+      "https://mcp.acme.example/mcp",
+      "https://gw.acme.example.evil.example/mcp",
+    ])
+      expect(() => transport(url, ["https://gw.acme.example/v1"])).toThrow(
+        /runtime credential is only sent to https:\/\/gw\.acme\.example$/,
+      );
+    expect(() =>
+      transport("https://gw.acme.example/mcp", ["not a url"]),
+    ).toThrow(/inference gateway origin, which is not configured/);
+  });
+});
+
 describe("Streamable HTTP transport limits", () => {
   it("rejects oversized responses and redirects", async () => {
     const big = new StreamableHttpTransport({

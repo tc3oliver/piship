@@ -449,6 +449,67 @@ describe("discoverProjectResources", () => {
     expect(byKind(found, ".pi/skills")).toMatchObject({ effect: "deny" });
   });
 
+  it("does not trust a resource directory nested deeper than the walk limit", () => {
+    const personal = makePolicy({}, "personal");
+    const shallow = dir("walk-shallow");
+    write(
+      join(shallow, ".pi", "skills", ...Array(31).fill("d"), "SKILL.md"),
+      "x",
+    );
+    expect(
+      byKind(
+        discoverProjectResources(
+          identifyProject(shallow, personal.projectTrust),
+          personal,
+          { homeDir: home },
+        ),
+        ".pi/skills",
+      )?.effect,
+    ).not.toBe("deny");
+    const deep = dir("walk-deep");
+    write(join(deep, ".pi", "skills", ...Array(33).fill("d"), "SKILL.md"), "x");
+    const skills = byKind(
+      discoverProjectResources(
+        identifyProject(deep, personal.projectTrust),
+        personal,
+        { homeDir: home },
+      ),
+      ".pi/skills",
+    );
+    expect(skills).toMatchObject({ effect: "deny", origin: "unknown" });
+    expect(skills?.reason).toContain("nests deeper than 32 levels");
+  });
+
+  it("stops at a link cycle inside a resource directory", () => {
+    const personal = makePolicy({}, "personal");
+    const root = dir("walk-cycle");
+    write(join(root, ".pi", "prompts", "a", "p.md"), "x");
+    const discover = () =>
+      byKind(
+        discoverProjectResources(
+          identifyProject(root, personal.projectTrust),
+          personal,
+          { homeDir: home },
+        ),
+        ".pi/prompts",
+      );
+    const clean = discover();
+    if (
+      !trySymlink(
+        join(root, ".pi", "prompts"),
+        join(root, ".pi", "prompts", "a", "up"),
+        "dir",
+      )
+    )
+      return;
+    trySymlink(
+      join(root, ".pi", "prompts", "a"),
+      join(root, ".pi", "prompts", "a", "self"),
+      "dir",
+    );
+    expect(discover()).toEqual(clean);
+  });
+
   it("re-evaluates an outside instruction link as unknown and never reads it", () => {
     const outside = dir("outside-instructions");
     write(join(outside, "AGENTS.md"), "@inside.md\n");

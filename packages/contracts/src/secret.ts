@@ -52,10 +52,16 @@ export function forgetSecret(value: SecretValue): void {
 const SECRET_PATTERNS: readonly RegExp[] = [
   /(authorization\s*:\s*)(bearer|basic)\s+[^\s"',;]+/gi,
   /\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b(basic)\s+[A-Za-z0-9+/=]{12,}/gi,
+  // A standalone Basic credential must look like base64 (a digit, `+`, `/`,
+  // `=`, or a lower-to-upper case change), so "basic authentication" stays.
+  // Case-sensitive on purpose: the case change is the signal.
+  /\b([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9+/]{12,}={0,2}/g,
   /\bsk-[A-Za-z0-9_-]{6,}/g,
-  /\bey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.?[A-Za-z0-9_-]*/g,
-  /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
+  // JWT shapes start only at the beginning of a token run: a match attempt
+  // from inside a run (such as "ey-ey-ey-...") would rescan it, which is
+  // quadratic on adversarial MCP output.
+  /(?<![A-Za-z0-9_-])ey[A-Za-z0-9_-]{10,}\.ey[A-Za-z0-9_-]{10,}\.?[A-Za-z0-9_-]*/g,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*/g,
   // Vendor-prefixed API keys and access tokens that appear without an
   // Authorization header or key=value context.
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g,
