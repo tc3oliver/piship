@@ -748,6 +748,25 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
+  it("policy: refuses an enabled capability whose provider class policy.providerTrust denies", () => {
+    const { path } = project({
+      extra: `capabilities:
+  workflow:
+    enabled: true
+    provider: { id: builtin/workflow }
+policy:
+  providerTrust:
+    builtin: deny
+`,
+    });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toMatch(/^Release gate policy: /);
+    expect(error.message).toContain(
+      "capability workflow is enabled with a builtin provider, which policy.providerTrust denies",
+    );
+  });
+
   it("certification: certified evidence is enforced when locking (the gate is a second layer)", () => {
     const { dir, path } = project({
       lock: false,
@@ -794,6 +813,32 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
       ).toMatch(/Release gate target: releases are built on their target/);
     },
   );
+
+  it("sandbox: refuses a required sandbox for win32-x64, which has no adapter", async () => {
+    // Build on a (simulated) win32-x64 host so the target gate passes and the
+    // sandbox gate is the one that decides, on every host.
+    vi.resetModules();
+    vi.doMock("./index.js", async (original) => ({
+      ...(await original<typeof import("./index.js")>()),
+      currentTarget: () => "win32-x64",
+    }));
+    try {
+      const release = await import("./release.js");
+      const { path } = project({ extra: "sandbox:\n  required: true\n" });
+      const error = caught(() => release.checkReleaseInputs(path, "win32-x64"));
+      expect(error.code).toBe("SANDBOX_UNAVAILABLE");
+      expect(error.message).toBe(
+        "Release gate sandbox: the distribution requires an OS sandbox and PiShip has no sandbox adapter for win32-x64",
+      );
+      const optional = project({ extra: "sandbox:\n  required: false\n" });
+      expect(
+        release.checkReleaseInputs(optional.path, "win32-x64").app.id,
+      ).toBe("acmepi");
+    } finally {
+      vi.doUnmock("./index.js");
+      vi.resetModules();
+    }
+  });
 
   it.runIf(process.platform === "win32")(
     "sandbox: refuses a required sandbox on win32",
