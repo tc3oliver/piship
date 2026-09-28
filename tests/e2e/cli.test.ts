@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -227,6 +228,8 @@ describe("CLI", () => {
       resumed: boolean;
       safeTool: string;
       extensionPaths: string[];
+      instructions: string[];
+      agentDir: string;
     };
     expect(firstResult).toMatchObject({
       resumed: false,
@@ -236,7 +239,36 @@ describe("CLI", () => {
       prompts: ["demo"],
       themes: ["mypi"],
     });
-    expect(firstResult.extensionPaths[0]).toContain(join(temp, "install's"));
+    expect(firstResult.agentDir).toContain(join(temp, "state", "mypi"));
+    const physicalTemp = realpathSync(temp);
+    expect(firstResult.instructions).toEqual([
+      join(
+        physicalTemp,
+        "install's",
+        "apps",
+        "mypi",
+        "1.0.0",
+        "resources",
+        "resources",
+        "AGENTS.md",
+      ),
+    ]);
+    expect(firstResult.extensionPaths).toEqual([
+      join(
+        physicalTemp,
+        "install's",
+        "apps",
+        "mypi",
+        "1.0.0",
+        "resources",
+        "resources",
+        "extensions",
+        "demo",
+      ),
+    ]);
+    expect(existsSync(join(temp, "home", ".pi", "agent", "auth.json"))).toBe(
+      false,
+    );
     const second = launch();
     expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout)).toMatchObject({
@@ -268,7 +300,7 @@ describe("CLI", () => {
       "bin",
       process.platform === "win32" ? "other-agent.cmd" : "other-agent",
     );
-    const otherLaunch =
+    const launchOther = () =>
       process.platform === "win32"
         ? spawnSync(
             "cmd.exe",
@@ -285,6 +317,7 @@ describe("CLI", () => {
             env,
             encoding: "utf8",
           });
+    const otherLaunch = launchOther();
     expect(otherLaunch.status, otherLaunch.stderr).toBe(0);
     expect(JSON.parse(otherLaunch.stdout)).toMatchObject({
       skills: [],
@@ -292,8 +325,6 @@ describe("CLI", () => {
     });
     expect(existsSync(join(temp, "state", "other-agent"))).toBe(true);
     expect(launch().status).toBe(0);
-    expect(command("uninstall", "other-agent").status).toBe(0);
-    expect(command("purge", "other-agent", "--yes").status).toBe(0);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
     expect(command("doctor", "mypi").status).toBe(0);
     const payload = join(temp, "install's", "apps", "mypi", "1.0.0");
@@ -338,6 +369,11 @@ describe("CLI", () => {
     expect(command("uninstall", "mypi").status).toBe(0);
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(installedCommand)).toBe(false);
+    expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
+    expect(existsSync(otherLauncher)).toBe(true);
+    expect(launchOther().status).toBe(0);
+    expect(relocatedBuilder("uninstall", "other-agent").status).toBe(0);
+    expect(relocatedBuilder("purge", "other-agent", "--yes").status).toBe(0);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
     const movedEnv = {
       ...env,
