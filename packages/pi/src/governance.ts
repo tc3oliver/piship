@@ -15,8 +15,10 @@ export interface ManagedEndpointGovernance {
 
 export interface PiNativeGovernance {
   readonly kind: "pi-native";
-  /** Empty means the personal owner allows any configured Pi model. */
+  /** Empty means the personal owner allows any configured Pi model... */
   readonly allowedModelKeys: readonly string[];
+  /** ...unless a policy restricts models, in which case empty allows none. */
+  readonly restricted?: boolean;
 }
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
@@ -67,17 +69,21 @@ export function governModelRuntime(
   let force = false;
   const managed =
     governance.kind === "managed-endpoint" ? governance : undefined;
+  const unrestricted =
+    governance.kind === "pi-native" &&
+    !governance.restricted &&
+    !governance.allowedModelKeys.length;
   const isAllowed = (provider: string, id: string): boolean =>
     managed
       ? provider === managed.providerId && managed.allowedModelIds.includes(id)
       : governance.kind === "pi-native" &&
-        (!governance.allowedModelKeys.length ||
+        (unrestricted ||
           governance.allowedModelKeys.includes(`${provider}/${id}`));
   const providerHasAllowed = (provider: string): boolean =>
     managed
       ? provider === managed.providerId
       : governance.kind === "pi-native" &&
-        (!governance.allowedModelKeys.length ||
+        (unrestricted ||
           governance.allowedModelKeys.some((key) =>
             key.startsWith(`${provider}/`),
           ));

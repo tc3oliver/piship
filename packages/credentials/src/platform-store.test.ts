@@ -30,4 +30,31 @@ describe.runIf(live)("platform secret store (live)", () => {
     expect(await store.get(ref)).toBeNull();
     await store.delete(ref);
   });
+  it("round-trips a token bundle larger than one platform item", async () => {
+    const store = createSecretStore({
+      provider: "system",
+      fileDirectory: "unused",
+    });
+    const ref = `piship:live-test:identity#${randomBytes(4).toString("hex")}`;
+    // OIDC access, ID, and refresh tokens from real providers reach several KB.
+    const large = new SecretValue(
+      JSON.stringify({
+        accessToken: randomBytes(2400).toString("base64url"),
+        idToken: randomBytes(1800).toString("base64url"),
+        refreshToken: randomBytes(600).toString("base64url"),
+      }),
+    );
+    const small = new SecretValue(`sk-live-${randomBytes(12).toString("hex")}`);
+    try {
+      await store.put(ref, large);
+      expect((await store.get(ref))?.reveal()).toBe(large.reveal());
+      await store.put(ref, small);
+      expect((await store.get(ref))?.reveal()).toBe(small.reveal());
+      await store.put(ref, large);
+      expect((await store.get(ref))?.reveal()).toBe(large.reveal());
+    } finally {
+      await store.delete(ref);
+    }
+    expect(await store.get(ref)).toBeNull();
+  });
 });

@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MemorySecretStore } from "@piship/credentials";
 import {
+  parseManifest,
+  PISHIP_SCHEMA_V1ALPHA2,
   readManifest,
   type AccessManifest,
   type Manifest,
@@ -124,6 +126,77 @@ describe("configuration precedence", () => {
         "acme/general",
       ),
     ).toThrow("enforced");
+  });
+
+  it("keeps an enforced model when a user narrows an otherwise open allowlist", () => {
+    const open = {
+      ...access,
+      models: { ...access.models, allowed: [] },
+      config: { ...access.config, enforced: { model: "openai/gpt-x" } },
+    } as AccessManifest;
+    const narrowed = resolveEffectiveConfig(open, undefined, {
+      schema: "piship-preferences/v1",
+      values: {},
+      modelsAllowed: ["anthropic/other"],
+    });
+    expect(narrowed).toMatchObject({
+      allowedModels: [],
+      modelsRestricted: true,
+    });
+    const kept = resolveEffectiveConfig(open, undefined, {
+      schema: "piship-preferences/v1",
+      values: {},
+      modelsAllowed: ["openai/gpt-x", "anthropic/other"],
+    });
+    expect(kept.allowedModels).toEqual(["openai/gpt-x"]);
+    const unrestricted = {
+      ...open,
+      config: { ...open.config, enforced: {} },
+    } as AccessManifest;
+    expect(
+      resolveEffectiveConfig(unrestricted, undefined, {
+        schema: "piship-preferences/v1",
+        values: {},
+      }),
+    ).toMatchObject({ allowedModels: [], modelsRestricted: false });
+    expect(
+      resolveEffectiveConfig(unrestricted, undefined, {
+        schema: "piship-preferences/v1",
+        values: {},
+        modelsAllowed: ["anthropic/other"],
+      }),
+    ).toMatchObject({
+      allowedModels: ["anthropic/other"],
+      modelsRestricted: true,
+    });
+  });
+
+  it("enforces the effective allowlist for Pi-native personal distributions", async () => {
+    const personal = parseManifest({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: { pi: "0.87.1" },
+      deployment: { mode: "personal" },
+      config: { enforced: { model: "openai/gpt-x" } },
+    });
+    const distribution = DistributionAccess.open({
+      app: personal.app,
+      mode: "personal",
+      access: personal.access as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: {},
+      secretStore: new MemorySecretStore(),
+    });
+    await expect(
+      distribution.activate({ requestedModel: "anthropic/claude-whatever" }),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    await expect(
+      distribution.activate({ requestedModel: "openai/gpt-x" }),
+    ).resolves.toMatchObject({
+      selectedModel: "openai/gpt-x",
+      config: { allowedModels: ["openai/gpt-x"], modelsRestricted: true },
+    });
   });
 
   it("refuses enforced, security-sensitive, disallowed, and widening preferences", () => {

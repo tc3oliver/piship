@@ -1,10 +1,13 @@
 import { randomBytes } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
@@ -78,6 +81,48 @@ function writeAtomic(path: string, content: string): void {
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
   renameSync(temporary, path);
+}
+
+const LOCK_STALE_MS = 120_000;
+const LOCK_WAIT_MS = 90_000;
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** In-process queue per metadata file, so concurrent callers never race. */
+const queues = new Map<string, Promise<unknown>>();
+
+/**
+ * Cross-process lock beside the metadata file. A lock older than the longest
+ * broker exchange is treated as abandoned by a crashed process.
+ */
+async function withFileLock<T>(
+  path: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const lock = `${path}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let age = 0;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age > LOCK_STALE_MS || Date.now() > deadline)
+        rmSync(lock, { force: true });
+      else await sleep(50);
+    }
+  }
+  try {
+    return await task();
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }
 
 /**
@@ -189,7 +234,7 @@ export class CredentialManager {
   }
 
   /** Persist a newly acquired credential and switch metadata to it atomically. */
-  async commit(credential: RuntimeCredential): Promise<CredentialMetadata> {
+  async #commit(credential: RuntimeCredential): Promise<CredentialMetadata> {
     const store = this.#store();
     const previous = this.readMetadata();
     const generation = (previous?.generation ?? 0) + 1;
@@ -250,8 +295,31 @@ export class CredentialManager {
     return next;
   }
 
-  async #clearIncompatible(): Promise<void> {
-    // Never resurrect or reuse a secret we cannot account for; force re-authentication.
+  /**
+   * Remove metadata we cannot use, deleting every secret it may reference so
+   * nothing is left behind. Never resurrect or reuse such a secret.
+   */
+  async #clearMetadata(): Promise<void> {
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
+    } catch {
+      raw = {};
+    }
+    const refs = new Set<string>();
+    const own = `piship:${this.options.distributionId}:inference#`;
+    for (const value of [
+      raw.credential_ref,
+      ...(Array.isArray(raw.orphans) ? raw.orphans : []),
+    ])
+      if (typeof value === "string" && value.startsWith(own)) refs.add(value);
+    const generation = Number(raw.generation);
+    if (Number.isInteger(generation) && generation >= 0) {
+      refs.add(this.#ref(generation));
+      refs.add(this.#ref(generation + 1));
+    }
+    for (const ref of refs)
+      await this.options.store?.delete(ref).catch(() => {});
     rmSync(this.options.metadataPath, { force: true });
   }
 
@@ -273,9 +341,52 @@ export class CredentialManager {
         notices: [],
       };
     }
+    // A forced renewal is satisfied by any renewal that lands after the
+    // caller observed the rejected generation, including one by another caller.
+    const observed = this.readMetadata()?.credential_ref;
+    return this.#exclusive(() =>
+      this.#ensure(identity, ctx, {
+        ...options,
+        forceRefresh:
+          options.forceRefresh === true &&
+          this.readMetadata()?.credential_ref === observed,
+      }),
+    );
+  }
+
+  /**
+   * Serialize credential changes within this process and across processes, so
+   * concurrent refreshes neither leak unrevoked credentials nor pair metadata
+   * with another generation's secret.
+   */
+  #exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const path = this.options.metadataPath;
+    const previous = queues.get(path) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(() => withFileLock(path, task));
+    const tail = run.catch(() => {});
+    queues.set(path, tail);
+    void tail.then(() => {
+      if (queues.get(path) === tail) queues.delete(path);
+    });
+    return run;
+  }
+
+  async #ensure(
+    identity: IdentitySession | null,
+    ctx: CredentialContext,
+    options: { allowAcquire: boolean; forceRefresh?: boolean },
+  ): Promise<ActiveCredential> {
+    if (!this.storesSecrets) {
+      await this.options.provider.acquire(identity, ctx);
+      return {
+        ref: { ref: `delegated:${this.mode}`, mode: this.mode },
+        secret: null,
+        notices: [],
+      };
+    }
     const notices: string[] = [];
     if (this.#incompatibleMetadataPresent()) {
-      await this.#clearIncompatible();
+      await this.#clearMetadata();
       notices.push(
         "Incompatible credential metadata was cleared; a new credential is required",
       );
@@ -285,7 +396,7 @@ export class CredentialManager {
       ? await this.#store().get(metadata.credential_ref)
       : null;
     if (metadata && !secret) {
-      rmSync(this.options.metadataPath, { force: true });
+      await this.#clearMetadata();
       notices.push(
         "Stored credential metadata had no matching secret and was cleared",
       );
@@ -310,7 +421,7 @@ export class CredentialManager {
             component: "credential",
           },
         );
-      metadata = await this.commit(acquired);
+      metadata = await this.#commit(acquired);
       return { ref: this.#toRef(metadata), secret: acquired.secret, notices };
     }
     const status = this.status();
@@ -336,7 +447,7 @@ export class CredentialManager {
             "CREDENTIAL_ACQUIRE_FAILED",
             "Credential refresh returned nothing",
           );
-        metadata = await this.commit(next);
+        metadata = await this.#commit(next);
         return { ref: this.#toRef(metadata), secret: next.secret, notices };
       } catch (error) {
         if (status.state === "expired" || force) {
@@ -362,20 +473,44 @@ export class CredentialManager {
     return { ref: this.#toRef(metadata), secret, notices };
   }
 
-  /** Record a gateway rejection so this and later processes renew before reuse. */
-  markRejected(): void {
-    const metadata = this.readMetadata();
-    if (!metadata || metadata.rejected_at) return;
-    writeAtomic(
-      this.options.metadataPath,
-      `${JSON.stringify({ ...metadata, rejected_at: new Date(this.#now()).toISOString() }, null, 2)}\n`,
-    );
+  /**
+   * Whether a rejected credential can be replaced without the user, which
+   * holds for organization-issued credentials but not user-owned secrets.
+   */
+  get renewable(): boolean {
+    return this.mode === "http-broker" || this.mode === "adapter";
+  }
+
+  /**
+   * Record a gateway rejection so this and later processes renew before reuse.
+   * Only the generation that was rejected is marked, never a newer one.
+   */
+  async markRejected(): Promise<void> {
+    if (!this.renewable) return;
+    const observed = this.readMetadata()?.credential_ref;
+    await this.#exclusive(async () => {
+      const metadata = this.readMetadata();
+      if (
+        !metadata ||
+        metadata.rejected_at ||
+        metadata.credential_ref !== observed
+      )
+        return;
+      writeAtomic(
+        this.options.metadataPath,
+        `${JSON.stringify({ ...metadata, rejected_at: new Date(this.#now()).toISOString() }, null, 2)}\n`,
+      );
+    });
   }
 
   /** Revoke when supported, then clear local secrets and metadata. */
   async logout(ctx: CredentialContext): Promise<string[]> {
+    if (!this.storesSecrets) return [];
+    return this.#exclusive(() => this.#logout(ctx));
+  }
+
+  async #logout(ctx: CredentialContext): Promise<string[]> {
     const problems: string[] = [];
-    if (!this.storesSecrets) return problems;
     const metadata = this.readMetadata();
     const store = this.options.store;
     if (metadata && store) {

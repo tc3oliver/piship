@@ -253,6 +253,17 @@ export interface ActivatedAccess {
   readonly notices: readonly string[];
 }
 
+function rejectedUserSecret(command: string): PiShipError {
+  return new PiShipError(
+    "CREDENTIAL_REVOKED",
+    "The gateway rejected the stored secret",
+    {
+      component: "credential",
+      userAction: `Check the key, then run ${command} login to replace it if it is no longer valid`,
+    },
+  );
+}
+
 /**
  * Orchestrates Identity → Credential → Inference for one distribution without
  * merging them: each provider is constructed separately from the manifest and
@@ -436,8 +447,22 @@ export class DistributionAccess {
     if (!provider) return null;
     const metadata = this.readIdentityMetadata();
     if (!metadata) {
-      if (existsSync(this.paths.identity))
+      if (existsSync(this.paths.identity)) {
+        // Delete the token bundle unusable metadata may still reference.
+        let stale: unknown;
+        try {
+          stale = JSON.parse(readFileSync(this.paths.identity, "utf8"));
+        } catch {
+          stale = null;
+        }
+        const ref = (stale as { secretRef?: unknown } | null)?.secretRef;
+        if (
+          typeof ref === "string" &&
+          ref.startsWith(`piship:${this.options.app.id}:identity#`)
+        )
+          await this.store?.delete(ref).catch(() => {});
         rmSync(this.paths.identity, { force: true });
+      }
       if (!options.required) return null;
       throw new PiShipError("IDENTITY_REQUIRED", "You are not signed in", {
         component: "identity",
@@ -609,7 +634,11 @@ export class DistributionAccess {
         !manager.storesSecrets
       )
         throw error;
-      manager.markRejected();
+      // A user-owned secret cannot be renewed automatically; leave it in
+      // place (the rejection may be transient) and ask for a new one.
+      if (!manager.renewable)
+        throw rejectedUserSecret(this.options.app.command);
+      await manager.markRejected();
       await this.requestSecret({ force: true });
       notices.push(
         "The gateway rejected the stored credential; a new credential was acquired",
@@ -680,6 +709,12 @@ export class DistributionAccess {
         await inference.resolveModel(requested, { models, allowed })
       ).model.id;
     } else if (requested) {
+      if (config.modelsRestricted && !config.allowedModels.includes(requested))
+        throw new PiShipError(
+          "MODEL_DENIED",
+          `Model ${requested} is not allowed by this distribution`,
+          { component: "inference" },
+        );
       await inference.resolveModel(requested, {
         models: [],
         allowed: config.allowedModels,
@@ -722,6 +757,8 @@ export class DistributionAccess {
   ): Promise<SecretValue | null> {
     const manager = await this.credentialManager();
     if (!manager.storesSecrets) return null;
+    if (options.force && !manager.renewable)
+      throw rejectedUserSecret(this.options.app.command);
     const status = manager.status();
     if (!options.force && status.state === "valid" && this.#secret)
       return this.#secret;
@@ -759,7 +796,7 @@ export class DistributionAccess {
 
   /** Persist a gateway rejection of the current runtime credential. */
   async markCredentialRejected(): Promise<void> {
-    (await this.credentialManager()).markRejected();
+    await (await this.credentialManager()).markRejected();
   }
 
   /** Token-free context for approved extensions. */

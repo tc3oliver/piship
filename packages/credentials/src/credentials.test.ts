@@ -1,9 +1,11 @@
 import {
+  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,13 +103,73 @@ describe("platform secret stores", () => {
         expect(call.args.join(" ")).not.toContain(secret.reveal());
         expect(call.args.join(" ")).not.toContain(encoded);
       }
-      const put = calls[0];
-      expect(
-        put?.stdin.includes(encoded) ||
-          put?.stdin.includes(Buffer.from(encoded).toString("hex")),
-      ).toBe(true);
+      const writes = calls.filter(
+        (call) =>
+          call.stdin.includes(encoded) ||
+          call.stdin.includes(Buffer.from(encoded).toString("hex")),
+      );
+      expect(writes).toHaveLength(1);
     },
   );
+  it("splits large macOS Keychain values into parts and removes stale parts", async () => {
+    // A stateful fake of `security`: interactive add/delete lines on stdin,
+    // find/delete through arguments.
+    const items = new Map<string, string>();
+    const calls: { args: readonly string[]; stdin: string }[] = [];
+    const run: CommandRunner = (_command, args, stdin) => {
+      calls.push({ args, stdin: stdin ?? "" });
+      const account = (list: readonly string[]) =>
+        list[list.indexOf("-a") + 1] ?? "";
+      if (args[0] === "-i") {
+        for (const line of (stdin ?? "").trim().split("\n")) {
+          const words = line.split(" ");
+          if (words[0] === "add-generic-password")
+            items.set(
+              account(words),
+              Buffer.from(words[words.indexOf("-X") + 1] ?? "", "hex").toString(
+                "utf8",
+              ),
+            );
+          else if (!items.delete(account(words)))
+            return { status: 0, stdout: "", stderr: "error: not found" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      const value = items.get(account(args));
+      if (args[0] === "find-generic-password")
+        return value === undefined
+          ? { status: 44, stdout: "", stderr: "" }
+          : { status: 0, stdout: `${value}\n`, stderr: "" };
+      return items.delete(account(args))
+        ? { status: 0, stdout: "", stderr: "" }
+        : { status: 44, stdout: "", stderr: "" };
+    };
+    const store = new MacKeychainSecretStore(run);
+    const ref = "piship:acmecode:identity";
+    const large = new SecretValue(`{"idToken":"${"x".repeat(6000)}"}`);
+    await store.put(ref, large);
+    expect([...items.keys()].sort()).toEqual(
+      [
+        ref,
+        ...[0, 1, 2, 3, 4, 5, 6, 7].map((index) => `${ref}+${index}`),
+      ].sort(),
+    );
+    for (const line of calls.at(-1)?.stdin.trim().split("\n") ?? [])
+      expect(line.length).toBeLessThan(4096);
+    expect((await store.get(ref))?.reveal()).toBe(large.reveal());
+    await store.put(ref, secret);
+    expect([...items.keys()]).toEqual([ref]);
+    expect((await store.get(ref))?.reveal()).toBe(secret.reveal());
+    await store.put(ref, large);
+    items.delete(`${ref}+3`);
+    await expect(store.get(ref)).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    await store.delete(ref);
+    expect([...items.keys()]).toEqual([]);
+    for (const call of calls)
+      expect(call.args.join(" ")).not.toContain("xxxxxxxx");
+  });
   it("reports an unavailable platform store instead of degrading to a file", async () => {
     const { runner } = recordingRunner({
       store: { status: 1, stderr: "Cannot autolaunch D-Bus without X11" },
@@ -435,6 +497,115 @@ describe("credential lifecycle", () => {
     ).rejects.toMatchObject({ code: "CREDENTIAL_REQUIRED" });
     const fresh = await credentials.ensure(null, ctx, { allowAcquire: true });
     expect(fresh.secret?.reveal()).not.toBe("sk-old-snapshot-secret");
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+  });
+  it("deletes every secret referenced by metadata whose secret is missing", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 3600 });
+    const { manager: credentials, store } = manager(provider);
+    for (const generation of [5, 6])
+      await store.put(
+        `piship:acmecode:inference#${generation}`,
+        new SecretValue(`sk-stale-generation-${generation}`),
+      );
+    await store.put("piship:other:inference#1", new SecretValue("sk-other-1"));
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    const metadata = JSON.parse(metadataText());
+    writeFileSync(
+      join(temp, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        ...metadata,
+        credential_ref: "piship:acmecode:inference#7",
+        generation: 7,
+        orphans: [
+          "piship:acmecode:inference#5",
+          "piship:acmecode:inference#6",
+          "piship:other:inference#1",
+        ],
+      }),
+    );
+    await store.delete("piship:acmecode:inference#1");
+    await expect(
+      credentials.ensure(null, ctx, { allowAcquire: false }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_REQUIRED" });
+    expect(store.refs()).toEqual(["piship:other:inference#1"]);
+  });
+  it("shares one refresh between concurrent callers and processes", async () => {
+    const revoked: string[] = [];
+    const provider = fakeProvider({ expiresInSeconds: 120, revoked });
+    const store = new MemorySecretStore();
+    const first = manager(provider, {}, store).manager;
+    const second = manager(provider, {}, store).manager;
+    await first.ensure(null, ctx, { allowAcquire: true });
+    const results = await Promise.all([
+      first.ensure(null, ctx, { allowAcquire: false }),
+      first.ensure(null, ctx, { allowAcquire: false }),
+      second.ensure(null, ctx, { allowAcquire: false }),
+    ]);
+    // The first caller refreshes (generation 2, still expiring); each later
+    // caller refreshes the generation it finds, never two at once.
+    expect(results.map((result) => result.secret?.reveal())).toEqual([
+      "sk-generation-2-secret",
+      "sk-generation-3-secret",
+      "sk-generation-4-secret",
+    ]);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#4"]);
+    expect(JSON.parse(metadataText())).toMatchObject({
+      credential_ref: "piship:acmecode:inference#4",
+      credential_id: "vk_4",
+    });
+  });
+  it("renews once when concurrent callers report the same rejection", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 3600 });
+    const store = new MemorySecretStore();
+    const first = manager(provider, {}, store).manager;
+    const second = manager(provider, {}, store).manager;
+    await first.ensure(null, ctx, { allowAcquire: true });
+    const forced = await Promise.all([
+      first.ensure(null, ctx, { allowAcquire: false, forceRefresh: true }),
+      second.ensure(null, ctx, { allowAcquire: false, forceRefresh: true }),
+    ]);
+    // Both callers saw the rejected generation; one renewal satisfies both.
+    expect(provider.acquired()).toBe(2);
+    expect(forced.map((result) => result.secret?.reveal())).toEqual([
+      "sk-generation-2-secret",
+      "sk-generation-2-secret",
+    ]);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#2"]);
+    // A rejection reported for an already replaced generation is ignored.
+    const stale = manager(provider, {}, store).manager;
+    await Promise.all([
+      first.ensure(null, ctx, { allowAcquire: false, forceRefresh: true }),
+      stale.markRejected(),
+    ]);
+    expect(provider.acquired()).toBe(3);
+    expect(first.status().state).toBe("valid");
+  });
+  it("waits for another process's lock and breaks an abandoned one", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 3600 });
+    const { manager: credentials } = manager(provider);
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    const lock = join(temp, "credentials-metadata", "inference.json.lock");
+    writeFileSync(lock, "");
+    let settled = false;
+    const waiting = credentials
+      .ensure(null, ctx, { allowAcquire: false })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(settled).toBe(false);
+    rmSync(lock);
+    await expect(waiting).resolves.toMatchObject({
+      secret: expect.anything(),
+    });
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(lock, old, old);
+    await expect(
+      credentials.ensure(null, ctx, { allowAcquire: false }),
+    ).resolves.toMatchObject({ secret: expect.anything() });
+    expect(existsSync(lock)).toBe(false);
   });
   it("revokes, then clears secrets and metadata on logout", async () => {
     const revoked: string[] = [];
@@ -474,6 +645,10 @@ describe("credential lifecycle", () => {
         { allowAcquire: true, forceRefresh: true },
       ),
     ).rejects.toThrow("malformed");
+    // A user-owned secret cannot be renewed, so a rejection is not persisted.
+    expect(credentials.renewable).toBe(false);
+    await credentials.markRejected();
+    expect(credentials.status().state).toBe("valid");
   });
   it.each([
     ["pi-native", new PiNativeCredentialProvider()],
@@ -507,7 +682,7 @@ describe("gateway rejection", () => {
       });
     const first = make();
     await first.ensure(null, ctx, { allowAcquire: true });
-    first.markRejected();
+    await first.markRejected();
     const later = make();
     expect(later.status().state).toBe("rejected");
     const renewed = await later.ensure(null, ctx, { allowAcquire: false });

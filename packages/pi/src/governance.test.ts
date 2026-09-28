@@ -297,4 +297,24 @@ describe("personal Pi-native governance", () => {
       runtime.streamSimple(other, { messages: [] } as never),
     ).toThrow("not allowed");
   });
+  it("allows no model when a restricting policy leaves an empty allowlist", async () => {
+    const runtime = await ModelRuntime.create({
+      authPath: join(temp, "auth.json"),
+      modelsPath: join(temp, "models.json"),
+      refreshOnCreate: false,
+    });
+    const other = runtime.getModels("anthropic")[0];
+    expect(other).toBeDefined();
+    if (!other) return;
+    governModelRuntime(runtime, {
+      kind: "pi-native",
+      allowedModelKeys: [],
+      restricted: true,
+    });
+    expect(runtime.getAvailableSnapshot()).toEqual([]);
+    expect(runtime.getModel("anthropic", other.id)).toBeUndefined();
+    expect(() =>
+      runtime.streamSimple(other, { messages: [] } as never),
+    ).toThrow("not allowed");
+  });
 });

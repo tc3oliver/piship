@@ -242,11 +242,16 @@ async function createModelRuntime(
       authPath: join(ctx.agentDir, "auth.json"),
       modelsPath: join(ctx.agentDir, "models.json"),
     });
-    const allowed = ctx.metadata.access?.models.allowed ?? [];
+    // The effective allowlist includes an enforced model and user narrowing,
+    // not only the manifest's list.
+    const effective = activated?.config;
     const governed = ctx.metadata.access
       ? governModelRuntime(modelRuntime, {
           kind: "pi-native",
-          allowedModelKeys: allowed,
+          allowedModelKeys: effective
+            ? effective.allowedModels
+            : ctx.metadata.access.models.allowed,
+          restricted: effective?.modelsRestricted ?? false,
         })
       : null;
     return { modelRuntime, governed };
@@ -758,6 +763,14 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
     return;
   }
   const access = ctx.metadata.access;
+  // Checked before the managed environment is sanitized, which removes the
+  // variable; a real launch refuses in this state, so doctor must too.
+  let tlsError: unknown;
+  try {
+    assertTlsVerificationEnabled();
+  } catch (error) {
+    tlsError = error;
+  }
   let opened: DistributionAccess | undefined;
   try {
     opened = openAccess(ctx);
@@ -809,38 +822,35 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
         `${status?.credential.state ?? "unknown"}; run ${app.command} login`,
       );
     lines.push("", "Inference");
-    try {
-      applyProcessNetworkPolicy(opened.network);
-      activated = await opened.activate();
-      ok("provider", access.inference.provider);
-      if (activated.runtime.kind === "managed-endpoint") {
-        const inference = opened.inferenceProvider() as {
-          probe?: () => Promise<string[]>;
-        };
-        if (inference.probe)
-          try {
-            const listed = await inference.probe();
-            ok("gateway", `reachable (${listed.length} listed)`);
-          } catch (error) {
-            bad("gateway", formatError(error));
-          }
+    if (tlsError) bad("activation", formatError(tlsError));
+    else
+      try {
+        applyProcessNetworkPolicy(opened.network);
+        activated = await opened.activate();
+        ok("provider", access.inference.provider);
+        if (activated.runtime.kind === "managed-endpoint") {
+          const inference = opened.inferenceProvider() as {
+            probe?: () => Promise<string[]>;
+          };
+          if (inference.probe)
+            try {
+              const listed = await inference.probe();
+              ok("gateway", `reachable (${listed.length} listed)`);
+            } catch (error) {
+              bad("gateway", formatError(error));
+            }
+        }
+        ok(
+          "models",
+          `${activated.config.allowedModels.length} allowed; default ${activated.selectedModel ?? "Pi default"}`,
+        );
+      } catch (error) {
+        bad("activation", formatError(error));
       }
-      ok(
-        "models",
-        `${activated.config.allowedModels.length} allowed; default ${activated.selectedModel ?? "Pi default"}`,
-      );
-    } catch (error) {
-      bad("activation", formatError(error));
-    }
   }
   lines.push("", "Security");
-  ok(
-    "TLS verification",
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0"
-      ? "DISABLED in environment"
-      : "on",
-  );
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") failed = true;
+  if (tlsError) bad("TLS verification", "DISABLED in environment");
+  else ok("TLS verification", "on");
   ok(
     "public fallback",
     access.network.publicFallback === "deny"

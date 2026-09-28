@@ -43,6 +43,11 @@ export interface ExplainedValue {
 export interface EffectiveConfig {
   readonly values: Readonly<Record<ConfigKey, string | undefined>>;
   readonly allowedModels: readonly string[];
+  /**
+   * True when any policy, entitlement, or preference restricts models. An
+   * empty `allowedModels` then means no model is selectable, not "any model".
+   */
+  readonly modelsRestricted: boolean;
   readonly entries: readonly ExplainedValue[];
   /** Visible problems, such as a user preference that policy overrides. */
   readonly notices: readonly string[];
@@ -310,9 +315,12 @@ export function resolveEffectiveConfig(
     sources.push("credential entitlement");
   }
   if (preferences.modelsAllowed) {
-    allowed = policy.allowed.length
-      ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
-      : [...preferences.modelsAllowed];
+    // Users only narrow: without any other restriction their list is the
+    // allowlist; otherwise it intersects the enforced, allowed, and entitled set.
+    allowed =
+      sources.length > 1 || policy.allowed.length
+        ? allowed.filter((item) => preferences.modelsAllowed?.includes(item))
+        : [...preferences.modelsAllowed];
     sources.push("user narrowing");
   }
   entries.push({
@@ -322,5 +330,11 @@ export function resolveEffectiveConfig(
     overridable: false,
     note: `${sources.join(" ∩ ")}; users may only narrow`,
   });
-  return { values, allowedModels: allowed, entries, notices };
+  return {
+    values,
+    allowedModels: allowed,
+    modelsRestricted: policy.allowed.length > 0 || sources.length > 1,
+    entries,
+    notices,
+  };
 }

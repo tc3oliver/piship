@@ -282,7 +282,10 @@ export class PiNativeInferenceProvider implements InferenceProvider {
     requested: string,
     ctx: InferenceContext,
   ): Promise<ResolvedModel> {
-    if (this.allowed.length && !this.allowed.includes(requested))
+    // The effective allowlist (enforced model, user narrowing) wins over the
+    // manifest's own list when the caller supplies one.
+    const allowed = ctx.allowed.length ? ctx.allowed : this.allowed;
+    if (allowed.length && !allowed.includes(requested))
       throw new PiShipError(
         "MODEL_DENIED",
         `Model ${requested} is not in the owner allowlist`,

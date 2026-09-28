@@ -388,6 +388,16 @@ describe("managed distribution (local fixtures)", () => {
     });
     expect(insecure.status).toBe(1);
     expect(insecure.stderr).toContain("TLS_POLICY_VIOLATION");
+    // Doctor reports the same refusal instead of passing after sanitizing.
+    const insecureDoctor = await branded(command, ["doctor"], {
+      cwd: temp,
+      env: { ...env, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    });
+    expect(insecureDoctor.status).toBe(1);
+    expect(insecureDoctor.stdout).toMatch(
+      /✗ TLS verification\s+DISABLED in environment/,
+    );
+    expect(insecureDoctor.stdout).toContain("TLS_POLICY_VIOLATION");
   }, 600000);
 });
 

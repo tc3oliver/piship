@@ -89,47 +89,100 @@ export class MemorySecretStore implements SecretStore {
   }
 }
 
+// Platform stores cap one item's size (Windows generic credentials at 2,560
+// bytes; macOS `security -i` reads one bounded command line). Larger values,
+// such as OIDC token bundles, are split across part items named
+// `<ref>+<index>` and the primary item holds `chunks:<count>`. Neither can be
+// confused with a stored value: base64url has no ":", references have no "+".
+const CHUNK_MARKER = "chunks:";
+const MAC_CHUNK = 1024;
+const partRef = (ref: string, index: number) => `${ref}+${index}`;
+function chunkCount(raw: string | null): number {
+  if (!raw?.startsWith(CHUNK_MARKER)) return 0;
+  const count = Number(raw.slice(CHUNK_MARKER.length));
+  return Number.isInteger(count) && count > 0 && count <= 1000 ? count : 0;
+}
+function splitChunks(value: string, size: number): string[] {
+  const parts: string[] = [];
+  for (let index = 0; index < value.length; index += size)
+    parts.push(value.slice(index, index + size));
+  return parts;
+}
+
 /** macOS login Keychain through /usr/bin/security in interactive (stdin) mode. */
 export class MacKeychainSecretStore implements SecretStore {
   readonly kind = "macos-keychain";
   readonly description = "macOS Keychain";
   constructor(private readonly run: CommandRunner = runCommand) {}
-  async put(ref: string, value: SecretValue): Promise<void> {
-    checkRef(ref);
-    const hex = Buffer.from(encode(value), "utf8").toString("hex");
-    const result = this.run(
-      "/usr/bin/security",
-      ["-i"],
-      `add-generic-password -U -a ${ref} -s ${SERVICE} -X ${hex}\n`,
-    );
-    if (result.status !== 0 || /error/i.test(result.stderr))
-      throw unavailable(this.description, result.stderr);
-  }
-  async get(ref: string): Promise<SecretValue | null> {
-    checkRef(ref);
+  #read(account: string): string | null {
     const result = this.run("/usr/bin/security", [
       "find-generic-password",
       "-a",
-      ref,
+      account,
       "-s",
       SERVICE,
       "-w",
     ]);
     if (result.status === 44) return null;
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
-    return decode(result.stdout);
+    return result.stdout.trim();
   }
-  async delete(ref: string): Promise<void> {
-    checkRef(ref);
+  #remove(account: string): void {
     const result = this.run("/usr/bin/security", [
       "delete-generic-password",
       "-a",
-      ref,
+      account,
       "-s",
       SERVICE,
     ]);
     if (result.status !== 0 && result.status !== 44)
       throw unavailable(this.description, result.stderr);
+  }
+  async put(ref: string, value: SecretValue): Promise<void> {
+    checkRef(ref);
+    const encoded = encode(value);
+    const previous = chunkCount(this.#read(ref));
+    const parts =
+      encoded.length > MAC_CHUNK ? splitChunks(encoded, MAC_CHUNK) : [];
+    const add = (account: string, text: string) =>
+      `add-generic-password -U -a ${account} -s ${SERVICE} -X ${Buffer.from(text, "utf8").toString("hex")}`;
+    const lines = [
+      ...parts.map((part, index) => add(partRef(ref, index), part)),
+      add(ref, parts.length ? `${CHUNK_MARKER}${parts.length}` : encoded),
+    ];
+    for (let index = parts.length; index < previous; index += 1)
+      lines.push(
+        `delete-generic-password -a ${partRef(ref, index)} -s ${SERVICE}`,
+      );
+    const result = this.run(
+      "/usr/bin/security",
+      ["-i"],
+      `${lines.join("\n")}\n`,
+    );
+    if (result.status !== 0 || /error/i.test(result.stderr))
+      throw unavailable(this.description, result.stderr);
+  }
+  async get(ref: string): Promise<SecretValue | null> {
+    checkRef(ref);
+    const raw = this.#read(ref);
+    if (raw === null) return null;
+    const count = chunkCount(raw);
+    if (!count) return decode(raw);
+    let joined = "";
+    for (let index = 0; index < count; index += 1) {
+      const part = this.#read(partRef(ref, index));
+      if (part === null)
+        throw unavailable(this.description, "a stored secret part is missing");
+      joined += part;
+    }
+    return decode(joined);
+  }
+  async delete(ref: string): Promise<void> {
+    checkRef(ref);
+    const count = chunkCount(this.#read(ref));
+    for (let index = 0; index < count; index += 1)
+      this.#remove(partRef(ref, index));
+    this.#remove(ref);
   }
 }
 
@@ -212,10 +265,32 @@ public static class PiShipCred {
   public static int Delete(string target) { if (CredDeleteW(target, 1, 0)) return 0; int e = Marshal.GetLastWin32Error(); return e == 1168 ? 0 : e; }
 }
 '@
+$Max = 2048
+function Save($t, $v) { $r = [PiShipCred]::Write($t, $v); if ($r -ne 0) { [Console]::Error.WriteLine("CredWrite $r"); exit 1 } }
+function Remove($t) { $r = [PiShipCred]::Delete($t); if ($r -ne 0) { [Console]::Error.WriteLine("CredDelete $r"); exit 1 } }
+function Parts($v) { if ($null -ne $v -and $v.StartsWith('chunks:')) { return [int]$v.Substring(7) } return 0 }
 $op = [Console]::In.ReadLine(); $target = [Console]::In.ReadLine()
-if ($op -eq 'put') { $value = [Console]::In.ReadLine(); $r = [PiShipCred]::Write($target, $value); if ($r -ne 0) { [Console]::Error.WriteLine("CredWrite $r"); exit 1 } }
-elseif ($op -eq 'get') { $v = [PiShipCred]::Read($target); if ($null -eq $v) { exit 44 } [Console]::Out.Write($v) }
-elseif ($op -eq 'delete') { $r = [PiShipCred]::Delete($target); if ($r -ne 0) { [Console]::Error.WriteLine("CredDelete $r"); exit 1 } }
+if ($op -eq 'put') {
+  $value = [Console]::In.ReadLine(); $old = Parts ([PiShipCred]::Read($target)); $n = 0
+  if ($value.Length -le $Max) { Save $target $value }
+  else {
+    $n = [int][Math]::Ceiling($value.Length / $Max)
+    for ($i = 0; $i -lt $n; $i++) { $chunk = $value.Substring($i * $Max, [Math]::Min($Max, $value.Length - $i * $Max)); Save "$target+$i" $chunk }
+    Save $target "chunks:$n"
+  }
+  for ($i = $n; $i -lt $old; $i++) { Remove "$target+$i" }
+}
+elseif ($op -eq 'get') {
+  $v = [PiShipCred]::Read($target); if ($null -eq $v) { exit 44 }
+  $n = Parts $v
+  if ($n -gt 0) {
+    $b = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt $n; $i++) { $p = [PiShipCred]::Read("$target+$i"); if ($null -eq $p) { [Console]::Error.WriteLine("CredRead missing part $i"); exit 1 }; [void]$b.Append($p) }
+    $v = $b.ToString()
+  }
+  [Console]::Out.Write($v)
+}
+elseif ($op -eq 'delete') { $n = Parts ([PiShipCred]::Read($target)); for ($i = 0; $i -lt $n; $i++) { Remove "$target+$i" }; Remove $target }
 else { exit 2 }
 `;
 
