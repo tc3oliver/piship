@@ -42,6 +42,8 @@ import {
   discoverProjectResources,
   identifyProject,
   parseRuleList,
+  projectGitControlDirectories,
+  projectGitControlFiles,
   providerTrustDecision,
   readProjectRestrictions,
   resourceTrustDecision,
@@ -260,6 +262,28 @@ function sandboxConfig(options: GovernanceOptions) {
   };
 }
 
+/**
+ * The git files that classify the project and the git trees that run
+ * outside the sandbox (hooks) stay read-only for tool subprocesses. A `.git`
+ * directory itself stays writable so git keeps working inside the sandbox.
+ */
+function gitProtection(root: string): {
+  files: string[];
+  directories: string[];
+} {
+  const isDirectory = (path: string) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  return {
+    files: projectGitControlFiles(root).filter((path) => !isDirectory(path)),
+    directories: projectGitControlDirectories(root),
+  };
+}
+
 async function buildEngine(
   options: GovernanceOptions,
   project: ProjectIdentity,
@@ -415,6 +439,7 @@ export async function inspectGovernance(
       // MCP modules run from the installed payload, which may sit under a
       // directory the sandbox otherwise replaces (such as /tmp).
       extraReadOnly: [options.distributionDir],
+      protectedPaths: gitProtection(project.root),
     });
     report = sandbox.report;
     tmpDir = sandbox.profile.tmpDir;
@@ -582,11 +607,13 @@ export class GovernanceSession {
       });
       const { project, candidates } = discoverProject(options, homeDir);
       // The distribution state holds sessions and credential metadata; tool
-      // subprocesses never need to read it.
+      // subprocesses never need to read it. The git files that classify the
+      // project and the hooks git runs outside the sandbox stay read-only.
       sandbox = await activateSandbox(sandboxConfig(options), {
         workspace: project.root,
         homeDir,
         extraReadOnly: [options.distributionDir],
+        protectedPaths: gitProtection(project.root),
       });
       metrics.recordSandbox(sandbox.report.level, sandbox.report.adapter);
       const engine = await buildEngine(
@@ -1030,11 +1057,23 @@ export class GovernanceSession {
     ] as McpServerConfig[];
     if (!servers.length) return;
     const channel = this.startupChannel();
+    // Only distribution-declared urls may carry `${NAME}` references; a
+    // project file never gets launch environment values interpolated.
+    const declared = new Set(
+      mcp.mode === "off" ? [] : mcp.servers.map((server) => server.id),
+    );
     const governor = new McpGovernor({
       servers,
       distributionDir: join(this.options.distributionDir, "resources"),
       workspace: this.project.root,
       fetch: this.options.fetch,
+      resolveUrl: (server) =>
+        declared.has(server.id)
+          ? this.options.resolveTemplate(
+              `mcp.servers.${server.id}.url`,
+              server.url ?? "",
+            )
+          : (server.url ?? ""),
       ...(this.sandbox.report.level === "enforced"
         ? { sandbox: this.sandbox }
         : {}),

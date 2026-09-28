@@ -374,15 +374,30 @@ describe("enforcement planes", () => {
       "skill.load",
       "instruction.load",
       "provider.load",
-      "agent.invoke",
       "mcp.server.start",
       "mcp.tool.call",
       "tool.execute",
-      "memory.read",
-      "memory.write",
     ] as const) {
       expect(enforcementPlane(action, NO_CONTAINMENT)).toBe("control-plane");
       expect(enforcementPlane(action, contained)).toBe("control-plane");
+    }
+  });
+  it("reports actions without a runtime hook as audit-only", () => {
+    for (const action of [
+      "agent.invoke",
+      "memory.read",
+      "memory.write",
+    ] as const) {
+      expect(enforcementPlane(action, NO_CONTAINMENT)).toBe("audit-only");
+      expect(enforcementPlane(action, contained)).toBe("audit-only");
+      const decision = engine({
+        policy: makePolicy({
+          enforced: [rule("no.action", action, "**", "deny")],
+        }),
+        context: { ...context, containment: contained },
+      }).evaluate({ action, resource: "anything" });
+      expect(decision.effect).toBe("deny");
+      expect(decision.enforcement).toBe("audit-only");
     }
   });
   it("uses the sandbox only when containment is active", () => {

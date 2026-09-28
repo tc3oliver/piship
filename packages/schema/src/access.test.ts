@@ -235,6 +235,37 @@ describe("piship/v1alpha2 managed manifest", () => {
   });
 });
 
+describe("model catalog metadata", () => {
+  it("records structuredOutput only when declared", () => {
+    const withFlag = patch(
+      managed,
+      "models.catalog.acme/coder",
+      undefined,
+    ) as Json;
+    const models = (withFlag.models as Json).catalog as Json;
+    models["acme/coder"] = {
+      name: "Coder",
+      contextWindow: 128000,
+      maxOutputTokens: 8192,
+      structuredOutput: true,
+    };
+    const catalog = parseManifest(withFlag).access?.models.catalog ?? [];
+    expect(catalog.find((item) => item.id === "acme/coder")).toMatchObject({
+      structuredOutput: true,
+    });
+    expect(
+      catalog.find((item) => item.id === "acme/general"),
+    ).not.toHaveProperty("structuredOutput");
+    models["acme/coder"] = {
+      name: "Coder",
+      contextWindow: 128000,
+      maxOutputTokens: 8192,
+      structuredOutput: "yes",
+    };
+    expect(() => parseManifest(withFlag)).toThrow("true or false");
+  });
+});
+
 describe("piship/v1alpha2 personal modes", () => {
   const gateway = {
     inference: {

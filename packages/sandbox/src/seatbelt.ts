@@ -1,10 +1,12 @@
 // macOS adapter: Seatbelt through /usr/bin/sandbox-exec and a generated SBPL
 // profile. SBPL evaluates the last matching rule, so the file-write allowlist
-// follows the blanket write deny and read denies come after both; a deny
+// follows the blanket write deny, protected paths (git control files and
+// hooks) are denied after the allowlist, and read denies come last; a deny
 // nested inside a writable path therefore still wins. The profile starts
 // from `(allow default)`, so launch paths that leave the sandbox through
 // launchd are denied explicitly.
 import { existsSync } from "node:fs";
+import { posix } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   type AdapterAvailability,
@@ -13,7 +15,13 @@ import {
   type SandboxCommand,
   type WrappedCommand,
 } from "./adapter.js";
-import { isDirectory, pathExists, type SandboxProfile } from "./profile.js";
+import {
+  isDirectory,
+  pathExists,
+  protectedAncestors,
+  type SandboxProfile,
+  writableProtected,
+} from "./profile.js";
 
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
@@ -98,6 +106,23 @@ export function seatbeltProfile(
   lines.push(
     `(allow file-write*\n  ${[...writable, ...DEVICE_WRITES].join("\n  ")})`,
   );
+  // Protected paths stay read-only inside the write allowlist. The
+  // directories above them may not be renamed, removed, or created, so a
+  // protected path cannot be moved aside for a replacement.
+  const protect = writableProtected(profile, posix);
+  if (protect.length)
+    lines.push(
+      `(deny file-write*\n  ${[
+        ...protectedAncestors(profile, protect, posix).map(
+          (path) => `(literal ${sbplString(path)})`,
+        ),
+        ...protect.map(({ path, directory }) =>
+          directory
+            ? `(subpath ${sbplString(path)})`
+            : denyFilter(path, exists, isDir),
+        ),
+      ].join("\n  ")})`,
+    );
   if (profile.readDeny.length)
     lines.push(
       `(deny file-read* file-write*\n  ${profile.readDeny

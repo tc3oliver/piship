@@ -59,6 +59,8 @@ export interface CatalogModel {
   readonly reasoning: boolean;
   readonly tools: boolean;
   readonly streaming: boolean;
+  /** Present only when declared; absent means unknown. */
+  readonly structuredOutput?: boolean;
   readonly policyTags: readonly string[];
 }
 
@@ -588,6 +590,7 @@ function parseModels(
         "reasoning",
         "tools",
         "streaming",
+        "structuredOutput",
         "policyTags",
       ]);
       const input = stringList(
@@ -614,6 +617,15 @@ function parseModels(
         reasoning: bool(item.reasoning, `${path}.reasoning`, false),
         tools: bool(item.tools, `${path}.tools`, false),
         streaming: bool(item.streaming, `${path}.streaming`, true),
+        ...(item.structuredOutput === undefined
+          ? {}
+          : {
+              structuredOutput: bool(
+                item.structuredOutput,
+                `${path}.structuredOutput`,
+                false,
+              ),
+            }),
         policyTags: stringList(item.policyTags, `${path}.policyTags`, tag),
       };
     },

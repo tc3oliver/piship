@@ -21,6 +21,8 @@ export interface CatalogEntry {
   readonly reasoning: boolean;
   readonly tools: boolean;
   readonly streaming: boolean;
+  /** Absent when the catalog does not declare it (unknown). */
+  readonly structuredOutput?: boolean;
   readonly policyTags: readonly string[];
 }
 
@@ -63,6 +65,9 @@ export function buildModelDefinitions(
           reasoning: entry.reasoning,
           tools: entry.tools,
           streaming: entry.streaming,
+          ...(entry.structuredOutput === undefined
+            ? {}
+            : { structuredOutput: entry.structuredOutput }),
           contextWindow: entry.contextWindow,
           maxOutputTokens: entry.maxOutputTokens,
         },
@@ -301,7 +306,8 @@ export class PiNativeInferenceProvider implements InferenceProvider {
         id: rest.join("/"),
         name: requested,
         provider,
-        capabilities: { input: ["text"] },
+        // Pi owns this catalog; PiShip has no verified metadata for it.
+        capabilities: {},
         policyTags: [],
         availability: { available: true },
       },

@@ -13,7 +13,14 @@ npm run check
 
 `npm run check` covers formatting, lint, types, package boundaries, tests, and build. For CLI changes, run `npm run test:e2e`. For Pi integration changes, run `npm run test:compatibility`.
 
-Every PR runs CI on Ubuntu, macOS, and Windows. Formatting, lint, types, and boundaries run once on Ubuntu; build and unit tests run on every target. The three-target portable E2E and Pi compatibility workflows run when package, installer, launcher, payload, resource, state, compatibility metadata, test, or relevant workflow inputs change; documentation-only PRs skip both. The real macOS Keychain and Windows Credential Manager tests run only when `packages/credentials` or `packages/contracts` change. `workflow_dispatch` can force each workflow on an exact release-candidate HEAD. Superseded PR runs are cancelled. Windows jobs disable Defender real-time scanning on the ephemeral runner and keep temp output and the npm cache on the runner's work drive, which is much faster than C: for npm installs. Pi compatibility does not repeat portable E2E. Release qualification requires both three-target workflows and CodeQL green on the candidate HEAD.
+CI evidence is routed to four tiers ([AGENTS.md](AGENTS.md#ci-evidence-tiers)); moving a check between tiers changes when it runs, never what it covers.
+
+- **Pull requests: fast merge gate.** CI on Ubuntu, macOS, and Windows (formatting, lint, types, and boundaries once on Ubuntu; build and unit tests on every target), Pi compatibility on all three targets, CodeQL, and the real macOS Keychain and Windows Credential Manager tests when `packages/credentials` or `packages/contracts` change. Superseded runs are cancelled. The critical path should stay around three to five minutes.
+- **`main`: normal integration.** The same cross-platform CI, compatibility, and path-scoped checks run after a merge. A `main` push does not start release qualification.
+- **Nightly and manual: full Portable E2E.** The three-target installed E2E (install, managed and personal lifecycles, governance, update, rollback, uninstall) runs every night and through `workflow_dispatch`. It is no longer a pull request gate; a nightly failure becomes a follow-up rather than blocking ordinary pull requests.
+- **Release candidate: explicit release qualification.** The `Release candidate` workflow runs only through `workflow_dispatch`, on the exact `main` HEAD being released: two independent builds per target, reproducibility, provenance attestation and verification, tamper rejection, supply-chain gates, and installer verification on Linux, macOS, and Windows. It does not run for ordinary pull requests or `main` pushes. A release still requires this workflow, Portable E2E, and CodeQL green on the candidate HEAD.
+
+Windows jobs disable Defender real-time scanning on the ephemeral runner and keep temp output and the npm cache on the runner's work drive, which is much faster than C: for npm installs.
 
 ## Choose the right place
 

@@ -1,0 +1,74 @@
+schema: piship/v1alpha4
+
+# A variant of MyPi for a local, OpenAI-compatible model server (such as
+# llama.cpp, Ollama, or vLLM on this machine) with a key the user keeps in
+# the distribution's own secret store. No enterprise identity is involved.
+app:
+  id: mypi-local
+  name: MyPi Local
+  command: mypi-local
+  version: 1.0.0
+  banner: MyPi on a local model server
+
+runtime:
+  pi: "0.87.1"
+
+deployment:
+  mode: personal
+
+variables:
+  - MYPI_MODEL_URL
+
+identity:
+  mode: none
+
+# `mypi-local login` asks for the key and stores it; `logout` deletes it.
+# For a server without a key, use `provider: none` and drop `storage`.
+credential:
+  provider: local-secret
+  storage:
+    provider: system
+
+inference:
+  provider: openai-compatible
+  baseUrl: ${MYPI_MODEL_URL}
+
+models:
+  default: local/coder
+  allowed: [local/coder]
+  catalog:
+    local/coder:
+      name: Local Coder
+      contextWindow: 32000
+      maxOutputTokens: 2048
+
+resources:
+  instructions:
+    user: [./AGENTS.md]
+
+policy:
+  default: allow
+  projectTrust:
+    company: &closed
+      passiveContext: deny
+      instructions: deny
+      skills: deny
+      agents: deny
+      hooks: deny
+      extensions: deny
+      mcp: deny
+      providers: deny
+    external: *closed
+    unknown: *closed
+
+mcp:
+  mode: off
+
+audit:
+  enabled: false
+
+# No update source or key: this variant is built and installed locally.
+updates:
+  channel: stable
+  channels: [stable]
+  rollback: true

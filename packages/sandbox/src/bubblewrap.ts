@@ -5,9 +5,12 @@
 //   2. a private tmpfs on /tmp unless host /tmp is itself configured;
 //   3. write-allowed paths bound read-write and extra read-only paths bound
 //      read-only, outermost first so a nested entry wins over its parent;
-//   4. read-denied directories replaced by an empty, mode 0000, read-only
+//   4. protected paths inside writable ones (git control files and hooks)
+//      bound read-only, their parent directories pinned as mount points;
+//   5. read-denied directories replaced by an empty, mode 0000, read-only
 //      tmpfs and read-denied files by /dev/null, last, so a deny always wins
 //      over an allow, including a deny nested inside a writable workspace.
+import { dirname, posix } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   type AdapterAvailability,
@@ -22,8 +25,10 @@ import {
   isWithin,
   pathDepth,
   pathExists,
+  protectedAncestors,
   realpathNearest,
   type SandboxProfile,
+  writableProtected,
 } from "./profile.js";
 
 export interface BubblewrapFeatures {
@@ -79,9 +84,15 @@ export function bubblewrapArgs(
   const privateTmp = ![...profile.writeAllow, ...profile.readOnly].some(
     (path) => isWithin(tmpRoot, path),
   );
-  const binds = byDepth([...profile.writeAllow, ...profile.readOnly]).filter(
-    exists,
+  const protect = writableProtected(profile, posix);
+  // A directory bound onto itself is a mount point, which cannot be renamed
+  // or removed, so a protected path below it cannot be moved aside.
+  const pins = protectedAncestors(profile, protect, posix).filter(
+    (path) => exists(path) && isDir(path),
   );
+  const binds = byDepth([
+    ...new Set([...profile.writeAllow, ...profile.readOnly, ...pins]),
+  ]).filter(exists);
   const visible = (path: string) =>
     !privateTmp ||
     !isWithin(path, tmpRoot) ||
@@ -95,10 +106,21 @@ export function bubblewrapArgs(
   if (privateTmp) args.push("--tmpfs", tmpRoot);
   for (const path of binds)
     args.push(
-      profile.writeAllow.includes(path) ? "--bind" : "--ro-bind",
+      profile.writeAllow.includes(path) || pins.includes(path)
+        ? "--bind"
+        : "--ro-bind",
       path,
       path,
     );
+  for (const { path, directory } of protect) {
+    if (!visible(path)) continue;
+    if (exists(path)) args.push("--ro-bind", path, path);
+    // A missing protected directory becomes an empty read-only one, so it
+    // cannot be created with content. A missing file cannot be guarded this
+    // way: its mount point would be an empty file left on the host.
+    else if (directory && isDir(dirname(path)))
+      args.push("--tmpfs", path, "--remount-ro", path);
+  }
 
   const escapes = (options.escapePaths ?? hostEscapePaths())
     .map(realpathNearest)

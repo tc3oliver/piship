@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,11 +17,41 @@ const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const cli = join(repo, "packages", "cli", "dist", "bin.js");
 const roots: string[] = [];
 
-/** Lock a temporary copy of an example with the built CLI. */
-function lockExample(name: string): DistributionLock {
+// The personal example's resources declared with the v0.1 personal alpha
+// schema, so a v1alpha1 lock can be compared with a current one.
+const V1ALPHA1_PERSONAL = `schema: piship/v1alpha1
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+  theme: mypi
+runtime:
+  pi: "0.87.1"
+deployment:
+  mode: personal
+resources:
+  instructions:
+    - ./resources/AGENTS.md
+  skills:
+    - ./resources/skills
+  extensions:
+    - ./resources/extensions/demo
+  prompts:
+    - ./resources/prompts
+  themes:
+    - ./resources/themes/mypi.json
+`;
+
+/**
+ * Lock a temporary copy of an example with the built CLI, optionally with a
+ * replacement manifest.
+ */
+function lockExample(name: string, manifest?: string): DistributionLock {
   const dir = mkdtempSync(join(tmpdir(), "piship-diff-"));
   roots.push(dir);
   cpSync(join(repo, "examples", name), dir, { recursive: true });
+  if (manifest) writeFileSync(join(dir, "piship.yaml"), manifest);
   const result = spawnSync(process.execPath, [cli, "lock", "piship.yaml"], {
     cwd: dir,
     env: process.env,
@@ -35,7 +71,7 @@ const clone = (lock: DistributionLock): Mutable => structuredClone(lock);
 
 beforeAll(() => {
   base = lockExample("demo-company");
-  personal = lockExample("personal");
+  personal = lockExample("personal", V1ALPHA1_PERSONAL);
 });
 afterAll(() => {
   for (const root of roots.splice(0))

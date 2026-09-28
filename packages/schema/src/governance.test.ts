@@ -835,6 +835,82 @@ describe("v1alpha3 resources", () => {
 describe("v1alpha3 capabilities", () => {
   const capability = (name: string, value: unknown) =>
     personal({ capabilities: { [name]: value } });
+  it("parses model requirements and records only what is declared", () => {
+    const [, workflow, checkpoint] = governance(
+      personal({
+        capabilities: {
+          workflow: {
+            enabled: true,
+            requirements: {
+              tools: true,
+              structuredOutput: true,
+              minContextWindow: 64000,
+              input: ["text", "image"],
+            },
+          },
+          checkpoint: { enabled: false },
+        },
+      }),
+    ).capabilities;
+    expect(workflow?.requirements).toEqual({
+      tools: true,
+      structuredOutput: true,
+      minContextWindow: 64000,
+      input: ["text", "image"],
+    });
+    expect(checkpoint).not.toHaveProperty("requirements");
+    const [, partial] = governance(
+      capability("workflow", {
+        enabled: true,
+        requirements: { minContextWindow: 32000 },
+      }),
+    ).capabilities;
+    expect(partial?.requirements).toEqual({ minContextWindow: 32000 });
+  });
+  it.each([
+    [{}, "capabilities.workflow.requirements", "at least one"],
+    [
+      { tools: "yes" },
+      "capabilities.workflow.requirements.tools",
+      "true or false",
+    ],
+    [
+      { minContextWindow: 0 },
+      "capabilities.workflow.requirements.minContextWindow",
+      "positive integer",
+    ],
+    [
+      { input: ["audio"] },
+      "capabilities.workflow.requirements.input[0]",
+      "text, image",
+    ],
+    [
+      { input: [] },
+      "capabilities.workflow.requirements.input",
+      "at least one input",
+    ],
+    [
+      { input: ["text", "text"] },
+      "capabilities.workflow.requirements.input[1]",
+      "Duplicate",
+    ],
+    [
+      { reasoning: true },
+      "capabilities.workflow.requirements.reasoning",
+      "Unknown field",
+    ],
+    [
+      { apiKey: "sk-x" },
+      "capabilities.workflow.requirements.apiKey",
+      "Secrets are never declared",
+    ],
+  ])("rejects model requirements %j", (requirements, field, message) => {
+    rejects(
+      capability("workflow", { enabled: true, requirements }),
+      field,
+      message,
+    );
+  });
   it("rejects unknown capability names", () => {
     rejects(
       capability("telepathy", { enabled: true }),

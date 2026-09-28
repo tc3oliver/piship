@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -10,10 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import {
+  type CredentialProvider,
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   type IdentitySession,
+  PiShipError,
   type RuntimeCredential,
   SecretValue,
 } from "@piship/contracts";
@@ -23,6 +27,7 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   type CommandRunner,
   CREDENTIAL_METADATA_SCHEMA,
+  type CredentialEvent,
   CredentialManager,
   HttpBrokerCredentialProvider,
   LocalSecretCredentialProvider,
@@ -34,6 +39,8 @@ import {
   SecretServiceSecretStore,
   WindowsCredentialSecretStore,
   createSecretStore,
+  metadataSecretRefs,
+  toSecretValue,
 } from "./index.js";
 
 let temp: string;
@@ -688,5 +695,389 @@ describe("gateway rejection", () => {
     const renewed = await later.ensure(null, ctx, { allowAcquire: false });
     expect(renewed.secret?.reveal()).toBe("sk-generation-2-secret");
     expect(later.status().state).toBe("valid");
+  });
+});
+
+describe("credential lifecycle events", () => {
+  function eventsManager(
+    provider: CredentialProvider,
+    store = new MemorySecretStore(),
+  ) {
+    const events: CredentialEvent[] = [];
+    const manager = new CredentialManager({
+      distributionId: "acmecode",
+      provider,
+      store,
+      metadataPath: join(temp, "credentials-metadata", "inference.json"),
+      beforeExpirySeconds: 300,
+      onEvent: (event) => events.push(event),
+    });
+    return { events, manager, store };
+  }
+
+  it("emits acquire only when acquired, refresh on renewal, and revoke with its outcome", async () => {
+    const revoked: string[] = [];
+    const provider = fakeProvider({ expiresInSeconds: 3600, revoked });
+    const { events, manager: credentials } = eventsManager(provider);
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    // Reusing the stored credential is not an acquisition.
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    await credentials.ensure(null, ctx, { allowAcquire: false });
+    expect(events.map((item) => item.event)).toEqual(["credential.acquire"]);
+    expect(events[0]?.detail).toEqual({
+      mode: "http-broker",
+      kind: "api_key",
+      generation: 1,
+      credentialId: "vk_1",
+      expiresAt: expect.any(String),
+    });
+    await credentials.ensure(null, ctx, {
+      allowAcquire: false,
+      forceRefresh: true,
+    });
+    expect(events.at(-1)).toMatchObject({
+      event: "credential.refresh",
+      detail: { reason: "rejected", generation: 2, credentialId: "vk_2" },
+    });
+    expect(await credentials.logout(ctx)).toEqual([]);
+    expect(events.at(-1)).toEqual({
+      event: "credential.revoke",
+      detail: {
+        mode: "http-broker",
+        generation: 2,
+        credentialId: "vk_2",
+        reason: "logout",
+        revocation: "revoked",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("sk-generation");
+    // No credential, no revoke event.
+    await credentials.logout(ctx);
+    expect(events).toHaveLength(3);
+  });
+
+  it("reports expiring renewals and a missing, failing, or unsupported revocation", async () => {
+    const expiring = eventsManager(fakeProvider({ expiresInSeconds: 120 }));
+    await expiring.manager.ensure(null, ctx, { allowAcquire: true });
+    await expiring.manager.ensure(null, ctx, { allowAcquire: false });
+    expect(expiring.events.at(-1)).toMatchObject({
+      event: "credential.refresh",
+      detail: { reason: "expiring", generation: 2 },
+    });
+    rmSync(join(temp, "credentials-metadata"), { recursive: true });
+
+    const failing = eventsManager({
+      ...fakeProvider({ expiresInSeconds: 3600 }),
+      async revoke() {
+        throw new Error("revoke endpoint returned HTTP 503");
+      },
+    });
+    await failing.manager.ensure(null, ctx, { allowAcquire: true });
+    expect(await failing.manager.logout(ctx)).toEqual([
+      "revocation: revoke endpoint returned HTTP 503",
+    ]);
+    expect(failing.events.at(-1)?.detail).toMatchObject({
+      revocation: "failed",
+    });
+    // Local clearing still happened.
+    expect(failing.store.refs()).toEqual([]);
+
+    const noRevoke: Partial<ReturnType<typeof fakeProvider>> = fakeProvider({
+      expiresInSeconds: 3600,
+    });
+    delete noRevoke.revoke;
+    const unsupported = eventsManager(noRevoke as CredentialProvider);
+    await unsupported.manager.ensure(null, ctx, { allowAcquire: true });
+    expect(unsupported.manager.revocable).toBe(false);
+    await unsupported.manager.logout(ctx);
+    expect(unsupported.events.at(-1)?.detail).toMatchObject({
+      revocation: "unsupported",
+    });
+    const broker = new HttpBrokerCredentialProvider({
+      endpoint: "https://broker.example/v1",
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY, "test"),
+    });
+    expect(broker.revocable).toBe(false);
+    expect(
+      new HttpBrokerCredentialProvider({
+        ...broker.options,
+        revokeEndpoint: "https://broker.example/v1/revoke",
+      }).revocable,
+    ).toBe(true);
+  });
+
+  it("revokes without clearing for lifecycle callers", async () => {
+    const revoked: string[] = [];
+    const {
+      events,
+      manager: credentials,
+      store,
+    } = eventsManager(fakeProvider({ expiresInSeconds: 3600, revoked }));
+    expect(await credentials.revoke(ctx, "lifecycle")).toEqual({
+      outcome: "absent",
+    });
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    expect(await credentials.revoke(ctx, "lifecycle")).toEqual({
+      outcome: "revoked",
+    });
+    expect(revoked).toEqual(["vk_1"]);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    expect(events.at(-1)?.detail).toMatchObject({
+      reason: "lifecycle",
+      revocation: "revoked",
+    });
+  });
+
+  it("keeps a specific failure code when a forced renewal fails", async () => {
+    let failure: Error = new Error("unused");
+    const provider = {
+      ...fakeProvider({ expiresInSeconds: 3600 }),
+      async refresh(): Promise<RuntimeCredential> {
+        throw failure;
+      },
+    };
+    const { manager: credentials } = eventsManager(provider);
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    // Actionable codes pass through: sign in again, or fix the network policy.
+    for (const code of ["IDENTITY_EXPIRED", "NETWORK_DENIED"] as const) {
+      failure = new PiShipError(code, "specific failure");
+      await expect(
+        credentials.ensure(null, ctx, {
+          allowAcquire: false,
+          forceRefresh: true,
+        }),
+      ).rejects.toMatchObject({ code });
+    }
+    // A generic acquisition failure becomes CREDENTIAL_REVOKED.
+    failure = new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "broker 503");
+    await expect(
+      credentials.ensure(null, ctx, {
+        allowAcquire: false,
+        forceRefresh: true,
+      }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_REVOKED" });
+  });
+});
+
+describe("secret normalization", () => {
+  const adapter = (secret: unknown, extra: Record<string, unknown> = {}) =>
+    ({
+      mode: "adapter",
+      requiresIdentity: false,
+      async acquire() {
+        return { kind: "api_key", secret, ...extra };
+      },
+    }) as unknown as CredentialProvider;
+  const manager = (provider: CredentialProvider) =>
+    new CredentialManager({
+      distributionId: "acmecode",
+      provider,
+      store: new MemorySecretStore(),
+      metadataPath: join(temp, "credentials-metadata", "inference.json"),
+      beforeExpirySeconds: 300,
+    });
+
+  it.each([
+    ["a plain string", "sk-adapter-plain-string-secret"],
+    [
+      "a foreign SecretValue-like object",
+      { reveal: () => "sk-adapter-plain-string-secret" },
+    ],
+  ])(
+    "re-wraps %s so the active credential never serializes the secret",
+    async (_name, secret) => {
+      const active = await manager(adapter(secret)).ensure(null, ctx, {
+        allowAcquire: true,
+      });
+      expect(active.secret).toBeInstanceOf(SecretValue);
+      expect(active.secret?.reveal()).toBe("sk-adapter-plain-string-secret");
+      expect(JSON.stringify(active)).not.toContain("sk-adapter");
+      expect(inspect(active, { depth: 10 })).not.toContain("sk-adapter");
+      expect(String(active.secret)).toBe("[REDACTED]");
+    },
+  );
+
+  it("rejects a credential without a usable secret, kind, or expiry", async () => {
+    for (const provider of [
+      adapter(undefined),
+      adapter(""),
+      adapter({ reveal: () => 42 }),
+      adapter("sk-valid-secret-000", { kind: "password" }),
+      adapter("sk-valid-secret-000", { expiresAt: "not a date" }),
+    ]) {
+      rmSync(join(temp, "credentials-metadata"), {
+        recursive: true,
+        force: true,
+      });
+      await expect(
+        manager(provider).ensure(null, ctx, { allowAcquire: true }),
+      ).rejects.toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+    }
+    expect(toSecretValue("sk-direct-value")).toBeInstanceOf(SecretValue);
+  });
+});
+
+describe("secret references", () => {
+  it("lists every reference metadata may own, only in its own namespace", () => {
+    expect(
+      metadataSecretRefs(
+        {
+          credential_ref: "piship:acmecode:inference#4",
+          generation: 4,
+          orphans: [
+            "piship:acmecode:inference#2",
+            "piship:other:inference#1",
+            "keychain:unrelated",
+          ],
+        },
+        "acmecode",
+      ),
+    ).toEqual([
+      "piship:acmecode:inference#2",
+      "piship:acmecode:inference#4",
+      "piship:acmecode:inference#5",
+    ]);
+    expect(
+      metadataSecretRefs(
+        { secretRef: "piship:acmecode:identity#3" },
+        "acmecode",
+      ),
+    ).toEqual([
+      "piship:acmecode:identity#2",
+      "piship:acmecode:identity#3",
+      "piship:acmecode:identity#4",
+    ]);
+    expect(metadataSecretRefs(null, "acmecode")).toEqual([]);
+    expect(
+      metadataSecretRefs({ secretRef: "piship:other:identity#1" }, "acmecode"),
+    ).toEqual([]);
+  });
+
+  it("logout clears orphaned and pending generations of unreadable metadata", async () => {
+    const store = new MemorySecretStore();
+    for (const ref of [
+      "piship:acmecode:inference#3",
+      "piship:acmecode:inference#4",
+      "piship:acmecode:inference#5",
+      "piship:other:inference#1",
+    ])
+      await store.put(ref, new SecretValue(`sk-${ref.replace(/\W/g, "")}`));
+    const path = join(temp, "credentials-metadata", "inference.json");
+    const credentials = new CredentialManager({
+      distributionId: "acmecode",
+      provider: fakeProvider(),
+      store,
+      metadataPath: path,
+      beforeExpirySeconds: 300,
+    });
+    mkdirSync(join(temp, "credentials-metadata"), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: "piship-credential-metadata/v9",
+        credential_ref: "piship:acmecode:inference#4",
+        generation: 4,
+        orphans: ["piship:acmecode:inference#3"],
+      }),
+    );
+    await credentials.logout(ctx);
+    expect(store.refs()).toEqual(["piship:other:inference#1"]);
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("Windows file fallback permissions", () => {
+  const directory = () => join(temp, "state dir", "secrets");
+  const secret = new SecretValue("sk-windows-file-secret");
+
+  it("applies an owner-only ACL through icacls before writing", async () => {
+    const { calls, runner } = recordingRunner({});
+    const store = new RestrictedFileSecretStore(directory(), {
+      platform: "win32",
+      run: runner,
+      account: "CORP\\dev user",
+    });
+    await store.put("piship:x:inference#1", secret);
+    await store.put("piship:x:inference#2", secret);
+    expect(calls).toEqual([
+      {
+        command: "icacls",
+        args: [
+          directory(),
+          "/inheritance:r",
+          "/grant:r",
+          "CORP\\dev user:(OI)(CI)F",
+        ],
+        stdin: "",
+      },
+    ]);
+    expect((await store.get("piship:x:inference#1"))?.reveal()).toBe(
+      secret.reveal(),
+    );
+    for (const call of calls)
+      expect(call.args.join(" ")).not.toContain(secret.reveal());
+  });
+
+  it("fails closed when the ACL cannot be applied or the account is unknown", async () => {
+    const { runner } = recordingRunner({
+      icacls: { status: 5, stderr: "Access is denied." },
+    });
+    const store = new RestrictedFileSecretStore(directory(), {
+      platform: "win32",
+      run: runner,
+      account: "CORP\\dev",
+    });
+    const error = await store
+      .put("piship:x:inference#1", secret)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+      message: expect.stringContaining("Access is denied"),
+    });
+    expect(readdirSync(directory())).toEqual([]);
+    const previous = process.env.USERNAME;
+    delete process.env.USERNAME;
+    try {
+      await expect(
+        new RestrictedFileSecretStore(directory(), {
+          platform: "win32",
+          run: recordingRunner({}).runner,
+        }).put("piship:x:inference#1", secret),
+      ).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+        message: expect.stringContaining("USERNAME"),
+      });
+    } finally {
+      if (previous !== undefined) process.env.USERNAME = previous;
+    }
+  });
+
+  it("passes the platform and runner through selection and keeps POSIX modes elsewhere", async () => {
+    const { calls, runner } = recordingRunner({});
+    const previous = process.env.USERNAME;
+    process.env.USERNAME = "tester";
+    try {
+      const store = createSecretStore({
+        provider: "file",
+        fileDirectory: directory(),
+        platform: "win32",
+        run: runner,
+      });
+      await store.put("piship:x:inference#1", secret);
+    } finally {
+      if (previous === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previous;
+    }
+    expect(calls.map((call) => call.command)).toEqual(["icacls"]);
+    if (process.platform !== "win32") {
+      const posix = recordingRunner({});
+      const other = new RestrictedFileSecretStore(join(temp, "posix"), {
+        platform: "linux",
+        run: posix.runner,
+      });
+      await other.put("piship:x:inference#1", secret);
+      expect(posix.calls).toEqual([]);
+      expect(statSync(join(temp, "posix")).mode & 0o777).toBe(0o700);
+    }
   });
 });

@@ -107,6 +107,17 @@ State defaults to `~/.piship/<id>` or `PISHIP_STATE_HOME/<id>`. The state path d
 | `data/` | Reserved runtime-generated data | Kept by uninstall; purge deletes it | Kept in place |
 | `migration/snapshots/` | Non-secret pre-update copies of preferences and user policy (`piship-snapshot/v1`); never credentials | Last three kept; purge deletes them | Written before each update activation |
 
+Other data PiShip creates or deliberately does not keep:
+
+| Data | Location, scope, and sensitivity | Retention and clearing | Update and rollback |
+| --- | --- | --- | --- |
+| Provider and model metadata | Pi's model metadata under `agent/`; managed runtimes hold the effective catalog in memory only; not secret | As `agent/` | As `agent/` |
+| Trust and approval decisions | Startup and in-session `ask` answers apply to the current process only and are never written to disk; project trust is recomputed from the manifest and git origin at each launch | Gone when the process exits | Nothing to migrate |
+| Audit buffers | In-memory event queue for HTTP sinks; metadata only | Flushed within the close deadline; undelivered optional events are dropped and counted | Nothing to migrate |
+| Session temporary files | `piship-sandbox-*` under the OS temp directory, private to one session; may hold tool output | Removed when the session ends and on process exit | Not migrated |
+| Download and staging data | `.staging-*` under the install home while an install, update, or rollback runs, and `piship-verify-*` or `piship-launch-check-*` under the OS temp directory during verification | Removed when the operation finishes; leftovers of an interrupted run are removed by the next update or rollback and reported by `doctor` | Never activated |
+| Checkpoints and agent memory | Not implemented by PiShip; Pi session files under `sessions/` are the only conversation history | — | — |
+
 Secrets held in a platform secret store live outside this directory, keyed by distribution ID; `logout` deletes them, while `purge` removes only files under the state directory. Run `logout` before `purge`. Reinstalling the same distribution ID reuses these paths. Updates and rollbacks never move or rewrite them except as the last column says: the non-mutating migration check (`piship migrate-check`) decides for each class whether it is `safe`, `requires-review`, or `unsupported` for the target release, and an unreadable non-credential class stops the switch rather than being reinterpreted ([release](release.md#migration-check-and-local-data)). Pi's resource loader disables ambient extension, skill, prompt, theme, and context discovery and receives only declared packaged paths. The working directory remains the user's project; its `.pi` resources are not distribution resources. For v1alpha3 and later, project resources that project trust admits are passed to the loader explicitly. An enforced sandbox denies contained processes read access to the whole state directory.
 
-See [manifest](manifest.md), [release](release.md), [compatibility](compatibility.md), [security](security.md), [identity](identity.md), [credentials](credentials.md), and [inference](inference.md).
+See [architecture decisions](decisions.md), [manifest](manifest.md), [release](release.md), [compatibility](compatibility.md), [security](security.md), [identity](identity.md), [credentials](credentials.md), and [inference](inference.md).

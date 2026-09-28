@@ -1028,7 +1028,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       join(stateDir(), "credentials-metadata", "inference.json"),
       JSON.stringify({
         schema: "piship-credential-metadata/v2",
-        credential_ref: "vault:inference-v2",
+        credential_ref: `piship:${ID}:inference#2`,
       }),
     );
     write(join(stateDir(), "secrets", "inference-v2"), `${SENTINEL_V2}\n`);
@@ -1044,7 +1044,8 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       runCheck: fakeRun,
       deleteSecret,
     });
-    expect(deleted).toEqual(["vault:inference-v2"]);
+    // Only references in this distribution's own namespace are deleted.
+    expect(deleted).toEqual([`piship:${ID}:inference#2`]);
     expect(result.notices).toEqual([
       "runtime credential metadata was cleared because the target cannot read it; sign in again",
     ]);
@@ -1074,7 +1075,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       join(stateDir(), "identity", "session.json"),
       JSON.stringify({
         schema: "piship-identity-metadata/v7",
-        secretRef: "keychain:identity",
+        secretRef: `piship:${ID}:identity#1`,
       }),
     );
     const result = await rollbackDistribution(ID, {
@@ -1083,7 +1084,9 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
         throw new Error("keychain locked");
       },
     });
+    // The current and the possibly pending next generation both fail.
     expect(result.notices).toEqual([
+      "Could not delete a stored secret: keychain locked",
       "Could not delete a stored secret: keychain locked",
       "identity session was cleared because the target cannot read it; sign in again",
     ]);
@@ -1091,6 +1094,130 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       false,
     );
     expect(containing(SENTINEL)).toEqual([]);
+  });
+
+  it("deletes every secret reference, including orphans and the next generation", async () => {
+    await updated();
+    write(
+      join(stateDir(), "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#5`,
+        generation: 5,
+        orphans: [
+          `piship:${ID}:inference#3`,
+          `piship:${ID}:inference#4`,
+          "piship:another-app:inference#1",
+        ],
+      }),
+    );
+    write(
+      join(stateDir(), "identity", "session.json"),
+      JSON.stringify({
+        schema: "piship-identity-metadata/v7",
+        secretRef: `piship:${ID}:identity#4`,
+      }),
+    );
+    const deleted: string[] = [];
+    const revokeCredential = vi.fn(async () => ({ outcome: "revoked" }));
+    const result = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      deleteSecret: async (ref) => {
+        deleted.push(ref);
+      },
+      revokeCredential,
+    });
+    expect(revokeCredential).toHaveBeenCalledTimes(1);
+    expect(deleted.sort()).toEqual([
+      `piship:${ID}:identity#3`,
+      `piship:${ID}:identity#4`,
+      `piship:${ID}:identity#5`,
+      `piship:${ID}:inference#3`,
+      `piship:${ID}:inference#4`,
+      `piship:${ID}:inference#5`,
+      `piship:${ID}:inference#6`,
+    ]);
+    expect(result.notices).toEqual([
+      "identity session was cleared because the target cannot read it; sign in again",
+      "runtime credential metadata was cleared because the target cannot read it; sign in again",
+    ]);
+    expect(existsSync(join(stateDir(), "identity", "session.json"))).toBe(
+      false,
+    );
+    expect(
+      existsSync(join(stateDir(), "credentials-metadata", "inference.json")),
+    ).toBe(false);
+  });
+
+  it("revokes before deleting and still clears locally when revocation fails", async () => {
+    await updated();
+    write(
+      join(stateDir(), "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#2`,
+        generation: 2,
+      }),
+    );
+    const order: string[] = [];
+    const result = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      deleteSecret: async (ref) => {
+        order.push(`delete ${ref}`);
+      },
+      revokeCredential: async () => {
+        order.push("revoke");
+        return {
+          outcome: "failed",
+          problem: "Credential revocation returned HTTP 503",
+        };
+      },
+    });
+    expect(order).toEqual([
+      "revoke",
+      `delete piship:${ID}:inference#2`,
+      `delete piship:${ID}:inference#3`,
+    ]);
+    expect(result.notices).toEqual([
+      "The runtime credential could not be revoked remotely (Credential revocation returned HTTP 503); it was cleared locally",
+      "runtime credential metadata was cleared because the target cannot read it; sign in again",
+    ]);
+    expect(
+      existsSync(join(stateDir(), "credentials-metadata", "inference.json")),
+    ).toBe(false);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+  });
+
+  it("continues clearing when the revocation hook throws", async () => {
+    await updated();
+    write(
+      join(stateDir(), "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#2`,
+        generation: 2,
+      }),
+    );
+    const deleted: string[] = [];
+    const result = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      deleteSecret: async (ref) => {
+        deleted.push(ref);
+      },
+      revokeCredential: async () => {
+        throw new Error("broker unreachable");
+      },
+    });
+    expect(deleted).toEqual([
+      `piship:${ID}:inference#2`,
+      `piship:${ID}:inference#3`,
+    ]);
+    expect(result.notices[0]).toBe(
+      "The runtime credential could not be revoked remotely (broker unreachable); it was cleared locally",
+    );
+    expect(
+      existsSync(join(stateDir(), "credentials-metadata", "inference.json")),
+    ).toBe(false);
   });
 
   it("does not bring back credentials revoked by logout", async () => {

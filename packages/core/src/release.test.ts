@@ -34,7 +34,10 @@ import {
   checkSourceUrl,
   compareReleases,
   downloadArchive,
+  evaluateSignatures,
   evaluateVulnerabilities,
+  piCompatibility,
+  piCompatibilitySurfaces,
   readChannel,
   signChannel,
   verifyRelease,
@@ -223,6 +226,16 @@ function fakeRun(
 
 const cleanScanner = () => ({ auditReportVersion: 2, vulnerabilities: {} });
 
+/** `npm audit signatures --json` output. */
+function signatureOutput(
+  invalid: readonly object[] = [],
+  missing: readonly object[] = [],
+  status = invalid.length || missing.length ? 1 : 0,
+): CommandResult {
+  return { status, stdout: JSON.stringify({ invalid, missing }), stderr: "" };
+}
+const cleanSignatures = () => signatureOutput();
+
 function advisory(severity: string, id = ADVISORY) {
   return {
     auditReportVersion: 2,
@@ -248,6 +261,7 @@ function build(path: string, options: Parameters<typeof buildRelease>[1] = {}) {
     assemble: fakeAssemble,
     runTest: fakeRun,
     scanner: cleanScanner,
+    signatureAuditor: cleanSignatures,
     now: () => new Date("2026-06-01T00:00:00Z"),
     ...options,
   });
@@ -279,6 +293,36 @@ function flipByte(path: string, offset?: number): void {
   writeFileSync(path, bytes);
 }
 
+/**
+ * Lock and check a project against a copy of the build input whose npm lock
+ * `edit` changed, with fresh module instances that read that input.
+ */
+async function withNpmLock<T>(
+  edit: (packages: Record<string, Record<string, unknown>>) => void,
+  run: (
+    core: typeof import("./index.js"),
+    release: typeof import("./release.js"),
+  ) => T,
+): Promise<T> {
+  const input = temp("piship-build-input-");
+  const npmLock = JSON.parse(
+    readFileSync(join(BUILD_INPUT, "package-lock.json"), "utf8"),
+  ) as { packages: Record<string, Record<string, unknown>> };
+  edit(npmLock.packages);
+  writeFileSync(
+    join(input, "package-lock.json"),
+    JSON.stringify(npmLock, null, 2),
+  );
+  process.env.PISHIP_BUILD_INPUT = input;
+  vi.resetModules();
+  try {
+    return run(await import("./index.js"), await import("./release.js"));
+  } finally {
+    process.env.PISHIP_BUILD_INPUT = BUILD_INPUT;
+    vi.resetModules();
+  }
+}
+
 // --------------------------------------------------------------------- lock
 
 describe("lock piship-lock/v1alpha4", () => {
@@ -290,8 +334,10 @@ describe("lock piship-lock/v1alpha4", () => {
     const lock = requireCurrentLock(path);
     expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA4);
     expect(lock.runtime.stateSchemas).toEqual(STATE_SCHEMAS);
-    for (const item of lock.runtime.packages)
+    for (const item of lock.runtime.packages) {
       expect(item.resolved).toMatch(/^https:\/\//);
+      expect(item.integrity).toMatch(/^sha512-/);
+    }
     expect(
       lock.runtime.packages
         .filter((item) => item.installScript)
@@ -333,6 +379,59 @@ describe("lock piship-lock/v1alpha4", () => {
         ],
       },
     });
+  });
+
+  it("keeps every registry package and leaves out only workspace links", () => {
+    const npmLock = JSON.parse(
+      readFileSync(join(BUILD_INPUT, "package-lock.json"), "utf8"),
+    ) as { packages: Record<string, { dev?: boolean; link?: boolean }> };
+    const entries = Object.entries(npmLock.packages).filter(
+      ([path, value]) => path.startsWith("node_modules/") && !value.dev,
+    );
+    const links = entries.filter(([, value]) => value.link);
+    expect(links.map(([path]) => path).sort()).toEqual(
+      [
+        "audit",
+        "cli",
+        "contracts",
+        "core",
+        "credentials",
+        "identity",
+        "inference",
+        "mcp",
+        "pi",
+        "policy",
+        "sandbox",
+        "schema",
+      ].map((name) => `node_modules/@piship/${name}`),
+    );
+    const { path } = project();
+    const locked = resolveLock(path).runtime.packages;
+    expect(locked.map((item) => item.path)).toEqual(
+      entries
+        .filter(([, value]) => !value.link)
+        .map(([path]) => path)
+        .sort((a, b) => a.localeCompare(b)),
+    );
+    expect(
+      locked.some((item) => item.path.startsWith("node_modules/@piship/")),
+    ).toBe(false);
+    // The Pi packages nested in pi-coding-agent carry registry integrity.
+    const prefix =
+      "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/";
+    const nested = locked.filter(
+      (item) =>
+        item.path.startsWith(prefix) &&
+        !item.path.slice(prefix.length).includes("/"),
+    );
+    expect(nested.map((item) => item.path.split("/").pop())).toEqual([
+      "chord",
+      "pi-agent-core",
+      "pi-ai",
+      "pi-telemetry",
+      "pi-tui",
+    ]);
+    for (const item of nested) expect(item.integrity).toMatch(/^sha512-/);
   });
 
   it("changes the resource digest when a resource changes", () => {
@@ -503,6 +602,60 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
+  it("source: refuses a registry package the npm lock records without integrity", async () => {
+    let victim = "";
+    const error = await withNpmLock(
+      (packages) => {
+        const entry = Object.entries(packages).find(
+          ([path, value]) =>
+            path.startsWith("node_modules/") && !value.dev && !value.link,
+        ) as [string, Record<string, unknown>];
+        victim = `${entry[0]}@${String(entry[1].version)}`;
+        delete entry[1].integrity;
+      },
+      (core, release) => {
+        const { path } = project({ lock: false });
+        core.lockManifest(path);
+        // The entry is kept in the lock, so the gate can see it.
+        expect(
+          core
+            .requireCurrentLock(path)
+            .runtime.packages.map((item) => `${item.path}@${item.version}`),
+        ).toContain(victim);
+        return caught(() => release.checkReleaseInputs(path));
+      },
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(
+      `Release gate source: ${victim} is missing integrity`,
+    );
+  });
+
+  it("source: a link outside the workspace packages is not treated as a workspace package", async () => {
+    const error = await withNpmLock(
+      (packages) => {
+        packages["node_modules/@piship/extra"] = {
+          resolved: "../elsewhere/extra",
+          link: true,
+        };
+      },
+      (core, release) => {
+        const { path } = project({ lock: false });
+        core.lockManifest(path);
+        expect(
+          core
+            .requireCurrentLock(path)
+            .runtime.packages.map((item) => item.path),
+        ).toContain("node_modules/@piship/extra");
+        return caught(() => release.checkReleaseInputs(path));
+      },
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(
+      /Release gate source: node_modules\/@piship\/extra@ is missing integrity/,
+    );
+  });
+
   it("install-script: refuses an unreviewed npm lifecycle script", async () => {
     const input = temp("piship-build-input-");
     const npmLock = JSON.parse(
@@ -595,6 +748,25 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
+  it("policy: refuses an enabled capability whose provider class policy.providerTrust denies", () => {
+    const { path } = project({
+      extra: `capabilities:
+  workflow:
+    enabled: true
+    provider: { id: builtin/workflow }
+policy:
+  providerTrust:
+    builtin: deny
+`,
+    });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toMatch(/^Release gate policy: /);
+    expect(error.message).toContain(
+      "capability workflow is enabled with a builtin provider, which policy.providerTrust denies",
+    );
+  });
+
   it("certification: certified evidence is enforced when locking (the gate is a second layer)", () => {
     const { dir, path } = project({
       lock: false,
@@ -641,6 +813,32 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
       ).toMatch(/Release gate target: releases are built on their target/);
     },
   );
+
+  it("sandbox: refuses a required sandbox for win32-x64, which has no adapter", async () => {
+    // Build on a (simulated) win32-x64 host so the target gate passes and the
+    // sandbox gate is the one that decides, on every host.
+    vi.resetModules();
+    vi.doMock("./index.js", async (original) => ({
+      ...(await original<typeof import("./index.js")>()),
+      currentTarget: () => "win32-x64",
+    }));
+    try {
+      const release = await import("./release.js");
+      const { path } = project({ extra: "sandbox:\n  required: true\n" });
+      const error = caught(() => release.checkReleaseInputs(path, "win32-x64"));
+      expect(error.code).toBe("SANDBOX_UNAVAILABLE");
+      expect(error.message).toBe(
+        "Release gate sandbox: the distribution requires an OS sandbox and PiShip has no sandbox adapter for win32-x64",
+      );
+      const optional = project({ extra: "sandbox:\n  required: false\n" });
+      expect(
+        release.checkReleaseInputs(optional.path, "win32-x64").app.id,
+      ).toBe("acmepi");
+    } finally {
+      vi.doUnmock("./index.js");
+      vi.resetModules();
+    }
+  });
 
   it.runIf(process.platform === "win32")(
     "sandbox: refuses a required sandbox on win32",
@@ -751,11 +949,287 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     ).rejects.toThrow("registry unreachable");
   });
 
+  it("signature: records a passing check and the packages without a registry signature", async () => {
+    const { path } = project();
+    const built = await build(path, {
+      signatureAuditor: () =>
+        signatureOutput(
+          [],
+          [
+            {
+              name: "zeta",
+              version: "1.0.0",
+              registry: "https://registry.npmjs.org/",
+            },
+            {
+              name: "alpha",
+              version: "1.0.0",
+              registry: "https://registry.npmjs.org/",
+            },
+          ],
+        ),
+    });
+    expect(built.metadata.signatures).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "passed",
+      missing: ["alpha@1.0.0", "zeta@1.0.0"],
+    });
+    const verified = await verifyRelease(built.archive);
+    expect(verified.metadata.signatures?.verdict).toBe("passed");
+    verified.cleanup();
+  });
+
+  it("signature: runs over the assembled payload", async () => {
+    const { path } = project();
+    const seen: string[] = [];
+    await build(path, {
+      signatureAuditor: (payload) => {
+        seen.push(payload);
+        expect(existsSync(join(payload, "node_modules", "alpha"))).toBe(true);
+        expect(existsSync(join(payload, "package-lock.json"))).toBe(true);
+        return signatureOutput();
+      },
+    });
+    expect(seen).toHaveLength(1);
+  });
+
+  it("signature: an invalid registry signature fails the build and leaves no output", async () => {
+    const { dir, path } = project();
+    const error = await rejection(
+      build(path, {
+        signatureAuditor: () =>
+          signatureOutput([
+            {
+              name: "alpha",
+              version: "1.0.0",
+              code: "EINTEGRITYSIGNATURE",
+              message: "alpha@1.0.0 has an invalid registry signature",
+            },
+          ]),
+      }),
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toBe(
+      "Release gate signature: invalid registry signatures or attestations: alpha@1.0.0 (EINTEGRITYSIGNATURE)",
+    );
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("signature: an invalid attestation fails the build", async () => {
+    const { path } = project();
+    const error = await rejection(
+      build(path, {
+        signatureAuditor: () =>
+          signatureOutput(
+            [
+              {
+                name: "@scope/beta",
+                version: "2.0.0",
+                code: "EATTESTATIONVERIFY",
+              },
+            ],
+            [{ name: "alpha", version: "1.0.0" }],
+          ),
+      }),
+    );
+    expect(error.message).toMatch(
+      /Release gate signature: .*@scope\/beta@2\.0\.0 \(EATTESTATIONVERIFY\)/,
+    );
+  });
+
+  it("signature: a check npm reports it could not run is recorded as unavailable", async () => {
+    const { path } = project();
+    const built = await build(path, {
+      signatureAuditor: () => ({
+        status: 1,
+        stdout: JSON.stringify({
+          error: { summary: "Failed to download", detail: "" },
+        }),
+        stderr: "npm error Failed to download\n",
+      }),
+    });
+    expect(built.metadata.signatures).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "unavailable",
+      missing: [],
+      reason: "Failed to download",
+    });
+  });
+
+  it.each([
+    [
+      "no output (npm could not start)",
+      { status: null, stdout: "", stderr: "spawn npm ENOENT" },
+    ],
+    ["plain text", { status: 1, stdout: "npm ERR! something", stderr: "" }],
+    [
+      "a report without missing",
+      { status: 0, stdout: '{"invalid":[]}', stderr: "" },
+    ],
+    [
+      "malformed entries",
+      { status: 1, stdout: '{"invalid":[1],"missing":[]}', stderr: "" },
+    ],
+    [
+      "an error without a summary",
+      { status: 1, stdout: '{"error":{}}', stderr: "" },
+    ],
+  ])("signature: %s fails closed", async (_label, output) => {
+    const { dir, path } = project();
+    const error = await rejection(
+      build(path, { signatureAuditor: () => output }),
+    );
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.message).toMatch(
+      /^Release gate signature: the registry signature check returned no report/,
+    );
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
   it("channel: refuses an unknown channel", async () => {
     const { path } = project();
     await expect(build(path, { channel: "nightly" })).rejects.toThrow(
       /Release gate channel: unknown channel nightly/,
     );
+  });
+});
+
+describe("release Pi compatibility", () => {
+  const lockFor = (mode: "personal" | "managed", version = "0.87.1") => ({
+    deployment: { mode },
+    runtime: { version } as never,
+  });
+
+  it("records the weakest of the deployment and lifecycle surfaces", () => {
+    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const saved = { ...known };
+    try {
+      const cases: [Record<string, string>, string, string][] = [
+        [
+          { personal: "supported", lifecycle: "supported" },
+          "personal",
+          "supported",
+        ],
+        [
+          { personal: "supported", lifecycle: "candidate" },
+          "personal",
+          "candidate",
+        ],
+        [
+          { personal: "candidate", lifecycle: "supported" },
+          "personal",
+          "candidate",
+        ],
+        [
+          { managed: "supported", lifecycle: "unsupported" },
+          "managed",
+          "unsupported",
+        ],
+        [
+          { managed: "unsupported", lifecycle: "supported" },
+          "managed",
+          "unsupported",
+        ],
+        [
+          { managed: "candidate", lifecycle: "candidate" },
+          "managed",
+          "candidate",
+        ],
+        [
+          { managed: "retired", lifecycle: "supported" },
+          "managed",
+          "unsupported",
+        ],
+      ];
+      for (const [statuses, mode, expected] of cases) {
+        Object.assign(known, saved, statuses);
+        const lock = lockFor(mode as "personal" | "managed");
+        expect(piCompatibility(lock)).toBe(expected);
+        expect(piCompatibilitySurfaces(lock)).toEqual({
+          [mode]: statuses[mode],
+          lifecycle: statuses.lifecycle,
+        });
+      }
+    } finally {
+      Object.assign(known, saved);
+    }
+  });
+
+  it("records an unknown Pi version as unsupported on every surface", () => {
+    const lock = lockFor("personal", "0.0.0");
+    expect(piCompatibility(lock)).toBe("unsupported");
+    expect(piCompatibilitySurfaces(lock)).toEqual({
+      personal: "unsupported",
+      lifecycle: "unsupported",
+    });
+  });
+
+  it.runIf(HOST_EVIDENCED)(
+    "pi: refuses a release when only the lifecycle surface is unsupported",
+    () => {
+      const { path } = project();
+      const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+      const saved = { ...known };
+      try {
+        known.personal = "supported";
+        known.lifecycle = "unsupported";
+        const error = caught(() => checkReleaseInputs(path));
+        expect(error.message).toMatch(/Release gate pi: Pi 0\.87\.1/);
+      } finally {
+        Object.assign(known, saved);
+      }
+    },
+  );
+});
+
+describe("evaluateSignatures", () => {
+  it("passes a clean report and sorts missing signatures", () => {
+    expect(
+      evaluateSignatures(
+        signatureOutput(
+          [],
+          [
+            { name: "b", version: "1.0.0" },
+            { name: "a", version: "2.0.0" },
+          ],
+        ),
+      ),
+    ).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "passed",
+      missing: ["a@2.0.0", "b@1.0.0"],
+    });
+  });
+
+  it("never records content beyond package names, versions, and npm's summary", () => {
+    const report = evaluateSignatures({
+      status: 1,
+      stdout: JSON.stringify({
+        error: {
+          summary: "  found no dependencies\n  to audit  ",
+          detail: "secret-ish detail",
+        },
+      }),
+      stderr: "",
+    });
+    expect(report).toEqual({
+      tool: "npm audit signatures --omit=dev",
+      verdict: "unavailable",
+      missing: [],
+      reason: "found no dependencies to audit",
+    });
+  });
+
+  it("fails on invalid entries even when npm exits 0", () => {
+    expect(() =>
+      evaluateSignatures(
+        signatureOutput(
+          [{ name: "a", version: "1.0.0", code: "EINTEGRITYSIGNATURE" }],
+          [],
+          0,
+        ),
+      ),
+    ).toThrow(/Release gate signature: invalid registry signatures/);
   });
 });
 
@@ -881,7 +1355,15 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         command: "acmepi",
         mode: "personal",
       },
-      pi: { version: "0.87.1", compatibility: "supported" },
+      // The weaker of the personal surface and the lifecycle surface.
+      pi: {
+        version: "0.87.1",
+        compatibility: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+        surfaces: {
+          personal: PI_COMPATIBILITY["0.87.1"]?.personal,
+          lifecycle: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+        },
+      },
       manifestSchema: "piship/v1alpha4",
       lockSchema: LOCK_SCHEMA_V1ALPHA4,
       target,

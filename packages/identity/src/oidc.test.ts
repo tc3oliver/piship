@@ -1,6 +1,8 @@
+import { generateKeyPairSync, sign } from "node:crypto";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  type ManagedFetch,
   SecretValue,
 } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -156,5 +158,82 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     ).rejects.toMatchObject({
       code: "NETWORK_DENIED",
     });
+  });
+});
+
+describe("ID token authorized party (deterministic fixture, not live evidence)", () => {
+  // The fixture signs ID tokens with a single audience. To exercise the
+  // authorized-party rules, this test re-signs the fixture's ID token with its
+  // own key and serves that key as the provider's JWKS, through the managed
+  // fetch the provider already uses for every OIDC request.
+  function resigning(patch: (claims: Record<string, unknown>) => void) {
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+    });
+    const kid = "azp-test";
+    const jwk = {
+      ...publicKey.export({ format: "jwk" }),
+      kid,
+      alg: "RS256",
+      use: "sig",
+    };
+    const base = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    const fetch: ManagedFetch = async (url, init) => {
+      const response = await base(url, init);
+      const path = new URL(String(url)).pathname;
+      if (path === "/idp/jwks") return Response.json({ keys: [jwk] });
+      if (path !== "/idp/token" || !response.ok) return response;
+      const body = (await response.json()) as { id_token: string };
+      const claims = JSON.parse(
+        Buffer.from(body.id_token.split(".")[1] ?? "", "base64url").toString(
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      patch(claims);
+      const header = Buffer.from(
+        JSON.stringify({ alg: "RS256", kid, typ: "JWT" }),
+      ).toString("base64url");
+      const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+      const signature = sign(
+        "sha256",
+        Buffer.from(`${header}.${payload}`),
+        privateKey,
+      ).toString("base64url");
+      return Response.json({
+        ...body,
+        id_token: `${header}.${payload}.${signature}`,
+      });
+    };
+    return provider({ fetch });
+  }
+
+  it("rejects multiple audiences with a wrong authorized party", async () => {
+    const error = await resigning((claims) => {
+      claims.aud = [services.clientId, "api://other-service"];
+      claims.azp = "another-client";
+    })
+      .login({ openUrl: approve })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
+    expect((error as Error).message).toMatch(/azp/);
+  });
+
+  it("rejects multiple audiences without an authorized party", async () => {
+    const error = await resigning((claims) => {
+      claims.aud = [services.clientId, "api://other-service"];
+    })
+      .login({ openUrl: approve })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
+    expect((error as Error).message).toMatch(/aud/);
+  });
+
+  it("accepts multiple audiences when this client is the authorized party", async () => {
+    const session = await resigning((claims) => {
+      claims.aud = [services.clientId, "api://other-service"];
+      claims.azp = services.clientId;
+    }).login({ openUrl: approve });
+    expect(session.subject).toBe("demo-user-1");
+    expect(session.claims?.azp).toBe(services.clientId);
   });
 });

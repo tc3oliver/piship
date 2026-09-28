@@ -29,7 +29,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `inference.baseUrl`, `api`, `liveCatalog` | For `openai-compatible`: gateway base URL, `openai-completions` (default) or `openai-responses`, and whether to query `GET {baseUrl}/models` at launch (default `false`) |
 | `models.default` | Default model ID; must be in `models.allowed` |
 | `models.allowed` | Distribution allowlist. For `pi-native`, entries use `provider/model` |
-| `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, and `policyTags` |
+| `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, `structuredOutput`, and `policyTags` |
 | `config.enforced`, `config.defaults` | Values for `model`, `theme`, and `thinkingLevel` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `models.default` rather than `config.defaults.model` |
 | `config.userOverridable` | Keys users may set; defaults to every key not enforced |
 | `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`) |
@@ -37,7 +37,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `network.publicFallback` | `deny` or `allow`; managed requires `deny` |
 | `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
 
-Secret-looking fields such as `credential.apiKey`, `credential.secret`, `credential.token`, `identity.oidc.clientSecret`, and `network.tls.rejectUnauthorized` or `insecure` are rejected. The schema cannot detect every secret placed in an otherwise allowed string.
+Secret-looking fields such as `credential.apiKey`, `credential.secret`, `credential.token`, `identity.oidc.clientSecret`, and `network.tls.rejectUnauthorized` or `insecure` are rejected. Every string value and key is also checked for common secret shapes (`sk-` keys, GitHub, GitLab, and Slack tokens, JWTs, AWS access key IDs, PEM private keys, and `Bearer` or `Basic` credentials); a match fails with the field path and never prints the value. The check cannot detect every secret.
 
 ## Validation rules
 
@@ -88,7 +88,7 @@ A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `
 
 ### Capabilities
 
-`capabilities` configures named capability contracts, each with `enabled`, an optional `provider`, and string `settings` (lowerCamelCase keys):
+`capabilities` configures named capability contracts, each with `enabled`, an optional `provider`, string `settings` (lowerCamelCase keys), and optional model `requirements` (`tools`, `structuredOutput`, `minContextWindow`, and `input`). At launch, a selected model whose verified catalog metadata does not meet the requirements of an enabled capability, or whose metadata is unknown, fails with `MODEL_INCOMPATIBLE`; no other model is substituted, and Pi-native models count as unverified:
 
 | Capability | Contract | This release |
 | --- | --- | --- |
@@ -163,7 +163,7 @@ Two JSON files add rules at launch. Each is a list of rules or `{"rules": [...]}
 A server declares `transport`:
 
 - `stdio`: exactly one of `module` (a `./` `.mjs` or `.js` file in the distribution, run with the distribution's Node.js) or `command` (a bare executable name found on `PATH`), plus `args` and `env` (`allow`: variable names inherited from the launch environment; `set`: fixed non-secret values). Credential-looking names are rejected.
-- `streamable-http`: `url`, which may be a `${NAME}` runtime reference. The legacy HTTP+SSE transport is rejected.
+- `streamable-http`: `url`, which may be a `${NAME}` runtime reference resolved from the launch environment at startup. An unset variable fails a required server with `CONFIG_UNAVAILABLE` and marks an optional one failed (`MCP_UNHEALTHY`). Project `.mcp.json` URLs are never interpolated. The legacy HTTP+SSE transport is rejected.
 
 Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both). Exposed tools are named `mcp__<server>__<tool>`.
 
@@ -241,8 +241,8 @@ The manifest and lock keep the unresolved template, so a lock is not machine-spe
 ## Commands
 
 ```bash
-npm exec -- piship init ./my-agent             # personal v1alpha1
-npm exec -- piship init ./my-agent --managed   # managed v1alpha2 template
+npm exec -- piship init ./my-agent             # personal v1alpha4 (identity none, pi-native)
+npm exec -- piship init ./my-agent --managed   # managed v1alpha4 template
 npm exec -- piship validate ./my-agent/piship.yaml
 npm exec -- piship migrate ./my-agent/piship.yaml [--write]
 npm exec -- piship lock ./my-agent/piship.yaml
@@ -260,7 +260,7 @@ node ./dist/my-agent/piship.mjs purge my-agent --yes
 
 v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
 
-`dev` builds and starts the interactive branded command with the same resource and state isolation. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
+`validate` also runs the resource, certified-integrity, and provider-integrity checks of `lock` without writing a lock. `dev` builds and starts the interactive branded command with the same resource and state isolation; `dev --smoke` runs it headlessly with `--smoke` and prints the JSON result. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
 
 v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint.
 
@@ -302,6 +302,6 @@ The lock never contains tokens, credentials, private keys, or resolved endpoint 
 - v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies all dimensions except `passiveContext`; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
 - v1alpha3 to v1alpha4: adds `updates: {channel: stable, channels: [stable], rollback: true}` with no `source` and no trust keys, so updates stay disabled until a source and at least one key are added. `release` is not written; its defaults apply (the three evidenced targets, `https://registry.npmjs.org`, and `failOn: high`). Nothing else changes.
 
-After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init --managed` still writes a v1alpha2 template; migrate it to adopt governance and the lifecycle.
+After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init` writes `piship/v1alpha4` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.keys` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.
 
 Earlier checkout-local preview manifests need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the current CLI, then rebuild. Checkout-local output cannot be installed as a portable payload.

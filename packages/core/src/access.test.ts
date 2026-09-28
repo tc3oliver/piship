@@ -9,9 +9,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
+import {
+  type ModelDefinition,
+  PiShipError,
+  SecretValue,
+} from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import {
+  type CapabilityConfig,
   parseManifest,
   PISHIP_SCHEMA_V1ALPHA2,
   readManifest,
@@ -22,8 +29,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
+  type AccessEvent,
   DistributionAccess,
   explainConfiguration,
+  incompatibleCapabilities,
+  modelRequirementGaps,
   networkPolicyFor,
   resolveRuntimeReferences,
 } from "./access.js";
@@ -499,6 +509,12 @@ describe("credential adapters", () => {
     });
     expect(activated.selectedModel).toBe("acme/coder");
     expect(activated.credential.secret?.reveal()).toBe("sk-adapter-issued-key");
+    // The adapter's duck-typed secret is re-wrapped, so it always redacts.
+    expect(activated.credential.secret).toBeInstanceOf(SecretValue);
+    expect(JSON.stringify(activated.credential)).not.toContain("sk-adapter");
+    expect(inspect(activated.credential, { depth: 10 })).not.toContain(
+      "sk-adapter",
+    );
     const context = (globalThis as Record<string, unknown>)
       .__pishipAdapterContext as Record<string, unknown>;
     expect(context).toMatchObject({
@@ -530,5 +546,433 @@ describe("credential adapters", () => {
         message: expect.stringContaining("returned no provider"),
       },
     );
+  });
+});
+
+describe("access lifecycle events and identity refresh (fixtures)", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  let options: Parameters<typeof DistributionAccess.open>[0];
+  let store: MemorySecretStore;
+  let events: AccessEvent[];
+  beforeEach(async () => {
+    services = await startLocalServices();
+    store = new MemorySecretStore();
+    events = [];
+    options = {
+      app: demo.app as Manifest["app"],
+      mode: "managed",
+      access: {
+        ...access,
+        identity: {
+          ...access.identity,
+          oidc: {
+            ...(access.identity as { oidc: object }).oidc,
+            redirectUri: "http://127.0.0.1/callback",
+          },
+        },
+      } as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: services.env(),
+      secretStore: store,
+      onEvent: (event) => events.push(event),
+    };
+  });
+  afterEach(() => services.close());
+  const names = () => events.map((event) => event.event);
+
+  it("records acquisitions, renewals, replacement revokes, and sign-out accurately without secrets", async () => {
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    expect(names()).toEqual(["identity.login", "credential.acquire"]);
+    // A launch that reuses the stored credential acquires nothing.
+    events.length = 0;
+    await DistributionAccess.open(options).activate();
+    expect(names()).toEqual([]);
+    // Login again: the previous credential is revoked before it is replaced.
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    expect(events).toEqual([
+      { event: "identity.login", detail: { expiresAt: expect.any(String) } },
+      {
+        event: "credential.revoke",
+        detail: expect.objectContaining({
+          mode: "http-broker",
+          reason: "replace",
+          revocation: "revoked",
+          credentialId: "vk_demo_1",
+        }),
+      },
+      {
+        event: "credential.acquire",
+        detail: expect.objectContaining({ credentialId: "vk_demo_2" }),
+      },
+    ]);
+    expect(services.state.revokedCredentials).toEqual(["vk_demo_1"]);
+    // A gateway rejection renews the credential: a refresh, not an acquire.
+    events.length = 0;
+    for (const entry of services.state.credentials.values())
+      entry.revoked = true;
+    services.knobs.gatewayModels = ["acme/coder", "acme/general"];
+    await DistributionAccess.open(options).requestSecret({ force: true });
+    expect(events).toEqual([
+      {
+        event: "credential.refresh",
+        detail: expect.objectContaining({ reason: "rejected" }),
+      },
+    ]);
+    events.length = 0;
+    expect(await distribution.logout()).toEqual([]);
+    expect(events).toEqual([
+      {
+        event: "credential.revoke",
+        detail: expect.objectContaining({
+          reason: "logout",
+          revocation: "revoked",
+        }),
+      },
+      { event: "identity.logout", detail: { revocation: "completed" } },
+    ]);
+    // Signing out again finds nothing and records nothing.
+    events.length = 0;
+    expect(await distribution.logout()).toEqual([]);
+    expect(events).toEqual([]);
+    const secrets = [
+      ...services.state.credentials.keys(),
+      ...services.state.accessTokens.keys(),
+      ...services.state.refreshTokens.keys(),
+    ];
+    const text = JSON.stringify(events);
+    for (const secret of secrets) expect(text).not.toContain(secret);
+  });
+
+  it("reports unsupported revocation for a broker without a revoke endpoint", async () => {
+    const noRevoke = {
+      ...options,
+      access: {
+        ...options.access,
+        credential: {
+          ...(options.access as AccessManifest).credential,
+          broker: {
+            endpoint: (options.access as AccessManifest).credential.broker
+              ?.endpoint,
+          },
+        },
+      } as AccessManifest,
+    };
+    const distribution = DistributionAccess.open(noRevoke);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    events.length = 0;
+    await distribution.logout();
+    expect(events[0]).toMatchObject({
+      event: "credential.revoke",
+      detail: { revocation: "unsupported" },
+    });
+    expect(services.state.revokedCredentials).toEqual([]);
+  });
+
+  it("shares one identity refresh between concurrent launches with rotating refresh tokens", async () => {
+    // Access tokens that expire within the 60-second refresh window.
+    services.knobs.accessTokenTtl = 30;
+    await DistributionAccess.open(options).login({
+      openUrl: (url) => void services.approve(url),
+    });
+    events.length = 0;
+    const [first, second] = await Promise.all([
+      DistributionAccess.open(options).currentIdentity({ required: true }),
+      DistributionAccess.open(options).currentIdentity({ required: true }),
+    ]);
+    const refreshes = services.state.requests.filter((item: { body: string }) =>
+      item.body.includes("grant_type=refresh_token"),
+    );
+    expect(refreshes).toHaveLength(1);
+    expect(first?.accessToken?.reveal()).toBe(second?.accessToken?.reveal());
+    expect(names()).toEqual(["identity.refresh"]);
+    expect(events[0]?.detail).toMatchObject({ reason: "expiring" });
+    // Only the current identity generation (and none of the replaced one) is stored.
+    expect(store.refs().filter((ref) => ref.includes(":identity#"))).toEqual([
+      "piship:acmecode:identity#2",
+    ]);
+    // A later launch keeps working with the rotated refresh token.
+    await expect(
+      DistributionAccess.open(options).currentIdentity({ required: true }),
+    ).resolves.toMatchObject({ subject: "demo-user-1" });
+  });
+});
+
+describe("identity requirements of credential providers", () => {
+  it("rejects an adapter that requires identity when identity.mode is none", async () => {
+    const manifest = parseManifest({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: { pi: "0.87.1" },
+      deployment: { mode: "personal" },
+      credential: { provider: "adapter", adapter: "./adapters/needs-id.mjs" },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://127.0.0.1:9/v1",
+      },
+      models: {
+        allowed: ["acme/coder"],
+        catalog: {
+          "acme/coder": {
+            name: "Coder",
+            contextWindow: 32000,
+            maxOutputTokens: 2048,
+          },
+        },
+      },
+    });
+    mkdirSync(join(temp, "resources", "adapters"), { recursive: true });
+    writeFileSync(
+      join(temp, "resources", "adapters", "needs-id.mjs"),
+      `export default () => ({
+        mode: "adapter",
+        requiresIdentity: true,
+        async acquire(identity) {
+          globalThis.__pishipNullIdentity = identity === null;
+          return { kind: "api_key", secret: "sk-never-issued-000" };
+        },
+      });`,
+    );
+    const distribution = DistributionAccess.open({
+      app: manifest.app,
+      mode: "personal",
+      access: manifest.access as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: {},
+      secretStore: new MemorySecretStore(),
+    });
+    await expect(distribution.activate()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("requires a signed-in identity"),
+    });
+    await expect(
+      distribution.login({ openUrl: () => {} }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(
+      (globalThis as Record<string, unknown>).__pishipNullIdentity,
+    ).toBeUndefined();
+  });
+});
+
+describe("capability model requirements", () => {
+  const capability = (
+    requirements: CapabilityConfig["requirements"],
+    enabled = true,
+  ): CapabilityConfig => ({
+    name: "workflow",
+    enabled,
+    settings: {},
+    ...(requirements ? { requirements } : {}),
+  });
+  const model = (capabilities: ModelDefinition["capabilities"]) =>
+    ({
+      id: "m",
+      name: "M",
+      provider: "p",
+      capabilities,
+      policyTags: [],
+      availability: { available: true },
+    }) satisfies ModelDefinition;
+
+  it("treats unknown metadata as not meeting a requirement", () => {
+    expect(
+      modelRequirementGaps(model({}), {
+        tools: true,
+        structuredOutput: true,
+        minContextWindow: 1000,
+        input: ["image"],
+      }),
+    ).toEqual([
+      "tool calling support is unknown",
+      "structured output support is unknown",
+      "the context window is unknown",
+      "the accepted input types are unknown",
+    ]);
+    expect(
+      modelRequirementGaps(
+        model({
+          tools: false,
+          structuredOutput: false,
+          contextWindow: 500,
+          input: ["text"],
+        }),
+        {
+          tools: true,
+          structuredOutput: true,
+          minContextWindow: 1000,
+          input: ["text", "image"],
+        },
+      ),
+    ).toEqual([
+      "tool calling is not supported",
+      "structured output is not supported",
+      "the context window 500 is below the required 1000",
+      "image input is not accepted",
+    ]);
+    expect(
+      modelRequirementGaps(
+        model({
+          tools: true,
+          structuredOutput: true,
+          contextWindow: 2000,
+          input: ["text", "image"],
+        }),
+        {
+          tools: true,
+          structuredOutput: true,
+          minContextWindow: 1000,
+          input: ["image"],
+        },
+      ),
+    ).toEqual([]);
+    expect(modelRequirementGaps(undefined, { tools: true })).toEqual([
+      "tool calling support is unknown",
+    ]);
+    // Disabled capabilities and capabilities without requirements never block.
+    expect(
+      incompatibleCapabilities(model({}), [
+        capability({ tools: true }, false),
+        capability(undefined),
+      ]),
+    ).toEqual([]);
+  });
+
+  describe("at launch (fixtures)", () => {
+    let services: Awaited<ReturnType<typeof startLocalServices>>;
+    beforeEach(async () => {
+      services = await startLocalServices();
+    });
+    afterEach(() => services.close());
+    const open = (capabilities: readonly CapabilityConfig[]) =>
+      DistributionAccess.open({
+        app: demo.app as Manifest["app"],
+        mode: "managed",
+        access: {
+          ...access,
+          identity: {
+            ...access.identity,
+            oidc: {
+              ...(access.identity as { oidc: object }).oidc,
+              redirectUri: "http://127.0.0.1/callback",
+            },
+          },
+        } as AccessManifest,
+        stateDir: join(temp, "state"),
+        distributionDir: temp,
+        env: services.env(),
+        secretStore: new MemorySecretStore(),
+        capabilities,
+      });
+
+    it("refuses an incompatible selected model and never substitutes another", async () => {
+      const distribution = open([capability({ minContextWindow: 100000 })]);
+      await distribution.login({
+        openUrl: (url) => void services.approve(url),
+      });
+      const activated = await distribution.activate();
+      expect(activated.selectedModel).toBe("acme/coder");
+      expect(activated.incompatibleModels).toEqual({
+        "acme/general":
+          "workflow: the context window 64000 is below the required 100000",
+      });
+      expect(() =>
+        DistributionAccess.checkSelection(activated, "acme/general"),
+      ).toThrow(expect.objectContaining({ code: "MODEL_INCOMPATIBLE" }));
+      const error = await distribution
+        .activate({ requestedModel: "acme/general" })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({
+        code: "MODEL_INCOMPATIBLE",
+        retryable: false,
+        userAction: "Choose a compatible model with --model: acme/coder",
+        sanitizedDetail: {
+          model: "acmecode/acme/general",
+          capabilities: [
+            {
+              capability: "workflow",
+              reasons: [
+                "the context window 64000 is below the required 100000",
+              ],
+            },
+          ],
+        },
+      });
+      expect((error as Error).message).toContain(
+        "Model acmecode/acme/general does not meet the model requirements of capability workflow",
+      );
+      const secrets = [
+        ...services.state.credentials.keys(),
+        ...services.state.accessTokens.keys(),
+      ];
+      const text = JSON.stringify(error) + String((error as Error).message);
+      for (const secret of secrets) expect(text).not.toContain(secret);
+    });
+
+    it("fails closed when no allowed model has the required metadata", async () => {
+      const distribution = open([capability({ structuredOutput: true })]);
+      await distribution.login({
+        openUrl: (url) => void services.approve(url),
+      });
+      await expect(distribution.activate()).rejects.toMatchObject({
+        code: "MODEL_INCOMPATIBLE",
+        message: expect.stringContaining(
+          "structured output support is unknown",
+        ),
+        userAction: expect.stringContaining(
+          "capabilities.workflow.requirements",
+        ),
+      });
+    });
+
+    it("ignores the requirements of a disabled capability", async () => {
+      const distribution = open([
+        capability({ structuredOutput: true }, false),
+      ]);
+      await distribution.login({
+        openUrl: (url) => void services.approve(url),
+      });
+      await expect(distribution.activate()).resolves.toMatchObject({
+        selectedModel: "acme/coder",
+        incompatibleModels: {},
+      });
+    });
+  });
+
+  it("refuses Pi-native models, whose metadata PiShip cannot verify", async () => {
+    const personal = parseManifest({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: { pi: "0.87.1" },
+      deployment: { mode: "personal" },
+    });
+    const open = (capabilities: readonly CapabilityConfig[]) =>
+      DistributionAccess.open({
+        app: personal.app,
+        mode: "personal",
+        access: personal.access as AccessManifest,
+        stateDir: join(temp, "state"),
+        distributionDir: temp,
+        env: {},
+        secretStore: new MemorySecretStore(),
+        capabilities,
+      });
+    const requiring = open([capability({ tools: true })]);
+    await expect(
+      requiring.activate({ requestedModel: "openai/gpt-x" }),
+    ).rejects.toMatchObject({
+      code: "MODEL_INCOMPATIBLE",
+      message: expect.stringContaining("tool calling support is unknown"),
+    });
+    await expect(requiring.activate()).rejects.toMatchObject({
+      code: "MODEL_INCOMPATIBLE",
+    });
+    await expect(
+      open([capability(undefined)]).activate({
+        requestedModel: "openai/gpt-x",
+      }),
+    ).resolves.toMatchObject({ selectedModel: "openai/gpt-x" });
   });
 });

@@ -24,7 +24,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, redact } from "@piship/contracts";
+import { metadataSecretRefs } from "@piship/credentials";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
 import { sha256File } from "./archive.js";
 import {
@@ -113,6 +114,15 @@ export interface LifecycleOptions {
   readonly runCheck?: ReleaseTestRunner;
   /** Deletes a secret-store reference when credentials must be cleared. */
   readonly deleteSecret?: (ref: string) => Promise<void>;
+  /**
+   * Best-effort remote revocation of the runtime credential by the release
+   * that can still read it, before it is cleared. A failure is a warning;
+   * local clearing always happens.
+   */
+  readonly revokeCredential?: () => Promise<{
+    readonly outcome: string;
+    readonly problem?: string;
+  }>;
   readonly now?: () => Date;
   readonly env?: NodeJS.ProcessEnv;
 }
@@ -658,35 +668,64 @@ function repairStateMarker(id: string, lock: DistributionLock): void {
 
 /**
  * Clear credential classes the target cannot read: their metadata files and
- * the secrets they reference. The target signs in or reacquires; an old
- * credential is never restored.
+ * every secret they may reference (current, orphaned, and pending
+ * generations). The runtime credential is first revoked remotely when the
+ * current release can read it and the distribution supports revocation. The
+ * target signs in or reacquires; an old credential is never restored.
  */
 async function clearCredentials(
   stateDir: string,
+  distributionId: string,
   report: MigrationReport,
-  deleteSecret: LifecycleOptions["deleteSecret"],
+  options: Pick<LifecycleOptions, "deleteSecret" | "revokeCredential">,
 ): Promise<string[]> {
   const notices: string[] = [];
-  for (const item of report.items) {
-    if (item.action !== "clear-and-reacquire") continue;
+  const items = report.items.filter(
+    (item) => item.action === "clear-and-reacquire",
+  );
+  const credentialPath = join(
+    stateDir,
+    "credentials-metadata",
+    "inference.json",
+  );
+  if (
+    options.revokeCredential &&
+    items.some(
+      (item) => join(stateDir, ...item.path.split("/")) === credentialPath,
+    ) &&
+    existsSync(credentialPath)
+  )
+    try {
+      const result = await options.revokeCredential();
+      if (result.outcome === "failed")
+        notices.push(
+          `The runtime credential could not be revoked remotely${result.problem ? ` (${redact(result.problem)})` : ""}; it was cleared locally`,
+        );
+    } catch (error) {
+      notices.push(
+        `The runtime credential could not be revoked remotely (${redact(error instanceof Error ? error.message : String(error))}); it was cleared locally`,
+      );
+    }
+  for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
     if (existsSync(path) && statSync(path).isFile()) {
       let refs: string[] = [];
       try {
-        const value = JSON.parse(readFileSync(path, "utf8")) as Record<
-          string,
-          unknown
-        >;
-        refs = [value.credential_ref, value.secretRef].filter(
-          (ref): ref is string => typeof ref === "string",
+        refs = metadataSecretRefs(
+          JSON.parse(readFileSync(path, "utf8")),
+          distributionId,
         );
       } catch {
         // Unreadable metadata still gets removed below.
       }
       for (const ref of refs)
-        await deleteSecret?.(ref).catch((error: Error) =>
-          notices.push(`Could not delete a stored secret: ${error.message}`),
-        );
+        await options
+          .deleteSecret?.(ref)
+          .catch((error: Error) =>
+            notices.push(
+              `Could not delete a stored secret: ${redact(error.message)}`,
+            ),
+          );
     }
     rmSync(path, { recursive: true, force: true });
     notices.push(
@@ -940,7 +979,7 @@ export async function updateDistribution(
       syncDirectory(apps);
       options.faults?.("installed");
       notices.push(
-        ...(await clearCredentials(stateDir, migration, options.deleteSecret)),
+        ...(await clearCredentials(stateDir, id, migration, options)),
       );
       const keepPrevious =
         updates.rollback && verified.lock.updates?.rollback !== false;
@@ -1088,9 +1127,7 @@ export async function rollbackDistribution(
     const notices = migration.items
       .filter((item) => item.verdict === "requires-review")
       .map((item) => item.reason);
-    notices.push(
-      ...(await clearCredentials(stateDir, migration, options.deleteSecret)),
-    );
+    notices.push(...(await clearCredentials(stateDir, id, migration, options)));
     writeReceipt({
       ...readInstallReceipt(id),
       app: target.app,

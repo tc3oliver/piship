@@ -59,6 +59,18 @@ describe("model catalog", () => {
       }).map((model) => model.id),
     ).toEqual(["acme/coder"]);
   });
+  it("carries structured output only when the catalog declares it", () => {
+    const [declared, unknown] = buildModelDefinitions(
+      "acmecode",
+      [
+        { ...catalog[0], structuredOutput: true } as (typeof catalog)[number],
+        catalog[1] as (typeof catalog)[number],
+      ],
+      { allowed: ["acme/coder", "acme/general"] },
+    );
+    expect(declared?.capabilities.structuredOutput).toBe(true);
+    expect(unknown?.capabilities).not.toHaveProperty("structuredOutput");
+  });
   it("rejects disallowed and unavailable models instead of substituting", () => {
     const models = buildModelDefinitions("acmecode", catalog, {
       allowed: ["acme/coder", "acme/review"],
@@ -112,6 +124,15 @@ describe("model catalog", () => {
         })
       ).model.provider,
     ).toBe("openai");
+    // PiShip has no verified metadata for Pi's catalog; nothing is invented.
+    expect(
+      (
+        await provider.resolveModel("openai/gpt-4o", {
+          models: [],
+          allowed: [],
+        })
+      ).model.capabilities,
+    ).toEqual({});
     expect(
       await provider.configureRuntime({
         providerId: "mypi",

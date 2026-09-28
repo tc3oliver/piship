@@ -1,7 +1,15 @@
 // Desired sandbox policy (manifest `sandbox:`) resolved into concrete,
 // symlink-resolved host paths. Enforcement is the adapter's job.
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  type PlatformPath,
+  resolve,
+  sep,
+} from "node:path";
 import { PiShipError } from "@piship/contracts";
 
 /** Structurally identical to `SandboxConfig` in @piship/schema. */
@@ -26,6 +34,18 @@ export interface ProfileContext {
   readonly extraWritable?: readonly string[];
   /** Paths that must stay readable even when an adapter hides a parent (e.g. host /tmp). */
   readonly extraReadOnly?: readonly string[];
+  /** Paths tools may never change, even inside a writable path. */
+  readonly protectedPaths?: ProtectedPaths;
+}
+
+/**
+ * Paths kept read-only inside writable ones, such as the git files that
+ * classify a project and the git hooks that run outside the sandbox.
+ * `directories` are protected as whole trees, also while they are missing.
+ */
+export interface ProtectedPaths {
+  readonly files: readonly string[];
+  readonly directories: readonly string[];
 }
 
 export interface SandboxProfile {
@@ -38,6 +58,8 @@ export interface SandboxProfile {
   readonly writeAllow: readonly string[];
   /** Absolute, realpath'd paths kept readable when a parent is hidden. */
   readonly readOnly: readonly string[];
+  /** Absolute, realpath'd paths that stay read-only inside a writable path. */
+  readonly writeProtect: ProtectedPaths;
   readonly network: "deny" | "allow";
   /** Environment variable names passed into sandboxed processes. */
   readonly environmentAllow: readonly string[];
@@ -143,11 +165,16 @@ export function resolveProfile(
   const readOnly = resolveAll(ctx.extraReadOnly ?? [], full).filter(
     (path) => !writeAllow.includes(path),
   );
+  const protect = ctx.protectedPaths;
   return {
     ...base,
     readDeny,
     writeAllow,
     readOnly,
+    writeProtect: {
+      files: resolveAll(protect?.files ?? [], full),
+      directories: resolveAll(protect?.directories ?? [], full),
+    },
     network: config.network.mode,
     environmentAllow: [...new Set(config.environment.allow)],
     warnings: conflicts(readDeny, writeAllow, base.workspace),
@@ -170,4 +197,86 @@ export function pathExists(path: string): boolean {
 /** Number of path segments, used to order mounts from outermost to innermost. */
 export function pathDepth(path: string): number {
   return path.split(sep).filter(Boolean).length;
+}
+
+/**
+ * The path semantics protected-path matching uses. A resolved profile holds
+ * host-native paths; an adapter that emits a POSIX profile (bubblewrap,
+ * Seatbelt) passes `posix`.
+ */
+export type ProfilePaths = Pick<PlatformPath, "sep" | "dirname">;
+const NATIVE_PATHS: ProfilePaths = { sep, dirname };
+
+function within(paths: ProfilePaths, path: string, root: string): boolean {
+  if (path === root) return true;
+  return path.startsWith(
+    root.endsWith(paths.sep) ? root : `${root}${paths.sep}`,
+  );
+}
+
+const depth = (paths: ProfilePaths, path: string) =>
+  path.split(paths.sep).filter(Boolean).length;
+
+export interface ProtectedEntry {
+  readonly path: string;
+  readonly directory: boolean;
+}
+
+/**
+ * Protected paths inside a writable path, outermost first; a path under
+ * another protected directory is covered by it and left out. Protected
+ * paths outside every writable path are read-only already.
+ */
+export function writableProtected(
+  profile: SandboxProfile,
+  paths: ProfilePaths = NATIVE_PATHS,
+): ProtectedEntry[] {
+  const entries = [
+    ...profile.writeProtect.files.map((path) => ({ path, directory: false })),
+    ...profile.writeProtect.directories.map((path) => ({
+      path,
+      directory: true,
+    })),
+  ]
+    .filter(({ path }) =>
+      profile.writeAllow.some((allowed) => within(paths, path, allowed)),
+    )
+    .sort((a, b) => depth(paths, a.path) - depth(paths, b.path));
+  const kept: ProtectedEntry[] = [];
+  for (const entry of entries)
+    if (
+      !kept.some(
+        (outer) =>
+          outer.path === entry.path ||
+          (outer.directory && within(paths, entry.path, outer.path)),
+      )
+    )
+      kept.push(entry);
+  return kept;
+}
+
+/**
+ * Directories between a writable root and a protected path, outermost
+ * first. Their contents stay writable, but renaming or removing one would
+ * move the protected path aside and let a replacement take its place.
+ */
+export function protectedAncestors(
+  profile: SandboxProfile,
+  entries: readonly ProtectedEntry[],
+  paths: ProfilePaths = NATIVE_PATHS,
+): string[] {
+  const ancestors = new Set<string>();
+  for (const { path } of entries) {
+    const roots = profile.writeAllow.filter((allowed) =>
+      within(paths, path, allowed),
+    );
+    for (
+      let current = paths.dirname(path);
+      !roots.includes(current) &&
+      roots.some((root) => within(paths, current, root));
+      current = paths.dirname(current)
+    )
+      ancestors.add(current);
+  }
+  return [...ancestors].sort((a, b) => depth(paths, a) - depth(paths, b));
 }

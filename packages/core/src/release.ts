@@ -97,8 +97,13 @@ export interface ReleaseMetadata {
   readonly pi: {
     readonly package: string;
     readonly version: string;
-    /** Compatibility status of this Pi version for the distribution's surface. */
+    /**
+     * Compatibility status of this Pi version for the release: the weakest of
+     * the distribution's deployment surface and the `lifecycle` surface.
+     */
     readonly compatibility: string;
+    /** Per-surface statuses behind `compatibility` (absent in older releases). */
+    readonly surfaces?: Readonly<Record<string, string>>;
   };
   readonly manifestSchema: string;
   readonly lockSchema: string;
@@ -126,8 +131,30 @@ export interface ReleaseMetadata {
     readonly verdict: "passed";
     readonly counts: Readonly<Record<string, number>>;
   };
+  /** Registry signature check of the payload packages (absent in older releases). */
+  readonly signatures?: SignatureReport;
   readonly attribution: string;
 }
+
+/**
+ * Result of `npm audit signatures` over the installed payload packages.
+ * `passed`: no invalid signature or attestation (packages without a registry
+ * signature are listed in `missing`). `unavailable`: the check could not run,
+ * for example because the Sigstore trust root or the registry keys could not
+ * be fetched; `reason` says why. Invalid signatures never produce a release.
+ */
+export interface SignatureReport {
+  readonly tool: string;
+  readonly verdict: "passed" | "unavailable";
+  /** `name@version` of packages without a registry signature. */
+  readonly missing: readonly string[];
+  readonly reason?: string;
+}
+
+/** Runs the registry signature check in the payload directory. */
+export type SignatureAuditor = (
+  payloadDirectory: string,
+) => Promise<CommandResult> | CommandResult;
 
 export interface VulnerabilityFinding {
   readonly id: string;
@@ -174,6 +201,8 @@ export interface ReleaseOptions {
   /** Build target; defaults to this machine. Cross-target builds are refused. */
   readonly target?: string;
   readonly scanner?: VulnerabilityScanner;
+  /** Registry signature check (defaults to `npm audit signatures`). */
+  readonly signatureAuditor?: SignatureAuditor;
   readonly runTest?: ReleaseTestRunner;
   /** Injectable clock for vulnerability exception expiry. */
   readonly now?: () => Date;
@@ -222,9 +251,35 @@ function createdTime(): string {
   return new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
 }
 
-function piCompatibility(lock: DistributionLock): string {
+const COMPATIBILITY_ORDER = ["unsupported", "candidate", "supported"];
+
+/**
+ * Status of each surface a release depends on: its deployment surface
+ * (`personal` or `managed`) and the `lifecycle` surface every release uses.
+ */
+export function piCompatibilitySurfaces(
+  lock: Pick<DistributionLock, "deployment" | "runtime">,
+): Readonly<Record<string, string>> {
   const surface = lock.deployment.mode === "managed" ? "managed" : "personal";
-  return PI_COMPATIBILITY[lock.runtime.version]?.[surface] ?? "unsupported";
+  const known = PI_COMPATIBILITY[lock.runtime.version];
+  return {
+    [surface]: known?.[surface] ?? "unsupported",
+    lifecycle: known?.lifecycle ?? "unsupported",
+  };
+}
+
+/**
+ * The weakest status among the surfaces a release depends on
+ * (unsupported < candidate < supported); an unknown status counts as
+ * unsupported.
+ */
+export function piCompatibility(
+  lock: Pick<DistributionLock, "deployment" | "runtime">,
+): string {
+  const ranks = Object.values(piCompatibilitySurfaces(lock)).map((status) =>
+    Math.max(0, COMPATIBILITY_ORDER.indexOf(status)),
+  );
+  return COMPATIBILITY_ORDER[Math.min(...ranks)] as string;
 }
 
 /** Enforced rules that contradict each other or a declared trust class. */
@@ -329,6 +384,15 @@ export function checkReleaseInputs(
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
   for (const item of lock.runtime.packages) {
+    // The lock keeps every registry entry, so one the npm lock records
+    // without integrity is refused here instead of going unchecked.
+    if (!item.integrity)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} is missing integrity in the npm lock`,
+        "Record the registry dist.integrity for this package in package-lock.json and lock again",
+      );
     if (!item.resolved)
       throw gate(
         "INTEGRITY_FAILED",
@@ -502,6 +566,113 @@ export function npmAuditScanner(lockDirectory: string): unknown {
   }
 }
 
+const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
+
+/**
+ * `npm audit signatures` over the installed payload. It reads the payload's
+ * `node_modules` and needs the registry and the Sigstore trust root.
+ */
+export function npmSignatureAuditor(payloadDirectory: string): CommandResult {
+  const args = ["audit", "signatures", "--omit=dev", "--json"];
+  const options = {
+    cwd: payloadDirectory,
+    encoding: "utf8" as const,
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 300_000,
+  };
+  const result =
+    process.platform === "win32"
+      ? spawnSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", `npm ${args.join(" ")}`],
+          options,
+        )
+      : spawnSync("npm", args, options);
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr || result.error?.message || "",
+  };
+}
+
+interface SignatureEntry {
+  readonly name: string;
+  readonly version: string;
+  readonly code: string;
+}
+
+function signatureEntries(value: unknown): SignatureEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries: SignatureEntry[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const entry = item as { name?: unknown; version?: unknown; code?: unknown };
+    if (typeof entry.name !== "string") return null;
+    entries.push({
+      name: entry.name,
+      version: typeof entry.version === "string" ? entry.version : "",
+      code: typeof entry.code === "string" ? entry.code : "",
+    });
+  }
+  return entries;
+}
+
+/**
+ * Apply the release signature policy to `npm audit signatures --json`
+ * output. An invalid registry signature or attestation fails the build. A
+ * missing signature is recorded. When npm reports that the check itself
+ * could not run, the release records `unavailable` with npm's reason.
+ * Output that is neither a report nor an npm error fails closed.
+ */
+export function evaluateSignatures(result: CommandResult): SignatureReport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    parsed = undefined;
+  }
+  const value = (parsed && typeof parsed === "object" ? parsed : {}) as {
+    invalid?: unknown;
+    missing?: unknown;
+    error?: { summary?: unknown };
+  };
+  const invalid = signatureEntries(value.invalid);
+  const missing = signatureEntries(value.missing);
+  if (invalid && missing) {
+    if (invalid.length)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "signature",
+        `invalid registry signatures or attestations: ${invalid
+          .map(
+            (item) =>
+              `${item.name}@${item.version}${item.code ? ` (${item.code})` : ""}`,
+          )
+          .join(", ")}`,
+        "Do not release this payload; reinstall the dependency from the trusted registry and investigate its source",
+      );
+    return {
+      tool: SIGNATURE_TOOL,
+      verdict: "passed",
+      missing: missing.map((item) => `${item.name}@${item.version}`).sort(),
+    };
+  }
+  const summary = value.error?.summary;
+  if (typeof summary === "string" && summary.trim())
+    return {
+      tool: SIGNATURE_TOOL,
+      verdict: "unavailable",
+      missing: [],
+      reason: summary.trim().replace(/\s+/g, " ").slice(0, 300),
+    };
+  throw gate(
+    "UPDATE_FAILED",
+    "signature",
+    `the registry signature check returned no report: ${(result.stderr || result.stdout || "no output").trim().slice(0, 300)}`,
+    "Restore npm and registry access for the build; releases are not produced from an unreadable signature check",
+  );
+}
+
 /** Apply the release vulnerability policy to npm-audit-v2-shaped JSON. */
 export function evaluateVulnerabilities(
   audit: unknown,
@@ -620,8 +791,9 @@ function writeJson(path: string, value: unknown): void {
 
 /**
  * Build a verified release: static gates, the canonical payload, required
- * tests, dependency scan, SBOM, notices, metadata, checksums, and a
- * deterministic archive. Any failure removes the partial output.
+ * tests, dependency scan, registry signature check, SBOM, notices,
+ * metadata, checksums, and a deterministic archive. Any failure removes
+ * the partial output.
  */
 export async function buildRelease(
   manifestPath: string,
@@ -687,6 +859,9 @@ export async function buildRelease(
           .join(", ")}`,
         "Update the dependency, or record a reviewed exception with an expiry in release.vulnerabilities.allow",
       );
+    const signatures = evaluateSignatures(
+      await (options.signatureAuditor ?? npmSignatureAuditor)(payload),
+    );
     const created = createdTime();
     const packages = listPayloadPackages(payload);
     const sbom = generateSbom({
@@ -725,6 +900,7 @@ export async function buildRelease(
         package: lock.runtime.package,
         version: lock.runtime.version,
         compatibility: piCompatibility(lock),
+        surfaces: piCompatibilitySurfaces(lock),
       },
       manifestSchema: lock.manifest.schema,
       lockSchema: lock.schema,
@@ -754,6 +930,7 @@ export async function buildRelease(
         verdict: "passed",
         counts: report.counts,
       },
+      signatures,
       attribution: `${lock.app.name} ${lock.app.version}, built with PiShip ${lock.runtime.pishipVersion} on Pi ${lock.runtime.version} by Earendil Works`,
     };
     writeJson(join(root, "release.json"), metadata);
@@ -936,6 +1113,12 @@ function checkReleaseDirectory(
     report.verdict !== "passed"
   )
     throw fail("the recorded vulnerability scan did not pass");
+  if (
+    metadata.signatures !== undefined &&
+    metadata.signatures?.verdict !== "passed" &&
+    metadata.signatures?.verdict !== "unavailable"
+  )
+    throw fail("the recorded registry signature check did not pass");
   if (
     !metadata.tests.length ||
     metadata.tests.some((t) => t.result !== "passed")

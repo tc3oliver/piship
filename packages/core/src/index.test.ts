@@ -9,8 +9,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readManifest } from "@piship/schema";
+import { LATEST_SCHEMA, readManifest } from "@piship/schema";
 import {
+  checkGovernance,
+  checkPiVersion,
   distributionStateDirectory,
   initDistribution,
   lockManifest,
@@ -107,6 +109,72 @@ describe("distribution core", () => {
       "Resource symlinks are not allowed",
     );
   });
+});
+
+describe("init", () => {
+  it.each([
+    ["personal", false],
+    ["managed", true],
+  ] as const)(
+    "writes a %s manifest on the latest schema that validates and locks",
+    (mode, managed) => {
+      const root = mkdtempSync(join(tmpdir(), "piship-init-"));
+      roots.push(root);
+      const path = initDistribution(join(root, `${mode}-agent`), { managed });
+      const manifest = readManifest(path);
+      expect(manifest.schema).toBe(LATEST_SCHEMA);
+      expect(manifest.deployment.mode).toBe(mode);
+      checkPiVersion(manifest);
+      expect(() => checkGovernance(manifest, path)).not.toThrow();
+      expect(manifest.governance).toBeDefined();
+      expect(manifest.governance?.sandbox.required).toBe(false);
+      const projectTrust = manifest.governance?.policy.projectTrust;
+      for (const origin of ["external", "unknown"] as const)
+        expect(projectTrust?.[origin].dimensions).toEqual({
+          passiveContext: "deny",
+          instructions: "deny",
+          skills: "deny",
+          agents: "deny",
+          hooks: "deny",
+          extensions: "deny",
+          mcp: "deny",
+          providers: "deny",
+        });
+      expect(manifest.lifecycle?.updates).toMatchObject({
+        channel: "stable",
+        channels: ["stable"],
+        rollback: true,
+        trust: { keys: [] },
+      });
+      expect(manifest.lifecycle?.updates.source).toBeUndefined();
+      if (managed) {
+        expect(manifest.access?.identity.mode).toBe("oidc");
+        expect(manifest.governance?.policy.default).toBe("ask");
+        expect(manifest.governance?.mcp.mode).toBe("allowlist");
+        expect(manifest.governance?.mcp.servers).toEqual([]);
+        expect(manifest.governance?.audit.enabled).toBe(true);
+        expect(manifest.governance?.resources.declared).toMatchObject([
+          { kind: "instructions", class: "company" },
+        ]);
+      } else {
+        expect(manifest.access?.identity.mode).toBe("none");
+        expect(manifest.access?.credential.provider).toBe("pi-native");
+        expect(manifest.access?.inference.provider).toBe("pi-native");
+        expect(manifest.governance?.policy.default).toBe("allow");
+        expect(manifest.governance?.mcp.mode).toBe("off");
+        expect(manifest.governance?.audit.enabled).toBe(false);
+        expect(manifest.governance?.resources.declared).toMatchObject([
+          { kind: "instructions", class: "user" },
+        ]);
+      }
+      lockManifest(path);
+      const lock = requireCurrentLock(path);
+      expect(lock.schema).toBe("piship-lock/v1alpha4");
+      expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
+      expect(lock.updates?.trust.keys).toEqual([]);
+    },
+    180000,
+  );
 });
 
 describe("managed init", () => {

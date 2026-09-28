@@ -31,19 +31,24 @@ import {
 } from "@piship/contracts";
 import {
   type ActiveCredential,
+  type CredentialEvent,
   CredentialManager,
   type CredentialStatus,
+  type RevocationOutcome,
   HttpBrokerCredentialProvider,
   LocalSecretCredentialProvider,
   NoCredentialProvider,
   PiNativeCredentialProvider,
   createSecretStore,
+  metadataSecretRefs,
+  withFileLock,
 } from "@piship/credentials";
 import {
   type IdentityMetadata,
   OidcPkceIdentityProvider,
   identityMetadata,
   identitySecret,
+  normalizedIdentityProvider,
   parseIdentityMetadata,
   restoreIdentitySession,
 } from "@piship/identity";
@@ -54,6 +59,8 @@ import {
 } from "@piship/inference";
 import {
   type AccessManifest,
+  type CapabilityConfig,
+  type CapabilityModelRequirements,
   type Manifest,
   RuntimeReferenceError,
   checkUrl,
@@ -230,6 +237,115 @@ function writeJsonAtomic(path: string, value: unknown): void {
   renameSync(temporary, path);
 }
 
+/**
+ * Metadata-only access lifecycle event, emitted as it happens. Details never
+ * contain token or credential text.
+ */
+export interface AccessEvent {
+  readonly event:
+    | CredentialEvent["event"]
+    | "identity.login"
+    | "identity.refresh"
+    | "identity.logout";
+  readonly detail: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+export interface ModelIncompatibility {
+  readonly capability: string;
+  readonly reasons: readonly string[];
+}
+
+/**
+ * Compare a model's verified metadata with one capability's requirements.
+ * Unknown metadata never satisfies a requirement.
+ */
+export function modelRequirementGaps(
+  model: ModelDefinition | undefined,
+  requirements: CapabilityModelRequirements,
+): string[] {
+  const capabilities = model?.capabilities;
+  const gaps: string[] = [];
+  const flag = (
+    required: boolean | undefined,
+    value: boolean | undefined,
+    what: string,
+  ) => {
+    if (!required || value === true) return;
+    gaps.push(
+      value === false
+        ? `${what} is not supported`
+        : `${what} support is unknown`,
+    );
+  };
+  flag(requirements.tools, capabilities?.tools, "tool calling");
+  flag(
+    requirements.structuredOutput,
+    capabilities?.structuredOutput,
+    "structured output",
+  );
+  if (requirements.minContextWindow !== undefined) {
+    const window = capabilities?.contextWindow;
+    if (window === undefined) gaps.push("the context window is unknown");
+    else if (window < requirements.minContextWindow)
+      gaps.push(
+        `the context window ${window} is below the required ${requirements.minContextWindow}`,
+      );
+  }
+  for (const input of requirements.input ?? []) {
+    if (!capabilities?.input) {
+      gaps.push("the accepted input types are unknown");
+      break;
+    }
+    if (!capabilities.input.includes(input))
+      gaps.push(`${input} input is not accepted`);
+  }
+  return gaps;
+}
+
+/** Enabled capabilities whose model requirements the model does not meet. */
+export function incompatibleCapabilities(
+  model: ModelDefinition | undefined,
+  capabilities: readonly CapabilityConfig[],
+): ModelIncompatibility[] {
+  return capabilities
+    .filter((item) => item.enabled && item.requirements)
+    .map((item) => ({
+      capability: item.name,
+      reasons: modelRequirementGaps(
+        model,
+        item.requirements as CapabilityModelRequirements,
+      ),
+    }))
+    .filter((item) => item.reasons.length > 0);
+}
+
+function modelIncompatible(
+  model: string,
+  gaps: readonly ModelIncompatibility[],
+  compatible: readonly string[],
+): PiShipError {
+  return new PiShipError(
+    "MODEL_INCOMPATIBLE",
+    `Model ${model} does not meet the model requirements of ${gaps
+      .map((gap) => `capability ${gap.capability} (${gap.reasons.join("; ")})`)
+      .join(", ")}`,
+    {
+      component: "inference",
+      retryable: false,
+      userAction: compatible.length
+        ? `Choose a compatible model with --model: ${compatible.join(", ")}`
+        : `No allowed model meets these requirements; ask the distribution owner to update the model catalog or capabilities.${gaps[0]?.capability ?? "<name>"}.requirements`,
+      sanitizedDetail: {
+        model,
+        capabilities: gaps.map((gap) => ({
+          capability: gap.capability,
+          reasons: [...gap.reasons],
+        })),
+      },
+    },
+  );
+}
+
 export interface AccessOptions {
   readonly app: Manifest["app"];
   readonly mode: "personal" | "managed";
@@ -241,6 +357,10 @@ export interface AccessOptions {
   /** Tests may inject a store; production selects from the manifest. */
   readonly secretStore?: SecretStore;
   readonly now?: () => number;
+  /** Declared capabilities; model requirements of enabled ones are checked at launch. */
+  readonly capabilities?: readonly CapabilityConfig[];
+  /** Receives identity and credential lifecycle events; failures are ignored. */
+  readonly onEvent?: (event: AccessEvent) => void;
 }
 
 export interface ActivatedAccess {
@@ -250,6 +370,11 @@ export interface ActivatedAccess {
   readonly runtime: RuntimeProviderConfiguration;
   readonly config: EffectiveConfig;
   readonly selectedModel: string | undefined;
+  /**
+   * Allowed models that do not meet an enabled capability's requirements,
+   * by model ID; they are not offered for selection.
+   */
+  readonly incompatibleModels: Readonly<Record<string, string>>;
   readonly notices: readonly string[];
 }
 
@@ -319,6 +444,14 @@ export class DistributionAccess {
     return this.options.access?.identity.mode ?? "none";
   }
 
+  #emit(event: AccessEvent["event"], detail: AccessEvent["detail"]): void {
+    try {
+      this.options.onEvent?.({ event, detail });
+    } catch {
+      // Event consumers never break sign-in, launch, or sign-out.
+    }
+  }
+
   #context(): AdapterContext {
     return {
       distributionId: this.options.app.id,
@@ -332,11 +465,13 @@ export class DistributionAccess {
     const identity = this.options.access?.identity;
     if (!identity || identity.mode === "none") this.#identity = null;
     else if (identity.mode === "adapter")
-      this.#identity = await loadAdapter<IdentityProvider>(
-        this.options.distributionDir,
-        identity.adapter,
-        "identity",
-        this.#context(),
+      this.#identity = normalizedIdentityProvider(
+        await loadAdapter<IdentityProvider>(
+          this.options.distributionDir,
+          identity.adapter,
+          "identity",
+          this.#context(),
+        ),
       );
     else
       this.#identity = new OidcPkceIdentityProvider({
@@ -379,6 +514,16 @@ export class DistributionAccess {
         this.#context(),
       );
     else provider = new PiNativeCredentialProvider();
+    if (provider.requiresIdentity && this.identityMode === "none")
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `The ${mode} credential provider requires a signed-in identity, but identity.mode is none`,
+        {
+          component: "credential",
+          userAction:
+            "Configure identity.mode (oidc or adapter), or use a credential provider that does not require identity",
+        },
+      );
     this.#credential = new CredentialManager({
       distributionId: this.options.app.id,
       provider,
@@ -387,6 +532,7 @@ export class DistributionAccess {
       beforeExpirySeconds:
         access?.credential.refresh.beforeExpirySeconds ?? 300,
       now: this.#now,
+      onEvent: (event) => this.#emit(event.event, event.detail),
     });
     return this.#credential;
   }
@@ -470,7 +616,7 @@ export class DistributionAccess {
       });
     }
     const secret = await this.store?.get(metadata.secretRef);
-    let session = restoreIdentitySession(metadata, secret ?? null);
+    const session = restoreIdentitySession(metadata, secret ?? null);
     if (!session.accessToken) {
       if (!options.required) return null;
       throw new PiShipError(
@@ -494,10 +640,57 @@ export class DistributionAccess {
             userAction: `Run ${this.options.app.command} login`,
           },
         );
-      session = await provider.refresh(session);
-      await this.#storeIdentity(session);
+      return this.#refreshShared(provider, session, "expiring");
     }
     return session;
+  }
+
+  /** Reload the stored identity session, or null when there is none. */
+  async #storedIdentity(): Promise<IdentitySession | null> {
+    const metadata = this.readIdentityMetadata();
+    if (!metadata) return null;
+    const secret = await this.store?.get(metadata.secretRef);
+    const session = restoreIdentitySession(metadata, secret ?? null);
+    return session.accessToken ? session : null;
+  }
+
+  /**
+   * Refresh the identity session once across processes. Refresh tokens may
+   * rotate on use, so concurrent launches share a lock beside the session
+   * metadata; a caller that finds a session another process already
+   * refreshed uses it instead of spending the old refresh token.
+   */
+  async #refreshShared(
+    provider: IdentityProvider,
+    observed: IdentitySession,
+    reason: "expiring" | "rejected",
+  ): Promise<IdentitySession> {
+    const refresh = provider.refresh?.bind(provider);
+    if (!refresh)
+      throw new PiShipError(
+        "IDENTITY_EXPIRED",
+        "The identity session expired",
+        {
+          component: "identity",
+          userAction: `Run ${this.options.app.command} login`,
+        },
+      );
+    return withFileLock(this.paths.identity, async () => {
+      const stored = await this.#storedIdentity();
+      if (
+        stored &&
+        stored.subject === observed.subject &&
+        !stored.accessToken?.equals(observed.accessToken)
+      )
+        return stored;
+      const refreshed = await refresh(stored ?? observed);
+      await this.#storeIdentity(refreshed);
+      this.#emit("identity.refresh", {
+        reason,
+        expiresAt: refreshed.expiresAt?.toISOString() ?? null,
+      });
+      return refreshed;
+    });
   }
 
   // -------------------------------------------------------------- operations
@@ -529,12 +722,22 @@ export class DistributionAccess {
         ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
       await this.#storeIdentity(identity);
+      this.#emit("identity.login", {
+        expiresAt: identity.expiresAt?.toISOString() ?? null,
+      });
     }
     const manager = await this.credentialManager();
     const notices: string[] = [];
     if (manager.storesSecrets) {
-      // A fresh login always replaces the runtime credential.
-      await manager.logout(this.#credentialContext()).catch(() => []);
+      // A fresh login always replaces the runtime credential, revoking the
+      // previous one where supported (audited as credential.revoke).
+      const problems = await manager
+        .logout(this.#credentialContext(), { reason: "replace" })
+        .catch((error: Error) => [redact(error.message)]);
+      for (const problem of problems)
+        notices.push(
+          `The previous credential was not fully cleared: ${problem}`,
+        );
       const active = await manager.ensure(
         identity,
         this.#credentialContext(ctx.readSecret),
@@ -555,23 +758,25 @@ export class DistributionAccess {
     const metadata = this.readIdentityMetadata();
     if (metadata && this.store) {
       const secret = await this.store.get(metadata.secretRef).catch(() => null);
+      let revocation: "completed" | "failed" | "unsupported" | "skipped" =
+        provider?.logout ? "skipped" : "unsupported";
       if (provider?.logout && secret)
         try {
           await provider.logout(restoreIdentitySession(metadata, secret));
+          revocation = "completed";
         } catch (error) {
+          revocation = "failed";
           problems.push(
             `identity revocation: ${redact((error as Error).message)}`,
           );
         }
-      for (const ref of [
-        metadata.secretRef,
-        `${metadata.secretRef.split("#")[0]}#${Number(metadata.secretRef.split("#")[1] ?? 0) + 1}`,
-      ])
+      for (const ref of metadataSecretRefs(metadata, this.options.app.id))
         await this.store
           .delete(ref)
           .catch((error: Error) =>
             problems.push(`identity secret: ${redact(error.message)}`),
           );
+      this.#emit("identity.logout", { revocation });
     }
     rmSync(this.paths.identity, { force: true });
     this.#secret = null;
@@ -680,6 +885,8 @@ export class DistributionAccess {
       models,
     });
     let selectedModel: string | undefined;
+    let incompatibleModels: Record<string, string> = {};
+    const capabilities = this.options.capabilities ?? [];
     const requested = options.requestedModel ?? config.values.model;
     if (runtimeConfig.kind === "managed-endpoint") {
       const allowed = config.allowedModels.filter((id) =>
@@ -705,9 +912,29 @@ export class DistributionAccess {
           "No default model is configured",
           { component: "inference" },
         );
-      selectedModel = (
+      const resolved = (
         await inference.resolveModel(requested, { models, allowed })
-      ).model.id;
+      ).model;
+      selectedModel = resolved.id;
+      const incompatible: Record<string, string> = {};
+      for (const id of allowed) {
+        const gaps = incompatibleCapabilities(
+          models.find((model) => model.id === id),
+          capabilities,
+        );
+        if (gaps.length)
+          incompatible[id] = gaps
+            .map((gap) => `${gap.capability}: ${gap.reasons.join("; ")}`)
+            .join(", ");
+      }
+      incompatibleModels = incompatible;
+      const gaps = incompatibleCapabilities(resolved, capabilities);
+      if (gaps.length)
+        throw modelIncompatible(
+          `${this.providerId}/${resolved.id}`,
+          gaps,
+          allowed.filter((id) => !incompatible[id]),
+        );
     } else if (requested) {
       if (config.modelsRestricted && !config.allowedModels.includes(requested))
         throw new PiShipError(
@@ -715,11 +942,17 @@ export class DistributionAccess {
           `Model ${requested} is not allowed by this distribution`,
           { component: "inference" },
         );
-      await inference.resolveModel(requested, {
+      const resolved = await inference.resolveModel(requested, {
         models: [],
         allowed: config.allowedModels,
       });
       selectedModel = requested;
+      const gaps = incompatibleCapabilities(resolved.model, capabilities);
+      if (gaps.length) throw modelIncompatible(requested, gaps, []);
+    } else {
+      // Pi chooses the model and PiShip has no verified metadata for it.
+      const gaps = incompatibleCapabilities(undefined, capabilities);
+      if (gaps.length) throw modelIncompatible("(selected by Pi)", gaps, []);
     }
     return {
       identity,
@@ -728,13 +961,14 @@ export class DistributionAccess {
       runtime: runtimeConfig,
       config,
       selectedModel,
+      incompatibleModels,
       notices,
     };
   }
 
   async #refreshIdentity(identity: IdentitySession): Promise<IdentitySession> {
     const provider = await this.identityProvider();
-    if (!provider?.refresh)
+    if (!provider)
       throw new PiShipError(
         "IDENTITY_EXPIRED",
         "The identity session expired",
@@ -743,9 +977,20 @@ export class DistributionAccess {
           userAction: `Run ${this.options.app.command} login`,
         },
       );
-    const refreshed = await provider.refresh(identity);
-    await this.#storeIdentity(refreshed);
-    return refreshed;
+    return this.#refreshShared(provider, identity, "rejected");
+  }
+
+  /**
+   * Best-effort remote revocation of the current runtime credential before
+   * an update, rollback, or migration clears it. Local clearing is the
+   * caller's job and happens whatever the outcome.
+   */
+  async revokeCredential(): Promise<{
+    readonly outcome: RevocationOutcome | "absent";
+    readonly problem?: string;
+  }> {
+    const manager = await this.credentialManager();
+    return manager.revoke(this.#credentialContext(), "lifecycle");
   }
 
   /**
@@ -900,6 +1145,13 @@ export class DistributionAccess {
       models: activated.models,
       allowed: activated.config.allowedModels,
     });
+    const reason = activated.incompatibleModels[requested];
+    if (reason)
+      throw new PiShipError(
+        "MODEL_INCOMPATIBLE",
+        `Model ${requested} does not meet capability model requirements (${reason})`,
+        { component: "inference", retryable: false },
+      );
   }
 }
 

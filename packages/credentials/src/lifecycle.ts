@@ -20,7 +20,7 @@ import {
   type RuntimeCredential,
   type RuntimeCredentialKind,
   type SecretStore,
-  type SecretValue,
+  SecretValue,
 } from "@piship/contracts";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
@@ -65,6 +65,32 @@ export interface ActiveCredential {
   readonly notices: readonly string[];
 }
 
+/** Why a credential was revoked. */
+export type CredentialRevokeReason = "logout" | "replace" | "lifecycle";
+
+/**
+ * Outcome of a remote revocation attempt: `revoked` when the provider
+ * accepted it, `failed` when it raised, `unsupported` when the provider has
+ * no remote revocation, and `skipped` when the stored secret was unreadable.
+ */
+export type RevocationOutcome =
+  | "revoked"
+  | "failed"
+  | "unsupported"
+  | "skipped";
+
+/**
+ * Metadata-only lifecycle event. Details never contain secret material; they
+ * are suitable for the audit log as they are.
+ */
+export interface CredentialEvent {
+  readonly event:
+    | "credential.acquire"
+    | "credential.refresh"
+    | "credential.revoke";
+  readonly detail: Readonly<Record<string, string | number | boolean | null>>;
+}
+
 export interface CredentialManagerOptions {
   readonly distributionId: string;
   readonly provider: CredentialProvider;
@@ -74,6 +100,8 @@ export interface CredentialManagerOptions {
   readonly now?: () => number;
   /** Fault injection for crash-safety tests. */
   readonly onPhase?: (phase: "secret-written" | "metadata-written") => void;
+  /** Receives acquire, refresh, and revoke events; failures are ignored. */
+  readonly onEvent?: (event: CredentialEvent) => void;
 }
 
 function writeAtomic(path: string, content: string): void {
@@ -81,6 +109,132 @@ function writeAtomic(path: string, content: string): void {
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
   renameSync(temporary, path);
+}
+
+/**
+ * Every secret-store reference that credential or identity metadata of one
+ * distribution may own: the current generation, recorded orphans, the next
+ * generation (written before a crash that never reached metadata), and for
+ * identity also the previous generation (a replacement whose delete failed).
+ * References of other distributions are never returned.
+ */
+export function metadataSecretRefs(
+  raw: unknown,
+  distributionId: string,
+): string[] {
+  const value =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const refs = new Set<string>();
+  const inference = `piship:${distributionId}:inference#`;
+  for (const item of [
+    value.credential_ref,
+    ...(Array.isArray(value.orphans) ? value.orphans : []),
+  ])
+    if (typeof item === "string" && item.startsWith(inference)) refs.add(item);
+  const generation = Number(value.generation);
+  if (
+    value.generation !== undefined &&
+    Number.isInteger(generation) &&
+    generation >= 0
+  ) {
+    refs.add(`${inference}${generation}`);
+    refs.add(`${inference}${generation + 1}`);
+  }
+  const identity = `piship:${distributionId}:identity#`;
+  if (
+    typeof value.secretRef === "string" &&
+    value.secretRef.startsWith(identity)
+  ) {
+    refs.add(value.secretRef);
+    const current = Number(value.secretRef.slice(identity.length));
+    if (Number.isInteger(current) && current >= 0) {
+      refs.add(`${identity}${current + 1}`);
+      if (current > 1) refs.add(`${identity}${current - 1}`);
+    }
+  }
+  return [...refs].sort();
+}
+
+const CREDENTIAL_KINDS: readonly RuntimeCredentialKind[] = [
+  "api_key",
+  "bearer",
+  "opaque",
+];
+
+/**
+ * Normalize a provider-returned secret to a SecretValue. Adapters may return
+ * a plain string or a SecretValue from another copy of the contracts package;
+ * redaction relies on `instanceof`, so every secret is re-wrapped here.
+ */
+export function toSecretValue(value: unknown): SecretValue {
+  if (value instanceof SecretValue) return value;
+  let text: unknown = value;
+  if (
+    value &&
+    typeof value === "object" &&
+    typeof (value as { reveal?: unknown }).reveal === "function"
+  )
+    try {
+      text = (value as { reveal: () => unknown }).reveal();
+    } catch {
+      text = undefined;
+    }
+  if (typeof text !== "string" || text.length === 0)
+    throw new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential provider returned a credential without a usable secret",
+      { component: "credential" },
+    );
+  return new SecretValue(text);
+}
+
+/** Validate a provider-returned credential and normalize its secret and expiry. */
+export function normalizeCredential(value: unknown): RuntimeCredential {
+  const credential = (value ?? {}) as Partial<
+    Omit<RuntimeCredential, "expiresAt">
+  > & { readonly expiresAt?: unknown };
+  if (!CREDENTIAL_KINDS.includes(credential.kind as RuntimeCredentialKind))
+    throw new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential provider returned an unknown credential kind",
+      { component: "credential" },
+    );
+  const expiresAt =
+    credential.expiresAt === undefined
+      ? undefined
+      : new Date(
+          credential.expiresAt instanceof Date
+            ? credential.expiresAt.getTime()
+            : typeof credential.expiresAt === "string"
+              ? Date.parse(credential.expiresAt)
+              : Number.NaN,
+        );
+  if (expiresAt && Number.isNaN(expiresAt.getTime()))
+    throw new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential provider returned an invalid expiry",
+      { component: "credential" },
+    );
+  if (
+    credential.credentialId !== undefined &&
+    typeof credential.credentialId !== "string"
+  )
+    throw new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential provider returned a non-string credential ID",
+      { component: "credential" },
+    );
+  return {
+    kind: credential.kind as RuntimeCredentialKind,
+    secret: toSecretValue(credential.secret),
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(credential.credentialId
+      ? { credentialId: credential.credentialId }
+      : {}),
+    ...(credential.metadata && typeof credential.metadata === "object"
+      ? { metadata: credential.metadata }
+      : {}),
+  };
 }
 
 const LOCK_STALE_MS = 120_000;
@@ -94,7 +248,7 @@ const queues = new Map<string, Promise<unknown>>();
  * Cross-process lock beside the metadata file. A lock older than the longest
  * broker exchange is treated as abandoned by a crashed process.
  */
-async function withFileLock<T>(
+export async function withFileLock<T>(
   path: string,
   task: () => Promise<T>,
 ): Promise<T> {
@@ -143,6 +297,30 @@ export class CredentialManager {
 
   get storesSecrets(): boolean {
     return this.mode !== "pi-native" && this.mode !== "none";
+  }
+
+  /**
+   * Whether the provider can revoke remotely. A provider may declare
+   * `revocable: false`, as a broker without a revoke endpoint does.
+   */
+  get revocable(): boolean {
+    const provider = this.options.provider as CredentialProvider & {
+      readonly revocable?: unknown;
+    };
+    return (
+      typeof provider.revoke === "function" && provider.revocable !== false
+    );
+  }
+
+  #emit(
+    event: CredentialEvent["event"],
+    detail: Record<string, string | number | boolean | null>,
+  ): void {
+    try {
+      this.options.onEvent?.({ event, detail: { mode: this.mode, ...detail } });
+    } catch {
+      // Event consumers never break the credential lifecycle.
+    }
   }
 
   readMetadata(): CredentialMetadata | null {
@@ -223,6 +401,17 @@ export class CredentialManager {
     };
   }
 
+  #eventDetail(
+    metadata: CredentialMetadata,
+  ): Record<string, string | number | boolean | null> {
+    return {
+      kind: metadata.kind,
+      generation: metadata.generation,
+      credentialId: metadata.credential_id ?? null,
+      expiresAt: metadata.expires_at ?? null,
+    };
+  }
+
   #store(): SecretStore {
     if (!this.options.store)
       throw new PiShipError(
@@ -235,6 +424,7 @@ export class CredentialManager {
 
   /** Persist a newly acquired credential and switch metadata to it atomically. */
   async #commit(credential: RuntimeCredential): Promise<CredentialMetadata> {
+    credential = normalizeCredential(credential);
     const store = this.#store();
     const previous = this.readMetadata();
     const generation = (previous?.generation ?? 0) + 1;
@@ -300,25 +490,13 @@ export class CredentialManager {
    * nothing is left behind. Never resurrect or reuse such a secret.
    */
   async #clearMetadata(): Promise<void> {
-    let raw: Record<string, unknown> = {};
+    let raw: unknown = {};
     try {
       raw = JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
     } catch {
       raw = {};
     }
-    const refs = new Set<string>();
-    const own = `piship:${this.options.distributionId}:inference#`;
-    for (const value of [
-      raw.credential_ref,
-      ...(Array.isArray(raw.orphans) ? raw.orphans : []),
-    ])
-      if (typeof value === "string" && value.startsWith(own)) refs.add(value);
-    const generation = Number(raw.generation);
-    if (Number.isInteger(generation) && generation >= 0) {
-      refs.add(this.#ref(generation));
-      refs.add(this.#ref(generation + 1));
-    }
-    for (const ref of refs)
+    for (const ref of metadataSecretRefs(raw, this.options.distributionId))
       await this.options.store?.delete(ref).catch(() => {});
     rmSync(this.options.metadataPath, { force: true });
   }
@@ -412,8 +590,8 @@ export class CredentialManager {
             userAction: "Run the branded login command",
           },
         );
-      const acquired = await this.options.provider.acquire(identity, ctx);
-      if (!acquired)
+      const returned = await this.options.provider.acquire(identity, ctx);
+      if (!returned)
         throw new PiShipError(
           "CREDENTIAL_ACQUIRE_FAILED",
           "The credential provider returned no credential",
@@ -421,7 +599,9 @@ export class CredentialManager {
             component: "credential",
           },
         );
+      const acquired = normalizeCredential(returned);
       metadata = await this.#commit(acquired);
+      this.#emit("credential.acquire", this.#eventDetail(metadata));
       return { ref: this.#toRef(metadata), secret: acquired.secret, notices };
     }
     const status = this.status();
@@ -439,15 +619,20 @@ export class CredentialManager {
       };
       try {
         const provider = this.options.provider;
-        const next = provider.refresh
+        const returned = provider.refresh
           ? await provider.refresh(identity, current, ctx)
           : await provider.acquire(identity, ctx);
-        if (!next)
+        if (!returned)
           throw new PiShipError(
             "CREDENTIAL_ACQUIRE_FAILED",
             "Credential refresh returned nothing",
           );
+        const next = normalizeCredential(returned);
         metadata = await this.#commit(next);
+        this.#emit("credential.refresh", {
+          ...this.#eventDetail(metadata),
+          reason: force ? "rejected" : status.state,
+        });
         return { ref: this.#toRef(metadata), secret: next.secret, notices };
       } catch (error) {
         if (status.state === "expired" || force) {
@@ -504,41 +689,97 @@ export class CredentialManager {
   }
 
   /** Revoke when supported, then clear local secrets and metadata. */
-  async logout(ctx: CredentialContext): Promise<string[]> {
+  async logout(
+    ctx: CredentialContext,
+    options: { readonly reason?: CredentialRevokeReason } = {},
+  ): Promise<string[]> {
     if (!this.storesSecrets) return [];
-    return this.#exclusive(() => this.#logout(ctx));
+    return this.#exclusive(() => this.#logout(ctx, options.reason ?? "logout"));
   }
 
-  async #logout(ctx: CredentialContext): Promise<string[]> {
+  /**
+   * Revoke the current credential remotely without clearing it, for callers
+   * that clear local state themselves (update, rollback, migration). Emits
+   * `credential.revoke` when there was a credential this release can read.
+   */
+  async revoke(
+    ctx: CredentialContext,
+    reason: CredentialRevokeReason,
+  ): Promise<{
+    readonly outcome: RevocationOutcome | "absent";
+    readonly problem?: string;
+  }> {
+    if (!this.storesSecrets) return { outcome: "absent" };
+    return this.#exclusive(async () => {
+      const metadata = this.readMetadata();
+      if (!metadata) return { outcome: "absent" as const };
+      return this.#revoke(metadata, ctx, reason);
+    });
+  }
+
+  async #revoke(
+    metadata: CredentialMetadata,
+    ctx: CredentialContext,
+    reason: CredentialRevokeReason,
+  ): Promise<{ outcome: RevocationOutcome; problem?: string }> {
+    let outcome: RevocationOutcome;
+    let problem: string | undefined;
+    const secret =
+      this.revocable && this.options.store
+        ? await this.options.store
+            .get(metadata.credential_ref)
+            .catch(() => null)
+        : null;
+    if (!this.revocable) outcome = "unsupported";
+    else if (!secret) outcome = "skipped";
+    else
+      try {
+        await this.options.provider.revoke?.(
+          {
+            kind: metadata.kind,
+            secret,
+            ...(metadata.credential_id
+              ? { credentialId: metadata.credential_id }
+              : {}),
+          },
+          ctx,
+        );
+        outcome = "revoked";
+      } catch (error) {
+        outcome = "failed";
+        problem = `revocation: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    this.#emit("credential.revoke", {
+      generation: metadata.generation,
+      credentialId: metadata.credential_id ?? null,
+      reason,
+      revocation: outcome,
+    });
+    return { outcome, ...(problem ? { problem } : {}) };
+  }
+
+  async #logout(
+    ctx: CredentialContext,
+    reason: CredentialRevokeReason,
+  ): Promise<string[]> {
     const problems: string[] = [];
-    const metadata = this.readMetadata();
     const store = this.options.store;
-    if (metadata && store) {
-      const secret = await store.get(metadata.credential_ref).catch(() => null);
-      if (secret && this.options.provider.revoke)
-        try {
-          await this.options.provider.revoke(
-            {
-              kind: metadata.kind,
-              secret,
-              ...(metadata.credential_id
-                ? { credentialId: metadata.credential_id }
-                : {}),
-            },
-            ctx,
-          );
-        } catch (error) {
-          problems.push(
-            `revocation: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      // The next generation may hold a secret written before a crash that never
-      // reached metadata; clear it too so logout leaves nothing behind.
-      for (const ref of [
-        metadata.credential_ref,
-        ...(metadata.orphans ?? []),
-        this.#ref(metadata.generation + 1),
-      ])
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
+    } catch {
+      raw = null;
+    }
+    const metadata = this.readMetadata();
+    if (metadata) {
+      const revoked = await this.#revoke(metadata, ctx, reason);
+      if (revoked.problem) problems.push(revoked.problem);
+    }
+    // Metadata this release cannot use may still reference secrets, and the
+    // next generation may hold a secret written before a crash that never
+    // reached metadata; clear all of them so logout leaves nothing behind.
+    if (store && raw)
+      for (const ref of metadataSecretRefs(raw, this.options.distributionId))
         try {
           await store.delete(ref);
         } catch (error) {
@@ -546,7 +787,6 @@ export class CredentialManager {
             `delete ${ref}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-    }
     rmSync(this.options.metadataPath, { force: true });
     return problems;
   }

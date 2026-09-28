@@ -168,19 +168,24 @@ function trimSlashes(value: string): string {
   return value.slice(start, end);
 }
 
-function gitConfigPath(gitDir: string): string {
+/** The shared git directory a worktree's `commondir` names, or `gitDir` itself. */
+function commonDirectory(gitDir: string): string {
   const commondir = readText(join(gitDir, "commondir"))?.trim();
-  if (!commondir) return join(gitDir, "config");
-  const common = isAbsolute(commondir) ? commondir : resolve(gitDir, commondir);
-  return join(common, "config");
+  if (!commondir) return gitDir;
+  return isAbsolute(commondir) ? commondir : resolve(gitDir, commondir);
+}
+
+function gitConfigPath(gitDir: string): string {
+  return join(commonDirectory(gitDir), "config");
 }
 
 /**
- * The git files that decide how `root` is classified: the `.git` entry
- * itself (a `gitdir:` pointer when it is a file), the git directory's
- * `config` and `commondir`, and the shared `config` a worktree points to.
- * Rewriting any of them could change the origin remote a later launch
- * reads. Paths are normalized (symlink-resolved, POSIX separators).
+ * The git files that decide how `root` is classified or what git runs: the
+ * `.git` entry itself (a `gitdir:` pointer when it is a file), the git
+ * directory's `config`, `config.worktree`, and `commondir`, and the shared
+ * `config` a worktree points to. Rewriting any of them could change the
+ * origin remote a later launch reads or the commands git runs. Paths are
+ * normalized (symlink-resolved, POSIX separators).
  */
 export function projectGitControlFiles(root: string): string[] {
   const dotGit = join(root, ".git");
@@ -189,11 +194,31 @@ export function projectGitControlFiles(root: string): string[] {
   if (gitDir) {
     files.push(
       real(join(gitDir, "config")),
+      real(join(gitDir, "config.worktree")),
       real(join(gitDir, "commondir")),
       real(gitConfigPath(gitDir)),
     );
   }
   return [...new Set(files)];
+}
+
+/**
+ * The git directories whose contents git runs or trusts on the user's
+ * behalf: `hooks` (run by the user's next git command, outside any sandbox)
+ * and `info` (attributes and excludes), of the `.git` directory, of the git
+ * directory a `.git` file points to, and of the shared directory a worktree
+ * names. They are protected as whole trees, whether or not they exist yet.
+ * Paths are normalized (symlink-resolved, POSIX separators).
+ */
+export function projectGitControlDirectories(root: string): string[] {
+  const bases = [join(root, ".git")];
+  const gitDir = gitDirectory(root);
+  if (gitDir) bases.push(gitDir, commonDirectory(gitDir));
+  const directories = bases.flatMap((base) => [
+    real(join(base, "hooks")),
+    real(join(base, "info")),
+  ]);
+  return [...new Set(directories)];
 }
 
 function matcherMatches(

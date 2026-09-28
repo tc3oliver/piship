@@ -1,4 +1,5 @@
 import {
+  type IdentityProvider,
   type IdentitySession,
   PiShipError,
   SecretValue,
@@ -48,6 +49,103 @@ export function identitySecret(session: IdentitySession): SecretValue {
       refreshToken: session.refreshToken?.reveal(),
     }),
   );
+}
+
+function tokenValue(value: unknown, field: string): SecretValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value instanceof SecretValue) return value;
+  let text: unknown = value;
+  if (
+    typeof value === "object" &&
+    typeof (value as { reveal?: unknown }).reveal === "function"
+  )
+    try {
+      text = (value as { reveal: () => unknown }).reveal();
+    } catch {
+      text = undefined;
+    }
+  if (typeof text !== "string" || text.length === 0)
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      `The identity provider returned an unusable ${field}`,
+      { component: "identity" },
+    );
+  return new SecretValue(text);
+}
+
+/**
+ * Validate an identity session from an adapter and re-wrap its tokens as
+ * SecretValues of this contracts copy, so redaction (which relies on
+ * `instanceof`) always applies. Plain-string tokens are accepted and wrapped.
+ */
+export function normalizeIdentitySession(value: unknown): IdentitySession {
+  const session = (value ?? {}) as Record<string, unknown>;
+  if (
+    typeof session.subject !== "string" ||
+    !session.subject ||
+    typeof session.issuer !== "string" ||
+    !session.issuer
+  )
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      "The identity provider returned a session without a subject and issuer",
+      { component: "identity" },
+    );
+  const expiresAt =
+    session.expiresAt === undefined
+      ? undefined
+      : new Date(
+          session.expiresAt instanceof Date
+            ? session.expiresAt.getTime()
+            : typeof session.expiresAt === "string"
+              ? Date.parse(session.expiresAt)
+              : Number.NaN,
+        );
+  if (expiresAt && Number.isNaN(expiresAt.getTime()))
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      "The identity provider returned an invalid session expiry",
+      { component: "identity" },
+    );
+  const accessToken = tokenValue(session.accessToken, "access token");
+  const idToken = tokenValue(session.idToken, "ID token");
+  const refreshToken = tokenValue(session.refreshToken, "refresh token");
+  return {
+    subject: session.subject,
+    issuer: session.issuer,
+    ...(typeof session.displayName === "string" && session.displayName
+      ? { displayName: session.displayName }
+      : {}),
+    ...(typeof session.email === "string" && session.email
+      ? { email: session.email }
+      : {}),
+    ...(accessToken ? { accessToken } : {}),
+    ...(idToken ? { idToken } : {}),
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(session.claims && typeof session.claims === "object"
+      ? { claims: session.claims as Record<string, unknown> }
+      : {}),
+  };
+}
+
+/** Wrap an adapter so every session it returns is normalized. */
+export function normalizedIdentityProvider(
+  provider: IdentityProvider,
+): IdentityProvider {
+  const refresh = provider.refresh?.bind(provider);
+  const logout = provider.logout?.bind(provider);
+  return {
+    kind: provider.kind,
+    login: async (ctx) => normalizeIdentitySession(await provider.login(ctx)),
+    ...(refresh
+      ? {
+          refresh: async (session: IdentitySession) =>
+            normalizeIdentitySession(await refresh(session)),
+        }
+      : {}),
+    ...(logout ? { logout } : {}),
+  };
 }
 
 export function parseIdentityMetadata(value: unknown): IdentityMetadata {

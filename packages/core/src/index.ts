@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  LATEST_SCHEMA,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
@@ -197,6 +198,14 @@ const workspacePackages = [
   "pi",
   "cli",
 ] as const;
+/** A package-lock link from `node_modules/@piship/<name>` to `packages/<name>`. */
+function isWorkspaceLink(path: string, resolved: string | undefined): boolean {
+  return workspacePackages.some(
+    (name) =>
+      path === `node_modules/@piship/${name}` &&
+      resolved === `packages/${name}`,
+  );
+}
 function runtimeDependencies(detailed = false): DistributionLock["runtime"] {
   const source = readFileSync(join(buildInput, "package-lock.json"));
   const npmLock = JSON.parse(source.toString()) as {
@@ -208,13 +217,20 @@ function runtimeDependencies(detailed = false): DistributionLock["runtime"] {
         dev?: boolean;
         resolved?: string;
         hasInstallScript?: boolean;
+        link?: boolean;
       }
     >;
   };
+  // Workspace links are PiShip's own packages, covered by the payload
+  // inventory rather than registry integrity. Every other runtime entry is
+  // kept, including one without integrity, so the release `source` gate
+  // sees it and fails instead of the entry silently disappearing.
   const packages: LockedPackage[] = Object.entries(npmLock.packages)
     .filter(
       ([path, value]) =>
-        path.startsWith("node_modules/") && !value.dev && value.integrity,
+        path.startsWith("node_modules/") &&
+        !value.dev &&
+        !(value.link && isWorkspaceLink(path, value.resolved)),
     )
     .map(([path, value]) => ({
       path,
@@ -522,6 +538,21 @@ function governanceLock(
   });
   return { manifest: governance, certified, providers };
 }
+/**
+ * Check-only form of the lock-time governance checks: certified resource and
+ * capability-provider tree integrity and install-script rejection. Throws the
+ * same errors as `piship lock` and writes nothing.
+ */
+export function checkGovernance(
+  manifest: Manifest,
+  manifestPath: string,
+  resources: readonly LockedResource[] = resolveResources(
+    manifest,
+    manifestPath,
+  ),
+): void {
+  governanceLock(manifest, dirname(resolve(manifestPath)), resources);
+}
 export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
@@ -808,6 +839,72 @@ export function binHome(): string {
     process.env.PISHIP_BIN_HOME ?? join(homedir(), ".local", "bin"),
   );
 }
+/**
+ * Governance and lifecycle sections shared by both init templates: explicit
+ * safe defaults for the deployment mode, and updates disabled until a source
+ * and release keys are configured (as `piship migrate` writes them).
+ */
+function initGovernance(managed: boolean, id: string): string {
+  // Workspace-provided items (.pi, .agents, AGENTS.md, .mcp.json) stay
+  // unloaded outside trusted projects, as in the v0.1 personal alpha.
+  const projectTrust = `  # Relax per dimension, or add company.match entries, to trust projects.
+  projectTrust:
+    external: &isolated
+      passiveContext: deny
+      instructions: deny
+      skills: deny
+      agents: deny
+      hooks: deny
+      extensions: deny
+      mcp: deny
+      providers: deny
+    unknown: *isolated
+`;
+  const policy = managed
+    ? `# Unmatched actions ask the person; headless runs resolve ask to deny.
+policy:
+  default: ask
+${projectTrust}  defaults:
+    - id: distribution.models
+      action: model.use
+      resource: "${id}/**"
+      effect: allow
+    - id: distribution.instructions
+      action: instruction.load
+      resource: "company:**"
+      effect: allow
+    - id: workspace.read
+      action: filesystem.read
+      resource: "workspace/**"
+      effect: allow
+`
+    : `policy:
+  default: allow
+${projectTrust}`;
+  return `${policy}# No MCP servers until they are declared and reviewed.
+mcp:
+  mode: ${managed ? "allowlist" : "off"}
+# Set required: true to fail the launch when the OS sandbox is unavailable.
+sandbox:
+  required: false
+audit:
+${
+  managed
+    ? `  enabled: true
+  sinks:
+    - id: local
+      type: file
+      required: false
+`
+    : `  enabled: false
+`
+}# Updates stay disabled until updates.source and updates.trust.keys are set.
+updates:
+  channel: stable
+  channels: [stable]
+  rollback: true
+`;
+}
 export function initDistribution(
   directory: string,
   options: { managed?: boolean } = {},
@@ -818,6 +915,15 @@ export function initDistribution(
   const id = basename(root).toLowerCase();
   distributionStateDirectory({ value: id });
   mkdirSync(join(root, "resources"), { recursive: true });
+  const header = `schema: ${LATEST_SCHEMA}
+app:
+  id: ${id}
+  name: ${id}
+  command: ${id}
+  version: 1.0.0
+runtime:
+  pi: "${PI_VERSION}"
+`;
   if (options.managed) {
     const candidate = id.toUpperCase().replaceAll("-", "_");
     // Variable names that look like secret material are rejected by the schema.
@@ -826,15 +932,7 @@ export function initDistribution(
       : candidate;
     writeFileSync(
       join(root, "piship.yaml"),
-      `schema: piship/v1alpha2
-app:
-  id: ${id}
-  name: ${id}
-  command: ${id}
-  version: 1.0.0
-runtime:
-  pi: "${PI_VERSION}"
-deployment:
+      `${header}deployment:
   mode: managed
 variables:
   - ${prefix}_OIDC_ISSUER
@@ -874,13 +972,27 @@ network:
   publicFallback: deny
 resources:
   instructions:
-    - ./resources/AGENTS.md
-`,
+    company:
+      - ./resources/AGENTS.md
+${initGovernance(true, id)}`,
     );
   } else
     writeFileSync(
       join(root, "piship.yaml"),
-      `schema: piship/v1alpha1\napp:\n  id: ${id}\n  name: ${id}\n  command: ${id}\n  version: 1.0.0\nruntime:\n  pi: "${PI_VERSION}"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    - ./resources/AGENTS.md\n`,
+      `${header}deployment:
+  mode: personal
+# Pi-native providers and auth, kept in this distribution's isolated state.
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+resources:
+  instructions:
+    user:
+      - ./resources/AGENTS.md
+${initGovernance(false, id)}`,
     );
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
   return join(root, "piship.yaml");
