@@ -401,72 +401,86 @@ describe("managed distribution (local fixtures)", () => {
   }, 600000);
 });
 
-describe("personal access modes without enterprise identity (local fixtures)", () => {
-  it.each([
-    [
-      "local-secret",
-      "provider: local-secret\n  storage:\n    provider: file",
-      "sk-personal-owner-key",
-    ],
-    ["none", "provider: none", "piship-no-credential"],
-  ])(
-    "runs identity.mode none with %s credentials",
-    async (mode, credential, acceptedKey) => {
-      const services: Services = await startLocalServices({
-        knobs: { acceptedKeys: [acceptedKey] },
-      });
-      closers.push(() => services.close());
-      const { temp, manifest, cli } = prepare("personal", (source) =>
-        source
-          .replace("schema: piship/v1alpha1", "schema: piship/v1alpha2")
-          .replace(
-            "resources:",
-            `variables:\n  - MYPI_GATEWAY_URL\nidentity:\n  mode: none\ncredential:\n  ${credential}\ninference:\n  provider: openai-compatible\n  baseUrl: \${MYPI_GATEWAY_URL}\nmodels:\n  default: acme/coder\n  allowed: [acme/coder]\n  catalog:\n    acme/coder:\n      name: Local Coder\n      contextWindow: 32000\n      maxOutputTokens: 2048\nresources:`,
-          ),
-      );
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        MYPI_GATEWAY_URL: services.gatewayUrl,
-        PISHIP_STATE_HOME: join(temp, "state"),
-        HOME: join(temp, "home"),
-        USERPROFILE: join(temp, "home"),
-        OPENAI_API_KEY: "sk-ambient-personal-key-e2e",
-      };
-      delete env.PISHIP_BUILD_INPUT;
-      const validate = cli(env, "validate", manifest);
-      expect(validate.status, validate.stderr).toBe(0);
-      expect(cli(env, "lock", manifest).status).toBe(0);
-      expect(cli(env, "build", manifest).status).toBe(0);
-      const command = launcher(join(temp, "dist", "mypi"), "mypi");
-      const run = (args: string[], input?: string) =>
-        branded(command, args, { cwd: temp, env, ...(input ? { input } : {}) });
-      if (mode === "local-secret") {
-        expect((await run(["--smoke"])).stderr).toContain(
-          "CREDENTIAL_REQUIRED",
+// Every target runs the managed lifecycle above. Each personal mode needs its
+// own full build (about two minutes of npm ci on Windows), so, like the
+// repeated-build checks in cli.test.ts, they run on the qualification path.
+const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";
+
+describe.runIf(qualification)(
+  "personal access modes without enterprise identity (local fixtures)",
+  () => {
+    it.each([
+      [
+        "local-secret",
+        "provider: local-secret\n  storage:\n    provider: file",
+        "sk-personal-owner-key",
+      ],
+      ["none", "provider: none", "piship-no-credential"],
+    ])(
+      "runs identity.mode none with %s credentials",
+      async (mode, credential, acceptedKey) => {
+        const services: Services = await startLocalServices({
+          knobs: { acceptedKeys: [acceptedKey] },
+        });
+        closers.push(() => services.close());
+        const { temp, manifest, cli } = prepare("personal", (source) =>
+          source
+            .replace("schema: piship/v1alpha1", "schema: piship/v1alpha2")
+            .replace(
+              "resources:",
+              `variables:\n  - MYPI_GATEWAY_URL\nidentity:\n  mode: none\ncredential:\n  ${credential}\ninference:\n  provider: openai-compatible\n  baseUrl: \${MYPI_GATEWAY_URL}\nmodels:\n  default: acme/coder\n  allowed: [acme/coder]\n  catalog:\n    acme/coder:\n      name: Local Coder\n      contextWindow: 32000\n      maxOutputTokens: 2048\nresources:`,
+            ),
         );
-        const login = await run(["login"], `${acceptedKey}\n`);
-        expect(login.status, login.stderr).toBe(0);
-        expect(login.stdout).toContain("No identity provider is configured");
-      } else
-        expect((await run(["login"])).stdout).toContain("no stored secret");
-      const result = await run(["--smoke-model"]);
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        access: { mode: "personal", identity: null, credential: { mode } },
-        modelRequest: { text: "Hello from acme/coder.", stopReason: "stop" },
-      });
-      const chat = services.state.requests.find((item: { path: string }) =>
-        item.path.endsWith("/chat/completions"),
-      );
-      expect(chat.authorization).toBe(`Bearer ${acceptedKey}`);
-      expect(scan(join(temp, "state"), ["sk-personal-owner-key"])).toEqual([]);
-      if (mode === "local-secret") {
-        expect((await run(["logout"])).status).toBe(0);
-        expect((await run(["--smoke"])).stderr).toContain(
-          "CREDENTIAL_REQUIRED",
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          MYPI_GATEWAY_URL: services.gatewayUrl,
+          PISHIP_STATE_HOME: join(temp, "state"),
+          HOME: join(temp, "home"),
+          USERPROFILE: join(temp, "home"),
+          OPENAI_API_KEY: "sk-ambient-personal-key-e2e",
+        };
+        delete env.PISHIP_BUILD_INPUT;
+        const validate = cli(env, "validate", manifest);
+        expect(validate.status, validate.stderr).toBe(0);
+        expect(cli(env, "lock", manifest).status).toBe(0);
+        expect(cli(env, "build", manifest).status).toBe(0);
+        const command = launcher(join(temp, "dist", "mypi"), "mypi");
+        const run = (args: string[], input?: string) =>
+          branded(command, args, {
+            cwd: temp,
+            env,
+            ...(input ? { input } : {}),
+          });
+        if (mode === "local-secret") {
+          expect((await run(["--smoke"])).stderr).toContain(
+            "CREDENTIAL_REQUIRED",
+          );
+          const login = await run(["login"], `${acceptedKey}\n`);
+          expect(login.status, login.stderr).toBe(0);
+          expect(login.stdout).toContain("No identity provider is configured");
+        } else
+          expect((await run(["login"])).stdout).toContain("no stored secret");
+        const result = await run(["--smoke-model"]);
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          access: { mode: "personal", identity: null, credential: { mode } },
+          modelRequest: { text: "Hello from acme/coder.", stopReason: "stop" },
+        });
+        const chat = services.state.requests.find((item: { path: string }) =>
+          item.path.endsWith("/chat/completions"),
         );
-      }
-    },
-    600000,
-  );
-});
+        expect(chat.authorization).toBe(`Bearer ${acceptedKey}`);
+        expect(scan(join(temp, "state"), ["sk-personal-owner-key"])).toEqual(
+          [],
+        );
+        if (mode === "local-secret") {
+          expect((await run(["logout"])).status).toBe(0);
+          expect((await run(["--smoke"])).stderr).toContain(
+            "CREDENTIAL_REQUIRED",
+          );
+        }
+      },
+      600000,
+    );
+  },
+);
