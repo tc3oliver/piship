@@ -522,6 +522,21 @@ function governanceLock(
   });
   return { manifest: governance, certified, providers };
 }
+/**
+ * Check-only form of the lock-time governance checks: certified resource and
+ * capability-provider tree integrity and install-script rejection. Throws the
+ * same errors as `piship lock` and writes nothing.
+ */
+export function checkGovernance(
+  manifest: Manifest,
+  manifestPath: string,
+  resources: readonly LockedResource[] = resolveResources(
+    manifest,
+    manifestPath,
+  ),
+): void {
+  governanceLock(manifest, dirname(resolve(manifestPath)), resources);
+}
 export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);

@@ -500,6 +500,31 @@ describe("CLI", () => {
     expect(existsSync(join(temp, "piship.lock"))).toBe(false);
     expect(existsSync(join(root, "dist/managedblocked"))).toBe(false);
   });
+  it("fails validate like lock when a certified digest does not match", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-certified-"));
+    temporary.push(temp);
+    const example = join(temp, "demo-company");
+    cpSync(join(root, "examples/demo-company"), example, { recursive: true });
+    rmSync(join(example, "piship.lock"), { force: true });
+    const manifest = join(example, "piship.yaml");
+    const original = readFileSync(manifest, "utf8");
+    const reviewed = /integrity: (sha256-[0-9a-f]{64})/.exec(original)?.[1];
+    expect(reviewed).toBeDefined();
+    const tampered = `sha256-${"0".repeat(64)}`;
+    writeFileSync(manifest, original.replace(`${reviewed}`, tampered));
+    for (const command of ["validate", "lock"]) {
+      const result = cli(command, manifest);
+      expect(result.status, command).toBe(1);
+      expect(result.stderr).toContain("resources.skills.certified");
+      expect(result.stderr).toContain("Integrity mismatch");
+      expect(result.stderr).toContain("re-review it and update the integrity");
+      expect(result.stdout).not.toContain("Manifest is valid");
+    }
+    expect(existsSync(join(example, "piship.lock"))).toBe(false);
+    writeFileSync(manifest, original);
+    expect(cli("validate", manifest).status).toBe(0);
+    expect(existsSync(join(example, "piship.lock"))).toBe(false);
+  });
   it("reports invalid Pi, missing resources, and YAML errors without a stack trace", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-errors-"));
     temporary.push(temp);

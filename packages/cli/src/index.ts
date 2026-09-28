@@ -5,6 +5,7 @@ import {
   binHome,
   buildDistribution,
   buildRelease,
+  checkGovernance,
   checkPiVersion,
   checkStateMigration,
   compareReleases,
@@ -293,7 +294,8 @@ export async function runCli(
     else if (command === "validate") {
       const manifest = readManifest(target);
       checkPiVersion(manifest);
-      resolveResources(manifest, target);
+      // The same resource and governance checks as lock, without writing it.
+      checkGovernance(manifest, target, resolveResources(manifest, target));
       const variables = manifest.access?.variables ?? [];
       const missing = variables.filter((name) => !process.env[name]);
       output.stdout(
