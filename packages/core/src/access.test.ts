@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
+import { LocalMetrics } from "@piship/audit";
 import { PiShipError, SecretValue } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import { computeCapabilityStates } from "@piship/policy";
@@ -32,6 +33,7 @@ import {
   configuredModel,
   explainConfiguration,
   networkPolicyFor,
+  recordGatewayResult,
   resolveRuntimeReferences,
 } from "./access.js";
 import {
@@ -468,6 +470,119 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
   });
 });
 
+describe("access metrics (fixtures)", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  let options: Parameters<typeof DistributionAccess.open>[0];
+  let metrics: LocalMetrics;
+  let clock: number;
+  beforeEach(async () => {
+    services = await startLocalServices();
+    metrics = new LocalMetrics(join(temp, "state"));
+    clock = Date.now();
+    options = {
+      app: demo.app as Manifest["app"],
+      mode: "managed",
+      access: {
+        ...access,
+        identity: {
+          ...access.identity,
+          oidc: {
+            ...(access.identity as { oidc: object }).oidc,
+            redirectUri: "http://127.0.0.1/callback",
+          },
+        },
+      } as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: services.env(),
+      secretStore: new MemorySecretStore(),
+      // Each read of the clock advances it, so every duration is positive.
+      now: () => (clock += 5),
+      metrics,
+    };
+  });
+  afterEach(() => services.close());
+
+  it("records identity and credential durations, gateway reachability, and the live catalog", async () => {
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    // Sign-in and the broker acquisition.
+    expect(metrics.snapshot().latency).toMatchObject({
+      identity: { count: 1 },
+      "credential.acquire": { count: 1 },
+    });
+    const activated = await DistributionAccess.open(options).activate();
+    const snapshot = metrics.snapshot();
+    // The session check is timed; reusing the stored credential is not.
+    expect(snapshot.latency?.identity?.count).toBe(2);
+    expect(snapshot.latency?.["credential.acquire"]?.count).toBe(1);
+    expect(snapshot.latency?.["credential.refresh"]).toBeUndefined();
+    expect(snapshot.gateway).toMatchObject({
+      reachable: true,
+      reachableCount: 1,
+      unreachableCount: 0,
+    });
+    expect(snapshot.modelCatalog?.models).toBe(activated.models.length);
+    await DistributionAccess.open(options).requestSecret({ force: true });
+    expect(metrics.snapshot().latency?.["credential.refresh"]?.count).toBe(1);
+    // Metadata only: no token, credential, URL, or subject.
+    const text = JSON.stringify(metrics.snapshot());
+    for (const secret of [
+      ...services.state.credentials.keys(),
+      ...services.state.accessTokens.keys(),
+    ])
+      expect(text).not.toContain(secret);
+    expect(text).not.toContain("127.0.0.1");
+    expect(text).not.toContain("demo-user-1");
+  });
+
+  it("records an unreachable gateway by error code and a doctor probe", async () => {
+    await DistributionAccess.open(options).login({
+      openUrl: (url) => void services.approve(url),
+    });
+    // Doctor probes after activation, which fetched the live catalog once.
+    const doctor = DistributionAccess.open(options);
+    await doctor.activate();
+    expect(await doctor.probeGateway()).toContain("acme/coder");
+    expect(metrics.snapshot().gateway?.reachableCount).toBe(2);
+    const unreachable = DistributionAccess.open({
+      ...options,
+      env: {
+        ...services.env(),
+        ACMECODE_LLM_GATEWAY_URL: "http://127.0.0.1:1/gateway/v1",
+      },
+    });
+    await expect(unreachable.activate()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+    });
+    expect(metrics.snapshot().gateway).toMatchObject({
+      reachable: false,
+      code: "GATEWAY_UNREACHABLE",
+      reachableCount: 2,
+      unreachableCount: 1,
+    });
+    expect(metrics.snapshot().gateway?.lastReachableAt).toBeDefined();
+    expect(metrics.snapshot().modelCatalog?.models).toBe(3);
+  });
+
+  it("classifies gateway answers as reachable and transport failures as not", () => {
+    const local = new LocalMetrics(temp);
+    recordGatewayResult(local, new PiShipError("CREDENTIAL_REVOKED", "401"));
+    expect(local.snapshot().gateway?.reachable).toBe(true);
+    recordGatewayResult(local, new PiShipError("NETWORK_DENIED", "denied"));
+    expect(local.snapshot().gateway).toMatchObject({
+      reachable: false,
+      code: "NETWORK_DENIED",
+    });
+    recordGatewayResult(local, new Error("timeout"));
+    expect(local.snapshot().gateway).toMatchObject({
+      reachable: false,
+      code: "UNKNOWN",
+    });
+    recordGatewayResult(undefined, new Error("ignored"));
+  });
+});
+
 describe("credential adapters", () => {
   let services: Awaited<ReturnType<typeof startLocalServices>>;
   beforeEach(async () => {
@@ -550,6 +665,29 @@ describe("credential adapters", () => {
     });
     expect(typeof context.fetch).toBe("function");
     expect(JSON.stringify(context)).not.toContain("sk-adapter");
+  });
+
+  it("counts adapter load failures as provider load failures", async () => {
+    const metrics = new LocalMetrics(join(temp, "state"));
+    const distribution = DistributionAccess.open({
+      ...open("./adapters/missing.mjs").options,
+      metrics,
+    });
+    await expect(distribution.activate()).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+    });
+    write("throws.mjs", "throw new Error('adapter crashed');");
+    await expect(
+      DistributionAccess.open({
+        ...open("./adapters/throws.mjs").options,
+        metrics,
+      }).activate(),
+    ).rejects.toThrow("adapter crashed");
+    expect(metrics.snapshot().providerLoadFailures).toEqual({
+      CONFIG_INVALID: 1,
+      UNKNOWN: 1,
+    });
+    expect(metrics.snapshot().resourceLoadFailures).toBeUndefined();
   });
 
   it("fails visibly for a missing or malformed adapter", async () => {

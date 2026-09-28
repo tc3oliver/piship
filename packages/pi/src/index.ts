@@ -82,6 +82,7 @@ import {
   inspectGovernance,
 } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
+import { launchMetrics, saveMetrics } from "./launch-metrics.js";
 
 export {
   governModelRuntime,
@@ -125,6 +126,7 @@ interface LaunchContext {
 function openAccess(
   ctx: LaunchContext,
   onEvent?: (event: AccessEvent) => void,
+  metrics?: LocalMetrics,
 ): DistributionAccess {
   const capabilities = ctx.metadata.governance?.manifest.capabilities;
   return DistributionAccess.open({
@@ -135,6 +137,7 @@ function openAccess(
     distributionDir: ctx.distributionDir,
     ...(capabilities ? { capabilities } : {}),
     ...(onEvent ? { onEvent } : {}),
+    ...(metrics ? { metrics } : {}),
   });
 }
 
@@ -272,6 +275,7 @@ function isolatedCredentialStore() {
 }
 
 interface PreparedAccess {
+  readonly metrics: LocalMetrics | undefined;
   readonly access: DistributionAccess | null;
   readonly activated: ActivatedAccess | null;
   readonly removedEnvironment: readonly string[];
@@ -282,6 +286,7 @@ async function prepareAccess(
   ctx: LaunchContext,
   requestedModel: string | undefined,
 ): Promise<PreparedAccess> {
+  const metrics = launchMetrics(ctx.metadata, ctx.stateDir, VERSION);
   if (!ctx.metadata.access) {
     if (requestedModel && !/^[^/]+\/.+$/.test(requestedModel))
       throw new PiShipError(
@@ -289,6 +294,7 @@ async function prepareAccess(
         "Use --model provider/model for Pi-native distributions",
       );
     return {
+      metrics,
       access: null,
       activated: null,
       removedEnvironment: [],
@@ -298,7 +304,7 @@ async function prepareAccess(
   // Refuse before sanitizing: silently dropping a disabled-TLS setting would hide it.
   assertTlsVerificationEnabled();
   const events = new AccessEvents();
-  const access = openAccess(ctx, events.listener);
+  const access = openAccess(ctx, events.listener, metrics);
   let removedEnvironment: string[] = [];
   if (ctx.mode === "managed")
     removedEnvironment = sanitizeManagedEnvironment(
@@ -307,10 +313,14 @@ async function prepareAccess(
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
-  const activated = await access.activate(
-    requestedModel ? { requestedModel } : {},
-  );
-  return { access, activated, removedEnvironment, events };
+  try {
+    const activated = await access.activate(
+      requestedModel ? { requestedModel } : {},
+    );
+    return { metrics, access, activated, removedEnvironment, events };
+  } finally {
+    saveMetrics(metrics);
+  }
 }
 
 async function createModelRuntime(
@@ -407,9 +417,10 @@ function governanceOptions(
   prepared: PreparedAccess | null,
   interactive: boolean,
 ): GovernanceOptions {
-  const { access, activated } = prepared ?? {};
+  const { access, activated, metrics } = prepared ?? {};
   return {
     lock,
+    ...(metrics ? { metrics } : {}),
     distributionDir: ctx.distributionDir,
     stateDir: ctx.stateDir,
     cwd: process.cwd(),
@@ -687,11 +698,15 @@ async function startRuntime(
     });
     await resourceLoader.reload();
     const extensionErrors = resourceLoader.getExtensions().errors;
+    const themeDiagnostics = resourceLoader.getThemes().diagnostics;
+    // Counted before the launch fails; Pi reports these without a PiShip code.
+    const loadFailures = extensionErrors.length + themeDiagnostics.length;
+    for (let index = 0; index < loadFailures; index += 1)
+      prepared.metrics?.recordLoadFailure("resource", "UNKNOWN");
     if (extensionErrors.length)
       throw new Error(
         `Pi extension load failed: ${extensionErrors.map((item) => item.error).join("; ")}`,
       );
-    const themeDiagnostics = resourceLoader.getThemes().diagnostics;
     if (themeDiagnostics.length)
       throw new Error(
         `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
@@ -919,6 +934,8 @@ async function runSmoke(
   } finally {
     await runtime.dispose();
     await gov?.close();
+    // Credential refreshes during the session land in the same metrics.
+    saveMetrics(prepared.metrics);
     publishContext(null);
   }
 }
@@ -933,6 +950,7 @@ async function startGoverned(
     return await startRuntime(ctx, prepared, sessionDir, gov);
   } catch (error) {
     await gov?.close();
+    saveMetrics(prepared.metrics);
     throw error;
   }
 }
@@ -1002,6 +1020,8 @@ async function runInteractive(
   } finally {
     await runtime.dispose();
     await gov?.close();
+    // Credential refreshes during the session land in the same metrics.
+    saveMetrics(prepared.metrics);
     publishContext(null);
   }
 }
@@ -1017,7 +1037,8 @@ async function runLogin(ctx: LaunchContext): Promise<void> {
     );
   assertTlsVerificationEnabled();
   const events: AccessEvent[] = [];
-  const access = openAccess(ctx, (event) => events.push(event));
+  const metrics = LocalMetrics.load(ctx.stateDir);
+  const access = openAccess(ctx, (event) => events.push(event), metrics);
   if (ctx.mode === "managed")
     sanitizeManagedEnvironment(
       process.env,
@@ -1025,13 +1046,15 @@ async function runLogin(ctx: LaunchContext): Promise<void> {
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
-  const result = await access.login({
-    openUrl: (url) => {
-      ctx.err(`Open this URL in your browser to sign in:\n${url}`);
-      openBrowser(url);
-    },
-    readSecret: readSecretInput,
-  });
+  const result = await access
+    .login({
+      openUrl: (url) => {
+        ctx.err(`Open this URL in your browser to sign in:\n${url}`);
+        openBrowser(url);
+      },
+      readSecret: readSecretInput,
+    })
+    .finally(() => saveMetrics(metrics));
   await auditAccess(ctx, access, result.identity?.subject ?? null, events);
   const identity = result.identity
     ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
@@ -1760,8 +1783,9 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
     tlsError = error;
   }
   let opened: DistributionAccess | undefined;
+  const metrics = LocalMetrics.load(ctx.stateDir);
   try {
-    opened = openAccess(ctx);
+    opened = openAccess(ctx, undefined, metrics);
     if (ctx.mode === "managed")
       sanitizeManagedEnvironment(process.env, opened.network, access.variables);
   } catch (error) {
@@ -1816,18 +1840,13 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
         applyProcessNetworkPolicy(opened.network);
         activated = await opened.activate();
         ok("provider", access.inference.provider);
-        if (activated.runtime.kind === "managed-endpoint") {
-          const inference = opened.inferenceProvider() as {
-            probe?: () => Promise<string[]>;
-          };
-          if (inference.probe)
-            try {
-              const listed = await inference.probe();
-              ok("gateway", `reachable (${listed.length} listed)`);
-            } catch (error) {
-              bad("gateway", formatError(error));
-            }
-        }
+        if (activated.runtime.kind === "managed-endpoint")
+          try {
+            const listed = await opened.probeGateway();
+            if (listed) ok("gateway", `reachable (${listed.length} listed)`);
+          } catch (error) {
+            bad("gateway", formatError(error));
+          }
         ok(
           "models",
           `${activated.config.allowedModels.length} allowed; default ${activated.selectedModel ?? "Pi default"}`,
@@ -1835,6 +1854,8 @@ async function runDoctor(ctx: LaunchContext): Promise<void> {
       } catch (error) {
         bad("activation", formatError(error));
       }
+    // Saved before the governance checks load the metrics again.
+    saveMetrics(metrics);
   }
   lines.push("", "Security");
   if (tlsError) bad("TLS verification", "DISABLED in environment");

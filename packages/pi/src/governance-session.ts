@@ -88,6 +88,11 @@ export interface GovernanceOptions {
    * requirements against; absent means unknown and meets no requirement.
    */
   readonly model?: ModelEvidence;
+  /**
+   * The launch's local metrics, shared with access so one save holds both;
+   * loaded from the state directory when absent.
+   */
+  readonly metrics?: LocalMetrics;
 }
 
 /** Evidence for one declared, builtin, or project resource. */
@@ -602,7 +607,7 @@ export class GovernanceSession {
   static async open(options: GovernanceOptions): Promise<GovernanceSession> {
     const started = Date.now();
     const manifest = options.lock.governance.manifest;
-    const metrics = LocalMetrics.load(options.stateDir);
+    const metrics = options.metrics ?? LocalMetrics.load(options.stateDir);
     const homeDir = options.homeDir ?? homedir();
     let audit: AuditLog | undefined;
     let sandbox: ActiveSandbox | undefined;
@@ -835,19 +840,23 @@ export class GovernanceSession {
     let integrity: ResourceEvidence["integrity"] = "not-applicable";
     let compatible = true;
     if (item.class === "certified") {
-      if (!certified)
+      if (!certified) {
+        this.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
         throw new PiShipError(
           "INTEGRITY_FAILED",
           `No certified evidence is locked for ${item.path}`,
           { userAction: "Re-lock and rebuild the distribution" },
         );
+      }
       const found = payloadTree(resourceDir, item.path);
-      if (found !== certified.integrity)
+      if (found !== certified.integrity) {
+        this.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
         throw new PiShipError(
           "INTEGRITY_FAILED",
           `Certified resource ${item.path} does not match its reviewed integrity`,
           { userAction: "Reinstall the distribution from a trusted artifact" },
         );
+      }
       integrity = "verified";
       const evidence = certified.evidence;
       compatible =
@@ -1165,6 +1174,7 @@ export class GovernanceSession {
       this.loader.builtin.has("piship-workflow") ||
       this.#providerExtension("workflow") !== undefined;
     const states = capabilityStates(this.options, workflowLoaded());
+    const { verification } = providerEvidence(this.options);
     const denied: Record<string, string> = {};
     const channel = this.startupChannel();
     for (const state of states) {
@@ -1173,6 +1183,12 @@ export class GovernanceSession {
       );
       if (!provider || provider.class === "builtin") continue;
       if (state.axes.effective.value !== "yes") {
+        // Files that do not match the lock are a load failure, not a decision.
+        if (
+          state.axes.enabled.value === "yes" &&
+          verification[provider.id]?.ok === false
+        )
+          this.metrics.recordLoadFailure("provider", "INTEGRITY_FAILED");
         this.emit("provider.denied", {
           resource: provider.id,
           detail: { capability: state.name, version: provider.version },

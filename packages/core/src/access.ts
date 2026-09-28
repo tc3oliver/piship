@@ -9,6 +9,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { LocalMetrics } from "@piship/audit";
 import {
   type CredentialContext,
   type CredentialProvider,
@@ -261,6 +262,49 @@ function writeJsonAtomic(path: string, value: unknown): void {
 }
 
 /**
+ * The local metrics access records: identity and credential durations, gateway
+ * reachability, live catalog fetches, and adapter load failures. Only numbers
+ * and PiShip error codes cross this boundary; `LocalMetrics` implements it.
+ */
+export type AccessMetrics = Pick<
+  LocalMetrics,
+  | "recordIdentityLatency"
+  | "recordCredentialLatency"
+  | "recordGatewayReachability"
+  | "recordModelCatalogFetch"
+  | "recordLoadFailure"
+>;
+
+/** Error codes that mean the gateway did not answer at all. */
+const GATEWAY_UNREACHABLE_CODES = new Set<string>([
+  "GATEWAY_UNREACHABLE",
+  "NETWORK_DENIED",
+  "TLS_POLICY_VIOLATION",
+]);
+
+/**
+ * Record the result of a gateway probe. A gateway that answered, even with a
+ * rejection (401, 403, 429, a malformed list), is reachable; transport
+ * failures, destination refusals, and timeouts are not.
+ */
+export function recordGatewayResult(
+  metrics: Pick<AccessMetrics, "recordGatewayReachability"> | undefined,
+  error?: unknown,
+): void {
+  if (!metrics) return;
+  try {
+    if (error === undefined) metrics.recordGatewayReachability(true);
+    else if (!(error instanceof PiShipError))
+      metrics.recordGatewayReachability(false, "UNKNOWN");
+    else if (GATEWAY_UNREACHABLE_CODES.has(error.code))
+      metrics.recordGatewayReachability(false, error.code);
+    else metrics.recordGatewayReachability(true);
+  } catch {
+    // Metrics never break access.
+  }
+}
+
+/**
  * Metadata-only access lifecycle event, emitted as it happens. Details never
  * contain token or credential text.
  */
@@ -344,6 +388,8 @@ export interface AccessOptions {
   readonly capabilities?: readonly CapabilityConfig[];
   /** Receives identity and credential lifecycle events; failures are ignored. */
   readonly onEvent?: (event: AccessEvent) => void;
+  /** Local operational metrics; recorder failures are ignored. */
+  readonly metrics?: AccessMetrics;
 }
 
 export interface ActivatedAccess {
@@ -386,6 +432,8 @@ export class DistributionAccess {
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
   #secret: SecretValue | null = null;
+  /** The last acquire or refresh the credential manager reported. */
+  #credentialChange: CredentialEvent["event"] | undefined;
   readonly #now: () => number;
 
   private constructor(readonly options: AccessOptions) {
@@ -439,6 +487,122 @@ export class DistributionAccess {
     }
   }
 
+  #metric(record: (metrics: AccessMetrics) => void): void {
+    const metrics = this.options.metrics;
+    if (!metrics) return;
+    try {
+      record(metrics);
+    } catch {
+      // Metrics never break sign-in, launch, or sign-out.
+    }
+  }
+
+  /** Load an identity or credential adapter, counting a failure by its code. */
+  async #loadAdapter<T>(path: string, kind: string): Promise<T> {
+    try {
+      return await loadAdapter<T>(
+        this.options.distributionDir,
+        path,
+        kind,
+        this.#context(),
+      );
+    } catch (error) {
+      this.#metric((metrics) =>
+        metrics.recordLoadFailure(
+          "provider",
+          error instanceof PiShipError ? error.code : "UNKNOWN",
+        ),
+      );
+      throw error;
+    }
+  }
+
+  /** Time an identity sign-in or session check that produced a session. */
+  async #timedIdentity<T>(task: () => Promise<T>): Promise<T> {
+    const started = this.#now();
+    const result = await task();
+    if (result)
+      this.#metric((metrics) =>
+        metrics.recordIdentityLatency(this.#now() - started),
+      );
+    return result;
+  }
+
+  /**
+   * Ensure the runtime credential and, when that acquired or refreshed an
+   * organization-issued credential, record how long it took. Reusing a stored
+   * credential is not an acquisition, and a user-entered secret measures the
+   * person, not the system, so neither is recorded.
+   */
+  async #ensureCredential(
+    manager: CredentialManager,
+    identity: IdentitySession | null,
+    ctx: CredentialContext,
+    options: { allowAcquire: boolean; forceRefresh?: boolean },
+  ): Promise<ActiveCredential> {
+    const started = this.#now();
+    this.#credentialChange = undefined;
+    const active = await manager.ensure(identity, ctx, options);
+    const change = this.#credentialChange;
+    this.#credentialChange = undefined;
+    if (
+      manager.renewable &&
+      (change === "credential.acquire" || change === "credential.refresh")
+    )
+      this.#metric((metrics) =>
+        metrics.recordCredentialLatency(
+          change === "credential.acquire" ? "acquire" : "refresh",
+          this.#now() - started,
+        ),
+      );
+    return active;
+  }
+
+  /**
+   * List the catalog. A live catalog is fetched from the gateway, so its
+   * result is also the gateway's reachability and a catalog fetch.
+   */
+  async #listModels(
+    inference: InferenceProvider,
+    identity: IdentitySession | null,
+    credential: CredentialRef | null,
+  ): Promise<ModelDefinition[]> {
+    const live =
+      inference.kind === "openai-compatible" &&
+      !!this.options.access?.inference.liveCatalog;
+    try {
+      const models = await inference.listModels(identity, credential);
+      if (live) {
+        recordGatewayResult(this.options.metrics);
+        this.#metric((metrics) =>
+          metrics.recordModelCatalogFetch(models.length),
+        );
+      }
+      return models;
+    } catch (error) {
+      if (live) recordGatewayResult(this.options.metrics, error);
+      throw error;
+    }
+  }
+
+  /**
+   * GET the gateway model list (doctor), recording reachability. Undefined
+   * when inference is not an OpenAI-compatible endpoint.
+   */
+  async probeGateway(): Promise<string[] | undefined> {
+    const inference = this.inferenceProvider();
+    if (!(inference instanceof OpenAICompatibleInferenceProvider))
+      return undefined;
+    try {
+      const listed = await inference.probe();
+      recordGatewayResult(this.options.metrics);
+      return listed;
+    } catch (error) {
+      recordGatewayResult(this.options.metrics, error);
+      throw error;
+    }
+  }
+
   #context(): AdapterContext {
     return {
       distributionId: this.options.app.id,
@@ -453,12 +617,7 @@ export class DistributionAccess {
     if (!identity || identity.mode === "none") this.#identity = null;
     else if (identity.mode === "adapter")
       this.#identity = normalizedIdentityProvider(
-        await loadAdapter<IdentityProvider>(
-          this.options.distributionDir,
-          identity.adapter,
-          "identity",
-          this.#context(),
-        ),
+        await this.#loadAdapter<IdentityProvider>(identity.adapter, "identity"),
       );
     else
       this.#identity = new OidcPkceIdentityProvider({
@@ -494,11 +653,9 @@ export class DistributionAccess {
       provider = new LocalSecretCredentialProvider();
     else if (mode === "none") provider = new NoCredentialProvider();
     else if (mode === "adapter")
-      provider = await loadAdapter<CredentialProvider>(
-        this.options.distributionDir,
+      provider = await this.#loadAdapter<CredentialProvider>(
         access?.credential.adapter ?? "",
         "credential",
-        this.#context(),
       );
     else provider = new PiNativeCredentialProvider();
     if (provider.requiresIdentity && this.identityMode === "none")
@@ -519,7 +676,11 @@ export class DistributionAccess {
       beforeExpirySeconds:
         access?.credential.refresh.beforeExpirySeconds ?? 300,
       now: this.#now,
-      onEvent: (event) => this.#emit(event.event, event.detail),
+      onEvent: (event) => {
+        if (event.event !== "credential.revoke")
+          this.#credentialChange = event.event;
+        this.#emit(event.event, event.detail);
+      },
     });
     return this.#credential;
   }
@@ -578,6 +739,13 @@ export class DistributionAccess {
   }): Promise<IdentitySession | null> {
     const provider = await this.identityProvider();
     if (!provider) return null;
+    return this.#timedIdentity(() => this.#checkIdentity(provider, options));
+  }
+
+  async #checkIdentity(
+    provider: IdentityProvider,
+    options: { required: boolean },
+  ): Promise<IdentitySession | null> {
     const metadata = this.readIdentityMetadata();
     if (!metadata) {
       if (existsSync(this.paths.identity)) {
@@ -704,10 +872,12 @@ export class DistributionAccess {
     const provider = await this.identityProvider();
     let identity: IdentitySession | null = null;
     if (provider) {
-      identity = await provider.login({
-        openUrl: ctx.openUrl,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
+      identity = await this.#timedIdentity(() =>
+        provider.login({
+          openUrl: ctx.openUrl,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        }),
+      );
       await this.#storeIdentity(identity);
       this.#emit("identity.login", {
         expiresAt: identity.expiresAt?.toISOString() ?? null,
@@ -725,7 +895,8 @@ export class DistributionAccess {
         notices.push(
           `The previous credential was not fully cleared: ${problem}`,
         );
-      const active = await manager.ensure(
+      const active = await this.#ensureCredential(
+        manager,
         identity,
         this.#credentialContext(ctx.readSecret),
         { allowAcquire: true },
@@ -787,11 +958,16 @@ export class DistributionAccess {
     const identity = await this.currentIdentity({ required: identityRequired });
     let credential: ActiveCredential;
     try {
-      credential = await manager.ensure(identity, this.#credentialContext(), {
-        allowAcquire:
-          this.credentialMode === "http-broker" ||
-          this.credentialMode === "adapter",
-      });
+      credential = await this.#ensureCredential(
+        manager,
+        identity,
+        this.#credentialContext(),
+        {
+          allowAcquire:
+            this.credentialMode === "http-broker" ||
+            this.credentialMode === "adapter",
+        },
+      );
     } catch (error) {
       if (
         error instanceof PiShipError &&
@@ -799,7 +975,8 @@ export class DistributionAccess {
         identity
       ) {
         const refreshed = await this.#refreshIdentity(identity);
-        credential = await manager.ensure(
+        credential = await this.#ensureCredential(
+          manager,
           refreshed,
           this.#credentialContext(),
           { allowAcquire: true },
@@ -817,7 +994,7 @@ export class DistributionAccess {
     const inference = this.inferenceProvider(preferences.modelsAllowed);
     let models: ModelDefinition[];
     try {
-      models = await inference.listModels(identity, credential.ref);
+      models = await this.#listModels(inference, identity, credential.ref);
     } catch (error) {
       // A gateway rejection of a stored credential gets one automatic renewal.
       if (
@@ -854,7 +1031,7 @@ export class DistributionAccess {
             }
           : credential.ref,
       };
-      models = await inference.listModels(identity, credential.ref);
+      models = await this.#listModels(inference, identity, credential.ref);
     }
     config = resolveEffectiveConfig(
       access,
@@ -964,7 +1141,9 @@ export class DistributionAccess {
           userAction: `Run ${this.options.app.command} login`,
         },
       );
-    return this.#refreshShared(provider, identity, "rejected");
+    return this.#timedIdentity(() =>
+      this.#refreshShared(provider, identity, "rejected"),
+    );
   }
 
   /**
@@ -998,12 +1177,17 @@ export class DistributionAccess {
       required: manager.options.provider.requiresIdentity,
     });
     try {
-      const active = await manager.ensure(identity, this.#credentialContext(), {
-        allowAcquire:
-          this.credentialMode === "http-broker" ||
-          this.credentialMode === "adapter",
-        ...(options.force ? { forceRefresh: true } : {}),
-      });
+      const active = await this.#ensureCredential(
+        manager,
+        identity,
+        this.#credentialContext(),
+        {
+          allowAcquire:
+            this.credentialMode === "http-broker" ||
+            this.credentialMode === "adapter",
+          ...(options.force ? { forceRefresh: true } : {}),
+        },
+      );
       this.#secret = active.secret;
     } catch (error) {
       if (
@@ -1012,7 +1196,8 @@ export class DistributionAccess {
         identity
       ) {
         const refreshed = await this.#refreshIdentity(identity);
-        const active = await manager.ensure(
+        const active = await this.#ensureCredential(
+          manager,
           refreshed,
           this.#credentialContext(),
           {
