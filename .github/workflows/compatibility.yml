@@ -55,6 +55,7 @@ jobs:
           "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
           "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
           "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+          "npm_config_prefer_offline=true" >> $env:GITHUB_ENV
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
