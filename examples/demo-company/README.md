@@ -2,7 +2,7 @@
 
 AcmeCode is a fictional managed distribution on `piship/v1alpha4`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. On top of that access layer it declares governance: a company policy, trust-classed resources, a governed MCP server, a Plan/Build workflow, a required OS sandbox, and audit. It also declares signed release channels and a release policy. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
 
-The managed surface and the release lifecycle are **candidates**, and governance is a preview: all are verified with the deterministic local fixtures below, not with a live identity provider or gateway. See [status](../../docs/status.md) for the current evidence and [compatibility](../../docs/compatibility.md) for the Pi contract.
+The managed surface, governance, and the release lifecycle are **candidates**: all are verified with the deterministic local fixtures below, not with a live identity provider or gateway. See [status](../../docs/status.md) for the current evidence and [compatibility](../../docs/compatibility.md) for the Pi contract.
 
 ## What the demo shows
 
