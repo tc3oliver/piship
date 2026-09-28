@@ -1,10 +1,8 @@
-import { createHash } from "node:crypto";
 import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,13 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildDistribution,
   distributionStateDirectory,
   lockManifest,
   requireCurrentLock,
   resolveLock,
   runtimeStateDirectory,
-  verifyPayload,
 } from "./index.js";
 const roots: string[] = [];
 function fixture() {
@@ -64,41 +60,12 @@ describe("distribution core", () => {
       lock.resources[0]?.sha256,
     );
   });
-  it("builds a branded output only for a current lock", () => {
-    const { dir, path } = fixture();
-    expect(() => buildDistribution(path, join(dir, "out"))).toThrow(
-      "Lockfile missing",
-    );
+  it("requires a current lock before building", () => {
+    const { path } = fixture();
+    expect(() => requireCurrentLock(path)).toThrow("Lockfile missing");
     lockManifest(path);
-    const output = buildDistribution(path, join(dir, "out"));
-    expect(
-      readFileSync(join(output, "resources/resources/AGENTS.md"), "utf8"),
-    ).toBe("first\n");
-    expect(readFileSync(join(output, "bin/mypi"), "utf8")).toContain(
-      "launchPiDistribution",
-    );
-    expect(readFileSync(join(output, "bin/mypi.cmd"), "utf8")).toContain(
-      "node",
-    );
-    if (process.platform !== "win32")
-      expect(statSync(join(output, "bin/mypi")).mode & 0o111).not.toBe(0);
-    expect(verifyPayload(output).app.id).toBe("mypi");
-    const targetPath = join(output, "metadata", "target.json");
-    writeFileSync(
-      targetPath,
-      JSON.stringify({ platform: "unsupported", arch: "unknown" }),
-    );
-    const inventoryPath = join(output, "metadata", "inventory.json");
-    const inventory = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
-      string,
-      string
-    >;
-    inventory["metadata/target.json"] = createHash("sha256")
-      .update(readFileSync(targetPath))
-      .digest("hex");
-    writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
-    expect(() => verifyPayload(output)).toThrow("does not match this machine");
-  }, 120000);
+    expect(requireCurrentLock(path).app.id).toBe("mypi");
+  });
   it("rejects resource roots and nested symlinks during locking", () => {
     const { dir, path } = fixture();
     writeFileSync(

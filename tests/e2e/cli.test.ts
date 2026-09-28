@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -8,6 +9,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -115,6 +117,17 @@ describe("CLI", () => {
     expect(acceptance.status, acceptance.stderr).toBe(0);
     expect(acceptance.stdout).toContain("Personal acceptance passed");
     const built = join(temp, "dist", "mypi");
+    expect(
+      readFileSync(join(built, "resources", "resources", "AGENTS.md"), "utf8"),
+    ).toContain("MyPi");
+    expect(readFileSync(join(built, "bin", "mypi"), "utf8")).toContain(
+      "launchPiDistribution",
+    );
+    expect(readFileSync(join(built, "bin", "mypi.cmd"), "utf8")).toContain(
+      "node",
+    );
+    if (process.platform !== "win32")
+      expect(statSync(join(built, "bin", "mypi")).mode & 0o111).not.toBe(0);
     const firstInventory = readFileSync(
       join(built, "metadata", "inventory.json"),
     );
@@ -366,6 +379,30 @@ describe("CLI", () => {
         expect(launch().stderr).toContain("integrity mismatch");
       writeFileSync(path, content);
     }
+    const targetPath = join(payload, "metadata", "target.json");
+    const inventoryPath = join(payload, "metadata", "inventory.json");
+    const originalTarget = readFileSync(targetPath);
+    const originalInventory = readFileSync(inventoryPath);
+    writeFileSync(
+      targetPath,
+      JSON.stringify({ platform: "unsupported", arch: "unknown" }),
+    );
+    const changedInventory = JSON.parse(originalInventory.toString()) as Record<
+      string,
+      string
+    >;
+    changedInventory["metadata/target.json"] = createHash("sha256")
+      .update(readFileSync(targetPath))
+      .digest("hex");
+    writeFileSync(
+      inventoryPath,
+      `${JSON.stringify(changedInventory, null, 2)}\n`,
+    );
+    expect(command("doctor", "mypi").stderr).toContain(
+      "does not match this machine",
+    );
+    writeFileSync(targetPath, originalTarget);
+    writeFileSync(inventoryPath, originalInventory);
     expect(command("uninstall", "mypi").status).toBe(0);
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(installedCommand)).toBe(false);
