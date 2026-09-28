@@ -188,6 +188,7 @@ const allowedOptions: Record<string, readonly string[]> = {
   init: ["--managed"],
   migrate: ["--write"],
   test: ["--model-request"],
+  dev: ["--smoke"],
 };
 export interface CliOutput {
   readonly stdout: (message: string) => void;
@@ -411,13 +412,17 @@ export async function runCli(
     } else if (command === "dev" || command === "test") {
       const artifact = buildDistribution(target);
       const lock = requireCurrentLock(target);
+      // `dev --smoke` runs the same isolated launch headlessly, for scripts.
+      const interactive = command === "dev" && rest[0] !== "--smoke";
       const result = runLauncher(
         artifact,
         lock.app.command,
         command === "test"
           ? [rest[0] === "--model-request" ? "--smoke-model" : "--smoke"]
-          : [],
-        command === "dev",
+          : interactive
+            ? []
+            : ["--smoke"],
+        interactive,
       );
       if (result.status !== 0)
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
@@ -425,6 +430,7 @@ export async function runCli(
         output.stdout(
           `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed: ${result.stdout.trim()}`,
         );
+      else if (!interactive) output.stdout(result.stdout.trim());
     } else if (command === "doctor") {
       const artifact = artifactFor(target);
       const app = payloadApp(artifact);
