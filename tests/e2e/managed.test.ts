@@ -134,6 +134,29 @@ function prepare(example: string, patch: (source: string) => string) {
   return { temp, directory, manifest, cli };
 }
 
+const PERSONAL_V1ALPHA1 = [
+  "schema: piship/v1alpha1",
+  "app:",
+  "  id: mypi",
+  "  name: MyPi",
+  "  command: mypi",
+  "  version: 1.0.0",
+  "runtime:",
+  '  pi: "0.87.1"',
+  "deployment:",
+  "  mode: personal",
+  "resources:",
+  "  instructions:",
+  "    - ./resources/AGENTS.md",
+  "  skills:",
+  "    - ./resources/skills",
+  "  extensions:",
+  "    - ./resources/extensions/demo",
+  "  prompts:",
+  "    - ./resources/prompts",
+  "",
+].join("\n");
+
 describe("managed distribution (local fixtures)", () => {
   it("initializes, locks, builds, logs in, enforces policy, resumes, and logs out", async () => {
     const services: Services = await startLocalServices();
@@ -166,11 +189,11 @@ describe("managed distribution (local fixtures)", () => {
     const freshValidate = cli(env, "validate", join(fresh, "piship.yaml"));
     expect(freshValidate.status, freshValidate.stderr).toBe(0);
     expect(freshValidate.stdout).toContain(
-      "Schema piship/v1alpha2, mode managed.",
+      "Schema piship/v1alpha4, mode managed.",
     );
     expect(cli(env, "lock", join(fresh, "piship.yaml")).status).toBe(0);
     const freshLock = readFileSync(join(fresh, "piship.lock"), "utf8");
-    expect(freshLock).toContain('"schema": "piship-lock/v1alpha2"');
+    expect(freshLock).toContain('"schema": "piship-lock/v1alpha4"');
     expect(freshLock).toContain(`\${FRESH_AGENT_LLM_GATEWAY_URL}`);
 
     // Demo company: lock records templates only, never resolved endpoints or secrets.
@@ -431,13 +454,15 @@ describe.runIf(qualification)(
           knobs: { acceptedKeys: [acceptedKey] },
         });
         closers.push(() => services.close());
-        const { temp, manifest, cli } = prepare("personal", (source) =>
-          source
-            .replace("schema: piship/v1alpha1", "schema: piship/v1alpha2")
-            .replace(
-              "resources:",
-              `variables:\n  - MYPI_GATEWAY_URL\nidentity:\n  mode: none\ncredential:\n  ${credential}\ninference:\n  provider: openai-compatible\n  baseUrl: \${MYPI_GATEWAY_URL}\nmodels:\n  default: acme/coder\n  allowed: [acme/coder]\n  catalog:\n    acme/coder:\n      name: Local Coder\n      contextWindow: 32000\n      maxOutputTokens: 2048\nresources:`,
-            ),
+        // The personal example's resources on the v0.2 access schema.
+        const { temp, manifest, cli } = prepare("personal", () =>
+          PERSONAL_V1ALPHA1.replace(
+            "schema: piship/v1alpha1",
+            "schema: piship/v1alpha2",
+          ).replace(
+            "resources:",
+            `variables:\n  - MYPI_GATEWAY_URL\nidentity:\n  mode: none\ncredential:\n  ${credential}\ninference:\n  provider: openai-compatible\n  baseUrl: \${MYPI_GATEWAY_URL}\nmodels:\n  default: acme/coder\n  allowed: [acme/coder]\n  catalog:\n    acme/coder:\n      name: Local Coder\n      contextWindow: 32000\n      maxOutputTokens: 2048\nresources:`,
+          ),
         );
         const env: NodeJS.ProcessEnv = {
           ...process.env,
