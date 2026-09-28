@@ -1,4 +1,4 @@
-schema: piship/v1alpha1
+schema: piship/v1alpha4
 
 app:
   id: mypi
@@ -14,14 +14,76 @@ runtime:
 deployment:
   mode: personal
 
+# The only runtime variable: where `mypi update` reads the signed channel.
+# It is resolved when `update` runs, never at launch.
+variables:
+  - MYPI_UPDATE_SOURCE
+
+# No enterprise identity, broker, or gateway: Pi's own providers and sign-in,
+# kept in the distribution's isolated state instead of ~/.pi.
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+
 resources:
   instructions:
-    - ./resources/AGENTS.md
+    user: [./resources/AGENTS.md]
   skills:
-    - ./resources/skills
+    user: [./resources/skills]
   extensions:
-    - ./resources/extensions/demo
+    user: [./resources/extensions/demo]
   prompts:
-    - ./resources/prompts
+    user: [./resources/prompts]
   themes:
-    - ./resources/themes/mypi.json
+    user: [./resources/themes/mypi.json]
+
+# Personal policy: everything the distribution declares is allowed. Workspace
+# files stay readable by tools, but nothing the project ships is loaded:
+# no project themes, instructions, skills, extensions, MCP definitions, or
+# the rest. Only the resources declared below reach Pi.
+policy:
+  default: allow
+  projectTrust:
+    company: &closed
+      passiveContext: deny
+      instructions: deny
+      skills: deny
+      agents: deny
+      hooks: deny
+      extensions: deny
+      mcp: deny
+      providers: deny
+    external: *closed
+    unknown: *closed
+
+# A user-managed MCP server: a local stdio script shipped with the
+# distribution. It needs no network and no credential.
+mcp:
+  mode: explicit
+  servers:
+    notes:
+      transport: stdio
+      module: ./resources/mcp/notes-server.mjs
+      expectedServerName: mypi-notes
+      timeout: 10s
+
+# Optional for a personal distribution. On Linux or macOS, `required: true`
+# contains bash, `!` commands, and the MCP server.
+sandbox:
+  required: false
+
+audit:
+  enabled: false
+
+# Signed release channels. The example pins no key: add your own
+# (piship keygen) before `update` can verify anything.
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${MYPI_UPDATE_SOURCE}
+  rollback: true
+  trust:
+    keys: []

@@ -1,6 +1,16 @@
 # Personal distribution example
 
-This runnable `piship/v1alpha1` example pins Pi 0.87.1 and declares instructions, a skill, a TypeScript extension, a prompt, and a branded theme. It is a keyless runtime demonstration; live model access requires credentials managed separately in the distribution's state.
+MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
+
+- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi neither reads nor changes. No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
+- **An exact pinned Pi**, 0.87.1.
+- **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
+- **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
+- **A user-managed MCP server.** `mcp.mode: explicit` declares `notes`, a tiny stdio server in `resources/mcp/notes-server.mjs`. It serves two in-memory notes as `mcp__notes__list_notes` and `mcp__notes__read_note`, uses no network and no credential, and must report `serverInfo.name` `mypi-notes`.
+- **Optional sandbox and no audit.** `sandbox.required: false` and `audit.enabled: false`. Set `sandbox.required: true` in a copy on Linux or macOS to contain `bash`, `!` commands, and the MCP server.
+- **Signed releases, update, and rollback.** `updates` offers the `stable` and `candidate` channels and reads the channel from `${MYPI_UPDATE_SOURCE}`, which is resolved only when `update` runs. The example pins no release key (`updates.trust.keys: []`), so `update` fails until you add your own.
+
+## Build, install, and run
 
 From the repository root with Node.js 22.19.0 or newer:
 
@@ -14,42 +24,74 @@ npm exec -- piship build examples/personal/piship.yaml
 node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi --version
 ~/.local/bin/mypi --smoke
+~/.local/bin/mypi doctor
+~/.local/bin/mypi capabilities
 ~/.local/bin/mypi
 node dist/mypi/piship.mjs inspect mypi
-node dist/mypi/piship.mjs doctor mypi
 node dist/mypi/piship.mjs uninstall mypi
 ```
 
-On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages. `--smoke` uses Pi's real SDK, declared TypeScript extension, read tool, and a separate persisted acceptance session without a model request. Repeating it should report the same session ID with `resumed: true`. The interactive command uses its own session directory. State defaults to `~/.piship/mypi`, separate from personal `~/.pi`. Uninstall retains that state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall.
+On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages.
 
-## piship/v1alpha2 personal options
+`--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. Repeating it reports the same session ID with `resumed: true`. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall.
 
-`piship migrate examples/personal/piship.yaml` prints a plan that moves this manifest to `piship/v1alpha2` with the same behavior (`identity.mode: none`, `pi-native` credentials and inference); `--write` applies it. Regenerate the lock and rebuild afterwards. v1alpha1 remains accepted.
+## Release, update, and rollback
 
-A v1alpha2 personal manifest can instead point at an OpenAI-compatible endpoint, such as a local model server, without enterprise identity:
+The lifecycle works as for the demo company ([release](../../docs/release.md)), with nothing to sign in to. Work in a copy so the example stays unchanged:
 
-```yaml
-schema: piship/v1alpha2
-# app, runtime, deployment (mode: personal), and resources as above
-variables:
-  - MYPI_GATEWAY_URL
-identity:
-  mode: none
-credential:
-  provider: local-secret   # or: none, for an endpoint without a key (omit storage)
-  storage:
-    provider: system       # or: file (owner-only plaintext, explicit opt-in)
-inference:
-  provider: openai-compatible
-  baseUrl: ${MYPI_GATEWAY_URL}
-models:
-  default: local/coder
-  allowed: [local/coder]
-  catalog:
-    local/coder:
-      name: Local Coder
-      contextWindow: 32000
-      maxOutputTokens: 2048
+1. Create a release key outside the repository, then replace `keys: []` in the copy with the printed entry:
+
+   ```bash
+   cp -r examples/personal /tmp/mypi
+   mkdir -p ~/mypi-keys
+   npm exec -- piship keygen ~/mypi-keys/release.pem --id mypi-release
+   ```
+
+2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release:
+
+   ```bash
+   npm exec -- piship lock /tmp/mypi/piship.yaml
+   npm exec -- piship release /tmp/mypi/piship.yaml
+   tar -xzf dist/releases/mypi-1.0.0-<target>.tar.gz -C /tmp
+   sh /tmp/mypi-1.0.0-<target>/install.sh
+   ```
+
+3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
+
+   ```bash
+   npm exec -- piship sign-channel /tmp/mypi-channel dist/releases/mypi-1.1.0-<target>.tar.gz \
+     --channel stable --key ~/mypi-keys/release.pem --key-id mypi-release
+   export MYPI_UPDATE_SOURCE=/tmp/mypi-channel
+   ~/.local/bin/mypi update --check
+   ~/.local/bin/mypi update      # 1.0.0 is retained; sessions are kept
+   ~/.local/bin/mypi rollback    # back to 1.0.0
+   ```
+
+`<target>` is `linux-x64`, `darwin-arm64`, or `win32-x64`. `MYPI_UPDATE_SOURCE` may also be an HTTPS URL, or `http` on loopback, serving the channel directory.
+
+## Local model variant
+
+[`local-model/piship.yaml`](local-model/piship.yaml) is MyPi Local (`mypi-local`), a smaller personal distribution for a local OpenAI-compatible model server, such as llama.cpp, Ollama, or vLLM, with no enterprise identity:
+
+- `credential.provider: local-secret` with `storage.provider: system`: `mypi-local login` asks for the key and keeps it in the system secret store; `logout` deletes it. Use `storage: {provider: file}` for owner-only plaintext files (a personal distribution needs no `acknowledgePlaintext`), or `credential.provider: none` without `storage` for a server without a key.
+- `inference.provider: openai-compatible` with `baseUrl: ${MYPI_MODEL_URL}` and a one-model catalog, `local/coder`. The URL must use HTTPS, or `http` on `127.0.0.1`, `localhost`, or `[::1]`.
+
+`local-model/model-server.mjs` is a stand-in server with canned replies, for trying the variant without a model. It is test infrastructure, not a model:
+
+```bash
+node examples/personal/local-model/model-server.mjs    # prints MYPI_MODEL_URL and the key it accepts
+export MYPI_MODEL_URL=http://127.0.0.1:<port>/v1
+npm exec -- piship lock examples/personal/local-model/piship.yaml
+npm exec -- piship build examples/personal/local-model/piship.yaml
+dist/mypi-local/bin/mypi-local login           # paste the key
+dist/mypi-local/bin/mypi-local --smoke-model   # one request to the local endpoint
+dist/mypi-local/bin/mypi-local logout
 ```
 
-Set `MYPI_GATEWAY_URL` (HTTPS, or `http://127.0.0.1:<port>/...` for loopback) when running the branded command. With `local-secret`, `mypi login` asks for the key and stores it in the secret store; `mypi logout` deletes it. With `none`, no key is stored. `mypi --smoke-model` sends one acceptance prompt. These modes are verified with local fixtures only; a real authenticated personal model request has not been recorded. See the [manifest reference](../../docs/manifest.md).
+These modes are verified against the stand-in server only; a request to a real local model server has not been recorded.
+
+## What the tests cover
+
+- `tests/e2e/personal-lifecycle.test.ts` releases MyPi 1.0.0 and 1.1.0 with a generated key, installs 1.0.0 with the shipped install script into an empty home, and checks `--smoke`, `doctor`, and `inspect`, including the healthy `notes` server. It updates to 1.1.0 from a signed loopback channel, rolls back, and uninstalls. Throughout, it checks that the session is resumed, that `~/.pi` is byte for byte unchanged, that no identity, credential, or audit state is written, that the channel host sees only channel requests, and that nothing goes out through a trap proxy set in the environment.
+- `tests/e2e/personal-local-model.test.ts` checks that the committed `local-model/piship.lock` is current, then builds MyPi Local with the file secret store and runs `login`, `--smoke-model` against the stand-in server, and `logout`.
+- `tests/e2e/cli.test.ts` builds and installs this example as a relocated payload and checks that ambient `~/.pi` and project resources are not loaded.
