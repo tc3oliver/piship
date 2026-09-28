@@ -338,10 +338,37 @@ export class WindowsCredentialSecretStore implements SecretStore {
  * written 0600 through a temporary file and atomic rename. It is not
  * equivalent to platform secure storage and is always reported as such.
  */
+export interface RestrictedFileStoreOptions {
+  readonly platform?: NodeJS.Platform;
+  /** Runs `icacls` on Windows; the directory path travels as one argument. */
+  readonly run?: CommandRunner;
+  /** Windows account granted access; defaults to USERDOMAIN\USERNAME. */
+  readonly account?: string;
+}
+
+/** The current Windows account as `DOMAIN\user`, or `user` without a domain. */
+function windowsAccount(env: NodeJS.ProcessEnv = process.env): string | null {
+  const user = env.USERNAME?.trim();
+  if (!user) return null;
+  const domain = env.USERDOMAIN?.trim();
+  return domain ? `${domain}\\${user}` : user;
+}
+
 export class RestrictedFileSecretStore implements SecretStore {
   readonly kind = "file";
   readonly description = "restricted plaintext file (explicit opt-in fallback)";
-  constructor(readonly directory: string) {}
+  readonly #platform: NodeJS.Platform;
+  readonly #run: CommandRunner;
+  readonly #account: string | null;
+  #secured = false;
+  constructor(
+    readonly directory: string,
+    options: RestrictedFileStoreOptions = {},
+  ) {
+    this.#platform = options.platform ?? process.platform;
+    this.#run = options.run ?? runCommand;
+    this.#account = options.account ?? windowsAccount();
+  }
   #path(ref: string): string {
     checkRef(ref);
     return join(
@@ -349,9 +376,35 @@ export class RestrictedFileSecretStore implements SecretStore {
       `${createHash("sha256").update(ref).digest("hex")}.secret`,
     );
   }
+  /**
+   * Windows ignores POSIX modes, so the directory gets an owner-only ACL:
+   * inherited entries are removed and only the current account keeps full
+   * control, inherited by every secret file. Failing to apply it is fatal.
+   */
+  #secureWindows(): void {
+    if (this.#secured) return;
+    if (!this.#account)
+      throw unavailable(
+        this.description,
+        "cannot restrict the secret directory: the current Windows account is unknown (USERNAME is not set)",
+      );
+    const result = this.#run("icacls", [
+      this.directory,
+      "/inheritance:r",
+      "/grant:r",
+      `${this.#account}:(OI)(CI)F`,
+    ]);
+    if (result.status !== 0)
+      throw unavailable(
+        this.description,
+        `cannot restrict the secret directory to the current user with icacls: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status ?? "unknown"}`}`,
+      );
+    this.#secured = true;
+  }
   #prepare(): void {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    if (process.platform !== "win32") {
+    if (this.#platform === "win32") this.#secureWindows();
+    else {
       chmodSync(this.directory, 0o700);
       const mode = statSync(this.directory).mode & 0o077;
       if (mode)
@@ -379,7 +432,8 @@ export class RestrictedFileSecretStore implements SecretStore {
   async get(ref: string): Promise<SecretValue | null> {
     const path = this.#path(ref);
     if (!existsSync(path)) return null;
-    if (process.platform !== "win32" && statSync(path).mode & 0o077)
+    if (this.#platform === "win32") this.#secureWindows();
+    else if (statSync(path).mode & 0o077)
       throw unavailable(
         this.description,
         "secret file permissions are not owner-only",
@@ -415,7 +469,10 @@ export function createSecretStore(
   selection: SecretStoreSelection,
 ): SecretStore {
   if (selection.provider === "file")
-    return new RestrictedFileSecretStore(selection.fileDirectory);
+    return new RestrictedFileSecretStore(selection.fileDirectory, {
+      ...(selection.platform ? { platform: selection.platform } : {}),
+      ...(selection.run ? { run: selection.run } : {}),
+    });
   const platform = selection.platform ?? process.platform;
   const run = selection.run ?? runCommand;
   if (platform === "darwin") return new MacKeychainSecretStore(run);

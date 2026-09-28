@@ -76,6 +76,11 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
   readonly requiresIdentity = true;
   constructor(readonly options: HttpBrokerOptions) {}
 
+  /** Remote revocation is available only with a declared revoke endpoint. */
+  get revocable(): boolean {
+    return !!this.options.revokeEndpoint;
+  }
+
   async acquire(
     identity: IdentitySession | null,
     ctx: CredentialContext,
