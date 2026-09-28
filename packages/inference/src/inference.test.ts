@@ -102,6 +102,10 @@ describe("model catalog", () => {
       retryable: true,
       retryAfterMs: 3000,
     });
+    const inAMinute = new Date(Date.now() + 60_000).toUTCString();
+    const dated = classifyGatewayStatus(429, { "retry-after": inAMinute });
+    expect(dated?.retryAfterMs).toBeGreaterThan(55_000);
+    expect(dated?.retryAfterMs).toBeLessThanOrEqual(60_000);
     expect(classifyGatewayStatus(503)).toMatchObject({
       code: "GATEWAY_UNREACHABLE",
       retryable: true,

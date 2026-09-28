@@ -15,6 +15,7 @@ import {
   checkDestination,
   createManagedFetch,
   formatError,
+  parseRetryAfter,
   redact,
   redactValue,
   sanitizeManagedEnvironment,
@@ -141,6 +142,27 @@ describe("SecretValue", () => {
     const rendered = `${formatError(error)} ${JSON.stringify(error)}`;
     expect(rendered).not.toContain(secret.reveal());
     expect(error.code).toBe("CREDENTIAL_ACQUIRE_FAILED");
+  });
+
+  it("parses Retry-After seconds and HTTP-dates and shows the wait", () => {
+    const now = Date.parse("Wed, 21 Oct 2015 07:28:00 GMT");
+    expect(parseRetryAfter("120", now)).toBe(120_000);
+    expect(parseRetryAfter(" 1.5 ", now)).toBe(1500);
+    expect(parseRetryAfter("Wed, 21 Oct 2015 07:28:30 GMT", now)).toBe(30_000);
+    expect(parseRetryAfter("Wed, 21 Oct 2015 07:00:00 GMT", now)).toBe(0);
+    for (const value of [undefined, null, "", "-5", "soon", "12abc"])
+      expect(parseRetryAfter(value, now)).toBeUndefined();
+    const limited = new PiShipError(
+      "GATEWAY_RATE_LIMITED",
+      "The inference gateway is rate limiting requests",
+      { retryable: true, retryAfterMs: 29_100, userAction: "Wait" },
+    );
+    expect(formatError(limited)).toBe(
+      "GATEWAY_RATE_LIMITED: The inference gateway is rate limiting requests\nRetry after: 30 s\nAction: Wait",
+    );
+    expect(formatError(new PiShipError("UPDATE_FAILED", "x"))).toBe(
+      "UPDATE_FAILED: x",
+    );
   });
 });
 

@@ -6,6 +6,7 @@ import {
   type ManagedFetch,
   type ModelDefinition,
   PiShipError,
+  parseRetryAfter,
   type ResolvedModel,
   type RuntimeConfigurationContext,
   type RuntimeProviderConfiguration,
@@ -116,11 +117,7 @@ export function classifyGatewayStatus(
   headers: Readonly<Record<string, string>> = {},
 ): PiShipError | null {
   if (status < 400) return null;
-  const retryAfterHeader = headers["retry-after"];
-  const retryAfterMs =
-    retryAfterHeader && Number.isFinite(Number(retryAfterHeader))
-      ? Number(retryAfterHeader) * 1000
-      : undefined;
+  const retryAfterMs = parseRetryAfter(headers["retry-after"]);
   if (status === 401)
     return new PiShipError(
       "CREDENTIAL_REVOKED",
