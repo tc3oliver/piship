@@ -47,13 +47,7 @@ const allowedLocal = {
     "@piship/mcp",
     "@piship/audit",
   ],
-  cli: [
-    "@piship/core",
-    "@piship/pi",
-    "@piship/schema",
-    "@piship/contracts",
-    "@piship/policy",
-  ],
+  cli: ["@piship/core", "@piship/schema", "@piship/contracts"],
   tests: [
     "@piship/core",
     "@piship/pi",
