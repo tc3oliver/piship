@@ -11,6 +11,7 @@ Preview milestone; not published to npm.
 - Project consolidation in progress; see [docs/roadmap.md](docs/roadmap.md).
 - Documentation: a single [status page](docs/status.md) for what current `main` supports and the evidence behind it; stale CI tier, schema, and revocation claims corrected; the manifest guide lists its differences from the product specification.
 - Documentation: the release guide is split into [owner workflow](docs/release/owner-workflow.md), [artifact contract](docs/release/artifact-contract.md), and [update lifecycle](docs/release/update-lifecycle.md) pages; `docs/release.md` is an index that maps every former section to its new location.
+- Documentation: an [enterprise integration contract](docs/enterprise-integration.md) lists the IdP, credential broker, and OpenAI-compatible gateway endpoints PiShip calls, with a LiteLLM example under `examples/enterprise-litellm/`.
 - This changelog is organized by milestone.
 
 ## v0.5
