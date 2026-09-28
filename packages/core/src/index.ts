@@ -1,5 +1,6 @@
 export * from "./access/index.js";
 export * from "./archive.js";
+export * from "./branded/index.js";
 export { buildDistribution } from "./build.js";
 export {
   currentTarget,
