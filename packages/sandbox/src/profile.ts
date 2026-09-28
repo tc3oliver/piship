@@ -1,7 +1,15 @@
 // Desired sandbox policy (manifest `sandbox:`) resolved into concrete,
 // symlink-resolved host paths. Enforcement is the adapter's job.
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  resolve,
+  sep,
+} from "node:path";
 import { PiShipError } from "@piship/contracts";
 
 /** Structurally identical to `SandboxConfig` in @piship/schema. */
@@ -191,6 +199,18 @@ export function pathDepth(path: string): number {
   return path.split(sep).filter(Boolean).length;
 }
 
+/**
+ * Containment for adapter profiles, whose paths are always POSIX (bubblewrap
+ * and Seatbelt run only on Linux and macOS), whatever the host running the
+ * profile builder.
+ */
+function withinPosix(path: string, root: string): boolean {
+  if (path === root) return true;
+  return path.startsWith(root.endsWith("/") ? root : `${root}/`);
+}
+
+const posixDepth = (path: string) => path.split("/").filter(Boolean).length;
+
 export interface ProtectedEntry {
   readonly path: string;
   readonly directory: boolean;
@@ -210,16 +230,16 @@ export function writableProtected(profile: SandboxProfile): ProtectedEntry[] {
     })),
   ]
     .filter(({ path }) =>
-      profile.writeAllow.some((allowed) => isWithin(path, allowed)),
+      profile.writeAllow.some((allowed) => withinPosix(path, allowed)),
     )
-    .sort((a, b) => pathDepth(a.path) - pathDepth(b.path));
+    .sort((a, b) => posixDepth(a.path) - posixDepth(b.path));
   const kept: ProtectedEntry[] = [];
   for (const entry of entries)
     if (
       !kept.some(
         (outer) =>
           outer.path === entry.path ||
-          (outer.directory && isWithin(entry.path, outer.path)),
+          (outer.directory && withinPosix(entry.path, outer.path)),
       )
     )
       kept.push(entry);
@@ -238,14 +258,15 @@ export function protectedAncestors(
   const ancestors = new Set<string>();
   for (const { path } of entries) {
     const roots = profile.writeAllow.filter((allowed) =>
-      isWithin(path, allowed),
+      withinPosix(path, allowed),
     );
     for (
-      let current = dirname(path);
-      !roots.includes(current) && roots.some((root) => isWithin(current, root));
-      current = dirname(current)
+      let current = posix.dirname(path);
+      !roots.includes(current) &&
+      roots.some((root) => withinPosix(current, root));
+      current = posix.dirname(current)
     )
       ancestors.add(current);
   }
-  return [...ancestors].sort((a, b) => pathDepth(a) - pathDepth(b));
+  return [...ancestors].sort((a, b) => posixDepth(a) - posixDepth(b));
 }
