@@ -195,6 +195,8 @@ For `GET /models` at launch and in `doctor`:
 | 5xx, unreachable, timeout | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, non-JSON, no `data` array | `GATEWAY_PROTOCOL_ERROR` |
 
+Each result is also counted in the local `<state>/logs/metrics.json`, which holds error codes and counts only, never the URL or a response. `GATEWAY_UNREACHABLE` (including 5xx) counts as unreachable; any other status counts as reachable, because the gateway answered. A successful live list also records the time and the number of models.
+
 During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed.
 
 ## Network and TLS

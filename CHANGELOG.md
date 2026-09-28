@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. Each section is
 
 Preview milestone; not published to npm.
 
+### Added
+
+- Local metrics (`<state>/logs/metrics.json`) are now recorded at their real call sites: identity sign-in and session-check durations, broker and adapter credential acquire and refresh durations, gateway reachability (from the live catalog fetch at launch and the `doctor` probe, once per run), live model catalog fetches (time and model count), resource and provider load failures by error code, and the running distribution, PiShip, Pi, and Node versions. Access and the governed session share one metrics instance per launch, so neither save overwrites the other. Metrics remain metadata-only: numbers, times, error codes, and version strings, never a URL, token, subject, model ID, or content.
+
 ### Changed
 
 - Project consolidation in progress; see [docs/roadmap.md](docs/roadmap.md).
@@ -15,6 +19,7 @@ Preview milestone; not published to npm.
 - This changelog is organized by milestone.
 - **Behavior change:** `doctor` shows the effective outbound state on one `outbound` line in place of the `public fallback` and `private-only` lines. When private-only is in effect, the line is a ✓ that lists the declared hosts. Personal mode without private-only shows a neutral informational line, and the old ✓ "allowed (personal owner policy)" is gone.
 - **Contract change:** `@piship/contracts` no longer exports the error codes `APPROVAL_REQUIRED`, `PROVIDER_UNHEALTHY`, `PROVIDER_UNRESOLVED`, `RESOURCE_DENIED`, and `SANDBOX_REQUIRED` (removed from `PISHIP_ERROR_CODES` and `PiShipErrorCode`); no code path produced them. Headless `ask` resolves to deny, denied tools and resources are refused and audited as denials (refused commands and settings use `POLICY_DENIED`), provider problems are reported on the `resolved`, `enabled`, and `healthy` capability axes, and a required sandbox that cannot be enforced fails with `SANDBOX_UNAVAILABLE`. A unit test now requires every remaining code to have a producing path. The manifest guide records the difference from the product specification ([removed error codes](docs/manifest.md#removed-error-codes)).
+- **Behavior change:** the audit file sink rotates `logs/audit.jsonl` by size: before it would pass 10 MB it becomes `audit.jsonl.1`, and five rotated files are kept (about 60 MB in total; approximate while several processes write at once). The limits are fixed and not a manifest setting. Rotation only renames files under a lock, so concurrent appenders never lose a retained line. The update and rollback migration check reads the newest audit schema from the rotated file when `audit.jsonl` is empty.
 - **Contract change:** `modelRequirementGaps`, `incompatibleCapabilities`, and `ModelIncompatibility` moved from `@piship/core` to `@piship/policy`, which also exports `ModelEvidence`; `@piship/core` no longer exports them and adds `configuredModel`. `@piship/policy` drops `CapabilityStateInput.modelToolSupport` and `TOOL_DEPENDENT_CAPABILITIES` (no caller passed them) and adds `CapabilityStateInput.model` and `policyDenied`.
 
 ### Security

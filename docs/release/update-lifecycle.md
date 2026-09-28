@@ -66,7 +66,7 @@ The migration check compares each local data class with the state schemas the ta
 | User policy rules | `config/policy.json` | Kept in place; included in the snapshot |
 | Pi agent configuration | `agent/` | Owned by Pi and kept in place; Pi-native `auth.json` is a credential and never snapshotted |
 | Sessions | `sessions/` | Kept in place; Pi migrates its session files forward. A target with an older Pi than the one that wrote existing sessions `requires-review` |
-| Audit and metrics logs | `logs/` | Kept in place and append-only; `unsupported` when the target cannot read the newest audit event schema |
+| Audit and metrics logs | `logs/` | Kept in place; `audit.jsonl` is rotated by size ([state table](../architecture.md)); `unsupported` when the target cannot read the newest audit event schema, read from the newest non-empty audit file |
 | Cache | `cache/` | Not migrated; safe to delete |
 | Runtime data | `data/` | Kept in place |
 | Migration snapshots | `migration/snapshots/` | The last three pre-update snapshots |
