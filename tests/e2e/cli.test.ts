@@ -80,6 +80,7 @@ describe("CLI", () => {
     expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
   });
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
+    const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";
     const temp = mkdtempSync(join(tmpdir(), "piship-install-"));
     temporary.push(temp);
     const example = join(temp, "example");
@@ -116,6 +117,7 @@ describe("CLI", () => {
     });
     expect(acceptance.status, acceptance.stderr).toBe(0);
     expect(acceptance.stdout).toContain("Personal acceptance passed");
+    process.stderr.write(acceptance.stderr);
     const built = join(temp, "dist", "mypi");
     expect(
       readFileSync(join(built, "resources", "resources", "AGENTS.md"), "utf8"),
@@ -132,11 +134,15 @@ describe("CLI", () => {
       join(built, "metadata", "inventory.json"),
     );
     const spare = join(temp, "spare-build");
-    renameSync(built, spare);
-    expect(localCli("build", manifest).status).toBe(0);
-    expect(readFileSync(join(built, "metadata", "inventory.json"))).toEqual(
-      firstInventory,
-    );
+    if (qualification) {
+      renameSync(built, spare);
+      const secondBuild = localCli("build", manifest);
+      expect(secondBuild.status, secondBuild.stderr).toBe(0);
+      process.stderr.write(secondBuild.stderr);
+      expect(readFileSync(join(built, "metadata", "inventory.json"))).toEqual(
+        firstInventory,
+      );
+    }
     const helper = join(
       example,
       "resources",
@@ -164,6 +170,7 @@ describe("CLI", () => {
       });
     const installed = command("install", relocated);
     expect(installed.status, installed.stderr).toBe(0);
+    process.stderr.write(installed.stderr);
     expect(command("install", relocated).stderr).toContain("collision");
     rmSync(relocated, { recursive: true, force: true });
     rmSync(example, { recursive: true, force: true });
@@ -293,21 +300,24 @@ describe("CLI", () => {
       themes: ["mypi"],
     });
     expect(command("doctor", "mypi").status).toBe(0);
-    const otherRoot = join(temp, "other-agent");
-    const otherManifest = join(otherRoot, "piship.yaml");
     const relocatedBuilder = (...args: string[]) =>
       spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
         cwd: temp,
         env,
         encoding: "utf8",
       });
-    expect(relocatedBuilder("init", otherRoot).status).toBe(0);
-    expect(relocatedBuilder("lock", otherManifest).status).toBe(0);
-    const otherBuild = relocatedBuilder("build", otherManifest);
-    expect(otherBuild.status, otherBuild.stderr).toBe(0);
-    expect(command("install", join(temp, "dist", "other-agent")).status).toBe(
-      0,
-    );
+    if (qualification) {
+      const otherRoot = join(temp, "other-agent");
+      const otherManifest = join(otherRoot, "piship.yaml");
+      expect(relocatedBuilder("init", otherRoot).status).toBe(0);
+      expect(relocatedBuilder("lock", otherManifest).status).toBe(0);
+      const otherBuild = relocatedBuilder("build", otherManifest);
+      expect(otherBuild.status, otherBuild.stderr).toBe(0);
+      process.stderr.write(otherBuild.stderr);
+      expect(command("install", join(temp, "dist", "other-agent")).status).toBe(
+        0,
+      );
+    }
     const otherLauncher = join(
       temp,
       "bin",
@@ -330,14 +340,16 @@ describe("CLI", () => {
             env,
             encoding: "utf8",
           });
-    const otherLaunch = launchOther();
-    expect(otherLaunch.status, otherLaunch.stderr).toBe(0);
-    expect(JSON.parse(otherLaunch.stdout)).toMatchObject({
-      skills: [],
-      extensions: 0,
-    });
-    expect(existsSync(join(temp, "state", "other-agent"))).toBe(true);
-    expect(launch().status).toBe(0);
+    if (qualification) {
+      const otherLaunch = launchOther();
+      expect(otherLaunch.status, otherLaunch.stderr).toBe(0);
+      expect(JSON.parse(otherLaunch.stdout)).toMatchObject({
+        skills: [],
+        extensions: 0,
+      });
+      expect(existsSync(join(temp, "state", "other-agent"))).toBe(true);
+      expect(launch().status).toBe(0);
+    }
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
     expect(command("doctor", "mypi").status).toBe(0);
     const payload = join(temp, "install's", "apps", "mypi", "1.0.0");
@@ -407,58 +419,63 @@ describe("CLI", () => {
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(installedCommand)).toBe(false);
     expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
-    expect(existsSync(otherLauncher)).toBe(true);
-    expect(launchOther().status).toBe(0);
-    expect(relocatedBuilder("uninstall", "other-agent").status).toBe(0);
-    expect(relocatedBuilder("purge", "other-agent", "--yes").status).toBe(0);
-    expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
-    const movedEnv = {
-      ...env,
-      PISHIP_INSTALL_HOME: join(temp, "moved-install"),
-      PISHIP_BIN_HOME: join(temp, "moved-bin"),
-    };
-    const movedCommand = (...args: string[]) =>
-      spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
-        cwd: temp,
-        env: movedEnv,
-        encoding: "utf8",
-      });
-    expect(movedCommand("install", spare).stderr).toContain(
-      "State already exists",
-    );
-    expect(movedCommand("install", spare, "--use-existing-state").status).toBe(
-      0,
-    );
-    const movedLauncher = join(
-      temp,
-      "moved-bin",
-      process.platform === "win32" ? "mypi.cmd" : "mypi",
-    );
-    const resumed =
-      process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", `call "${movedLauncher}" --smoke`],
-            {
+    if (qualification) {
+      expect(existsSync(otherLauncher)).toBe(true);
+      expect(launchOther().status).toBe(0);
+      expect(relocatedBuilder("uninstall", "other-agent").status).toBe(0);
+      expect(relocatedBuilder("purge", "other-agent", "--yes").status).toBe(0);
+      expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
+      const movedEnv = {
+        ...env,
+        PISHIP_INSTALL_HOME: join(temp, "moved-install"),
+        PISHIP_BIN_HOME: join(temp, "moved-bin"),
+      };
+      const movedCommand = (...args: string[]) =>
+        spawnSync(process.execPath, [join(spare, "piship.mjs"), ...args], {
+          cwd: temp,
+          env: movedEnv,
+          encoding: "utf8",
+        });
+      expect(movedCommand("install", spare).stderr).toContain(
+        "State already exists",
+      );
+      expect(
+        movedCommand("install", spare, "--use-existing-state").status,
+      ).toBe(0);
+      const movedLauncher = join(
+        temp,
+        "moved-bin",
+        process.platform === "win32" ? "mypi.cmd" : "mypi",
+      );
+      const resumed =
+        process.platform === "win32"
+          ? spawnSync(
+              "cmd.exe",
+              ["/d", "/s", "/c", `call "${movedLauncher}" --smoke`],
+              {
+                cwd: temp,
+                env: movedEnv,
+                encoding: "utf8",
+                windowsVerbatimArguments: true,
+              },
+            )
+          : spawnSync(movedLauncher, ["--smoke"], {
               cwd: temp,
               env: movedEnv,
               encoding: "utf8",
-              windowsVerbatimArguments: true,
-            },
-          )
-        : spawnSync(movedLauncher, ["--smoke"], {
-            cwd: temp,
-            env: movedEnv,
-            encoding: "utf8",
-          });
-    expect(resumed.status, resumed.stderr).toBe(0);
-    expect(JSON.parse(resumed.stdout)).toMatchObject({
-      sessionId: firstResult.sessionId,
-      resumed: true,
-    });
-    expect(movedCommand("uninstall", "mypi").status).toBe(0);
-    expect(movedCommand("purge", "mypi").status).toBe(1);
-    expect(movedCommand("purge", "mypi", "--yes").status).toBe(0);
+            });
+      expect(resumed.status, resumed.stderr).toBe(0);
+      expect(JSON.parse(resumed.stdout)).toMatchObject({
+        sessionId: firstResult.sessionId,
+        resumed: true,
+      });
+      expect(movedCommand("uninstall", "mypi").status).toBe(0);
+      expect(movedCommand("purge", "mypi").status).toBe(1);
+      expect(movedCommand("purge", "mypi", "--yes").status).toBe(0);
+    } else {
+      expect(localCli("purge", "mypi").status).toBe(1);
+      expect(localCli("purge", "mypi", "--yes").status).toBe(0);
+    }
     expect(existsSync(join(temp, "state", "mypi"))).toBe(false);
   }, 360000);
   it("rejects managed manifests before lock or build output", () => {

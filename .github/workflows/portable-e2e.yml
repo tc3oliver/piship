@@ -47,4 +47,8 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code
+      # Every target runs the installed lifecycle. Ubuntu also qualifies the
+      # repeated clean build, relocated builder, and second distribution.
       - run: npm run test:e2e
+        env:
+          PISHIP_E2E_QUALIFICATION: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}

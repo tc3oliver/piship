@@ -123,6 +123,12 @@ export function runtimeStateDirectory(
 function hash(content: string | Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
+function debugTiming(label: string, started: bigint): void {
+  if (process.env.PISHIP_DEBUG_TIMING === "1")
+    process.stderr.write(
+      `${label}: ${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)} ms\n`,
+    );
+}
 function manifestDigest(manifest: Manifest): string {
   return hash(JSON.stringify(manifest));
 }
@@ -372,6 +378,7 @@ export function buildDistribution(
   mkdirSync(outputRoot, { recursive: true });
   const stage = mkdtempSync(join(outputRoot, `.piship-${lock.app.id}-`));
   try {
+    let phase = process.hrtime.bigint();
     copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
     copyFileSync(
       join(buildInput, "package-lock.json"),
@@ -388,6 +395,8 @@ export function buildDistribution(
         recursive: true,
       });
     }
+    debugTiming("build input copy", phase);
+    phase = process.hrtime.bigint();
     const install =
       process.platform === "win32"
         ? spawnSync(
@@ -403,6 +412,8 @@ export function buildDistribution(
       throw new Error(
         `Portable runtime assembly failed: ${install.stderr || install.error?.message || install.stdout}`,
       );
+    debugTiming("npm ci --omit=dev", phase);
+    phase = process.hrtime.bigint();
     for (const name of workspacePackages) {
       const target = join(stage, "node_modules", "@piship", name);
       rmSync(target, { recursive: true, force: true });
@@ -414,7 +425,11 @@ export function buildDistribution(
       { recursive: true },
     );
     rmSync(join(stage, "packages"), { recursive: true, force: true });
+    debugTiming("PiShip/build-input copying", phase);
+    phase = process.hrtime.bigint();
     removeNpmBins(join(stage, "node_modules"));
+    debugTiming("removeNpmBins", phase);
+    phase = process.hrtime.bigint();
     mkdirSync(join(stage, "bin"), { recursive: true });
     mkdirSync(join(stage, "metadata"), { recursive: true });
     copyFileSync(manifestPath, join(stage, "piship.yaml"));
@@ -436,10 +451,13 @@ export function buildDistribution(
       `@echo off\r\nnode "%~dp0\\${lock.app.command}" %*\r\n`,
     );
     writeFileSync(join(stage, "piship.mjs"), portableCliSource());
+    debugTiming("resource/payload assembly", phase);
+    phase = process.hrtime.bigint();
     writeFileSync(
       join(stage, "metadata", "inventory.json"),
       `${JSON.stringify(inventory(stage), null, 2)}\n`,
     );
+    debugTiming("inventory hashing", phase);
     rmSync(output, { recursive: true, force: true });
     renameSync(stage, output);
     return output;
@@ -507,7 +525,9 @@ export function installDistribution(
   mkdirSync(dirname(commandPath), { recursive: true });
   mkdirSync(dirname(receiptPath(id)), { recursive: true });
   try {
+    const copyStarted = process.hrtime.bigint();
     cpSync(source, target, { recursive: true });
+    debugTiming("install payload copy", copyStarted);
     verifyPayload(target);
     if (process.platform === "win32")
       writeFileSync(
