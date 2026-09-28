@@ -35,12 +35,12 @@ import {
   POLICY_ACTIONS,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
-  type AuditEventType,
   formatError,
   redact,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import {
+  type AccessEvent,
   type ActivatedAccess,
   DistributionAccess,
   type DistributionLock,
@@ -119,14 +119,42 @@ interface LaunchContext {
   readonly err: (message: string) => void;
 }
 
-function openAccess(ctx: LaunchContext): DistributionAccess {
+function openAccess(
+  ctx: LaunchContext,
+  onEvent?: (event: AccessEvent) => void,
+): DistributionAccess {
+  const capabilities = ctx.metadata.governance?.manifest.capabilities;
   return DistributionAccess.open({
     app: ctx.metadata.app,
     mode: ctx.mode,
     access: ctx.metadata.access,
     stateDir: ctx.stateDir,
     distributionDir: ctx.distributionDir,
+    ...(capabilities ? { capabilities } : {}),
+    ...(onEvent ? { onEvent } : {}),
   });
+}
+
+/**
+ * Access lifecycle events raised before the audit log is open are buffered,
+ * then forwarded as they happen once a governed session exists.
+ */
+class AccessEvents {
+  #buffer: AccessEvent[] = [];
+  #target: ((event: AccessEvent) => void) | null = null;
+  readonly listener = (event: AccessEvent): void => {
+    if (this.#target) this.#target(event);
+    else this.#buffer.push(event);
+  };
+  drain(): AccessEvent[] {
+    const events = this.#buffer;
+    this.#buffer = [];
+    return events;
+  }
+  forward(target: ((event: AccessEvent) => void) | null): void {
+    if (target) for (const event of this.drain()) target(event);
+    this.#target = target;
+  }
 }
 
 function openBrowser(url: string): void {
@@ -244,6 +272,7 @@ interface PreparedAccess {
   readonly access: DistributionAccess | null;
   readonly activated: ActivatedAccess | null;
   readonly removedEnvironment: readonly string[];
+  readonly events: AccessEvents;
 }
 
 async function prepareAccess(
@@ -256,11 +285,17 @@ async function prepareAccess(
         "MODEL_DENIED",
         "Use --model provider/model for Pi-native distributions",
       );
-    return { access: null, activated: null, removedEnvironment: [] };
+    return {
+      access: null,
+      activated: null,
+      removedEnvironment: [],
+      events: new AccessEvents(),
+    };
   }
   // Refuse before sanitizing: silently dropping a disabled-TLS setting would hide it.
   assertTlsVerificationEnabled();
-  const access = openAccess(ctx);
+  const events = new AccessEvents();
+  const access = openAccess(ctx, events.listener);
   let removedEnvironment: string[] = [];
   if (ctx.mode === "managed")
     removedEnvironment = sanitizeManagedEnvironment(
@@ -272,7 +307,7 @@ async function prepareAccess(
   const activated = await access.activate(
     requestedModel ? { requestedModel } : {},
   );
-  return { access, activated, removedEnvironment };
+  return { access, activated, removedEnvironment, events };
 }
 
 async function createModelRuntime(
@@ -322,9 +357,15 @@ async function createModelRuntime(
     {
       kind: "managed-endpoint",
       providerId: activated.runtime.providerId,
+      // Models that miss an enabled capability's model requirements are not
+      // offered for switching; the launch model was checked at activation.
       allowedModelIds: activated.runtime.models
         .map((model) => model.id)
-        .filter((id) => activated.config.allowedModels.includes(id)),
+        .filter(
+          (id) =>
+            activated.config.allowedModels.includes(id) &&
+            !activated.incompatibleModels[id],
+        ),
       apiKey: async ({ force }) => {
         if (!activated.runtime.requiresCredential)
           return NO_CREDENTIAL_PLACEHOLDER;
@@ -402,16 +443,15 @@ async function openGovernance(
   const gov = await GovernanceSession.open(
     governanceOptions(ctx, lock, prepared, interactive),
   );
-  const { access, activated } = prepared;
-  if (access && activated?.credential.ref)
-    gov.emit("credential.acquire", {
-      detail: {
-        mode: access.credentialMode,
-        renewed: activated.notices.some((notice) =>
-          notice.includes("new credential"),
-        ),
-      },
-    });
+  const { access } = prepared;
+  // Only lifecycle changes are recorded: reusing a stored credential is not
+  // an acquisition. Later refreshes during the session are forwarded live.
+  if (access)
+    prepared.events.forward((event) =>
+      gov.emit(event.event, {
+        detail: { mode: access.credentialMode, ...event.detail },
+      }),
+    );
   return gov;
 }
 
@@ -423,10 +463,10 @@ async function auditAccess(
   ctx: LaunchContext,
   access: DistributionAccess,
   user: string | null,
-  events: readonly AuditEventType[],
+  events: readonly AccessEvent[],
 ): Promise<void> {
   const lock = governedLock(ctx);
-  if (!lock) return;
+  if (!lock || !events.length) return;
   try {
     const log = await AuditLog.open({
       config: lock.governance.manifest.audit,
@@ -443,10 +483,10 @@ async function auditAccess(
     });
     for (const event of events)
       log.emit({
-        event,
+        event: event.event,
         user,
         session: null,
-        detail: { mode: access.credentialMode },
+        detail: { mode: access.credentialMode, ...event.detail },
       });
     await log.close();
   } catch (error) {
@@ -930,7 +970,8 @@ async function runLogin(ctx: LaunchContext): Promise<void> {
       "This distribution delegates authentication to Pi; start it and use Pi's /login inside the session",
     );
   assertTlsVerificationEnabled();
-  const access = openAccess(ctx);
+  const events: AccessEvent[] = [];
+  const access = openAccess(ctx, (event) => events.push(event));
   if (ctx.mode === "managed")
     sanitizeManagedEnvironment(
       process.env,
@@ -945,12 +986,7 @@ async function runLogin(ctx: LaunchContext): Promise<void> {
     },
     readSecret: readSecretInput,
   });
-  await auditAccess(ctx, access, result.identity?.subject ?? null, [
-    ...(result.identity ? (["identity.login"] as const) : []),
-    ...(result.credential.state === "delegated"
-      ? []
-      : (["credential.acquire"] as const)),
-  ]);
+  await auditAccess(ctx, access, result.identity?.subject ?? null, events);
   const identity = result.identity
     ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
     : "No identity provider is configured.";
@@ -976,7 +1012,8 @@ async function runLogout(ctx: LaunchContext): Promise<void> {
       "This distribution delegates authentication to Pi; use Pi's /logout inside the session",
     );
   assertTlsVerificationEnabled();
-  const access = openAccess(ctx);
+  const events: AccessEvent[] = [];
+  const access = openAccess(ctx, (event) => events.push(event));
   if (ctx.mode === "managed")
     sanitizeManagedEnvironment(
       process.env,
@@ -986,10 +1023,10 @@ async function runLogout(ctx: LaunchContext): Promise<void> {
   applyProcessNetworkPolicy(access.network);
   const signedIn = (await access.status().catch(() => undefined))?.identity;
   const problems = await access.logout();
-  await auditAccess(ctx, access, signedIn?.subject ?? null, [
-    "identity.logout",
-    "credential.revoke",
-  ]);
+  // Only what happened is recorded: credential.revoke with its remote
+  // revocation outcome when a credential existed, identity.logout when
+  // there was an identity session.
+  await auditAccess(ctx, access, signedIn?.subject ?? null, events);
   ctx.out(
     `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; sessions were preserved.`,
   );
@@ -1302,6 +1339,24 @@ function requireInstalled(ctx: LaunchContext, command: string): void {
     );
 }
 
+/**
+ * Best-effort remote revocation, by this (the switching) release, of a
+ * runtime credential a target release cannot read. The outcome is audited;
+ * local clearing happens whatever it is.
+ */
+function credentialRevoker(ctx: LaunchContext) {
+  if (!ctx.metadata.access) return undefined;
+  return async () => {
+    const events: AccessEvent[] = [];
+    const access = openAccess(ctx, (event) => events.push(event));
+    try {
+      return await access.revokeCredential();
+    } finally {
+      await auditAccess(ctx, access, null, events);
+    }
+  };
+}
+
 /** Deletes secret-store entries for credentials a target release cannot read. */
 function secretDeleter(ctx: LaunchContext) {
   if (!ctx.metadata.access) return undefined;
@@ -1408,6 +1463,7 @@ async function runUpdate(
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");
   const deleteSecret = secretDeleter(ctx);
+  const revokeCredential = credentialRevoker(ctx);
   let network = DEFAULT_NETWORK_POLICY;
   try {
     if (ctx.metadata.access) network = openAccess(ctx).network;
@@ -1434,6 +1490,7 @@ async function runUpdate(
       acceptReview: flags.has("--accept-review"),
       fetcher,
       ...(deleteSecret ? { deleteSecret } : {}),
+      ...(revokeCredential && !check ? { revokeCredential } : {}),
     });
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "UPDATE_FAILED";
@@ -1475,10 +1532,12 @@ async function runRollback(ctx: LaunchContext): Promise<void> {
   const { app } = ctx.metadata;
   requireInstalled(ctx, `${app.command} rollback`);
   const deleteSecret = secretDeleter(ctx);
+  const revokeCredential = credentialRevoker(ctx);
   let result: Awaited<ReturnType<typeof rollbackDistribution>>;
   try {
     result = await rollbackDistribution(app.id, {
       ...(deleteSecret ? { deleteSecret } : {}),
+      ...(revokeCredential ? { revokeCredential } : {}),
     });
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "ROLLBACK_FAILED";
