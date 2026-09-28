@@ -125,12 +125,14 @@ function lastSegment(field: string): string {
 /**
  * Common secret value shapes. A static manifest never carries these, so every
  * string scalar (and mapping key) is checked. Equivalent to the MCP value
- * check in governance-parse, with the `Bearer`/`Basic` prefix narrowed to a
- * credential-shaped token so display text such as "Basic Agent" stays valid.
+ * check in governance-parse, narrowed so ordinary names stay valid: the
+ * `Bearer`/`Basic` prefix needs a credential-shaped token ("Basic Agent" is
+ * display text), and an `sk-` key needs 16+ characters including a digit
+ * (`sk-helper` is a distribution id).
  */
 export const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /^(?:bearer|basic)\s+(?=\S*[0-9+/=._~-])[A-Za-z0-9._~+/=-]{8,}\s*$/i,
-  /\bsk-[A-Za-z0-9_-]{6,}/,
+  /\bsk-(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{16,}/,
   /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\./,
   /\b(?:ghp|gho|ghs|ghu|github_pat|glpat|xox[abpsr])[-_][A-Za-z0-9_-]{8,}/,
   /\bAKIA[0-9A-Z]{16}\b/,

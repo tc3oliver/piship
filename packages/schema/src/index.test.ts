@@ -152,6 +152,15 @@ describe("secret-looking values", () => {
       parseManifest({ ...valid, app: { ...valid.app, name } }).app.name,
     ).toBe(name);
   });
+  it.each(["sk-helper", "sk-learning-assistant", "desk-tools"])(
+    "accepts the ordinary id %s",
+    (id) => {
+      expect(
+        parseManifest({ ...valid, app: { ...valid.app, id, command: id } }).app
+          .id,
+      ).toBe(id);
+    },
+  );
   it("accepts both shipped examples", () => {
     expect(readManifest(example("personal")).app.id).toBe("mypi");
     expect(readManifest(example("demo-company")).schema).toBe(
