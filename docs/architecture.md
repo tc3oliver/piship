@@ -19,7 +19,7 @@ The layers arrived in order. The personal distribution core came first (`piship/
 | `@piship/contracts` | Separate `IdentityProvider`, `CredentialProvider`, `SecretStore`, and `InferenceProvider` contracts; the policy decision and audit event contracts; `SecretValue` redaction; `PiShipError` codes; managed network policy |
 | `@piship/policy` | Policy engine and rule precedence, glob and path matching, `policy explain` rendering, project identification and resource discovery, resource and provider trust, capability state |
 | `@piship/audit` | Metadata-first audit log with file and HTTP sinks, the failure matrix, and local metrics, including update and rollback outcome counters |
-| `@piship/sandbox` | OS sandbox adapters (Linux bubblewrap, macOS Seatbelt), profile resolution, the live containment probe, and contained process spawning |
+| `@piship/sandbox` | The sandbox backend contract and its backends (native Linux bubblewrap and macOS Seatbelt, custom adapters, e2b-compatible, Kubernetes Agent Sandbox), profile resolution, the live containment probe, PiShip-owned command timeout and cancellation, and contained process spawning ([sandbox backends](sandbox.md)) |
 | `@piship/mcp` | Governed MCP client: stdio and Streamable HTTP transports, server start and tool call authorization, tool exposure |
 | `@piship/identity` | OIDC Authorization Code + PKCE login for native public clients ([identity](identity.md)) |
 | `@piship/credentials` | Credential providers, platform secret stores, and the runtime credential lifecycle ([credentials](credentials.md)) |
@@ -71,7 +71,7 @@ A `piship/v1alpha3` or `piship/v1alpha4` payload runs the access steps above for
 
 1. Audit: opens the sinks; an unreachable required sink fails with `AUDIT_UNAVAILABLE`.
 2. Project: finds the project root and origin remote, classifies the origin, and discovers project resource candidates.
-3. Sandbox: when required, selects the platform adapter and proves it with a live probe; otherwise fails with `SANDBOX_UNAVAILABLE`.
+3. Sandbox: when required, builds the declared backend (the platform OS sandbox by default), checks its capabilities against the policy, prepares it, and proves it with a live probe or, for a backend that cannot wrap local processes, an outside check; otherwise fails with `SANDBOX_UNAVAILABLE`. PiShip owns policy and governance; the sandbox backend owns execution isolation ([sandbox backends](sandbox.md)).
 4. Policy engine: enforced rules, team adapter rules, project restrictions, distribution defaults, and user rules, with the proven containment.
 5. Declared resources: trust class, certified integrity and compatibility, then `*.load` policy; builtin extensions likewise.
 6. Project resources: project trust dimension, resource trust, then policy.

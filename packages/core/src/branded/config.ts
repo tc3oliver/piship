@@ -31,6 +31,7 @@ function governanceRows(ctx: BrandedContext) {
       sandbox.required,
       "run doctor for the effective containment level",
     ),
+    row("sandbox.provider", sandbox.provider ?? "native"),
     row("sandbox.network", sandbox.network.mode),
     row(
       "audit.sinks",

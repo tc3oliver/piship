@@ -256,9 +256,34 @@ export interface McpConfig {
 
 // ----------------------------------------------------------------- sandbox
 
+/** Where sandboxed commands run; `native` is the platform OS sandbox. */
+export const SANDBOX_PROVIDERS = [
+  "native",
+  "custom",
+  "e2b-compatible",
+  "kubernetes-agent-sandbox",
+] as const;
+export type SandboxProvider = (typeof SANDBOX_PROVIDERS)[number];
+
 export interface SandboxConfig {
   /** A required sandbox that cannot be activated fails closed. */
   readonly required: boolean;
+  /** The backend; omitted for `native`, the default. */
+  readonly provider?: Exclude<SandboxProvider, "native">;
+  /** `custom`: the adapter module (`./...`, packaged and locked). */
+  readonly adapter?: string;
+  /** Remote providers: control endpoint URL or `${NAME}` reference. */
+  readonly endpoint?: string;
+  /** `kubernetes-agent-sandbox`: sandbox router URL or `${NAME}` reference. */
+  readonly router?: string;
+  /** `kubernetes-agent-sandbox`: namespace of the SandboxClaims. */
+  readonly namespace?: string;
+  /** `e2b-compatible`: template ID; `kubernetes-agent-sandbox`: warm pool. */
+  readonly template?: string;
+  /** Remote providers: the remote directory that maps to the workspace. */
+  readonly workdir?: string;
+  /** Sent to the endpoint: only `runtime` sends the runtime credential. */
+  readonly credential?: "runtime";
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };

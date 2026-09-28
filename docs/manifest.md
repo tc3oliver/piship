@@ -173,13 +173,15 @@ Other server fields: `credential` (`none`, the default, or `runtime`, which send
 
 | Field | Default | Values |
 | --- | --- | --- |
-| `sandbox.required` | `false` | `true` activates the OS sandbox and fails the launch with `SANDBOX_UNAVAILABLE` when it cannot be enforced. With `false`, no OS sandbox is activated |
+| `sandbox.required` | `false` | `true` activates the sandbox and fails the launch with `SANDBOX_UNAVAILABLE` when it cannot be enforced. With `false`, no sandbox is activated |
+| `sandbox.provider` | `native` | `native` (bubblewrap on Linux, Seatbelt on macOS), `custom`, `e2b-compatible`, or `kubernetes-agent-sandbox`. A non-native provider requires `sandbox.required: true`. The lock omits the field for `native` |
+| `sandbox.adapter`, `endpoint`, `router`, `namespace`, `template`, `workdir`, `credential` | none | Backend settings, each accepted only by the providers that use it; `endpoint` and `router` accept runtime references, and `credential` is `none` or `runtime`. See [sandbox backends](sandbox.md#configuration) |
 | `sandbox.filesystem.read.deny` | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pi` | Paths hidden from contained processes; the distribution state directory is always added |
 | `sandbox.filesystem.write.allow` | `workspace`, `tmp` | The only writable paths; everything else is read-only |
 | `sandbox.network.mode` | `deny` when required, otherwise `allow` | `deny` or `allow` only. `allowlist`, `allow`, `allowHosts`, and `hosts` keys are rejected: hostname allowlists are not enforced at this boundary |
 | `sandbox.environment.allow` | `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TZ`, `SHELL`, `TMPDIR` | Variables passed into contained processes; credential-looking names are rejected |
 
-Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or `..` segments. `tmp` is a private per-session directory.
+Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or `..` segments. `tmp` is a private per-session directory. A `custom` adapter module is locked and packaged like other adapters.
 
 ### Audit
 
@@ -236,7 +238,7 @@ The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribu
 
 ## Runtime references
 
-`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url` and `audit.sinks[].url`, and in v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
+`${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url`, `audit.sinks[].url`, `sandbox.endpoint`, and `sandbox.router`, and in v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
 
 The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `updates.source` is resolved only when `update` runs, not at launch; its resolved value must pass the same URL checks or be an absolute local directory (`--from` also accepts a relative directory). `piship validate` lists the variables and notes which are unset in the current shell.
 

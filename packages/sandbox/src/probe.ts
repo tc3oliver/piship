@@ -11,7 +11,11 @@ import {
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SandboxAdapter } from "./adapter.js";
+import type {
+  SandboxAdapter,
+  SandboxCommand,
+  WrappedCommand,
+} from "./adapter.js";
 import { sanitizeStderr } from "./environment.js";
 import { spawnManaged } from "./process.js";
 import { isWithin, realpathNearest, type SandboxProfile } from "./profile.js";
@@ -152,9 +156,20 @@ function evaluate(
   return failures;
 }
 
+/**
+ * Something the probe can run a child in: an adapter, or a backend that
+ * prepares a wrapping instance for the probe's own profile.
+ */
+export interface ProbeTarget {
+  prepare(profile: SandboxProfile): Promise<{
+    wrap(command: SandboxCommand): WrappedCommand;
+    dispose(): Promise<void>;
+  }>;
+}
+
 /** Spawn a real child inside the adapter and verify every claimed plane. */
 export async function probeSandbox(
-  adapter: SandboxAdapter,
+  target: SandboxAdapter | ProbeTarget,
   profile: SandboxProfile,
   options: ProbeOptions,
 ): Promise<ProbeResult> {
@@ -197,12 +212,26 @@ export async function probeSandbox(
       loopbackPort: listener?.port ?? 0,
       connectTimeoutMs: 3000,
     });
-    const wrapped = adapter.wrap(probeProfile, {
-      file: process.execPath,
-      args: ["-e", PROBE_SCRIPT, input],
-      cwd: allowedDir,
-      env: options.env,
-    });
+    const instance =
+      "wrap" in target
+        ? {
+            wrap: (command: SandboxCommand) =>
+              target.wrap(probeProfile, command),
+            dispose: async () => {},
+          }
+        : await target.prepare(probeProfile);
+    let wrapped: WrappedCommand;
+    try {
+      wrapped = instance.wrap({
+        file: process.execPath,
+        args: ["-e", PROBE_SCRIPT, input],
+        cwd: allowedDir,
+        env: options.env,
+      });
+    } catch (error) {
+      await instance.dispose();
+      throw error;
+    }
     let stdout = "";
     let stderr = "";
     const child = spawnManaged({
@@ -220,6 +249,7 @@ export async function probeSandbox(
       },
     });
     const exit = await child.exited;
+    await instance.dispose();
     let report: ProbeReport;
     try {
       report = JSON.parse(stdout) as ProbeReport;

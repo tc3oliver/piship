@@ -1,5 +1,8 @@
-// Sandbox activation: select an adapter, prove it with a live probe, and
-// expose wrap/exec for tool subprocesses. A required sandbox never falls back.
+// Sandbox activation: select a backend, check that its capabilities can
+// enforce the policy, prove it (a live probe for local backends, an outside
+// check for the others), and expose wrap/exec for tool subprocesses. PiShip
+// owns the environment, timeout, and cancellation of every command. A
+// required sandbox never falls back.
 import {
   existsSync,
   mkdirSync,
@@ -8,19 +11,31 @@ import {
   rmSync,
 } from "node:fs";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
-import type {
-  SandboxAdapter,
-  SandboxAdapterId,
-  WrappedCommand,
-} from "./adapter.js";
+import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
+import {
+  capabilityMismatch,
+  type SandboxBackend,
+  type SandboxCapabilities,
+  type SandboxExecRequest,
+  type SandboxExecResult,
+  type SandboxInstance,
+  type SandboxProvider,
+} from "./backend.js";
 import { filterEnvironment, stripCredentials } from "./environment.js";
-import { type ContainmentPlane, probeSandbox } from "./probe.js";
-import { spawnManaged, spawnProcess } from "./process.js";
+import { NativeBackend } from "./native.js";
+import {
+  CONTAINMENT_PLANES,
+  type ContainmentPlane,
+  type ProbeTarget,
+  probeSandbox,
+} from "./probe.js";
+import { spawnProcess } from "./process.js";
 import {
   isWithin,
   type ProtectedPaths,
+  realpathNearest,
   resolveProfile,
   type SandboxPolicy,
   type SandboxProfile,
@@ -29,13 +44,28 @@ import { selectAdapter } from "./select.js";
 
 export type ContainmentLevel = "enforced" | "unavailable" | "not-required";
 
+/**
+ * How the enforced planes are known. `live-probe`: a real child inside the
+ * backend failed to cross each plane. `backend-attested`: the backend
+ * declares them; PiShip checked what it can from outside (the command
+ * round trip, the environment it sends, and a failed outbound connection in
+ * deny mode).
+ */
+export type ContainmentVerification = "live-probe" | "backend-attested";
+
 export interface ContainmentReport {
   readonly level: ContainmentLevel;
-  readonly adapter: SandboxAdapterId;
+  /** The backend id, such as `linux-bubblewrap` or `e2b-compatible`. */
+  readonly adapter: string;
+  readonly provider: SandboxProvider;
   readonly required: boolean;
-  /** Planes verified by the live probe; empty unless enforced. */
+  /** Planes enforced by the backend; empty unless enforced. */
   readonly planes: readonly ContainmentPlane[];
   readonly network: "deny" | "allow";
+  /** Set when enforced. */
+  readonly verification?: ContainmentVerification;
+  /** Whether local processes (MCP stdio servers) can be contained. */
+  readonly localProcesses: boolean;
   readonly reason?: string;
   readonly warnings: readonly string[];
 }
@@ -53,11 +83,18 @@ export interface ActivationContext {
   /** Activate even when not required; a failure then reports `unavailable`. */
   readonly enable?: boolean;
   readonly platform?: NodeJS.Platform;
-  /** Adapter override (tests, diagnostics). */
+  /** Native adapter override (tests, diagnostics). */
   readonly adapter?: SandboxAdapter;
+  /** The backend; defaults to the native backend for the platform. */
+  readonly backend?: SandboxBackend;
   /** Source environment for sandboxed commands. Defaults to process.env. */
   readonly env?: NodeJS.ProcessEnv;
   readonly probeTimeoutMs?: number;
+  /**
+   * How long PiShip waits for a backend to settle after it timed out or
+   * cancelled a command before it stops waiting and retires the instance.
+   */
+  readonly settleMs?: number;
 }
 
 /** Structurally compatible with Pi's `BashOperations.exec` options. */
@@ -75,7 +112,8 @@ export interface ActiveSandbox {
   /**
    * Wrap a command for spawning. With `env`, that approved environment is used
    * (credential names still stripped); otherwise the profile allowlist is
-   * applied to the source environment.
+   * applied to the source environment. A backend that cannot contain local
+   * processes refuses with SANDBOX_UNAVAILABLE.
    */
   wrap(
     file: string,
@@ -88,8 +126,8 @@ export interface ActiveSandbox {
     cwd: string,
     options: SandboxExecOptions,
   ): Promise<{ exitCode: number | null }>;
-  /** Remove the owned session temp directory. */
-  dispose(): void;
+  /** Release the backend instance and remove the owned session temp directory. */
+  dispose(): Promise<void>;
 }
 
 /** Variables the sandbox sets itself: the private session temp dir and the working directory. */
@@ -155,18 +193,172 @@ function exitCodeOf(
   return signal ? 128 + (osConstants.signals[signal] ?? 0) : 1;
 }
 
+/**
+ * Variables that describe this host. A remote backend never receives them,
+ * even when allowlisted: its own environment provides them.
+ */
+export const HOST_BOUND_VARIABLES = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "PWD",
+] as const;
+
+/** The working directory relative to the workspace, or undefined outside it. */
+function workspacePath(workspace: string, cwd: string): string | undefined {
+  const real = realpathNearest(cwd);
+  if (!isWithin(real, workspace)) return undefined;
+  const path = relative(workspace, real);
+  return path === "" ? "." : path.split(sep).join("/");
+}
+
+const ABANDONED = Symbol("abandoned");
+
+/** The default for `ActivationContext.settleMs`. */
+const DEFAULT_SETTLE_MS = 5000;
+
+interface GovernedRun {
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  readonly settleMs: number;
+  readonly onData: (chunk: Buffer) => void;
+  /** Called when the backend ignored an abort for `settleMs`. */
+  readonly retire: () => void;
+}
+
+type GovernedOutcome =
+  | { readonly kind: "exit"; readonly exitCode: number }
+  | { readonly kind: "timeout" }
+  | { readonly kind: "cancelled" };
+
+/**
+ * Run one command through a backend instance with PiShip's timeout and
+ * cancellation. PiShip decides the outcome: once it times out or cancels,
+ * whatever the backend reports afterwards is ignored, output stops being
+ * forwarded, and a backend that does not settle within `settleMs` has its
+ * instance retired.
+ */
+async function runGoverned(
+  instance: SandboxInstance,
+  request: SandboxExecRequest,
+  run: GovernedRun,
+): Promise<GovernedOutcome> {
+  if (run.signal?.aborted) return { kind: "cancelled" };
+  const controller = new AbortController();
+  let timedOut = false;
+  let cancelled = false;
+  let open = true;
+  let settleTimer: NodeJS.Timeout | undefined;
+  const onAbort = () => {
+    cancelled = true;
+    controller.abort();
+  };
+  run.signal?.addEventListener("abort", onAbort, { once: true });
+  const timer =
+    run.timeoutMs !== undefined && run.timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, run.timeoutMs)
+      : undefined;
+  const abandoned = new Promise<typeof ABANDONED>((resolvePromise) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        // The outcome is decided: nothing the backend prints afterwards counts.
+        open = false;
+        settleTimer = setTimeout(() => resolvePromise(ABANDONED), run.settleMs);
+      },
+      { once: true },
+    );
+  });
+  const forward = (chunk: Buffer) => {
+    if (open) run.onData(chunk);
+  };
+  const pending = Promise.resolve().then(() =>
+    instance.exec(request, {
+      signal: controller.signal,
+      onStdout: forward,
+      onStderr: forward,
+    }),
+  );
+  // A late rejection after PiShip stopped waiting must not go unhandled.
+  pending.catch(() => undefined);
+  let result: SandboxExecResult | typeof ABANDONED | undefined;
+  try {
+    result = await Promise.race([pending, abandoned]);
+  } catch (error) {
+    if (!timedOut && !cancelled)
+      throw new Error(redact(String((error as Error)?.message ?? error)));
+  } finally {
+    open = false;
+    if (timer) clearTimeout(timer);
+    if (settleTimer) clearTimeout(settleTimer);
+    run.signal?.removeEventListener("abort", onAbort);
+  }
+  if (result === ABANDONED) run.retire();
+  if (timedOut) return { kind: "timeout" };
+  if (cancelled) return { kind: "cancelled" };
+  const exit = result as SandboxExecResult | undefined;
+  const code = Number.isInteger(exit?.exitCode)
+    ? (exit?.exitCode as number)
+    : null;
+  return { kind: "exit", exitCode: exitCodeOf(code, exit?.signal ?? null) };
+}
+
 interface Session {
   readonly report: ContainmentReport;
   readonly profile: SandboxProfile;
-  readonly adapter: SandboxAdapter;
+  readonly backend: SandboxBackend;
+  readonly instance: SandboxInstance | undefined;
+  readonly capabilities: SandboxCapabilities | undefined;
   readonly sourceEnv: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
   readonly ownedTmp: string | undefined;
+  readonly settleMs: number;
+}
+
+function retiredError(report: ContainmentReport): PiShipError {
+  return new PiShipError(
+    "SANDBOX_UNAVAILABLE",
+    `The ${report.adapter} sandbox backend did not stop a timed-out or cancelled command, so PiShip retired it; start a new session`,
+    { component: "sandbox" },
+  );
+}
+
+/** The approved environment for one command inside an enforced backend. */
+function commandEnvironment(
+  session: Pick<Session, "profile" | "platform" | "capabilities">,
+  source: NodeJS.ProcessEnv,
+): Record<string, string> {
+  const filtered = filterEnvironment(
+    source,
+    session.profile.environmentAllow,
+    {},
+    session.platform,
+  );
+  if (session.capabilities?.isolation !== "remote")
+    return sessionEnvironment(session.profile, filtered);
+  const hostBound = new Set<string>(HOST_BOUND_VARIABLES);
+  const output: Record<string, string> = {};
+  for (const [name, value] of Object.entries(filtered))
+    if (!hostBound.has(name.toUpperCase())) output[name] = value;
+  return output;
 }
 
 function createActiveSandbox(session: Session): ActiveSandbox {
-  const { report, profile, adapter, sourceEnv, platform } = session;
-  const enforced = report.level === "enforced";
+  const { report, profile, instance, sourceEnv, platform } = session;
+  const enforced = report.level === "enforced" && instance !== undefined;
+  let retired = false;
+  let disposed = false;
+  const retire = () => {
+    if (retired) return;
+    retired = true;
+    void instance?.dispose().catch(() => undefined);
+  };
   const approvedEnv = (env?: Readonly<Record<string, string>>) =>
     sessionEnvironment(
       profile,
@@ -182,48 +374,81 @@ function createActiveSandbox(session: Session): ActiveSandbox {
         cwd,
         env: env ? { ...env } : stripCredentials(sourceEnv),
       };
-    return adapter.wrap(profile, { file, args, cwd, env: approvedEnv(env) });
+    if (retired || disposed) throw retiredError(report);
+    if (!report.localProcesses || !instance.wrap)
+      throw new PiShipError(
+        "SANDBOX_UNAVAILABLE",
+        `The ${report.adapter} sandbox backend cannot contain local processes such as MCP stdio servers`,
+        {
+          component: "sandbox",
+          userAction:
+            "Use an HTTP MCP server, or a sandbox backend that contains local processes",
+        },
+      );
+    return instance.wrap({ file, args, cwd, env: approvedEnv(env) });
   };
   const exec: ActiveSandbox["exec"] = async (command, cwd, options) => {
     if (options.signal?.aborted) throw new Error("aborted");
-    if (!existsSync(cwd))
+    const remote = session.capabilities?.isolation === "remote";
+    if (!(enforced && remote) && !existsSync(cwd))
       throw new Error(`Working directory does not exist: ${cwd}`);
-    const shell = shellFor(platform);
-    const common = {
-      file: shell.file,
-      args: [...shell.flag, command],
-      cwd,
-      ...(options.timeout ? { timeoutMs: options.timeout * 1000 } : {}),
-      graceMs: 1000,
-      ...(options.signal ? { signal: options.signal } : {}),
-      onStdout: options.onData,
-      onStderr: options.onData,
-    };
-    const child = enforced
-      ? spawnManaged({
-          ...common,
-          env: filterEnvironment(
-            options.env ?? sourceEnv,
-            profile.environmentAllow,
-            {},
-            platform,
-          ),
-          sandbox: { wrap },
-        })
-      : // Not contained: behave like a plain local shell, environment untouched.
-        spawnProcess({ ...common, env: options.env ?? sourceEnv });
-    const exit = await child.exited;
-    if (exit.error) throw new Error(exit.error);
-    if (exit.cancelled) throw new Error("aborted");
-    if (exit.timedOut) throw new Error(`timeout:${options.timeout}`);
-    return { exitCode: exitCodeOf(exit.code, exit.signal) };
+    if (!enforced) {
+      // Not contained: behave like a plain local shell, environment untouched.
+      const shell = shellFor(platform);
+      const exit = await spawnProcess({
+        file: shell.file,
+        args: [...shell.flag, command],
+        cwd,
+        env: options.env ?? sourceEnv,
+        ...(options.timeout ? { timeoutMs: options.timeout * 1000 } : {}),
+        graceMs: 1000,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onStdout: options.onData,
+        onStderr: options.onData,
+      }).exited;
+      if (exit.error) throw new Error(exit.error);
+      if (exit.cancelled) throw new Error("aborted");
+      if (exit.timedOut) throw new Error(`timeout:${options.timeout}`);
+      return { exitCode: exitCodeOf(exit.code, exit.signal) };
+    }
+    if (retired || disposed) throw retiredError(report);
+    const relativeCwd = workspacePath(profile.workspace, cwd);
+    if (remote && relativeCwd === undefined)
+      throw new Error(
+        `Working directory is outside the workspace, where the ${report.adapter} sandbox backend cannot run commands: ${cwd}`,
+      );
+    const outcome = await runGoverned(
+      instance,
+      {
+        command,
+        cwd,
+        workspacePath: relativeCwd,
+        env: commandEnvironment(session, options.env ?? sourceEnv),
+      },
+      {
+        ...(options.timeout ? { timeoutMs: options.timeout * 1000 } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        settleMs: session.settleMs,
+        onData: options.onData,
+        retire,
+      },
+    );
+    if (outcome.kind === "cancelled") throw new Error("aborted");
+    if (outcome.kind === "timeout")
+      throw new Error(`timeout:${options.timeout}`);
+    return { exitCode: outcome.exitCode };
   };
   return {
     report,
     profile,
     wrap,
     exec,
-    dispose: () => removeSessionTmp(session.ownedTmp),
+    dispose: async () => {
+      if (disposed) return;
+      disposed = true;
+      if (!retired) await instance?.dispose().catch(() => undefined);
+      removeSessionTmp(session.ownedTmp);
+    },
   };
 }
 
@@ -254,7 +479,7 @@ function removeSessionTmp(dir: string | undefined): void {
 
 function unavailable(
   config: SandboxPolicy,
-  adapter: SandboxAdapterId,
+  backend: SandboxBackend,
   reason: string,
   warnings: readonly string[],
 ): ContainmentReport {
@@ -265,20 +490,141 @@ function unavailable(
       {
         component: "sandbox",
         userAction:
-          adapter === "unsupported"
-            ? "Run this distribution on Linux (bubblewrap) or macOS (sandbox-exec)"
-            : "Fix the sandbox mechanism reported above; PiShip does not fall back to running unsandboxed",
-        sanitizedDetail: { adapter },
+          backend.id === "unsupported"
+            ? "Run this distribution on Linux (bubblewrap) or macOS (sandbox-exec), or use a remote sandbox backend"
+            : "Fix the sandbox backend reported above; PiShip does not fall back to running unsandboxed",
+        sanitizedDetail: { adapter: backend.id, provider: backend.provider },
       },
     );
   return {
     level: "unavailable",
-    adapter,
+    adapter: backend.id,
+    provider: backend.provider,
     required: false,
     planes: [],
     network: config.network.mode,
+    localProcesses: false,
     reason: redact(reason),
     warnings,
+  };
+}
+
+function message(error: unknown): string {
+  return redact(String((error as Error)?.message ?? error)).slice(0, 400);
+}
+
+/** Printed by the check command when it ran inside the backend. */
+export const SANDBOX_READY_MARKER = "piship-sandbox-ready";
+/** Set in the check command's source environment; it must never arrive. */
+const UNLISTED_MARKER = "PISHIP_PROBE_UNLISTED";
+
+function checkCommand(network: "deny" | "allow", externalHost: string): string {
+  const lines = [
+    `printf '%s %s\\n' ${SANDBOX_READY_MARKER} "\${${UNLISTED_MARKER}:-unset}"`,
+  ];
+  if (network === "deny")
+    lines.push(
+      `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${externalHost}/443' >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; else echo piship-network-unchecked; fi`,
+    );
+  return lines.join("\n");
+}
+
+/**
+ * The outside check for a backend PiShip cannot live-probe: a command must
+ * run and report back, the unlisted marker must not arrive, and in deny mode
+ * an outbound connection must fail. Returns a failure reason and warnings.
+ */
+async function checkAttested(
+  instance: SandboxInstance,
+  session: Pick<Session, "profile" | "platform" | "capabilities">,
+  sourceEnv: NodeJS.ProcessEnv,
+  options: { timeoutMs: number; settleMs: number; externalHost: string },
+): Promise<{ failure?: string; warnings: string[] }> {
+  let output = "";
+  const outcome = await runGoverned(
+    instance,
+    {
+      command: checkCommand(session.profile.network, options.externalHost),
+      cwd: session.profile.workspace,
+      workspacePath: ".",
+      env: commandEnvironment(session, {
+        ...sourceEnv,
+        [UNLISTED_MARKER]: "1",
+      }),
+    },
+    {
+      timeoutMs: options.timeoutMs,
+      settleMs: options.settleMs,
+      onData: (chunk) => {
+        if (output.length < 4096) output += chunk.toString("utf8");
+      },
+      retire: () => {},
+    },
+  ).catch((error: unknown) => ({ kind: "error" as const, error }));
+  if (outcome.kind === "error")
+    return {
+      failure: `the sandbox check command failed: ${message(outcome.error)}`,
+      warnings: [],
+    };
+  if (outcome.kind !== "exit")
+    return { failure: "the sandbox check command timed out", warnings: [] };
+  const lines = output.split(/\r?\n/).map((line) => line.trim());
+  const ready = lines.find((line) =>
+    line.startsWith(`${SANDBOX_READY_MARKER} `),
+  );
+  if (outcome.exitCode !== 0 || !ready)
+    return {
+      failure: `the sandbox check command did not report back (exit ${outcome.exitCode})`,
+      warnings: [],
+    };
+  if (ready !== `${SANDBOX_READY_MARKER} unset`)
+    return {
+      failure:
+        "an unapproved environment variable reached the sandboxed command",
+      warnings: [],
+    };
+  if (session.profile.network !== "deny") return { warnings: [] };
+  if (lines.includes("piship-network-reachable"))
+    return {
+      failure:
+        "an outbound network connection succeeded although the network is denied",
+      warnings: [],
+    };
+  if (lines.includes("piship-network-blocked")) return { warnings: [] };
+  return {
+    warnings: [
+      "the outbound connection check could not run inside the sandbox; network denial is attested by the backend only",
+    ],
+  };
+}
+
+/** Planes the report claims: those the policy needs and the backend declares. */
+function declaredPlanes(
+  capabilities: SandboxCapabilities,
+  network: "deny" | "allow",
+): ContainmentPlane[] {
+  return CONTAINMENT_PLANES.filter(
+    (plane) =>
+      capabilities.planes.includes(plane) &&
+      (plane !== "network-deny" || network === "deny"),
+  );
+}
+
+/** A probe target that prepares a separate wrapping instance per probe. */
+function probeTarget(backend: SandboxBackend): ProbeTarget {
+  return {
+    prepare: async (profile) => {
+      const instance = await backend.prepare({ profile });
+      const wrap = instance.wrap?.bind(instance);
+      if (!wrap) {
+        await instance.dispose().catch(() => undefined);
+        throw new Error("the backend instance cannot wrap a local process");
+      }
+      return {
+        wrap,
+        dispose: () => instance.dispose().catch(() => undefined),
+      };
+    },
   };
 }
 
@@ -291,79 +637,154 @@ export async function activateSandbox(
   ctx: ActivationContext,
 ): Promise<ActiveSandbox> {
   const platform = ctx.platform ?? process.platform;
-  const adapter = ctx.adapter ?? selectAdapter(platform);
+  const backend =
+    ctx.backend ??
+    new NativeBackend(ctx.adapter ?? selectAdapter(platform), platform);
   const active = config.required || ctx.enable === true;
   const ownedTmp = active && !ctx.tmpDir ? createSessionTmp() : undefined;
   // Without activation nothing is contained, so no session directory is made.
   const tmpDir = ctx.tmpDir ?? ownedTmp ?? tmpdir();
   if (active) mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
-  const profile = withNodeReadable(
-    resolveProfile(config, {
-      workspace: ctx.workspace,
-      homeDir: ctx.homeDir ?? homedir(),
-      tmpDir,
-      ...(ctx.extraWritable ? { extraWritable: ctx.extraWritable } : {}),
-      ...(ctx.extraReadOnly ? { extraReadOnly: ctx.extraReadOnly } : {}),
-      ...(ctx.protectedPaths ? { protectedPaths: ctx.protectedPaths } : {}),
-    }),
-  );
-  const sourceEnv = ctx.env ?? process.env;
-  const session = { profile, adapter, sourceEnv, platform, ownedTmp };
-  const cleanupOnThrow = () => removeSessionTmp(ownedTmp);
+  const settleMs = ctx.settleMs ?? DEFAULT_SETTLE_MS;
+  let instance: SandboxInstance | undefined;
+  const cleanupOnThrow = async () => {
+    await instance?.dispose().catch(() => undefined);
+    removeSessionTmp(ownedTmp);
+  };
   try {
+    const profile = withNodeReadable(
+      resolveProfile(config, {
+        workspace: ctx.workspace,
+        homeDir: ctx.homeDir ?? homedir(),
+        tmpDir,
+        ...(ctx.extraWritable ? { extraWritable: ctx.extraWritable } : {}),
+        ...(ctx.extraReadOnly ? { extraReadOnly: ctx.extraReadOnly } : {}),
+        ...(ctx.protectedPaths ? { protectedPaths: ctx.protectedPaths } : {}),
+      }),
+    );
+    const sourceEnv = ctx.env ?? process.env;
+    const base = {
+      profile,
+      backend,
+      sourceEnv,
+      platform,
+      ownedTmp,
+      settleMs,
+    };
+    const fail = async (reason: string) => {
+      await instance?.dispose().catch(() => undefined);
+      instance = undefined;
+      return createActiveSandbox({
+        ...base,
+        instance: undefined,
+        capabilities: undefined,
+        report: unavailable(config, backend, reason, profile.warnings),
+      });
+    };
     if (!active)
       return createActiveSandbox({
-        ...session,
+        ...base,
+        instance: undefined,
+        capabilities: undefined,
         report: {
           level: "not-required",
-          adapter: adapter.id,
+          adapter: backend.id,
+          provider: backend.provider,
           required: false,
           planes: [],
           network: config.network.mode,
+          localProcesses: false,
           warnings: profile.warnings,
         },
       });
-    const availability = await adapter.available();
-    let report: ContainmentReport;
-    if (!availability.available)
-      report = unavailable(
-        config,
-        adapter.id,
-        availability.reason,
-        profile.warnings,
+    const availability = await backend.available().catch((error: unknown) => ({
+      available: false as const,
+      reason: message(error),
+    }));
+    if (!availability.available) return await fail(availability.reason);
+    const capabilities = backend.capabilities();
+    const mismatch = capabilityMismatch(capabilities, config.network.mode);
+    if (mismatch)
+      return await fail(
+        `the ${backend.id} sandbox backend cannot enforce this policy: ${mismatch}`,
       );
-    else {
+    try {
+      instance = await backend.prepare({ profile });
+    } catch (error) {
+      return await fail(
+        `the ${backend.id} sandbox backend could not prepare a sandbox: ${message(error)}`,
+      );
+    }
+    const session = { ...base, capabilities };
+    const live =
+      capabilities.isolation === "local" && typeof instance.wrap === "function";
+    let verification: ContainmentVerification;
+    let planes: readonly ContainmentPlane[];
+    const warnings = [...profile.warnings];
+    if (live) {
       const env = sessionEnvironment(
         profile,
         filterEnvironment(
-          { ...sourceEnv, PISHIP_PROBE_UNLISTED: "1" },
+          { ...sourceEnv, [UNLISTED_MARKER]: "1" },
           profile.environmentAllow,
           {},
           platform,
         ),
       );
-      const probe = await probeSandbox(adapter, profile, {
-        env,
-        injected: [
-          ...INJECTED_VARIABLES,
-          ...platformInjectedVariables(platform),
-        ],
-        ...(ctx.probeTimeoutMs ? { timeoutMs: ctx.probeTimeoutMs } : {}),
+      const probe = await probeSandbox(
+        backend instanceof NativeBackend
+          ? backend.adapter
+          : probeTarget(backend),
+        profile,
+        {
+          env,
+          injected: [
+            ...INJECTED_VARIABLES,
+            ...platformInjectedVariables(platform),
+          ],
+          ...(ctx.probeTimeoutMs ? { timeoutMs: ctx.probeTimeoutMs } : {}),
+        },
+      ).catch((error: unknown) => ({
+        ok: false as const,
+        reason: `the sandbox probe could not run: ${message(error)}`,
+      }));
+      if (!probe.ok) return await fail(probe.reason);
+      verification = "live-probe";
+      planes = probe.planes;
+    } else {
+      const check = await checkAttested(instance, session, sourceEnv, {
+        timeoutMs: ctx.probeTimeoutMs ?? 60_000,
+        settleMs,
+        externalHost: "1.1.1.1",
       });
-      report = probe.ok
-        ? {
-            level: "enforced",
-            adapter: adapter.id,
-            required: config.required,
-            planes: probe.planes,
-            network: config.network.mode,
-            warnings: profile.warnings,
-          }
-        : unavailable(config, adapter.id, probe.reason, profile.warnings);
+      if (check.failure)
+        return await fail(
+          `the ${backend.id} sandbox backend failed its check: ${check.failure}`,
+        );
+      warnings.push(...check.warnings);
+      verification = "backend-attested";
+      planes = declaredPlanes(capabilities, config.network.mode);
     }
-    return createActiveSandbox({ ...session, report });
+    return createActiveSandbox({
+      ...session,
+      instance,
+      report: {
+        level: "enforced",
+        adapter: backend.id,
+        provider: backend.provider,
+        required: config.required,
+        planes,
+        network: config.network.mode,
+        verification,
+        localProcesses:
+          capabilities.localProcesses &&
+          capabilities.isolation === "local" &&
+          typeof instance.wrap === "function",
+        warnings,
+      },
+    });
   } catch (error) {
-    cleanupOnThrow();
+    await cleanupOnThrow();
     throw error;
   }
 }
@@ -372,11 +793,19 @@ export async function activateSandbox(
 export function describeContainment(report: ContainmentReport): string {
   const requirement = report.required ? "required" : "optional";
   switch (report.level) {
-    case "enforced":
-      return `enforced by ${report.adapter} (${requirement}): ${report.planes.join(", ")}; network ${report.network}. Contains tool subprocesses and MCP stdio servers, not the agent process or in-process extensions`;
+    case "enforced": {
+      const how =
+        report.verification === "backend-attested"
+          ? `${requirement}, attested by the backend`
+          : requirement;
+      const scope = report.localProcesses
+        ? "Contains tool subprocesses and MCP stdio servers"
+        : "Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start";
+      return `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions`;
+    }
     case "unavailable":
       return `unavailable on ${report.adapter} (${requirement}): ${redact(report.reason ?? "unknown reason")}. Tool subprocesses run with the user's privileges`;
     default:
-      return "not required: no OS sandbox is active; tool subprocesses run with the user's privileges";
+      return "not required: no sandbox is active; tool subprocesses run with the user's privileges";
   }
 }

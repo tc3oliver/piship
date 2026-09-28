@@ -4,9 +4,12 @@ export {
   type ActiveSandbox,
   type ContainmentLevel,
   type ContainmentReport,
+  type ContainmentVerification,
   describeContainment,
+  HOST_BOUND_VARIABLES,
   INJECTED_VARIABLES,
   platformInjectedVariables,
+  SANDBOX_READY_MARKER,
   type SandboxExecOptions,
 } from "./activate.js";
 export {
@@ -18,6 +21,20 @@ export {
   type SandboxCommand,
   type WrappedCommand,
 } from "./adapter.js";
+export {
+  capabilityMismatch,
+  isBackendId,
+  requiredPlanes,
+  SANDBOX_PROVIDERS,
+  type SandboxBackend,
+  type SandboxCapabilities,
+  type SandboxExecIO,
+  type SandboxExecRequest,
+  type SandboxExecResult,
+  type SandboxInstance,
+  type SandboxPrepareRequest,
+  type SandboxProvider,
+} from "./backend.js";
 export {
   BubblewrapAdapter,
   type BubblewrapFeatures,
@@ -33,11 +50,13 @@ export {
   sanitizeStderr,
   stripCredentials,
 } from "./environment.js";
+export { NativeBackend } from "./native.js";
 export {
   CONTAINMENT_PLANES,
   type ContainmentPlane,
   type ProbeOptions,
   type ProbeResult,
+  type ProbeTarget,
   probeSandbox,
 } from "./probe.js";
 export {
@@ -70,3 +89,16 @@ export {
   selectAdapter,
   UnsupportedAdapter,
 } from "./select.js";
+export { type CustomBackendContext, customBackend } from "./custom.js";
+export {
+  connectEnvelope,
+  E2bCompatibleBackend,
+  type E2bCompatibleOptions,
+  EnvelopeReader,
+} from "./remote/e2b.js";
+export type { RemoteBackendOptions } from "./remote/http.js";
+export {
+  KubernetesAgentSandboxBackend,
+  type KubernetesAgentSandboxOptions,
+  runtimeCommand,
+} from "./remote/kubernetes.js";

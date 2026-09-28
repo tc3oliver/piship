@@ -13,6 +13,7 @@ You provide three services. Their URLs are `${NAME}` [runtime references](manife
 | Credential broker: revoke (optional) | `credential.broker.revokeEndpoint` | PiShip | `logout`; `login` (replaces the previous credential); update, rollback, or migration that must clear it |
 | LLM gateway: model list | `inference.baseUrl` + `/models` | PiShip | Launch with `inference.liveCatalog: true`; `doctor` |
 | LLM gateway: inference | `inference.baseUrl` + `/chat/completions` or `/responses` | Pi, in the same process | Every model turn and `--smoke-model` |
+| Sandbox backend (optional) | `sandbox.provider`, `sandbox.endpoint` | PiShip | Launch (create and check), each `bash` or `!` command, session end |
 
 ```text
 user ──login──▶ IdP (browser, PKCE) ──tokens──▶ PiShip
@@ -199,6 +200,28 @@ Each result is also counted in the local `<state>/logs/metrics.json`, which hold
 
 During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed.
 
+## Sandbox backend (optional)
+
+By default contained commands run in the native OS sandbox and nothing here is needed. A distribution can instead run them in the company's own sandbox or remote execution service: a `custom` adapter module, an `e2b-compatible` API (E2B, CubeSandbox, or another service that implements it), or Kubernetes Agent Sandbox. PiShip owns policy and governance; the sandbox backend owns execution isolation. The [sandbox contract](sandbox.md) has the fields, lifecycle, and wire calls.
+
+```yaml
+variables: [ACMECODE_SANDBOX_URL]
+sandbox:
+  required: true
+  provider: e2b-compatible
+  endpoint: ${ACMECODE_SANDBOX_URL}
+  template: acmecode-workspace
+  credential: runtime
+```
+
+| PiShip does | Your sandbox service owns |
+| --- | --- |
+| Decides every command against the policy before the backend sees it | Isolating the command: filesystem, network, processes, and resource limits |
+| Sends one command, its workspace-relative directory, and the approved environment; never files, host paths such as `PATH` or `HOME`, or credential-looking variables | Providing the workspace contents (template, image, volume, or clone) and a usable shell |
+| Sends the runtime credential only with `credential: runtime`, and only to the inference gateway origin | Authenticating that credential, or fronting E2B or Kubernetes with the company gateway |
+| Checks declared capabilities and fails closed on a gap, an unavailable service, or a failed check | Honoring the declared capabilities, including network denial for `sandbox.network.mode: deny` |
+| Times out and cancels commands, then kills the remote process or deletes the claim | Stopping commands promptly and removing sandboxes that are deleted or expire |
+
 ## Network and TLS
 
 Applies to every PiShip-managed request above and to Pi's in-process requests ([security](security.md#network-and-tls)).
@@ -242,6 +265,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | Enforces HTTPS, private-only hosts, and the declared CA | TLS certificates, network reachability, proxies, and the enterprise CA bundle |
 | Keeps secrets out of `piship.yaml` and the lock; endpoints are runtime references | Distributing endpoint values to users, rotating broker and upstream provider keys |
 | Declares model capabilities from `models.catalog` | Keeping that catalog accurate for the models the gateway serves |
+| Governs commands and owns their timeout, cancellation, environment, and credentials | Execution isolation in a custom, e2b-compatible, or Kubernetes sandbox backend |
 
 ## Connecting a LiteLLM gateway
 

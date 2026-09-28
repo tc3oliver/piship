@@ -1,14 +1,21 @@
 // Sandbox: filesystem, network, and child environment boundaries.
-import type { SandboxConfig } from "../governance.js";
+import {
+  SANDBOX_PROVIDERS,
+  type SandboxConfig,
+  type SandboxProvider,
+} from "../governance.js";
 import {
   bool,
+  conflict,
   envName,
   fail,
   isRecord,
   list,
+  modulePath,
   oneOf,
   optionalRecord,
   plainString,
+  referenceUrl,
   unsafe,
 } from "./fields.js";
 
@@ -63,14 +70,154 @@ function sandboxPath(value: unknown, path: string): string {
   return item.length > 1 && item.endsWith("/") ? item.slice(0, -1) : item;
 }
 
-export function parseSandbox(value: unknown): SandboxConfig {
+/** Backend fields and the providers that accept them. */
+const BACKEND_FIELDS: Readonly<
+  Record<string, readonly Exclude<SandboxProvider, "native">[]>
+> = {
+  adapter: ["custom"],
+  endpoint: ["custom", "e2b-compatible", "kubernetes-agent-sandbox"],
+  router: ["kubernetes-agent-sandbox"],
+  namespace: ["kubernetes-agent-sandbox"],
+  template: ["e2b-compatible", "kubernetes-agent-sandbox"],
+  workdir: ["e2b-compatible", "kubernetes-agent-sandbox"],
+  credential: ["custom", "e2b-compatible", "kubernetes-agent-sandbox"],
+};
+const KUBERNETES_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const TEMPLATE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+function remoteWorkdir(value: unknown, path: string): string {
+  const item = plainString(value, path, 1024);
+  if (
+    !item.startsWith("/") ||
+    item.includes("\\") ||
+    item
+      .split("/")
+      .slice(1)
+      .some(
+        (segment, index, all) =>
+          segment === "." ||
+          segment === ".." ||
+          (!segment && index < all.length - 1),
+      )
+  )
+    unsafe(path, "Use an absolute POSIX path without . or .. segments");
+  return item;
+}
+
+/** The backend fields, validated for the provider; empty for native. */
+function parseBackend(
+  sandbox: Readonly<Record<string, unknown>>,
+  required: boolean,
+  variables: readonly string[],
+): Omit<SandboxConfig, "required" | "filesystem" | "network" | "environment"> {
+  const provider = oneOf(
+    sandbox.provider,
+    "sandbox.provider",
+    SANDBOX_PROVIDERS,
+    "native",
+  );
+  for (const [field, providers] of Object.entries(BACKEND_FIELDS))
+    if (
+      sandbox[field] !== undefined &&
+      (provider === "native" || !providers.includes(provider))
+    )
+      conflict(
+        `sandbox.${field}`,
+        `${field} applies only to the ${providers.join(", ")} provider${providers.length > 1 ? "s" : ""}`,
+      );
+  if (provider === "native") return {};
+  if (!required)
+    conflict(
+      "sandbox.provider",
+      `The ${provider} backend is used only by a required sandbox; set sandbox.required: true`,
+    );
+  if (provider === "custom" && sandbox.adapter === undefined)
+    fail("sandbox.adapter", "The custom provider needs an adapter module");
+  if (provider !== "custom" && sandbox.endpoint === undefined)
+    fail("sandbox.endpoint", `The ${provider} provider needs an endpoint`);
+  if (provider === "kubernetes-agent-sandbox") {
+    if (sandbox.router === undefined)
+      fail(
+        "sandbox.router",
+        "The kubernetes-agent-sandbox provider needs the sandbox router URL",
+      );
+    if (sandbox.template === undefined)
+      fail(
+        "sandbox.template",
+        "The kubernetes-agent-sandbox provider needs the warm pool name",
+      );
+  }
+  const text = (field: string, pattern: RegExp, message: string) => {
+    const item = plainString(sandbox[field], `sandbox.${field}`, 128);
+    if (!pattern.test(item)) fail(`sandbox.${field}`, message);
+    return item;
+  };
+  const credential = oneOf(
+    sandbox.credential,
+    "sandbox.credential",
+    ["none", "runtime"] as const,
+    "none",
+  );
+  return {
+    provider,
+    ...(sandbox.adapter === undefined
+      ? {}
+      : { adapter: modulePath(sandbox.adapter, "sandbox.adapter") }),
+    ...(sandbox.endpoint === undefined
+      ? {}
+      : {
+          endpoint: referenceUrl(
+            sandbox.endpoint,
+            "sandbox.endpoint",
+            variables,
+          ),
+        }),
+    ...(sandbox.router === undefined
+      ? {}
+      : { router: referenceUrl(sandbox.router, "sandbox.router", variables) }),
+    ...(sandbox.namespace === undefined
+      ? {}
+      : {
+          namespace: text(
+            "namespace",
+            KUBERNETES_NAME,
+            "Use a Kubernetes namespace name",
+          ),
+        }),
+    ...(sandbox.template === undefined
+      ? {}
+      : {
+          template: text(
+            "template",
+            provider === "kubernetes-agent-sandbox"
+              ? KUBERNETES_NAME
+              : TEMPLATE_ID,
+            provider === "kubernetes-agent-sandbox"
+              ? "Use a Kubernetes resource name"
+              : "Use a template ID or name",
+          ),
+        }),
+    ...(sandbox.workdir === undefined
+      ? {}
+      : { workdir: remoteWorkdir(sandbox.workdir, "sandbox.workdir") }),
+    ...(credential === "runtime" ? { credential } : {}),
+  };
+}
+
+export function parseSandbox(
+  value: unknown,
+  variables: readonly string[] = [],
+): SandboxConfig {
   const sandbox = optionalRecord(value, "sandbox", [
     "required",
+    "provider",
+    ...Object.keys(BACKEND_FIELDS),
     "filesystem",
     "network",
     "environment",
   ]);
   const required = bool(sandbox.required, "sandbox.required", false);
+  const backend = parseBackend(sandbox, required, variables);
   const filesystem = optionalRecord(sandbox.filesystem, "sandbox.filesystem", [
     "read",
     "write",
@@ -97,6 +244,7 @@ export function parseSandbox(value: unknown): SandboxConfig {
   );
   return {
     required,
+    ...backend,
     filesystem: {
       read: {
         deny:

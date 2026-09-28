@@ -851,6 +851,14 @@ policy:
       expect(
         release.checkReleaseInputs(optional.path, "win32-x64").app.id,
       ).toBe("acmepi");
+      // A remote backend does not depend on the target's OS sandbox.
+      const remote = project({
+        extra:
+          "sandbox:\n  required: true\n  provider: e2b-compatible\n  endpoint: https://sandbox.example.com\n",
+      });
+      expect(release.checkReleaseInputs(remote.path, "win32-x64").app.id).toBe(
+        "acmepi",
+      );
     } finally {
       vi.doUnmock("./index.js");
       vi.resetModules();

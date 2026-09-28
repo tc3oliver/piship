@@ -13,6 +13,38 @@ export function sandbox(
       ? ["high", "Sandbox no longer fails closed when unavailable."]
       : ["medium", "Sandbox becomes required."],
   );
+  out.scalar(
+    "sandbox",
+    "sandbox provider",
+    x?.provider ?? "native",
+    y?.provider ?? "native",
+    () => ["high", "Commands run in a different sandbox backend."],
+  );
+  for (const field of [
+    "adapter",
+    "endpoint",
+    "router",
+    "namespace",
+    "template",
+    "workdir",
+  ] as const)
+    out.scalar("sandbox", `sandbox ${field}`, x?.[field], y?.[field], () => [
+      "medium",
+      "Changes where or how the sandbox backend runs commands.",
+    ]);
+  out.scalar(
+    "sandbox",
+    "sandbox credential",
+    x?.credential ?? "none",
+    y?.credential ?? "none",
+    (_, r) =>
+      r === "runtime"
+        ? ["high", "Sends the runtime credential to the sandbox endpoint."]
+        : [
+            "medium",
+            "Stops sending the runtime credential to the sandbox endpoint.",
+          ],
+  );
   out.set(
     "sandbox",
     "sandbox filesystem.read.deny",

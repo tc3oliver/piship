@@ -31,6 +31,6 @@ Out of scope for v0.6, and candidates for v0.7 or later:
 - Runtime hooks for actions that have none yet: `network.connect`, `web.request`, `browser.execute`, `agent.invoke`, and `memory.*`.
 - Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([release checklist](release/owner-workflow.md#release-checklist)); more targets once each has installed lifecycle evidence.
 
-## Considered: remote execution backends
+## Remote execution backends
 
-v0.3 contains tool subprocesses with the host OS sandbox (bubblewrap on Linux, Seatbelt on macOS) so that commands run on the developer's machine against the local workspace. A company that wants commands to run on its own infrastructure instead could later add an optional remote execution backend, for example a KVM microVM service such as CubeSandbox. That needs workspace synchronization and a server deployment, so it is not scheduled.
+v0.3 contained tool subprocesses with the host OS sandbox (bubblewrap on Linux, Seatbelt on macOS). Pluggable [sandbox backends](sandbox.md) now let a company run commands on its own infrastructure instead: a custom adapter, an E2B-compatible service such as E2B or CubeSandbox, or Kubernetes Agent Sandbox, as a preview without live evidence. Still considered, not scheduled: synchronizing the local workspace into a remote sandbox (today the template or image provides it) and running file tools remotely.

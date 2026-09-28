@@ -1660,6 +1660,202 @@ describe("v1alpha3 sandbox", () => {
   });
 });
 
+describe("sandbox backends", () => {
+  const withSandbox = (value: Json) =>
+    managed({
+      variables: [
+        ...managedAccess.variables,
+        ...["ACME_SANDBOX_URL", "ACME_ROUTER_URL"].filter((name) =>
+          JSON.stringify(value).includes(name),
+        ),
+      ],
+      sandbox: value,
+    });
+  it("defaults to the native provider without adding fields", () => {
+    const result = governance(withSandbox({ required: true })).sandbox;
+    expect(result).not.toHaveProperty("provider");
+    expect(
+      governance(withSandbox({ required: true, provider: "native" })).sandbox,
+    ).toEqual(result);
+  });
+  it("accepts an e2b-compatible backend with a runtime endpoint", () => {
+    expect(
+      governance(
+        withSandbox({
+          required: true,
+          provider: "e2b-compatible",
+          endpoint: `\${ACME_SANDBOX_URL}`,
+          template: "piship-workspace",
+          workdir: "/workspace/repo",
+          credential: "runtime",
+        }),
+      ).sandbox,
+    ).toMatchObject({
+      required: true,
+      provider: "e2b-compatible",
+      endpoint: `\${ACME_SANDBOX_URL}`,
+      template: "piship-workspace",
+      workdir: "/workspace/repo",
+      credential: "runtime",
+      network: { mode: "deny" },
+    });
+  });
+  it("accepts a kubernetes-agent-sandbox backend and a custom adapter", () => {
+    expect(
+      governance(
+        withSandbox({
+          required: true,
+          provider: "kubernetes-agent-sandbox",
+          endpoint: "https://k8s.example.com",
+          router: `\${ACME_ROUTER_URL}`,
+          namespace: "agents",
+          template: "python-pool",
+        }),
+      ).sandbox,
+    ).toMatchObject({
+      provider: "kubernetes-agent-sandbox",
+      router: `\${ACME_ROUTER_URL}`,
+      namespace: "agents",
+      template: "python-pool",
+    });
+    const custom = governance(
+      withSandbox({
+        required: true,
+        provider: "custom",
+        adapter: "./sandbox/acme-sandbox.mjs",
+      }),
+    ).sandbox;
+    expect(custom).toMatchObject({
+      provider: "custom",
+      adapter: "./sandbox/acme-sandbox.mjs",
+    });
+    expect(custom).not.toHaveProperty("credential");
+  });
+  it.each([
+    [
+      { provider: "e2b-compatible", endpoint: "https://sandbox.example.com" },
+      "sandbox.provider",
+      "set sandbox.required: true",
+    ],
+    [
+      { required: true, provider: "firecracker" },
+      "sandbox.provider",
+      undefined,
+    ],
+    [
+      { required: true, provider: "e2b-compatible" },
+      "sandbox.endpoint",
+      "needs an endpoint",
+    ],
+    [
+      { required: true, provider: "custom" },
+      "sandbox.adapter",
+      "needs an adapter module",
+    ],
+    [
+      { required: true, provider: "custom", adapter: "/abs/adapter.mjs" },
+      "sandbox.adapter",
+      undefined,
+    ],
+    [
+      { required: true, endpoint: "https://sandbox.example.com" },
+      "sandbox.endpoint",
+      "applies only to",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        router: "https://r.example.com",
+      },
+      "sandbox.router",
+      "kubernetes-agent-sandbox",
+    ],
+    [
+      {
+        required: true,
+        provider: "kubernetes-agent-sandbox",
+        endpoint: "https://k.example.com",
+        template: "pool",
+      },
+      "sandbox.router",
+      "router URL",
+    ],
+    [
+      {
+        required: true,
+        provider: "kubernetes-agent-sandbox",
+        endpoint: "https://k.example.com",
+        router: "https://r.example.com",
+      },
+      "sandbox.template",
+      "warm pool",
+    ],
+    [
+      {
+        required: true,
+        provider: "kubernetes-agent-sandbox",
+        endpoint: "https://k.example.com",
+        router: "https://r.example.com",
+        template: "Pool_1",
+      },
+      "sandbox.template",
+      "Kubernetes resource name",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "http://sandbox.example.com",
+      },
+      "sandbox.endpoint",
+      undefined,
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: `\${UNDECLARED_URL}`,
+      },
+      "sandbox.endpoint",
+      "not declared",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        credential: "api-key",
+      },
+      "sandbox.credential",
+      undefined,
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        workdir: "repo",
+      },
+      "sandbox.workdir",
+      "absolute POSIX path",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        apiKey: "e2b_x",
+      },
+      "sandbox.apiKey",
+      "Secrets are never declared",
+    ],
+  ])("rejects %j at %s", (value, field, message) => {
+    rejects(withSandbox(value as Json), field, message);
+  });
+});
+
 describe("v1alpha3 audit", () => {
   const audit = (value: Json, mode: "personal" | "managed" = "personal") =>
     mode === "managed" ? managed({ audit: value }) : personal({ audit: value });
