@@ -301,10 +301,14 @@ describe("governed distribution (local fixtures)", () => {
     expect(toolResults[3]).toMatch(
       /not allowed|outside what this distribution/,
     );
-    expect(toolResults[4]).toContain("handbook/release");
+    // Plan mode allows only read and ask_user: MCP tools, allowed by policy
+    // in Build mode, are refused before they reach the server.
+    expect(toolResults[4]).toContain("Plan mode does not allow");
+    expect(toolResults[4]).not.toContain("handbook/release");
     // The denied tool is never offered and never reaches the server.
     expect(toolResults[5]).toMatch(/not found/i);
-    expect(toolResults[6]).toContain("Reviews check tests");
+    expect(toolResults[6]).toContain("Plan mode does not allow");
+    expect(toolResults[6]).not.toContain("Reviews check tests");
     expect(toolResults[7]).toContain("No interactive user");
 
     const events = auditEvents(dist.state);
@@ -313,9 +317,14 @@ describe("governed distribution (local fixtures)", () => {
         event.event === "tool.denied" && event.rule === "piship-workflow.plan",
     );
     expect(planDenials.map((event) => event.resource)).toEqual(
-      expect.arrayContaining(["write", "bash"]),
+      expect.arrayContaining([
+        "write",
+        "bash",
+        "mcp__docs__search",
+        "mcp__docs__get_document",
+      ]),
     );
-    expect(events.some((event) => event.event === "mcp.call")).toBe(true);
+    expect(events.some((event) => event.event === "mcp.call")).toBe(false);
     expect(events.some((event) => event.event === "session.start")).toBe(true);
     const log = JSON.stringify(events);
     expect(log).not.toContain(SECRET);
@@ -502,6 +511,9 @@ describe("governed distribution (local fixtures)", () => {
               },
             },
           ]),
+      // MCP tools refused in Plan mode run under the policy in Build mode.
+      { name: "mcp__docs__search", arguments: { query: "release" } },
+      { name: "mcp__docs__get_document", arguments: { id: "handbook/review" } },
     ];
     const { result, toolResults } = await scripted(
       dist,
@@ -523,10 +535,24 @@ describe("governed distribution (local fixtures)", () => {
       expect(toolResults[5]).toContain("NETERR");
       expect(connections).toBe(0);
     }
+    expect(toolResults.at(-2)).toContain("handbook/release");
+    expect(toolResults.at(-1)).toContain("Reviews check tests");
     // The company sink received metadata-only events.
     expect(received.map((event) => event.event)).toEqual(
-      expect.arrayContaining(["session.start", "tool.allowed", "session.end"]),
+      expect.arrayContaining([
+        "session.start",
+        "tool.allowed",
+        "mcp.call",
+        "session.end",
+      ]),
     );
+    expect(
+      received.some(
+        (event) =>
+          event.event === "tool.denied" &&
+          event.rule === "piship-workflow.plan",
+      ),
+    ).toBe(false);
     const delivered = JSON.stringify(received);
     expect(delivered).not.toContain(SECRET);
     expect(delivered).not.toContain("echo sandboxed");

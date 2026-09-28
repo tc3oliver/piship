@@ -42,13 +42,38 @@ import type { GovernanceSession } from "./governance-session.js";
 /** True when `path` is `root` or below it. */
 const inside = (root: string, path: string) => isWithin(path, root);
 
-/** Tools a Plan-mode session may not run. */
-export const PLAN_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
-  "write",
-  "edit",
-  "bash",
+/**
+ * The only tools a Plan-mode session may run: the governed `read` and
+ * `ask_user`. Everything else, including MCP and extension tools whose
+ * effects PiShip cannot know, is blocked until the user switches to Build.
+ */
+export const PLAN_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
+  "read",
+  "ask_user",
 ]);
 export const PLAN_RULE = "piship-workflow.plan";
+
+/**
+ * Record a tool refused by Plan mode and return the refusal, or undefined
+ * when the session is not in Plan mode or the tool is allowed there.
+ */
+export function planRefusal(
+  gov: GovernanceSession,
+  tool: string,
+): string | undefined {
+  if (gov.workflowMode !== "plan" || PLAN_ALLOWED_TOOLS.has(tool))
+    return undefined;
+  gov.metrics.recordPolicyDenial("tool.execute");
+  gov.emit("tool.denied", {
+    resource: tool,
+    decision: "denied",
+    policy: gov.policyId,
+    rule: PLAN_RULE,
+    enforcement: "control-plane",
+    detail: { action: "tool.execute" },
+  });
+  return `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
+}
 
 /** An approval channel backed by Pi's dialog UI, or none when headless. */
 export function uiChannel(ctx: ExtensionContext): ApprovalChannel | undefined {
@@ -356,7 +381,10 @@ function withChannel<T extends ToolDefinition>(
   } as T;
 }
 
-function mcpTool(tool: GovernedMcpTool): ToolDefinition {
+function mcpTool(
+  gov: GovernanceSession,
+  tool: GovernedMcpTool,
+): ToolDefinition {
   return {
     name: tool.name,
     label: `${tool.server}: ${tool.tool}`,
@@ -366,6 +394,9 @@ function mcpTool(tool: GovernedMcpTool): ToolDefinition {
     parameters: tool.inputSchema as never,
     executionMode: "sequential",
     async execute(_id, params, signal) {
+      // The tool_call hook refuses first; this holds for direct calls too.
+      const refusal = planRefusal(gov, tool.name);
+      if (refusal) throw blocked(refusal);
       const result = await tool.call(params as Record<string, unknown>, signal);
       if (result.isError) throw new Error(result.text || "MCP tool failed");
       return {
@@ -449,7 +480,7 @@ export function governedTools(
     createBashToolDefinition(cwd, {
       operations: governedBashOperations(gov, "bash"),
     }) as ToolDefinition,
-    ...(gov.mcp?.tools() ?? []).map(mcpTool),
+    ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
   return tools.map((tool) => withChannel(gov, tool));
 }

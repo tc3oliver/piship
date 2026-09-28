@@ -479,7 +479,21 @@ describe("governed built-in tools", () => {
     expect(await call?.({ toolName: "edit", input: {} }, context())).toEqual(
       expect.objectContaining({ block: true }),
     );
+    // Plan mode is an allowlist: MCP and extension tools are blocked too,
+    // whatever the policy says about them.
+    for (const name of ["mcp__docs__search", "deploy", "grep"])
+      expect(await call?.({ toolName: name, input: {} }, context())).toEqual({
+        block: true,
+        reason: `Plan mode does not allow ${name}. The user can switch to Build mode with /build.`,
+      });
+    for (const name of ["read", "ask_user"])
+      expect(await call?.({ toolName: name, input: {} }, context())).toBe(
+        undefined,
+      );
     session.workflowMode = "build";
+    expect(
+      await call?.({ toolName: "mcp__docs__search", input: {} }, context()),
+    ).toBe(undefined);
     expect(await call?.({ toolName: "read", input: {} }, context())).toBe(
       undefined,
     );

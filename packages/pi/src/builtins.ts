@@ -10,13 +10,12 @@ import { redact } from "@piship/contracts";
 import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
-  PLAN_BLOCKED_TOOLS,
-  PLAN_RULE,
+  planRefusal,
   uiChannel,
 } from "./governed-tools.js";
 
 export const DEFAULT_PLAN_PROMPT =
-  "You are in Plan mode. Investigate and propose a plan. Do not change files or run commands; the user switches to Build mode with /build when the plan is ready.";
+  "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available: do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
 export const DEFAULT_BUILD_PROMPT =
   "You are in Build mode. Carry out the agreed plan with the available tools.";
 
@@ -33,21 +32,8 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
       pi.on("tool_call", async (event, ctx) => {
         attach(gov, ctx);
         const tool = event.toolName;
-        if (gov.workflowMode === "plan" && PLAN_BLOCKED_TOOLS.has(tool)) {
-          gov.metrics.recordPolicyDenial("tool.execute");
-          gov.emit("tool.denied", {
-            resource: tool,
-            decision: "denied",
-            policy: gov.policyId,
-            rule: PLAN_RULE,
-            enforcement: "control-plane",
-            detail: { action: "tool.execute" },
-          });
-          return {
-            block: true,
-            reason: `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`,
-          };
-        }
+        const refusal = planRefusal(gov, tool);
+        if (refusal) return { block: true, reason: refusal };
         gov.emit("tool.request", { resource: tool });
         const decision = await gov.withChannel(uiChannel(ctx), () =>
           gov.decide("tool.execute", tool, gov.currentChannel(), {
@@ -181,14 +167,14 @@ export function workflowExtension(
           if (ctx.hasUI)
             ctx.ui.notify(
               mode === "plan"
-                ? "Plan mode: files and commands are read-only."
+                ? "Plan mode: only reading files and asking the user are allowed."
                 : "Build mode: tools follow the distribution policy.",
               "info",
             );
         };
       pi.registerCommand("plan", {
         description:
-          "Plan mode: investigate without changing files or running commands",
+          "Plan mode: investigate with read-only tools; no changes, commands, or other tools",
         handler: switchTo("plan"),
       });
       pi.registerCommand("build", {
