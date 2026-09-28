@@ -62,6 +62,14 @@ jobs:
           node-version: 22.19.x
           cache: npm
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
+      # The OS sandbox tests need bubblewrap and unprivileged user
+      # namespaces, which Ubuntu restricts through AppArmor by default.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --version
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code
@@ -70,3 +78,4 @@ jobs:
       - run: npm run test:e2e
         env:
           PISHIP_E2E_QUALIFICATION: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
