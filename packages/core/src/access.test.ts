@@ -1,9 +1,11 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -426,5 +428,107 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
         item.body.includes("grant_type=refresh_token"),
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("credential adapters", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  beforeEach(async () => {
+    services = await startLocalServices({
+      knobs: { acceptedKeys: ["sk-adapter-issued-key"] },
+    });
+  });
+  afterEach(() => services.close());
+  const open = (adapter: string) => {
+    const manifest = parseManifest({
+      schema: PISHIP_SCHEMA_V1ALPHA2,
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: { pi: "0.87.1" },
+      deployment: { mode: "personal" },
+      credential: { provider: "adapter", adapter },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: services.gatewayUrl,
+      },
+      models: {
+        allowed: ["acme/coder"],
+        catalog: {
+          "acme/coder": {
+            name: "Coder",
+            contextWindow: 32000,
+            maxOutputTokens: 2048,
+          },
+        },
+      },
+    });
+    return DistributionAccess.open({
+      app: manifest.app,
+      mode: "personal",
+      access: manifest.access as AccessManifest,
+      stateDir: join(temp, "state"),
+      distributionDir: temp,
+      env: {},
+      secretStore: new MemorySecretStore(),
+    });
+  };
+  const write = (name: string, source: string) => {
+    mkdirSync(join(temp, "resources", "adapters"), { recursive: true });
+    writeFileSync(join(temp, "resources", "adapters", name), source);
+  };
+
+  it("loads the adapter from the payload with a token-free context and uses its credential", async () => {
+    write(
+      "credential.mjs",
+      `export default (context) => {
+        globalThis.__pishipAdapterContext = context;
+        return {
+          mode: "adapter",
+          requiresIdentity: false,
+          async acquire() {
+            return {
+              kind: "api_key",
+              secret: { reveal: () => "sk-adapter-issued-key" },
+            };
+          },
+        };
+      };`,
+    );
+    const distribution = open("./adapters/credential.mjs");
+    const activated = await distribution.activate({
+      requestedModel: "acme/coder",
+    });
+    expect(activated.selectedModel).toBe("acme/coder");
+    expect(activated.credential.secret?.reveal()).toBe("sk-adapter-issued-key");
+    const context = (globalThis as Record<string, unknown>)
+      .__pishipAdapterContext as Record<string, unknown>;
+    expect(context).toMatchObject({
+      distributionId: "mypi",
+      endpoints: { baseUrl: services.gatewayUrl },
+    });
+    expect(typeof context.fetch).toBe("function");
+    expect(JSON.stringify(context)).not.toContain("sk-adapter");
+  });
+
+  it("fails visibly for a missing or malformed adapter", async () => {
+    await expect(
+      open("./adapters/missing.mjs").activate(),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("missing from the verified payload"),
+    });
+    write("object.mjs", "export default { acquire() {} };");
+    await expect(
+      open("./adapters/object.mjs").activate(),
+    ).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("default-export a factory"),
+    });
+    write("empty.mjs", "export default () => null;");
+    await expect(open("./adapters/empty.mjs").activate()).rejects.toMatchObject(
+      {
+        code: "CONFIG_INVALID",
+        message: expect.stringContaining("returned no provider"),
+      },
+    );
   });
 });
