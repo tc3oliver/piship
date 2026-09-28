@@ -169,7 +169,10 @@ describe("managed distribution (local fixtures)", () => {
           "provider: system",
           "provider: file\n    acknowledgePlaintext: true",
         )
-        .replace("127.0.0.1:8765", "127.0.0.1"),
+        .replace("127.0.0.1:8765", "127.0.0.1")
+        // --smoke-model runs the demo extension's tool; Plan mode (the demo's
+        // default) refuses every tool but read and ask_user.
+        .replace("defaultMode: plan", "defaultMode: build"),
     );
     const env: NodeJS.ProcessEnv = {
       ...process.env,
