@@ -44,6 +44,13 @@ const CA_VARIABLES = ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"];
 // Agent sockets are local IPC paths, not secret values; git and signing need them.
 const PRESERVED_VARIABLES = ["SSH_AUTH_SOCK", "GPG_AGENT_INFO"];
 
+/** Remove trailing `/` characters in linear time (a `/\/+$/` regex is quadratic on long runs). */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return value.slice(0, end);
+}
+
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return (

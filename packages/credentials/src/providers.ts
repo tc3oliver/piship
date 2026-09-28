@@ -8,6 +8,7 @@ import {
   type RuntimeCredential,
   type RuntimeCredentialKind,
   SecretValue,
+  trimTrailingSlashes,
 } from "@piship/contracts";
 
 export interface HttpBrokerOptions {
@@ -52,7 +53,7 @@ async function brokerRequest(
 
 function normalizeUrl(value: string): string {
   const url = new URL(value);
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  return `${url.origin}${trimTrailingSlashes(url.pathname)}`;
 }
 
 /**

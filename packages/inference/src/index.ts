@@ -11,6 +11,7 @@ import {
   type RuntimeConfigurationContext,
   type RuntimeProviderConfiguration,
   type SecretValue,
+  trimTrailingSlashes,
 } from "@piship/contracts";
 
 export interface CatalogEntry {
@@ -204,7 +205,7 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
     let response: Response;
     try {
       response = await this.options.fetch(
-        `${this.options.baseUrl.replace(/\/+$/, "")}/models`,
+        `${trimTrailingSlashes(this.options.baseUrl)}/models`,
         {
           headers: {
             accept: "application/json",
