@@ -168,12 +168,15 @@ class FileSinkWriter implements SinkWriter {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") await chmod(directory, 0o700);
     const bytes = Buffer.byteLength(data, "utf8");
+    // Read the generation before opening: if a rotation happens in between,
+    // the generation no longer matches and this writer does not rotate.
+    const generation = bytes > 0 ? await this.generation() : "";
     let handle = await this.open();
     try {
-      const { size, ino } = await handle.stat();
+      const { size } = await handle.stat();
       if (bytes > 0 && size > 0 && size + bytes > this.rotation.maxBytes) {
         await handle.close();
-        await this.rotate(ino);
+        await this.rotate(generation);
         handle = await this.open();
       }
       if (process.platform !== "win32") await handle.chmod(0o600);
@@ -200,16 +203,20 @@ class FileSinkWriter implements SinkWriter {
    * rotates at a time; the others append to the current file and retry on a
    * later write. Best effort: a failed rotation never fails the append.
    */
-  private async rotate(measured: number): Promise<void> {
+  private async rotate(measured: string): Promise<void> {
     const lock = `${this.path}.rotate.lock`;
     const token = `${process.pid}-${randomBytes(8).toString("hex")}\n`;
     if (!(await this.acquireRotationLock(lock, token))) return;
     try {
       // Another process may have taken over a lock this one held too long.
       if ((await readFile(lock, "utf8").catch(() => "")) !== token) return;
-      // Another process may have rotated since this one measured the file.
-      const current = await statOpen(this.path).catch(() => undefined);
-      if (!current || (measured && current.ino !== measured)) return;
+      // Another writer may have rotated since this one read the generation.
+      // File identity (inode) is not used: it is not reliable on Windows.
+      if ((await this.generation()) !== measured) return;
+      if (!(await statOpen(this.path).catch(() => undefined))) return;
+      // Advance the generation before moving any file: a crash in between
+      // can only make another writer skip one rotation, never repeat one.
+      await this.writeGeneration(String(Number(measured) + 1));
       const files = Math.max(1, Math.floor(this.rotation.files));
       await rm(`${this.path}.${files}`, { force: true });
       for (let index = files - 1; index >= 1; index -= 1)
@@ -226,6 +233,31 @@ class FileSinkWriter implements SinkWriter {
       // Release only a lock this process still owns.
       if ((await readFile(lock, "utf8").catch(() => "")) === token)
         await rm(lock, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * The generation of the current `audit.jsonl`: a counter in
+   * `audit.jsonl.generation` that each rotation advances under the rotation
+   * lock. A missing or unreadable file is generation 0.
+   */
+  private async generation(): Promise<string> {
+    const value = await readFile(`${this.path}.generation`, "utf8").catch(
+      () => "",
+    );
+    return /^\d+$/.test(value.trim()) ? String(Number(value.trim())) : "0";
+  }
+
+  /** Replace the generation file atomically (write a temporary, rename). */
+  private async writeGeneration(value: string): Promise<void> {
+    const target = `${this.path}.generation`;
+    const temporary = `${target}.${randomBytes(6).toString("hex")}.tmp`;
+    await writeFile(temporary, `${value}\n`, { flag: "wx", mode: 0o600 });
+    try {
+      await rename(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
     }
   }
 
