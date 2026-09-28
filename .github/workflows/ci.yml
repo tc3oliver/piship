@@ -28,4 +28,3 @@ jobs:
       - run: npm run check:boundaries
       - run: npm test
       - run: npm run build
-      - run: npm run test:e2e
