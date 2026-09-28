@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   type KeyObject,
   createHash,
@@ -7,6 +8,8 @@ import {
   sign,
   verify,
 } from "node:crypto";
+import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 
 /** A release key a distribution trusts: base64 of the 44-byte Ed25519 SPKI DER. */
@@ -87,6 +90,76 @@ export function generateSigningKey(id: string): SigningKeyPair {
       .export({ type: "spki", format: "der" })
       .toString("base64"),
   };
+}
+
+/** Where a private key would land relative to a git work tree. */
+export type KeyLocation = "outside" | "ignored" | "tracked-worktree";
+
+function git(args: readonly string[], cwd: string) {
+  const env = { ...process.env };
+  // Answer for the directory itself, not an inherited repository.
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"])
+    delete env[name];
+  return spawnSync("git", args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    shell: false,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+}
+
+/**
+ * Classify a private-key output path: outside any git work tree, inside one
+ * but git-ignored, or inside one where `git add` would pick it up. Without a
+ * usable git, a `.git` entry in any ancestor counts as a work tree whose
+ * ignore rules are unknown.
+ */
+export function privateKeyLocation(path: string): KeyLocation {
+  const target = resolve(path);
+  const parent = existsSync(dirname(target))
+    ? realpathSync(dirname(target))
+    : dirname(target);
+  const file = join(parent, basename(target));
+  const inside = git(["rev-parse", "--is-inside-work-tree"], parent);
+  if (!inside.error) {
+    if (inside.status !== 0 || inside.stdout.trim() !== "true")
+      return "outside";
+    const ignored = git(["check-ignore", "--quiet", "--", file], parent);
+    return !ignored.error && ignored.status === 0
+      ? "ignored"
+      : "tracked-worktree";
+  }
+  for (let dir = parent; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".git"))) return "tracked-worktree";
+    if (dirname(dir) === dir) return "outside";
+  }
+}
+
+/**
+ * Write a new private key (mode 0600, never overwriting). A path inside a git
+ * work tree that is not git-ignored is refused unless `forceInWorktree`, so
+ * the key is not committed by accident.
+ */
+export function writePrivateKey(
+  path: string,
+  privateKeyPem: string,
+  options: { readonly forceInWorktree?: boolean } = {},
+): KeyLocation {
+  const location = privateKeyLocation(path);
+  if (location === "tracked-worktree" && !options.forceInWorktree)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Refusing to write a private key to ${path}: it is inside a git work tree and not git-ignored`,
+      {
+        component: "signing",
+        userAction:
+          "Write the key outside the repository, add the path to .gitignore, or pass --force-in-worktree",
+      },
+    );
+  writeFileSync(path, privateKeyPem, { mode: 0o600, flag: "wx" });
+  return location;
 }
 
 /** The base64 SPKI DER public key for an Ed25519 PEM private key. */

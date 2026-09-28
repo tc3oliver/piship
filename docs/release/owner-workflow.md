@@ -62,7 +62,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 
 Channel names, the channel directory layout, and how clients accept signed metadata are described in the [update lifecycle](update-lifecycle.md#channels-and-signed-metadata). The owner's commands:
 
-- `piship keygen <file> --id <key-id>` writes a new Ed25519 private key (PKCS#8 PEM, mode 0600, refusing to overwrite) and prints the `updates.trust.keys` entry and the key's `sha256:` fingerprint. Keep the private key out of the repository, CI logs, and the manifest; only the public key is pinned.
+- `piship keygen <file> --id <key-id> [--force-in-worktree]` writes a new Ed25519 private key (PKCS#8 PEM, mode 0600, refusing to overwrite, and refusing a path inside a git work tree that is not git-ignored unless `--force-in-worktree` is given) and prints the `updates.trust.keys` entry and the key's `sha256:` fingerprint. Keep the private key out of the repository, CI logs, and the manifest; only the public key is pinned.
 - `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id>` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution. `sign-channel` does not check that the key is pinned by the distribution; an update with an unpinned key fails.
 - Rotation: pin the new key next to the old one, ship a release with both, then sign with the new key and remove the old key in a later release. Key IDs are unique within `updates.trust.keys`.
 

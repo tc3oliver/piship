@@ -1,11 +1,24 @@
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   generateSigningKey,
   keyFingerprint,
+  privateKeyLocation,
   publicKeyFromPrivate,
   signBytes,
   verifySignature,
+  writePrivateKey,
 } from "./signing.js";
 
 const bytes = new TextEncoder().encode('{"channel":"stable"}\n');
@@ -84,5 +97,63 @@ describe("signing", () => {
     expect(() => publicKeyFromPrivate(ecdsa)).toThrow(/must be Ed25519/);
     expect(() => signBytes(bytes, "nope", "acme")).toThrow(/PEM/);
     expect(() => generateSigningKey("Bad Id")).toThrow(/key id/);
+  });
+});
+
+describe("private key location", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0))
+      rmSync(root, { recursive: true, force: true });
+  });
+  const repo = () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-keygen-"));
+    roots.push(root);
+    const init = spawnSync("git", ["init", "--quiet", root]);
+    if (init.status !== 0) throw new Error("git init failed");
+    writeFileSync(join(root, ".gitignore"), "secret/\n");
+    mkdirSync(join(root, "secret"));
+    mkdirSync(join(root, "src"));
+    return root;
+  };
+  const pem = generateSigningKey("acme-release-2026").privateKeyPem;
+
+  it("refuses a key inside a work tree unless it is ignored or forced", () => {
+    const root = repo();
+    expect(() => writePrivateKey(join(root, "src", "k.pem"), pem)).toThrow(
+      /inside a git work tree and not git-ignored/,
+    );
+    expect(existsSync(join(root, "src", "k.pem"))).toBe(false);
+    expect(writePrivateKey(join(root, "secret", "k.pem"), pem)).toBe("ignored");
+    expect(
+      writePrivateKey(join(root, "src", "k.pem"), pem, {
+        forceInWorktree: true,
+      }),
+    ).toBe("tracked-worktree");
+    if (process.platform !== "win32")
+      expect(statSync(join(root, "src", "k.pem")).mode & 0o777).toBe(0o600);
+    // It still never overwrites.
+    expect(() => writePrivateKey(join(root, "secret", "k.pem"), pem)).toThrow(
+      /EEXIST/,
+    );
+    const outside = mkdtempSync(join(tmpdir(), "piship-keygen-out-"));
+    roots.push(outside);
+    expect(privateKeyLocation(join(outside, "k.pem"))).toBe("outside");
+  });
+
+  it("falls back to finding .git when git is unavailable", () => {
+    const root = repo();
+    const path = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      expect(privateKeyLocation(join(root, "secret", "k.pem"))).toBe(
+        "tracked-worktree",
+      );
+      const outside = mkdtempSync(join(tmpdir(), "piship-keygen-out-"));
+      roots.push(outside);
+      expect(privateKeyLocation(join(outside, "k.pem"))).toBe("outside");
+    } finally {
+      process.env.PATH = path;
+    }
   });
 });

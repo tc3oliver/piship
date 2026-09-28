@@ -31,6 +31,7 @@ import {
   uninstallDistribution,
   verifyPayload,
   verifyRelease,
+  writePrivateKey,
   type DistributionLock,
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
@@ -113,10 +114,10 @@ const lifecycleCommands: Record<
     flags: [],
   },
   keygen: {
-    usage: "keygen <private-key-file> --id <key-id>",
+    usage: "keygen <private-key-file> --id <key-id> [--force-in-worktree]",
     positional: [1, 1],
     values: ["--id"],
-    flags: [],
+    flags: ["--force-in-worktree"],
   },
   "sign-channel": {
     usage:
@@ -536,9 +537,14 @@ async function runLifecycle(
   } else if (command === "keygen") {
     const id = options["--id"];
     if (!id) throw new Error("keygen needs --id <key-id>");
-    const { writeFileSync } = await import("node:fs");
     const pair = generateSigningKey(id);
-    writeFileSync(first, pair.privateKeyPem, { mode: 0o600, flag: "wx" });
+    const location = writePrivateKey(first, pair.privateKeyPem, {
+      forceInWorktree: flags.has("--force-in-worktree"),
+    });
+    if (location === "tracked-worktree")
+      output.stderr(
+        `Warning: ${first} is inside a git work tree and not git-ignored; do not commit it.`,
+      );
     output.stdout(
       `Wrote the private key to ${first}. Keep it out of the repository and out of CI logs.\nAdd the public key to piship.yaml:\n\nupdates:\n  trust:\n    keys:\n      - id: ${id}\n        publicKey: ${pair.publicKey}\n\nFingerprint: ${keyFingerprint(pair.publicKey)}`,
     );
