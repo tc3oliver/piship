@@ -2,7 +2,11 @@
   "schema": 1,
   "versions": {
     "0.87.1": {
-      "status": "supported"
+      "status": "supported",
+      "surfaces": {
+        "personal": "supported",
+        "managed": "candidate"
+      }
     }
   }
 }

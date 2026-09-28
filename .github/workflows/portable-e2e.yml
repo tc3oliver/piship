@@ -4,7 +4,9 @@ on:
     paths:
       - 'packages/**'
       - 'tests/e2e/**'
+      - 'tests/helpers/**'
       - 'examples/personal/**'
+      - 'examples/demo-company/**'
       - 'scripts/**'
       - 'compatibility/**'
       - '.github/workflows/**'
@@ -17,7 +19,9 @@ on:
     paths:
       - 'packages/**'
       - 'tests/e2e/**'
+      - 'tests/helpers/**'
       - 'examples/personal/**'
+      - 'examples/demo-company/**'
       - 'scripts/**'
       - 'compatibility/**'
       - '.github/workflows/**'

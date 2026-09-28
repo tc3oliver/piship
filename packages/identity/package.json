@@ -1,0 +1,37 @@
+{
+  "name": "@piship/identity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Native OIDC Authorization Code + PKCE identity provider for PiShip.",
+  "keywords": [
+    "piship",
+    "identity",
+    "oidc",
+    "pkce"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/identity"
+  },
+  "dependencies": {
+    "@piship/contracts": "0.1.0",
+    "openid-client": "6.8.8"
+  }
+}

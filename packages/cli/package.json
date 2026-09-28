@@ -33,6 +33,7 @@
     "directory": "packages/cli"
   },
   "dependencies": {
+    "@piship/contracts": "0.1.0",
     "@piship/core": "0.1.0",
     "@piship/pi": "0.1.0",
     "@piship/schema": "0.1.0"

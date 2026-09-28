@@ -8,7 +8,16 @@ rmSync(input, { recursive: true, force: true });
 mkdirSync(input, { recursive: true });
 for (const name of ["package.json", "package-lock.json"])
   cpSync(join(workspace, name), join(input, name));
-for (const name of ["schema", "core", "pi", "cli"]) {
+for (const name of [
+  "schema",
+  "contracts",
+  "identity",
+  "credentials",
+  "inference",
+  "core",
+  "pi",
+  "cli",
+]) {
   const source = join(workspace, "packages", name);
   const target = join(input, "packages", name);
   mkdirSync(target, { recursive: true });
