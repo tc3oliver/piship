@@ -1,8 +1,32 @@
 name: Pi compatibility
 on:
   pull_request:
+    paths:
+      - 'packages/**'
+      - 'tests/compatibility/**'
+      - 'tests/e2e/**'
+      - 'examples/personal/**'
+      - 'scripts/**'
+      - 'compatibility/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.config.ts'
+      - 'tsconfig*.json'
   push:
     branches: [main]
+    paths:
+      - 'packages/**'
+      - 'tests/compatibility/**'
+      - 'tests/e2e/**'
+      - 'examples/personal/**'
+      - 'scripts/**'
+      - 'compatibility/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.config.ts'
+      - 'tsconfig*.json'
   workflow_dispatch:
 permissions:
   contents: read
