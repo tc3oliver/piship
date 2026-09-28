@@ -99,7 +99,8 @@ export interface ReleaseMetadata {
     readonly version: string;
     /**
      * Compatibility status of this Pi version for the release: the weakest of
-     * the distribution's deployment surface and the `lifecycle` surface.
+     * the distribution's deployment surface, the `governance` surface when it
+     * declares governance, and the `lifecycle` surface.
      */
     readonly compatibility: string;
     /** Per-surface statuses behind `compatibility` (absent in older releases). */
@@ -255,15 +256,20 @@ const COMPATIBILITY_ORDER = ["unsupported", "candidate", "supported"];
 
 /**
  * Status of each surface a release depends on: its deployment surface
- * (`personal` or `managed`) and the `lifecycle` surface every release uses.
+ * (`personal` or `managed`), the `governance` surface when the distribution
+ * declares governance (every piship/v1alpha3 or later manifest does), and
+ * the `lifecycle` surface every release uses.
  */
 export function piCompatibilitySurfaces(
-  lock: Pick<DistributionLock, "deployment" | "runtime">,
+  lock: Pick<DistributionLock, "deployment" | "runtime" | "governance">,
 ): Readonly<Record<string, string>> {
   const surface = lock.deployment.mode === "managed" ? "managed" : "personal";
   const known = PI_COMPATIBILITY[lock.runtime.version];
   return {
     [surface]: known?.[surface] ?? "unsupported",
+    ...(lock.governance
+      ? { governance: known?.governance ?? "unsupported" }
+      : {}),
     lifecycle: known?.lifecycle ?? "unsupported",
   };
 }
@@ -274,7 +280,7 @@ export function piCompatibilitySurfaces(
  * unsupported.
  */
 export function piCompatibility(
-  lock: Pick<DistributionLock, "deployment" | "runtime">,
+  lock: Pick<DistributionLock, "deployment" | "runtime" | "governance">,
 ): string {
   const ranks = Object.values(piCompatibilitySurfaces(lock)).map((status) =>
     Math.max(0, COMPATIBILITY_ORDER.indexOf(status)),

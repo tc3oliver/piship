@@ -86,11 +86,17 @@ export const EVIDENCED_TARGETS = ["linux-x64", "darwin-arm64", "win32-x64"];
  * compatibility/pi.json (a test keeps them equal).
  */
 export const PI_COMPATIBILITY: Readonly<
-  Record<string, Readonly<Record<"personal" | "managed" | "lifecycle", string>>>
+  Record<
+    string,
+    Readonly<
+      Record<"personal" | "managed" | "governance" | "lifecycle", string>
+    >
+  >
 > = {
   "0.87.1": {
     personal: "supported",
     managed: "candidate",
+    governance: "candidate",
     lifecycle: "candidate",
   },
 };

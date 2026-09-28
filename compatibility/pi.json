@@ -6,6 +6,7 @@
       "surfaces": {
         "personal": "supported",
         "managed": "candidate",
+        "governance": "candidate",
         "lifecycle": "candidate"
       }
     }
