@@ -7,5 +7,11 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../schema" }]
+  "references": [
+    { "path": "../schema" },
+    { "path": "../contracts" },
+    { "path": "../identity" },
+    { "path": "../credentials" },
+    { "path": "../inference" }
+  ]
 }

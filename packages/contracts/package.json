@@ -1,0 +1,36 @@
+{
+  "name": "@piship/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "description": "Separate identity, credential, secret-store, and inference contracts plus redaction and error primitives for PiShip.",
+  "keywords": [
+    "piship",
+    "identity",
+    "credentials",
+    "inference"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tc3oliver/piship.git",
+    "directory": "packages/contracts"
+  },
+  "dependencies": {
+    "undici": "8.10.2"
+  }
+}

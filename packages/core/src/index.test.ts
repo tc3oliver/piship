@@ -9,8 +9,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readManifest } from "@piship/schema";
 import {
   distributionStateDirectory,
+  initDistribution,
   lockManifest,
   requireCurrentLock,
   resolveLock,
@@ -104,5 +106,22 @@ describe("distribution core", () => {
     expect(() => resolveLock(other.path)).toThrow(
       "Resource symlinks are not allowed",
     );
+  });
+});
+
+describe("managed init", () => {
+  it("creates a valid managed profile even when the id resembles secret words", () => {
+    for (const id of ["acme-agent", "token-agent"]) {
+      const root = mkdtempSync(join(tmpdir(), "piship-init-managed-"));
+      roots.push(root);
+      const manifest = readManifest(
+        initDistribution(join(root, id), { managed: true }),
+      );
+      expect(manifest.deployment.mode).toBe("managed");
+      expect(manifest.access?.identity.mode).toBe("oidc");
+      expect(
+        manifest.access?.variables.every((name) => !/TOKEN/.test(name)),
+      ).toBe(true);
+    }
   });
 });

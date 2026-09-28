@@ -20,10 +20,16 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ManifestError,
+  PISHIP_SCHEMA_V1ALPHA2,
+  checkVariableName,
   readManifest,
+  type AccessManifest,
   type Manifest,
   type PishipSchemaVersion,
 } from "@piship/schema";
+
+export * from "./access.js";
+export * from "./config.js";
 
 export interface DistributionId {
   readonly value: string;
@@ -34,6 +40,11 @@ export interface ResolvedDistribution {
   readonly piVersion: string;
 }
 export const LOCK_SCHEMA_VERSION = "piship-lock/v1alpha1";
+/** Lock schema for piship/v1alpha2 manifests; adds the static access envelope. */
+export const LOCK_SCHEMA_V1ALPHA2 = "piship-lock/v1alpha2";
+export type LockSchemaVersion =
+  | typeof LOCK_SCHEMA_VERSION
+  | typeof LOCK_SCHEMA_V1ALPHA2;
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "0.87.1";
 export const PISHIP_VERSION = "0.1.0";
@@ -43,12 +54,13 @@ export interface LockedResource {
     | "skills"
     | "extensions"
     | "prompts"
-    | "themes";
+    | "themes"
+    | "adapters";
   readonly path: string;
   readonly sha256: string;
 }
 export interface DistributionLock {
-  readonly schema: typeof LOCK_SCHEMA_VERSION;
+  readonly schema: LockSchemaVersion;
   readonly manifest: {
     readonly schema: PishipSchemaVersion;
     readonly sha256: string;
@@ -68,12 +80,27 @@ export interface DistributionLock {
   };
   readonly resources: readonly LockedResource[];
   readonly declared: Manifest["resources"];
+  /**
+   * Static access intent for v1alpha2: unresolved `${NAME}` templates, provider
+   * modes, and the model catalog. Never tokens, credentials, or resolved
+   * machine-specific values.
+   */
+  readonly access?: AccessManifest;
 }
 // This input is prepared with the @piship/core build, and travels with that package.
 const buildInput =
   process.env.PISHIP_BUILD_INPUT ??
   fileURLToPath(new URL("./build-input/", import.meta.url));
-const workspacePackages = ["schema", "core", "pi", "cli"] as const;
+const workspacePackages = [
+  "schema",
+  "contracts",
+  "identity",
+  "credentials",
+  "inference",
+  "core",
+  "pi",
+  "cli",
+] as const;
 function runtimeDependencies(): DistributionLock["runtime"] {
   const source = readFileSync(join(buildInput, "package-lock.json"));
   const npmLock = JSON.parse(source.toString()) as {
@@ -161,6 +188,15 @@ function walkResource(root: string, current: string, output: string[]): void {
     );
   output.push(relative(root, current).split(sep).join("/"));
 }
+function adapterDeclarations(manifest: Manifest): [string, string][] {
+  const output: [string, string][] = [];
+  const access = manifest.access;
+  if (access?.identity.mode === "adapter")
+    output.push(["identity.adapter", access.identity.adapter]);
+  if (access?.credential.adapter)
+    output.push(["credential.adapter", access.credential.adapter]);
+  return output;
+}
 export function resolveResources(
   manifest: Manifest,
   manifestPath: string,
@@ -229,6 +265,43 @@ export function resolveResources(
         });
     }
   }
+  for (const [field, declared] of adapterDeclarations(manifest)) {
+    const absolute = resolve(base, declared);
+    if (!absolute.startsWith(`${base}${sep}`))
+      throw new ManifestError(
+        "unsafe path/name",
+        field,
+        `Path escapes manifest directory: ${declared}`,
+      );
+    if (!existsSync(absolute))
+      throw new ManifestError(
+        "missing resource",
+        field,
+        `${declared} does not exist`,
+      );
+    let component = base;
+    for (const segment of relative(base, absolute).split(sep)) {
+      component = join(component, segment);
+      if (lstatSync(component).isSymbolicLink())
+        throw new ManifestError(
+          "unsafe path/name",
+          field,
+          `Adapter symlinks are not allowed: ${declared}`,
+        );
+    }
+    if (!lstatSync(absolute).isFile())
+      throw new ManifestError(
+        "invalid field",
+        field,
+        `${declared} must be a file`,
+      );
+    const path = relative(base, absolute).split(sep).join("/");
+    output.push({
+      kind: "adapters",
+      path,
+      sha256: hash(readFileSync(absolute)),
+    });
+  }
   output.sort(
     (a, b) => a.kind.localeCompare(b.kind) || a.path.localeCompare(b.path),
   );
@@ -249,13 +322,17 @@ export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
   return {
-    schema: LOCK_SCHEMA_VERSION,
+    schema:
+      manifest.schema === PISHIP_SCHEMA_V1ALPHA2
+        ? LOCK_SCHEMA_V1ALPHA2
+        : LOCK_SCHEMA_VERSION,
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,
     runtime: runtimeDependencies(),
     resources: resolveResources(manifest, manifestPath),
     declared: manifest.resources,
+    ...(manifest.access ? { access: manifest.access } : {}),
   };
 }
 export function lockManifest(manifestPath: string): string {
@@ -278,10 +355,10 @@ export function requireCurrentLock(manifestPath: string): DistributionLock {
   return JSON.parse(expected) as DistributionLock;
 }
 function launcherSource(): string {
-  return `#!/usr/bin/env node\nimport { fileURLToPath } from "node:url";\nimport { verifyPayload } from "@piship/core";\nconst directory = fileURLToPath(new URL("..", import.meta.url));\ntry {\n  const version = process.versions.node.split(".").map(Number);\n  if (version[0] < 22 || (version[0] === 22 && version[1] < 19)) throw new Error("Node.js 22.19.0 or newer is required; install Node separately before launch");\n  const metadata = verifyPayload(directory);\n  const { launchPiDistribution } = await import("@piship/pi");\n  await launchPiDistribution({ distributionDir: directory, metadata, args: process.argv.slice(2) });\n} catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }\n`;
+  return `#!/usr/bin/env node\nimport { fileURLToPath } from "node:url";\nimport { verifyPayload } from "@piship/core";\nconst directory = fileURLToPath(new URL("..", import.meta.url));\ntry {\n  const version = process.versions.node.split(".").map(Number);\n  if (version[0] < 22 || (version[0] === 22 && version[1] < 19)) throw new Error("Node.js 22.19.0 or newer is required; install Node separately before launch");\n  const metadata = verifyPayload(directory);\n  const { launchPiDistribution } = await import("@piship/pi");\n  await launchPiDistribution({ distributionDir: directory, metadata, args: process.argv.slice(2) });\n} catch (error) { const { formatError } = await import("@piship/contracts"); console.error(formatError(error)); process.exitCode = 1; }\n`;
 }
 function portableCliSource(): string {
-  return `const version = process.versions.node.split(".").map(Number);\nif (version[0] < 22 || (version[0] === 22 && version[1] < 19)) { console.error("Node.js 22.19.0 or newer is required. Install Node separately."); process.exitCode = 1; } else { const { runCli } = await import("@piship/cli"); process.exitCode = runCli(process.argv.slice(2), { stdout: (message) => console.log(message), stderr: (message) => console.error(message) }); }\n`;
+  return `const version = process.versions.node.split(".").map(Number);\nif (version[0] < 22 || (version[0] === 22 && version[1] < 19)) { console.error("Node.js 22.19.0 or newer is required. Install Node separately."); process.exitCode = 1; } else { const { runCli } = await import("@piship/cli"); process.exitCode = await runCli(process.argv.slice(2), { stdout: (message) => console.log(message), stderr: (message) => console.error(message) }); }\n`;
 }
 function inventory(root: string): Record<string, string> {
   const output: Record<string, string> = {};
@@ -587,17 +664,80 @@ export function purgeDistributionState(id: string): string {
   rmSync(state, { recursive: true, force: true });
   return state;
 }
-export function initDistribution(directory: string): string {
+export function initDistribution(
+  directory: string,
+  options: { managed?: boolean } = {},
+): string {
   const root = resolve(directory);
   if (existsSync(root) && readdirSync(root).length)
     throw new Error(`Directory is not empty: ${root}`);
   const id = basename(root).toLowerCase();
   distributionStateDirectory({ value: id });
   mkdirSync(join(root, "resources"), { recursive: true });
-  writeFileSync(
-    join(root, "piship.yaml"),
-    `schema: piship/v1alpha1\napp:\n  id: ${id}\n  name: ${id}\n  command: ${id}\n  version: 1.0.0\nruntime:\n  pi: "${PI_VERSION}"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    - ./resources/AGENTS.md\n`,
-  );
+  if (options.managed) {
+    const candidate = id.toUpperCase().replaceAll("-", "_");
+    // Variable names that look like secret material are rejected by the schema.
+    const prefix = checkVariableName(`${candidate}_OIDC_ISSUER`)
+      ? "DISTRIBUTION"
+      : candidate;
+    writeFileSync(
+      join(root, "piship.yaml"),
+      `schema: piship/v1alpha2
+app:
+  id: ${id}
+  name: ${id}
+  command: ${id}
+  version: 1.0.0
+runtime:
+  pi: "${PI_VERSION}"
+deployment:
+  mode: managed
+variables:
+  - ${prefix}_OIDC_ISSUER
+  - ${prefix}_OIDC_CLIENT_ID
+  - ${prefix}_CREDENTIAL_BROKER_URL
+  - ${prefix}_LLM_GATEWAY_URL
+identity:
+  mode: oidc
+  oidc:
+    issuer: \${${prefix}_OIDC_ISSUER}
+    clientId: \${${prefix}_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    scopes: [openid, profile, email]
+    redirectUri: http://127.0.0.1:8765/callback
+credential:
+  provider: http-broker
+  broker:
+    endpoint: \${${prefix}_CREDENTIAL_BROKER_URL}
+  storage:
+    provider: system
+  refresh:
+    beforeExpiry: 5m
+inference:
+  provider: openai-compatible
+  baseUrl: \${${prefix}_LLM_GATEWAY_URL}
+models:
+  default: example/coder
+  allowed:
+    - example/coder
+  catalog:
+    example/coder:
+      name: Example Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+network:
+  publicFallback: deny
+resources:
+  instructions:
+    - ./resources/AGENTS.md
+`,
+    );
+  } else
+    writeFileSync(
+      join(root, "piship.yaml"),
+      `schema: piship/v1alpha1\napp:\n  id: ${id}\n  name: ${id}\n  command: ${id}\n  version: 1.0.0\nruntime:\n  pi: "${PI_VERSION}"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    - ./resources/AGENTS.md\n`,
+    );
   writeFileSync(join(root, "resources", "AGENTS.md"), `# ${id}\n`);
   return join(root, "piship.yaml");
 }

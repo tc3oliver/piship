@@ -1,14 +1,16 @@
 # Roadmap
 
-PiShip is a company-first open-source distribution and governance framework around upstream Pi. The current v0.1 implementation is the portable personal foundation; managed access, governance/security, and production lifecycle follow in later milestones. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
+PiShip is a company-first open-source distribution and governance framework around upstream Pi. v0.1, the portable personal foundation, is complete; v0.2 managed access is in preview; governance/security and production lifecycle follow. The personal alpha example builds a portable payload and launches an upstream Pi session after user-writable installation. These milestones describe direction, without dates.
 
-## Now: v0.1 — Distribution core
+## Done: v0.1 — Distribution core
 
-The personal distribution core includes a portable payload, install/uninstall, state isolation, inspection, diagnostics, a safe tool smoke, and session resume. Cross-platform installed-surface CI remains the release gate. No managed access is included yet.
+The personal distribution core includes a portable payload, install/uninstall, state isolation, inspection, diagnostics, a safe tool smoke, and session resume. It is supported on Ubuntu x64, macOS arm64, and Windows x64.
 
-## Later: v0.2 — Managed access
+## In progress (preview): v0.2 — Managed access
 
-Add identity and credential boundaries and managed inference configuration. PiShip should integrate with an identity provider or gateway, not become one.
+Implemented: the `piship/v1alpha2` schema with runtime references and migration; separate identity, credential, secret-store, and inference contracts; OIDC Authorization Code + PKCE login; the `http-broker` credential protocol with platform secret stores and a crash-safe refresh lifecycle; an OpenAI-compatible gateway binding with an intersected model catalog; model governance on the pinned Pi runtime; layered configuration with `config explain`; managed network and TLS rules; and branded `login`, `logout`, `doctor`, and `models`. PiShip integrates with an identity provider or gateway; it does not become one.
+
+Status: verified with deterministic local fixtures on the pinned Pi public API. Still pending before it can be supported: a live OIDC login, live gateway inference, a real authenticated personal model request, real platform secret-store results, and three-target installed E2E for the managed surface.
 
 ## Later: v0.3 — Governance
 

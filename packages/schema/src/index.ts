@@ -1,9 +1,25 @@
 import { readFileSync } from "node:fs";
 import { parseDocument } from "yaml";
 import { valid as validSemver } from "semver";
+import {
+  AccessFieldError,
+  parseAccess,
+  type AccessManifest,
+  type DeploymentMode,
+} from "./access.js";
 
+export * from "./access.js";
+export * from "./variables.js";
+
+/** The v0.1 personal alpha schema; still accepted for personal pi-native distributions. */
 export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
-export type PishipSchemaVersion = typeof PISHIP_SCHEMA_VERSION;
+/** The v0.2 alpha schema with managed and personal access configuration. */
+export const PISHIP_SCHEMA_V1ALPHA2 = "piship/v1alpha2" as const;
+export const SUPPORTED_SCHEMAS = [
+  PISHIP_SCHEMA_VERSION,
+  PISHIP_SCHEMA_V1ALPHA2,
+] as const;
+export type PishipSchemaVersion = (typeof SUPPORTED_SCHEMAS)[number];
 export interface ValidationDiagnostic {
   readonly path: string;
   readonly message: string;
@@ -25,7 +41,7 @@ export interface Manifest {
     readonly theme?: string;
   };
   readonly runtime: { readonly pi: string };
-  readonly deployment: { readonly mode: "personal" };
+  readonly deployment: { readonly mode: DeploymentMode };
   readonly resources: {
     readonly instructions: readonly string[];
     readonly skills: readonly string[];
@@ -33,6 +49,8 @@ export interface Manifest {
     readonly prompts: readonly string[];
     readonly themes: readonly string[];
   };
+  /** Present only for piship/v1alpha2 manifests. */
+  readonly access?: AccessManifest;
 }
 export class ManifestError extends Error {
   constructor(
@@ -42,7 +60,8 @@ export class ManifestError extends Error {
       | "schema mismatch"
       | "invalid field"
       | "missing resource"
-      | "unsafe path/name",
+      | "unsafe path/name"
+      | "conflict",
     readonly field: string,
     message: string,
   ) {
@@ -55,9 +74,12 @@ export function parseManifestHeader(
 ): ManifestHeader | ValidationDiagnostic {
   if (!isRecord(value) || !("schema" in value))
     return { path: "schema", message: "Missing manifest schema" };
-  if (value.schema !== PISHIP_SCHEMA_VERSION)
-    return { path: "schema", message: `Expected ${PISHIP_SCHEMA_VERSION}` };
-  return { schema: PISHIP_SCHEMA_VERSION };
+  if (!(SUPPORTED_SCHEMAS as readonly unknown[]).includes(value.schema))
+    return {
+      path: "schema",
+      message: `Expected ${SUPPORTED_SCHEMAS.join(" or ")}`,
+    };
+  return { schema: value.schema as PishipSchemaVersion };
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -149,20 +171,39 @@ function paths(value: unknown, path: string): string[] {
     return item;
   });
 }
+const V1ALPHA2_KEYS = [
+  "identity",
+  "credential",
+  "inference",
+  "models",
+  "config",
+  "network",
+  "variables",
+];
 export function parseManifest(value: unknown): Manifest {
+  const schema = isRecord(value) ? value.schema : undefined;
+  if (!(SUPPORTED_SCHEMAS as readonly unknown[]).includes(schema)) {
+    if (!isRecord(value))
+      throw new ManifestError(
+        "invalid field",
+        "manifest",
+        "Expected an object",
+      );
+    throw new ManifestError(
+      "schema mismatch",
+      "schema",
+      `Expected ${SUPPORTED_SCHEMAS.join(" or ")}`,
+    );
+  }
+  const v2 = schema === PISHIP_SCHEMA_V1ALPHA2;
   const root = record(value, "manifest", [
     "schema",
     "app",
     "runtime",
     "deployment",
     "resources",
+    ...(v2 ? V1ALPHA2_KEYS : []),
   ]);
-  if (root.schema !== PISHIP_SCHEMA_VERSION)
-    throw new ManifestError(
-      "schema mismatch",
-      "schema",
-      `Expected ${PISHIP_SCHEMA_VERSION}`,
-    );
   const app = record(root.app, "app", [
     "id",
     "name",
@@ -181,18 +222,27 @@ export function parseManifest(value: unknown): Manifest {
     "themes",
   ]);
   const mode = deployment.mode;
-  if (mode === "managed")
+  if (mode === "managed" && !v2)
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "managed is not runnable in PiShip v1alpha1 yet. Managed access is planned for a later milestone",
+      "managed requires schema piship/v1alpha2 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
     );
-  if (mode !== "personal")
+  if (mode !== "personal" && mode !== "managed")
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "Expected personal",
+      v2 ? "Expected personal or managed" : "Expected personal",
     );
+  let access: AccessManifest | undefined;
+  if (v2)
+    try {
+      access = parseAccess(root, mode);
+    } catch (error) {
+      if (error instanceof AccessFieldError)
+        throw new ManifestError(error.kind, error.field, error.message);
+      throw error;
+    }
   const pi = string(runtime.pi, "runtime.pi");
   if (!/^\d+\.\d+\.\d+$/.test(pi))
     throw new ManifestError(
@@ -201,7 +251,7 @@ export function parseManifest(value: unknown): Manifest {
       "Expected an exact Pi version",
     );
   return {
-    schema: PISHIP_SCHEMA_VERSION,
+    schema: v2 ? PISHIP_SCHEMA_V1ALPHA2 : PISHIP_SCHEMA_VERSION,
     app: {
       id: name(app.id, "app.id"),
       name: displayText(app.name, "app.name"),
@@ -232,9 +282,14 @@ export function parseManifest(value: unknown): Manifest {
       prompts: paths(resources.prompts, "resources.prompts"),
       themes: paths(resources.themes, "resources.themes"),
     },
+    ...(access ? { access } : {}),
   };
 }
 export function readManifest(path: string): Manifest {
+  return parseManifest(readManifestDocument(path));
+}
+/** Read and parse YAML without schema validation (used by migration). */
+export function readManifestDocument(path: string): unknown {
   let source: string;
   try {
     source = readFileSync(path, "utf8");
@@ -254,5 +309,52 @@ export function readManifest(path: string): Manifest {
       path,
       document.errors[0]?.message ?? "Invalid YAML",
     );
-  return parseManifest(document.toJS() as unknown);
+  return document.toJS() as unknown;
+}
+
+export interface MigrationPlan {
+  readonly from: PishipSchemaVersion;
+  readonly to: PishipSchemaVersion;
+  readonly changes: readonly string[];
+  readonly source: string;
+}
+/**
+ * Versioned migration from the v0.1 personal alpha to piship/v1alpha2. The
+ * migrated profile is behaviorally equivalent: no identity, explicit Pi-native
+ * credential delegation, and Pi-native inference inside isolated state.
+ */
+export function migrateManifestSource(source: string): MigrationPlan {
+  const document = parseDocument(source, { uniqueKeys: true });
+  if (document.errors.length)
+    throw new ManifestError(
+      "YAML parse failure",
+      "manifest",
+      document.errors[0]?.message ?? "Invalid YAML",
+    );
+  const current = parseManifest(document.toJS() as unknown);
+  if (current.schema === PISHIP_SCHEMA_V1ALPHA2)
+    return {
+      from: current.schema,
+      to: current.schema,
+      changes: [],
+      source,
+    };
+  document.set("schema", PISHIP_SCHEMA_V1ALPHA2);
+  document.set("identity", document.createNode({ mode: "none" }));
+  document.set("credential", document.createNode({ provider: "pi-native" }));
+  document.set("inference", document.createNode({ provider: "pi-native" }));
+  const migrated = document.toString();
+  parseManifest(parseDocument(migrated).toJS() as unknown);
+  return {
+    from: PISHIP_SCHEMA_VERSION,
+    to: PISHIP_SCHEMA_V1ALPHA2,
+    changes: [
+      "schema: piship/v1alpha1 -> piship/v1alpha2",
+      "identity.mode: none (unchanged behavior: no enterprise identity)",
+      "credential.provider: pi-native (explicit delegation to Pi auth in isolated state)",
+      "inference.provider: pi-native (Pi model catalog, as in v0.1)",
+      "Regenerate piship.lock with piship lock, then rebuild",
+    ],
+    source: migrated,
+  };
 }

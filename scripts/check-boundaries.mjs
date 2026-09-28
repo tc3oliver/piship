@@ -4,13 +4,42 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const packages = ["schema", "core", "pi", "cli"];
+const packages = [
+  "schema",
+  "contracts",
+  "identity",
+  "credentials",
+  "inference",
+  "core",
+  "pi",
+  "cli",
+];
+// Identity, credentials, and inference are separate contracts: none of them
+// may import another, and only core orchestrates them.
 const allowedLocal = {
   schema: [],
-  core: ["@piship/schema"],
-  pi: ["@piship/core", "@piship/schema"],
-  cli: ["@piship/core", "@piship/pi", "@piship/schema"],
-  tests: ["@piship/core", "@piship/pi", "@piship/schema"],
+  contracts: [],
+  identity: ["@piship/contracts"],
+  credentials: ["@piship/contracts"],
+  inference: ["@piship/contracts"],
+  core: [
+    "@piship/schema",
+    "@piship/contracts",
+    "@piship/identity",
+    "@piship/credentials",
+    "@piship/inference",
+  ],
+  pi: ["@piship/core", "@piship/schema", "@piship/contracts"],
+  cli: ["@piship/core", "@piship/pi", "@piship/schema", "@piship/contracts"],
+  tests: [
+    "@piship/core",
+    "@piship/pi",
+    "@piship/schema",
+    "@piship/contracts",
+    "@piship/identity",
+    "@piship/credentials",
+    "@piship/inference",
+  ],
 };
 const failures = [];
 

@@ -9,4 +9,30 @@ describe("Pi public SDK", () => {
     expect(upstreamPi.VERSION).toBe(PINNED_PI_VERSION);
     expect(PI_VERSION).toBe(PINNED_PI_VERSION);
   });
+  // Managed model governance narrows these public ModelRuntime methods on the
+  // instance PiShip creates. If an upgrade renames or removes one, governance
+  // could be bypassed, so the upgrade must fail here first.
+  it("exposes every ModelRuntime method that managed governance narrows", () => {
+    const prototype = upstreamPi.ModelRuntime.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    for (const method of [
+      "getModel",
+      "getModels",
+      "getAvailable",
+      "getAvailableSnapshot",
+      "checkAuth",
+      "getAuth",
+      "stream",
+      "streamSimple",
+      "complete",
+      "completeSimple",
+      "login",
+      "setRuntimeApiKey",
+      "registerProvider",
+    ])
+      expect(typeof prototype[method], method).toBe("function");
+    expect(typeof upstreamPi.DefaultResourceLoader).toBe("function");
+  });
 });

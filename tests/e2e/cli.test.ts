@@ -478,7 +478,7 @@ describe("CLI", () => {
     }
     expect(existsSync(join(temp, "state", "mypi"))).toBe(false);
   }, 360000);
-  it("rejects managed manifests before lock or build output", () => {
+  it("rejects managed v1alpha1 manifests before lock or build output", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-managed-"));
     temporary.push(temp);
     const manifest = join(temp, "piship.yaml");
@@ -493,7 +493,9 @@ describe("CLI", () => {
       const result = cli(command, manifest);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("deployment.mode");
-      expect(result.stderr).toContain("managed is not runnable");
+      expect(result.stderr).toContain(
+        "managed requires schema piship/v1alpha2",
+      );
     }
     expect(existsSync(join(temp, "piship.lock"))).toBe(false);
     expect(existsSync(join(root, "dist/managedblocked"))).toBe(false);

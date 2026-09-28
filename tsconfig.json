@@ -2,6 +2,10 @@
   "files": [],
   "references": [
     { "path": "./packages/schema" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/identity" },
+    { "path": "./packages/credentials" },
+    { "path": "./packages/inference" },
     { "path": "./packages/core" },
     { "path": "./packages/pi" },
     { "path": "./packages/cli" }

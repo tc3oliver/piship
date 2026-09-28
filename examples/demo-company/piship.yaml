@@ -1,12 +1,94 @@
-schema: piship/v1alpha1
+schema: piship/v1alpha2
 
 app:
   id: acmecode
   name: AcmeCode
   command: acmecode
+  version: 1.0.0
+  banner: AcmeCode managed demo distribution (fictional)
 
 runtime:
   pi: "0.87.1"
 
 deployment:
   mode: managed
+
+# Non-secret endpoints resolved from the launch environment at runtime.
+# The lock keeps these templates, never the resolved values.
+variables:
+  - ACMECODE_OIDC_ISSUER
+  - ACMECODE_OIDC_CLIENT_ID
+  - ACMECODE_CREDENTIAL_BROKER_URL
+  - ACMECODE_CREDENTIAL_REVOKE_URL
+  - ACMECODE_LLM_GATEWAY_URL
+
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${ACMECODE_OIDC_ISSUER}
+    clientId: ${ACMECODE_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    scopes: [openid, profile, email]
+    redirectUri: http://127.0.0.1:8765/callback
+
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage:
+    provider: system
+  refresh:
+    beforeExpiry: 5m
+
+inference:
+  provider: openai-compatible
+  baseUrl: ${ACMECODE_LLM_GATEWAY_URL}
+  liveCatalog: true
+
+models:
+  default: acme/coder
+  allowed:
+    - acme/coder
+    - acme/general
+    - acme/review
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+      policyTags: [general, code]
+    acme/general:
+      name: Acme General
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [general]
+    acme/review:
+      name: Acme Review
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [review]
+
+config:
+  enforced:
+    theme: dark
+  defaults:
+    thinkingLevel: "off"
+  userOverridable: [model, thinkingLevel]
+
+network:
+  proxy:
+    inheritEnvironment: true
+  publicFallback: deny
+  privateOnly: true
+
+resources:
+  instructions:
+    - ./resources/AGENTS.md
+  skills:
+    - ./resources/skills
+  extensions:
+    - ./resources/extensions/enterprise-context

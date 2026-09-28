@@ -20,6 +20,7 @@
   ],
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",
+    "@piship/contracts": "0.1.0",
     "@piship/core": "0.1.0"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",

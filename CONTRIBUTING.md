@@ -19,15 +19,19 @@ Every PR runs fast CI. The three-target portable E2E and Pi compatibility workfl
 
 | Change | Start in |
 | --- | --- |
-| Manifest marker and validation | `packages/schema` |
-| Distribution types and orchestration | `packages/core` |
-| Public Pi API integration | `packages/pi` |
+| Manifest schema, runtime references, and migration | `packages/schema` |
+| Shared contracts, errors, redaction, and network policy | `packages/contracts` |
+| OIDC and identity providers | `packages/identity` |
+| Credential providers, secret stores, and lifecycle | `packages/credentials` |
+| Inference binding and model catalog | `packages/inference` |
+| Lock, payload, install, access orchestration, and configuration | `packages/core` |
+| Public Pi API integration and branded commands | `packages/pi` |
 | Command presentation | `packages/cli` |
 | A particular agent's branding or private integration | Its distribution repository |
 
-Generic runtime behavior should be considered upstream in Pi first. Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing package boundaries or Pi integration. Small documentation and test changes do not require reading the full architecture first.
+Generic runtime behavior should be considered upstream in Pi first. `identity`, `credentials`, and `inference` may import only `contracts`, never each other; `npm run check:boundaries` enforces this. Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing package boundaries or Pi integration. Small documentation and test changes do not require reading the full architecture first.
 
-The personal CLI supports `init`, `dev`, `validate`, `lock`, `build`, `test`, `inspect`, `doctor`, `install`, `uninstall`, and explicit `purge`; see [the runnable example](examples/personal/README.md).
+The CLI supports `init [--managed]`, `dev`, `validate`, `migrate [--write]`, `lock`, `build`, `test [--model-request]`, `config explain`, `inspect`, `doctor`, `install`, `uninstall`, and explicit `purge`. v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain|set|unset`, `--model`, `--smoke`, and `--smoke-model`. See the [personal](examples/personal/README.md) and [demo company](examples/demo-company/README.md) examples. Managed tests use the deterministic fixtures in `examples/demo-company/fixtures/`; they are not evidence of a live integration, so describe them that way in PRs.
 
 ## Pi compatibility
 
@@ -35,7 +39,7 @@ Keep Pi dependencies exact-pinned and confined to `packages/pi`. Use public expo
 
 ## Changesets and pull requests
 
-Packages are at `0.1.0` and are not published. Internal refactors need no changeset. Add a patch changeset for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change. The `piship/v1alpha1` schema is experimental.
+Packages are at `0.1.0` and are not published. Internal refactors need no changeset. Add a patch changeset for a bug fix, minor for a new user-facing capability, or major for a breaking public API or schema change. The `piship/v1alpha1` and `piship/v1alpha2` schemas are experimental.
 
 Use a descriptive PR title: `type(scope): concise summary`, or `type: concise summary` when a scope adds nothing. Common types are `feat`, `fix`, `perf`, `docs`, `test`, `refactor`, `ci`, and `chore`. Name the part changed, such as `schema`, `core`, `pi`, or `cli`; do not force a scope onto every PR. For example, `fix(pi): keep the compatibility check on public exports` or `docs: explain the alpha manifest status`.
 
