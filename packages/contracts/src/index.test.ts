@@ -20,6 +20,7 @@ import {
   redactValue,
   sanitizeManagedEnvironment,
   DEFAULT_NETWORK_POLICY,
+  trimTrailingSlashes,
 } from "./index.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -346,5 +347,20 @@ describe("network policy", () => {
     await expect(direct("http://127.0.0.1:59999/broker")).rejects.toMatchObject(
       { code: "GATEWAY_UNREACHABLE" },
     );
+  });
+});
+
+describe("trimTrailingSlashes", () => {
+  it("removes trailing slashes in linear time", () => {
+    expect(trimTrailingSlashes("https://gw.example/v1///")).toBe(
+      "https://gw.example/v1",
+    );
+    expect(trimTrailingSlashes("https://gw.example/v1")).toBe(
+      "https://gw.example/v1",
+    );
+    expect(trimTrailingSlashes("///")).toBe("");
+    const started = performance.now();
+    trimTrailingSlashes(`${"/".repeat(1_000_000)}x`);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });

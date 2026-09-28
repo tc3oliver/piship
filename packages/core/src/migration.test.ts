@@ -261,6 +261,18 @@ describe("checkStateMigration", () => {
     ).toBe("unsupported");
   });
 
+  it("reads the newest audit schema from the rotated file after a rotation", () => {
+    const dir = populated();
+    write(dir, "logs/audit.jsonl", "");
+    write(dir, "logs/audit.jsonl.1", '{"schema":"piship-audit/v2"}\n');
+    write(dir, "logs/audit.jsonl.2", '{"schema":"piship-audit/v1"}\n');
+    const report = checkStateMigration(dir, target(), current);
+    expect(item(report, "audit and metrics logs")).toMatchObject({
+      current: "piship-audit/v2",
+      verdict: "unsupported",
+    });
+  });
+
   it("clears and reacquires credential classes the target cannot read", () => {
     const dir = populated();
     write(dir, "credentials-metadata/inference.json", {

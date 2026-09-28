@@ -1,8 +1,12 @@
 import {
+  existsSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -18,9 +22,11 @@ import { NO_CONTENT_CAPTURE, PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AUDIT_FAILURE_MATRIX,
+  AUDIT_ROTATION,
   type AuditConfig,
   AuditLog,
   type AuditSinkConfig,
+  auditLogFiles,
   describeAuditStatus,
   formatAuditFailureMatrix,
 } from "./index.js";
@@ -199,6 +205,141 @@ describe("AuditLog file sink", () => {
     expect(log.status().sinks[0]).toMatchObject({ dropped: 1, pending: 0 });
     expect(() => log.assertAvailable()).not.toThrow();
     await log.close();
+  });
+});
+
+describe("AuditLog file sink retention", () => {
+  const sink = [{ id: "local", type: "file", required: false }] as const;
+  const lines = (path: string) =>
+    existsSync(path)
+      ? readFileSync(path, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { resource: string })
+      : [];
+
+  it("uses fixed defaults of 10 MB and five rotated files", () => {
+    expect(AUDIT_ROTATION).toEqual({ maxBytes: 10 * 1024 * 1024, files: 5 });
+  });
+
+  it("rotates by size, keeps the configured files, and never loses a retained line", async () => {
+    const log = await AuditLog.open({
+      config: config([...sink], 1000),
+      distribution: "acmecode",
+      stateDir: temp,
+      rotation: { maxBytes: 600, files: 2 },
+    });
+    // Each flush is one append of about 250 bytes.
+    for (let index = 0; index < 12; index += 1) {
+      log.emit({ event: "resource.load", resource: `r${index}` });
+      await log.flush();
+    }
+    await log.close();
+    const base = join(temp, "logs", "audit.jsonl");
+    expect(auditLogFiles(temp, { maxBytes: 600, files: 2 })).toEqual([
+      base,
+      `${base}.1`,
+      `${base}.2`,
+    ]);
+    expect(existsSync(`${base}.3`)).toBe(false);
+    for (const path of [base, `${base}.1`, `${base}.2`])
+      expect(statSync(path).size).toBeLessThanOrEqual(600);
+    // Oldest to newest, the retained events are contiguous and end with the last.
+    const kept = [`${base}.2`, `${base}.1`, base].flatMap((path) =>
+      lines(path).map((line) => Number(line.resource.slice(1))),
+    );
+    expect(kept.at(-1)).toBe(11);
+    expect(kept).toEqual(
+      Array.from({ length: kept.length }, (_, i) => 12 - kept.length + i),
+    );
+    if (posix)
+      for (const path of [base, `${base}.1`])
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("does not rotate twice when another writer already rotated", async () => {
+    const rotation = { maxBytes: 400, files: 3 };
+    const open = () =>
+      AuditLog.open({
+        config: config([...sink], 1000),
+        distribution: "acmecode",
+        stateDir: temp,
+        rotation,
+      });
+    const [first, second] = await Promise.all([open(), open()]);
+    for (let round = 0; round < 6; round += 1) {
+      first.emit({ event: "resource.load", resource: `a${round}` });
+      second.emit({ event: "resource.load", resource: `b${round}` });
+      await Promise.all([first.flush(), second.flush()]);
+    }
+    await Promise.all([first.close(), second.close()]);
+    const base = join(temp, "logs", "audit.jsonl");
+    const all = auditLogFiles(temp, rotation).flatMap((path) =>
+      lines(path).map((line) => line.resource),
+    );
+    // Twelve events of about 250 bytes fit in the four files; none is lost.
+    expect(all.sort()).toEqual(
+      [0, 1, 2, 3, 4, 5].flatMap((i) => [`a${i}`, `b${i}`]).sort(),
+    );
+    expect(existsSync(`${base}.rotate.lock`)).toBe(false);
+  });
+
+  it("takes over a stale rotation lock once, even with concurrent writers", async () => {
+    mkdirSync(join(temp, "logs"), { recursive: true });
+    const base = join(temp, "logs", "audit.jsonl");
+    const lock = `${base}.rotate.lock`;
+    writeFileSync(lock, "crashed\n");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const rotation = { maxBytes: 400, files: 9 };
+    const open = () =>
+      AuditLog.open({
+        config: config([...sink], 1000),
+        distribution: "acmecode",
+        stateDir: temp,
+        rotation,
+      });
+    const writers = await Promise.all([open(), open(), open()]);
+    for (let round = 0; round < 3; round += 1) {
+      for (const [index, log] of writers.entries())
+        log.emit({ event: "resource.load", resource: `w${index}-${round}` });
+      await Promise.all(writers.map((log) => log.flush()));
+    }
+    await Promise.all(writers.map((log) => log.close()));
+    // Rotated despite the abandoned lock; no lock or takeover file is left.
+    expect(existsSync(`${base}.1`)).toBe(true);
+    expect(
+      readdirSync(join(temp, "logs")).filter((name) => name.includes("lock")),
+    ).toEqual([]);
+    const all = auditLogFiles(temp, rotation).flatMap((path) =>
+      lines(path).map((line) => line.resource),
+    );
+    expect(all.sort()).toEqual(
+      [0, 1, 2].flatMap((w) => [0, 1, 2].map((r) => `w${w}-${r}`)).sort(),
+    );
+  });
+
+  it("appends without rotating while a live rotation lock is held", async () => {
+    mkdirSync(join(temp, "logs"), { recursive: true });
+    const base = join(temp, "logs", "audit.jsonl");
+    writeFileSync(`${base}.rotate.lock`, "1\n");
+    const log = await AuditLog.open({
+      config: config([...sink], 1000),
+      distribution: "acmecode",
+      stateDir: temp,
+      rotation: { maxBytes: 300, files: 2 },
+    });
+    for (let index = 0; index < 3; index += 1) {
+      log.emit({ event: "resource.load", resource: `r${index}` });
+      await log.flush();
+    }
+    await log.close();
+    expect(existsSync(`${base}.1`)).toBe(false);
+    expect(lines(base).map((line) => line.resource)).toEqual([
+      "r0",
+      "r1",
+      "r2",
+    ]);
   });
 });
 

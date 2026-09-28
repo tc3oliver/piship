@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { dirname, join, parse } from "node:path";
 import {
   type ExtensionContext,
@@ -17,8 +18,9 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { LocalMetrics } from "@piship/audit";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
-import { resolveLock } from "@piship/core";
+import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -61,6 +63,7 @@ async function open(
     readonly fetch?: ManagedFetch;
     readonly resolveTemplate?: (key: string, template: string) => string;
     readonly mode?: "managed" | "personal";
+    readonly metrics?: LocalMetrics;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -119,6 +122,7 @@ async function open(
       }) as unknown as ManagedFetch),
     resolveTemplate: options.resolveTemplate ?? ((_key, template) => template),
     homeDir: home,
+    ...(options.metrics ? { metrics: options.metrics } : {}),
   });
   sessions.push(session);
   return { session, workspace, home, root };
@@ -767,5 +771,73 @@ describe("capability provider loading", () => {
         healthy: { value: "n/a" },
         effective: { value: "no" },
       });
+  });
+
+  it("counts a provider whose installed files do not match the lock as a load failure", async () => {
+    const { session } = await open(
+      [
+        allow("provider.load", "company/flow"),
+        allow("extension.load", "company:./providers/flow"),
+        ...PROVIDER,
+      ],
+      {
+        files: {
+          ...files,
+          "resources/providers/flow/index.ts": "export default () => 1;\n",
+        },
+      },
+    );
+    expect(session.effective("workflow")).toBe(false);
+    expect(session.metrics.snapshot().providerLoadFailures).toEqual({
+      INTEGRITY_FAILED: 1,
+    });
+  });
+
+  it("does not count a policy refusal as a load failure", async () => {
+    const { session } = await open(PROVIDER, { files });
+    expect(session.effective("workflow")).toBe(false);
+    expect(session.metrics.snapshot().providerLoadFailures).toBeUndefined();
+  });
+});
+
+describe("launch metrics", () => {
+  it("records into the metrics the launch passes and counts a tampered certified resource", async () => {
+    const skill = "---\nname: cite\ndescription: Cite sources.\n---\nCite.\n";
+    const integrity = treeDigest([
+      {
+        path: "SKILL.md",
+        sha256: createHash("sha256").update(skill).digest("hex"),
+      },
+    ]);
+    const stateDir = mkdtempSync(join(tmpdir(), "piship-metrics-"));
+    roots.push(stateDir);
+    const metrics = new LocalMetrics(stateDir);
+    await expect(
+      open(
+        [
+          "resources:",
+          "  skills:",
+          "    certified:",
+          "      - path: ./vendor/cite",
+          "        id: cite",
+          "        version: 1.0.0",
+          "        source: https://example.org/cite",
+          `        integrity: ${integrity}`,
+          "        license: MIT",
+          '        pi: ["0.87.1"]',
+        ],
+        {
+          files: {
+            "vendor/cite/SKILL.md": skill,
+            "resources/vendor/cite/SKILL.md": `${skill}tampered\n`,
+          },
+          metrics,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INTEGRITY_FAILED" });
+    const snapshot = metrics.snapshot();
+    expect(snapshot.resourceLoadFailures).toEqual({ INTEGRITY_FAILED: 1 });
+    expect(snapshot.startupFailures).toEqual({ INTEGRITY_FAILED: 1 });
+    expect(snapshot.sandbox).toBeDefined();
   });
 });

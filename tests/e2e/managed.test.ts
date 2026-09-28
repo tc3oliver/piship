@@ -252,6 +252,35 @@ describe("managed distribution (local fixtures)", () => {
     expect(firstResult.access.removedEnvironment).toEqual(
       expect.arrayContaining(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]),
     );
+    // One managed launch leaves metadata-only operational metrics.
+    const metricsText = readFileSync(
+      join(temp, "state", "acmecode", "logs", "metrics.json"),
+      "utf8",
+    );
+    const metrics = JSON.parse(metricsText);
+    expect(metrics).toMatchObject({
+      schema: "piship-metrics/v1",
+      versions: {
+        distribution: "1.0.0",
+        pi: "0.87.1",
+        node: process.versions.node,
+      },
+      latency: {
+        identity: { count: expect.any(Number) },
+        "credential.acquire": { count: 1 },
+      },
+      gateway: { reachable: true, reachableCount: expect.any(Number) },
+      modelCatalog: { models: 3 },
+      startupLatency: { count: 1 },
+      startupFailures: {},
+    });
+    expect(metrics.versions.piship).toMatch(/^\d+\.\d+\.\d+/);
+    // Load failures are counted only when one happens.
+    expect(metrics.resourceLoadFailures).toBeUndefined();
+    expect(metrics.providerLoadFailures).toBeUndefined();
+    expect(metricsText).not.toContain(services.base);
+    expect(metricsText).not.toContain("demo-user-1");
+    expect(metricsText).not.toMatch(/sk-demo|demo-at-|demo-rt-/);
     const resumed = JSON.parse((await run(["--smoke"])).stdout);
     expect(resumed).toMatchObject({
       sessionId: firstResult.sessionId,
