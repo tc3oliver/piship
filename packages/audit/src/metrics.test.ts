@@ -84,6 +84,38 @@ describe("LocalMetrics", () => {
     expect(reloaded.snapshot().startupLatency?.count).toBe(2);
   });
 
+  it("counts lifecycle outcomes by kind and error code only", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    expect(metrics.snapshot()).not.toHaveProperty("lifecycle");
+    metrics.recordLifecycle("check", "ok");
+    metrics.recordLifecycle("update", "ok");
+    metrics.recordLifecycle("update", "INTEGRITY_FAILED");
+    metrics.recordLifecycle("rollback", "ok");
+    metrics.recordLifecycle("rollback", "channel https://updates.acme/x");
+    metrics.recordLifecycle("install" as never, "ok");
+    metrics.save();
+    const reloaded = LocalMetrics.load(temp, { now });
+    expect(reloaded.snapshot().lifecycle).toEqual({
+      "check:ok": 1,
+      "update:ok": 1,
+      "update:INTEGRITY_FAILED": 1,
+      "rollback:ok": 1,
+      "rollback:UNKNOWN": 1,
+    });
+    const path = join(temp, "logs", "metrics.json");
+    const stored = JSON.parse(readFileSync(path, "utf8"));
+    stored.lifecycle = {
+      "update:ok": 2,
+      "update:ok:extra": 1,
+      "install:ok": 1,
+      "update:https://x": 1,
+    };
+    writeFileSync(path, JSON.stringify(stored));
+    expect(LocalMetrics.load(temp, { now }).snapshot().lifecycle).toEqual({
+      "update:ok": 2,
+    });
+  });
+
   it("never stores content-like strings", () => {
     const metrics = new LocalMetrics(temp, { now });
     metrics.recordPolicyDenial("cat ~/.ssh/id_rsa");

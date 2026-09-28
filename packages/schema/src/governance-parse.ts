@@ -364,7 +364,7 @@ function parseKind(
   if (Array.isArray(value))
     fail(
       path,
-      "piship/v1alpha3 resources map a trust class (certified, company, user) to entries; run piship migrate to convert a flat list",
+      "piship/v1alpha3 and piship/v1alpha4 resources map a trust class (certified, company, user) to entries; run piship migrate to convert a flat list",
     );
   if (!isRecord(value)) fail(path, "Expected an object");
   for (const key of ["upstream", "project"])

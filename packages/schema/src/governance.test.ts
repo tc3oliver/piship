@@ -1704,8 +1704,8 @@ describe("v1alpha3 audit", () => {
 describe("migration to piship/v1alpha3", () => {
   const v1 =
     'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "0.87.1"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n  extensions: [./ext]\n';
-  it("migrates v1alpha1 to v1alpha3 by default in steps", () => {
-    const plan = migrateManifestSource(v1);
+  it("migrates v1alpha1 to v1alpha3 in steps", () => {
+    const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.from).toBe("piship/v1alpha1");
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.changes[0]).toBe("schema: piship/v1alpha1 -> piship/v1alpha2");
@@ -1720,14 +1720,16 @@ describe("migration to piship/v1alpha3", () => {
       { kind: "extensions", class: "user", path: "./ext" },
     ]);
     expect(manifest.resources.skills).toEqual(["./skills"]);
-    expect(migrateManifestSource(plan.source).changes).toEqual([]);
+    expect(
+      migrateManifestSource(plan.source, PISHIP_SCHEMA_V1ALPHA3).changes,
+    ).toEqual([]);
   });
   it("keeps a v1alpha2 target and does not downgrade", () => {
     const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA2);
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA2);
     expect(plan.source).not.toContain("policy");
     expect(plan.source).toContain("- ./skills");
-    const v3 = migrateManifestSource(v1).source;
+    const v3 = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA3).source;
     expect(() => migrateManifestSource(v3, PISHIP_SCHEMA_V1ALPHA2)).toThrow(
       "downgrades are not supported",
     );
@@ -1761,7 +1763,7 @@ describe("migration to piship/v1alpha3", () => {
       "  prompts: []",
       "",
     ].join("\n");
-    const plan = migrateManifestSource(source);
+    const plan = migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.from).toBe(PISHIP_SCHEMA_V1ALPHA2);
     expect(plan.changes).toEqual([
       "schema: piship/v1alpha2 -> piship/v1alpha3",
@@ -1814,7 +1816,7 @@ describe("migration to piship/v1alpha3", () => {
   it("leaves a v1alpha3 manifest unchanged", () => {
     const source =
       'schema: piship/v1alpha3\napp: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }\nruntime: { pi: "0.87.1" }\ndeployment: { mode: personal }\n';
-    expect(migrateManifestSource(source)).toEqual({
+    expect(migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA3)).toEqual({
       from: PISHIP_SCHEMA_V1ALPHA3,
       to: PISHIP_SCHEMA_V1ALPHA3,
       changes: [],

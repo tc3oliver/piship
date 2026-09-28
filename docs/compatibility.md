@@ -31,6 +31,12 @@ Governance (`piship/v1alpha3`) is implemented on Pi 0.87.1 as a preview; it is n
 
 The fixtures prove PiShip's governance contracts, not a production deployment. The [portable E2E run](https://github.com/tc3oliver/piship/actions/runs/36389270287) passed on Ubuntu, macOS, and Windows. Still pending: live company services.
 
+## Production lifecycle surface: in preview
+
+The v0.4 lifecycle (`piship/v1alpha4`) is implemented on Pi 0.87.1 as a preview and is not a separate surface in `compatibility/pi.json`. `@piship/core` carries a copy of the matrix: `piship release` refuses a Pi version that is not in it, records the version's status for the distribution's surface (`supported` for personal, `candidate` for managed) in `release.json`, and `update` refuses a release that records its Pi version as unsupported. A Pi upgrade must therefore update `compatibility/pi.json` and that copy together.
+
+Releases are built only for `linux-x64`, `darwin-arm64`, and `win32-x64`. The lifecycle E2E installs a release of the managed demo from its archive with the shipped install script, signs in against the local fixtures, keeps a session across an update through a signed loopback channel, rejects a tampered archive, altered metadata, and replayed metadata, rolls back, confirms no credential remains in state or install directories, and uninstalls. On Windows it runs the demo with the sandbox optional. The release-candidate workflow adds per-target reproducibility, fresh-job verification, and attestation checks. Recorded results for these runs are pending; see [release](release.md#supported-platforms).
+
 ## Public API used
 
 PiShip uses the public SDK entrypoint: `createAgentSessionRuntime`, `createAgentSession`, `DefaultResourceLoader`, `ModelRuntime`, `SessionManager`, `SettingsManager`, `InteractiveMode`, `createReadTool`, `VERSION`, and the `AgentSessionServices`, `CreateAgentSessionRuntimeFactory`, and `InlineExtension` types.

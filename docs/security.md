@@ -1,6 +1,6 @@
 # Security architecture
 
-Upstream Pi runs the agent. PiShip validates distribution inputs, locks declared resources and package identities, and verifies packaged file hashes before entering Pi. A distribution's extensions are executable code with the user's process privileges. For `piship/v1alpha3` distributions PiShip also governs what loads and what tools may do, and can run tool subprocesses and MCP stdio servers inside an OS sandbox (see [Governance](#governance)). The Pi process itself is never sandboxed.
+Upstream Pi runs the agent. PiShip validates distribution inputs, locks declared resources and package identities, and verifies packaged file hashes before entering Pi. A distribution's extensions are executable code with the user's process privileges. For `piship/v1alpha3` and later distributions PiShip also governs what loads and what tools may do, and can run tool subprocesses and MCP stdio servers inside an OS sandbox (see [Governance](#governance)). The Pi process itself is never sandboxed.
 
 ## Payload and state
 
@@ -8,7 +8,7 @@ The installer owns only its receipt, installed payload, and command shim. Existi
 
 Pi receives a dedicated agent directory, user and acceptance session directories, in-memory settings, and a loader with ambient extension, skill, prompt, theme, and context discovery disabled. Only declared resources are packaged. Packaging rejects symlinks in resource roots, nested files, and adapter paths. For v1alpha1 and v1alpha2 distributions, project files remain accessible to Pi tools and trusted extensions, and PiShip does not enforce project trust or tool policy.
 
-The SHA-256 inventory detects accidental or unauthorized file changes only while the inventory itself is trusted. PiShip does not sign artifacts, attest their origin, or provide a security boundary against a malicious local user who can rewrite both files and inventory.
+The SHA-256 inventory detects accidental or unauthorized file changes only while the inventory itself is trusted. For `piship/v1alpha4` releases, signed channel metadata and build provenance establish where an artifact came from ([Releases and updates](#releases-and-updates)). Nothing here is a security boundary against a malicious local user who can rewrite both files and inventory.
 
 ## Secrets
 
@@ -42,7 +42,7 @@ The proxy, CA, and `privateOnly` policy is also applied to the Pi process's defa
 
 ## Governance
 
-A `piship/v1alpha3` launch opens a governance session before Pi starts (see [architecture](architecture.md#governed-launch-flow)). Every mandatory control that cannot be established fails the launch; nothing silently falls back to an ungoverned run. Every decision names its enforcement plane:
+A `piship/v1alpha3` or `piship/v1alpha4` launch opens a governance session before Pi starts (see [architecture](architecture.md#governed-launch-flow)). Every mandatory control that cannot be established fails the launch; nothing silently falls back to an ungoverned run. Every decision names its enforcement plane:
 
 | Plane | Meaning | Actions |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ MCP servers are declared in the manifest and started by PiShip, not by an extens
 
 ### Audit
 
-Audit is metadata first. Events (`piship-audit/v1`) record the event type, time, identity subject (never a token), session, distribution, and, where relevant, the resource, decision, policy, rule, and enforcement plane. File access is recorded as a path class (`workspace`, `tmp`, `home`, or `other`), shell commands by tool and byte length, and MCP calls by `<server>:<tool>`, outcome, and duration. Prompt, response, command, and source content are recorded only for classes the distribution opts in to under `audit.capture`, and are redacted. The file sink writes `<state>/logs/audit.jsonl` (0600 in a 0700 directory); HTTP sinks POST `piship-audit-batch/v1` batches through the managed fetch. Local counters for denials, startup failures, sandbox level, and MCP health are kept in `<state>/logs/metrics.json`.
+Audit is metadata first. Events (`piship-audit/v1`) record the event type, time, identity subject (never a token), session, distribution, and, where relevant, the resource, decision, policy, rule, and enforcement plane. File access is recorded as a path class (`workspace`, `tmp`, `home`, or `other`), shell commands by tool and byte length, and MCP calls by `<server>:<tool>`, outcome, and duration. Prompt, response, command, and source content are recorded only for classes the distribution opts in to under `audit.capture`, and are redacted. The file sink writes `<state>/logs/audit.jsonl` (0600 in a 0700 directory); HTTP sinks POST `piship-audit-batch/v1` batches through the managed fetch. Update and rollback activations and refusals are recorded as `runtime.update` and `runtime.rollback` events with versions, channel, key ID, and error code. Local counters for denials, startup failures, sandbox level, MCP health, and update, check, and rollback outcomes are kept in `<state>/logs/metrics.json`.
 
 | Sink | Condition | Result |
 | --- | --- | --- |
@@ -126,10 +126,24 @@ The OS sandbox is activated only when `sandbox.required: true`. PiShip then sele
 - There is no seccomp or system-call filtering.
 - Machine administrators, and anyone who can modify the installed payload, state, or inventory, can defeat these controls. Governance does not protect against them or against a malicious extension a distribution chose to load.
 
+## Releases and updates
+
+The production lifecycle is described in [release](release.md). Its trust model:
+
+- **Consumer verification.** `verify-release` checks archive digests, `checksums.txt`, every payload file against the inventory, manifest and lock agreement, `release.json` against the payload, SBOM completeness, notices coverage, and the recorded scan and test results. It proves a release is complete and consistent, not who built it.
+- **Channel signing.** Channel metadata is signed with Ed25519 by a key the distribution owner holds offline; the public keys are pinned in the manifest's `updates.trust.keys` and locked into every release. A client accepts metadata only when it verifies with a pinned key, names its distribution and channel, has not expired, and does not have a lower sequence than the client has already accepted, which blocks replay of older signed metadata. Each archive is then checked against the SHA-256 and size in the signed entry before extraction, and its version, command, Pi version, and lock digest must match that entry. With no pinned key, update fails; there is no unsigned or trust-on-first-use mode. Key rotation happens by shipping a release that pins both keys.
+- **Build provenance.** The `release-candidate` CI workflow creates GitHub artifact attestations (Sigstore keyless signatures bound to the GitHub Actions workflow identity) for each archive and verifies them on a separate job with `gh attestation verify`, including rejecting a tampered archive. This is independent of the owner's channel key: provenance says which workflow built an archive, and the channel signature says which releases the owner offers.
+- **Update transport.** Update sources must be `https`, plain `http` on a loopback host, or a local directory. Requests use the managed fetch with the distribution's proxy and CA policy, never follow redirects, and archive names must be plain `.tar.gz` file names. Extraction refuses links, special files, unsafe or reserved names, and oversize archives.
+- **Supply-chain gates.** `piship release` refuses packages from origins outside `release.sources`, packages without `sha512` integrity, unreviewed npm lifecycle scripts, an unsupported Pi pin, policy conflicts, missing certification evidence, and a required sandbox on a target without an adapter. It records an SPDX SBOM and third-party notices, and blocks on `npm audit` findings at or above `release.vulnerabilities.failOn` unless a reviewed exception has not yet expired.
+- **Activation.** Payloads are immutable per version; the active release is switched by one atomic receipt rename after all verification, launch, and migration checks. Downgrades through `update` are refused; `rollback` only returns to the locally retained, re-verified release.
+- **Credentials across versions.** Credentials are never part of a release, snapshot, or rollback. Update and rollback keep credential metadata only when the target can read its schema; otherwise they delete the local secret and metadata so the target signs in or reacquires. Rollback therefore cannot restore a credential that `logout` removed or revoked.
+
+Limits: release archives carry no macOS notarization or code signature and no Windows Authenticode signature. Provenance depends on GitHub Actions and the repository's workflow files. A channel host can withhold updates until metadata expires. A stolen channel key can publish updates until the distribution ships a release without it. The vulnerability verdict is a build-time snapshot. Clearing an unreadable credential does not revoke it remotely. Packages that the npm lock records without integrity are covered by the payload inventory but not by the source gate or SBOM checksums.
+
 ## Logout and revocation
 
-`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files but cannot revoke credentials; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation.
+`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files but cannot revoke credentials; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback do not call revocation endpoints; run `logout` first when a credential must be revoked remotely.
 
 ## Not covered
 
-PiShip does not contain the Pi process or in-process extensions, enforce hostname-level egress for child processes, filter system calls, sign artifacts or attest provenance, or provide an update channel. v1alpha1 and v1alpha2 distributions have no tool policy, OS sandbox, MCP governance, or audit log. Credential safety across a rollback to an older payload is future work. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
+PiShip does not contain the Pi process or in-process extensions, enforce hostname-level egress for child processes, filter system calls, or code-sign release artifacts for macOS or Windows. v1alpha1 and v1alpha2 distributions have no tool policy, OS sandbox, MCP governance, or audit log; v1alpha1 to v1alpha3 distributions have no signed update channel. Report vulnerabilities through [SECURITY.md](../SECURITY.md).

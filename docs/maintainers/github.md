@@ -52,4 +52,4 @@ The workflow uploads SARIF and does not publish to the public Scorecard API. If 
 
 ## Release setup
 
-Publishing needs confirmed package ownership, npm Trusted Publishing, and a release policy. The [roadmap](../roadmap.md) names the intended release components; no publishing workflow exists.
+The `release-candidate` workflow builds, verifies, and attests release archives and keeps them only as workflow artifacts; no publishing workflow exists. Any publish step follows the [release checklist](../release.md#release-checklist), including the maintainer's explicit approval. npm publication or GitHub Releases would additionally need confirmed package ownership and a release policy.

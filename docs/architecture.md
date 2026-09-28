@@ -2,7 +2,7 @@
 
 PiShip is an open-source, company-first distribution and governance framework for branded Pi-based coding agents. Pi owns the agent loop, TUI, sessions, tools, model/runtime behavior, and extension execution. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, identity/credential/inference integration, and progressively policy/trust and lifecycle/release. Distribution repositories own their brand and declared resources. Pi source is neither forked nor patched.
 
-v0.1 delivered the portable personal foundation. v0.2 adds managed access and configuration as a preview: enterprise identity, organization-issued runtime credentials, an explicit inference gateway, model governance, and layered configuration. v0.3 adds governance as a preview for `piship/v1alpha3`: policy, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses, and audit. Production lifecycle remains a later milestone. See [compatibility](compatibility.md) for what is verified.
+v0.1 delivered the portable personal foundation. v0.2 adds managed access and configuration as a preview: enterprise identity, organization-issued runtime credentials, an explicit inference gateway, model governance, and layered configuration. v0.3 adds governance as a preview for `piship/v1alpha3`: policy, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses, and audit. v0.4 adds the production lifecycle as an unreleased preview for `piship/v1alpha4`: verifiable per-target release artifacts, signed update channels, verified update with atomic activation, rollback, and a migration check for local data ([release](release.md)). See [compatibility](compatibility.md) for what is verified.
 
 | Change | Home |
 | --- | --- |
@@ -15,26 +15,39 @@ v0.1 delivered the portable personal foundation. v0.2 adds managed access and co
 
 | Package | Responsibility |
 | --- | --- |
-| `@piship/schema` | Validates `piship/v1alpha1`, `piship/v1alpha2`, and `piship/v1alpha3`, runtime references, and step-wise alpha migration |
+| `@piship/schema` | Validates `piship/v1alpha1` through `piship/v1alpha4`, including the v1alpha4 `updates` and `release` sections, runtime references, and step-wise alpha migration |
 | `@piship/contracts` | Separate `IdentityProvider`, `CredentialProvider`, `SecretStore`, and `InferenceProvider` contracts; the policy decision and audit event contracts; `SecretValue` redaction; `PiShipError` codes; managed network policy |
 | `@piship/policy` | Policy engine and rule precedence, glob and path matching, `policy explain` rendering, project identification and resource discovery, resource and provider trust, capability state |
-| `@piship/audit` | Metadata-first audit log with file and HTTP sinks, the failure matrix, and local metrics |
+| `@piship/audit` | Metadata-first audit log with file and HTTP sinks, the failure matrix, and local metrics, including update and rollback outcome counters |
 | `@piship/sandbox` | OS sandbox adapters (Linux bubblewrap, macOS Seatbelt), profile resolution, the live containment probe, and contained process spawning |
 | `@piship/mcp` | Governed MCP client: stdio and Streamable HTTP transports, server start and tool call authorization, tool exposure |
 | `@piship/identity` | OIDC Authorization Code + PKCE login for native public clients ([identity](identity.md)) |
 | `@piship/credentials` | Credential providers, platform secret stores, and the runtime credential lifecycle ([credentials](credentials.md)) |
 | `@piship/inference` | OpenAI-compatible and Pi-native inference binding and the effective model catalog ([inference](inference.md)) |
-| `@piship/core` | Lock (including certified tree digests and provider evidence), payload assembly and verification, install ownership, access orchestration (`DistributionAccess`), layered configuration |
-| `@piship/pi` | The only direct Pi dependency; builds the governed Pi runtime, the governance session, governed tools, builtin extensions, and branded commands through public SDK exports |
+| `@piship/core` | Lock (including certified tree digests, provider evidence, and v1alpha4 release inputs), payload assembly and verification, release build and verification, SBOM and notices, deterministic archives, Ed25519 channel signing, install receipts, update, rollback, the migration check, `piship diff`, access orchestration (`DistributionAccess`), layered configuration |
+| `@piship/pi` | The only direct Pi dependency; builds the governed Pi runtime, the governance session, governed tools, builtin extensions, and branded commands (including `update` and `rollback`) through public SDK exports |
 | `@piship/cli` | Presents `piship` commands |
 
 `identity`, `credentials`, and `inference` depend only on `contracts` and may not import each other; only `core` connects them, through `IdentitySession`, `CredentialRef`, and `ModelDefinition`. `policy`, `audit`, `sandbox`, and `mcp` are governance leaves: `policy` may import `contracts` and `schema`; `audit` and `sandbox` only `contracts`; `mcp` `contracts` and `sandbox`, so stdio servers spawn through the sandbox. `core` may import `policy` and `audit`; `pi` composes all four; `cli` may import `policy`. `scripts/check-boundaries.mjs` enforces these imports and the rule that only `packages/pi` imports Pi.
 
 ## Canonical payload
 
-`piship build` creates `dist/<id>` from package-owned build inputs prepared with `@piship/core`, using `npm ci --omit=dev` and exact locked dependencies. It does not infer the PiShip source repository from its module path. The payload contains `node_modules` (including Pi and PiShip), `bin/`, declared `resources/` and adapters, the exact source `piship.yaml` and `piship.lock`, `package-lock.json`, and `metadata/target.json` and `metadata/inventory.json`. The inventory covers the canonical lock and all payload files. The launcher checks the recorded target and integrity before entering Pi and resolves only packages inside this directory. A machine must have Node.js 22.19.0 or newer installed separately. Build-time registry access may be needed; installation and launch do not fetch Node, Pi, or packages. The payload includes upstream package notices. It is the same unit future release verification and updates must consume.
+`piship build` creates `dist/<id>` from package-owned build inputs prepared with `@piship/core`, using `npm ci --omit=dev` and exact locked dependencies. It does not infer the PiShip source repository from its module path. The payload contains `node_modules` (including Pi and PiShip), `bin/`, declared `resources/` and adapters, the exact source `piship.yaml` and `piship.lock`, `package-lock.json`, and `metadata/target.json` and `metadata/inventory.json`. The inventory covers the canonical lock and all payload files. The launcher checks the recorded target and integrity before entering Pi and resolves only packages inside this directory. A machine must have Node.js 22.19.0 or newer installed separately. Build-time registry access may be needed; installation and launch do not fetch Node, Pi, or packages. The payload includes upstream package notices. It is the unit that releases wrap unchanged and that updates and rollback switch between ([release](release.md)).
 
-The payload includes `piship.mjs`, so installation and diagnostics need no source checkout. `node <payload>/piship.mjs install <payload>` copies this payload into `~/.local/share/piship/apps/<id>/<version>` and writes a command shim in `~/.local/bin` by default. Set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. The receipt in `<install-home>/receipts/<id>.json` records owned paths. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, and payload; `purge <id> --yes` separately deletes the selected state after uninstall.
+The payload includes `piship.mjs`, so installation and diagnostics need no source checkout. `node <payload>/piship.mjs install <payload|release-dir|archive>` verifies its input (a release is verified with `verify-release` for this target first) and installs it for the current user:
+
+```text
+<install-home>/receipts/<id>.json     piship-install/v1 receipt: owned paths, retained releases, active and previous version, channel
+<install-home>/apps/<id>/launch.mjs   reads the receipt and imports the active release's launcher
+<install-home>/apps/<id>/<version>/   immutable payload per retained release
+<bin-home>/<command>                  shim that runs launch.mjs with Node (<command>.cmd on Windows)
+```
+
+`<install-home>` defaults to `~/.local/share/piship` and `<bin-home>` to `~/.local/bin`; set `PISHIP_INSTALL_HOME` and `PISHIP_BIN_HOME` to choose other user-writable locations. Add the bin directory to `PATH` yourself; PiShip does not edit shell profiles. Name, command, existing install, and pre-existing state collisions fail. `--use-existing-state` explicitly adopts state during install. `uninstall` removes the receipt, shim, launcher, and every retained payload; `purge <id> --yes` separately deletes the selected state after uninstall. A receipt written by an earlier PiShip still launches and uninstalls, but update and rollback need a reinstall.
+
+## Lifecycle
+
+A v1alpha4 release is the canonical payload plus release metadata, SBOM, notices, scan result, checksums, and install scripts in one deterministic archive per target. The branded `update` verifies signed channel metadata against keys pinned in the installed lock, downloads and verifies the newest release for the target, runs its launch check and the migration check, snapshots non-secret state, then activates it by atomically replacing the receipt; `launch.mjs` picks up the new active release on its next start. The previous release is retained, and `rollback` switches the receipt back to it after re-verifying it. Only one update or rollback runs at a time, and leftovers of an interrupted one are removed by the next. The active release performs the switch, so its audit, network, and credential handling apply; `piship update <id>` and `piship rollback <id>` delegate to it. The full contract is in [release](release.md).
 
 ## Managed launch flow
 
@@ -54,7 +67,7 @@ For a `piship/v1alpha2` payload the branded command:
 
 ## Governed launch flow
 
-A `piship/v1alpha3` payload runs the access steps above for its deployment mode, then `GovernanceSession.open` establishes the controls in this order before Pi starts. Any mandatory control that fails stops the launch.
+A `piship/v1alpha3` or `piship/v1alpha4` payload runs the access steps above for its deployment mode, then `GovernanceSession.open` establishes the controls in this order before Pi starts. Any mandatory control that fails stops the launch.
 
 1. Audit: opens the sinks; an unreachable required sink fails with `AUDIT_UNAVAILABLE`.
 2. Project: finds the project root and origin remote, classifies the origin, and discovers project resource candidates.
@@ -78,20 +91,22 @@ Governance uses these public Pi seams:
 
 State defaults to `~/.piship/<id>` or `PISHIP_STATE_HOME/<id>`. The state path depends on the distribution ID, so relocation or reinstallation can resume the same session. State is never copied into the payload.
 
-| State path | Scope and sensitivity | Retention and clearing |
-| --- | --- | --- |
-| `agent/` | Pi config, model metadata, and, for Pi-native auth, Pi's local auth file; sensitive. Managed runtimes do not write `auth.json` or `models.json` | Kept by uninstall; selected distribution purge deletes it |
-| `identity/session.json` | Non-secret identity metadata (subject, issuer, display claims, expiry) and a secret-store reference; no tokens | Cleared by `logout`; purge deletes it |
-| `credentials-metadata/inference.json` | Non-secret runtime credential metadata (`piship-credential-metadata/v1`): generation reference, credential ID, expiry, entitled models; no secret | Cleared by `logout`; purge deletes it |
-| `config/preferences.json` | User preferences (`piship-preferences/v1`) | Kept by uninstall and logout; purge deletes it |
-| `config/policy.json` | Optional user policy rules (v1alpha3); may relax distribution defaults only | Kept by uninstall and logout; purge deletes it |
-| `secrets/` | Only with the explicit file fallback: owner-only plaintext secret files. Unused with a platform secret store | Cleared by `logout`; purge deletes it |
-| `sessions/user/` | Interactive Pi sessions; may contain private project content | Kept by uninstall and logout; purge deletes it |
-| `sessions/acceptance/` | Labeled smoke session | Kept by uninstall and logout; purge deletes it |
-| `cache/` | Reserved per-distribution cache | Kept by uninstall; purge deletes it |
-| `logs/` | v1alpha3 audit file sink `audit.jsonl` (metadata-first events) and local counters `metrics.json`; may be sensitive | Kept by uninstall; purge deletes it |
-| `data/` | Reserved runtime-generated data | Kept by uninstall; purge deletes it |
+| State path | Scope and sensitivity | Retention and clearing | Update and rollback |
+| --- | --- | --- | --- |
+| `state.json` | `piship-state/v1` marker: distribution, active version, Pi and PiShip versions; not sensitive | Kept by uninstall; purge deletes it | Rewritten at each update and rollback activation |
+| `agent/` | Pi config, model metadata, and, for Pi-native auth, Pi's local auth file; sensitive. Managed runtimes do not write `auth.json` or `models.json` | Kept by uninstall; selected distribution purge deletes it | Kept in place; never snapshotted |
+| `identity/session.json` | Non-secret identity metadata (subject, issuer, display claims, expiry) and a secret-store reference; no tokens | Cleared by `logout`; purge deletes it | Kept when the target reads its schema; otherwise cleared with its secret and reacquired by `login` |
+| `credentials-metadata/inference.json` | Non-secret runtime credential metadata (`piship-credential-metadata/v1`): generation reference, credential ID, expiry, entitled models; no secret | Cleared by `logout`; purge deletes it | Kept when readable; otherwise cleared with its secret and reacquired |
+| `config/preferences.json` | User preferences (`piship-preferences/v1`) | Kept by uninstall and logout; purge deletes it | Kept in place and snapshotted; an unreadable schema stops the switch |
+| `config/policy.json` | Optional user policy rules (v1alpha3 and later); may relax distribution defaults only | Kept by uninstall and logout; purge deletes it | Kept in place and snapshotted |
+| `secrets/` | Only with the explicit file fallback: owner-only plaintext secret files. Unused with a platform secret store | Cleared by `logout`; purge deletes it | Never copied, snapshotted, or restored; removed when a credential class is cleared |
+| `sessions/user/` | Interactive Pi sessions; may contain private project content | Kept by uninstall and logout; purge deletes it | Kept in place; Pi migrates them forward; a target with an older Pi needs review |
+| `sessions/acceptance/` | Labeled smoke session | Kept by uninstall and logout; purge deletes it | As `sessions/user/` |
+| `cache/` | Reserved per-distribution cache | Kept by uninstall; purge deletes it | Not migrated; safe to delete |
+| `logs/` | Audit file sink `audit.jsonl` (metadata-first events, v1alpha3 and later) and local counters `metrics.json`; may be sensitive | Kept by uninstall; purge deletes it | Kept in place, append-only; an unreadable audit schema stops the switch |
+| `data/` | Reserved runtime-generated data | Kept by uninstall; purge deletes it | Kept in place |
+| `migration/snapshots/` | Non-secret pre-update copies of preferences and user policy (`piship-snapshot/v1`); never credentials | Last three kept; purge deletes them | Written before each update activation |
 
-Secrets held in a platform secret store live outside this directory, keyed by distribution ID; `logout` deletes them, while `purge` removes only files under the state directory. Run `logout` before `purge`. These paths have no automatic migration; reinstalling the same distribution ID reuses them. Pi's resource loader disables ambient extension, skill, prompt, theme, and context discovery and receives only declared packaged paths. The working directory remains the user's project; its `.pi` resources are not distribution resources. For v1alpha3, project resources that project trust admits are passed to the loader explicitly. An enforced sandbox denies contained processes read access to the whole state directory.
+Secrets held in a platform secret store live outside this directory, keyed by distribution ID; `logout` deletes them, while `purge` removes only files under the state directory. Run `logout` before `purge`. Reinstalling the same distribution ID reuses these paths. Updates and rollbacks never move or rewrite them except as the last column says: the non-mutating migration check (`piship migrate-check`) decides for each class whether it is `safe`, `requires-review`, or `unsupported` for the target release, and an unreadable non-credential class stops the switch rather than being reinterpreted ([release](release.md#migration-check-and-local-data)). Pi's resource loader disables ambient extension, skill, prompt, theme, and context discovery and receives only declared packaged paths. The working directory remains the user's project; its `.pi` resources are not distribution resources. For v1alpha3 and later, project resources that project trust admits are passed to the loader explicitly. An enforced sandbox denies contained processes read access to the whole state directory.
 
-See [manifest](manifest.md), [compatibility](compatibility.md), [security](security.md), [identity](identity.md), [credentials](credentials.md), and [inference](inference.md).
+See [manifest](manifest.md), [release](release.md), [compatibility](compatibility.md), [security](security.md), [identity](identity.md), [credentials](credentials.md), and [inference](inference.md).

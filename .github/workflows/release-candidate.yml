@@ -1,0 +1,216 @@
+name: Release candidate
+# Builds, verifies, and attests the demo distribution's release archives.
+# Output stays in workflow artifacts: nothing is published or released here.
+on:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'examples/demo-company/**'
+      - 'scripts/**'
+      - 'compatibility/**'
+      - '.github/workflows/release-candidate.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'examples/demo-company/**'
+      - 'scripts/**'
+      - 'compatibility/**'
+      - '.github/workflows/release-candidate.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+          "npm_config_prefer_offline=true" >> $env:GITHUB_ENV
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      - run: node -p "process.platform + '-' + process.arch + ' Node ' + process.version"
+      - run: test "$(node -p "process.platform + '-' + process.arch")" = "${{ matrix.target }}"
+      - run: npm ci
+      - run: npm run build
+      # Windows has no sandbox adapter, so the demo (sandbox.required: true)
+      # is refused there by the release sandbox gate; the Windows candidate
+      # is built from a copy that makes the sandbox optional.
+      - name: Prepare the demo distribution
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const demo = path.join(process.env.RUNNER_TEMP, "demo");
+            fs.cpSync("examples/demo-company", demo, { recursive: true });
+            if (process.platform === "win32") {
+              const file = path.join(demo, "piship.yaml");
+              const source = fs.readFileSync(file, "utf8");
+              const patched = source.replace("  required: true\n  filesystem:", "  required: false\n  filesystem:");
+              if (patched === source) throw new Error("sandbox setting not found");
+              fs.writeFileSync(file, patched);
+            }
+          '
+          node packages/cli/dist/bin.js lock "$RUNNER_TEMP/demo/piship.yaml"
+      # Two independent builds from the same commit must produce the same
+      # payload; the report also records whether the archives are identical.
+      - name: Build the release twice
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          node packages/cli/dist/bin.js release "$RUNNER_TEMP/demo/piship.yaml" --out "$RUNNER_TEMP/first" --channel candidate
+          node packages/cli/dist/bin.js release "$RUNNER_TEMP/demo/piship.yaml" --out "$RUNNER_TEMP/second" --channel candidate
+          name="acmecode-1.0.0-${{ matrix.target }}"
+          mkdir -p "$RUNNER_TEMP/upload"
+          node packages/cli/dist/bin.js reproducibility "$RUNNER_TEMP/first/releases/$name.tar.gz" "$RUNNER_TEMP/second/releases/$name.tar.gz" --out "$RUNNER_TEMP/upload/reproducibility-${{ matrix.target }}.json"
+          cp "$RUNNER_TEMP/first/releases/$name.tar.gz" "$RUNNER_TEMP/first/releases/$name.tar.gz.sha256" "$RUNNER_TEMP/upload/"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/upload/
+          if-no-files-found: error
+          retention-days: 14
+
+  # Keyless build provenance bound to this workflow's identity. Pull requests
+  # from forks cannot mint the OIDC token, so they stop after verification.
+  attest:
+    needs: build
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*
+          path: releases
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: releases/*.tar.gz
+
+  # A fresh runner per target that never built the archive: verify the
+  # checksum, contents, and provenance, prove tampering is caught, and install.
+  verify:
+    needs: [build, attest]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.attest.result != 'failure' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      attestations: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      NAME: acmecode-1.0.0-${{ matrix.target }}
+      GH_TOKEN: ${{ github.token }}
+      ATTESTED: ${{ needs.attest.result == 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/candidate
+      - name: Verify the release
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          cat "reproducibility-${{ matrix.target }}.json"
+          node "$GITHUB_WORKSPACE/packages/cli/dist/bin.js" verify-release "$NAME.tar.gz" --sha256 "$(cut -d ' ' -f 1 "$NAME.tar.gz.sha256")"
+      - name: Verify the provenance
+        if: env.ATTESTED == 'true'
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          gh attestation verify "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml"
+      - name: Reject a tampered archive
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const bytes = fs.readFileSync(process.argv[1]);
+            bytes[bytes.length - 100] ^= 0xff;
+            fs.writeFileSync(process.argv[2], bytes);
+          ' "$NAME.tar.gz" tampered.tar.gz
+          if node "$GITHUB_WORKSPACE/packages/cli/dist/bin.js" verify-release tampered.tar.gz; then
+            echo "verify-release accepted a tampered archive" >&2; exit 1
+          fi
+          if node "$GITHUB_WORKSPACE/packages/cli/dist/bin.js" verify-release "$NAME.tar.gz" --sha256 "$(printf '0%.0s' $(seq 64))"; then
+            echo "verify-release accepted a wrong expected digest" >&2; exit 1
+          fi
+          if [ "$ATTESTED" = true ] && gh attestation verify tampered.tar.gz --repo "$GITHUB_REPOSITORY"; then
+            echo "gh attestation verify accepted a tampered archive" >&2; exit 1
+          fi
+      - name: Install with the shipped script
+        if: runner.os != 'Windows'
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          tar -xzf "$NAME.tar.gz"
+          export PISHIP_INSTALL_HOME="$RUNNER_TEMP/install" PISHIP_BIN_HOME="$RUNNER_TEMP/bin"
+          sh "$NAME/install.sh"
+          "$RUNNER_TEMP/bin/acmecode" version | tee version.txt
+          grep -q "AcmeCode 1.0.0" version.txt
+      - name: Install with the shipped script
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}/candidate
+        shell: pwsh
+        run: |
+          tar -xzf "$env:NAME.tar.gz"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PISHIP_INSTALL_HOME = "$env:RUNNER_TEMP\install"
+          $env:PISHIP_BIN_HOME = "$env:RUNNER_TEMP\bin"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:NAME\install.ps1"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = & "$env:RUNNER_TEMP\bin\acmecode.cmd" version
+          $version
+          if (-not ($version -match "AcmeCode 1\.0\.0")) { exit 1 }
