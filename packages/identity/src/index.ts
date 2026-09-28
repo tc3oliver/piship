@@ -5,6 +5,9 @@ import {
   SecretValue,
 } from "@piship/contracts";
 
+import { retainClaims } from "./claims.js";
+
+export { RETAINED_CLAIMS, retainClaims } from "./claims.js";
 export { startLoopbackReceiver, type LoopbackReceiver } from "./loopback.js";
 export { OidcPkceIdentityProvider, type OidcIdentityOptions } from "./oidc.js";
 
@@ -35,7 +38,8 @@ export function identityMetadata(
     ...(session.expiresAt
       ? { expiresAt: session.expiresAt.toISOString() }
       : {}),
-    claims: session.claims ?? {},
+    // Only allowlisted claims reach the plaintext session file.
+    claims: retainClaims(session.claims),
     secretRef,
   };
 }
@@ -124,7 +128,7 @@ export function normalizeIdentitySession(value: unknown): IdentitySession {
     ...(refreshToken ? { refreshToken } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     ...(session.claims && typeof session.claims === "object"
-      ? { claims: session.claims as Record<string, unknown> }
+      ? { claims: retainClaims(session.claims as Record<string, unknown>) }
       : {}),
   };
 }

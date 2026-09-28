@@ -8,6 +8,7 @@ import {
   PiShipError,
   SecretValue,
 } from "@piship/contracts";
+import { retainClaims } from "./claims.js";
 import { startLoopbackReceiver } from "./loopback.js";
 
 export interface OidcIdentityOptions {
@@ -22,22 +23,6 @@ export interface OidcIdentityOptions {
   readonly timeoutSeconds?: number;
   readonly clockToleranceSeconds?: number;
 }
-
-/** Only non-secret, display-relevant claims are retained in session state. */
-const RETAINED_CLAIMS = [
-  "sub",
-  "iss",
-  "aud",
-  "azp",
-  "exp",
-  "iat",
-  "auth_time",
-  "name",
-  "preferred_username",
-  "email",
-  "email_verified",
-  "groups",
-];
 
 function mapError(error: unknown, action: string): PiShipError {
   for (
@@ -125,9 +110,7 @@ function session(
       "Refreshed identity does not match the signed-in subject",
       { component: "identity" },
     );
-  const retained: Record<string, unknown> = {};
-  for (const name of RETAINED_CLAIMS)
-    if (claims?.[name] !== undefined) retained[name] = claims[name];
+  const retained = retainClaims(claims);
   const expiresIn = tokens.expiresIn();
   const displayName =
     (claims?.name as string | undefined) ??
