@@ -1,5 +1,6 @@
 name: Release candidate
-# Builds, verifies, and attests the demo distribution's release archives.
+# Builds, verifies, and attests the release archives of the managed demo
+# (acmecode) and the personal example (mypi).
 # Output stays in workflow artifacts: nothing is published or released here.
 # Release qualification runs manually on the exact candidate HEAD before a
 # release; it is not triggered by pull requests or main pushes (see
@@ -9,8 +10,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   # Every target is built twice, on two separate runners, each from a fresh
   # checkout and `npm ci`, with the same SOURCE_DATE_EPOCH (the commit time).
@@ -84,13 +85,22 @@ jobs:
             fs.writeFileSync(file, patched);
           '
           node packages/cli/dist/bin.js lock "$RUNNER_TEMP/demo/piship.yaml"
-      - name: Build the release
+      # The personal example needs no sandbox, so every target uses its
+      # committed, reviewed lock unchanged.
+      - name: Copy the committed personal distribution
+        run: |
+          test -f examples/personal/piship.lock
+          node -e 'require("node:fs").cpSync("examples/personal", require("node:path").join(process.env.RUNNER_TEMP, "personal"), { recursive: true })'
+      - name: Build the releases
         run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          node packages/cli/dist/bin.js release "$RUNNER_TEMP/demo/piship.yaml" --out "$RUNNER_TEMP/out" --channel candidate
-          name="acmecode-1.0.0-${{ matrix.target }}"
           mkdir -p "$RUNNER_TEMP/upload"
-          cp "$RUNNER_TEMP/out/releases/$name.tar.gz" "$RUNNER_TEMP/out/releases/$name.tar.gz.sha256" "$RUNNER_TEMP/upload/"
+          for pair in demo:acmecode personal:mypi; do
+            dir="${pair%%:*}" id="${pair##*:}"
+            node packages/cli/dist/bin.js release "$RUNNER_TEMP/$dir/piship.yaml" --out "$RUNNER_TEMP/out" --channel candidate
+            name="$id-1.0.0-${{ matrix.target }}"
+            cp "$RUNNER_TEMP/out/releases/$name.tar.gz" "$RUNNER_TEMP/out/releases/$name.tar.gz.sha256" "$RUNNER_TEMP/upload/"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-${{ matrix.target }}-${{ matrix.build }}
@@ -133,6 +143,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        distribution: [acmecode, mypi]
+        target: [linux-x64, darwin-arm64, win32-x64]
         include:
           - os: ubuntu-latest
             target: linux-x64
@@ -144,7 +156,7 @@ jobs:
       run:
         shell: bash
     env:
-      NAME: acmecode-1.0.0-${{ matrix.target }}
+      NAME: ${{ matrix.distribution }}-1.0.0-${{ matrix.target }}
     steps:
       - if: runner.os == 'Windows'
         shell: pwsh
@@ -174,22 +186,20 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/report"
           node "$PISHIP_CLI" reproducibility "$RUNNER_TEMP/first/$NAME.tar.gz" "$RUNNER_TEMP/second/$NAME.tar.gz" \
-            --out "$RUNNER_TEMP/report/reproducibility-${{ matrix.target }}.json"
-          cat "$RUNNER_TEMP/report/reproducibility-${{ matrix.target }}.json"
+            --out "$RUNNER_TEMP/report/reproducibility-$NAME.json"
+          cat "$RUNNER_TEMP/report/reproducibility-$NAME.json"
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: reproducibility-${{ matrix.target }}
+          name: reproducibility-${{ matrix.distribution }}-${{ matrix.target }}
           path: ${{ runner.temp }}/report/
           if-no-files-found: ignore
           retention-days: 14
 
   # Keyless build provenance bound to this workflow's identity and the ref it
-  # ran for. Only the `first` build of each target is attested. Pull requests
-  # from forks cannot mint the OIDC token, so they stop after verification.
+  # ran for. Only the `first` build of each target is attested.
   attest:
     needs: build
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -219,6 +229,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        distribution: [acmecode, mypi]
+        target: [linux-x64, darwin-arm64, win32-x64]
         include:
           - os: ubuntu-latest
             target: linux-x64
@@ -230,7 +242,7 @@ jobs:
       run:
         shell: bash
     env:
-      NAME: acmecode-1.0.0-${{ matrix.target }}
+      NAME: ${{ matrix.distribution }}-1.0.0-${{ matrix.target }}
       GH_TOKEN: ${{ github.token }}
       ATTESTED: ${{ needs.attest.result == 'success' }}
     steps:
@@ -258,8 +270,8 @@ jobs:
         working-directory: ${{ runner.temp }}/candidate
         run: |
           node "$PISHIP_CLI" verify-release "$NAME.tar.gz" --sha256 "$(cut -d ' ' -f 1 "$NAME.tar.gz.sha256")"
-      # The attestation records the ref the run was for: refs/heads/main for
-      # a push to main, refs/pull/<n>/merge for a pull request.
+      # The attestation records the ref the run was dispatched for, normally
+      # refs/heads/main.
       - name: Verify the provenance
         if: env.ATTESTED == 'true'
         working-directory: ${{ runner.temp }}/candidate
@@ -331,13 +343,18 @@ jobs:
 
   # A fresh runner per target installs the first build with the install
   # script shipped inside it, which verifies the release itself. It needs no
-  # PiShip CLI, so it runs alongside verification.
+  # PiShip CLI, so it runs alongside verification. The personal example then
+  # runs the installed offline `--smoke` and `doctor`; the managed demo needs
+  # a sign-in (fixtures, a secret store, and on Linux bubblewrap) for those,
+  # which the Portable E2E covers, so it checks the version only.
   install:
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        distribution: [acmecode, mypi]
+        target: [linux-x64, darwin-arm64, win32-x64]
         include:
           - os: ubuntu-latest
             target: linux-x64
@@ -349,7 +366,9 @@ jobs:
       run:
         shell: bash
     env:
-      NAME: acmecode-1.0.0-${{ matrix.target }}
+      NAME: ${{ matrix.distribution }}-1.0.0-${{ matrix.target }}
+      DIST: ${{ matrix.distribution }}
+      DIST_NAME: ${{ matrix.distribution == 'mypi' && 'MyPi' || 'AcmeCode' }}
     steps:
       - if: runner.os == 'Windows'
         shell: pwsh
@@ -373,8 +392,8 @@ jobs:
           tar -xzf "$NAME.tar.gz"
           export PISHIP_INSTALL_HOME="$RUNNER_TEMP/install" PISHIP_BIN_HOME="$RUNNER_TEMP/bin"
           sh "$NAME/install.sh"
-          "$RUNNER_TEMP/bin/acmecode" version | tee version.txt
-          grep -q "AcmeCode 1.0.0" version.txt
+          "$RUNNER_TEMP/bin/$DIST" version | tee version.txt
+          grep -q "$DIST_NAME 1.0.0" version.txt
       - name: Install with the shipped script
         if: runner.os == 'Windows'
         working-directory: ${{ runner.temp }}/candidate
@@ -386,6 +405,22 @@ jobs:
           $env:PISHIP_BIN_HOME = "$env:RUNNER_TEMP\bin"
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:NAME\install.ps1"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $version = & "$env:RUNNER_TEMP\bin\acmecode.cmd" version
+          $version = & "$env:RUNNER_TEMP\bin\$env:DIST.cmd" version
           $version
-          if (-not ($version -match "AcmeCode 1\.0\.0")) { exit 1 }
+          if (-not ($version -match "$env:DIST_NAME 1\.0\.0")) { exit 1 }
+      # Offline checks on the installed personal release: Pi startup, the
+      # declared resources and extension, the notes MCP server, session
+      # resume, and the diagnostics. No model request and no network.
+      - name: Smoke and doctor the installed personal release
+        if: matrix.distribution == 'mypi' && runner.os != 'Windows'
+        run: |
+          "$RUNNER_TEMP/bin/mypi" --smoke
+          "$RUNNER_TEMP/bin/mypi" doctor
+      - name: Smoke and doctor the installed personal release
+        if: matrix.distribution == 'mypi' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP\bin\mypi.cmd" --smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\bin\mypi.cmd" doctor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
