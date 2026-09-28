@@ -32,7 +32,7 @@ npm exec -- piship sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64
 | `schema` | The manifest is not `piship/v1alpha4` |
 | `target` | This machine's `<platform>-<arch>` is not in `release.targets`, has no installed lifecycle evidence in this PiShip version (only `linux-x64`, `darwin-arm64`, and `win32-x64` do), or differs from the requested target |
 | `pi` | The pinned Pi version is not in this PiShip build's compatibility matrix |
-| `source` | A locked package has no recorded source, comes from an origin outside `release.sources`, or has no `sha512` integrity |
+| `source` | A locked package has no recorded source, comes from an origin outside `release.sources`, or has no `sha512` integrity in the npm lock |
 | `install-script` | A locked package runs npm lifecycle scripts and is not on PiShip's reviewed list for the pinned Pi closure |
 | `policy` | A rule ID appears in both `policy.enforced` and `policy.defaults`; two enforced rules for the same action and resource disagree; a declared resource's class is denied by `policy.resourceTrust`; or an enabled capability's provider class is denied by `policy.providerTrust` |
 | `certification` | A certified resource or capability provider has no certification evidence |
@@ -44,7 +44,7 @@ PiShip then assembles the canonical payload with the same code as `piship build`
 - `offline-smoke`: the branded `--smoke`, only when the distribution needs no sign-in (personal Pi-native or `none` credentials).
 - `governance-inspection`: the branded `capabilities --json`, when the distribution is governed.
 
-A managed distribution that requires sign-in is therefore not smoke-tested by `piship release`; the lifecycle E2E covers login, model use, and session resume against local fixtures. After the tests come the vulnerability gate, SBOM, notices, metadata, checksums, and a deterministic archive. Any failure removes the partial output. On success the release lands in `<out>/releases/` (default `dist/releases/`). The build is unsigned: its output says so, and it is a development artifact until it is published through a signed channel or carries verified build provenance.
+A managed distribution that requires sign-in is therefore not smoke-tested by `piship release`; the lifecycle E2E covers login, model use, and session resume against local fixtures. After the tests come the vulnerability gate, the registry signature gate (`npm audit signatures`: an invalid signature or attestation fails the build, missing signatures are recorded, a check that cannot run, for example without access to the Sigstore TUF repository, is recorded as `unavailable`, and unreadable output fails closed), SBOM, notices, metadata, checksums, and a deterministic archive. Any failure removes the partial output. On success the release lands in `<out>/releases/` (default `dist/releases/`). The build is unsigned: its output says so, and it is a development artifact until it is published through a signed channel or carries verified build provenance.
 
 Set `SOURCE_DATE_EPOCH` to record a creation time. Without it the recorded time is the Unix epoch, so two builds of the same inputs still produce identical metadata.
 
@@ -64,7 +64,7 @@ acmecode-1.1.0-linux-x64/
   install.sh, install.ps1           verify this release, then install it for the current user
 ```
 
-The payload's own `metadata/inventory.json` covers every payload file, so `checksums.txt` plus the inventory cover the whole release. `release.json` records the distribution ID, name, version, command, and deployment mode; the PiShip version; the Pi package, version, and its compatibility status for the distribution's surface (`supported` or `candidate`); the manifest and lock schemas and the lock SHA-256; the target; the channel it was built for; the creation time; the payload inventory digest and file count; the local state schemas this PiShip version reads; the passed tests; the SBOM digest and package count; the vulnerability verdict and counts; and a Pi attribution line. Distribution, PiShip, and Pi versions are recorded separately.
+The payload's own `metadata/inventory.json` covers every payload file, so `checksums.txt` plus the inventory cover the whole release. `release.json` records the distribution ID, name, version, command, and deployment mode; the PiShip version; the Pi package, version, and its compatibility status, the weaker of the distribution's surface and the `lifecycle` surface, with each surface's status; the manifest and lock schemas and the lock SHA-256; the target; the channel it was built for; the creation time; the payload inventory digest and file count; the local state schemas this PiShip version reads; the passed tests; the SBOM digest and package count; the vulnerability verdict and counts; the registry signature verdict and any packages without signatures; and a Pi attribution line. Distribution, PiShip, and Pi versions are recorded separately.
 
 The archive is plain ustar in gzip: entries are sorted by byte order, with a fixed modification time (`SOURCE_DATE_EPOCH` or 0), owner 0, and mode `0755` for directories, `install.sh`, and payload launchers or `0644` otherwise; the gzip header's time and OS bytes are normalized. Symbolic links and special files are refused when archiving. Extraction accepts only regular files and directories under the expected root, refuses absolute, `..`, drive-letter, control-character, and (on Windows) reserved or ill-formed names, and stops at 2 GiB or 200,000 entries.
 
@@ -254,7 +254,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 ## Known limitations
 
 - There is no macOS notarization or code signing, and no Windows Authenticode signing. Release archives and their scripts may be flagged or quarantined by the operating system.
-- Packages that the npm lock records without an integrity value are left out of the lock's package list, so the `source` gate does not check them and their SBOM entries carry no checksum or download location. For the pinned Pi closure these are five `@earendil-works` packages nested inside `@earendil-works/pi-coding-agent` and the local PiShip workspace packages. They are still covered by the payload inventory and the archive digest.
+- The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 0.87.1's own shrinkwrap omits integrity for five nested `@earendil-works` packages; the root npm lock records their registry integrity so `npm ci` verifies them, and a Pi upgrade must re-check this.
 - Packages that ship no license or notice file are listed with their declared license only.
 - The vulnerability verdict reflects `npm audit` and its advisory database at build time; it is not rechecked at install or update.
 - Clearing an unreadable credential during update or rollback deletes local secrets only; it does not revoke them remotely.

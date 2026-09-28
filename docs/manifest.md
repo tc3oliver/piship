@@ -37,7 +37,7 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `network.publicFallback` | `deny` or `allow`; managed requires `deny` |
 | `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
 
-Secret-looking fields such as `credential.apiKey`, `credential.secret`, `credential.token`, `identity.oidc.clientSecret`, and `network.tls.rejectUnauthorized` or `insecure` are rejected. The schema cannot detect every secret placed in an otherwise allowed string.
+Secret-looking fields such as `credential.apiKey`, `credential.secret`, `credential.token`, `identity.oidc.clientSecret`, and `network.tls.rejectUnauthorized` or `insecure` are rejected. Every string value and key is also checked for common secret shapes (`sk-` keys, GitHub, GitLab, and Slack tokens, JWTs, AWS access key IDs, PEM private keys, and `Bearer` or `Basic` credentials); a match fails with the field path and never prints the value. The check cannot detect every secret.
 
 ## Validation rules
 
@@ -241,8 +241,8 @@ The manifest and lock keep the unresolved template, so a lock is not machine-spe
 ## Commands
 
 ```bash
-npm exec -- piship init ./my-agent             # personal v1alpha1
-npm exec -- piship init ./my-agent --managed   # managed v1alpha2 template
+npm exec -- piship init ./my-agent             # personal v1alpha4 (identity none, pi-native)
+npm exec -- piship init ./my-agent --managed   # managed v1alpha4 template
 npm exec -- piship validate ./my-agent/piship.yaml
 npm exec -- piship migrate ./my-agent/piship.yaml [--write]
 npm exec -- piship lock ./my-agent/piship.yaml
@@ -260,7 +260,7 @@ node ./dist/my-agent/piship.mjs purge my-agent --yes
 
 v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
 
-`dev` builds and starts the interactive branded command with the same resource and state isolation. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
+`validate` also runs the resource, certified-integrity, and provider-integrity checks of `lock` without writing a lock. `dev` builds and starts the interactive branded command with the same resource and state isolation; `dev --smoke` runs it headlessly with `--smoke` and prints the JSON result. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
 
 v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint.
 
@@ -302,6 +302,6 @@ The lock never contains tokens, credentials, private keys, or resolved endpoint 
 - v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies all dimensions except `passiveContext`; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
 - v1alpha3 to v1alpha4: adds `updates: {channel: stable, channels: [stable], rollback: true}` with no `source` and no trust keys, so updates stay disabled until a source and at least one key are added. `release` is not written; its defaults apply (the three evidenced targets, `https://registry.npmjs.org`, and `failOn: high`). Nothing else changes.
 
-After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init --managed` still writes a v1alpha2 template; migrate it to adopt governance and the lifecycle.
+After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2 and v1alpha3 remain accepted but cannot build a release. `piship init` writes `piship/v1alpha4` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.keys` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.
 
 Earlier checkout-local preview manifests need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the current CLI, then rebuild. Checkout-local output cannot be installed as a portable payload.
