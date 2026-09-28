@@ -210,6 +210,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     /** The live claim for a command, renewed or replaced as needed. */
     const acquire = async (io: SandboxExecIO): Promise<[Lease, Claim]> => {
       for (let attempt = 0; ; attempt++) {
+        // Never create a claim once the session is disposed: nothing would
+        // delete it before its shutdownTime.
+        if (disposed) throw new Error("the sandbox was disposed");
         current ??= lease(this.#claim(io.signal));
         const entry = current;
         let claim: Claim;
@@ -222,13 +225,16 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         }
         try {
           await this.#renewIfDue(claim, io.signal);
-          return [entry, claim];
         } catch (error) {
           // An expired claim is replaced once; any other renewal failure
           // fails the command rather than run it in a sandbox about to go.
           if (!(error instanceof ClaimGone) || attempt > 0) throw error;
           retire(entry);
+          void release(entry);
+          continue;
         }
+        if (disposed) throw new Error("the sandbox was disposed");
+        return [entry, claim];
       }
     };
     return {
@@ -237,7 +243,11 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         const [entry, claim] = await acquire(io);
         entry.users++;
         entry.keepalive ??= setInterval(() => {
-          if (!entry.retired) void this.#renew(claim).catch(() => undefined);
+          if (entry.retired) return;
+          void this.#renew(claim).catch((error: unknown) => {
+            // Gone mid-command: the next command must not reuse it.
+            if (error instanceof ClaimGone) retire(entry);
+          });
         }, this.#renewEveryMs());
         entry.keepalive.unref?.();
         // The runtime cannot stop a running command. A cancelled command
@@ -281,7 +291,11 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
   }
 
   async #renewIfDue(claim: Claim, signal: AbortSignal): Promise<void> {
-    if (claim.expiresAt - this.#now() >= this.#lifetimeMs() / 2) return;
+    const left = claim.expiresAt - this.#now();
+    // Past its shutdownTime the claim may already be shutting down, even if
+    // the controller has not removed it yet: replace it, never revive it.
+    if (left <= 0) throw new ClaimGone("the SandboxClaim expired");
+    if (left >= this.#lifetimeMs() / 2) return;
     await this.#renew(claim, signal);
   }
 

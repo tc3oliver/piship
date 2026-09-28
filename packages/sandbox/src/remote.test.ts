@@ -558,6 +558,8 @@ interface Cluster {
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
   expired?: Set<string>;
+  /** Holds PATCH responses until it resolves. */
+  patchGate?: Promise<void>;
 }
 
 async function kubernetesServer(
@@ -586,10 +588,11 @@ async function kubernetesServer(
           response.statusCode >= 400 ? '{"message":"etcd unavailable"}' : "{}",
         );
       }
-      if (request.method === "PATCH") {
-        response.statusCode = cluster.expired?.has(name) ? 404 : 200;
-        return void response.end("{}");
-      }
+      if (request.method === "PATCH")
+        return void (cluster.patchGate ?? Promise.resolve()).then(() => {
+          response.statusCode = cluster.expired?.has(name) ? 404 : 200;
+          response.end("{}");
+        });
       const seen = (polls.get(name) ?? 0) + 1;
       polls.set(name, seen);
       return void response.end(
@@ -855,12 +858,6 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
     const names = claimNames(mock.requests);
     expect(names).toHaveLength(2);
-    expect(
-      mock.requests.some(
-        (request) =>
-          request.method === "PATCH" && request.path === `${CLAIMS}/${retired}`,
-      ),
-    ).toBe(false);
     const execute = mock.requests.filter(
       (request) => request.path === "/execute",
     );
@@ -908,6 +905,98 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     controller.abort();
     await slow;
     await sandbox.dispose();
+  });
+
+  it("stops renewing a claim once its command is cancelled", async () => {
+    const mock = await kubernetesServer((command) =>
+      command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+    );
+    // A one-second lifetime renews a running command every 250 ms.
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 1 }),
+    );
+    const [first] = claimNames(mock.requests);
+    const renewals = () =>
+      mock.requests.filter(
+        (request) =>
+          request.method === "PATCH" && request.path === `${CLAIMS}/${first}`,
+      ).length;
+    const controller = new AbortController();
+    const pending = sandbox
+      .exec("sleep 600", workspace, {
+        onData: () => {},
+        signal: controller.signal,
+      })
+      .catch(() => undefined);
+    // Renewal really runs while the command does...
+    const deadline = Date.now() + 10_000;
+    while (renewals() < 1 && Date.now() < deadline)
+      await new Promise((done) => setTimeout(done, 25));
+    expect(renewals()).toBeGreaterThanOrEqual(1);
+    controller.abort();
+    await pending;
+    const atRetire = renewals();
+    // ...and never again after retirement, over more than two intervals.
+    await new Promise((done) => setTimeout(done, 700));
+    expect(renewals()).toBe(atRetire);
+    await sandbox.dispose();
+  });
+
+  it("replaces a locally expired claim without renewing it", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    // The cluster has not removed the claim yet, so a PATCH would succeed.
+    const mock = await kubernetesServer();
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+    );
+    const [first] = claimNames(mock.requests);
+    now += 61_000;
+    expect((await run(sandbox, "echo ok")).exitCode).toBe(0);
+    expect(claimNames(mock.requests)).toHaveLength(2);
+    expect(
+      mock.requests.filter((request) => request.method === "PATCH"),
+    ).toHaveLength(0);
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    await sandbox.dispose();
+  });
+
+  it("creates no claim after dispose, even mid-renewal", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    let open!: () => void;
+    const cluster: Cluster = {
+      expired: new Set(),
+      patchGate: new Promise<void>((done) => {
+        open = done;
+      }),
+    };
+    const mock = await kubernetesServer(undefined, cluster);
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+    );
+    const [first] = claimNames(mock.requests);
+    // Due for renewal; the cluster answers that the claim is gone only
+    // after the session has been disposed.
+    now += 40_000;
+    cluster.expired?.add(first ?? "");
+    const pending = run(sandbox, "echo ok");
+    const deadline = Date.now() + 10_000;
+    while (
+      !mock.requests.some((request) => request.method === "PATCH") &&
+      Date.now() < deadline
+    )
+      await new Promise((done) => setTimeout(done, 10));
+    await sandbox.dispose();
+    open();
+    await expect(pending).rejects.toThrow(/disposed/);
+    expect(claimNames(mock.requests)).toEqual([first]);
+    expect(
+      mock.requests.filter((request) => request.path === "/execute").length,
+    ).toBe(1); // the activation check only
   });
 
   it("replaces a claim the cluster already expired before running", async () => {
