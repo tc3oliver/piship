@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDistribution,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
@@ -600,6 +601,14 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /Release gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources \(https:\/\/npm.internal.example\)/,
     );
+    // `piship build` runs the same gate before assembling anything.
+    const out = temp("piship-build-out-");
+    const built = caught(() => buildDistribution(path, out));
+    expect(built.code).toBe("POLICY_DENIED");
+    expect(built.message).toMatch(
+      /Build gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources/,
+    );
+    expect(readdirSync(out)).toEqual([]);
   });
 
   it("source: refuses a registry package the npm lock records without integrity", async () => {
@@ -689,6 +698,14 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
       expect(error.code).toBe("POLICY_DENIED");
       expect(error.message).toContain(
         `Release gate install-script: ${victim[0]}@${String(victim[1].version)} runs npm lifecycle scripts`,
+      );
+      // `piship build` refuses it too, before npm could run the script.
+      const built = caught(() =>
+        core.buildDistribution(path, temp("piship-build-out-")),
+      );
+      expect(built.code).toBe("POLICY_DENIED");
+      expect(built.message).toContain(
+        `Build gate install-script: ${victim[0]}@${String(victim[1].version)}`,
       );
     } finally {
       process.env.PISHIP_BUILD_INPUT = BUILD_INPUT;

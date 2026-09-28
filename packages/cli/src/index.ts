@@ -418,7 +418,10 @@ export async function runCli(
         );
       }
     } else if (command === "dev" || command === "test") {
-      const artifact = buildDistribution(target);
+      // Local iteration: the supply-chain gates run on build and release.
+      const artifact = buildDistribution(target, undefined, {
+        supplyChainGates: false,
+      });
       const lock = requireCurrentLock(target);
       // `dev --smoke` runs the same isolated launch headlessly, for scripts.
       const interactive = command === "dev" && rest[0] !== "--smoke";

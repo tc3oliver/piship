@@ -41,6 +41,7 @@ import {
 } from "./trust.js";
 import { STATE_SCHEMAS, type StateSchemaSupport } from "./migration.js";
 import { PiShipError } from "@piship/contracts";
+import { checkPackageSources } from "./release.js";
 
 export * from "./access.js";
 export * from "./archive.js";
@@ -749,11 +750,20 @@ function payloadIntegrityError(): PiShipError {
     { component: "payload" },
   );
 }
+/**
+ * Assemble the portable payload from a current lock. By default the release
+ * `source` and `install-script` gates run first (piship/v1alpha4 locks), so a
+ * distributable build never installs an unapproved source or an unreviewed
+ * npm lifecycle script; `dev` and `test` pass `supplyChainGates: false` to
+ * stay lenient while iterating.
+ */
 export function buildDistribution(
   manifestPath: string,
   outputRoot = resolve("dist"),
+  options: { readonly supplyChainGates?: boolean } = {},
 ): string {
   const lock = requireCurrentLock(manifestPath);
+  if (options.supplyChainGates !== false) checkPackageSources(lock, "Build");
   const output = join(outputRoot, lock.app.id);
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });

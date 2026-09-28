@@ -228,9 +228,10 @@ function gate(
   gateName: string,
   message: string,
   userAction?: string,
+  stage: "Release" | "Build" = "Release",
 ): PiShipError {
-  return new PiShipError(code, `Release gate ${gateName}: ${message}`, {
-    component: "release",
+  return new PiShipError(code, `${stage} gate ${gateName}: ${message}`, {
+    component: stage === "Release" ? "release" : "build",
     sanitizedDetail: { gate: gateName },
     ...(userAction ? { userAction } : {}),
   });
@@ -337,6 +338,80 @@ function policyConflicts(lock: DistributionLock): string[] {
 }
 
 /**
+ * The `source` and `install-script` gates over the locked npm closure: every
+ * package has sha512 integrity and a source in `release.sources`, and every
+ * npm lifecycle script was reviewed for this PiShip version. `piship release`
+ * and `piship build` both run them; only piship/v1alpha4 locks record
+ * sources and install scripts.
+ */
+export function checkPackageSources(
+  lock: DistributionLock,
+  stage: "Release" | "Build" = "Release",
+): void {
+  const release = lock.release;
+  if (!release) return;
+  for (const item of lock.runtime.packages) {
+    // The lock keeps every registry entry, so one the npm lock records
+    // without integrity is refused here instead of going unchecked.
+    if (!item.integrity)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} is missing integrity in the npm lock`,
+        "Record the registry dist.integrity for this package in package-lock.json and lock again",
+        stage,
+      );
+    if (!item.resolved)
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} has no recorded source`,
+        undefined,
+        stage,
+      );
+    let origin: string;
+    try {
+      origin = new URL(item.resolved).origin;
+    } catch {
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} has an unparsable source`,
+        undefined,
+        stage,
+      );
+    }
+    if (!release.sources.includes(origin))
+      throw gate(
+        "POLICY_DENIED",
+        "source",
+        `${item.path}@${item.version} comes from ${origin}, which is not in release.sources (${release.sources.join(", ")})`,
+        undefined,
+        stage,
+      );
+    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(item.integrity))
+      throw gate(
+        "INTEGRITY_FAILED",
+        "source",
+        `${item.path}@${item.version} has no sha512 integrity`,
+        undefined,
+        stage,
+      );
+    if (
+      item.installScript &&
+      !REVIEWED_INSTALL_SCRIPTS.includes(`${item.path}@${item.version}`)
+    )
+      throw gate(
+        "POLICY_DENIED",
+        "install-script",
+        `${item.path}@${item.version} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
+        undefined,
+        stage,
+      );
+  }
+}
+
+/**
  * Static release gates, checked before anything is assembled. Each failure
  * names its gate: lock, schema, target, pi, source, install-script,
  * policy, certification, or sandbox.
@@ -389,54 +464,7 @@ export function checkReleaseInputs(
       "pi",
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
-  for (const item of lock.runtime.packages) {
-    // The lock keeps every registry entry, so one the npm lock records
-    // without integrity is refused here instead of going unchecked.
-    if (!item.integrity)
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} is missing integrity in the npm lock`,
-        "Record the registry dist.integrity for this package in package-lock.json and lock again",
-      );
-    if (!item.resolved)
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no recorded source`,
-      );
-    let origin: string;
-    try {
-      origin = new URL(item.resolved).origin;
-    } catch {
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has an unparsable source`,
-      );
-    }
-    if (!release.sources.includes(origin))
-      throw gate(
-        "POLICY_DENIED",
-        "source",
-        `${item.path}@${item.version} comes from ${origin}, which is not in release.sources (${release.sources.join(", ")})`,
-      );
-    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(item.integrity))
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no sha512 integrity`,
-      );
-    if (
-      item.installScript &&
-      !REVIEWED_INSTALL_SCRIPTS.includes(`${item.path}@${item.version}`)
-    )
-      throw gate(
-        "POLICY_DENIED",
-        "install-script",
-        `${item.path}@${item.version} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
-      );
-  }
+  checkPackageSources(lock);
   const conflicts = policyConflicts(lock);
   if (conflicts.length)
     throw gate("POLICY_DENIED", "policy", conflicts.join("; "));
