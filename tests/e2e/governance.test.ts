@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -57,7 +58,9 @@ function build(
   services: Services,
   patch: (source: string) => string,
 ): Distribution {
-  const temp = mkdtempSync(join(tmpdir(), "piship-governance-e2e-"));
+  const temp = realpathSync(
+    mkdtempSync(join(tmpdir(), "piship-governance-e2e-")),
+  );
   temporary.push(temp);
   const directory = join(temp, "distribution");
   cpSync(join(root, "examples", "demo-company"), directory, {
@@ -69,7 +72,15 @@ function build(
       "provider: system",
       "provider: file\n    acknowledgePlaintext: true",
     )
-    .replace("127.0.0.1:8765", "127.0.0.1");
+    .replace("127.0.0.1:8765", "127.0.0.1")
+    // The demo's company matcher requires a checkout under /srv/src; the
+    // test's company project lives in this temporary directory instead.
+    .replace(
+      'path: "/srv/src/**"',
+      `path: ${JSON.stringify(`${temp.replaceAll("\\", "/")}/**`)}`,
+    );
+  if (source.includes("/srv/src/**"))
+    throw new Error("demo company path matcher not found");
   if (windows)
     source = source.replace(
       "  required: true\n  filesystem:",

@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "eecd6f2d08faa0ebafcdb27fb62ce6c3448bb4b81a747318399a2e1fd8888f77"
+    "sha256": "ca3ae72dd7393497e838c7f1d38e844e81d44ef764f92b29563790c4990952ac"
   },
   "app": {
     "id": "acmecode",
@@ -1307,7 +1307,8 @@
           "company": {
             "match": [
               {
-                "remote": "git.acme.example/**"
+                "remote": "git.acme.example/**",
+                "path": "/srv/src/**"
               }
             ],
             "dimensions": {
@@ -1479,7 +1480,7 @@
   },
   "digests": {
     "resources": "sha256-4324767ab5f9114492df68197c3391cd2f048d701396e692f8546a8aefb59f33",
-    "policy": "sha256-b3698a76084a1acfe3bd2a14d6e6b5faa58b4f2e0496e22f7dc50d1035a9218c",
+    "policy": "sha256-d7b6a9ec4404a324971547ffaef557e8d3614c63cce7ade35f5c0d867b2cb7e1",
     "capabilities": "sha256-212e5e46ae9e89c4a49394f78609e0a4d9c2d46d0899a28859fb41dadce2c97a",
     "mcp": "sha256-a0831046aa070dc1b2d306d8d593ad03cf2cbe8e58bde8d0de627f1117ec9c5f",
     "sandbox": "sha256-71471e2d35df62ee3f87be257a8600d9a380a9f9aac440b9184c16a20da9bd64",

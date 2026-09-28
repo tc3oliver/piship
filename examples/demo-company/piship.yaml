@@ -121,13 +121,16 @@ policy:
   id: acme-engineering
   version: 1
   default: ask
-  # Repositories on the (fictional) company Git host are company projects;
-  # every other workspace is unknown. Unlisted dimensions keep the managed
+  # Repositories on the (fictional) company Git host that are checked out
+  # under the managed source root are company projects; every other
+  # workspace is unknown. The origin remote alone is only a claim, so the
+  # matcher also requires the path. Unlisted dimensions keep the managed
   # defaults: no project extensions, hooks, agents, MCP, or providers.
   projectTrust:
     company:
       match:
         - remote: "git.acme.example/**"
+          path: "/srv/src/**"
   enforced:
     - id: acme.secrets.read
       action: filesystem.read

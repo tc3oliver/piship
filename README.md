@@ -27,12 +27,23 @@ models:
   allowed: [acme/coder, acme/general, acme/review]
 ```
 
+Try it against the deterministic local fixtures (a loopback OIDC provider, credential broker, and gateway that auto-approve sign-in; test infrastructure, not a live integration). From the repository root with Node.js 22.19.0 or newer:
+
+```bash
+npm ci && npm run build
+node examples/demo-company/fixtures/local-services.mjs   # keeps running; prints ACMECODE_* export lines
+```
+
+In a second terminal, paste the printed lines, then:
+
 ```bash
 npm exec -- piship build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
-acmecode login
-acmecode
+~/.local/bin/acmecode login
+~/.local/bin/acmecode
 ```
+
+The demo requires an OS sandbox (bubblewrap on Linux, Seatbelt on macOS) and a system secret store (Secret Service on Linux, Keychain, or Credential Manager). Windows has no sandbox adapter, so there the demo stops with `SANDBOX_UNAVAILABLE` unless a copy sets `sandbox.required: false`; use `acmecode.cmd` on Windows. The [demo README](examples/demo-company/README.md) has the full walkthrough and the file secret-store fallback.
 
 **Powered by Pi, governed by you.**
 
