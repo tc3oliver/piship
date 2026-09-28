@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDistribution,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
@@ -600,6 +601,14 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /Release gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources \(https:\/\/npm.internal.example\)/,
     );
+    // `piship build` runs the same gate before assembling anything.
+    const out = temp("piship-build-out-");
+    const built = caught(() => buildDistribution(path, out));
+    expect(built.code).toBe("POLICY_DENIED");
+    expect(built.message).toMatch(
+      /Build gate source: .* comes from https:\/\/registry.npmjs.org, which is not in release.sources/,
+    );
+    expect(readdirSync(out)).toEqual([]);
   });
 
   it("source: refuses a registry package the npm lock records without integrity", async () => {
@@ -689,6 +698,14 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
       expect(error.code).toBe("POLICY_DENIED");
       expect(error.message).toContain(
         `Release gate install-script: ${victim[0]}@${String(victim[1].version)} runs npm lifecycle scripts`,
+      );
+      // `piship build` refuses it too, before npm could run the script.
+      const built = caught(() =>
+        core.buildDistribution(path, temp("piship-build-out-")),
+      );
+      expect(built.code).toBe("POLICY_DENIED");
+      expect(built.message).toContain(
+        `Build gate install-script: ${victim[0]}@${String(victim[1].version)}`,
       );
     } finally {
       process.env.PISHIP_BUILD_INPUT = BUILD_INPUT;
@@ -1095,9 +1112,14 @@ policy:
 });
 
 describe("release Pi compatibility", () => {
-  const lockFor = (mode: "personal" | "managed", version = "0.87.1") => ({
+  const lockFor = (
+    mode: "personal" | "managed",
+    version = "0.87.1",
+    governance = false,
+  ) => ({
     deployment: { mode },
     runtime: { version } as never,
+    ...(governance ? { governance: {} as never } : {}),
   });
 
   it("records the weakest of the deployment and lifecycle surfaces", () => {
@@ -1155,6 +1177,66 @@ describe("release Pi compatibility", () => {
     }
   });
 
+  it("includes the governance surface when the distribution declares governance", () => {
+    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const saved = { ...known };
+    try {
+      const cases: [Record<string, string>, string, string][] = [
+        [
+          {
+            personal: "supported",
+            governance: "supported",
+            lifecycle: "supported",
+          },
+          "personal",
+          "supported",
+        ],
+        [
+          {
+            personal: "supported",
+            governance: "candidate",
+            lifecycle: "supported",
+          },
+          "personal",
+          "candidate",
+        ],
+        [
+          {
+            managed: "supported",
+            governance: "unsupported",
+            lifecycle: "supported",
+          },
+          "managed",
+          "unsupported",
+        ],
+        [
+          {
+            managed: "candidate",
+            governance: "supported",
+            lifecycle: "supported",
+          },
+          "managed",
+          "candidate",
+        ],
+      ];
+      for (const [statuses, mode, expected] of cases) {
+        Object.assign(known, saved, statuses);
+        const lock = lockFor(mode as "personal" | "managed", "0.87.1", true);
+        expect(piCompatibility(lock)).toBe(expected);
+        expect(piCompatibilitySurfaces(lock)).toEqual({
+          [mode]: statuses[mode],
+          governance: statuses.governance,
+          lifecycle: statuses.lifecycle,
+        });
+        // Without governance the governance surface does not count.
+        const plain = lockFor(mode as "personal" | "managed");
+        expect(piCompatibilitySurfaces(plain)).not.toHaveProperty("governance");
+      }
+    } finally {
+      Object.assign(known, saved);
+    }
+  });
+
   it("records an unknown Pi version as unsupported on every surface", () => {
     const lock = lockFor("personal", "0.0.0");
     expect(piCompatibility(lock)).toBe("unsupported");
@@ -1162,7 +1244,29 @@ describe("release Pi compatibility", () => {
       personal: "unsupported",
       lifecycle: "unsupported",
     });
+    expect(piCompatibilitySurfaces(lockFor("managed", "0.0.0", true))).toEqual({
+      managed: "unsupported",
+      governance: "unsupported",
+      lifecycle: "unsupported",
+    });
   });
+
+  it.runIf(HOST_EVIDENCED)(
+    "pi: refuses a release when only the governance surface is unsupported",
+    () => {
+      const { path } = project();
+      const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+      const saved = { ...known };
+      try {
+        for (const surface of Object.keys(known)) known[surface] = "supported";
+        known.governance = "unsupported";
+        const error = caught(() => checkReleaseInputs(path));
+        expect(error.message).toMatch(/Release gate pi: Pi 0\.87\.1/);
+      } finally {
+        Object.assign(known, saved);
+      }
+    },
+  );
 
   it.runIf(HOST_EVIDENCED)(
     "pi: refuses a release when only the lifecycle surface is unsupported",
@@ -1355,12 +1459,17 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         command: "acmepi",
         mode: "personal",
       },
-      // The weaker of the personal surface and the lifecycle surface.
+      // The weakest of the personal, governance, and lifecycle surfaces.
       pi: {
         version: "0.87.1",
-        compatibility: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+        compatibility: piCompatibility({
+          deployment: { mode: "personal" },
+          runtime: { version: "0.87.1" } as never,
+          governance: {} as never,
+        }),
         surfaces: {
           personal: PI_COMPATIBILITY["0.87.1"]?.personal,
+          governance: PI_COMPATIBILITY["0.87.1"]?.governance,
           lifecycle: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
         },
       },

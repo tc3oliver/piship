@@ -27,12 +27,23 @@ models:
   allowed: [acme/coder, acme/general, acme/review]
 ```
 
+Try it against the deterministic local fixtures (a loopback OIDC provider, credential broker, and gateway that auto-approve sign-in; test infrastructure, not a live integration). From the repository root with Node.js 22.19.0 or newer:
+
+```bash
+npm ci && npm run build
+node examples/demo-company/fixtures/local-services.mjs   # keeps running; prints ACMECODE_* export lines
+```
+
+In a second terminal, paste the printed lines, then:
+
 ```bash
 npm exec -- piship build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
-acmecode login
-acmecode
+~/.local/bin/acmecode login
+~/.local/bin/acmecode
 ```
+
+The demo requires an OS sandbox (bubblewrap on Linux, Seatbelt on macOS) and a system secret store (Secret Service on Linux, Keychain, or Credential Manager). Windows has no sandbox adapter, so there the demo stops with `SANDBOX_UNAVAILABLE` unless a copy sets `sandbox.required: false`; use `acmecode.cmd` on Windows. The [demo README](examples/demo-company/README.md) has the full walkthrough and the file secret-store fallback.
 
 **Powered by Pi, governed by you.**
 
@@ -65,7 +76,7 @@ The installer and launcher never fetch Node, Pi, or packages. `piship build` run
 
 `piship/v1alpha2` adds `deployment.mode: managed`. A managed distribution signs users in with OIDC Authorization Code + PKCE, obtains a scoped runtime credential from an organization broker, and sends inference only to a declared OpenAI-compatible gateway. Only allowed models are visible or callable, ambient provider keys are removed from the runtime environment, and branded `login`, `logout`, `doctor`, `models`, and `config explain` commands are included. Endpoints are runtime references, so the lock never holds secrets or machine-specific values. The managed surface is a compatibility **candidate**: it has no live identity provider or live gateway evidence ([status](docs/status.md)). Try it with the [demo company example](examples/demo-company/README.md) and its local fixtures.
 
-## Governance preview
+## Governance
 
 `piship/v1alpha3` adds governance to both deployment modes. A distribution declares resources by trust class (company, certified with a reviewed tree digest, or user), a policy with enforced rules and relaxable defaults, project trust by git origin, MCP servers with tool allowlists, an OS sandbox, and audit sinks. PiShip decides each resource load, tool call, governed file access, shell command, and MCP call before it happens, runs `bash`, `!` commands, and MCP stdio servers inside bubblewrap (Linux) or Seatbelt (macOS) when the sandbox is required, and fails closed when a required sandbox or audit sink is unavailable. Windows has no sandbox adapter. The Pi process and in-process extensions are not contained; see [security](docs/security.md#governance) for exactly what is enforced. Branded `policy explain`, `capabilities`, and governance sections in `doctor` show the effective state. `piship migrate` moves v1alpha1 and v1alpha2 manifests to v1alpha3 with behavior-preserving defaults, and on to v1alpha4.
 

@@ -76,17 +76,23 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
 - `credential.provider: local-secret` with `storage.provider: system`: `mypi-local login` asks for the key and keeps it in the system secret store; `logout` deletes it. Use `storage: {provider: file}` for owner-only plaintext files (a personal distribution needs no `acknowledgePlaintext`), or `credential.provider: none` without `storage` for a server without a key.
 - `inference.provider: openai-compatible` with `baseUrl: ${MYPI_MODEL_URL}` and a one-model catalog, `local/coder`. The URL must use HTTPS, or `http` on `127.0.0.1`, `localhost`, or `[::1]`.
 
-`local-model/model-server.mjs` is a stand-in server with canned replies, for trying the variant without a model. It is test infrastructure, not a model:
+`local-model/model-server.mjs` is a stand-in server with canned replies, for trying the variant without a model. It is test infrastructure, not a model. In a first terminal, from the repository root after `npm ci` and `npm run build`:
 
 ```bash
-node examples/personal/local-model/model-server.mjs    # prints MYPI_MODEL_URL and the key it accepts
-export MYPI_MODEL_URL=http://127.0.0.1:<port>/v1
-npm exec -- piship lock examples/personal/local-model/piship.yaml
+node examples/personal/local-model/model-server.mjs    # keeps running; prints MYPI_MODEL_URL and the key it accepts
+```
+
+In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` on Windows), then:
+
+```bash
+npm exec -- piship validate examples/personal/local-model/piship.yaml
 npm exec -- piship build examples/personal/local-model/piship.yaml
 dist/mypi-local/bin/mypi-local login           # paste the key
 dist/mypi-local/bin/mypi-local --smoke-model   # one request to the local endpoint
 dist/mypi-local/bin/mypi-local logout
 ```
+
+The committed `local-model/piship.lock` is current; run `piship lock` only after editing the manifest. `login` uses the system secret store, as for the demo company: on Linux it needs an unlocked Secret Service and `secret-tool`, otherwise it fails with `SECRET_STORE_UNAVAILABLE`; set `storage: {provider: file}` in a copy to use owner-only files instead. On Windows run `dist\mypi-local\bin\mypi-local.cmd`.
 
 These modes are verified against the stand-in server only; a request to a real local model server has not been recorded.
 
