@@ -659,6 +659,42 @@ describe("CLI", () => {
     expect(cli("validate", manifest).status).toBe(0);
     expect(existsSync(join(example, "piship.lock"))).toBe(false);
   }, 180000);
+  it("rejects secret-looking values and fields without echoing them", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-secret-"));
+    temporary.push(temp);
+    const example = join(temp, "demo-company");
+    cpSync(join(root, "examples/demo-company"), example, { recursive: true });
+    const manifest = join(example, "piship.yaml");
+    const original = readFileSync(manifest, "utf8");
+    const token = ["ghp", "Z9y8X7w6V5u4T3s2R1q0"].join("_");
+    writeFileSync(
+      manifest,
+      original.replace(
+        "banner: AcmeCode managed demo distribution (fictional)",
+        `banner: ${token}`,
+      ),
+    );
+    const banner = cli("validate", manifest);
+    expect(banner.status).toBe(1);
+    expect(banner.stderr).toContain("app.banner");
+    expect(banner.stderr).toContain("looks like secret material");
+    expect(banner.stderr).not.toContain(token);
+    writeFileSync(
+      manifest,
+      original.replace(
+        "  liveCatalog: true\n",
+        "  liveCatalog: true\n  apiKey: plain-value-123\n",
+      ),
+    );
+    const field = cli("validate", manifest);
+    expect(field.status).toBe(1);
+    expect(field.stderr).toContain("inference.apiKey");
+    expect(field.stderr).toContain(
+      "Unknown field; secrets are not allowed in piship.yaml",
+    );
+    expect(field.stderr).not.toContain("plain-value-123");
+    expect(field.stderr).not.toContain("REDACTED");
+  });
   it("reports invalid Pi, missing resources, and YAML errors without a stack trace", () => {
     const temp = mkdtempSync(join(tmpdir(), "piship-errors-"));
     temporary.push(temp);
