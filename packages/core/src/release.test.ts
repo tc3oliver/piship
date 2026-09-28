@@ -622,12 +622,15 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
-  it("sandbox: a required sandbox passes on a supported host target", () => {
-    const { path } = project({ extra: "sandbox:\n  required: true\n" });
-    expect(checkReleaseInputs(path).governance?.manifest.sandbox.required).toBe(
-      true,
-    );
-  });
+  it.runIf(process.platform !== "win32")(
+    "sandbox: a required sandbox passes on a supported host target",
+    () => {
+      const { path } = project({ extra: "sandbox:\n  required: true\n" });
+      expect(
+        checkReleaseInputs(path).governance?.manifest.sandbox.required,
+      ).toBe(true);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "sandbox: win32 cannot be reached from this host; the target gate refuses first",
