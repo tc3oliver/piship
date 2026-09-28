@@ -205,4 +205,23 @@ describe("OpenAI-compatible endpoint", () => {
     ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
     services = await startLocalServices();
   });
+  it("reports a gateway that does not answer in time as unreachable", async () => {
+    const timedOut = new OpenAICompatibleInferenceProvider({
+      providerId: "acmecode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      catalog,
+      allowed: ["acme/coder"],
+      liveCatalog: true,
+      fetch: async () => {
+        throw new DOMException("The operation timed out", "TimeoutError");
+      },
+      secret: () => null,
+    });
+    await expect(timedOut.probe()).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      message: "The inference gateway did not answer within 15 s",
+    });
+  });
 });

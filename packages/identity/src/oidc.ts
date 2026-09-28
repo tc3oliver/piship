@@ -46,6 +46,22 @@ function mapError(error: unknown, action: string): PiShipError {
     current = (current as { cause?: unknown }).cause
   )
     if (current instanceof PiShipError) return current;
+  // A deadline is an unavailable identity provider, not an invalid identity.
+  for (
+    let current: unknown = error;
+    current;
+    current = (current as { cause?: unknown }).cause
+  )
+    if ((current as Error)?.name === "TimeoutError")
+      return new PiShipError(
+        "GATEWAY_UNREACHABLE",
+        `${action}: the identity provider did not respond in time`,
+        {
+          component: "identity",
+          retryable: true,
+          userAction: "Check the network connection, then try again",
+        },
+      );
   const code = (error as { code?: string })?.code ?? "";
   const cause = (error as { cause?: unknown })?.cause;
   // oauth4webapi puts the precise failed check (claim, state, signature) in the cause.

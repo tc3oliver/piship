@@ -185,6 +185,8 @@ export interface OpenAICompatibleOptions {
   readonly secret: () => SecretValue | null;
 }
 
+const PROBE_TIMEOUT_MS = 15_000;
+
 /** Explicit OpenAI-compatible endpoint (managed gateway or local server). */
 export class OpenAICompatibleInferenceProvider implements InferenceProvider {
   readonly kind = "openai-compatible";
@@ -193,16 +195,27 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
   /** GET {baseUrl}/models, used for live availability and gateway reachability. */
   async probe(): Promise<string[]> {
     const secret = this.options.secret();
-    const response = await this.options.fetch(
-      `${this.options.baseUrl.replace(/\/+$/, "")}/models`,
-      {
-        headers: {
-          accept: "application/json",
-          ...(secret ? { authorization: `Bearer ${secret.reveal()}` } : {}),
+    let response: Response;
+    try {
+      response = await this.options.fetch(
+        `${this.options.baseUrl.replace(/\/+$/, "")}/models`,
+        {
+          headers: {
+            accept: "application/json",
+            ...(secret ? { authorization: `Bearer ${secret.reveal()}` } : {}),
+          },
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         },
-        signal: AbortSignal.timeout(15_000),
-      },
-    );
+      );
+    } catch (error) {
+      if ((error as Error)?.name === "TimeoutError")
+        throw new PiShipError(
+          "GATEWAY_UNREACHABLE",
+          `The inference gateway did not answer within ${PROBE_TIMEOUT_MS / 1000} s`,
+          { component: "inference", retryable: true },
+        );
+      throw error;
+    }
     const failure = classifyGatewayStatus(
       response.status,
       Object.fromEntries(response.headers),
