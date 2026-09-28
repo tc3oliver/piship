@@ -722,6 +722,56 @@ describe("McpGovernor over Streamable HTTP", () => {
     expect(report?.reason).toMatch(/runtime credential/);
   });
 
+  it("resolves the url just before connecting", async () => {
+    const fixture = await startFixtureHttpServer({});
+    cleanup.push(() => fixture.close());
+    const resolveUrl = vi.fn((server: McpServerConfig) =>
+      (server.url ?? "").replace(`\${TICKETS_URL}`, fixture.url),
+    );
+    const { governor } = harness({
+      resolveUrl,
+      servers: [httpServer("tickets", `\${TICKETS_URL}`, { required: true })],
+    });
+    const [report] = await governor.start();
+    expect(report?.state).toBe("healthy");
+    expect(resolveUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "tickets", url: `\${TICKETS_URL}` }),
+    );
+    expect(fixture.requests.length).toBeGreaterThan(0);
+  });
+
+  it("fails an unresolvable url: CONFIG_UNAVAILABLE when required, unhealthy when optional", async () => {
+    const resolveUrl = () => {
+      throw new Error("Runtime variable TICKETS_URL is not set");
+    };
+    const optional = harness({
+      resolveUrl,
+      servers: [
+        httpServer("tickets", `\${TICKETS_URL}`, { retry: { attempts: 3 } }),
+      ],
+    });
+    const [report] = await optional.governor.start();
+    expect(report).toMatchObject({ state: "failed", required: false });
+    expect(report?.reason).toContain("TICKETS_URL is not set");
+    // Starting the server was attempted once: the environment will not change.
+    expect(optional.audit).toContainEqual(
+      expect.objectContaining({
+        event: "mcp.server.start",
+        detail: expect.objectContaining({ state: "failed", attempts: 1 }),
+      }),
+    );
+    const required = harness({
+      resolveUrl,
+      servers: [httpServer("tickets", `\${TICKETS_URL}`, { required: true })],
+    });
+    const error = await required.governor
+      .start()
+      .catch((e: unknown) => e as PiShipError);
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error).toMatchObject({ code: "CONFIG_UNAVAILABLE" });
+    expect((error as PiShipError).message).toContain("TICKETS_URL is not set");
+  });
+
   it("does not follow redirects", async () => {
     const fixture = await startFixtureHttpServer({ redirect: true });
     cleanup.push(() => fixture.close());

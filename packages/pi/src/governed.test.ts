@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ManagedFetch } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
+import { resolveTemplate } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   askUserExtension,
@@ -57,6 +58,8 @@ async function open(
   options: {
     readonly userRules?: readonly unknown[];
     readonly files?: Readonly<Record<string, string>>;
+    readonly fetch?: ManagedFetch;
+    readonly resolveTemplate?: (key: string, template: string) => string;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -100,10 +103,12 @@ async function open(
     cwd: workspace,
     piVersion: "0.87.1",
     interactive: false,
-    fetch: (() => {
-      throw new Error("no network in unit tests");
-    }) as unknown as ManagedFetch,
-    resolveTemplate: (_key, template) => template,
+    fetch:
+      options.fetch ??
+      ((() => {
+        throw new Error("no network in unit tests");
+      }) as unknown as ManagedFetch),
+    resolveTemplate: options.resolveTemplate ?? ((_key, template) => template),
     homeDir: home,
   });
   sessions.push(session);
@@ -555,6 +560,66 @@ describe("piship-workflow", () => {
     ).toBe("base\n\nCompany build rules.");
     await workflow.commands.get("plan")?.handler("", context(true));
     expect(session.workflowMode).toBe("plan");
+  });
+});
+
+describe("Streamable HTTP MCP urls", () => {
+  const mcp = (required: boolean) => [
+    "variables: [UNIT_MCP_URL]",
+    "mcp:",
+    "  mode: allowlist",
+    "  servers:",
+    "    tickets:",
+    "      transport: streamable-http",
+    `      url: \${UNIT_MCP_URL}`,
+    `      required: ${required}`,
+  ];
+  const allowStart =
+    "    - { id: tickets, action: mcp.server.start, resource: tickets, effect: allow }";
+  const env =
+    (vars: Record<string, string>) => (key: string, template: string) =>
+      resolveTemplate(key, template, ["UNIT_MCP_URL"], vars);
+
+  it("resolves the url from the launch environment before connecting", async () => {
+    const requested: string[] = [];
+    const fetch = (async (url: string | URL) => {
+      requested.push(String(url));
+      throw new Error("connection refused");
+    }) as unknown as ManagedFetch;
+    const { session } = await open([allowStart, ...mcp(false)], {
+      fetch,
+      resolveTemplate: env({ UNIT_MCP_URL: "https://mcp.unit.example/rpc" }),
+    });
+    expect(requested[0]).toBe("https://mcp.unit.example/rpc");
+    expect(session.mcpReports).toEqual([
+      expect.objectContaining({ id: "tickets", state: "failed" }),
+    ]);
+    expect(session.mcpReports[0]?.reason).not.toContain("${");
+  });
+
+  it("reports an unset variable: a failed optional server, an unavailable required one", async () => {
+    const fetch = (async () => {
+      throw new Error("must not connect");
+    }) as unknown as ManagedFetch;
+    const { session } = await open([allowStart, ...mcp(false)], {
+      fetch,
+      resolveTemplate: env({}),
+    });
+    expect(session.mcpReports).toEqual([
+      expect.objectContaining({
+        id: "tickets",
+        state: "failed",
+        reason: expect.stringContaining(
+          "Runtime variable UNIT_MCP_URL for mcp.servers.tickets.url is not set",
+        ),
+      }),
+    ]);
+    await expect(
+      open([allowStart, ...mcp(true)], { fetch, resolveTemplate: env({}) }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_UNAVAILABLE",
+      message: expect.stringContaining("UNIT_MCP_URL"),
+    });
   });
 });
 

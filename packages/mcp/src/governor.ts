@@ -52,6 +52,12 @@ export interface McpGovernorOptions {
   readonly fetch?: McpFetch;
   /** Runtime bearer for `credential: runtime` servers. */
   readonly credential?: McpCredentialProvider;
+  /**
+   * Resolve a Streamable HTTP server's `url` (for example its `${NAME}`
+   * runtime references) just before connecting. A throw fails that server:
+   * CONFIG_UNAVAILABLE for a required one, unhealthy for an optional one.
+   */
+  readonly resolveUrl?: (server: McpServerConfig) => string;
   /** Active sandbox (`ActiveSandbox`) that wraps every stdio spawn. */
   readonly sandbox?: SandboxWrapper;
   /** Replaces the sandbox spawner (tests, embedding). */
@@ -80,6 +86,8 @@ interface ServerEntry {
   readonly config: McpServerConfig;
   state: McpServerState | "pending";
   reason?: string;
+  /** Error code of a start failure. */
+  failure?: string;
   session?: McpSession;
   protocolVersion?: string;
   serverName?: string;
@@ -184,6 +192,15 @@ export class McpGovernor {
     );
     if (failedRequired) {
       await this.close();
+      if (failedRequired.failure === "CONFIG_UNAVAILABLE")
+        throw new PiShipError(
+          "CONFIG_UNAVAILABLE",
+          `Required MCP server ${failedRequired.config.id} cannot start: ${failedRequired.reason ?? "its configuration is unavailable"}`,
+          {
+            component: "mcp",
+            sanitizedDetail: { server: failedRequired.config.id },
+          },
+        );
       throw mcpUnhealthy(
         `Required MCP server ${failedRequired.config.id} failed to start: ${failedRequired.reason ?? "unknown error"}`,
         { detail: { server: failedRequired.config.id } },
@@ -215,6 +232,7 @@ export class McpGovernor {
     if (lastError !== undefined || !entry.session) {
       entry.state = "failed";
       entry.reason = failureReason(lastError ?? "closed during start");
+      if (lastError instanceof PiShipError) entry.failure = lastError.code;
     }
     this.#emit({
       event: "mcp.server.start",
@@ -295,12 +313,26 @@ export class McpGovernor {
       );
     return new StreamableHttpTransport({
       serverId: config.id,
-      url: config.url,
+      url: this.#resolveUrl(config),
       fetch: this.#options.fetch,
       ...(config.credential === "runtime" && this.#options.credential
         ? { credential: this.#options.credential }
         : {}),
     });
+  }
+
+  #resolveUrl(config: McpServerConfig): string {
+    const resolve = this.#options.resolveUrl;
+    if (!resolve) return config.url ?? "";
+    try {
+      return resolve(config);
+    } catch (error) {
+      const message = `MCP server ${config.id} url cannot be resolved: ${error instanceof Error ? error.message : "unknown error"}`;
+      // Not retryable: the launch environment does not change between attempts.
+      throw config.required
+        ? new PiShipError("CONFIG_UNAVAILABLE", message, { component: "mcp" })
+        : mcpUnhealthy(message);
+    }
   }
 
   #processRuntime(): ProcessRuntime {

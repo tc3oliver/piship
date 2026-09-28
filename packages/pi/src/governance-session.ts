@@ -1057,11 +1057,23 @@ export class GovernanceSession {
     ] as McpServerConfig[];
     if (!servers.length) return;
     const channel = this.startupChannel();
+    // Only distribution-declared urls may carry `${NAME}` references; a
+    // project file never gets launch environment values interpolated.
+    const declared = new Set(
+      mcp.mode === "off" ? [] : mcp.servers.map((server) => server.id),
+    );
     const governor = new McpGovernor({
       servers,
       distributionDir: join(this.options.distributionDir, "resources"),
       workspace: this.project.root,
       fetch: this.options.fetch,
+      resolveUrl: (server) =>
+        declared.has(server.id)
+          ? this.options.resolveTemplate(
+              `mcp.servers.${server.id}.url`,
+              server.url ?? "",
+            )
+          : (server.url ?? ""),
       ...(this.sandbox.report.level === "enforced"
         ? { sandbox: this.sandbox }
         : {}),
