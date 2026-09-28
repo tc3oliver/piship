@@ -1,6 +1,6 @@
 {
   "name": "@piship/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -33,8 +33,8 @@
     "directory": "packages/cli"
   },
   "dependencies": {
-    "@piship/core": "0.0.0",
-    "@piship/pi": "0.0.0",
-    "@piship/schema": "0.0.0"
+    "@piship/core": "0.1.0",
+    "@piship/pi": "0.1.0",
+    "@piship/schema": "0.1.0"
   }
 }

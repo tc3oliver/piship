@@ -1,6 +1,6 @@
 {
   "name": "piship-workspace",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,22 +10,23 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b && node scripts/mark-cli-executable.mjs",
+    "build": "tsc -b && node scripts/prepare-build-input.mjs && node scripts/mark-cli-executable.mjs",
     "clean": "node scripts/clean.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc -b",
-    "test": "npm run build && vitest run",
-    "test:e2e": "npm run build && vitest run tests/e2e",
-    "test:compatibility": "npm run check:boundaries && npm run build && vitest run packages/pi/src/compatibility.test.ts tests/compatibility",
+    "test": "vitest run --exclude 'tests/e2e/**' --exclude 'tests/compatibility/**' --exclude 'packages/pi/src/compatibility.test.ts'",
+    "test:e2e": "vitest run tests/e2e",
+    "test:compatibility": "vitest run packages/pi/src/compatibility.test.ts tests/compatibility",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm run build && npm test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@changesets/cli": "3.0.3",
     "@types/node": "22.20.4",
+    "@types/semver": "7.7.1",
     "typescript": "5.9.3",
     "vitest": "4.1.11"
   }

@@ -1,10 +1,11 @@
 /** The only Pi package integration boundary. All imports use the public package entrypoint. */
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   createAgentSession,
   createAgentSessionRuntime,
+  createReadTool,
   DefaultResourceLoader,
   InteractiveMode,
   ModelRuntime,
@@ -38,11 +39,28 @@ export async function launchPiDistribution(
     throw new Error(
       "Built Pi metadata does not match the pinned upstream runtime",
     );
+  if (options.args.length === 1 && options.args[0] === "--version") {
+    console.log(
+      `${metadata.app.name} ${metadata.app.version}\nPiShip ${metadata.runtime.pishipVersion}\nPi ${VERSION} by Earendil Works`,
+    );
+    return;
+  }
+  if (options.args.length === 1 && options.args[0] === "--help") {
+    console.log(
+      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke]\nPi ${VERSION} by Earendil Works`,
+    );
+    return;
+  }
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
   const agentDir = join(stateDir, "agent");
-  const sessionDir = join(stateDir, "sessions");
-  mkdirSync(agentDir, { recursive: true });
-  mkdirSync(sessionDir, { recursive: true });
+  const cacheDir = join(stateDir, "cache");
+  const logsDir = join(stateDir, "logs");
+  const dataDir = join(stateDir, "data");
+  const smoke = options.args.length === 1 && options.args[0] === "--smoke";
+  const sessionDir = join(stateDir, "sessions", smoke ? "acceptance" : "user");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  for (const path of [agentDir, cacheDir, logsDir, dataDir, sessionDir])
+    mkdirSync(path, { recursive: true, mode: 0o700 });
   const distributionDir = resolve(options.distributionDir);
   const resourceDir = join(distributionDir, "resources");
   for (const resource of metadata.resources) {
@@ -93,6 +111,7 @@ export async function launchPiDistribution(
       additionalExtensionPaths: resourcePaths("extensions"),
       additionalSkillPaths: resourcePaths("skills"),
       additionalPromptTemplatePaths: resourcePaths("prompts"),
+      additionalThemePaths: resourcePaths("themes"),
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -106,6 +125,19 @@ export async function launchPiDistribution(
       throw new Error(
         `Pi extension load failed: ${extensionErrors.map((item) => item.error).join("; ")}`,
       );
+    const themeDiagnostics = resourceLoader.getThemes().diagnostics;
+    if (themeDiagnostics.length)
+      throw new Error(
+        `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
+      );
+    if (
+      metadata.app.theme &&
+      !["dark", "light"].includes(metadata.app.theme) &&
+      !resourceLoader
+        .getThemes()
+        .themes.some((item) => item.name === metadata.app.theme)
+    )
+      throw new Error(`Declared theme is unavailable: ${metadata.app.theme}`);
     const result = await createAgentSession({
       cwd,
       agentDir,
@@ -127,16 +159,65 @@ export async function launchPiDistribution(
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: process.cwd(),
     agentDir,
-    sessionManager: SessionManager.create(process.cwd(), sessionDir),
+    sessionManager: SessionManager.continueRecent(process.cwd(), sessionDir),
   });
   try {
-    if (options.args.length === 1 && options.args[0] === "--smoke") {
+    if (smoke) {
       const { resourceLoader } = runtime.services;
+      const sessionManager = runtime.session.sessionManager;
+      const resumed =
+        !!sessionManager.getSessionFile() &&
+        existsSync(sessionManager.getSessionFile() ?? "");
+      const toolResult = await createReadTool(distributionDir).execute(
+        "piship-smoke",
+        { path: "piship.yaml" },
+      );
+      const toolText = toolResult.content.find((item) => item.type === "text");
+      if (
+        toolText?.type !== "text" ||
+        !toolText.text.includes("piship/v1alpha1")
+      )
+        throw new Error("Pi safe read tool failed on the packaged manifest");
+      if (!resumed)
+        sessionManager.appendMessage({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "PiShip local acceptance session; no model call.",
+            },
+          ],
+          api: "piship-local-smoke",
+          provider: "piship",
+          model: "none",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        });
       console.log(
         JSON.stringify({
           initialized: true,
           piVersion: VERSION,
+          sessionId: sessionManager.getSessionId(),
+          resumed,
+          safeTool: "read",
           agentDir,
+          cacheDir,
+          logsDir,
+          dataDir,
           sessionDir,
           instructions: resourceLoader
             .getAgentsFiles()
@@ -156,7 +237,10 @@ export async function launchPiDistribution(
       throw new Error(
         `Unknown branded command option: ${options.args.join(" ")}`,
       );
-    await new InteractiveMode(runtime).run();
+    await new InteractiveMode(
+      runtime,
+      metadata.app.theme ? { initialThemeSetting: metadata.app.theme } : {},
+    ).run();
   } finally {
     await runtime.dispose();
   }

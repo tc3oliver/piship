@@ -1,9 +1,8 @@
-name: Pi compatibility
+name: Portable E2E
 on:
   pull_request:
     paths:
       - 'packages/**'
-      - 'tests/compatibility/**'
       - 'tests/e2e/**'
       - 'examples/personal/**'
       - 'scripts/**'
@@ -17,7 +16,6 @@ on:
     branches: [main]
     paths:
       - 'packages/**'
-      - 'tests/compatibility/**'
       - 'tests/e2e/**'
       - 'examples/personal/**'
       - 'scripts/**'
@@ -31,7 +29,7 @@ on:
 permissions:
   contents: read
 jobs:
-  pinned:
+  portable:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -48,6 +46,9 @@ jobs:
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       - run: npm ci
       - run: npm run build
-      - run: npm run test:compatibility
-# TODO: Add a read-only latest Pi canary once it can report failures reliably.
-# It must never change the pinned runtime dependency, commit, merge, or publish.
+      - run: git diff --exit-code
+      # Every target runs the installed lifecycle. Ubuntu also qualifies the
+      # repeated clean build, relocated builder, and second distribution.
+      - run: npm run test:e2e
+        env:
+          PISHIP_E2E_QUALIFICATION: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}

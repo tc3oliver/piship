@@ -1,25 +1,11 @@
 # Security architecture
 
-## Trust boundaries
+Upstream Pi runs the agent. PiShip validates distribution inputs, locks declared resources and package identities, and verifies packaged file hashes before entering Pi. A distribution's extensions are executable code with the user's process privileges. This is resource and state isolation, not an OS sandbox.
 
-Upstream Pi executes the agent runtime. PiShip validates distribution inputs and controls the initial resource set. A distribution repository supplies executable extensions and instructions. Local project content remains less trusted than a curated distribution. The current slice is not a sandbox.
+The installer owns only its receipt, installed payload, and command shim. Existing install, command, and state collisions fail by default. `uninstall` preserves `~/.piship/<id>`; `purge <id> --yes` removes that one distribution's state after uninstall. The payload is separate from mutable config, sessions, cache, logs, credential metadata, and other runtime data. There is no shared runtime cache in v0.1.
 
-## Current isolation
+Pi receives a dedicated agent directory, user and acceptance session directories, in-memory settings, and a loader with ambient extension, skill, prompt, theme, and context discovery disabled. Only declared resources are packaged. Packaging rejects symlinks in resource roots and nested files. Project files remain accessible to Pi tools and trusted extensions; PiShip does not yet enforce project trust or tool policy.
 
-The launcher passes Pi an explicit state directory under `~/.piship/<id>` (or `PISHIP_STATE_HOME/<id>`), a separate session directory, in-memory settings, and a `DefaultResourceLoader` with Pi's ambient extension, skill, prompt, theme, and context discovery disabled. Only manifest-declared resource paths are added. Declared instructions, skills, extensions, and prompts are copied into the build; each resource file hash is checked at launch. Cross-platform E2E creates ambient resources in the isolated agent directory, personal Pi directories, `~/.agents/skills`, and project directories, then checks that the launch sees only declared resources.
+The alpha manifest has no credential fields and rejects environment substitutions. It cannot detect every secret embedded in an otherwise allowed string. Never commit secrets in `piship.yaml` or `piship.lock`. Runtime credential files remain in per-distribution state, never in the payload. Purge removes PiShip-owned state files but cannot revoke unknown external credentials; inspect external provider settings separately.
 
-This is configuration and state isolation, not process containment. A declared extension executes with the user's process privileges and can read files available to that user. The user project remains the agent's working directory. Project content and tool execution may still affect the agent. Distributions must review extensions before declaring them.
-
-## Secrets
-
-The alpha schema permits only known fields, has no credential fields, and rejects `${...}` substitutions. It cannot identify arbitrary secret text in an allowed string. Maintainers must keep secrets out of the manifest and `piship.lock` before committing them. Do not include API keys, OIDC tokens, gateway credentials, proprietary source, or sensitive logs in issues or build resources. The alpha launcher has no credential broker; any provider setup is local to the isolated Pi state.
-
-## Governance and containment
-
-An allowlist or policy label does not contain malicious code. Future governance must distinguish approval from OS enforcement. PiShip does not yet sandbox extensions, enforce policy, or manage identity and credentials.
-
-## Pi public API and supply chain
-
-Only `packages/pi` imports upstream Pi, through the public entrypoint and an exact pin. This boundary localizes upgrades; it is not a security sandbox. `npm ci` fixes transitive resolution from `package-lock.json`. The current build is checkout-local and not signed or packaged. SBOM, provenance, signing, and release verification are future work.
-
-Security reports follow [SECURITY.md](../SECURITY.md).
+The SHA-256 inventory detects accidental or unauthorized file changes only while the inventory itself is trusted. v0.1 does not sign artifacts, attest their origin, or provide a security boundary against a malicious local user who can rewrite both files and inventory. Signing, provenance, policy, and OS containment are later milestones. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
