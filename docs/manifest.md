@@ -294,7 +294,7 @@ A v1alpha4 manifest produces `piship-lock/v1alpha4`, which keeps every v1alpha3 
 
 Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
 
-The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
+The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. For a `piship/v1alpha4` lock, `piship build` also runs the release `source` and `install-script` gates ([owner workflow](release/owner-workflow.md)); `dev` and `test` do not. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 
 ## Migration
 

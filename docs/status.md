@@ -22,9 +22,9 @@ The evidence column names the [CI tier](#ci-evidence-tiers) that produces the ev
 | Distribution core | Managed | **candidate** (Pi surface `managed`) | Fast gate as above. Portable E2E: [`managed`](../tests/e2e/managed.test.ts) with [`examples/demo-company`](../examples/demo-company/README.md) against local fixtures, on all three targets; it also checks that one launch writes the metadata-only local metrics (`logs/metrics.json`). |
 | Managed access: OIDC + PKCE login, `http-broker` credentials, platform secret store, OpenAI-compatible gateway, model governance, layered configuration | Managed | **candidate** (Pi surface `managed`) | Deterministic loopback fixtures only (OIDC provider, broker, gateway). No live identity provider or gateway. The Secret store workflow runs the opt-in live Keychain and Credential Manager test on macOS and Windows when credential or contract code changes; Linux Secret Service has no live coverage. |
 | Access modes `local-secret`, `none`, and a local OpenAI-compatible model | Personal | **preview** | Portable E2E: [`personal-local-model`](../tests/e2e/personal-local-model.test.ts) with [`examples/personal/local-model`](../examples/personal/local-model/piship.yaml) against a fixture server on all three targets; the `local-secret` and `none` scenarios in [`managed`](../tests/e2e/managed.test.ts) run only on the Ubuntu qualification path (`PISHIP_E2E_QUALIFICATION`). No real authenticated model request is claimed. |
-| Governance: policy, resource/provider/project trust, capabilities and Plan/Build, governed MCP, OS sandbox, audit | Managed and personal | **preview** (not yet a separate Pi surface) | Fast gate: the live sandbox probe and boundary tests run in the unit suite with a required sandbox on Ubuntu (bubblewrap) and macOS (Seatbelt). Portable E2E: [`governance`](../tests/e2e/governance.test.ts) on all three targets; on Windows only with the sandbox optional, because Windows has no sandbox adapter and a required sandbox fails closed. |
-| Lifecycle: `piship release`, `verify-release`, signed channels, `update`, `rollback`, migration check | Managed | **candidate** (Pi surface `lifecycle`) | Portable E2E: `lifecycle-install`, `lifecycle-integrity`, `lifecycle-update`, and `lifecycle-rollback` with the demo on all three targets (Windows with the sandbox optional). Release candidate: two builds per target, reproducibility, `verify-release` on a fresh runner, tamper rejection, attestation, and install with the shipped script, for the demo only. |
-| Lifecycle | Personal | **candidate** (Pi surface `lifecycle`) | Portable E2E: [`personal-lifecycle`](../tests/e2e/personal-lifecycle.test.ts) covers signed update and rollback of the personal example. The personal example has never gone through the Release candidate workflow. |
+| Governance: policy, resource/provider/project trust, capabilities and Plan/Build, governed MCP, OS sandbox, audit | Managed and personal | **candidate** (Pi surface `governance`) | Fast gate: the live sandbox probe and boundary tests run in the unit suite with a required sandbox on Ubuntu (bubblewrap) and macOS (Seatbelt). Portable E2E: [`governance`](../tests/e2e/governance.test.ts) on all three targets; on Windows only with the sandbox optional, because Windows has no sandbox adapter and a required sandbox fails closed. |
+| Lifecycle: `piship release`, `verify-release`, signed channels, `update`, `rollback`, migration check | Managed | **candidate** (Pi surface `lifecycle`) | Portable E2E: `lifecycle-install`, `lifecycle-integrity`, `lifecycle-update`, and `lifecycle-rollback` with the demo on all three targets (Windows with the sandbox optional). Release candidate: two builds per target, reproducibility, `verify-release` on a fresh runner, tamper rejection, attestation, and install with the shipped script. |
+| Lifecycle | Personal | **candidate** (Pi surface `lifecycle`) | Portable E2E: [`personal-lifecycle`](../tests/e2e/personal-lifecycle.test.ts) covers signed update and rollback of the personal example. Release candidate: the same two builds, reproducibility, verification, attestation, and install as the demo, plus the installed release's offline `--smoke` and `doctor`; no run is recorded yet. |
 
 The endpoints a company must provide for managed access, and how PiShip calls them, are in the [enterprise integration contract](enterprise-integration.md).
 
@@ -32,15 +32,16 @@ Not claimed anywhere: a live OIDC login, live gateway inference, a real authenti
 
 ## Pi compatibility
 
-[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 0.87.1 it currently lists three surfaces:
+[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 0.87.1 it currently lists four surfaces:
 
 | Surface | Status | What it covers |
 | --- | --- | --- |
 | `personal` | supported | The portable personal distribution core |
 | `managed` | candidate | Managed access and configuration |
+| `governance` | candidate | Policy and trust, capabilities, governed MCP, the OS sandbox, and audit (`piship/v1alpha3` and later) |
 | `lifecycle` | candidate | Release, signed channels, update, and rollback |
 
-Governance is not a separate surface yet. `release.json` records the weaker of the distribution's surface and the `lifecycle` surface, so every release built today records `candidate`. See [compatibility](compatibility.md) for the Pi public API PiShip uses and the upgrade policy.
+`release.json` records the weakest of the distribution's deployment surface, the `governance` surface when the distribution declares governance (every `piship/v1alpha3` or later manifest does), and the `lifecycle` surface, so every release built today records `candidate`. See [compatibility](compatibility.md) for the Pi public API PiShip uses and the upgrade policy.
 
 ## CI evidence tiers
 
@@ -50,7 +51,9 @@ Governance is not a separate surface yet. `release.json` records the weaker of t
 | --- | --- | --- | --- |
 | Fast merge gate | `CI` (build and unit tests on Ubuntu, macOS, and Windows; format, lint, types, and boundaries on Ubuntu), `Pi compatibility` (three targets, path-scoped), `Secret store` (macOS and Windows, path-scoped), `CodeQL` | Every pull request and every `main` push | A change is safe to merge |
 | Full Portable E2E | `Portable E2E` (`npm run test:e2e` on three targets; Ubuntu also runs the repeated-build qualification) | Nightly and `workflow_dispatch`; not a pull request gate | The cross-platform installed integration surface |
-| Release candidate | `Release candidate` (demo company only) | `workflow_dispatch` only, on the exact candidate commit | A specific artifact is ready to ship |
+| Release candidate | `Release candidate` (demo company and personal example) | `workflow_dispatch` only, on the exact candidate commit | A specific artifact is ready to ship |
+
+Outside these tiers, `Pi latest canary` runs the compatibility suite nightly against the newest published Pi. It is early warning for the next Pi upgrade, not evidence for the pinned version. Scheduled failures of the canary and of Portable E2E open or update a tracking issue.
 
 ## Recorded evidence
 

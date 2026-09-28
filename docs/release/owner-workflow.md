@@ -40,6 +40,8 @@ npm exec -- piship sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64
 | `certification` | A certified resource or capability provider has no certification evidence |
 | `sandbox` | `sandbox.required: true` and the target is not Linux or macOS (there is no Windows sandbox adapter) |
 
+`piship build` also runs the `source` and `install-script` gates on `piship/v1alpha4` locks, reported as `Build gate source` or `Build gate install-script`; `dev` and `test` do not.
+
 PiShip then assembles the canonical payload with the same code as `piship build`, and runs the required tests on it with a throwaway state directory:
 
 - `launch-version`: the branded `version` command, which verifies payload integrity, target, Node, and the pinned Pi version.
@@ -70,7 +72,7 @@ Channel names, the channel directory layout, and how clients accept signed metad
 
 Nothing is published automatically: there is no GitHub Release, npm publication, or publish automation, and CI keeps artifacts only as workflow artifacts. The maintainer, Oliver, is the sole release approver. Before any publish step:
 
-1. Confirm the `release-candidate` run for the exact commit on `main` passed on `linux-x64`, `darwin-arm64`, and `win32-x64`. It must show two builds on separate runners with equal payloads (the `reproducibility-<target>` reports), `verify-release` on a fresh job, and rejection of the tampered archive, the wrong digest, and the modified payload, `release.json`, SBOM, and `checksums.txt`, and an install with the shipped script on a fresh job. Attestations must verify with `gh attestation verify --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`. Also confirm a Portable E2E run on the same commit passed on all three targets, including the lifecycle scenarios (`tests/e2e/lifecycle-*.test.ts` and `tests/e2e/personal-lifecycle.test.ts`), and that CodeQL is green on it.
+1. Confirm the `release-candidate` run for the exact commit on `main` passed on `linux-x64`, `darwin-arm64`, and `win32-x64`. It must show two builds on separate runners with equal payloads for both `acmecode` and `mypi` (the `reproducibility-<distribution>-<target>` reports), `verify-release` on a fresh job, and rejection of the tampered archive, the wrong digest, and the modified payload, `release.json`, SBOM, and `checksums.txt`, and an install with the shipped script on a fresh job, followed for `mypi` by the installed release's offline `--smoke` and `doctor`. Attestations must verify with `gh attestation verify --repo tc3oliver/piship --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml --source-ref refs/heads/main`. Also confirm a Portable E2E run on the same commit passed on all three targets, including the lifecycle scenarios (`tests/e2e/lifecycle-*.test.ts` and `tests/e2e/personal-lifecycle.test.ts`), and that CodeQL is green on it.
 2. Confirm `examples/demo-company/piship.lock` was reviewed in the change that committed it, and that the Windows candidate is treated as the patched variant whose lock was generated in CI.
 3. Confirm `npm run check` and `npm run test:compatibility` passed, and review `piship diff` between the previous and new release for its risk and required tests.
 4. Review `vulnerabilities.json` and every `release.vulnerabilities.allow` exception and its expiry.

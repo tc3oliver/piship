@@ -5,6 +5,9 @@ name: Pi latest canary
 # A failure opens (or comments on) one tracking issue. It is early warning
 # for the next Pi upgrade, not a pull request gate (see AGENTS.md, CI
 # evidence tiers).
+# It exercises the public Pi seams through the compatibility suite only, not
+# a real branded launch: the launcher's guard rejects any Pi other than the
+# pinned version, so a Pi upgrade still needs the pin bump and Portable E2E.
 on:
   schedule:
     - cron: "23 5 * * *"
@@ -39,7 +42,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.19.x
-          cache: npm
+          # No shared npm cache: the canary must not seed the pinned jobs'
+          # cache with a closure that includes an unpinned Pi.
+          cache: ''
       - run: npm ci
       # --no-save leaves package.json and package-lock.json untouched; the
       # latest Pi exists only in this runner's node_modules.
