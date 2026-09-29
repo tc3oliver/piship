@@ -25,7 +25,7 @@ The evidence column names the [CI tier](#ci-evidence-tiers) that produces the ev
 | Governance: policy, resource/provider/project trust, capabilities and Plan/Build, governed MCP, OS sandbox, audit | Managed and personal | **candidate** (Pi surface `governance`) | Fast gate: the live sandbox probe and boundary tests run in the unit suite with a required sandbox on Ubuntu (bubblewrap) and macOS (Seatbelt). Portable E2E: [`governance`](../tests/e2e/governance.test.ts) on all three targets; on Windows only with the sandbox optional, because Windows has no sandbox adapter and a required sandbox fails closed. |
 | Sandbox backends: `custom` adapters, `e2b-compatible` (E2B, CubeSandbox), `kubernetes-agent-sandbox` ([sandbox backends](sandbox.md)) | Managed and personal | **preview** | Unit tests only: the backend contract and custom adapter lifecycle with fake adapters, the e2b-compatible backend against a mock E2B server, and the Kubernetes backend against a mock API server and router. No live E2B, CubeSandbox, cluster, or company sandbox; no E2E. The native OS sandbox runs through the same contract with its live boundary tests unchanged. |
 | Lifecycle: `piship release`, `verify-release`, signed channels, `update`, `rollback`, migration check | Managed | **candidate** (Pi surface `lifecycle`) | Portable E2E: `lifecycle-install`, `lifecycle-integrity`, `lifecycle-update`, and `lifecycle-rollback` with the demo on all three targets (Windows with the sandbox optional). Release candidate: two builds per target, reproducibility, `verify-release` on a fresh runner, tamper rejection, attestation, and install with the shipped script. |
-| Lifecycle | Personal | **candidate** (Pi surface `lifecycle`) | Portable E2E: [`personal-lifecycle`](../tests/e2e/personal-lifecycle.test.ts) covers signed update and rollback of the personal example. Release candidate: the same two builds, reproducibility, verification, attestation, and install as the demo, plus the installed release's offline `--smoke` and `doctor`; no run is recorded yet. |
+| Lifecycle | Personal | **candidate** (Pi surface `lifecycle`) | Portable E2E: [`personal-lifecycle`](../tests/e2e/personal-lifecycle.test.ts) covers signed update and rollback of the personal example. Release candidate: the same two builds, reproducibility, verification, attestation, and install as the demo, plus the installed release's offline `--smoke` and `doctor`; recorded on `21de31a`, none yet on the [freeze SHA](#recorded-evidence). |
 
 The endpoints a company must provide for managed access, and how PiShip calls them, are in the [enterprise integration contract](enterprise-integration.md).
 
@@ -58,20 +58,34 @@ Outside these tiers, `Pi latest canary` runs the compatibility suite nightly aga
 
 ## Recorded evidence
 
-The latest recorded runs relevant to current `main` (`03c33cf`, v0.5):
+A result is evidence only for the commit and tier it ran on. A run that has not happened is listed as not recorded; it is never inferred from another commit.
+
+### v0.6 freeze
+
+`ab3e7f2` on `main` is the v0.6 freeze SHA: the last commit before any v0.7 pull request merges. v0.7 work branches from it.
 
 | Tier | Commit | Result |
 | --- | --- | --- |
-| Fast merge gate | `03c33cf` on `main` | [CI](https://github.com/tc3oliver/piship/actions/runs/36426544851), [Pi compatibility](https://github.com/tc3oliver/piship/actions/runs/36426544785), [Secret store](https://github.com/tc3oliver/piship/actions/runs/36426544791), and [CodeQL](https://github.com/tc3oliver/piship/actions/runs/36426544770) passed |
-| Portable E2E | `03c33cf` | No run recorded yet |
+| Fast merge gate | `ab3e7f2` (freeze) | [CI](https://github.com/tc3oliver/piship/actions/runs/36519003434) and [CodeQL](https://github.com/tc3oliver/piship/actions/runs/36519003468) passed |
+| Portable E2E | `ab3e7f2` (freeze) | No run recorded yet |
+| Release qualification | `ab3e7f2` (freeze) | No run recorded yet; a manual run on this commit is pending |
+| Fast merge gate | `4830b07`, the commit before the freeze | [CI](https://github.com/tc3oliver/piship/actions/runs/36518291601): the Windows job failed in `packages/audit/src/log.test.ts`, an audit log rotation test whose assertion depended on how two concurrent writers interleave; the macOS and Ubuntu jobs and [CodeQL](https://github.com/tc3oliver/piship/actions/runs/36518291609) passed |
+| Release qualification | `21de31a`, three commits before the freeze | [Run](https://github.com/tc3oliver/piship/actions/runs/36516126990): `CI`, `CodeQL`, `Portable E2E`, and `Release candidate` (demo company and personal example) passed on all three targets. It is not evidence for `ab3e7f2`: the commits after it change an E2E fixture and the E2E hook timeout (#36), ignore rules (#37), and `SECURITY.md` (#38) |
+
+Consequence: the `personal` surface stays `supported` in `compatibility/pi.json`, and the Release qualification on `21de31a` covered the `piship/v1alpha4` personal example on all three targets. But no Portable E2E or Release qualification has run on the freeze SHA `ab3e7f2`, so the v0.6 baseline is implemented and frozen, not yet qualified at its exact commit. A manual Release qualification on `ab3e7f2` is pending. Until it is recorded here, treat current-head claims conservatively. A v0.7 result is evidence only for the v0.7 commit it ran on and does not stand in for the v0.6 baseline.
+
+### Earlier milestones
+
+| Tier | Commit | Result |
+| --- | --- | --- |
+| Fast merge gate | v0.5 `03c33cf` on `main` | [CI](https://github.com/tc3oliver/piship/actions/runs/36426544851), [Pi compatibility](https://github.com/tc3oliver/piship/actions/runs/36426544785), [Secret store](https://github.com/tc3oliver/piship/actions/runs/36426544791), and [CodeQL](https://github.com/tc3oliver/piship/actions/runs/36426544770) passed |
+| Portable E2E | v0.5 `03c33cf` | No run recorded |
 | Portable E2E | Last head of the v0.5 pull request | [Run](https://github.com/tc3oliver/piship/actions/runs/36422526632): Ubuntu and Windows passed, macOS failed |
 | Portable E2E | Earlier v0.5 pull request head (personal examples relocked) | [Run](https://github.com/tc3oliver/piship/actions/runs/36416137244): passed on all three targets |
-| Release candidate | `03c33cf` | No run recorded yet |
+| Release candidate | v0.5 `03c33cf` | No run recorded |
 | Release candidate | Last head of the v0.5 pull request | [Run](https://github.com/tc3oliver/piship/actions/runs/36422526731): passed on all three targets |
 | Governance sandbox on macOS | v0.3 pull request | [CI run](https://github.com/tc3oliver/piship/actions/runs/36389270268) with the Seatbelt live probe and launchd boundary test; [Portable E2E](https://github.com/tc3oliver/piship/actions/runs/36389270287) passed on all three targets |
 | Personal surface first qualified | v0.1 pull request | [Pi compatibility run](https://github.com/tc3oliver/piship/actions/runs/36345041538) with build and installed E2E on all three targets, for the `piship/v1alpha1` personal example of that time |
-
-Consequence: the `personal` surface stays `supported` in `compatibility/pi.json`, but the current `piship/v1alpha4` personal example has no green three-target Portable E2E on the exact `main` commit. A manual Portable E2E and Release candidate run on `main` is the next qualification step. Until then, treat current-head claims conservatively.
 
 ## Version map
 
@@ -84,6 +98,7 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.3 | Governance and security baseline | `piship/v1alpha3` | `piship-lock/v1alpha3` |
 | v0.4 | Production release lifecycle | `piship/v1alpha4` | `piship-lock/v1alpha4` |
 | v0.5 | Gap closure across governance, access, supply chain, and the personal profile | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
-| v0.6 (in progress) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
+| v0.6 (implemented, frozen at `ab3e7f2`) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
+| v0.7 (in progress) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged so far) | `piship-lock/v1alpha4` (unchanged so far) |
 
 All four manifest schemas are still accepted and all are experimental; only v1alpha4 can build a release. Both examples use `piship/v1alpha4`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).

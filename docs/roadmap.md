@@ -4,11 +4,11 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 ## History
 
-Five preview milestones are complete; none has been published to npm or as a GitHub Release. v0.1 delivered the portable personal distribution core (`piship/v1alpha1`). v0.2 added managed access and layered configuration: OIDC sign-in, broker-issued runtime credentials, an explicit OpenAI-compatible gateway, and model governance (`piship/v1alpha2`). v0.3 added governance: a layered policy engine, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses on Linux and macOS, and metadata-first audit (`piship/v1alpha3`). v0.4 added the production lifecycle: per-target release archives with an SBOM, notices, and a vulnerability gate, signed update channels, verified update, and rollback (`piship/v1alpha4`). v0.5 closed gaps across governance, access, supply chain, and the personal profile, and introduced the three CI evidence tiers, without a new schema. The [changelog](../CHANGELOG.md) has the details of each milestone.
+Six preview milestones are implemented; none has been published to npm or as a GitHub Release. v0.1 delivered the portable personal distribution core (`piship/v1alpha1`). v0.2 added managed access and layered configuration: OIDC sign-in, broker-issued runtime credentials, an explicit OpenAI-compatible gateway, and model governance (`piship/v1alpha2`). v0.3 added governance: a layered policy engine, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses on Linux and macOS, and metadata-first audit (`piship/v1alpha3`). v0.4 added the production lifecycle: per-target release archives with an SBOM, notices, and a vulnerability gate, signed update channels, verified update, and rollback (`piship/v1alpha4`). v0.5 closed gaps across governance, access, supply chain, and the personal profile, and introduced the three CI evidence tiers, without a new schema. v0.6 consolidated the project, as described below. The [changelog](../CHANGELOG.md) has the details of each milestone.
 
-## v0.6 — Project Consolidation (in progress)
+## v0.6 — Project Consolidation (implemented)
 
-v0.6 makes the documentation match `main`, fixes known contract problems, and splits oversized internal modules. It adds no major feature and keeps `piship/v1alpha4` and `piship-lock/v1alpha4`. Behavior changes are marked as such in the changelog, refactors change no behavior, and the pull request gate stays within the [CI evidence tiers](../AGENTS.md#ci-evidence-tiers).
+v0.6 makes the documentation match `main`, fixes known contract problems, and splits oversized internal modules. It adds no major feature and keeps `piship/v1alpha4` and `piship-lock/v1alpha4`. Behavior changes are marked as such in the changelog, refactors change no behavior, and the pull request gate stays within the [CI evidence tiers](../AGENTS.md#ci-evidence-tiers). The milestone is implemented and frozen; the [status page](status.md#recorded-evidence) records the freeze commit and which qualification runs exist for it.
 
 1. **Documentation status and drift.** A single [status page](status.md) with a capability matrix and its evidence; README, roadmap, compatibility, release, and architecture link to it instead of each stating status; stale CI and schema claims are corrected; the manifest guide lists its differences from the product specification.
    - An [enterprise integration contract](enterprise-integration.md) documents the IdP, broker, and gateway endpoints a company provides, with a LiteLLM starting point.
@@ -19,9 +19,21 @@ v0.6 makes the documentation match `main`, fixes known contract problems, and sp
 6. **Module split and boundaries.** Large files in `core`, `pi`, and `schema` are split into modules with no behavior change, Pi-independent branded commands move out of `packages/pi`, and the boundary check discovers packages automatically and reads the Pi version from one source.
 7. **Compatibility and examples.** A `governance` surface is added to `compatibility/pi.json` and to the weaker-of-surfaces rule in `release.json`; a read-only latest-Pi canary; the examples and README quickstart are checked against the current CLI; the Release candidate workflow also qualifies the personal example.
 
+## v0.7 — Enterprise Integration and Qualification (in progress)
+
+v0.7 connects PiShip to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and qualifies managed deployments on real components and on clean machines. It starts from the frozen v0.6 baseline and keeps `piship/v1alpha4` and `piship-lock/v1alpha4` unless the work shows that a manifest field is necessary; a schema change would ship once, as `piship/v1alpha5`. PiShip does not become an identity provider, gateway, credential broker, sandbox service, or audit platform, and Pi remains the agent runtime. Publication and a Windows sandbox adapter are not planned for v0.7. Direction, not dates:
+
+1. **Contract hardening.** State bound to the signed-in principal so that switching users leaves nothing of the previous user; credential error and retry rules; audit delivery that never silently discards a required control; network and diagnostics coverage for proxies, custom certificate authorities, and private endpoints.
+2. **Adapter platform.** A thin SDK and public conformance kits for identity, credential, sandbox, and audit adapters.
+3. **Sandbox contracts.** A declared and verified workspace consistency contract for remote sandboxes, and a PiShip-managed credential source for them.
+4. **Reference deployment.** A neutral, runnable reference stack of open-source components, exercised by the Release qualification on Ubuntu.
+5. **Qualification.** Live Linux secret store coverage, and clean-machine managed and personal flows on all three targets.
+
+Nothing on this list is claimed until the [status page](status.md) records its evidence.
+
 ## Next
 
-Out of scope for v0.6, and candidates for v0.7 or later:
+Out of scope for v0.6 and, unless listed above, for v0.7; candidates for later:
 
 - A `piship/v1alpha5` schema: a `data` section for retention and purge policy, `app.configDir` and branding, a `policy.userRules` field, `resources.packages`, and a `tests` section.
 - A unified lock format: a `sha256-` prefixed, canonical manifest digest, and capabilities that record the contract actually selected.
@@ -33,4 +45,4 @@ Out of scope for v0.6, and candidates for v0.7 or later:
 
 ## Remote execution backends
 
-v0.3 contained tool subprocesses with the host OS sandbox (bubblewrap on Linux, Seatbelt on macOS). Pluggable [sandbox backends](sandbox.md) now let a company run commands on its own infrastructure instead: a custom adapter, an E2B-compatible service such as E2B or CubeSandbox, or Kubernetes Agent Sandbox, as a preview without live evidence. Still considered, not scheduled: synchronizing the local workspace into a remote sandbox (today the template or image provides it), running file tools remotely, mapping `sandbox.filesystem` path rules into a remote sandbox, and a purpose-scoped sandbox credential provider. Today `credential: runtime` only reuses the inference runtime credential on the gateway origin, so E2B API keys, Kubernetes API credentials, a company sandbox's own bearer token, or a short-lived credential issued for the sandbox service have no PiShip-managed source ([limits](sandbox.md#credentials)).
+v0.3 contained tool subprocesses with the host OS sandbox (bubblewrap on Linux, Seatbelt on macOS). Pluggable [sandbox backends](sandbox.md) now let a company run commands on its own infrastructure instead: a custom adapter, an E2B-compatible service such as E2B or CubeSandbox, or Kubernetes Agent Sandbox, as a preview without live evidence. Still considered, not scheduled: synchronizing the local workspace into a remote sandbox (today the template or image provides it), running file tools remotely, and mapping `sandbox.filesystem` path rules into a remote sandbox. v0.7 takes up a declared and verified workspace consistency contract and a purpose-scoped sandbox credential source (above). Today `credential: runtime` only reuses the inference runtime credential on the gateway origin, so E2B API keys, Kubernetes API credentials, a company sandbox's own bearer token, or a short-lived credential issued for the sandbox service have no PiShip-managed source ([limits](sandbox.md#credentials)).
