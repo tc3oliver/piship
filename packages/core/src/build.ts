@@ -12,7 +12,11 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
-import { inventory, removeNpmBins } from "./payload.js";
+import {
+  inventory,
+  removeForeignPlatformPackages,
+  removeNpmBins,
+} from "./payload.js";
 import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 
@@ -85,7 +89,8 @@ export function buildDistribution(
     debugTiming("PiShip/build-input copying", phase);
     phase = process.hrtime.bigint();
     removeNpmBins(join(stage, "node_modules"));
-    debugTiming("removeNpmBins", phase);
+    removeForeignPlatformPackages(stage);
+    debugTiming("removeNpmBins/foreign platform packages", phase);
     phase = process.hrtime.bigint();
     mkdirSync(join(stage, "bin"), { recursive: true });
     mkdirSync(join(stage, "metadata"), { recursive: true });
