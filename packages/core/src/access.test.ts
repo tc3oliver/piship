@@ -762,8 +762,9 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
     expect(names()).toEqual([]);
     // Login again: the previous credential is revoked before it is replaced.
     await distribution.login({ openUrl: (url) => void services.approve(url) });
+    // The previous credential is revoked and deleted before the new
+    // identity is stored.
     expect(events).toEqual([
-      { event: "identity.login", detail: { expiresAt: expect.any(String) } },
       {
         event: "credential.revoke",
         detail: expect.objectContaining({
@@ -773,6 +774,7 @@ describe("access lifecycle events and identity refresh (fixtures)", () => {
           credentialId: "vk_demo_1",
         }),
       },
+      { event: "identity.login", detail: { expiresAt: expect.any(String) } },
       {
         event: "credential.acquire",
         detail: expect.objectContaining({ credentialId: "vk_demo_2" }),

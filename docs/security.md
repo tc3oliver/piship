@@ -166,7 +166,23 @@ Limits: release archives carry no macOS notarization or code signature and no Wi
 
 ## Logout and revocation
 
-`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. Sessions and preferences are kept. `purge` removes PiShip-owned state files and deletes, best effort, the secret-store entries its metadata references, but it revokes nothing; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback revoke, best effort, a credential they must clear because the target cannot read it.
+`logout` revokes the runtime credential at the broker's revoke endpoint when one is declared, revokes identity refresh and access tokens at the provider's revocation endpoint when discovery advertises one, then deletes local secrets, including any orphaned or pending generations, and metadata. Revocation failures are reported as warnings, and local clearing still happens. A secret that cannot be deleted is reported, and its metadata stays so the next login or logout deletes it. Sessions, preferences, and the principal binding are kept. `purge` removes PiShip-owned state files and deletes, best effort, the secret-store entries its metadata references, but it revokes nothing; run `logout` first. Credentials that PiShip does not manage, such as Pi-native provider auth, may need manual revocation. Update and rollback revoke, best effort, a credential they must clear because the target cannot read it.
+
+## User switching
+
+The user is the principal `(iss, sub)` ([identity](identity.md#principal)). User A's runtime credential is never usable by user B:
+
+- **Bound state.** The runtime credential and its entitlement (the broker's model list) are bound to the principal they were issued to, and checked against the signed-in principal before every use. A credential bound to anyone else, or to nobody, is revoked where supported and deleted, never used. The model selection (`model` and `models.allowed` in `config/preferences.json`) is cleared when the principal changes; other preferences stay. The model catalog is fetched with the current credential at each launch and never cached on disk.
+- **Order of a sign-in.** `login` revokes and deletes the previous credential and confirms the deletion before it stores the new identity. On a change of principal it also clears the model selection and the previous identity session (its tokens are revoked at the provider where supported, then deleted and the deletion confirmed) before the new identity is stored. A crash at any point leaves either the previous identity without a credential or the new identity without one, never the new identity with the old credential.
+- **Fail closed.** A secret that cannot be deleted, or whose deletion cannot be confirmed (a locked keyring, a store error), fails the login before the new identity is stored, and fails every launch, until the secret store works again. The references stay tracked by a discarded marker that no release reads as a credential, so neither a later launch nor a rollback to an older release can use them.
+- **Revocation failures do not block the next user.** A failed broker revocation is shown, audited as `credential.revoke` with `revocation: failed`, and recorded without the secret as a pending revocation that every login checks and `doctor` reports. The local secret is deleted all the same. Because the broker authenticates revocation with the credential itself, PiShip cannot send the revocation again once the secret is deleted: a pending entry is resolved when the credential expires, or by an administrator revoking it at the broker.
+- **Rollback.** Snapshots never contain credentials, and rollback never restores one, so it cannot bring back the previous user's credential.
+
+Limits:
+
+- Pi session history is project data owned by Pi. In this release it is not partitioned by principal: `sessions/user/` and `sessions/acceptance/` are shared, so another user signing in on the same OS account resumes the previous user's sessions. Separate OS accounts separate them.
+- Audit events attribute events to the identity subject; the issuer is not part of the attribution yet.
+- The principal binding and pending revocations are ordinary files under the state directory: anyone who can modify the state directory can defeat them, as with the rest of the state.
 
 ## Guarantees and their limits
 

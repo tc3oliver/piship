@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 import { type IdentityProvider, SecretValue } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  assertSamePrincipal,
   identityMetadata,
   normalizedIdentityProvider,
   normalizeIdentitySession,
@@ -86,5 +87,40 @@ describe("adapter identity sessions", () => {
     );
     expect(metadata.claims).toEqual(expected);
     expect(JSON.stringify(metadata)).not.toContain("555");
+  });
+});
+
+describe("adapter identity refresh", () => {
+  const signedIn = { subject: "user-1", issuer: "https://idp.example" };
+  it.each([
+    ["subject", { subject: "user-2" }],
+    ["issuer", { issuer: "https://other.example" }],
+  ])("refuses a refresh that changes the %s", async (_part, change) => {
+    const provider = normalizedIdentityProvider({
+      kind: "adapter",
+      login: async () => signedIn,
+      refresh: async (session) => ({ ...session, ...change }),
+    });
+    const session = await provider.login({ openUrl: () => {} });
+    await expect(provider.refresh?.(session)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+    });
+  });
+  it("keeps a refresh that changes only attributes", async () => {
+    const provider = normalizedIdentityProvider({
+      kind: "adapter",
+      login: async () => signedIn,
+      refresh: async (session) => ({
+        ...session,
+        email: "renamed@idp.example",
+        displayName: "Renamed",
+      }),
+    });
+    const session = await provider.login({ openUrl: () => {} });
+    await expect(provider.refresh?.(session)).resolves.toMatchObject({
+      ...signedIn,
+      email: "renamed@idp.example",
+    });
+    expect(assertSamePrincipal(session, session)).toBe(session);
   });
 });

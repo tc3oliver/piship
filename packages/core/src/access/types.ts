@@ -43,6 +43,8 @@ export interface AccessOptions {
   readonly onEvent?: (event: AccessEvent) => void;
   /** Local operational metrics; recorder failures are ignored. */
   readonly metrics?: AccessMetrics;
+  /** Fault injection for crash-safety tests of login. */
+  readonly onPhase?: (phase: "credential-cleared" | "identity-stored") => void;
 }
 
 export interface ActivatedAccess {

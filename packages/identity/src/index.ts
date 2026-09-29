@@ -2,7 +2,9 @@ import {
   type IdentityProvider,
   type IdentitySession,
   PiShipError,
+  principalKey,
   SecretValue,
+  samePrincipal,
 } from "@piship/contracts";
 
 import { retainClaims } from "./claims.js";
@@ -133,7 +135,27 @@ export function normalizeIdentitySession(value: unknown): IdentitySession {
   };
 }
 
-/** Wrap an adapter so every session it returns is normalized. */
+/**
+ * Refuse a refreshed session whose principal `(iss, sub)` differs from the
+ * session it refreshed: a refresh never switches the user.
+ */
+export function assertSamePrincipal(
+  refreshed: IdentitySession,
+  previous: IdentitySession,
+): IdentitySession {
+  if (!samePrincipal(principalKey(refreshed), principalKey(previous)))
+    throw new PiShipError(
+      "IDENTITY_INVALID",
+      "Refreshed identity does not match the signed-in subject",
+      { component: "identity", userAction: "Run login again" },
+    );
+  return refreshed;
+}
+
+/**
+ * Wrap an adapter so every session it returns is normalized and a refresh
+ * keeps the signed-in principal.
+ */
 export function normalizedIdentityProvider(
   provider: IdentityProvider,
 ): IdentityProvider {
@@ -145,7 +167,10 @@ export function normalizedIdentityProvider(
     ...(refresh
       ? {
           refresh: async (session: IdentitySession) =>
-            normalizeIdentitySession(await refresh(session)),
+            assertSamePrincipal(
+              normalizeIdentitySession(await refresh(session)),
+              session,
+            ),
         }
       : {}),
     ...(logout ? { logout } : {}),

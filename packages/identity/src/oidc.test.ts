@@ -100,6 +100,25 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     });
   });
 
+  it("rejects a refresh whose ID token names another subject or issuer", async () => {
+    const identity = provider();
+    const session = await identity.login({ openUrl: approve });
+    services.knobs.refreshSubject = "someone-else";
+    await expect(identity.refresh(session)).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+      message: expect.stringContaining("does not match the signed-in subject"),
+    });
+    services.knobs.refreshSubject = undefined;
+    // The same subject under another issuer is another principal.
+    const other = await identity.login({ openUrl: approve });
+    await expect(
+      identity.refresh({ ...other, issuer: "https://other.example/idp" }),
+    ).rejects.toMatchObject({
+      code: "IDENTITY_INVALID",
+      message: expect.stringContaining("does not match the signed-in subject"),
+    });
+  });
+
   it.each([
     ["idTokenIssuer", "https://evil.example/idp", "IDENTITY_INVALID", /iss/],
     ["idTokenAudience", "another-client", "IDENTITY_INVALID", /aud/],

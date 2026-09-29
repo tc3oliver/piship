@@ -31,12 +31,20 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 - Authorization Code with PKCE `S256`, `state`, and `nonce`. `audience` is sent when configured.
 - ID token checks: issuer, audience, authorized party, signature (`enableNonRepudiationChecks`), expiry and not-before with 30 seconds of clock tolerance, and nonce.
 - A loopback redirect (RFC 8252). PiShip listens on the registered `redirectUri`, for example `http://127.0.0.1:8765/callback`, answers only that path, accepts the first callback, and closes the listener after completion, a 5-minute timeout, or cancellation. Register the exact URI with the provider.
-- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
+- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer; otherwise the refresh fails with `IDENTITY_INVALID` and the stored session is kept. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
 - On `logout`, refresh and access tokens are revoked when the provider advertises a revocation endpoint.
 
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
 
 Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The tokens are one secret in the configured secret store, under a generation reference.
+
+## Principal
+
+The signed-in user is the normalized principal `(iss, sub)`: the issuer and the subject, compared as exact strings. Email, display name, username, and other claims are attributes that may change and never identify the user. `@piship/contracts` exports the key (`PrincipalKey`, `principalKey`, `samePrincipal`), a string form for attribution (`principalId`: the issuer with `%` and `#` percent-encoded, `#`, then the subject), and a fixed-length digest for per-principal directory names (`principalDigest`).
+
+- A refresh, from the built-in provider or an identity adapter, must return the same principal; anything else is `IDENTITY_INVALID`, whatever the provider returned.
+- The runtime credential, its entitlement, and the model selection belong to the principal. Signing in as another principal clears them first; see [user switching](security.md#user-switching).
+- `identity/principal.json` records the principal that owns the state. `logout` keeps it, so a different user signing in after a logout is still recognized as a change of user.
 
 ## Errors
 

@@ -13,9 +13,12 @@ import {
   type ModelDefinition,
   type NetworkPolicy,
   PiShipError,
+  type PrincipalKey,
+  principalKey,
   redact,
   type SecretStore,
   type SecretValue,
+  samePrincipal,
 } from "@piship/contracts";
 import {
   type ActiveCredential,
@@ -23,11 +26,15 @@ import {
   CredentialManager,
   type CredentialStatus,
   createSecretStore,
+  deleteSecretsVerified,
+  deletionFailure,
   HttpBrokerCredentialProvider,
   LocalSecretCredentialProvider,
   metadataSecretRefs,
   NoCredentialProvider,
+  type PendingRevocations,
   PiNativeCredentialProvider,
+  readPendingRevocations,
   type RevocationOutcome,
   withFileLock,
 } from "@piship/credentials";
@@ -36,6 +43,7 @@ import {
   identityMetadata,
   identitySecret,
   normalizedIdentityProvider,
+  assertSamePrincipal,
   OidcPkceIdentityProvider,
   parseIdentityMetadata,
   restoreIdentitySession,
@@ -73,6 +81,8 @@ function rejectedUserSecret(command: string): PiShipError {
     },
   );
 }
+
+const PRINCIPAL_BINDING_SCHEMA = "piship-principal-binding/v1";
 
 /**
  * Orchestrates Identity → Credential → Inference for one distribution without
@@ -339,6 +349,7 @@ export class DistributionAccess {
       provider,
       store: this.store,
       metadataPath: this.paths.credential,
+      revocationRetryPath: this.paths.revocationRetry,
       beforeExpirySeconds:
         access?.credential.refresh.beforeExpirySeconds ?? 300,
       now: this.#now,
@@ -381,6 +392,116 @@ export class DistributionAccess {
     }
   }
 
+  /**
+   * The principal that owns this state's user-scoped PiShip data (credential,
+   * entitlement, model selection). Kept by logout, so the next sign-in knows
+   * whether the user changed. `undefined` when the record is unreadable.
+   */
+  readPrincipalBinding(): PrincipalKey | null | undefined {
+    if (!existsSync(this.paths.principal)) return null;
+    try {
+      const value = JSON.parse(readFileSync(this.paths.principal, "utf8")) as {
+        schema?: unknown;
+      };
+      if (value.schema !== PRINCIPAL_BINDING_SCHEMA) return undefined;
+      return principalKey(value as { issuer?: unknown; subject?: unknown });
+    } catch {
+      return undefined;
+    }
+  }
+
+  #writePrincipalBinding(principal: PrincipalKey): void {
+    writeJsonAtomic(this.paths.principal, {
+      schema: PRINCIPAL_BINDING_SCHEMA,
+      issuer: principal.issuer,
+      subject: principal.subject,
+      bound_at: new Date(this.#now()).toISOString(),
+    });
+  }
+
+  /**
+   * Drop the model selection (`model` and the `modelsAllowed` narrowing) from
+   * the user preferences: it was made by another principal from that
+   * principal's entitlement. Other preferences stay. Unreadable preferences
+   * are left for launch to refuse.
+   */
+  #clearModelSelection(): boolean {
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(readFileSync(this.paths.preferences, "utf8"));
+    } catch {
+      return false;
+    }
+    if (!value || typeof value !== "object") return false;
+    const values =
+      value.values && typeof value.values === "object"
+        ? { ...(value.values as Record<string, unknown>) }
+        : undefined;
+    if (!values?.model && !("modelsAllowed" in value)) return false;
+    if (values) delete values.model;
+    const { modelsAllowed: _dropped, ...rest } = value;
+    writeJsonAtomic(this.paths.preferences, {
+      ...rest,
+      ...(values ? { values } : {}),
+    });
+    return true;
+  }
+
+  /**
+   * Bind the state to `principal`. When another principal owned it, the model
+   * selection is invalidated first; the credential is bound and checked on
+   * its own. Returns whether the principal changed and whether a model
+   * selection was cleared.
+   */
+  #bindPrincipal(principal: PrincipalKey): {
+    changed: boolean;
+    cleared: boolean;
+  } {
+    const bound = this.readPrincipalBinding();
+    const stored = this.readIdentityMetadata();
+    // An unreadable record may have named anyone: treat it as a change.
+    const changed =
+      bound === undefined ||
+      [bound, stored].some(
+        (previous) => !!previous && !samePrincipal(previous, principal),
+      );
+    const cleared = changed && this.#clearModelSelection();
+    if (!bound || !samePrincipal(bound, principal))
+      this.#writePrincipalBinding(principal);
+    return { changed, cleared };
+  }
+
+  /**
+   * Clear another principal's identity session before a new one is stored:
+   * revoke its tokens at the provider (best effort, a failure is a notice),
+   * delete every token generation and confirm it, then the metadata. A
+   * deletion that cannot be confirmed fails closed and keeps the metadata, so
+   * the tokens stay tracked.
+   */
+  async #clearPreviousIdentity(
+    metadata: IdentityMetadata,
+    provider: IdentityProvider,
+    notices: string[],
+  ): Promise<void> {
+    const store = this.store;
+    if (!store) return;
+    const secret = await store.get(metadata.secretRef).catch(() => null);
+    if (provider.logout && secret)
+      try {
+        await provider.logout(restoreIdentitySession(metadata, secret));
+      } catch (error) {
+        notices.push(
+          `The previous identity session could not be revoked at the identity provider: ${redact((error as Error).message)}`,
+        );
+      }
+    const failed = await deleteSecretsVerified(
+      store,
+      metadataSecretRefs(metadata, this.options.app.id),
+    );
+    if (failed.length) throw deletionFailure(failed);
+    rmSync(this.paths.identity, { force: true });
+  }
+
   async #storeIdentity(session: IdentitySession): Promise<void> {
     if (!this.store)
       throw new PiShipError(
@@ -389,6 +510,14 @@ export class DistributionAccess {
         { component: "identity" },
       );
     const previous = this.readIdentityMetadata();
+    // Another principal's session is cleared (verified) before a new one is
+    // stored; this never replaces it in place.
+    if (previous && !samePrincipal(previous, principalKey(session)))
+      throw new PiShipError(
+        "IDENTITY_INVALID",
+        "Another identity is still stored; it must be cleared first",
+        { component: "identity" },
+      );
     const generation = previous
       ? Number(previous.secretRef.split("#")[1] ?? 0) + 1
       : 1;
@@ -500,11 +629,13 @@ export class DistributionAccess {
       const stored = await this.#storedIdentity();
       if (
         stored &&
-        stored.subject === observed.subject &&
+        samePrincipal(principalKey(stored), principalKey(observed)) &&
         !stored.accessToken?.equals(observed.accessToken)
       )
         return stored;
-      const refreshed = await refresh(stored ?? observed);
+      const previous = stored ?? observed;
+      // A refresh never switches the principal, whatever the provider does.
+      const refreshed = assertSamePrincipal(await refresh(previous), previous);
       await this.#storeIdentity(refreshed);
       this.#emit("identity.refresh", {
         reason,
@@ -516,6 +647,16 @@ export class DistributionAccess {
 
   // -------------------------------------------------------------- operations
 
+  /**
+   * With identity configured every credential is bound to the signed-in
+   * principal, so none is used without one.
+   */
+  #identityRequired(manager: CredentialManager): boolean {
+    return (
+      manager.options.provider.requiresIdentity || this.identityMode !== "none"
+    );
+  }
+
   #credentialContext(
     readSecret?: (prompt: string) => Promise<string>,
   ): CredentialContext {
@@ -525,7 +666,17 @@ export class DistributionAccess {
     };
   }
 
-  /** Interactive login: identity (when configured), then the runtime credential. */
+  /**
+   * Interactive login: identity (when configured), then the runtime
+   * credential. The previous runtime credential is revoked where supported
+   * and deleted, and its deletion confirmed, before the new identity is
+   * stored, so no state ever pairs a new identity with an old credential.
+   * When the principal changes, the previous identity session and the model
+   * selection are cleared as well. A deletion that cannot be confirmed fails
+   * the login before the new identity is stored; a failed remote revocation
+   * does not: it is a notice, an audited `credential.revoke`, and a pending
+   * revocation record.
+   */
   async login(ctx: {
     openUrl: LoginContext["openUrl"];
     readSecret?: (prompt: string) => Promise<string>;
@@ -537,30 +688,61 @@ export class DistributionAccess {
   }> {
     const provider = await this.identityProvider();
     let identity: IdentitySession | null = null;
-    if (provider) {
+    if (provider)
       identity = await this.#timedIdentity(() =>
         provider.login({
           openUrl: ctx.openUrl,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         }),
       );
+    const principal = identity ? principalKey(identity) : null;
+    const manager = await this.credentialManager();
+    const notices: string[] = [];
+    this.#secret = null;
+    if (manager.storesSecrets) {
+      // Earlier revocation failures stay visible at every login.
+      try {
+        notices.push(...manager.checkPendingRevocations());
+      } catch (error) {
+        notices.push(
+          `Pending revocations could not be checked: ${redact((error as Error).message)}`,
+        );
+      }
+      // A fresh login always replaces the runtime credential, revoking the
+      // previous one where supported (audited as credential.revoke).
+      const problems = (
+        await manager.logout(this.#credentialContext(), { reason: "replace" })
+      ).map((problem) => redact(problem));
+      if (manager.hasStoredCredential())
+        throw new PiShipError(
+          "SECRET_STORE_UNAVAILABLE",
+          `The previous credential could not be deleted from the secret store, so sign-in stopped before storing the new identity: ${problems.join("; ")}`,
+          {
+            component: "credential",
+            userAction:
+              "Unlock or repair the secret store, then run login again",
+          },
+        );
+      for (const problem of problems)
+        notices.push(
+          `The previous credential was deleted locally but not revoked: ${problem}`,
+        );
+    }
+    this.options.onPhase?.("credential-cleared");
+    let principalChange = false;
+    if (provider && identity && principal) {
+      principalChange = this.#bindPrincipal(principal).changed;
+      const stored = this.readIdentityMetadata();
+      if (stored && !samePrincipal(stored, principal))
+        await this.#clearPreviousIdentity(stored, provider, notices);
       await this.#storeIdentity(identity);
       this.#emit("identity.login", {
         expiresAt: identity.expiresAt?.toISOString() ?? null,
+        ...(principalChange ? { principalChange: true } : {}),
       });
     }
-    const manager = await this.credentialManager();
-    const notices: string[] = [];
+    this.options.onPhase?.("identity-stored");
     if (manager.storesSecrets) {
-      // A fresh login always replaces the runtime credential, revoking the
-      // previous one where supported (audited as credential.revoke).
-      const problems = await manager
-        .logout(this.#credentialContext(), { reason: "replace" })
-        .catch((error: Error) => [redact(error.message)]);
-      for (const problem of problems)
-        notices.push(
-          `The previous credential was not fully cleared: ${problem}`,
-        );
       const active = await this.#ensureCredential(
         manager,
         identity,
@@ -573,11 +755,20 @@ export class DistributionAccess {
     return { identity, credential: manager.status(), notices };
   }
 
-  /** Revoke and clear runtime and identity credentials; sessions are preserved. */
+  /**
+   * Revoke and clear runtime and identity credentials; sessions, preferences,
+   * and the principal binding are kept. A secret that cannot be deleted is a
+   * problem, and its metadata stays so the next login or logout retries.
+   */
   async logout(): Promise<string[]> {
     const problems: string[] = [];
     const manager = await this.credentialManager();
-    problems.push(...(await manager.logout(this.#credentialContext())));
+    problems.push(
+      ...(await manager.logout(this.#credentialContext())).map((problem) =>
+        redact(problem),
+      ),
+    );
+    this.#secret = null;
     const provider = await this.identityProvider().catch(() => null);
     const metadata = this.readIdentityMetadata();
     if (metadata && this.store) {
@@ -594,17 +785,24 @@ export class DistributionAccess {
             `identity revocation: ${redact((error as Error).message)}`,
           );
         }
-      for (const ref of metadataSecretRefs(metadata, this.options.app.id))
-        await this.store
-          .delete(ref)
-          .catch((error: Error) =>
-            problems.push(`identity secret: ${redact(error.message)}`),
-          );
+      const failed = await deleteSecretsVerified(
+        this.store,
+        metadataSecretRefs(metadata, this.options.app.id),
+      );
+      for (const item of failed)
+        problems.push(`identity secret ${item.ref}: ${item.problem}`);
       this.#emit("identity.logout", { revocation });
+      // Keep the metadata of tokens that are still stored, so they stay
+      // tracked and the next login or logout deletes them.
+      if (failed.length) return problems;
     }
     rmSync(this.paths.identity, { force: true });
-    this.#secret = null;
     return problems;
+  }
+
+  /** Revocations that failed and may still be live remotely (no secrets). */
+  pendingRevocations(): PendingRevocations {
+    return readPendingRevocations(this.paths.revocationRetry, this.#now());
   }
 
   /**
@@ -617,11 +815,19 @@ export class DistributionAccess {
   ): Promise<ActivatedAccess> {
     const notices: string[] = [];
     const access = this.options.access;
-    const preferences = readPreferences(this.paths.preferences);
+    let preferences = readPreferences(this.paths.preferences);
     const manager = await this.credentialManager();
-    const identityRequired =
-      manager.options.provider.requiresIdentity || this.identityMode !== "none";
-    const identity = await this.currentIdentity({ required: identityRequired });
+    const identity = await this.currentIdentity({
+      required: this.#identityRequired(manager),
+    });
+    // State another principal left behind (from an interrupted switch or an
+    // older release) loses its model selection before anything uses it.
+    if (identity && this.#bindPrincipal(principalKey(identity)).cleared) {
+      preferences = readPreferences(this.paths.preferences);
+      notices.push(
+        "The model selection of a previously signed-in identity was cleared",
+      );
+    }
     let credential: ActiveCredential;
     try {
       credential = await this.#ensureCredential(
@@ -840,7 +1046,7 @@ export class DistributionAccess {
     if (!options.force && status.state === "valid" && this.#secret)
       return this.#secret;
     const identity = await this.currentIdentity({
-      required: manager.options.provider.requiresIdentity,
+      required: this.#identityRequired(manager),
     });
     try {
       const active = await this.#ensureCredential(

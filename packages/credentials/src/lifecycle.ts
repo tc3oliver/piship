@@ -13,21 +13,36 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   type CredentialContext,
   type CredentialProvider,
   type CredentialRef,
   type IdentitySession,
   PiShipError,
+  type PrincipalKey,
+  principalKey,
+  redact,
   type RuntimeCredential,
   type RuntimeCredentialKind,
   type SecretStore,
   SecretValue,
+  samePrincipal,
 } from "@piship/contracts";
 import { heldLocks } from "./lock-heartbeat.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
+/**
+ * Metadata left in place of a credential whose secrets could not all be
+ * deleted: it lists only the references still to delete. No release reads it
+ * as a credential (older ones see an incompatible schema and clear it), so a
+ * discarded credential is never used, and every command retries the deletion
+ * before it does anything else with the credential.
+ */
+export const CREDENTIAL_DISCARDED_SCHEMA = "piship-credential-discarded/v1";
+export const REVOCATION_RETRY_SCHEMA = "piship-revocation-retry/v1";
+/** Default file name of pending revocations, beside the credential metadata. */
+export const REVOCATION_RETRY_FILE = "revocation-retry.json";
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
@@ -41,6 +56,12 @@ export interface CredentialMetadata {
   readonly acquired_at: string;
   readonly models?: readonly string[];
   readonly base_url?: string;
+  /**
+   * The principal `(iss, sub)` the credential and its entitlement (`models`)
+   * were issued to; absent when no identity is configured. A credential is
+   * used only while the signed-in principal is the same.
+   */
+  readonly principal?: PrincipalKey;
   /** References whose deletion failed and must be retried. */
   readonly orphans?: readonly string[];
   /** Set when the gateway rejected this credential; forces renewal on next use. */
@@ -69,8 +90,15 @@ export interface ActiveCredential {
   readonly notices: readonly string[];
 }
 
-/** Why a credential was revoked. */
-export type CredentialRevokeReason = "logout" | "replace" | "lifecycle";
+/**
+ * Why a credential was revoked: `principal-change` is a stored credential
+ * found bound to another principal than the signed-in one.
+ */
+export type CredentialRevokeReason =
+  | "logout"
+  | "replace"
+  | "lifecycle"
+  | "principal-change";
 
 /**
  * Outcome of a remote revocation attempt: `revoked` when the provider
@@ -103,6 +131,11 @@ export interface CredentialManagerOptions {
   readonly metadataPath: string;
   readonly beforeExpirySeconds: number;
   readonly now?: () => number;
+  /**
+   * Where failed remote revocations are recorded (non-secret). Defaults to
+   * `revocation-retry.json` beside the metadata.
+   */
+  readonly revocationRetryPath?: string;
   /** Fault injection for crash-safety tests. */
   readonly onPhase?: (phase: "secret-written" | "metadata-written") => void;
   /** Receives acquire, refresh, and revoke events; failures are ignored. */
@@ -114,6 +147,97 @@ function writeAtomic(path: string, content: string): void {
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
   renameSync(temporary, path);
+}
+
+/**
+ * One remote revocation that failed after the local secret was deleted, or
+ * was about to be. Non-secret: it names the credential, never holds it.
+ */
+export interface RevocationRetryEntry {
+  readonly credential_id?: string;
+  readonly mode: CredentialProvider["mode"];
+  readonly generation: number;
+  readonly reason: CredentialRevokeReason;
+  readonly failed_at: string;
+  readonly expires_at?: string;
+  /** How many later logins found it still pending. */
+  readonly checks: number;
+  readonly checked_at?: string;
+}
+
+interface RevocationRetryFile {
+  readonly schema: typeof REVOCATION_RETRY_SCHEMA;
+  readonly entries: readonly RevocationRetryEntry[];
+}
+
+/** Pending revocations for diagnostics: counts and ages only, no secrets. */
+export interface PendingRevocations {
+  /** False when the file exists but cannot be read. */
+  readonly readable: boolean;
+  readonly count: number;
+  readonly oldestAgeSeconds: number | null;
+  readonly entries: readonly {
+    readonly credentialId?: string;
+    readonly reason: CredentialRevokeReason;
+    readonly failedAt: string;
+    readonly ageSeconds: number;
+    readonly expiresAt?: string;
+  }[];
+}
+
+function readRetryFile(path: string): RevocationRetryFile | null {
+  if (!existsSync(path))
+    return { schema: REVOCATION_RETRY_SCHEMA, entries: [] };
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as RevocationRetryFile;
+    if (
+      value?.schema !== REVOCATION_RETRY_SCHEMA ||
+      !Array.isArray(value.entries)
+    )
+      return null;
+    return {
+      schema: REVOCATION_RETRY_SCHEMA,
+      entries: value.entries.filter(
+        (entry) =>
+          !!entry &&
+          typeof entry.failed_at === "string" &&
+          typeof entry.generation === "number",
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Summarize the pending revocations recorded at `path` (the credential
+ * metadata directory's `revocation-retry.json`), for `doctor`.
+ */
+export function readPendingRevocations(
+  path: string,
+  now: number = Date.now(),
+): PendingRevocations {
+  const file = readRetryFile(path);
+  if (!file)
+    return { readable: false, count: 0, oldestAgeSeconds: null, entries: [] };
+  const entries = file.entries.map((entry) => ({
+    ...(entry.credential_id ? { credentialId: entry.credential_id } : {}),
+    reason: entry.reason,
+    failedAt: entry.failed_at,
+    ageSeconds: Math.max(
+      0,
+      Math.floor((now - Date.parse(entry.failed_at)) / 1000) || 0,
+    ),
+    ...(entry.expires_at ? { expiresAt: entry.expires_at } : {}),
+  }));
+  return {
+    readable: true,
+    count: entries.length,
+    oldestAgeSeconds: entries.length
+      ? Math.max(...entries.map((entry) => entry.ageSeconds))
+      : null,
+    entries,
+  };
 }
 
 /**
@@ -242,6 +366,50 @@ export function normalizeCredential(value: unknown): RuntimeCredential {
       ? { metadata: credential.metadata }
       : {}),
   };
+}
+
+/**
+ * Delete each reference and confirm it is gone. A delete that throws, or a
+ * secret still readable (or unreadable) afterwards, is a failure: an
+ * unconfirmed deletion never counts as absent. Returns the failures, with
+ * redacted problems.
+ */
+export async function deleteSecretsVerified(
+  store: SecretStore,
+  refs: readonly string[],
+): Promise<{ ref: string; problem: string }[]> {
+  const failed: { ref: string; problem: string }[] = [];
+  for (const ref of refs)
+    try {
+      await store.delete(ref);
+      if ((await store.get(ref)) !== null)
+        failed.push({ ref, problem: "still present after deletion" });
+    } catch (error) {
+      failed.push({
+        ref,
+        problem:
+          error instanceof PiShipError
+            ? `${error.code}: ${redact(error.message)}`
+            : redact(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  return failed;
+}
+
+/** A local secret that could not be deleted: fail closed. */
+export function deletionFailure(
+  failed: readonly { ref: string; problem: string }[],
+): PiShipError {
+  return new PiShipError(
+    "SECRET_STORE_UNAVAILABLE",
+    `A stored credential could not be deleted from the secret store (${failed.map((item) => `${item.ref}: ${item.problem}`).join("; ")}); it is not used, and the deletion is retried by the next login, launch, or logout`,
+    {
+      component: "credential",
+      userAction:
+        "Unlock or repair the secret store, then run the command again",
+      sanitizedDetail: { refs: failed.map((item) => item.ref) },
+    },
+  );
 }
 
 /** A held lock is refreshed this often, so only an abandoned one goes stale. */
@@ -444,8 +612,38 @@ export class CredentialManager {
     );
   }
 
+  /**
+   * Whether any credential metadata is left, including metadata of a
+   * credential whose secrets could not all be deleted. A caller that must
+   * know the previous credential is gone checks this after `logout`.
+   */
+  hasStoredCredential(): boolean {
+    return existsSync(this.options.metadataPath);
+  }
+
+  #discardedPending(): boolean {
+    try {
+      return (
+        (
+          JSON.parse(readFileSync(this.options.metadataPath, "utf8")) as {
+            schema?: unknown;
+          }
+        ).schema === CREDENTIAL_DISCARDED_SCHEMA
+      );
+    } catch {
+      return false;
+    }
+  }
+
   status(): CredentialStatus {
     if (!this.storesSecrets) return { state: "delegated", metadata: null };
+    if (this.#discardedPending())
+      return {
+        state: "absent",
+        metadata: null,
+        notice:
+          "A discarded credential is still being deleted from the secret store; it is never used",
+      };
     if (this.#incompatibleMetadataPresent())
       return {
         state: "absent",
@@ -518,7 +716,10 @@ export class CredentialManager {
   }
 
   /** Persist a newly acquired credential and switch metadata to it atomically. */
-  async #commit(credential: RuntimeCredential): Promise<CredentialMetadata> {
+  async #commit(
+    credential: RuntimeCredential,
+    principal: PrincipalKey | null,
+  ): Promise<CredentialMetadata> {
     credential = normalizeCredential(credential);
     const store = this.#store();
     const previous = this.readMetadata();
@@ -546,6 +747,14 @@ export class CredentialManager {
         : {}),
       ...(typeof credential.metadata?.baseUrl === "string"
         ? { base_url: credential.metadata.baseUrl }
+        : {}),
+      ...(principal
+        ? {
+            principal: {
+              issuer: principal.issuer,
+              subject: principal.subject,
+            },
+          }
         : {}),
       ...(orphans.size ? { orphans: [...orphans].sort() } : {}),
     };
@@ -580,20 +789,53 @@ export class CredentialManager {
     return next;
   }
 
-  /**
-   * Remove metadata we cannot use, deleting every secret it may reference so
-   * nothing is left behind. Never resurrect or reuse such a secret.
-   */
-  async #clearMetadata(): Promise<void> {
-    let raw: unknown = {};
+  #readRaw(): unknown {
     try {
-      raw = JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
+      return JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
     } catch {
-      raw = {};
+      return {};
     }
-    for (const ref of metadataSecretRefs(raw, this.options.distributionId))
-      await this.options.store?.delete(ref).catch(() => {});
-    rmSync(this.options.metadataPath, { force: true });
+  }
+
+  /**
+   * Delete every secret the metadata may reference, then the metadata. When a
+   * deletion fails, the metadata is replaced by a discarded marker listing
+   * the references still to delete, so the secret stays tracked and is never
+   * used, and the failures are returned.
+   */
+  async #discardMetadata(
+    raw: unknown = this.#readRaw(),
+  ): Promise<{ ref: string; problem: string }[]> {
+    const failed = await deleteSecretsVerified(
+      this.#store(),
+      metadataSecretRefs(raw, this.options.distributionId),
+    );
+    if (!failed.length) {
+      rmSync(this.options.metadataPath, { force: true });
+      return failed;
+    }
+    writeAtomic(
+      this.options.metadataPath,
+      `${JSON.stringify(
+        {
+          schema: CREDENTIAL_DISCARDED_SCHEMA,
+          orphans: failed.map((item) => item.ref).sort(),
+          discarded_at: new Date(this.#now()).toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return failed;
+  }
+
+  /**
+   * Discard metadata that must not be used, failing closed when a secret it
+   * references could not be deleted.
+   */
+  async #clearMetadata(raw?: unknown): Promise<void> {
+    const failed = await this.#discardMetadata(raw);
+    if (failed.length) throw deletionFailure(failed);
   }
 
   /**
@@ -664,13 +906,32 @@ export class CredentialManager {
     const attempt: CredentialContext = ctx.idempotencyKey
       ? ctx
       : { ...ctx, idempotencyKey: randomUUID() };
+    const principal = identity ? principalKey(identity) : null;
     if (this.#incompatibleMetadataPresent()) {
+      const discarded = this.#discardedPending();
       await this.#clearMetadata();
       notices.push(
-        "Incompatible credential metadata was cleared; a new credential is required",
+        discarded
+          ? "The secrets of a discarded credential were deleted"
+          : "Incompatible credential metadata was cleared; a new credential is required",
       );
     }
     let metadata = this.readMetadata();
+    // A credential is used only by the principal it was issued to. Anything
+    // else, including metadata written before credentials were bound to a
+    // principal, is revoked where supported and deleted, never used.
+    if (metadata && !samePrincipal(metadata.principal ?? null, principal)) {
+      const revoked = await this.#revoke(metadata, attempt, "principal-change");
+      await this.#clearMetadata(metadata);
+      notices.push(
+        "A stored credential that was not issued to the signed-in identity was discarded",
+      );
+      if (revoked.problem)
+        notices.push(
+          `The discarded credential could not be revoked; it is recorded for follow-up: ${revoked.problem}`,
+        );
+      metadata = null;
+    }
     const secret = metadata
       ? await this.#store().get(metadata.credential_ref)
       : null;
@@ -701,7 +962,7 @@ export class CredentialManager {
           },
         );
       const acquired = normalizeCredential(returned);
-      metadata = await this.#commit(acquired);
+      metadata = await this.#commit(acquired, principal);
       this.#emit("credential.acquire", this.#eventDetail(metadata));
       return { ref: this.#toRef(metadata), secret: acquired.secret, notices };
     }
@@ -729,7 +990,7 @@ export class CredentialManager {
             "Credential refresh returned nothing",
           );
         const next = normalizeCredential(returned);
-        metadata = await this.#commit(next);
+        metadata = await this.#commit(next, principal);
         this.#emit("credential.refresh", {
           ...this.#eventDetail(metadata),
           reason: force ? "rejected" : status.state,
@@ -752,7 +1013,7 @@ export class CredentialManager {
           const failure = error instanceof PiShipError ? error : undefined;
           throw new PiShipError(
             force ? "CREDENTIAL_REVOKED" : "CREDENTIAL_EXPIRED",
-            `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed${error instanceof Error ? `: ${error.message}` : ""}`,
+            `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed${error instanceof Error ? `: ${redact(error.message)}` : ""}`,
             {
               component: "credential",
               userAction: failure?.retryable
@@ -871,15 +1132,105 @@ export class CredentialManager {
         outcome = "revoked";
       } catch (error) {
         outcome = "failed";
-        problem = `revocation: ${error instanceof Error ? error.message : String(error)}`;
+        problem = `revocation: ${redact(error instanceof Error ? error.message : String(error))}`;
+      }
+    // A failed revocation leaves a credential that may be live remotely while
+    // its local secret is deleted: record it (without the secret) so login
+    // and doctor keep reporting it.
+    let retryPending = false;
+    if (outcome === "failed")
+      try {
+        this.#recordRetry(metadata, reason);
+        retryPending = true;
+      } catch (error) {
+        problem = `${problem}; the pending revocation could not be recorded (${redact(error instanceof Error ? error.message : String(error))})`;
       }
     this.#emit("credential.revoke", {
       generation: metadata.generation,
       credentialId: metadata.credential_id ?? null,
       reason,
       revocation: outcome,
+      ...(retryPending ? { retryPending: true } : {}),
     });
     return { outcome, ...(problem ? { problem } : {}) };
+  }
+
+  get #retryPath(): string {
+    return (
+      this.options.revocationRetryPath ??
+      join(dirname(this.options.metadataPath), REVOCATION_RETRY_FILE)
+    );
+  }
+
+  #writeRetries(entries: readonly RevocationRetryEntry[]): void {
+    if (!entries.length) {
+      rmSync(this.#retryPath, { force: true });
+      return;
+    }
+    writeAtomic(
+      this.#retryPath,
+      `${JSON.stringify({ schema: REVOCATION_RETRY_SCHEMA, entries }, null, 2)}\n`,
+    );
+  }
+
+  #recordRetry(
+    metadata: CredentialMetadata,
+    reason: CredentialRevokeReason,
+  ): void {
+    // An unreadable file is replaced: it holds nothing secret, and losing the
+    // record of an older failure is better than never recording this one.
+    const entries = (readRetryFile(this.#retryPath)?.entries ?? []).filter(
+      (entry) =>
+        !(
+          entry.generation === metadata.generation &&
+          entry.credential_id === metadata.credential_id
+        ),
+    );
+    entries.push({
+      ...(metadata.credential_id
+        ? { credential_id: metadata.credential_id }
+        : {}),
+      mode: this.mode,
+      generation: metadata.generation,
+      reason,
+      failed_at: new Date(this.#now()).toISOString(),
+      ...(metadata.expires_at ? { expires_at: metadata.expires_at } : {}),
+      checks: 0,
+    });
+    this.#writeRetries(entries);
+  }
+
+  /** Pending revocations recorded by this manager, for diagnostics. */
+  pendingRevocations(): PendingRevocations {
+    return readPendingRevocations(this.#retryPath, this.#now());
+  }
+
+  /**
+   * Re-check recorded revocation failures, as every login does. The
+   * revocation itself cannot be re-sent: the provider authenticates it with
+   * the credential, whose secret was deleted. An entry is resolved once its
+   * credential has expired, and the rest are returned as notices so the
+   * failure stays visible until an administrator revokes the credential.
+   */
+  checkPendingRevocations(): string[] {
+    const file = readRetryFile(this.#retryPath);
+    if (!file) return ["The pending revocation record is unreadable"];
+    const now = this.#now();
+    const remaining = file.entries
+      .filter(
+        (entry) => !entry.expires_at || Date.parse(entry.expires_at) > now,
+      )
+      .map((entry) => ({
+        ...entry,
+        checks: (entry.checks ?? 0) + 1,
+        checked_at: new Date(now).toISOString(),
+      }));
+    if (remaining.length !== file.entries.length || remaining.length)
+      this.#writeRetries(remaining);
+    return remaining.map(
+      (entry) =>
+        `Credential ${entry.credential_id ?? `generation ${entry.generation}`} could not be revoked on ${entry.failed_at}; it may be valid at the provider ${entry.expires_at ? `until ${entry.expires_at}` : "until an administrator revokes it"}`,
+    );
   }
 
   async #logout(
@@ -887,13 +1238,7 @@ export class CredentialManager {
     reason: CredentialRevokeReason,
   ): Promise<string[]> {
     const problems: string[] = [];
-    const store = this.options.store;
-    let raw: unknown = null;
-    try {
-      raw = JSON.parse(readFileSync(this.options.metadataPath, "utf8"));
-    } catch {
-      raw = null;
-    }
+    if (!this.hasStoredCredential()) return problems;
     const metadata = this.readMetadata();
     if (metadata) {
       const revoked = await this.#revoke(metadata, ctx, reason);
@@ -901,17 +1246,10 @@ export class CredentialManager {
     }
     // Metadata this release cannot use may still reference secrets, and the
     // next generation may hold a secret written before a crash that never
-    // reached metadata; clear all of them so logout leaves nothing behind.
-    if (store && raw)
-      for (const ref of metadataSecretRefs(raw, this.options.distributionId))
-        try {
-          await store.delete(ref);
-        } catch (error) {
-          problems.push(
-            `delete ${ref}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-    rmSync(this.options.metadataPath, { force: true });
+    // reached metadata; delete all of them so logout leaves nothing behind.
+    // What cannot be deleted stays tracked by a discarded marker.
+    for (const failed of await this.#discardMetadata())
+      problems.push(`delete ${failed.ref}: ${failed.problem}`);
     return problems;
   }
 }

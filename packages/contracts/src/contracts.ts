@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { PiShipError } from "./errors.js";
 import type { SecretValue } from "./secret.js";
 
 /*
@@ -27,6 +29,77 @@ export interface IdentitySession {
   readonly expiresAt?: Date;
   /** Non-secret claims only; token strings never appear here. */
   readonly claims?: Record<string, unknown>;
+}
+
+/**
+ * The normalized principal: the stable identity key `(iss, sub)`. PiShip binds
+ * user-scoped state (runtime credential, entitlement, model selection) to it.
+ * Both parts are compared as exact strings, as OIDC compares them; email,
+ * display name, and username are attributes and never part of the key.
+ */
+export interface PrincipalKey {
+  readonly issuer: string;
+  readonly subject: string;
+}
+
+/**
+ * The principal of an identity session or of stored metadata. Throws
+ * `IDENTITY_INVALID` when the issuer or subject is missing or not a string.
+ */
+export function principalKey(value: {
+  readonly issuer?: unknown;
+  readonly subject?: unknown;
+}): PrincipalKey {
+  const { issuer, subject } = value ?? {};
+  if (typeof issuer !== "string" || !issuer)
+    throw new PiShipError("IDENTITY_INVALID", "The identity has no issuer", {
+      component: "identity",
+    });
+  if (typeof subject !== "string" || !subject)
+    throw new PiShipError("IDENTITY_INVALID", "The identity has no subject", {
+      component: "identity",
+    });
+  return { issuer, subject };
+}
+
+/**
+ * Whether two principals are the same `(iss, sub)`. `null` stands for "no
+ * identity" and equals only `null`; a malformed principal equals nothing.
+ */
+export function samePrincipal(
+  a: PrincipalKey | null | undefined,
+  b: PrincipalKey | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    typeof a.issuer === "string" &&
+    typeof a.subject === "string" &&
+    !!a.issuer &&
+    !!a.subject &&
+    a.issuer === b.issuer &&
+    a.subject === b.subject
+  );
+}
+
+/**
+ * The principal as one string, for audit attribution: the issuer, `#`, then
+ * the subject. `%` and `#` in the issuer are percent-encoded, so the first
+ * `#` always ends the issuer and two principals never share a string. An OIDC
+ * issuer is an URL without a fragment and reads unchanged.
+ */
+export function principalId(key: PrincipalKey): string {
+  return `${key.issuer.replace(/%/g, "%25").replace(/#/g, "%23")}#${key.subject}`;
+}
+
+/**
+ * A fixed-length, filesystem-safe name for per-principal directories: 32 hex
+ * characters of SHA-256 over the principal. It reveals neither part.
+ */
+export function principalDigest(key: PrincipalKey): string {
+  return createHash("sha256")
+    .update(JSON.stringify([key.issuer, key.subject]))
+    .digest("hex")
+    .slice(0, 32);
 }
 
 export interface IdentityProvider {

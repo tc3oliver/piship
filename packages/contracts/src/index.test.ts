@@ -16,7 +16,11 @@ import {
   createManagedFetch,
   formatError,
   parseRetryAfter,
+  principalDigest,
+  principalId,
+  principalKey,
   redact,
+  samePrincipal,
   redactValue,
   sanitizeManagedEnvironment,
   DEFAULT_NETWORK_POLICY,
@@ -362,5 +366,50 @@ describe("trimTrailingSlashes", () => {
     const started = performance.now();
     trimTrailingSlashes(`${"/".repeat(1_000_000)}x`);
     expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
+describe("normalized principal", () => {
+  const alice = { issuer: "https://idp.example/realms/acme", subject: "alice" };
+  it("keys a principal by issuer and subject only", () => {
+    expect(
+      principalKey({ ...alice, email: "a@example.com" } as typeof alice),
+    ).toEqual(alice);
+    for (const value of [
+      { subject: "alice" },
+      { issuer: "https://idp.example" },
+      { issuer: "", subject: "alice" },
+      { issuer: "https://idp.example", subject: 7 },
+    ])
+      expect(() => principalKey(value)).toThrow(PiShipError);
+  });
+  it("compares both parts exactly and treats no identity as its own value", () => {
+    expect(samePrincipal(alice, { ...alice })).toBe(true);
+    expect(samePrincipal(alice, { ...alice, subject: "Alice" })).toBe(false);
+    expect(samePrincipal(alice, { ...alice, issuer: `${alice.issuer}/` })).toBe(
+      false,
+    );
+    expect(samePrincipal(null, null)).toBe(true);
+    expect(samePrincipal(undefined, null)).toBe(true);
+    expect(samePrincipal(alice, null)).toBe(false);
+    expect(samePrincipal(null, alice)).toBe(false);
+    expect(
+      samePrincipal({ issuer: "", subject: "" }, { issuer: "", subject: "" }),
+    ).toBe(false);
+  });
+  it("renders an unambiguous audit key and a directory-safe digest", () => {
+    expect(principalId(alice)).toBe("https://idp.example/realms/acme#alice");
+    // A # or % in the issuer cannot make two principals share a string.
+    const left = principalId({ issuer: "a#b", subject: "c" });
+    const right = principalId({ issuer: "a", subject: "b#c" });
+    expect(left).toBe("a%23b#c");
+    expect(right).toBe("a#b#c");
+    expect(principalId({ issuer: "a%23b", subject: "c" })).toBe("a%2523b#c");
+    expect(principalDigest(alice)).toMatch(/^[0-9a-f]{32}$/);
+    expect(principalDigest(alice)).toBe(principalDigest({ ...alice }));
+    expect(principalDigest({ issuer: "a#b", subject: "c" })).not.toBe(
+      principalDigest({ issuer: "a", subject: "b#c" }),
+    );
+    expect(principalDigest(alice)).not.toContain("alice");
   });
 });

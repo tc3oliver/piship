@@ -104,6 +104,30 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     credential: true,
   },
   {
+    name: "principal binding",
+    path: "identity/principal.json",
+    kind: "file",
+    scope: "user",
+    sensitivity: "private",
+    retention:
+      "kept by logout; replaced when another principal (issuer and subject) signs in",
+    clear: "purge",
+    migration:
+      "kept in place; no secret. A missing or unreadable record counts as a change of principal",
+  },
+  {
+    name: "pending revocations",
+    path: "credentials-metadata/revocation-retry.json",
+    kind: "file",
+    scope: "user",
+    sensitivity: "metadata",
+    retention:
+      "until the credential expires; checked at every login and reported by doctor",
+    clear: "login once the credential expired, purge",
+    migration:
+      "kept in place; credential IDs and times only, never a secret, so nothing can be revoked or restored from it",
+  },
+  {
     name: "file secret fallback",
     path: "secrets",
     kind: "directory",

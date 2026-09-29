@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
   type CommandRunner,
+  CREDENTIAL_DISCARDED_SCHEMA,
   CREDENTIAL_METADATA_SCHEMA,
   type CredentialEvent,
   CredentialManager,
@@ -35,6 +36,8 @@ import {
   MemorySecretStore,
   NoCredentialProvider,
   PiNativeCredentialProvider,
+  REVOCATION_RETRY_SCHEMA,
+  readPendingRevocations,
   RestrictedFileSecretStore,
   SecretServiceSecretStore,
   WindowsCredentialSecretStore,
@@ -1647,20 +1650,36 @@ describe("credential lifecycle events", () => {
       unreadableStore,
     );
     await unreadable.manager.ensure(null, ctx, { allowAcquire: true });
-    unreadableStore.get = async () => {
-      throw new PiShipError(
-        "SECRET_STORE_UNAVAILABLE",
-        "The keychain is locked",
-      );
+    const lock = () => {
+      unreadableStore.get = async () => {
+        throw new PiShipError(
+          "SECRET_STORE_UNAVAILABLE",
+          "The keychain is locked",
+        );
+      };
     };
+    const unlock = () => Reflect.deleteProperty(unreadableStore, "get");
+    lock();
+    // The deletion cannot be confirmed either: that is reported, never
+    // taken as "absent", and the metadata stays as a discarded marker.
     expect(await unreadable.manager.logout(ctx)).toEqual([
       "revocation: the stored credential could not be read (SECRET_STORE_UNAVAILABLE)",
+      expect.stringMatching(
+        /^delete piship:acmecode:inference#1: SECRET_STORE_UNAVAILABLE/,
+      ),
+      expect.stringMatching(
+        /^delete piship:acmecode:inference#2: SECRET_STORE_UNAVAILABLE/,
+      ),
     ]);
     expect(unreadable.events.at(-1)?.detail).toMatchObject({
       revocation: "failed",
+      retryPending: true,
     });
-    expect(unreadableStore.refs()).toEqual([]);
+    expect(unreadable.manager.hasStoredCredential()).toBe(true);
+    expect(unreadable.manager.status()).toMatchObject({ state: "absent" });
+    unlock();
     await unreadable.manager.ensure(null, ctx, { allowAcquire: true });
+    lock();
     await expect(
       unreadable.manager.revoke(ctx, "lifecycle"),
     ).resolves.toMatchObject({
@@ -2006,6 +2025,298 @@ describe("secret references", () => {
     await credentials.logout(ctx);
     expect(store.refs()).toEqual(["piship:other:inference#1"]);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("principal binding and verified deletion", () => {
+  const alice = { issuer: "https://idp.example", subject: "alice" };
+  const bob = { issuer: "https://idp.example", subject: "bob" };
+  const path = () => join(temp, "credentials-metadata", "inference.json");
+  const retryPath = () =>
+    join(temp, "credentials-metadata", "revocation-retry.json");
+
+  class FailingDeletes extends MemorySecretStore {
+    fail = false;
+    override async delete(ref: string): Promise<void> {
+      if (this.fail)
+        throw new PiShipError(
+          "SECRET_STORE_UNAVAILABLE",
+          "the keyring is locked (Authorization: Bearer abc.def.ghijkl)",
+        );
+      return super.delete(ref);
+    }
+  }
+
+  function make(
+    provider: CredentialProvider,
+    store: MemorySecretStore = new MemorySecretStore(),
+    extra: Partial<ConstructorParameters<typeof CredentialManager>[0]> = {},
+  ) {
+    const events: CredentialEvent[] = [];
+    const manager = new CredentialManager({
+      distributionId: "acmecode",
+      provider,
+      store,
+      metadataPath: path(),
+      beforeExpirySeconds: 300,
+      onEvent: (event) => events.push(event),
+      ...extra,
+    });
+    return { manager, store, events };
+  }
+
+  it("binds the credential and its entitlement to the principal and never hands them to another", async () => {
+    const revoked: string[] = [];
+    const { manager, store, events } = make(
+      fakeProvider({ expiresInSeconds: 3600, revoked }),
+    );
+    await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({
+      principal: alice,
+      models: ["acme/coder"],
+    });
+    // The same principal: email and display name are attributes.
+    await expect(
+      manager.ensure(
+        { ...alice, email: "renamed@idp.example" } as IdentitySession,
+        ctx,
+        { allowAcquire: false },
+      ),
+    ).resolves.toMatchObject({ ref: { credentialId: "vk_1" } });
+    // Another subject, or the same subject from another issuer, is another
+    // principal: the credential is revoked and deleted, never returned.
+    for (const other of [bob, { ...alice, issuer: "https://other.example" }]) {
+      await manager.ensure(alice as IdentitySession, ctx, {
+        allowAcquire: true,
+      });
+      const before = manager.readMetadata()?.credential_id;
+      await expect(
+        manager.ensure(other as IdentitySession, ctx, { allowAcquire: false }),
+      ).rejects.toMatchObject({ code: "CREDENTIAL_REQUIRED" });
+      expect(revoked.at(-1)).toBe(before);
+      expect(store.refs()).toEqual([]);
+      expect(existsSync(path())).toBe(false);
+    }
+    expect(
+      events
+        .filter((event) => event.event === "credential.revoke")
+        .map((event) => event.detail.reason),
+    ).toEqual(["principal-change", "principal-change"]);
+  });
+
+  it("discards a credential that is not bound to the signed-in principal, including an unbound one", async () => {
+    const { manager, store } = make(fakeProvider({ expiresInSeconds: 3600 }));
+    // Written without identity, as credentials before principal binding were.
+    await manager.ensure(null, ctx, { allowAcquire: true });
+    expect(JSON.parse(readFileSync(path(), "utf8")).principal).toBeUndefined();
+    const bound = await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    expect(bound.notices).toEqual([
+      expect.stringContaining("not issued to the signed-in identity"),
+    ]);
+    expect(bound.secret?.reveal()).toBe("sk-generation-2-secret");
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    // And the other way round: a bound credential is not used without identity.
+    await expect(
+      manager.ensure(null, ctx, { allowAcquire: false }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_REQUIRED" });
+    expect(store.refs()).toEqual([]);
+  });
+
+  it("fails closed and keeps a discarded marker when another principal's secret cannot be deleted", async () => {
+    const store = new FailingDeletes();
+    const { manager } = make(fakeProvider({ expiresInSeconds: 3600 }), store);
+    await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    store.fail = true;
+    const error = await manager
+      .ensure(bob as IdentitySession, ctx, { allowAcquire: true })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    expect(String((error as Error).message)).not.toContain("abc.def.ghijkl");
+    // Alice's secret is still in the store, tracked, and unusable: no
+    // release reads the marker as a credential.
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    const marker = JSON.parse(readFileSync(path(), "utf8"));
+    expect(marker).toMatchObject({
+      schema: CREDENTIAL_DISCARDED_SCHEMA,
+      orphans: ["piship:acmecode:inference#1", "piship:acmecode:inference#2"],
+    });
+    expect(marker.schema).not.toBe(CREDENTIAL_METADATA_SCHEMA);
+    expect(manager.readMetadata()).toBeNull();
+    expect(manager.status()).toMatchObject({
+      state: "absent",
+      notice: expect.stringContaining("discarded"),
+    });
+    // Nobody gets a credential while the deletion keeps failing, not even
+    // Alice, and no new credential is acquired over the marker.
+    for (const who of [alice, bob])
+      await expect(
+        manager.ensure(who as IdentitySession, ctx, { allowAcquire: true }),
+      ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    store.fail = false;
+    const recovered = await manager.ensure(bob as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    expect(recovered.notices).toEqual([
+      "The secrets of a discarded credential were deleted",
+    ]);
+    expect(recovered.secret?.reveal()).not.toBe("sk-generation-1-secret");
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+    expect((await store.get("piship:acmecode:inference#1"))?.reveal()).toBe(
+      recovered.secret?.reveal(),
+    );
+  });
+
+  it("never removes metadata whose secrets could not be deleted", async () => {
+    const store = new FailingDeletes();
+    const { manager } = make(fakeProvider({ expiresInSeconds: 3600 }), store);
+    await store.put(
+      "piship:acmecode:inference#7",
+      new SecretValue("sk-old-snapshot-secret"),
+    );
+    mkdirSync(join(temp, "credentials-metadata"), { recursive: true });
+    writeFileSync(
+      path(),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v0",
+        credential_ref: "piship:acmecode:inference#7",
+      }),
+    );
+    store.fail = true;
+    await expect(
+      manager.ensure(null, ctx, { allowAcquire: true }),
+    ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    expect(JSON.parse(readFileSync(path(), "utf8")).orphans).toEqual([
+      "piship:acmecode:inference#7",
+    ]);
+    // Logout reports the failure instead of dropping the reference.
+    expect(await manager.logout(ctx)).toEqual([
+      expect.stringMatching(
+        /^delete piship:acmecode:inference#7: SECRET_STORE_UNAVAILABLE/,
+      ),
+    ]);
+    expect(existsSync(path())).toBe(true);
+    // A store that reports success but still returns the secret has not
+    // deleted it either.
+    const sticky = new MemorySecretStore();
+    await sticky.put(
+      "piship:acmecode:inference#7",
+      new SecretValue("sk-sticky-secret"),
+    );
+    sticky.delete = async () => {};
+    expect(await make(fakeProvider(), sticky).manager.logout(ctx)).toEqual([
+      "delete piship:acmecode:inference#7: still present after deletion",
+    ]);
+    expect(existsSync(path())).toBe(true);
+    store.fail = false;
+    expect(await manager.logout(ctx)).toEqual([]);
+    expect(existsSync(path())).toBe(false);
+    expect(store.refs()).toEqual([]);
+  });
+
+  it("records a failed revocation without the secret, re-checks it, and drops it once the credential expired", async () => {
+    let now = Date.parse("2026-09-29T12:00:00Z");
+    const provider: CredentialProvider = {
+      mode: "http-broker",
+      requiresIdentity: false,
+      async acquire(): Promise<RuntimeCredential> {
+        return {
+          kind: "api_key",
+          secret: new SecretValue("sk-pending-revocation-secret"),
+          credentialId: "vk_pending",
+          expiresAt: new Date(now + 3600_000),
+        };
+      },
+      async revoke() {
+        throw new Error(
+          "revoke endpoint returned HTTP 503 for Bearer abc.def.ghijkl",
+        );
+      },
+    };
+    const { manager, events } = make(provider, new MemorySecretStore(), {
+      now: () => now,
+    });
+    expect(manager.pendingRevocations()).toEqual({
+      readable: true,
+      count: 0,
+      oldestAgeSeconds: null,
+      entries: [],
+    });
+    await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    const problems = await manager.logout(ctx, { reason: "replace" });
+    expect(problems).toEqual([expect.stringContaining("HTTP 503")]);
+    expect(problems[0]).not.toContain("abc.def.ghijkl");
+    expect(events.at(-1)?.detail).toMatchObject({
+      revocation: "failed",
+      retryPending: true,
+    });
+    const text = readFileSync(retryPath(), "utf8");
+    expect(text).not.toContain("sk-pending-revocation-secret");
+    expect(JSON.parse(text)).toEqual({
+      schema: REVOCATION_RETRY_SCHEMA,
+      entries: [
+        {
+          credential_id: "vk_pending",
+          mode: "http-broker",
+          generation: 1,
+          reason: "replace",
+          failed_at: "2026-09-29T12:00:00.000Z",
+          expires_at: "2026-09-29T13:00:00.000Z",
+          checks: 0,
+        },
+      ],
+    });
+    now += 90_000;
+    expect(readPendingRevocations(retryPath(), now)).toMatchObject({
+      count: 1,
+      oldestAgeSeconds: 90,
+      entries: [{ credentialId: "vk_pending", ageSeconds: 90 }],
+    });
+    expect(manager.checkPendingRevocations()).toEqual([
+      expect.stringContaining("Credential vk_pending could not be revoked"),
+    ]);
+    expect(
+      JSON.parse(readFileSync(retryPath(), "utf8")).entries[0].checks,
+    ).toBe(1);
+    now += 3600_000;
+    expect(manager.checkPendingRevocations()).toEqual([]);
+    expect(existsSync(retryPath())).toBe(false);
+    // An unreadable record is reported, not taken as "nothing pending".
+    mkdirSync(join(temp, "credentials-metadata"), { recursive: true });
+    writeFileSync(retryPath(), "{broken");
+    expect(manager.pendingRevocations().readable).toBe(false);
+    expect(manager.checkPendingRevocations()).toEqual([
+      "The pending revocation record is unreadable",
+    ]);
+  });
+
+  it("redacts a provider message copied into a renewal failure", async () => {
+    const provider = {
+      ...fakeProvider({ expiresInSeconds: 1 }),
+      async refresh(): Promise<RuntimeCredential> {
+        throw new Error("broker said: Authorization: Bearer abc.def.ghijkl");
+      },
+    };
+    let now = Date.now();
+    const { manager } = make(provider, new MemorySecretStore(), {
+      now: () => now,
+    });
+    await manager.ensure(null, ctx, { allowAcquire: true });
+    now += 5_000;
+    const error = await manager
+      .ensure(null, ctx, { allowAcquire: false })
+      .catch((caught: Error) => caught);
+    expect(error).toMatchObject({ code: "CREDENTIAL_EXPIRED" });
+    expect(error.message).toContain("could not be renewed");
+    expect(error.message).not.toContain("abc.def.ghijkl");
   });
 });
 
