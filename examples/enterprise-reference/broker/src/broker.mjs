@@ -165,18 +165,28 @@ export function createIdempotencyStore({
 
 /**
  * Requests per caller per minute, fixed window. At most `maxCallers` windows
- * are kept; while that many callers are counted, a new one waits for the
- * oldest window to end.
+ * are kept. Past that, a caller without a window is counted in one shared
+ * overflow window limited to `overflowLimitPerMinute` (unlimited by
+ * default) rather than refused: someone who fills the table with made-up
+ * callers must not lock every other caller out. What protects the upstream
+ * then is the caller's own concurrency cap.
  */
 export function createRateLimiter({
   limitPerMinute,
   now = Date.now,
   maxCallers = 10_000,
+  overflowLimitPerMinute = Number.POSITIVE_INFINITY,
 }) {
   /** @type {Map<string, { windowStart: number, count: number }>} */
   const windows = new Map();
+  const overflow = { windowStart: Number.NEGATIVE_INFINITY, count: 0 };
   const secondsLeft = (window, at) =>
     Math.max(1, Math.ceil((window.windowStart + 60_000 - at) / 1000));
+  const count = (window, limit, at) => {
+    if (window.count >= limit) return secondsLeft(window, at);
+    window.count += 1;
+    return 0;
+  };
   return {
     /** @returns {number} 0 when allowed, else seconds until the window resets */
     take(caller) {
@@ -185,17 +195,45 @@ export function createRateLimiter({
         if (at - window.windowStart >= 60_000) windows.delete(id);
       let window = windows.get(caller);
       if (!window) {
-        // Windows are inserted in time order, so the first is the oldest.
-        if (windows.size >= maxCallers)
-          return secondsLeft(windows.values().next().value, at);
+        if (windows.size >= maxCallers) {
+          if (at - overflow.windowStart >= 60_000) {
+            overflow.windowStart = at;
+            overflow.count = 0;
+          }
+          return count(overflow, overflowLimitPerMinute, at);
+        }
         window = { windowStart: at, count: 0 };
         windows.set(caller, window);
       }
-      if (window.count >= limitPerMinute) return secondsLeft(window, at);
-      window.count += 1;
-      return 0;
+      return count(window, limitPerMinute, at);
     },
   };
+}
+
+/**
+ * The rate-limit key of an address: an IPv4 address as it is, an IPv6
+ * address by its /64 prefix, since one host or network usually holds a
+ * whole /64 and could otherwise count as billions of callers.
+ */
+export function addressBucket(address) {
+  if (isIP(address) !== 6) return address;
+  let text = address.split("%")[0].toLowerCase();
+  const v4 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (v4) {
+    const [a, b, c, d] = v4.slice(1).map(Number);
+    text = `${text.slice(0, v4.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = text.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups =
+    tail === undefined
+      ? left
+      : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
+  return `${groups
+    .slice(0, 4)
+    .map((group) => Number.parseInt(group, 16).toString(16))
+    .join(":")}::/64`;
 }
 
 /** Strip the IPv4-mapped IPv6 prefix, so one client has one address. */
@@ -579,7 +617,9 @@ export function createBroker(
   async function revoke(req) {
     // Revoke is authenticated only by the key it revokes, so it is limited
     // by where it comes from, before anything else is looked at.
-    const wait = revokeLimiter.take(clientAddress(req, trustedProxies));
+    const wait = revokeLimiter.take(
+      addressBucket(clientAddress(req, trustedProxies)),
+    );
     if (wait)
       return failure(429, "rate_limited", { "retry-after": String(wait) });
     const credential = bearer(req);

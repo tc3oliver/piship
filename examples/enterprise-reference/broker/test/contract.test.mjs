@@ -1041,20 +1041,65 @@ describe("revoke: limits", () => {
     );
   });
 
-  it("the rate limiter keeps at most maxCallers windows", async () => {
+  it("the rate limiter keeps at most maxCallers windows, and counts new callers past that in one overflow window instead of refusing them", async () => {
     const { createRateLimiter } = await import("../src/broker.mjs");
     let now = 0;
     const limiter = createRateLimiter({
-      limitPerMinute: 5,
+      limitPerMinute: 1,
       maxCallers: 2,
       now: () => now,
     });
     assert.equal(limiter.take("a"), 0);
     now = 10_000;
     assert.equal(limiter.take("b"), 0);
-    assert.equal(limiter.take("c"), 50, "waits for the oldest window");
-    now = 60_000;
-    assert.equal(limiter.take("c"), 0, "a's window ended");
+    for (let i = 0; i < 50; i++)
+      assert.equal(limiter.take(`new-${i}`), 0, "a full table refuses no one");
+    assert.equal(limiter.take("a"), 50, "a known caller keeps its own limit");
+
+    const bounded = createRateLimiter({
+      limitPerMinute: 1,
+      maxCallers: 1,
+      overflowLimitPerMinute: 2,
+      now: () => now,
+    });
+    assert.equal(bounded.take("a"), 0);
+    assert.equal(bounded.take("b"), 0);
+    assert.equal(bounded.take("c"), 0);
+    assert.equal(bounded.take("d"), 60, "the overflow window is shared");
+  });
+
+  it("an IPv6 caller is limited by its /64 prefix", async () => {
+    const { addressBucket } = await import("../src/broker.mjs");
+    assert.equal(addressBucket("192.0.2.7"), "192.0.2.7");
+    for (const address of [
+      "2001:db8:1:2::1",
+      "2001:0db8:0001:0002:ffff:ffff:ffff:ffff",
+      "2001:DB8:1:2:0:0:192.0.2.1",
+      "2001:db8:1:2::9%eth0",
+    ])
+      assert.equal(addressBucket(address), "2001:db8:1:2::/64", address);
+    assert.equal(addressBucket("::1"), "0:0:0:0::/64");
+    assert.equal(addressBucket("2001:db8::"), "2001:db8:0:0::/64");
+    assert.notEqual(
+      addressBucket("2001:db8:1:3::1"),
+      addressBucket("2001:db8:1:2::1"),
+    );
+
+    const h = await harness({
+      BROKER_REVOKE_LIMIT_PER_MINUTE: "1",
+      BROKER_TRUSTED_PROXIES: "127.0.0.1",
+    });
+    const from = (address) =>
+      h.revoke("sk-unknown-SENTINEL-020", null, "acmecode", {
+        "x-forwarded-for": address,
+      });
+    assert.equal((await from("2001:db8:1:2::1")).status, 404);
+    assert.equal(
+      (await from("2001:db8:1:2:abcd::77")).status,
+      429,
+      "another address in the same /64 shares the window",
+    );
+    assert.equal((await from("2001:db8:1:3::1")).status, 404);
   });
 });
 
