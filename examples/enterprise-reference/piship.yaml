@@ -1,0 +1,198 @@
+schema: piship/v1alpha4
+
+# AcmeCode wired to the enterprise reference stack in this directory: the
+# Keycloak realm `piship-reference`, the reference credential broker, and the
+# LiteLLM gateway. It has the shape of examples/demo-company, whose manifest it
+# follows section by section, without that example's MCP server, certified
+# skill, or company extension: none of them touches the stack.
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+  version: 1.0.0
+  banner: AcmeCode enterprise reference distribution (fictional)
+
+runtime:
+  pi: "0.87.1"
+
+deployment:
+  mode: managed
+
+# Non-secret endpoints resolved from the launch environment at runtime, so the
+# lock is the same whatever ports the stack was started on. The README lists
+# the values for a stack started with the default `.env`.
+variables:
+  - ACMECODE_OIDC_ISSUER
+  - ACMECODE_CREDENTIAL_BROKER_URL
+  - ACMECODE_CREDENTIAL_REVOKE_URL
+  - ACMECODE_LLM_GATEWAY_URL
+  - ACMECODE_UPDATE_SOURCE
+
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${ACMECODE_OIDC_ISSUER}
+    # The public client of the reference realm: no secret, PKCE S256 only.
+    clientId: acmecode
+    flow: authorization_code_pkce
+    scopes: [openid, profile, email]
+    # The realm registers this port-less loopback URI, which Keycloak matches
+    # for any loopback port; PiShip listens on an ephemeral one.
+    redirectUri: http://127.0.0.1/callback
+
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage:
+    provider: system
+  refresh:
+    beforeExpiry: 5m
+
+inference:
+  provider: openai-compatible
+  baseUrl: ${ACMECODE_LLM_GATEWAY_URL}
+  api: openai-completions
+  liveCatalog: true
+
+# The upper bound. The broker narrows it per user by Keycloak group:
+# `engineering` (alice) gets both models, `support` (bob) only acme/coder. The
+# IDs are LiteLLM's model_name values.
+models:
+  default: acme/coder
+  allowed:
+    - acme/coder
+    - acme/general
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+      policyTags: [general, code]
+    acme/general:
+      name: Acme General
+      contextWindow: 64000
+      maxOutputTokens: 4096
+      tools: true
+      policyTags: [general]
+
+config:
+  enforced:
+    theme: dark
+  defaults:
+    thinkingLevel: "off"
+  userOverridable: [model, thinkingLevel]
+
+network:
+  proxy:
+    inheritEnvironment: true
+  publicFallback: deny
+  privateOnly: true
+
+resources:
+  instructions:
+    company: [./resources/AGENTS.md]
+  skills:
+    company: [./resources/skills]
+  extensions:
+    builtin: [piship-ask-user, piship-workflow]
+
+capabilities:
+  permissions:
+    enabled: true
+    provider: { id: builtin/permissions }
+  workflow:
+    enabled: true
+    provider: { id: builtin/workflow }
+    settings:
+      defaultMode: plan
+      planPrompt: Plan mode. Investigate and propose a plan; do not change files or run commands.
+      buildPrompt: Build mode. Implement the approved plan with the smallest safe change.
+
+# Fictional policy, the demo company's without its handbook MCP rules. Headless
+# runs have no approval channel, so every `ask` below resolves to deny there.
+policy:
+  id: acme-engineering
+  version: 1
+  default: ask
+  projectTrust:
+    company:
+      match:
+        - remote: "git.acme.example/**"
+          path: "/srv/src/**"
+  enforced:
+    - id: acme.secrets.read
+      action: filesystem.read
+      resource: "~/.ssh/**"
+      effect: deny
+      reason: Credentials stay outside the agent
+  defaults:
+    - id: acme.models
+      action: model.use
+      resource: "acmecode/**"
+      effect: allow
+    - id: acme.skills
+      action: skill.load
+      resource: "**"
+      effect: allow
+    - id: acme.instructions
+      action: instruction.load
+      resource: "**"
+      effect: allow
+    - id: acme.extensions
+      action: extension.load
+      resource: "**"
+      effect: allow
+    - id: acme.workspace.read
+      action: filesystem.read
+      resource: "workspace/**"
+      effect: allow
+    - id: acme.workspace.write
+      action: filesystem.write
+      resource: "workspace/**"
+      effect: ask
+    - id: acme.shell
+      action: shell.execute
+      resource: "**"
+      effect: ask
+    - id: acme.tools
+      action: tool.execute
+      resource: "*"
+      effect: allow
+
+sandbox:
+  required: true
+  filesystem:
+    read:
+      deny: [~/.ssh, ~/.aws, ~/.gnupg]
+    write:
+      allow: [workspace, tmp]
+  network:
+    mode: deny
+
+audit:
+  enabled: true
+  sinks:
+    - id: local
+      type: file
+      required: false
+
+# Signed release channels, as in the demo: no release key is pinned, so a
+# distribution owner adds their own (piship keygen) before any update verifies.
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${ACMECODE_UPDATE_SOURCE}
+  rollback: true
+  trust:
+    keys: []
+
+# The reference stack runs in Linux containers, and the required sandbox has
+# an adapter on Linux and macOS only, so the release targets are those two.
+release:
+  targets: [linux-x64, darwin-arm64]
+  sources: [https://registry.npmjs.org]
+  vulnerabilities:
+    failOn: high

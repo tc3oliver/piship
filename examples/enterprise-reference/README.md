@@ -2,7 +2,7 @@
 
 A local, runnable version of the company services a managed PiShip distribution talks to: an OIDC identity provider, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
 
-This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md) but no distribution yet: that is later v0.7 work. Nothing here needs an Internet model provider or a paid API key.
+This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md) and [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack. Nothing here needs an Internet model provider or a paid API key.
 
 | Service | Image (pinned by index digest) | Host port (default) | Role |
 | --- | --- | --- | --- |
@@ -167,3 +167,66 @@ On macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0, Compose
 All four images have native `linux/arm64` and `linux/amd64` builds; nothing ran under emulation. Image sizes on this machine (compressed / unpacked): Keycloak 266 MB / 756 MB, LiteLLM 398 MB / 1.66 GB, PostgreSQL 115 MB / 416 MB, Node 61 MB / 233 MB. Resident memory when idle: LiteLLM about 810 MiB, Keycloak about 680 MiB, PostgreSQL about 115 MiB, mock about 23 MiB.
 
 These figures are from one developer machine. Running on GitHub's `ubuntu-latest` is proven only by the reference E2E workflow (V07-54), not by this measurement.
+
+## AcmeCode reference distribution
+
+[`piship.yaml`](piship.yaml) is a managed AcmeCode distribution (`piship/v1alpha4`) wired to this stack, locked in [`piship.lock`](piship.lock). It has the shape of [`examples/demo-company`](../demo-company/README.md): the same sections in the same order, the same `acme-engineering` policy without its handbook rules, the required OS sandbox, a local audit sink, and the signed-channel and release sections. It points at the stack instead of the demo's loopback fixtures:
+
+| Section | Value |
+| --- | --- |
+| `identity.oidc` | Issuer `${ACMECODE_OIDC_ISSUER}` (the Keycloak realm), public client `acmecode`, scopes `openid profile email`, redirect `http://127.0.0.1/callback` (port-less, so PiShip listens on an ephemeral loopback port and Keycloak matches it) |
+| `credential` | `http-broker` at `${ACMECODE_CREDENTIAL_BROKER_URL}` with revoke at `${ACMECODE_CREDENTIAL_REVOKE_URL}` (the reference broker), stored in the platform secret store (`provider: system`) |
+| `inference` | `openai-compatible` at `${ACMECODE_LLM_GATEWAY_URL}` (LiteLLM), with the live model catalog |
+| `models` | Upper bound `acme/coder` and `acme/general`, LiteLLM's `model_name` values. The broker narrows it per user (below) |
+
+The URLs are runtime variables, so the lock is the same whatever ports the stack uses. For a stack started with the default `.env`:
+
+| Variable | Value |
+| --- | --- |
+| `ACMECODE_OIDC_ISSUER` | `http://127.0.0.1:18080/realms/piship-reference` |
+| `ACMECODE_CREDENTIAL_BROKER_URL` | `http://127.0.0.1:18070/v1/credential` |
+| `ACMECODE_CREDENTIAL_REVOKE_URL` | `http://127.0.0.1:18070/v1/revoke` |
+| `ACMECODE_LLM_GATEWAY_URL` | `http://127.0.0.1:14000/v1` |
+
+`ACMECODE_UPDATE_SOURCE` is read only by `update`. Use the ports in your `.env` if you changed them.
+
+A manifest cannot reach outside its own directory (resource paths start with `./` and may not contain `..` or symlinks), so this distribution cannot reuse the demo's resources by path. [`resources/`](resources) is a copy of the two it needs, the company instructions and the `acme-review` skill. It leaves out the demo's handbook MCP server, certified skill, and enterprise-context extension: none of them touches the stack. The release targets are Linux x64 and macOS arm64: the stack runs in Linux containers and the required sandbox has an adapter on those two only. The manifest pins no release key, as the demo does; a release is built from a copy that pins one (`piship keygen`).
+
+### Users and entitlements
+
+Sign in as `alice` or `bob`; their passwords are `REFERENCE_ALICE_PASSWORD` and `REFERENCE_BOB_PASSWORD` in `.env`. Keycloak's groups become model entitlement at the broker, so the two users get different keys and different `models` lists from the same distribution:
+
+| User | Group | Models |
+| --- | --- | --- |
+| `alice` | `engineering` | `acme/coder`, `acme/general` |
+| `bob` | `support` | `acme/coder` |
+
+For Bob, `--model acme/general` is refused by PiShip with `MODEL_UNAVAILABLE` (not included in the runtime credential entitlement), and a request for it with his key is refused by LiteLLM with `key_model_access_denied`. Signing in as the other user, without a logout, revokes the first user's key at LiteLLM and their identity tokens at Keycloak, and clears their model selection.
+
+### Try it
+
+With Node 22.19 or later and Docker, from the repository root:
+
+```sh
+npm ci
+npm run build
+( cd examples/enterprise-reference && node scripts/generate-env.mjs && docker compose up --wait )
+
+export ACMECODE_OIDC_ISSUER=http://127.0.0.1:18080/realms/piship-reference
+export ACMECODE_CREDENTIAL_BROKER_URL=http://127.0.0.1:18070/v1/credential
+export ACMECODE_CREDENTIAL_REVOKE_URL=http://127.0.0.1:18070/v1/revoke
+export ACMECODE_LLM_GATEWAY_URL=http://127.0.0.1:14000/v1
+
+npm exec -- piship build examples/enterprise-reference/piship.yaml
+node dist/acmecode/piship.mjs install dist/acmecode
+~/.local/bin/acmecode login              # sign in as alice on the Keycloak page
+~/.local/bin/acmecode models
+~/.local/bin/acmecode --smoke-model
+~/.local/bin/acmecode login              # sign in as bob, without a logout
+~/.local/bin/acmecode models             # acme/general is no longer available
+~/.local/bin/acmecode logout
+node dist/acmecode/piship.mjs uninstall acmecode
+( cd examples/enterprise-reference && docker compose down )
+```
+
+`login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
