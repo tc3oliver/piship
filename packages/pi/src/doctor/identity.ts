@@ -17,7 +17,12 @@ export function identityGroup(data: DoctorData, out: DoctorSection): void {
   const { mode } = access.manifest.identity;
   out.ok("mode", mode);
   if (mode === "none" || access.configError) return;
-  if (access.signedIn) out.ok("session", "signed in");
+  // A workload identity is never stored: whether a (stale) session is on
+  // disk says nothing about it, and the activation shows whether it works.
+  if (access.workload)
+    if (access.identityError) out.bad("session", access.identityError);
+    else out.ok("session", "workload identity, obtained per run");
+  else if (access.signedIn) out.ok("session", "signed in");
   else
     out.bad(
       "session",

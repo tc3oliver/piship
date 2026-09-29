@@ -331,6 +331,97 @@ describe("renderDoctor", () => {
     );
   });
 
+  it("reports a workload identity as obtained per run, whatever session is stored", () => {
+    for (const signedIn of [false, true]) {
+      const report = renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            manifest: {
+              ...accessData().manifest,
+              identity: { mode: "adapter" },
+            } as unknown as AccessData["manifest"],
+            signedIn,
+            workload: true,
+          }),
+        }),
+      );
+      expect(report.failed).toBe(false);
+      expect(group(report.render(), "Identity")).toEqual([
+        `  ✓ ${"mode".padEnd(20)} adapter`,
+        `  ✓ ${"session".padEnd(20)} workload identity, obtained per run`,
+        `  ✓ ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
+      ]);
+    }
+    const failed = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          workload: true,
+          identityError:
+            "IDENTITY_INVALID: The workload identity adapter could not obtain a session",
+        }),
+      }),
+    );
+    expect(failed.failed).toBe(true);
+    expect(group(failed.render(), "Identity")).toContain(
+      `  ✗ ${"session".padEnd(20)} IDENTITY_INVALID: The workload identity adapter could not obtain a session`,
+    );
+  });
+
+  it("reports pending revocation retries by count and age, never by credential", () => {
+    const lines = (pending: AccessData["pendingRevocations"]) =>
+      group(
+        renderDoctor(
+          doctorData("managed", {
+            access: accessData(pending ? { pendingRevocations: pending } : {}),
+          }),
+        ).render(),
+        "Secret Store",
+      );
+    expect(
+      lines({ readable: true, count: 0, dropped: 0, oldestAgeSeconds: null }),
+    ).toEqual([
+      `  ✓ ${"backend".padEnd(20)} macOS Keychain`,
+      `  ✓ ${"revocation retries".padEnd(20)} none pending`,
+    ]);
+    expect(
+      lines({
+        readable: true,
+        count: 2,
+        dropped: 0,
+        oldestAgeSeconds: 3 * 3600 + 5,
+      }),
+    ).toEqual([
+      `  ✓ ${"backend".padEnd(20)} macOS Keychain`,
+      `  ! ${"revocation retries".padEnd(20)} pending revocation retries: 2, oldest 3h`,
+      `  ! ${"revocation".padEnd(20)} a replaced credential could not be revoked and may still be valid at the provider until it expires or an administrator revokes it`,
+    ]);
+    expect(
+      lines({ readable: true, count: 20, dropped: 4, oldestAgeSeconds: 90 })[1],
+    ).toBe(
+      `  ! ${"revocation retries".padEnd(20)} pending revocation retries: 20, oldest 90s; 4 older not listed`,
+    );
+    expect(
+      lines({ readable: false, count: 0, dropped: 0, oldestAgeSeconds: null }),
+    ).toContain(
+      `  ! ${"revocation retries".padEnd(20)} the pending revocation record is unreadable`,
+    );
+    // Warnings never fail the report.
+    expect(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            pendingRevocations: {
+              readable: true,
+              count: 1,
+              dropped: 0,
+              oldestAgeSeconds: 60,
+            },
+          }),
+        }),
+      ).failed,
+    ).toBe(false);
+  });
+
   it("warns about the plaintext file secret store and says when no store is used", () => {
     const file = renderDoctor(
       doctorData("managed", {

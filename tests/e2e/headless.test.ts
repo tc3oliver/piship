@@ -329,6 +329,17 @@ describe("headless workload distribution (local fixtures)", () => {
       .at(-1);
     expect(chat?.authorization).toBe(`Bearer ${credentialSecret("vk_demo_1")}`);
 
+    // doctor sees a healthy workload run: no stored session, none needed.
+    const doctor = await run(["doctor"]);
+    expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
+    expect(doctor.stdout).toMatch(
+      /Identity\n {2}✓ mode\s+adapter\n {2}✓ session\s+workload identity, obtained per run/,
+    );
+    expect(doctor.stdout).toMatch(
+      /Secret Store\n(?:.*\n)*? {2}✓ revocation retries\s+none pending/,
+    );
+    expect(doctor.stdout + doctor.stderr).not.toContain(firstToken);
+
     // 3. Managed policy stays enforced: model allowlist and entitlement,
     //    and the network policy for the adapter's own requests.
     const personalModel = await run(["--model", "openai/gpt-4o", "--smoke"]);

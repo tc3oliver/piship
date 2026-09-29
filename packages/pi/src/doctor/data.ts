@@ -52,6 +52,23 @@ export interface AccessData {
   readonly tlsError?: string;
   /** Whether an identity session is stored; never its claims. */
   readonly signedIn: boolean;
+  /**
+   * The identity is a workload identity, obtained per run and never stored:
+   * a stored session says nothing about it.
+   */
+  readonly workload?: boolean;
+  /** Why the activation could not obtain the identity, when it could not. */
+  readonly identityError?: string;
+  /**
+   * Remote revocations that failed at a sign-in or user switch: counts and
+   * ages only, never a credential identifier or secret.
+   */
+  readonly pendingRevocations?: {
+    readonly readable: boolean;
+    readonly count: number;
+    readonly dropped: number;
+    readonly oldestAgeSeconds: number | null;
+  };
   /** The configured issuer, from the manifest (not from a token). */
   readonly issuer?: string;
   readonly store?: { readonly kind: string; readonly description: string };
@@ -238,11 +255,29 @@ async function collectAccess(
   } catch (error) {
     configError = formatError(error);
   }
+  const workload = opened
+    ? await opened.usesWorkloadIdentity().catch(() => false)
+    : false;
   const status = opened
     ? await opened.status().catch(() => undefined)
     : undefined;
+  let pendingRevocations: AccessData["pendingRevocations"];
+  if (opened?.store)
+    try {
+      const { readable, count, dropped, oldestAgeSeconds } =
+        opened.pendingRevocations();
+      pendingRevocations = { readable, count, dropped, oldestAgeSeconds };
+    } catch {
+      pendingRevocations = {
+        readable: false,
+        count: 0,
+        dropped: 0,
+        oldestAgeSeconds: null,
+      };
+    }
   let activated: ActivatedAccess | undefined;
   let activationError: string | undefined;
+  let identityError: string | undefined;
   let gateway: AccessData["gateway"];
   if (opened && !tlsError)
     try {
@@ -262,6 +297,8 @@ async function collectAccess(
         }
     } catch (error) {
       activationError = formatError(error);
+      if (error instanceof PiShipError && error.component === "identity")
+        identityError = activationError;
     }
   if (opened) saveMetrics(metrics);
   const gatewayOrigin = origin(activated?.runtime.baseUrl);
@@ -270,6 +307,9 @@ async function collectAccess(
     ...(configError ? { configError } : {}),
     ...(tlsError ? { tlsError } : {}),
     signedIn: !!status?.identity,
+    ...(workload ? { workload } : {}),
+    ...(identityError ? { identityError } : {}),
+    ...(pendingRevocations ? { pendingRevocations } : {}),
     ...(opened?.endpoints.issuer ? { issuer: opened.endpoints.issuer } : {}),
     ...(opened?.store
       ? {
