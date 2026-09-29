@@ -34,6 +34,13 @@ export const AUDIT_EVENT_SCHEMA = "piship-audit/v1" as const;
 
 export interface AuditEvent {
   readonly schema: typeof AUDIT_EVENT_SCHEMA;
+  /**
+   * Random UUID assigned once when the event is emitted. A redelivered event
+   * keeps its ID, so a receiver drops any ID it has already stored. Every
+   * event the audit log emits has one; events written before it was added
+   * do not.
+   */
+  readonly id?: string;
   readonly event: AuditEventType;
   /** RFC 3339 UTC time. */
   readonly time: string;
@@ -69,10 +76,30 @@ export const NO_CONTENT_CAPTURE: AuditCapture = Object.freeze({
   sourceContent: false,
 });
 
+export const AUDIT_BATCH_SCHEMA = "piship-audit-batch/v1" as const;
+
+/** The body an HTTP audit sink receives: one JSON object per POST. */
+export interface AuditBatch {
+  readonly schema: typeof AUDIT_BATCH_SCHEMA;
+  /** Oldest first. The empty batch is the readiness probe of a required sink. */
+  readonly events: readonly AuditEvent[];
+}
+
+/**
+ * Where the audit log delivers batches. Resolve only once the whole batch is
+ * durably accepted; reject otherwise, and the log retries the same events
+ * (required sink) or drops and counts them (optional sink). A retry can
+ * repeat events that were stored before the failure, so a sink must treat an
+ * event whose `id` it has already stored as delivered.
+ */
+export interface AuditSink {
+  write(batch: AuditBatch, signal: AbortSignal): Promise<void>;
+}
+
 /** Emits events; implementations handle buffering and sink failures. */
 export interface AuditEmitter {
   emit(
-    event: Omit<AuditEvent, "schema" | "time" | "distribution"> & {
+    event: Omit<AuditEvent, "schema" | "id" | "time" | "distribution"> & {
       readonly time?: string;
     },
   ): void;

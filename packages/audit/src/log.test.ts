@@ -545,6 +545,45 @@ describe("AuditLog http sink", () => {
     await log.close();
   });
 
+  it("resends a batch the collector stored but did not acknowledge with the same event ids", async () => {
+    // Fault injection: the collector stores the first batch, then fails the
+    // request (as a timeout after the write would); PiShip retries it.
+    const received: { id: string; event: string }[][] = [];
+    let failures = 1;
+    const log = await AuditLog.open({
+      config: config([
+        {
+          id: "company",
+          type: "http",
+          url: "https://audit.example/ingest",
+          required: true,
+        },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch: async (_url, init) => {
+        received.push(JSON.parse(String(init?.body)).events);
+        if (received.length > 1 && failures-- > 0)
+          return new Response(null, { status: 504 });
+        return new Response(null, { status: 200 });
+      },
+    });
+    log.emit({ event: "tool.request", user: null, session: null });
+    log.emit({ event: "tool.allowed", user: null, session: null });
+    await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 2, delivered: 0 });
+    await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 0, delivered: 2 });
+    await log.close();
+    const [, first, second] = received;
+    expect(second).toEqual(first);
+    // A receiver that keeps one row per id stores each event once.
+    const stored = new Map(
+      received.flat().map((event) => [event.id, event.event]),
+    );
+    expect([...stored.values()]).toEqual(["tool.request", "tool.allowed"]);
+  });
+
   it("enters failed when a required sink stays down until the buffer is full", async () => {
     const collector = await startCollector();
     const log = await AuditLog.open({

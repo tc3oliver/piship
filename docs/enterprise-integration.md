@@ -14,6 +14,7 @@ You provide three services. Their URLs are `${NAME}` [runtime references](manife
 | LLM gateway: model list | `inference.baseUrl` + `/models` | PiShip | Launch with `inference.liveCatalog: true`; `doctor` |
 | LLM gateway: inference | `inference.baseUrl` + `/chat/completions` or `/responses` | Pi, in the same process | Every model turn and `--smoke-model` |
 | Sandbox backend (optional) | `sandbox.provider`, `sandbox.endpoint` | PiShip | Launch (create and check), each `bash` or `!` command, session end |
+| Audit collector (optional) | `audit.sinks[].url` (`type: http`) | PiShip | Launch and `login`, `logout`, `update`, `rollback` (readiness probe of a required sink), then batches during and at the end of each |
 
 ```text
 user ──login──▶ IdP (browser, PKCE) ──tokens──▶ PiShip
@@ -226,6 +227,102 @@ sandbox:
 | Sends the inference runtime credential only with `credential: runtime`, and only to the inference gateway origin; there is no separate sandbox credential yet ([limits](sandbox.md#credentials)) | Authenticating that credential by fronting the sandbox API with the company gateway, or exposing an endpoint that needs no client credential |
 | Checks declared capabilities and fails closed on a gap, an unavailable service, or a failed check | Honoring the declared capabilities, including network denial for `sandbox.network.mode: deny` |
 | Times out and cancels commands, then kills the remote process or deletes the claim | Stopping commands promptly and removing sandboxes that are deleted or expire |
+
+## Audit collector (`piship-audit-batch/v1`)
+
+An `http` audit sink POSTs metadata-only audit events to a collector you run, for example an ingest endpoint in front of your SIEM. PiShip ships no vendor-specific adapter; anything that accepts this contract works.
+
+```yaml
+variables: [ACMECODE_AUDIT_URL]
+audit:
+  enabled: true
+  sinks:
+    - { id: local, type: file, required: false }
+    - { id: company, type: http, url: "${ACMECODE_AUDIT_URL}", required: true }
+  buffer: { maxEvents: 1000, flushInterval: 2s }
+```
+
+**Request.** `POST <url>` with `content-type: application/json` and one batch as the body. The URL must be `https` (plain `http` only on loopback), must not embed credentials, and goes through the managed fetch (proxy, CA, and private-only rules above; list its host in `network.allowHosts`). PiShip sends **no authentication header**: expose the collector only on the company network or behind your own ingress. Redirects are not followed. Any `2xx` means the whole batch was stored; any other status, a network error, or no answer within 10 seconds is a failure. The response body is ignored.
+
+**Readiness probe.** When a required sink opens (every launch, and every `login`, `logout`, `update`, and `rollback` that records events), PiShip first sends an empty batch, `{"schema":"piship-audit-batch/v1","events":[]}`, and needs a `2xx`. Optional sinks are not probed.
+
+**Batching.** Each sink has its own queue of at most `audit.buffer.maxEvents` events. PiShip delivers every `audit.buffer.flushInterval`, as soon as a queue is half full, and when the session or command ends (within 5 seconds). One request carries at most 500 events, oldest first.
+
+**Retries and de-duplication.** A failed batch for a required sink stays queued and is sent again, with the same events, on the next flush; for an optional sink it is dropped and counted. PiShip cannot tell whether a failed request was stored (a timeout after your collector wrote the batch, for example), so an event can arrive more than once. Every event carries an `id`, a random UUID assigned once when it is emitted and never changed by a retry. To de-duplicate, store an event only if its `id` is not already stored (a unique key on `id` does this), and still answer `2xx` for a batch whose events are all or partly duplicates; otherwise PiShip keeps resending it. Retries of one event can span a whole session, so compare against every stored ID rather than a short window. Order events by `time`, not by arrival: a retried batch can arrive after newer events. Events written before `id` was added have none and cannot be de-duplicated. What PiShip does when a required collector keeps failing is the [audit failure policy](security.md#audit).
+
+**Privacy.** Events hold metadata: the event type, time, identity subject (never a token), session, distribution, and, where relevant, resource, decision, policy, rule, enforcement plane, and a short `detail` map. Prompt, response, command, and source content appear in `content` only for classes the distribution opts in to under `audit.capture`, and are redacted. Credential and token values are never sent: values of secret-named `detail` keys become `[REDACTED]`, and token shapes are scrubbed from every string.
+
+**Schema.** The body is valid against this JSON Schema (draft 2020-12). A receiver should accept properties it does not know: `piship-audit-batch/v1` may gain optional properties, as it gained `id`, without a version change.
+
+<!-- piship-audit-batch/v1 schema: tested by packages/audit/src/wire-schema.test.ts -->
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "piship-audit-batch/v1",
+  "type": "object",
+  "required": ["schema", "events"],
+  "properties": {
+    "schema": { "const": "piship-audit-batch/v1" },
+    "events": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["schema", "id", "event", "time", "user", "session", "distribution"],
+      "properties": {
+        "schema": { "const": "piship-audit/v1" },
+        "id": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "event": {
+          "enum": [
+            "session.start", "session.end",
+            "identity.login", "identity.refresh", "identity.logout",
+            "credential.acquire", "credential.refresh", "credential.revoke",
+            "model.request", "model.denied",
+            "resource.load", "resource.denied",
+            "provider.load", "provider.denied",
+            "tool.request", "tool.allowed", "tool.denied",
+            "mcp.server.start", "mcp.call", "mcp.denied",
+            "policy.loaded", "policy.violation",
+            "runtime.update", "runtime.rollback"
+          ]
+        },
+        "time": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+        "user": { "type": ["string", "null"], "maxLength": 512 },
+        "session": { "type": ["string", "null"], "maxLength": 512 },
+        "distribution": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resource": { "type": "string", "maxLength": 512 },
+        "decision": { "enum": ["allowed", "denied", "asked", "approved"] },
+        "policy": { "type": "string", "maxLength": 512 },
+        "rule": { "type": "string", "maxLength": 512 },
+        "enforcement": { "enum": ["control-plane", "sandbox", "audit-only"] },
+        "detail": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+          "additionalProperties": { "type": ["string", "number", "boolean", "null"], "maxLength": 256 }
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt": { "type": "string", "maxLength": 8192 },
+            "response": { "type": "string", "maxLength": 8192 },
+            "command": { "type": "string", "maxLength": 8192 },
+            "source": { "type": "string", "maxLength": 8192 }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`user` is the identity subject, or `null` without identity or outside a session's identity (update and rollback). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
 
 ## Network and TLS
 

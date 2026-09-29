@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import {
   chmod,
@@ -11,9 +11,12 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  AUDIT_BATCH_SCHEMA,
+  type AuditBatch,
   type AuditCapture,
   type AuditEmitter,
   type AuditEvent,
+  type AuditSink,
   isLoopbackHost,
   NO_CONTENT_CAPTURE,
   PiShipError,
@@ -105,7 +108,6 @@ export const AUDIT_ROTATION: AuditRotation = Object.freeze({
 /** Input accepted by `emit`; distribution and schema are filled by the log. */
 export type AuditEmitInput = Omit<AuditEventInput, "distribution">;
 
-export const AUDIT_BATCH_SCHEMA = "piship-audit-batch/v1" as const;
 export const AUDIT_LOG_FILE = join("logs", "audit.jsonl");
 /** A rotation older than this is treated as abandoned by a crashed process. */
 const ROTATION_LOCK_STALE_MS = 30_000;
@@ -137,12 +139,7 @@ const DISABLED_CONFIG: AuditConfig = {
   capture: NO_CONTENT_CAPTURE,
 };
 
-interface SinkWriter {
-  /** Deliver a batch; throws on failure. */
-  write(events: readonly AuditEvent[], signal: AbortSignal): Promise<void>;
-}
-
-class FileSinkWriter implements SinkWriter {
+class FileSinkWriter implements AuditSink {
   readonly path: string;
 
   constructor(
@@ -157,9 +154,9 @@ class FileSinkWriter implements SinkWriter {
     await this.append("");
   }
 
-  async write(events: readonly AuditEvent[]): Promise<void> {
+  async write(batch: AuditBatch): Promise<void> {
     await this.append(
-      events.map((event) => `${JSON.stringify(event)}\n`).join(""),
+      batch.events.map((event) => `${JSON.stringify(event)}\n`).join(""),
     );
   }
 
@@ -304,25 +301,18 @@ class FileSinkWriter implements SinkWriter {
   }
 }
 
-class HttpSinkWriter implements SinkWriter {
+class HttpSinkWriter implements AuditSink {
   constructor(
     readonly url: URL,
     readonly fetch: AuditFetch,
     readonly timeoutMs: number,
   ) {}
 
-  async write(
-    events: readonly AuditEvent[],
-    signal: AbortSignal,
-  ): Promise<void> {
-    await this.post(events, signal);
-  }
-
-  async post(events: readonly AuditEvent[], signal: AbortSignal) {
+  async write(batch: AuditBatch, signal: AbortSignal): Promise<void> {
     const response = await this.fetch(this.url.toString(), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ schema: AUDIT_BATCH_SCHEMA, events }),
+      body: JSON.stringify(batch),
       redirect: "manual",
       signal: AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)]),
     });
@@ -362,7 +352,7 @@ class Sink {
 
   constructor(
     readonly config: AuditSinkConfig,
-    readonly writer: SinkWriter | undefined,
+    readonly writer: AuditSink | undefined,
     readonly endpoint: string | undefined,
   ) {}
 
@@ -480,11 +470,15 @@ export class AuditLog implements AuditEmitter {
   emit(input: AuditEmitInput): void {
     try {
       if (this.#state === "disabled" || this.#closed) return;
-      const event = sanitizeEvent(
-        { ...input, distribution: this.#distribution },
-        this.#config.capture,
-        this.#now,
-      );
+      // One ID per emission, shared by every sink and kept across retries.
+      const event: AuditEvent = {
+        ...sanitizeEvent(
+          { ...input, distribution: this.#distribution },
+          this.#config.capture,
+          this.#now,
+        ),
+        id: randomUUID(),
+      };
       const limit = this.#config.buffer.maxEvents;
       let flushSoon = false;
       for (const sink of this.#sinks) {
@@ -579,7 +573,10 @@ export class AuditLog implements AuditEmitter {
       try {
         if (!sink.writer) throw new Error(sink.lastError ?? "sink is not open");
         if (this.#abort.signal.aborted) throw new Error("audit log closed");
-        await sink.writer.write(batch, this.#abort.signal);
+        await sink.writer.write(
+          { schema: AUDIT_BATCH_SCHEMA, events: batch },
+          this.#abort.signal,
+        );
       } catch (error) {
         sink.lastError = sink.describeError(error);
         if (sink.config.required) {
@@ -654,7 +651,10 @@ async function openSink(
   // Readiness probe: required HTTP sinks must accept an empty batch.
   if (config.required)
     try {
-      await writer.post([], new AbortController().signal);
+      await writer.write(
+        { schema: AUDIT_BATCH_SCHEMA, events: [] },
+        new AbortController().signal,
+      );
     } catch (error) {
       throw unavailable(config, sink.describeError(error));
     }
