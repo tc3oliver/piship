@@ -314,8 +314,9 @@ async function buildReleases(
  */
 async function sharedReleases(
   distribution: Distribution,
+  fixtures: string = inject("lifecycleFixtures"),
 ): Promise<ReleaseFixtures & { buildInventory?: string }> {
-  const directory = join(inject("lifecycleFixtures"), distribution.example);
+  const directory = join(fixtures, distribution.example);
   mkdirSync(directory, { recursive: true });
   const ready = join(directory, "ready.json");
   const failed = join(directory, "failed.txt");
@@ -362,6 +363,20 @@ export async function lifecycleReleases(): Promise<LifecycleReleases> {
 /** The personal example's shared release fixtures, built on first use. */
 export function personalReleases(): Promise<ReleaseFixtures> {
   return sharedReleases(PERSONAL);
+}
+
+/**
+ * Build both distributions' fixtures into `fixtures` before any scenario
+ * starts, through the same election the scenarios use, so they find them
+ * ready instead of building while other E2E files compete for the CPU.
+ */
+export async function prebuildLifecycleFixtures(
+  fixtures: string,
+): Promise<void> {
+  await Promise.all([
+    sharedReleases(DEMO, fixtures),
+    sharedReleases(PERSONAL, fixtures),
+  ]);
 }
 
 /**
