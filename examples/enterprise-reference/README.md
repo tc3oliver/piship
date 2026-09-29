@@ -230,3 +230,18 @@ node dist/acmecode/piship.mjs uninstall acmecode
 ```
 
 `login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
+
+### Tests
+
+`npm run test:reference` (after `npm run build`, with Docker running) runs the tests in [`tests/`](tests), each against a stack it starts and removes itself:
+
+| File | What it runs |
+| --- | --- |
+| [`distribution-flow.test.ts`](tests/distribution-flow.test.ts) | Build from the committed lock, install, sign Alice in on the real Keycloak authorization page (PKCE `S256`, loopback redirect), credential exchange at the broker (checked against LiteLLM's own key record), storage in the secret store, `models`, `--smoke-model` (streamed through LiteLLM to the mock upstream), renewal of a key the gateway rejected, `doctor`, a scan of the state directory, install home, and output for every secret, and `logout` (key and identity tokens revoked, store empty) |
+| [`user-switching.test.ts`](tests/user-switching.test.ts) | Alice to Bob without a logout: Alice's key and identity tokens revoked, Bob gets none of her key, entitlement, model selection, or history, and no trace of her secrets is left; a model Bob is not entitled to is refused by PiShip and by the gateway; Alice signs back in to a new key and her own history; and a distribution whose model list is narrower than the entitlement stays narrower |
+
+The tests use their own compose project (`piship-reference-distribution`) and loopback ports 38080 (Keycloak), 34000 (LiteLLM), 38090 (mock), 35432 (PostgreSQL), and 38070 (broker), so they run beside a stack on the default ports. Set `PISHIP_REFERENCE_PROJECT` or `KEYCLOAK_PORT`, `LITELLM_PORT`, `MOCK_UPSTREAM_PORT`, `POSTGRES_PORT`, `BROKER_PORT` to change them. The generated env file lives in a temporary directory and is removed with the containers. The tests never print a token, key, or password.
+
+Secret store: the platform store writes to the login keychain or keyring of whoever runs the tests, so, like the platform-store test, the tests use it only with `PISHIP_LIVE_SECRET_STORE=1` (the CI check jobs set it) and then never fall back to a file. Without it, they build a copy of the distribution with the restricted plaintext file store; the store in use is named in the title of the credential test and in the first line of the output. On macOS the platform-store run keeps the real `HOME`, because the default keychain is resolved through it; every other run isolates `HOME`.
+
+Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images already present and the file store: `distribution-flow.test.ts` 47 s and `user-switching.test.ts` 62 s, each including the stack start and stop. The platform-store run (`PISHIP_LIVE_SECRET_STORE=1`) has not been recorded: the Keychain refuses writes from a session without user interaction, and then the tests fail with `SECRET_STORE_UNAVAILABLE` instead of using a file.
