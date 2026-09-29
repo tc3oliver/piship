@@ -360,7 +360,7 @@ describe("network policy", () => {
 });
 
 // An HTTP/1.1 server in another process, as a broker is. It keeps
-// connections alive without a Keep-Alive hint, closes one after 300 ms idle
+// connections alive without a Keep-Alive hint, closes one after IDLE_MS idle
 // (a short server keep-alive timeout), and answers with the number of the
 // connection the request came on.
 const KEEP_ALIVE_SERVER = `
@@ -379,15 +379,16 @@ const server = require("node:net").createServer((socket) => {
       buffered = buffered.slice(end + 4 + length);
       socket.write("HTTP/1.1 200 OK\\r\\ncontent-length: " + id.length + "\\r\\nconnection: keep-alive\\r\\n\\r\\n" + id);
     }
-    idle = setTimeout(() => socket.destroy(), 300);
+    idle = setTimeout(() => socket.destroy(), Number(process.env.IDLE_MS));
   });
 });
 server.listen(0, "127.0.0.1", () => console.log(server.address().port));
 `;
 
-async function keepAliveServer(): Promise<string> {
+async function keepAliveServer(idleMs = 300): Promise<string> {
   const server = spawn(process.execPath, ["-e", KEEP_ALIVE_SERVER], {
     stdio: ["ignore", "pipe", "inherit"],
+    env: { ...process.env, IDLE_MS: String(idleMs) },
   });
   cleanup.push(() => {
     server.kill();
@@ -442,7 +443,8 @@ describe("managed fetch connections", () => {
   }, 30_000);
 
   it("keeps pooling connections for the process-wide dispatcher", async () => {
-    const url = await keepAliveServer();
+    // A long idle time: this test needs a live connection, not a closed one.
+    const url = await keepAliveServer(5000);
     const dispatcher = createDispatcher(DEFAULT_NETWORK_POLICY);
     cleanup.push(() => dispatcher.close());
     const post = async () =>
