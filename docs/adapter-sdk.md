@@ -2,7 +2,7 @@
 
 `@piship/adapter-sdk` is the supported surface for writing a company adapter: an identity adapter (`identity.mode: adapter`), a credential adapter (`credential.provider: adapter`), a custom sandbox backend (`sandbox.provider: custom`), or the audit collector behind the built-in `http` audit sink. An adapter imports nothing else from PiShip.
 
-Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are described below; the identity and sandbox kits arrive with their contracts.
+Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are described below (audit sink, credential, identity); the sandbox kit arrives with its contract.
 
 The SDK is thin on purpose. It re-exports public contracts, and its helpers either return their argument unchanged or wrap one public function. It is not a framework: an adapter is still a plain module whose default export PiShip's loader calls.
 
@@ -79,23 +79,6 @@ it("conforms to piship-audit-batch/v1", async () => {
   const report = await testAuditSink((env) =>
     createSink({ url: env.url, fetch: env.fetch, token: env.credential }),
   );
-
-`packages/adapter-sdk/examples/` holds one example of each kind, written against placeholder `*.example.com` services: `identity.mjs` (a device-style sign-in), `credential.mjs` (exchanges the identity for a runtime credential and revokes it with itself), `sandbox.mjs` (a remote execution service), and `audit-sink.mjs` (a collector that stores each event once). Each is a single file that imports only the SDK and `node:` built-ins, which a unit test checks. Replace the placeholder service, declare its host in `network.allowHosts` when the distribution is private-only, and copy the file into the distribution.
-
-## Credential conformance kit
-
-`testCredentialAdapter` from `@piship/adapter-conformance` runs a credential adapter against a fake credential broker that the kit owns, and reports each behavior of the credential contract as `passed`, `failed`, or `skipped`. The fake broker answers through the managed `fetch` in the adapter's context, so a run needs no network, no real broker, and nothing from PiShip but the SDK. The kit imports only `@piship/adapter-sdk` and `node:` built-ins.
-
-```ts
-import { testCredentialAdapter } from "@piship/adapter-conformance";
-import { expect, it } from "vitest";
-import { createAdapter } from "./credential-adapter.js";
-
-it("meets the PiShip credential contract", async () => {
-  // Build the adapter with a short request timeout for the kit.
-  const report = await testCredentialAdapter(createAdapter({ timeoutMs: 200 }), {
-    requestTimeoutMs: 200,
-  });
   expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
 });
 ```
@@ -118,6 +101,24 @@ Each result is `passed`, `failed` with a reason, or `skipped` with a reason. A r
 | duplicate handling | After the collector stored a batch but its answer was lost, the resent batch carries the same IDs in the same order and the same content, so a collector that stores each `id` once stores every event once. The sink accepts the collector's `2xx` for a batch it had already stored |
 
 `failed` means the sink breaks that statement; fix the sink, not the kit. Some defects fail two behaviors because one implies the other: a sink that swallows errors cannot fail closed, and a new `id` or `session` on each write makes a resent event differ from its first delivery. `skipped` means the check does not apply to this kind of sink, not that it passed. The kit's own tests (`packages/adapter-conformance/src/audit.test.ts`) run it against a reference plain sink and a reference buffering sink, which pass, and against sinks seeded with one defect each, which fail.
+
+## Credential conformance kit
+
+`testCredentialAdapter` from `@piship/adapter-conformance` runs a credential adapter against a fake credential broker that the kit owns, and reports each behavior of the credential contract as `passed`, `failed`, or `skipped`. The fake broker answers through the managed `fetch` in the adapter's context, so a run needs no network, no real broker, and nothing from PiShip but the SDK. The kit imports only `@piship/adapter-sdk` and `node:` built-ins.
+
+```ts
+import { testCredentialAdapter } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+import { createAdapter } from "./credential-adapter.js";
+
+it("meets the PiShip credential contract", async () => {
+  // Build the adapter with a short request timeout for the kit.
+  const report = await testCredentialAdapter(createAdapter({ timeoutMs: 200 }), {
+    requestTimeoutMs: 200,
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+```
 
 The first argument is what the adapter module default-exports, the factory `defineCredentialAdapter` returns. The kit calls it once per behavior with a fresh context and a fresh broker, so no state carries over between behaviors. The context holds placeholder endpoints under `*.conformance.invalid` (`brokerEndpoint`, `brokerRevokeEndpoint`, `baseUrl`, `issuer`); every request reaches the fake broker whatever its URL. An adapter that uses any other client than the context's `fetch` fails `acquire`.
 

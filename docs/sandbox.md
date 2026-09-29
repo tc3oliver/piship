@@ -217,7 +217,7 @@ The command prints only fixed tokens, never file contents or paths, and the repo
 | No location | `snapshot` | `unverifiable` | Warning; commands run |
 | A protected file or directory was writable, or the check did not run, exited non-zero, or timed out | — | `failed` | `SANDBOX_UNAVAILABLE`: the instance is retired, the pending command was never sent, and no later command runs in that session |
 
-The effective mode is never stronger than the declaration. A lower mode is a warning, not a failure: the commands still run on what the sandbox sees. Only the git-control failure closes, because the hooks the sandbox could write run outside any sandbox with the user's next git command. The check refutes a claim; it cannot prove a mount. An immediate result also fits a very fast sync, so the report says "both directions immediate", never "is a mount".
+The effective mode is never stronger than the declaration. A lower mode is a warning, not a failure: the commands still run on what the sandbox sees. Only the git-control failure closes, because the hooks the sandbox could write run outside any sandbox with the user's next git command. The check refutes a claim; it cannot prove a mount. An immediate result also fits a very fast sync, so the report says "both directions immediate", never "is a mount". The session shows one notice when the mode is lower than declared and records the result in the local metrics, which `doctor` shows while its own check is pending.
 
 A result counts until the first of: 30 minutes pass, the instance reports a new `epoch()`, or the instance is retired. The next command then checks again first. A command that happened to run in a replaced environment before that is not checked afterwards.
 
