@@ -7,12 +7,13 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
 import {
   deleteSecretsVerified,
@@ -20,7 +21,13 @@ import {
   metadataSecretRefs,
 } from "@piship/credentials";
 import { runtimeStateDirectory, type DistributionLock } from "../index.js";
-import { writeFileAtomic, type LifecycleOptions } from "../install/receipt.js";
+import {
+  syncDirectory,
+  syncTree,
+  writeFileAtomic,
+  type LifecycleOptions,
+} from "../install/receipt.js";
+import { abandoned } from "../install/temporaries.js";
 import {
   STATE_DATA_CLASSES,
   STATE_MARKER_FILE,
@@ -33,51 +40,165 @@ import { storageTransitionNotice } from "../storage-transition.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";
 const SNAPSHOT_RETENTION = 3;
+/** A snapshot being built: `.staging-p<pid>-<random>` beside the snapshots. */
+const SNAPSHOT_STAGING = /^\.staging-p(\d+)-/;
 
-/** Copy preferences and user policy (never credentials) before activation. */
+interface CompletedSnapshot {
+  readonly name: string;
+  /** Creation order; 0 for a snapshot written before sequences. */
+  readonly sequence: number;
+  readonly time: string;
+}
+
+/** The snapshot `snapshot.json` describes, or null when it is not one. */
+function readSnapshot(root: string, name: string): CompletedSnapshot | null {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(root, name, "snapshot.json"), "utf8"),
+    ) as { schema?: unknown; sequence?: unknown; time?: unknown };
+    if (manifest.schema !== SNAPSHOT_SCHEMA) return null;
+    const { sequence } = manifest;
+    if (
+      sequence !== undefined &&
+      !(Number.isSafeInteger(sequence) && (sequence as number) > 0)
+    )
+      return null;
+    return {
+      name,
+      sequence: (sequence as number | undefined) ?? 0,
+      time: typeof manifest.time === "string" ? manifest.time : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Completed snapshots in creation order, oldest first. The order is the
+ * snapshot's sequence, never the wall clock, so a clock set back or forward
+ * cannot make a new snapshot look older than the ones before it. Snapshots
+ * written before sequences come first, in their recorded time order.
+ * Directories without a valid `snapshot.json` are returned as incomplete.
+ */
+function listSnapshots(root: string): {
+  completed: CompletedSnapshot[];
+  incomplete: string[];
+} {
+  const completed: CompletedSnapshot[] = [];
+  const incomplete: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const snapshot = readSnapshot(root, entry.name);
+    if (snapshot) completed.push(snapshot);
+    else incomplete.push(entry.name);
+  }
+  completed.sort(
+    (a, b) =>
+      a.sequence - b.sequence ||
+      a.time.localeCompare(b.time) ||
+      a.name.localeCompare(b.name),
+  );
+  return { completed, incomplete };
+}
+
+/**
+ * Remove what interrupted snapshots left behind: staging directories whose
+ * process is gone (or that are too old to belong to a live one), and
+ * snapshot directories without a valid `snapshot.json`.
+ */
+function reclaimSnapshots(root: string): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const staging = SNAPSHOT_STAGING.exec(entry.name);
+    if (!entry.isDirectory() || !staging) continue;
+    const path = join(root, entry.name);
+    if (abandoned(Number(staging[1]), statSync(path).mtimeMs))
+      rmSync(path, { recursive: true, force: true });
+  }
+  for (const name of listSnapshots(root).incomplete)
+    rmSync(join(root, name), { recursive: true, force: true });
+}
+
+/**
+ * Copy preferences and user policy (never credentials) before activation.
+ * The snapshot is built in a staging directory, `snapshot.json` last, and
+ * published by one rename, so a snapshot directory is always complete. Only
+ * completed snapshots count toward the retention of the newest three, in
+ * sequence order; the wall-clock time is recorded for people only.
+ */
 export function snapshotState(
   stateDir: string,
   from: string,
   to: string,
   now: Date,
+  faults?: LifecycleOptions["faults"],
 ): string | null {
   if (!existsSync(stateDir)) return null;
   const root = join(stateDir, "migration", "snapshots");
-  const name = `${now.toISOString().replace(/[:.]/g, "-")}-${from}-to-${to}`;
-  const target = join(root, name);
-  const files: string[] = [];
-  for (const path of ["config/preferences.json", "config/policy.json"]) {
-    const source = join(stateDir, ...path.split("/"));
-    if (!existsSync(source)) continue;
-    mkdirSync(dirname(join(target, ...path.split("/"))), {
-      recursive: true,
-      mode: 0o700,
-    });
-    copyFileSync(source, join(target, ...path.split("/")));
-    files.push(path);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  reclaimSnapshots(root);
+  const sequence = (listSnapshots(root).completed.at(-1)?.sequence ?? 0) + 1;
+  const staging = mkdtempSync(join(root, `.staging-p${process.pid}-`));
+  let published = false;
+  try {
+    faults?.("snapshot-directory");
+    const files: string[] = [];
+    for (const path of ["config/preferences.json", "config/policy.json"]) {
+      const source = join(stateDir, ...path.split("/"));
+      if (!existsSync(source)) continue;
+      mkdirSync(dirname(join(staging, ...path.split("/"))), {
+        recursive: true,
+        mode: 0o700,
+      });
+      copyFileSync(source, join(staging, ...path.split("/")));
+      files.push(path);
+      faults?.("snapshot-file");
+    }
+    faults?.("snapshot-files");
+    writeFileSync(
+      join(staging, "snapshot.json"),
+      `${JSON.stringify(
+        {
+          schema: SNAPSHOT_SCHEMA,
+          sequence,
+          from,
+          to,
+          time: now.toISOString(),
+          files,
+          excluded: STATE_DATA_CLASSES.filter((item) => item.credential).map(
+            (item) => item.path,
+          ),
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600, flag: "wx" },
+    );
+    if (
+      readSnapshot(dirname(staging), basename(staging))?.sequence !== sequence
+    )
+      throw new Error(`The snapshot manifest in ${staging} did not read back`);
+    faults?.("snapshot-manifest");
+    syncTree(staging);
+    faults?.("snapshot-publish");
+    const target = join(
+      root,
+      `${String(sequence).padStart(8, "0")}-${from}-to-${to}`,
+    );
+    renameSync(staging, target);
+    published = true;
+    syncDirectory(root);
+    const { completed } = listSnapshots(root);
+    for (const old of completed.slice(0, -SNAPSHOT_RETENTION))
+      rmSync(join(root, old.name), { recursive: true, force: true });
+    return target;
+  } finally {
+    if (!published)
+      try {
+        rmSync(staging, { recursive: true, force: true });
+      } catch {
+        // Reclaimed by the next snapshot.
+      }
   }
-  mkdirSync(target, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(target, "snapshot.json"),
-    `${JSON.stringify(
-      {
-        schema: SNAPSHOT_SCHEMA,
-        from,
-        to,
-        time: now.toISOString(),
-        files,
-        excluded: STATE_DATA_CLASSES.filter((item) => item.credential).map(
-          (item) => item.path,
-        ),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  const snapshots = readdirSync(root).sort();
-  for (const old of snapshots.slice(0, -SNAPSHOT_RETENTION))
-    rmSync(join(root, old), { recursive: true, force: true });
-  return target;
 }
 
 export function writeStateMarker(

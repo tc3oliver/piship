@@ -71,6 +71,11 @@ export interface InstallReceipt {
 export type LifecyclePhase =
   | "staged"
   | "verified"
+  | "snapshot-directory"
+  | "snapshot-file"
+  | "snapshot-files"
+  | "snapshot-manifest"
+  | "snapshot-publish"
   | "installed"
   | "committed"
   | "cleaned";

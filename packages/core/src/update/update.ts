@@ -315,6 +315,7 @@ export async function updateDistribution(
         receipt.active,
         entry.version,
         now(),
+        options.faults,
       );
       const destination = join(apps, entry.version);
       rmSync(destination, { recursive: true, force: true });
