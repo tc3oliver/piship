@@ -408,7 +408,12 @@ async function serve(directory: string): Promise<{
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/`,
     requests,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    // close() alone waits for idle keep-alive connections from the updater.
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
   };
 }
 
