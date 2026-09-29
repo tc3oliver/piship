@@ -3,7 +3,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,6 +119,51 @@ describe("platform-store lease", () => {
     });
     release();
     expect(existsSync(lease)).toBe(false);
+  });
+
+  it("never breaks a lease another waiter took after breaking the same stale one", async () => {
+    // Fake PIDs: 1001 crashed holding the lease, 1002 is the other waiter.
+    const dead = 1001;
+    const other = 1002;
+    mkdirSync(lease);
+    writeFileSync(join(lease, "owner"), String(dead));
+    // This waiter read the dead owner; before it breaks the lease, the
+    // other waiter breaks it and takes a lease of its own.
+    let interleaved = false;
+    const waiting = acquireLease(lease, {
+      deadlineMs: 200,
+      pollMs: 10,
+      alive: (pid) => pid !== dead,
+      beforeBreak: () => {
+        if (interleaved) return;
+        interleaved = true;
+        rmSync(lease, { recursive: true, force: true });
+        mkdirSync(lease);
+        writeFileSync(join(lease, "owner"), String(other));
+      },
+    });
+    await expect(waiting).rejects.toThrow(`held by process ${other}`);
+    expect(interleaved).toBe(true);
+    expect(readFileSync(join(lease, "owner"), "utf8")).toBe(String(other));
+  });
+
+  it("breaks a lease left without an owner after the grace period only", async () => {
+    // Its creator died between creating the lease and writing its PID.
+    mkdirSync(lease);
+    await expect(
+      acquireLease(lease, { deadlineMs: 100, pollMs: 10 }),
+    ).rejects.toThrow("held by process unknown");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lease, old, old);
+    const release = await acquireLease(lease, {
+      deadlineMs: 1000,
+      pollMs: 10,
+      ownerlessGraceMs: 10_000,
+    });
+    expect(readFileSync(join(lease, "owner"), "utf8")).toBe(
+      String(process.pid),
+    );
+    release();
   });
 
   it("releases only a lease this process holds", async () => {
