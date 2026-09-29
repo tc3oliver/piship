@@ -1,7 +1,8 @@
 // Network group: TLS verification, the outbound policy, the proxy and
-// enterprise CA settings, and the network environment child processes
-// receive. Proxies are shown as scheme://host:port only; NO_PROXY and
-// withheld variables by name, never by value.
+// enterprise CA settings, and the network environment the agent's own
+// commands (the bash tool) receive; MCP stdio servers only get env.allow.
+// Proxies are shown as scheme://host:port only; NO_PROXY and withheld
+// variables by name, never by value.
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
@@ -10,7 +11,7 @@ export function networkGroup(data: DoctorData, out: DoctorSection): void {
   if (!access) {
     out.info("outbound", "any host (personal mode; no PiShip network policy)");
     out.info(
-      "child environment",
+      "agent commands",
       "not restricted (personal mode; child processes keep the shell's proxy and CA variables)",
     );
     return;
@@ -61,7 +62,7 @@ export function networkGroup(data: DoctorData, out: DoctorSection): void {
   );
   if (!network.childrenRestricted) {
     out.info(
-      "child environment",
+      "agent commands",
       "not restricted (personal mode; child processes keep the shell's proxy and CA variables)",
     );
     return;
@@ -69,7 +70,7 @@ export function networkGroup(data: DoctorData, out: DoctorSection): void {
   if (!approved) return;
   const names = Object.keys(approved.variables);
   out.ok(
-    "child environment",
+    "agent commands",
     `approved network variables only${names.length ? `: ${names.join(", ")}` : " (none)"}`,
   );
   for (const item of approved.withheld)

@@ -99,6 +99,23 @@ const PRINCIPAL_BINDING_SCHEMA = "piship-principal-binding/v1";
  * it cannot.
  */
 const IDENTITY_DISCARDED_SCHEMA = "piship-identity-discarded/v1";
+
+/**
+ * Leave a discarded marker in place of identity metadata whose token bundles
+ * could not all be deleted: it names the orphans so they stay tracked and is
+ * never restored as a session.
+ */
+export function writeIdentityDiscardedMarker(
+  path: string,
+  orphans: string[],
+  now: Date = new Date(),
+): void {
+  writeJsonAtomic(path, {
+    schema: IDENTITY_DISCARDED_SCHEMA,
+    orphans: [...orphans].sort(),
+    discarded_at: now.toISOString(),
+  });
+}
 /** How long a workload identity adapter's `login()` may take. */
 const WORKLOAD_LOGIN_TIMEOUT_MS = 30_000;
 /**
@@ -636,11 +653,11 @@ export class DistributionAccess {
       : refs.map((ref) => ({ ref, problem: "no secret store is configured" }));
     if (!failed.length) rmSync(this.paths.identity, { force: true });
     else
-      writeJsonAtomic(this.paths.identity, {
-        schema: IDENTITY_DISCARDED_SCHEMA,
-        orphans: failed.map((item) => item.ref).sort(),
-        discarded_at: new Date(this.#now()).toISOString(),
-      });
+      writeIdentityDiscardedMarker(
+        this.paths.identity,
+        failed.map((item) => item.ref),
+        new Date(this.#now()),
+      );
     return failed;
   }
 

@@ -451,7 +451,7 @@ describe("renderDoctor", () => {
       `  ✓ ${"mode".padEnd(20)} personal Pi-native (no identity; Pi auth in isolated state)`,
     ]);
     expect(group(output, "Network")).toContain(
-      `  - ${"child environment".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
+      `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
     );
     expect(group(output, "Audit")[0]).toBe(
       `  - ${"state".padEnd(20)} not configured (the distribution declares no audit)`,
@@ -494,7 +494,7 @@ describe("Network group", () => {
       `  ✓ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128)`,
       `  ✓ ${"NO_PROXY".padEnd(20)} set`,
       `  ✓ ${"enterprise CA".padEnd(20)} 2 additional bundle(s) declared`,
-      `  ✓ ${"child environment".padEnd(20)} approved network variables only: HTTPS_PROXY, https_proxy, NO_PROXY, no_proxy`,
+      `  ✓ ${"agent commands".padEnd(20)} approved network variables only: HTTPS_PROXY, https_proxy, NO_PROXY, no_proxy`,
       `  ! ${"withheld NODE_EXTRA_CA_CERTS".padEnd(20)} not passed to child processes: network.tls.additionalCA lists several bundles and a child accepts one file`,
       `  - ${"withheld SSL_CERT_FILE".padEnd(20)} not passed to child processes: not approved by the network policy`,
     ]);
@@ -528,7 +528,7 @@ describe("Network group", () => {
     expect(ignored.join("\n")).not.toContain("NO_PROXY");
   });
 
-  it("says that a personal distribution does not restrict the child environment", () => {
+  it("says that a personal distribution does not restrict the agent commands' environment", () => {
     const base = accessData();
     const lines = group(
       renderDoctor(
@@ -548,7 +548,7 @@ describe("Network group", () => {
       `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
     );
     expect(lines.at(-1)).toBe(
-      `  - ${"child environment".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
+      `  - ${"agent commands".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
     );
     expect(lines.join("\n")).not.toContain("withheld");
   });

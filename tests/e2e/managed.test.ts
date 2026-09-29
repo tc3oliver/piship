@@ -349,7 +349,7 @@ describe("managed distribution (local fixtures)", () => {
     );
     expect(doctor.stdout).toMatch(/Network\n(?:.*\n)*? {2}✓ proxy\s+/);
     expect(doctor.stdout).toMatch(
-      /✓ child environment\s+approved network variables only/,
+      /✓ agent commands\s+approved network variables only/,
     );
     expect(doctor.stdout).toMatch(
       /Workspace\n {2}- consistency\s+not reported/,

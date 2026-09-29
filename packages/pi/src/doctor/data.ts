@@ -100,12 +100,13 @@ export interface NetworkData {
   readonly caBundles: number;
   /**
    * The approved network environment derived from the policy: the proxy
-   * PiShip's own clients use and what child processes may receive. Absent
+   * PiShip's own clients use and what the agent's commands may receive
+   * (MCP stdio servers get only their own `env.allow`). Absent
    * when the access configuration could not be opened.
    */
   readonly approved?: ApprovedNetworkEnvironment;
   /**
-   * Whether child processes receive only `approved` (managed mode). In
+   * Whether the agent's commands receive only `approved` (managed mode). In
    * personal mode they keep the environment of the user's shell.
    */
   readonly childrenRestricted: boolean;

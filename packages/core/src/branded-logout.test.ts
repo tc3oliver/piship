@@ -278,6 +278,32 @@ describe("branded logout", () => {
   });
 
   it.runIf(POSIX_USER)(
+    "leaves a discarded marker, not usable metadata, when the identity tokens cannot be deleted without the runtime variables",
+    async () => {
+      const { ctx, path } = context();
+      await signIn(ctx);
+      for (const name of Object.keys(services.env())) delete process.env[name];
+      for (const name of readdirSync(path("secrets")))
+        chmodSync(path("secrets", name), 0o644);
+      chmodSync(path("secrets"), 0o500);
+      const error = await rejection(runLogout(ctx));
+      expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+      expect(
+        JSON.parse(readFileSync(path("identity", "session.json"), "utf8")),
+      ).toMatchObject({
+        schema: "piship-identity-discarded/v1",
+        orphans: expect.arrayContaining([`piship:${ID}:identity#1`]),
+      });
+      chmodSync(path("secrets"), 0o700);
+      for (const name of readdirSync(path("secrets")))
+        chmodSync(path("secrets", name), 0o600);
+      await runLogout(ctx);
+      expect(readdirSync(path("secrets"))).toEqual([]);
+      expect(existsSync(path("identity", "session.json"))).toBe(false);
+    },
+  );
+
+  it.runIf(POSIX_USER)(
     "fails and keeps every secret tracked while the store is locked",
     async () => {
       const { ctx, out, path } = context();

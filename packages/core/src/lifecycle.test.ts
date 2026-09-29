@@ -1571,7 +1571,6 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(await purgeDistributionState(ID)).toEqual({
       state: stateDir(),
       deletedSecrets: [],
-      problems: [],
     });
     expect(existsSync(stateDir())).toBe(false);
   });
@@ -1635,7 +1634,6 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(result).toEqual({
       state,
       deletedSecrets: deleted,
-      problems: [],
     });
     expect(existsSync(state)).toBe(false);
   });

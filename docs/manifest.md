@@ -288,7 +288,7 @@ Branded commands of installed distributions add `update [--channel <name>] [--fr
 | Inference | Provider, activation, and the allowed and default models. |
 | Gateway | The managed endpoint's origin and whether its model list answers. |
 | Secret Store | The store PiShip keeps secrets in; the plaintext file store is a warning. |
-| Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment child processes receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode the child environment is not restricted. |
+| Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment the agent's commands (the `bash` tool) receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode it is not restricted. MCP stdio servers get only their own `env.allow`. |
 | Release | Whether the running payload is a verified release artifact, a payload directory, or a build directory. |
 
 Every line is sanitized before it is printed: URL credentials, queries, and fragments are removed, and known secret values and token shapes are redacted, whatever an error message holds.

@@ -19,7 +19,7 @@ interface IdentityProvider {
 
 | `identity.mode` | Behavior |
 | --- | --- |
-| `none` | No enterprise identity. Personal only |
+| `none` | No enterprise identity, so no principal: credentials and state are bound to nobody and are not compared with anyone at launch. Personal only |
 | `oidc` | Built-in OIDC Authorization Code + PKCE |
 | `adapter` | A packaged module that default-exports a factory `(context) => IdentityProvider`, where `context` has `distributionId`, the managed `fetch`, and resolved `endpoints`. The adapter is locked and integrity-checked like other resources |
 

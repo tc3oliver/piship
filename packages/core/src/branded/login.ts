@@ -24,6 +24,7 @@ import {
   type DistributionAccess,
   accessStatePaths,
   networkPolicyFor,
+  writeIdentityDiscardedMarker,
 } from "../access/index.js";
 import {
   type BrandedContext,
@@ -221,7 +222,14 @@ async function logoutLocally(
       event: "identity.logout",
       detail: { revocation: tokens ? "failed" : "unsupported" },
     });
+    // What could not be deleted stays tracked in a discarded marker, which
+    // is never restored as a session, instead of as usable metadata.
     if (!failed.length) rmSync(paths.identity, { force: true });
+    else
+      writeIdentityDiscardedMarker(
+        paths.identity,
+        failed.map((item) => item.ref),
+      );
   }
   return problems;
 }

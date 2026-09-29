@@ -158,7 +158,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
     expect(doctor.stdout).toMatch(/- outbound\s+any host \(personal mode/);
     expect(doctor.stdout).toMatch(
-      /- child environment\s+not restricted \(personal mode/,
+      /- agent commands\s+not restricted \(personal mode/,
     );
     expect(doctor.stdout).toMatch(/Secret Store\n {2}- backend\s+not used/);
     expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
