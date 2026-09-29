@@ -7,7 +7,7 @@ import {
   OpenAICompatibleInferenceProvider,
 } from "@piship/inference";
 import { isCredentialRejection, isModelDenial } from "@piship/pi";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   type Installed,
   installDistribution,
@@ -81,6 +81,10 @@ const CATALOG: CatalogEntry[] = [
 
 let stack: ReferenceStack;
 let acme: Installed | undefined;
+// Set by a test that sends an upstream 401, with a key to poll with: every
+// test sharing this stack waits for the 5 s cooldown to end, even when the
+// test that caused it failed before its own wait.
+let cooling: string | undefined;
 const fileStarted = performance.now();
 
 /** The reference distribution's view of this stack. */
@@ -140,6 +144,12 @@ afterAll(async () => {
   }
 }, 120_000);
 
+afterEach(async () => {
+  // A failed test may leave queued mock faults or a cooled-down deployment.
+  await clearFaults();
+  if (cooling !== undefined) await untilServed(cooling);
+}, 60_000);
+
 const installed = () => {
   if (!acme) throw new Error("the distribution is not installed");
   return acme;
@@ -195,6 +205,7 @@ const clearFaults = () =>
 
 /** Wait until the model's deployment serves requests again after a cooldown. */
 function untilServed(key: string, model = "acme/coder") {
+  cooling = undefined;
   return poll(
     `${model} to leave its cooldown`,
     async () => {
@@ -439,6 +450,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       console.info(`failed renewal, as the user sees it:\n${refused.stderr}`);
       // The broker's transport failure keeps the managed fetch's code in
       // parentheses: it names the gateway although the broker is down.
+      // Pins current behavior, expected to change when the mapping is fixed.
       expect(refused.stderr).toContain(
         "CREDENTIAL_REVOKED: The runtime credential was rejected and could not be renewed: The credential broker is unreachable (GATEWAY_UNREACHABLE)\nAction: Try again later; if it keeps failing, run the branded login command",
       );
@@ -628,6 +640,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
   describe("upstream failures through LiteLLM", () => {
     it("passes an upstream 401 on without a retry and cools the deployment down for 5 s", async () => {
       const bob = await stack.acquire("bob");
+      cooling = bob.key;
       const { value: refused, upstream } = await upstreamDuring(() =>
         chat(bob.key, "hello [mock:status=401]"),
       );
@@ -641,6 +654,8 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       });
       expect(upstream).toHaveLength(1);
       // PiShip reads the provider's 401 as its own credential being rejected.
+      // Pins current behavior, expected to change when the mapping is fixed:
+      // the provider's 401 is not the user's.
       expect(classifyGatewayStatus(refused.status, refused.headers)?.code).toBe(
         "CREDENTIAL_REVOKED",
       );
@@ -730,12 +745,18 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
           status,
         ]);
         expect(refused.headers["retry-after"]).toBeUndefined();
+        // Pins current behavior, expected to change when the mapping is fixed:
+        // the upstream's retry time is only in llm_provider-retry-after, so
+        // PiShip's mapping below has no retryAfterMs for a 429.
         if (status === 429)
           expect(refused.headers["llm_provider-retry-after"]).toBe("1");
         console.info(
           `upstream ${status}: LiteLLM answered after ${elapsed} ms`,
         );
 
+        // Pins current behavior, expected to change when the mapping is fixed:
+        // an upstream 403 (permission_error) reads as MODEL_DENIED, and a 429
+        // has no retry time.
         const failure = classifyGatewayStatus(refused.status, refused.headers);
         expect({
           code: failure?.code,
@@ -779,12 +800,10 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
   });
 
   describe("in a session: Pi's request through the gateway, read by PiShip", () => {
-    afterAll(async () => {
-      await clearFaults();
-    });
-
     it("an upstream 401 is taken as a rejected runtime credential, which the next start replaces", async () => {
       const before = credentialMetadata().credential_id;
+      const bob = await stack.acquire("bob");
+      cooling = bob.key;
       await queueFaults({ status: 401, count: 1 });
       const { value: result, upstream } = await upstreamDuring(() =>
         smokeModel(),
@@ -803,10 +822,12 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         '"type":"authentication_error"',
       );
       expect(upstream.map((record) => record.status)).toEqual([401]);
+      // Pins current behavior, expected to change when the mapping is fixed: an
+      // upstream 401 (type authentication_error) is not the user's credential,
+      // which should be neither marked rejected nor replaced.
       expect(isCredentialRejection(assistantMessage(result))).toBe(true);
       expect(credentialMetadata().rejected_at).toEqual(expect.any(String));
 
-      const bob = await stack.acquire("bob");
       await untilServed(bob.key);
       const next = await installed().smoke();
       expect(next.access.credential.credentialId).not.toBe(before);
@@ -829,8 +850,12 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       expect(result.modelRequest?.error).toContain('"type":"permission_error"');
       expect(upstream.map((record) => record.status)).toEqual([403, 403, 403]);
       expect(isCredentialRejection(assistantMessage(result))).toBe(false);
+      // Pins current behavior, expected to change when the mapping is fixed: an
+      // upstream 403 (permission_error) is not the gateway's model denial
+      // (key_model_access_denied), yet it re-reads the entitlement.
       expect(isModelDenial(assistantMessage(result))).toBe(true);
-      // The entitlement re-read is a renewal through the refresh path.
+      // The entitlement re-read is a renewal through the refresh path: it
+      // mints a new credential.
       expect(credentialMetadata().credential_id).not.toBe(before);
     });
 
