@@ -13,7 +13,7 @@ interface IdentityProvider {
 }
 ```
 
-`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL.
+`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `@piship/identity` exports `WorkloadIdentityProvider` and `isWorkloadIdentityProvider` for it.
 
 ## Modes
 
@@ -45,6 +45,51 @@ The signed-in user is the normalized principal `(iss, sub)`: the issuer and the 
 - A refresh, from the built-in provider or an identity adapter, must return the same principal; anything else is `IDENTITY_INVALID`, whatever the provider returned.
 - The runtime credential, its entitlement, and the model selection belong to the principal. Signing in as another principal clears them first; see [user switching](security.md#user-switching).
 - `identity/principal.json` records the principal that owns the state. `logout` keeps it, so a different user signing in after a logout is still recognized as a change of user.
+
+## Workload identity (headless runs)
+
+A managed distribution can run without a person: in CI, scheduled automation, a headless RPC service, or a managed worker. The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
+
+```js
+// resources/adapters/workload-identity.mjs, declared as
+//   identity: { mode: adapter, adapter: ./adapters/workload-identity.mjs }
+import { readFileSync } from "node:fs";
+
+export default (context) => ({
+  kind: "acme-workload",
+  interactive: false,
+  async login() {
+    // Read the token the platform provides: a projected service account
+    // token, a CI job token, or a token exchange through context.fetch.
+    const document = JSON.parse(
+      readFileSync(process.env.ACME_WORKLOAD_IDENTITY_PATH, "utf8"),
+    );
+    return {
+      issuer: document.issuer,
+      subject: document.subject,
+      accessToken: document.token,
+      expiresAt: document.expiresAt,
+    };
+  },
+});
+```
+
+What a workload adapter must implement:
+
+- `interactive: false`. Anything other than `true`, `false`, or absent is refused with `CONFIG_INVALID`; absent or `true` is the interactive path described above, unchanged.
+- `login(ctx)`, which returns a session without a person: `issuer` and `subject` (the principal), the `accessToken` the broker accepts as the bearer (or whatever the credential adapter needs), and `expiresAt` when the token expires. It must never call `ctx.openUrl`: the one it receives fails the run with `IDENTITY_INVALID`. A session that is already expired fails with `IDENTITY_EXPIRED`.
+- Network requests only through `context.fetch`, the managed fetch, so the distribution's TLS, proxy, CA, and private-only rules apply ([security](security.md#network-and-tls)).
+- Its token source outside credential-named environment variables. In a managed distribution PiShip removes variables such as `*_TOKEN`, `*_SECRET`, `*_API_KEY`, and provider prefixes before any adapter loads, so read a token file, a platform endpoint, or a non-secret variable that names where the token is (for example `ACME_WORKLOAD_IDENTITY_PATH`).
+- `refresh` and `logout` are not used for a workload identity: PiShip calls `login` again instead.
+
+How PiShip uses it:
+
+- Every launch, `doctor`, and `login` obtains the session from `login()`; no prior `login` and no stored session are needed. The session is held in memory for the process and never stored: no `identity/session.json` and no identity secret in the secret store. `login` works too (it replaces the runtime credential) and needs no browser.
+- The session is obtained again when it expires within 60 seconds, and once when the broker rejects its token (HTTP 401). A new session inside one process must name the same principal, or the run fails with `IDENTITY_INVALID`; if the adapter keeps returning a rejected token, the run fails with `IDENTITY_EXPIRED`.
+- The workload principal follows the same rules as a person ([principal](#principal), [user switching](security.md#user-switching)). The runtime credential and entitlement are bound to it, the principal binding records it, and when a later run's workload identity is another principal, the previous principal's credential is revoked where supported and deleted, its model selection cleared, and a stored identity session of another principal deleted (confirmed) before anything is used. A deletion that cannot be confirmed fails the run closed.
+- `identity.login` (and `identity.refresh` for a renewed session) is audited with `workload: true`.
+
+The runtime credential still comes from `credential.provider: http-broker`, with the workload access token as the bearer, or from a credential adapter. It is stored in the configured secret store ([headless storage](credentials.md#headless-runs)).
 
 ## Errors
 

@@ -104,6 +104,21 @@ The macOS, Windows, and Linux Secret Service stores limit the size of one item (
 
 `storage.provider: system` selects the store for the current platform and never falls back to a file. A failing store raises `SECRET_STORE_UNAVAILABLE` with guidance to unlock or install the platform store or opt in to the file fallback. Managed manifests must set `acknowledgePlaintext: true` for the file store.
 
+### Headless runs
+
+A [workload identity](identity.md#workload-identity-headless-runs) is never stored, but the runtime credential is, in the configured store, so that later runs reuse it until it needs renewal. Which store works depends on the runner:
+
+| Runner | `storage.provider: system` | `storage.provider: file` with `acknowledgePlaintext: true` |
+| --- | --- | --- |
+| macOS | Works when the job can use an unlocked keychain; a job without a login session is not qualified | Works |
+| Windows | Works when the job runs with a user profile; not qualified for service accounts | Works |
+| Linux with an unlocked Secret Service (a desktop session, or `gnome-keyring-daemon` started in the job) | Works | Works |
+| Linux without a Secret Service (most containers and CI runners) | Fails closed with `SECRET_STORE_UNAVAILABLE` | Works: plaintext at rest under `<state>/secrets/`, 0600, deleted on renewal and `logout` |
+
+The headless E2E uses the file store on every target.
+
+There is no memory-only option yet: a headless Linux runner without a Secret Service must accept the plaintext file store or fail. Keep its state directory on storage private to the job and discard it with the job, prefer short-lived broker credentials, and run `logout` at the end of the job so the credential is revoked where the broker supports it.
+
 ## Lifecycle
 
 `CredentialManager` keeps one runtime credential per distribution:

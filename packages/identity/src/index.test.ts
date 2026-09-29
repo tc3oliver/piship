@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSamePrincipal,
   identityMetadata,
+  isWorkloadIdentityProvider,
   normalizedIdentityProvider,
   normalizeIdentitySession,
 } from "./index.js";
@@ -122,5 +123,46 @@ describe("adapter identity refresh", () => {
       email: "renamed@idp.example",
     });
     expect(assertSamePrincipal(session, session)).toBe(session);
+  });
+});
+
+describe("workload identity adapters", () => {
+  const login = async () => ({
+    subject: "svc-build-1",
+    issuer: "https://workload.example",
+  });
+
+  it("keeps a non-interactive declaration and treats anything else as interactive", () => {
+    const workload = normalizedIdentityProvider({
+      kind: "workload",
+      interactive: false,
+      login,
+    } as IdentityProvider);
+    expect(isWorkloadIdentityProvider(workload)).toBe(true);
+    for (const interactive of [true, undefined]) {
+      const provider = normalizedIdentityProvider({
+        kind: "adapter",
+        ...(interactive === undefined ? {} : { interactive }),
+        login,
+      } as IdentityProvider);
+      expect(isWorkloadIdentityProvider(provider)).toBe(false);
+      expect("interactive" in provider).toBe(false);
+    }
+  });
+
+  it("refuses an interactive declaration that is not a boolean", () => {
+    for (const interactive of ["false", 0, null])
+      expect(() =>
+        normalizedIdentityProvider({
+          kind: "workload",
+          interactive,
+          login,
+        } as unknown as IdentityProvider),
+      ).toThrow(
+        expect.objectContaining({
+          code: "CONFIG_INVALID",
+          message: expect.stringContaining("interactive declaration"),
+        }),
+      );
   });
 });

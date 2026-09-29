@@ -42,6 +42,7 @@ import {
   type IdentityMetadata,
   identityMetadata,
   identitySecret,
+  isWorkloadIdentityProvider,
   normalizedIdentityProvider,
   assertSamePrincipal,
   OidcPkceIdentityProvider,
@@ -85,6 +86,22 @@ function rejectedUserSecret(command: string): PiShipError {
 const PRINCIPAL_BINDING_SCHEMA = "piship-principal-binding/v1";
 
 /**
+ * The `openUrl` a workload identity adapter receives. A workload never has a
+ * person to send to a browser, so asking for one fails the sign-in.
+ */
+function refuseBrowser(): never {
+  throw new PiShipError(
+    "IDENTITY_INVALID",
+    "A non-interactive identity adapter tried to open a browser",
+    {
+      component: "identity",
+      userAction:
+        "A workload identity adapter must obtain its session without a person; fix the adapter or declare it interactive",
+    },
+  );
+}
+
+/**
  * Orchestrates Identity → Credential → Inference for one distribution without
  * merging them: each provider is constructed separately from the manifest and
  * connected only through IdentitySession, CredentialRef, and ModelDefinition.
@@ -98,6 +115,10 @@ export class DistributionAccess {
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
   #secret: SecretValue | null = null;
+  /** A workload identity session, held for this process only and never stored. */
+  #workload: IdentitySession | null = null;
+  /** Notices from obtaining a workload identity, reported by the next activation. */
+  #identityNotices: string[] = [];
   /** The last acquire or refresh the credential manager reported. */
   #credentialChange: CredentialEvent["event"] | undefined;
   /** Whether this instance already recorded gateway reachability. */
@@ -534,7 +555,81 @@ export class DistributionAccess {
   }): Promise<IdentitySession | null> {
     const provider = await this.identityProvider();
     if (!provider) return null;
+    if (isWorkloadIdentityProvider(provider))
+      return this.#timedIdentity(() => this.#workloadIdentity(provider, null));
     return this.#timedIdentity(() => this.#checkIdentity(provider, options));
+  }
+
+  #expiring(session: IdentitySession): boolean {
+    return (
+      !!session.expiresAt && session.expiresAt.getTime() - this.#now() < 60_000
+    );
+  }
+
+  /**
+   * Obtain a session from a workload identity adapter. It receives an
+   * `openUrl` that fails, so no browser is ever involved, and a session that
+   * is already expired is refused.
+   */
+  async #obtainWorkload(
+    provider: IdentityProvider,
+    signal?: AbortSignal,
+  ): Promise<IdentitySession> {
+    const session = await provider.login({
+      openUrl: refuseBrowser,
+      ...(signal ? { signal } : {}),
+    });
+    if (session.expiresAt && session.expiresAt.getTime() <= this.#now())
+      throw new PiShipError(
+        "IDENTITY_EXPIRED",
+        "The workload identity adapter returned an expired session",
+        {
+          component: "identity",
+          userAction:
+            "Check that the workload's identity source (a token file or platform endpoint) is current",
+        },
+      );
+    return session;
+  }
+
+  /**
+   * The workload identity session: obtained from the adapter without a
+   * person or a stored login, held in memory for this process, and never
+   * stored. It is obtained again when it expires within 60 s or after the
+   * broker rejected it (`renew: "rejected"`), and must then name the same
+   * principal: a process never switches principals. The first session of a
+   * process may name another principal than the previous run; a stored
+   * identity session of that other principal is cleared (verified) before
+   * anything else, and activation then clears its model selection and the
+   * credential manager discards its credential.
+   */
+  async #workloadIdentity(
+    provider: IdentityProvider,
+    renew: "rejected" | null,
+  ): Promise<IdentitySession> {
+    const current = this.#workload;
+    if (current && !renew && !this.#expiring(current)) return current;
+    const session = await this.#obtainWorkload(provider);
+    if (current) assertSamePrincipal(session, current);
+    else {
+      const stored = this.readIdentityMetadata();
+      if (stored && !samePrincipal(stored, principalKey(session)))
+        await this.#clearPreviousIdentity(
+          stored,
+          provider,
+          this.#identityNotices,
+        );
+    }
+    this.#workload = session;
+    const expiresAt = session.expiresAt?.toISOString() ?? null;
+    if (current)
+      this.#emit("identity.refresh", {
+        reason: renew ?? "expiring",
+        expiresAt,
+        workload: true,
+      });
+    else this.#emit("identity.login", { expiresAt, workload: true });
+    return session;
   }
 
   async #checkIdentity(
@@ -676,6 +771,9 @@ export class DistributionAccess {
    * the login before the new identity is stored; a failed remote revocation
    * does not: it is a notice, an audited `credential.revoke`, and a pending
    * revocation record.
+   *
+   * A workload identity adapter never gets `ctx.openUrl`, and its session is
+   * held for this process only, never stored; everything else is the same.
    */
   async login(ctx: {
     openUrl: LoginContext["openUrl"];
@@ -687,13 +785,16 @@ export class DistributionAccess {
     notices: string[];
   }> {
     const provider = await this.identityProvider();
+    const workload = !!provider && isWorkloadIdentityProvider(provider);
     let identity: IdentitySession | null = null;
     if (provider)
       identity = await this.#timedIdentity(() =>
-        provider.login({
-          openUrl: ctx.openUrl,
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        }),
+        workload
+          ? this.#obtainWorkload(provider, ctx.signal)
+          : provider.login({
+              openUrl: ctx.openUrl,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            }),
       );
     const principal = identity ? principalKey(identity) : null;
     const manager = await this.credentialManager();
@@ -735,10 +836,12 @@ export class DistributionAccess {
       const stored = this.readIdentityMetadata();
       if (stored && !samePrincipal(stored, principal))
         await this.#clearPreviousIdentity(stored, provider, notices);
-      await this.#storeIdentity(identity);
+      if (workload) this.#workload = identity;
+      else await this.#storeIdentity(identity);
       this.#emit("identity.login", {
         expiresAt: identity.expiresAt?.toISOString() ?? null,
         ...(principalChange ? { principalChange: true } : {}),
+        ...(workload ? { workload: true } : {}),
       });
     }
     this.options.onPhase?.("identity-stored");
@@ -769,6 +872,7 @@ export class DistributionAccess {
       ),
     );
     this.#secret = null;
+    this.#workload = null;
     const provider = await this.identityProvider().catch(() => null);
     const metadata = this.readIdentityMetadata();
     if (metadata && this.store) {
@@ -820,6 +924,7 @@ export class DistributionAccess {
     const identity = await this.currentIdentity({
       required: this.#identityRequired(manager),
     });
+    notices.push(...this.#identityNotices.splice(0));
     // State another principal left behind (from an interrupted switch or an
     // older release) loses its model selection before anything uses it.
     if (identity && this.#bindPrincipal(principalKey(identity)).cleared) {
@@ -1012,6 +1117,10 @@ export class DistributionAccess {
           component: "identity",
           userAction: `Run ${this.options.app.command} login`,
         },
+      );
+    if (isWorkloadIdentityProvider(provider))
+      return this.#timedIdentity(() =>
+        this.#workloadIdentity(provider, "rejected"),
       );
     return this.#timedIdentity(() =>
       this.#refreshShared(provider, identity, "rejected"),

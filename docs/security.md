@@ -184,6 +184,27 @@ Limits:
 - Audit events attribute events to the identity subject; the issuer is not part of the attribution yet.
 - The principal binding and pending revocations are ordinary files under the state directory: anyone who can modify the state directory can defeat them, as with the rest of the state.
 
+## Headless and workload runs
+
+A managed distribution with a [workload identity](identity.md#workload-identity-headless-runs) runs with no person, no browser, and no stored login. The headless E2E (`tests/e2e/headless.test.ts`, local fixtures) runs such a distribution with no browser opener allowed, no authorization page and no identity provider request, personal credentials planted around it, key rotation, expiry, and a change of workload principal.
+
+What a headless run proves:
+
+- **No browser.** The adapter's `login` receives an `openUrl` that fails the run; PiShip never prints an authorization URL or starts a browser opener for it, and no process approves an authorization page.
+- **No ambient personal credential.** Provider keys and other credential-named variables are removed from the environment before any adapter loads ([managed runtime isolation](#managed-runtime-isolation)); Pi's `auth.json` under `~/.pi` or another distribution's state is never read; and a missing or failing workload identity fails the run closed, with no fallback to Pi-native or personal credentials.
+- **A scoped credential.** The gateway sees only the runtime credential the broker issued to the workload principal, bound to `(iss, sub)` like a person's ([user switching](#user-switching)); the broker sees only the workload token.
+- **Expiry and rotation.** A credential is renewed within `refresh.beforeExpiry` with the workload's current token, replaced generations are deleted, and a credential past its expiry that cannot be renewed fails the run (`CREDENTIAL_EXPIRED`, or `IDENTITY_EXPIRED` when the broker rejects the workload token and the adapter has no valid one).
+- **Managed policy.** The model allowlist, entitlement, network policy (including for the adapter's own requests through `context.fetch`), and every other managed control apply unchanged.
+- **Principal changes.** A run whose workload principal differs from the previous run's never uses the previous principal's credential, entitlement, or model selection, and leaves none of its secrets behind.
+
+What it cannot prove:
+
+- **Who the workload is.** PiShip does not validate a workload token (it checks an ID token only in the built-in OIDC flow): the principal is what the adapter returns, and the adapter is distribution code running with the process's privileges. The broker is the authority that must validate the workload token and bind the credential it issues to that token's subject; a broker that trusts the principal without checking the token grants whatever the adapter claims.
+- **That the token source is protected.** A token file, platform endpoint, or metadata service is the workload platform's responsibility; anything that can read it can act as the workload.
+- **That nothing is at rest.** The workload session is held in memory only, but the runtime credential is stored in the configured secret store. A Linux runner without a Secret Service needs the plaintext file store, and there is no memory-only option yet ([headless storage](credentials.md#headless-runs)).
+- **Revocation at the end of a job.** A credential stays valid at the gateway until it expires unless the job runs `logout` (which revokes it where the broker supports it) or the broker issues short-lived credentials.
+- **Confinement of the adapter.** Like any adapter or extension, the workload adapter is in-process code; PiShip cannot stop it from starting a browser or using other credentials on its own. Loading it is a code-trust decision.
+
 ## Guarantees and their limits
 
 Within the enforcement plane each control names, PiShip provides: deterministic loading of only declared and admitted resources; resource, provider, and project trust decisions; model allowlist enforcement in managed mode; MCP governance for declared servers; static version and integrity verification of the payload and releases; storage and process-scoped injection of the credentials PiShip manages; inspectable configuration and explainable policy decisions; metadata-first audit where enabled; activation checks for a required sandbox; and reproducible static builds.

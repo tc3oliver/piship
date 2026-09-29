@@ -9,6 +9,7 @@ You provide three services. Their URLs are `${NAME}` [runtime references](manife
 | Service | Manifest field | Called by | When |
 | --- | --- | --- | --- |
 | OIDC identity provider | `identity.oidc.issuer` | PiShip; the browser for the authorization page | `login`; launches that need a fresh identity token; `logout` |
+| Workload identity (headless, instead of OIDC) | `identity.adapter` with `interactive: false` | The adapter, in the PiShip process | Every launch, `doctor`, and `login` ([headless runs](#headless-and-workload-runs)) |
 | Credential broker: acquire | `credential.broker.endpoint` | PiShip | `login`; any launch or model request without a valid runtime credential |
 | Credential broker: revoke (optional) | `credential.broker.revokeEndpoint` | PiShip | `logout`; `login` (replaces the previous credential); update, rollback, or migration that must clear it |
 | LLM gateway: model list | `inference.baseUrl` + `/models` | PiShip | Launch with `inference.liveCatalog: true`; `doctor` |
@@ -80,6 +81,40 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 | Revocation | On `logout`, if discovery advertises `revocation_endpoint`: the refresh token, then the access token (RFC 7009 with `token_type_hint`). A failure is a warning; local state is still cleared |
 | Timeouts | 30 s per OIDC HTTP request; a timeout fails with retryable `GATEWAY_UNREACHABLE`. The browser sign-in waits up to 5 minutes |
 | Token endpoint failures | A 5xx (including a proxy's HTML error page) or a `server_error` / `temporarily_unavailable` error fails with retryable `GATEWAY_UNREACHABLE`, and a 429 with retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After`. `invalid_grant` is `IDENTITY_EXPIRED` ("run login"); other token errors are `IDENTITY_INVALID`. PiShip never retries a token request automatically, because a refresh token may rotate on use |
+
+## Headless and workload runs
+
+A managed distribution can run in CI, scheduled automation, a headless RPC service, or a managed worker, with no person, no browser, and no prior `login`. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
+
+```yaml
+identity:
+  mode: adapter
+  adapter: ./adapters/workload-identity.mjs   # interactive: false
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage: { provider: file, acknowledgePlaintext: true }   # headless Linux; see below
+  refresh: { beforeExpiry: 5m }
+```
+
+```text
+workload platform ──token (file, endpoint)──▶ identity adapter ──session (memory only)──▶ PiShip
+PiShip ──POST broker (Bearer workload access token)──▶ runtime credential
+Pi ──POST gateway (Bearer runtime credential)──▶ completions
+```
+
+| You provide | Detail |
+| --- | --- |
+| The workload token | Issued by your platform (a Kubernetes projected service account token, a CI job's OIDC token, a token exchange at your IdP). The adapter reads it; PiShip never stores it |
+| The identity adapter | `interactive: false` and a `login()` that returns `issuer`, `subject`, `accessToken`, and `expiresAt` without a person. It must not call `openUrl`, must use `context.fetch` for any request, and must not expect a token in a credential-named environment variable: managed mode removes those before adapters load |
+| Broker acceptance of the workload token | The broker validates the workload token as it validates a person's access token (issuer, audience, signature, expiry) and decides which models the workload gets. Idempotency, retries, and revocation are unchanged ([below](#credential-broker-http-broker)) |
+| A credential store the runner can use | `system` where the runner has an unlocked platform store; otherwise the file store with `acknowledgePlaintext: true` ([headless storage](credentials.md#headless-runs)) |
+
+What PiShip does on every run: it obtains the session from the adapter, binds the runtime credential to the workload principal `(iss, sub)`, reuses the stored credential while it is valid, renews it within `refresh.beforeExpiry` presenting the current workload token, obtains a new session when the old one expires within 60 s or the broker answers 401, and enforces the manifest's model allowlist, entitlement, and network policy exactly as for a person. A run whose workload principal differs from the previous run's gets nothing of it: the previous credential is revoked where supported and deleted, and its model selection cleared. Provider keys in the environment and any personal Pi sign-in (`~/.pi/agent/auth.json`, another distribution's state) are never used, and a missing or failing workload identity fails the run closed; there is no fallback.
+
+What a headless run can and cannot prove is in [security](security.md#headless-and-workload-runs).
 
 ## Credential broker (`http-broker`)
 
