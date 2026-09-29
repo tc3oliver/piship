@@ -487,8 +487,10 @@ export async function startLocalServices(options = {}) {
     },
     close() {
       return new Promise((resolve) => {
-        server.closeAllConnections();
+        // Stop accepting first: a connection opened between the two calls
+        // would otherwise keep close() waiting.
         server.close(() => resolve());
+        server.closeAllConnections();
       });
     },
   };
