@@ -129,6 +129,8 @@ export interface ActiveCredential {
 export interface RejectedCredential {
   readonly ref: string;
   readonly acquiredAt?: string | undefined;
+  /** The non-secret ID of one stored secret, where the credential has one. */
+  readonly credentialId?: string | undefined;
   readonly principal: PrincipalKey | null;
 }
 
@@ -354,14 +356,23 @@ export function metadataSecretRefs(
     Number.isInteger(generation) &&
     generation >= 0
   ) {
+    // The slot is named by the file's own schema or reference. A file that
+    // names neither (damaged, or from a future release) adds no generation
+    // references: guessing the runtime slot would delete a live credential.
+    const ref =
+      typeof value.credential_ref === "string" ? value.credential_ref : "";
     const prefix =
       value.schema === SANDBOX_CREDENTIAL_METADATA_SCHEMA ||
-      (typeof value.credential_ref === "string" &&
-        value.credential_ref.startsWith(sandbox))
+      ref.startsWith(sandbox)
         ? sandbox
-        : inference;
-    refs.add(`${prefix}${generation}`);
-    refs.add(`${prefix}${generation + 1}`);
+        : value.schema === CREDENTIAL_METADATA_SCHEMA ||
+            ref.startsWith(inference)
+          ? inference
+          : undefined;
+    if (prefix) {
+      refs.add(`${prefix}${generation}`);
+      refs.add(`${prefix}${generation + 1}`);
+    }
   }
   if (
     typeof value.secretRef === "string" &&
@@ -1321,6 +1332,8 @@ export class CredentialManager {
           "principal" in target &&
           ((target.acquiredAt !== undefined &&
             metadata.acquired_at !== target.acquiredAt) ||
+            (target.credentialId !== undefined &&
+              metadata.credential_id !== target.credentialId) ||
             !samePrincipal(metadata.principal ?? null, target.principal)))
       )
         return;

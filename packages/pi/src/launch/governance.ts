@@ -69,8 +69,9 @@ export function governanceOptions(
     ...(onSandboxCredentialEvent ? { onSandboxCredentialEvent } : {}),
     ...(known && sandbox.credential === "stored" && sandbox.provider
       ? {
-          sandboxCredential: (targets: readonly string[]) =>
-            openSandboxCredential({
+          sandboxCredential: async (targets: readonly string[]) => {
+            const signedIn = await access?.signedInGuard(principal);
+            return openSandboxCredential({
               distributionId: lock.app.id,
               command: lock.app.command,
               stateDir: ctx.stateDir,
@@ -82,11 +83,13 @@ export function governanceOptions(
                 : {}),
               ...(access?.store ? { secretStore: access.store } : {}),
               principal,
+              ...(signedIn ? { signedIn } : {}),
               targets,
               ...(onSandboxCredentialEvent
                 ? { onEvent: onSandboxCredentialEvent }
                 : {}),
-            }).access(),
+            }).access();
+          },
         }
       : {}),
     ...(known

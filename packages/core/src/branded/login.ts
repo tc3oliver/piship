@@ -216,19 +216,6 @@ async function logoutLocally(
     const problems = (await manager.logout({ distributionId: id })).map(
       (problem) => redact(problem),
     );
-    // The stored sandbox credential has no remote revocation to miss.
-    problems.push(
-      ...(
-        await new SandboxCredential({
-          distributionId: id,
-          command: ctx.metadata.app.command,
-          stateDir: ctx.stateDir,
-          secretStore: store,
-          principal: null,
-          onEvent,
-        }).clear()
-      ).map((problem) => `sandbox credential: ${problem}`),
-    );
     if (existsSync(paths.identity))
       await withFileLock(paths.identity, async () => {
         if (!existsSync(paths.identity)) return;
@@ -261,6 +248,21 @@ async function logoutLocally(
             failed.map((item) => item.ref),
           );
       });
+    // The stored sandbox credential has no remote revocation to miss. It goes
+    // after the identity, so a `sandbox login` that checked the signed-in
+    // user before the identity lock was taken is cleared here too.
+    problems.push(
+      ...(
+        await new SandboxCredential({
+          distributionId: id,
+          command: ctx.metadata.app.command,
+          stateDir: ctx.stateDir,
+          secretStore: store,
+          principal: null,
+          onEvent,
+        }).clear()
+      ).map((problem) => `sandbox credential: ${problem}`),
+    );
     return problems;
   });
 }

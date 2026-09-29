@@ -121,6 +121,7 @@ async function sandboxLogin(ctx: BrandedContext): Promise<void> {
   const events: AccessEvent[] = [];
   const onEvent = (event: AccessEvent) => events.push(event);
   const { principal, network, access } = await signedInPrincipal(ctx, onEvent);
+  const signedIn = await access?.signedInGuard(principal);
   const slot = new SandboxCredential({
     distributionId: ctx.metadata.app.id,
     command: ctx.metadata.app.command,
@@ -131,6 +132,7 @@ async function sandboxLogin(ctx: BrandedContext): Promise<void> {
       : {}),
     ...(access?.store ? { secretStore: access.store } : {}),
     principal,
+    ...(signedIn ? { signedIn } : {}),
     // Resolved after the managed environment was sanitized, as a launch does.
     targets: sandboxTargets(ctx),
     onEvent,

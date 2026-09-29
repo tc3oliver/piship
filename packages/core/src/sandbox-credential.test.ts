@@ -72,6 +72,8 @@ class SpyStore implements SecretStore {
   readonly kind = "memory";
   readonly description = "test store";
   failDeletes: RegExp | null = null;
+  /** Called before each deletion, to observe the state around it. */
+  onDelete: ((ref: string) => void) | null = null;
   readonly gets: string[] = [];
   constructor(readonly inner = new MemorySecretStore()) {}
   put(ref: string, value: SecretValue) {
@@ -84,6 +86,7 @@ class SpyStore implements SecretStore {
     return value;
   }
   async delete(ref: string) {
+    this.onDelete?.(ref);
     if (this.failDeletes?.test(ref)) throw new Error("the keyring is locked");
     return this.inner.delete(ref);
   }
@@ -764,10 +767,73 @@ describe("sandbox credential across user switches (fixtures)", () => {
     expect(await again.logout()).toEqual([]);
     expect(store.sandboxRefs()).toEqual([]);
     expect(existsSync(metadataFile())).toBe(false);
-    expect(accessEvents.at(-2)).toMatchObject({
+    // After the identity is signed out.
+    expect(accessEvents.at(-1)).toMatchObject({
       event: "credential.revoke",
       detail: { purpose: "sandbox", reason: "logout" },
     });
+  });
+
+  it("a session of a user who is no longer signed in deletes nothing of the new user's", async () => {
+    const alice = await login("alice-0001");
+    const issuer = alice.readIdentityMetadata()?.issuer ?? "";
+    const aliceKey = { issuer, subject: "alice-0001" };
+    const bob = await login("bob-0002");
+    const bobKey = { issuer, subject: "bob-0002" };
+    await slot(bobKey, { signedIn: await bob.signedInGuard(bobKey) }).save(
+      enter(SECRET_2),
+    );
+    // Alice's process still runs: her launch builds a sandbox backend now.
+    const stale = slot(aliceKey, {
+      signedIn: await alice.signedInGuard(aliceKey),
+    });
+    expect(await code(stale.access())).toBe("IDENTITY_REQUIRED");
+    expect(readMetadata().principal).toEqual(bobKey);
+    expect(store.sandboxRefs()).toEqual([`piship:${ID}:sandbox#1`]);
+    // Bob's own launch uses it.
+    const active = await slot(bobKey, {
+      signedIn: await bob.signedInGuard(bobKey),
+    }).access();
+    expect((await active.secret()).reveal()).toBe(SECRET_2);
+  });
+
+  it("sandbox login stores nothing for a user who signed out while it waited for the secret", async () => {
+    const alice = await login("alice-0001");
+    const issuer = alice.readIdentityMetadata()?.issuer ?? "";
+    const aliceKey = { issuer, subject: "alice-0001" };
+    const entering = slot(aliceKey, {
+      signedIn: await alice.signedInGuard(aliceKey),
+    });
+    await alice.logout();
+    expect(await code(entering.save(enter(SECRET)))).toBe("IDENTITY_REQUIRED");
+    expect(store.sandboxRefs()).toEqual([]);
+    expect(existsSync(metadataFile())).toBe(false);
+    // Nor after another user signed in meanwhile.
+    const again = await login("alice-0001");
+    const waiting = slot(aliceKey, {
+      signedIn: await again.signedInGuard(aliceKey),
+    });
+    await login("bob-0002");
+    expect(await code(waiting.save(enter(SECRET)))).toBe("IDENTITY_REQUIRED");
+    expect(store.sandboxRefs()).toEqual([]);
+  });
+
+  it("logout deletes the sandbox credential after the identity, so a login that checked first is cleared too", async () => {
+    const alice = await login("alice-0001");
+    const issuer = alice.readIdentityMetadata()?.issuer ?? "";
+    await slot({ issuer, subject: "alice-0001" }).save(enter(SECRET));
+    const identityFile = join(stateDir(), "identity", "session.json");
+    const identityWhenDeleted: boolean[] = [];
+    store.onDelete = (ref) => {
+      if (ref.includes(":sandbox#"))
+        identityWhenDeleted.push(existsSync(identityFile));
+    };
+    expect(await alice.logout()).toEqual([]);
+    // Every generation it may hold is deleted, and none while the identity
+    // is still stored.
+    expect(identityWhenDeleted.length).toBeGreaterThan(0);
+    expect(identityWhenDeleted).not.toContain(true);
+    expect(store.sandboxRefs()).toEqual([]);
   });
 
   it("logout reports a sandbox secret it cannot delete and keeps it tracked", async () => {

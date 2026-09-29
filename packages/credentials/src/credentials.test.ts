@@ -2283,6 +2283,67 @@ describe("sandbox credential slot", () => {
     expect(sandbox.status().state).toBe("rejected");
   });
 
+  it("marks a rejection only for the issuance it names", async () => {
+    const store = new MemorySecretStore();
+    const sandbox = manager(store);
+    await sandbox.ensure(
+      null,
+      { ...ctx, readSecret: async () => "fake-sandbox-token-1" },
+      { allowAcquire: true },
+    );
+    const stored = sandbox.readMetadata();
+    const ref = "piship:acmecode:sandbox#1";
+    // Generations restart after a logout, so the reference alone does not
+    // tell one stored secret from the next: a later issuance, or one stored
+    // for another user, is never marked by a rejection of an earlier one.
+    await sandbox.markRejected({
+      ref,
+      acquiredAt: "2000-01-01T00:00:00.000Z",
+      principal: null,
+    });
+    await sandbox.markRejected({
+      ref,
+      credentialId: "another",
+      principal: null,
+    });
+    await sandbox.markRejected({ ref, principal: alice });
+    expect(sandbox.readMetadata()?.rejected_at).toBeUndefined();
+    await sandbox.markRejected({
+      ref,
+      acquiredAt: stored?.acquired_at,
+      principal: null,
+    });
+    expect(sandbox.status().state).toBe("rejected");
+  });
+
+  it("names generation references only for a file whose schema or reference says which credential it is", () => {
+    // A damaged file or one from a future release must not name the runtime
+    // credential's secrets: clearing it would delete a live credential.
+    expect(
+      metadataSecretRefs({ generation: 3, schema: "future/v9" }, "acmecode"),
+    ).toEqual([]);
+    expect(metadataSecretRefs({ generation: 3 }, "acmecode")).toEqual([]);
+    expect(
+      metadataSecretRefs(
+        { generation: 3, schema: CREDENTIAL_METADATA_SCHEMA },
+        "acmecode",
+      ),
+    ).toEqual(["piship:acmecode:inference#3", "piship:acmecode:inference#4"]);
+    expect(
+      metadataSecretRefs(
+        { generation: 1, credential_ref: "piship:acmecode:sandbox#1" },
+        "acmecode",
+      ),
+    ).toEqual(["piship:acmecode:sandbox#1", "piship:acmecode:sandbox#2"]);
+    // What the file names itself is still found.
+    expect(
+      metadataSecretRefs(
+        { generation: 3, orphans: ["piship:acmecode:inference#2"] },
+        "acmecode",
+      ),
+    ).toEqual(["piship:acmecode:inference#2"]);
+  });
+
   it("the local secret provider checks length and header safety", async () => {
     const provider = new LocalSecretCredentialProvider({
       label: "Sandbox API key",

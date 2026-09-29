@@ -31,6 +31,7 @@ import {
   createSecretStore,
   LocalSecretCredentialProvider,
   normalizeCredential,
+  type RejectedCredential,
 } from "@piship/credentials";
 import { accessStatePaths } from "./state.js";
 
@@ -42,6 +43,14 @@ export type SandboxCredentialProvider =
 
 /** Longest sandbox secret accepted. */
 export const SANDBOX_SECRET_MAX_LENGTH = 4096;
+
+/**
+ * Runs a task holding the identity lock, after checking that the principal
+ * the credential is used or stored for is still the signed-in user; throws
+ * (and runs nothing) when it is not. Only an interactive identity has stored
+ * state to check.
+ */
+export type SignedInGuard = <T>(task: () => Promise<T>) => Promise<T>;
 
 export interface SandboxCredentialOptions {
   readonly distributionId: string;
@@ -63,6 +72,12 @@ export interface SandboxCredentialOptions {
   readonly secretStore?: SecretStore;
   /** The principal the credential is used by or stored for; null without identity. */
   readonly principal: PrincipalKey | null;
+  /**
+   * Given for an interactive identity. `save` and the deletion of another
+   * user's credential run inside it, so a session or a `sandbox login` of a
+   * user who is no longer signed in stores and deletes nothing.
+   */
+  readonly signedIn?: SignedInGuard;
   /**
    * The resolved URLs the backend sends the credential to: the endpoint and,
    * for Kubernetes, the router. Not needed to clear the credential.
@@ -120,6 +135,19 @@ export function sandboxOrigin(url: string): string | undefined {
 }
 
 /** Which stored secret metadata describes: its reference and random ID. */
+/** The one issuance of a stored credential, for a rejection to name. */
+function issuance(
+  metadata: CredentialMetadata,
+  principal: PrincipalKey | null,
+): RejectedCredential {
+  return {
+    ref: metadata.credential_ref,
+    acquiredAt: metadata.acquired_at,
+    credentialId: metadata.credential_id,
+    principal,
+  };
+}
+
 function identify(metadata: CredentialMetadata): string {
   return `${metadata.credential_ref} ${metadata.credential_id ?? ""} ${metadata.acquired_at}`;
 }
@@ -248,31 +276,37 @@ export class SandboxCredential {
       origins,
     );
     const principal = this.#options.principal;
-    await manager.exclusive(async () => {
-      const problems = await manager.logout(
-        { distributionId: this.#options.distributionId },
-        { reason: "replace" },
-      );
-      if (manager.hasStoredCredential())
-        throw new PiShipError(
-          "SECRET_STORE_UNAVAILABLE",
-          `The previous sandbox credential could not be deleted from the secret store, so the new one was not stored: ${problems.map((problem) => redact(problem)).join("; ")}`,
-          {
-            component: "credential",
-            userAction: `Unlock or repair the secret store, then run ${this.#options.command} sandbox login again`,
-          },
+    const guard = this.#options.signedIn ?? ((task) => task());
+    // The sandbox lock, then the identity lock, and the user is checked under
+    // both: a `logout` or another user's `login` that came first is seen
+    // here, and one that comes after clears what is stored now.
+    await manager.exclusive(() =>
+      guard(async () => {
+        const problems = await manager.logout(
+          { distributionId: this.#options.distributionId },
+          { reason: "replace" },
         );
-      await manager.ensure(
-        principal
-          ? ({
-              issuer: principal.issuer,
-              subject: principal.subject,
-            } satisfies IdentitySession)
-          : null,
-        { distributionId: this.#options.distributionId },
-        { allowAcquire: true },
-      );
-    });
+        if (manager.hasStoredCredential())
+          throw new PiShipError(
+            "SECRET_STORE_UNAVAILABLE",
+            `The previous sandbox credential could not be deleted from the secret store, so the new one was not stored: ${problems.map((problem) => redact(problem)).join("; ")}`,
+            {
+              component: "credential",
+              userAction: `Unlock or repair the secret store, then run ${this.#options.command} sandbox login again`,
+            },
+          );
+        await manager.ensure(
+          principal
+            ? ({
+                issuer: principal.issuer,
+                subject: principal.subject,
+              } satisfies IdentitySession)
+            : null,
+          { distributionId: this.#options.distributionId },
+          { allowAcquire: true },
+        );
+      }),
+    );
     return {
       kind: prompt.kind,
       store: `${this.store.kind} (${this.store.description})`,
@@ -370,7 +404,12 @@ export class SandboxCredential {
     const principal = this.#options.principal;
     const store = this.store;
     let held:
-      | { id: string; secret: SecretValue; kind: SandboxCredentialKind }
+      | {
+          id: string;
+          issuance: RejectedCredential;
+          secret: SecretValue;
+          kind: SandboxCredentialKind;
+        }
       | undefined = await manager.exclusive(async () => {
       if (!manager.hasStoredCredential())
         throw this.#unavailable("No sandbox credential is stored");
@@ -381,9 +420,15 @@ export class SandboxCredential {
         throw this.#unavailable("No usable sandbox credential is stored");
       }
       if (!samePrincipal(metadata.principal ?? null, principal)) {
-        await this.#discard(
-          manager,
-          !metadata.principal && principal ? "unbound" : "principal-change",
+        // Only the signed-in user's launch deletes: a session of a user who
+        // was signed out or replaced meanwhile must not delete the new
+        // user's credential.
+        const guard = this.#options.signedIn ?? ((task) => task());
+        await guard(() =>
+          this.#discard(
+            manager,
+            !metadata.principal && principal ? "unbound" : "principal-change",
+          ),
         );
         throw this.#unavailable(
           "The stored sandbox credential belonged to another user; it was deleted",
@@ -409,6 +454,7 @@ export class SandboxCredential {
       }
       return {
         id: identify(metadata),
+        issuance: issuance(metadata, principal),
         secret,
         kind: sandboxKind(metadata.kind),
       };
@@ -441,17 +487,22 @@ export class SandboxCredential {
           // The same principal stored a new one: use it from now on.
           const secret = await store.get(metadata.credential_ref);
           if (!secret) throw changed();
-          held = { id: identify(metadata), secret, kind };
+          held = {
+            id: identify(metadata),
+            issuance: issuance(metadata, principal),
+            secret,
+            kind,
+          };
         }
         return held.secret;
       },
       rejected: async () => {
-        const id = held?.id;
+        const used = held?.issuance;
         held = undefined;
-        const metadata = manager.readMetadata();
-        // Only the secret that was rejected is marked, never a newer one.
-        if (id && metadata && identify(metadata) === id)
-          await manager.markRejected(metadata.credential_ref);
+        // Only the secret that was rejected is marked, never a newer one:
+        // the comparison is made under the lock, since generations restart
+        // and a login may have stored another secret under the same reference.
+        if (used) await manager.markRejected(used);
       },
     };
   }

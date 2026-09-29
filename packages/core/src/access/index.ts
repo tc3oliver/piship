@@ -28,5 +28,6 @@ export {
   type SandboxCredentialProvider,
   type SandboxCredentialState,
   type SandboxCredentialStatus,
+  type SignedInGuard,
   sandboxOrigin,
 } from "./sandbox-credential.js";
