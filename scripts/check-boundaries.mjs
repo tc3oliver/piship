@@ -148,11 +148,16 @@ function checkSpecifier(specifier, file, owner) {
 /**
  * A relative import never reaches into another package's directory; that
  * would bypass its public exports and the dependency map. Shared test
- * helpers and example fixtures outside packages/ stay reachable.
+ * helpers and example fixtures outside packages/ stay reachable, and the
+ * repository's tests may use a package's src/testing servers.
  */
 function checkRelative(specifier, path, owner) {
   if (!specifier.startsWith(".")) return;
-  const target = packageOf(resolve(dirname(path), specifier));
+  const resolved = resolve(dirname(path), specifier);
+  // The repository's own tests may use a package's test servers, which live
+  // in its src/testing directory and are not part of its public exports.
+  if (owner === "tests" && /[\\/]src[\\/]testing[\\/]/.test(resolved)) return;
+  const target = packageOf(resolved);
   if (target !== undefined && target !== owner)
     failures.push(
       `${relative(root, path)}: relative import ${specifier} crosses into packages/${target}; import @piship/${target} instead`,
