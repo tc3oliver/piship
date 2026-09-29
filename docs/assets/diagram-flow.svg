@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="560" viewBox="0 0 840 560" role="img" aria-label="Company OIDC identity flows through the PiShip distribution into the company LLM gateway and the sandbox backend">
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+    .m{fill:#59636e}
+    .box{fill:#f6f8fa;stroke:#d1d9e0}
+    .ln{stroke:#8c959f;fill:none}
+    .ah{fill:#8c959f}
+    @media (prefers-color-scheme:dark){text{fill:#f0f6fc}.m{fill:#9198a1}.box{fill:#151b23;stroke:#3d444d}.ln{stroke:#656c76}.ah{fill:#656c76}}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>
+
+  <rect x="40" y="40" width="140" height="50" rx="10" class="box" stroke-width="1.5"/>
+  <text x="110" y="70" text-anchor="middle" font-size="16" font-weight="600">Developer</text>
+
+  <path class="ln" d="M182 65H316" stroke-width="2" marker-end="url(#a)"/>
+  <text x="249" y="56" text-anchor="middle" font-size="13" class="m">login</text>
+
+  <rect x="320" y="16" width="240" height="96" rx="12" fill="#8250df" fill-opacity=".12" stroke="#8250df" stroke-width="1.5"/>
+  <text x="440" y="48" text-anchor="middle" font-size="17" font-weight="600">OIDC / SSO</text>
+  <text x="440" y="71" text-anchor="middle" font-size="13" class="m">Entra · Okta · Keycloak</text>
+  <text x="440" y="96" text-anchor="middle" font-size="12" class="m">company infrastructure</text>
+
+  <path class="ln" d="M440 114V146" stroke-width="2" marker-end="url(#a)"/>
+  <text x="450" y="135" font-size="13" class="m">identity</text>
+
+  <rect x="60" y="150" width="720" height="226" rx="14" fill="#f97316" fill-opacity=".08" stroke="#f97316" stroke-width="1.5"/>
+  <text x="420" y="182" text-anchor="middle" font-size="18" font-weight="700">Your PiShip Distribution</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="78" y="200" width="104" height="40" rx="8" class="box"/><text x="130" y="225">Brand</text>
+    <rect x="194" y="200" width="104" height="40" rx="8" class="box"/><text x="246" y="225">Models</text>
+    <rect x="310" y="200" width="104" height="40" rx="8" class="box"/><text x="362" y="225">Resources</text>
+    <rect x="426" y="200" width="104" height="40" rx="8" class="box"/><text x="478" y="225">MCP</text>
+    <rect x="542" y="200" width="104" height="40" rx="8" class="box"/><text x="594" y="225">Policy</text>
+    <rect x="658" y="200" width="104" height="40" rx="8" class="box"/><text x="710" y="225">Project trust</text>
+    <rect x="136" y="252" width="104" height="40" rx="8" class="box"/><text x="188" y="277">Audit</text>
+    <rect x="252" y="252" width="104" height="40" rx="8" class="box"/><text x="304" y="277">Credentials</text>
+    <rect x="368" y="252" width="104" height="40" rx="8" class="box"/><text x="420" y="277">Sandbox</text>
+    <rect x="484" y="252" width="104" height="40" rx="8" class="box"/><text x="536" y="277">Release</text>
+    <rect x="600" y="252" width="104" height="40" rx="8" class="box"/><text x="652" y="277">Updates</text>
+  </g>
+  <rect x="78" y="310" width="684" height="46" rx="8" fill="#0969da" fill-opacity=".14" stroke="#0969da" stroke-width="1.5"/>
+  <text x="420" y="339" text-anchor="middle" font-size="16" font-weight="600">upstream Pi</text>
+
+  <path class="ln" d="M240 378V446" stroke-width="2" marker-end="url(#a)"/>
+  <text x="250" y="417" font-size="13" class="m">scoped runtime credential</text>
+  <path class="ln" d="M600 378V446" stroke-width="2" marker-end="url(#a)"/>
+  <text x="610" y="417" font-size="13" class="m">approved command</text>
+
+  <rect x="90" y="450" width="300" height="96" rx="12" fill="#1a7f37" fill-opacity=".10" stroke="#1a7f37" stroke-width="1.5"/>
+  <text x="240" y="484" text-anchor="middle" font-size="17" font-weight="600">Company LLM Gateway</text>
+  <text x="240" y="510" text-anchor="middle" font-size="13" class="m">LiteLLM · custom</text>
+  <text x="240" y="530" text-anchor="middle" font-size="13" class="m">OpenAI-compatible</text>
+
+  <rect x="450" y="450" width="300" height="96" rx="12" fill="#bf3989" fill-opacity=".10" stroke="#bf3989" stroke-width="1.5"/>
+  <text x="600" y="484" text-anchor="middle" font-size="17" font-weight="600">Sandbox Backend</text>
+  <text x="600" y="510" text-anchor="middle" font-size="13" class="m">Native · Custom · E2B · CubeSandbox</text>
+  <text x="600" y="530" text-anchor="middle" font-size="13" class="m">Kubernetes Agent Sandbox</text>
+</svg>

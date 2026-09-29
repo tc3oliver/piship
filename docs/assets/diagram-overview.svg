@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="280" viewBox="0 0 800 280" role="img" aria-label="Upstream Pi plus PiShip plus your distribution manifest becomes your coding agent">
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+    .m{fill:#59636e}
+    .box{fill:#f6f8fa;stroke:#d1d9e0}
+    .ln{stroke:#8c959f;fill:none}
+    .ah{fill:#8c959f}
+    @media (prefers-color-scheme:dark){text{fill:#f0f6fc}.m{fill:#9198a1}.box{fill:#151b23;stroke:#3d444d}.ln{stroke:#656c76}.ah{fill:#656c76}}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>
+
+  <rect x="20" y="16" width="240" height="56" rx="10" fill="#0969da" fill-opacity=".12" stroke="#0969da" stroke-width="1.5"/>
+  <text x="140" y="50" text-anchor="middle" font-size="17" font-weight="600">upstream Pi</text>
+  <text x="140" y="98" text-anchor="middle" font-size="22" class="m">+</text>
+  <rect x="20" y="108" width="240" height="56" rx="10" fill="#f97316" fill-opacity=".14" stroke="#f97316" stroke-width="1.5"/>
+  <text x="140" y="142" text-anchor="middle" font-size="17" font-weight="600">PiShip</text>
+  <text x="140" y="190" text-anchor="middle" font-size="22" class="m">+</text>
+  <rect x="20" y="200" width="240" height="56" rx="10" class="box" stroke-width="1.5"/>
+  <text x="140" y="234" text-anchor="middle" font-size="16">your distribution manifest</text>
+
+  <path class="ln" d="M282 136H350" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="370" y="30" width="410" height="220" rx="14" fill="#1a7f37" fill-opacity=".10" stroke="#1a7f37" stroke-width="1.5"/>
+  <text x="575" y="66" text-anchor="middle" font-size="19" font-weight="700">Your Coding Agent</text>
+  <g font-size="15" text-anchor="middle">
+    <rect x="395" y="92" width="170" height="48" rx="8" class="box"/><text x="480" y="121">AcmeCode</text>
+    <rect x="585" y="92" width="170" height="48" rx="8" class="box"/><text x="670" y="121">CompanyCode</text>
+    <rect x="395" y="156" width="170" height="48" rx="8" class="box"/><text x="480" y="185">TeamPi</text>
+    <rect x="585" y="156" width="170" height="48" rx="8" class="box"/><text x="670" y="185">MyPi</text>
+  </g>
+  <text x="575" y="232" text-anchor="middle" font-size="13" class="m">your brand · your policy · your release</text>
+</svg>
