@@ -554,11 +554,13 @@ describe("acquire: idempotency (docs: Idempotency and retries)", () => {
     const store = createIdempotencyStore({ maxEntries: 4, maxPerPrincipal: 2 });
     const admit = () => null;
     const far = Date.now() + 3_600_000;
-    assert.equal(store.begin("bob", "b1", "fb", admit).kind, "new");
-    store.complete("bob", "b1", { id: "bob-1" }, far);
+    const bob = store.begin("bob", "b1", "fb", admit);
+    assert.equal(bob.kind, "new");
+    store.complete("bob", "b1", bob.token, { id: "bob-1" }, far);
     for (let i = 1; i <= 5; i++) {
-      assert.equal(store.begin("alice", `a${i}`, "fa", admit).kind, "new");
-      store.complete("alice", `a${i}`, { id: `alice-${i}` }, far);
+      const alice = store.begin("alice", `a${i}`, "fa", admit);
+      assert.equal(alice.kind, "new");
+      store.complete("alice", `a${i}`, alice.token, { id: `alice-${i}` }, far);
       assert.ok(store.size("alice") <= 2);
     }
     assert.deepEqual(store.begin("bob", "b1", "fb", admit), {
@@ -575,6 +577,36 @@ describe("acquire: idempotency (docs: Idempotency and retries)", () => {
       "new",
       "alice's oldest was dropped",
     );
+  });
+
+  it("a record in progress outlives any wait, and only its own reservation can complete or abandon it", async () => {
+    const { createIdempotencyStore } = await import("../src/broker.mjs");
+    let now = 0;
+    const store = createIdempotencyStore({ now: () => now });
+    const admit = () => null;
+    const first = store.begin("alice", "k", "f", admit);
+    assert.equal(first.kind, "new");
+    now = 60 * 60_000;
+    assert.equal(
+      store.begin("alice", "k", "f", admit).kind,
+      "in-flight",
+      "not swept while its request is still running",
+    );
+    store.abandon("alice", "k", first.token);
+    const second = store.begin("alice", "k", "f", admit);
+    assert.equal(second.kind, "new");
+    assert.notEqual(second.token, first.token);
+    // The first reservation's late calls touch nothing of the second's.
+    store.complete("alice", "k", first.token, { id: "stale" }, now + 60_000);
+    store.abandon("alice", "k", first.token);
+    assert.equal(store.begin("alice", "k", "f", admit).kind, "in-flight");
+    store.complete("alice", "k", second.token, { id: "fresh" }, now + 60_000);
+    assert.deepEqual(store.begin("alice", "k", "f", admit), {
+      kind: "replay",
+      response: { id: "fresh" },
+    });
+    store.abandon("alice", "k", first.token);
+    assert.equal(store.begin("alice", "k", "f", admit).kind, "replay");
   });
 
   it("a principal whose records are all in progress gets 'full', and others are unaffected", async () => {

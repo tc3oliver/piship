@@ -77,14 +77,19 @@ const MAX_BODY_BYTES = 4096;
  * drops that principal's oldest finished record, so one busy user never
  * evicts anyone else's. Only past `maxEntries` in all are other principals'
  * oldest finished records dropped.
+ *
+ * A record in progress has no time limit: it stays until the request that
+ * reserved it completes or abandons it, however long that request waits
+ * (every LiteLLM call it makes has a timeout, so it ends). Each reservation
+ * carries a random token, and complete and abandon act only on the record
+ * their own reservation made, never on a later one for the same key.
  */
 export function createIdempotencyStore({
   now = Date.now,
-  pendingTtlMs = 120_000,
   maxEntries = 10_000,
   maxPerPrincipal = 6,
 } = {}) {
-  /** @type {Map<string, { principal: string, fingerprint: string, state: "pending" | "done", response?: object, expiresAt: number }>} */
+  /** @type {Map<string, { principal: string, fingerprint: string, token: string, state: "pending" | "done", response?: object, expiresAt: number }>} */
   const entries = new Map();
   /** Each principal's record ids, oldest first. @type {Map<string, Set<string>>} */
   const byPrincipal = new Map();
@@ -132,27 +137,30 @@ export function createIdempotencyStore({
         return { kind: "full" };
       if (entries.size >= maxEntries && !evictOldestDone(entries.keys()))
         return { kind: "full" };
+      const token = randomBytes(16).toString("hex");
       entries.set(id, {
         principal,
         fingerprint,
+        token,
         state: "pending",
-        expiresAt: now() + pendingTtlMs,
+        expiresAt: Number.POSITIVE_INFINITY,
       });
       own.add(id);
       byPrincipal.set(principal, own);
-      return { kind: "new" };
+      return { kind: "new", token };
     },
     /** Keep the answer until the credential it carries expires. */
-    complete(principal, key, response, expiresAtMs) {
+    complete(principal, key, token, response, expiresAtMs) {
       const entry = entries.get(recordId(principal, key));
-      if (!entry) return;
+      if (entry?.token !== token) return;
       entry.state = "done";
       entry.response = response;
       entry.expiresAt = expiresAtMs;
     },
     /** Forget a key whose issuing failed, so it can be sent again. */
-    abandon(principal, key) {
-      remove(recordId(principal, key));
+    abandon(principal, key, token) {
+      const id = recordId(principal, key);
+      if (entries.get(id)?.token === token) remove(id);
     },
     /** How many records are kept, in all or for one principal. */
     size(principal) {
@@ -442,6 +450,7 @@ export function createBroker(
       return wait ? { kind: "rate-limited", wait } : null;
     };
     let reserved = false;
+    let reservation;
     if (typeof key === "string") {
       const fingerprint = createHash("sha256")
         .update(canonical([claims.iss, claims.sub, body]))
@@ -477,6 +486,7 @@ export function createBroker(
           userId,
         };
       reserved = true;
+      reservation = outcome.token;
     } else {
       const refusal = admit();
       if (refusal)
@@ -495,7 +505,13 @@ export function createBroker(
       const result = await perUser(userId, async () => {
         const issued = await issue({ claims, userId, models, credentialId });
         if (reserved)
-          idempotency.complete(userId, key, issued.body, issued.expiresAtMs);
+          idempotency.complete(
+            userId,
+            key,
+            reservation,
+            issued.body,
+            issued.expiresAtMs,
+          );
         await retireOldKeys(userId, credentialId);
         return issued;
       });
@@ -508,7 +524,7 @@ export function createBroker(
         idempotency: reserved ? "new" : "none",
       };
     } catch (error) {
-      if (reserved) idempotency.abandon(userId, key);
+      if (reserved) idempotency.abandon(userId, key, reservation);
       if (!(error instanceof UpstreamError)) throw error;
       if (error.unknownOutcome) {
         // A key may exist that is not being returned: /key/generate's answer
