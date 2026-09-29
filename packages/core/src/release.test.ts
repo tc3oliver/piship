@@ -1971,7 +1971,7 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
 describe("committed example locks", () => {
   // The release lock gate refuses a stale lock, so a dependency or resource
   // change must re-lock the examples in the same change.
-  it.each(["demo-company", "personal"])(
+  it.each(["demo-company", "personal", "enterprise-reference"])(
     "keeps examples/%s/piship.lock current",
     (name) => {
       const manifest = fileURLToPath(
