@@ -3,6 +3,7 @@
 // injected at the store itself: a secret file that cannot be read or
 // removed, or (POSIX) a store directory that refuses every change.
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import {
   chmodSync,
   existsSync,
@@ -16,8 +17,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AuditEvent, PiShipError, principalId } from "@piship/contracts";
-import { withFileLock } from "@piship/credentials";
+import type { AuditConfig } from "@piship/audit";
+import {
+  type AuditEvent,
+  PiShipError,
+  principalId,
+  type SecretStore,
+  type SecretValue,
+} from "@piship/contracts";
+import {
+  MemorySecretStore,
+  RestrictedFileSecretStore,
+  type SecretStoreSelection,
+  withFileLock,
+} from "@piship/credentials";
 import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
@@ -26,6 +39,24 @@ import { type AccessEvent, DistributionAccess } from "./access/index.js";
 import type { BrandedContext } from "./branded/context.js";
 import { runLogout } from "./branded/login.js";
 import { resolveLock } from "./index.js";
+
+// The platform store is stood in for by a memory store the test sets, so that
+// no test reaches the real one. Unset, it is not available, as on a machine
+// without a keychain or secret service.
+const platform = vi.hoisted(() => ({ store: null as SecretStore | null }));
+vi.mock("@piship/credentials", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@piship/credentials")>();
+  return {
+    ...actual,
+    createSecretStore: (selection: SecretStoreSelection) => {
+      if (selection.provider !== "system")
+        return actual.createSecretStore(selection);
+      if (!platform.store)
+        throw new Error("the platform secret store is not available");
+      return platform.store;
+    },
+  };
+});
 
 const DEMO = fileURLToPath(
   new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
@@ -37,6 +68,7 @@ let temp: string;
 let services: Awaited<ReturnType<typeof startLocalServices>>;
 let savedEnv: NodeJS.ProcessEnv;
 beforeEach(async () => {
+  platform.store = null;
   savedEnv = { ...process.env };
   temp = mkdtempSync(join(tmpdir(), "piship-branded-logout-"));
   services = await startLocalServices();
@@ -54,7 +86,7 @@ afterEach(async () => {
   rmSync(temp, { recursive: true, force: true });
 });
 
-function context() {
+function context(provider: "file" | "system" = "file") {
   const lock = resolveLock(DEMO);
   const access = lock.access as AccessManifest;
   const out: string[] = [];
@@ -73,7 +105,10 @@ function context() {
         },
         credential: {
           ...access.credential,
-          storage: { provider: "file", acknowledgePlaintext: true },
+          storage:
+            provider === "file"
+              ? { provider, acknowledgePlaintext: true }
+              : { provider },
         },
       } as AccessManifest,
     },
@@ -132,6 +167,41 @@ function stateText(ctx: BrandedContext): string {
   };
   visit(ctx.stateDir);
   return texts.join("\n");
+}
+
+/**
+ * Move the identity's token bundle to another store and record that store in
+ * the session, as a release configured for the other storage provider leaves
+ * it (a Pi session of the old release refreshing the identity after the
+ * switch, say).
+ */
+async function moveIdentityTokens(
+  ctx: BrandedContext,
+  from: SecretStore,
+  to: SecretStore,
+  recorded: "file" | "system",
+): Promise<string> {
+  const file = join(ctx.stateDir, "identity", "session.json");
+  const metadata = JSON.parse(readFileSync(file, "utf8"));
+  await to.put(
+    metadata.secretRef,
+    (await from.get(metadata.secretRef)) as SecretValue,
+  );
+  await from.delete(metadata.secretRef);
+  writeFileSync(file, JSON.stringify({ ...metadata, secret_store: recorded }));
+  return metadata.secretRef;
+}
+
+const fileStoreOf = (ctx: BrandedContext) =>
+  new RestrictedFileSecretStore(join(ctx.stateDir, "secrets"));
+
+/** A local URL nothing listens on. */
+async function closedUrl(): Promise<string> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return `http://127.0.0.1:${port}/ingest`;
 }
 
 async function rejection(promise: Promise<unknown>) {
@@ -499,4 +569,183 @@ describe("branded logout", () => {
       expect(existsSync(path("identity", "session.json"))).toBe(false);
     },
   );
+
+  it("deletes the identity tokens from the store its session records when signing out without the runtime variables", async () => {
+    const { ctx, out, path } = context("file");
+    await signIn(ctx);
+    // The session records the platform store, the configured one is the file.
+    const system = new MemorySecretStore();
+    platform.store = system;
+    const ref = await moveIdentityTokens(
+      ctx,
+      fileStoreOf(ctx),
+      system,
+      "system",
+    );
+    expect(system.refs()).toEqual([ref]);
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    await runLogout(ctx);
+    expect(system.refs()).toEqual([]);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(readdirSync(path("secrets"))).toEqual([]);
+    expect(out).toEqual([
+      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; sessions were preserved.",
+    ]);
+  });
+
+  it("deletes the identity tokens from the file store when the session records it and the platform store is configured", async () => {
+    const system = new MemorySecretStore();
+    platform.store = system;
+    const { ctx, path } = context("system");
+    await signIn(ctx);
+    const file = fileStoreOf(ctx);
+    const ref = await moveIdentityTokens(ctx, system, file, "file");
+    expect(await file.get(ref)).not.toBeNull();
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    await runLogout(ctx);
+    expect(await file.get(ref)).toBeNull();
+    expect(system.refs()).toEqual([]);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(readdirSync(path("secrets"))).toEqual([]);
+  });
+
+  it("keeps identity tokens tracked in a marker that names their store while that store is not available", async () => {
+    const { ctx, out, err, path } = context("file");
+    await signIn(ctx);
+    const system = new MemorySecretStore();
+    const ref = await moveIdentityTokens(
+      ctx,
+      fileStoreOf(ctx),
+      system,
+      "system",
+    );
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    // No platform store here: the file store is not looked in instead, where
+    // nothing would be found and the deletion would count as confirmed.
+    const error = await rejection(runLogout(ctx));
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.message).toBe(
+      "Signed out of AcmeCode only in part: the runtime credential was cleared, but the identity session could not be deleted from the secret store. It is never used and stays tracked, so the next login or logout deletes it; sessions were preserved",
+    );
+    expect(out).toEqual([]);
+    expect(err).toEqual(
+      expect.arrayContaining([
+        `Warning: identity secret ${ref}: the system secret store that holds it is not available`,
+      ]),
+    );
+    expect(
+      JSON.parse(readFileSync(path("identity", "session.json"), "utf8")),
+    ).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+      orphans: expect.arrayContaining([ref]),
+      secret_store: "system",
+    });
+    expect(system.refs()).toEqual([ref]);
+    // Once the store is reachable, the next logout deletes them.
+    platform.store = system;
+    err.length = 0;
+    await runLogout(ctx);
+    expect(system.refs()).toEqual([]);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(out).toEqual([
+      "Signed out of AcmeCode. Local runtime and identity credentials were cleared; sessions were preserved.",
+    ]);
+  });
+
+  it("names the store that could not delete identity tokens in the marker it leaves", async () => {
+    const { ctx, path } = context("file");
+    await signIn(ctx);
+    const system = new MemorySecretStore();
+    const ref = await moveIdentityTokens(
+      ctx,
+      fileStoreOf(ctx),
+      system,
+      "system",
+    );
+    system.delete = async () => {
+      throw new Error("the keychain is locked");
+    };
+    platform.store = system;
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    const error = await rejection(runLogout(ctx));
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(
+      JSON.parse(readFileSync(path("identity", "session.json"), "utf8")),
+    ).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+      orphans: expect.arrayContaining([ref]),
+      secret_store: "system",
+    });
+    expect(system.refs()).toEqual([ref]);
+  });
+
+  it("keeps the lock timeout as the error, and shows what it found, when a required audit sink is down", async () => {
+    const { ctx, err } = context();
+    await signIn(ctx);
+    const governance = ctx.metadata.governance as NonNullable<
+      typeof ctx.metadata.governance
+    >;
+    const governed: BrandedContext = {
+      ...ctx,
+      auditCloseDeadlineMs: 300,
+      metadata: {
+        ...ctx.metadata,
+        governance: {
+          ...governance,
+          manifest: {
+            ...governance.manifest,
+            audit: {
+              ...governance.manifest.audit,
+              enabled: true,
+              sinks: [
+                { id: "local", type: "file", required: false },
+                {
+                  id: "company",
+                  type: "http",
+                  url: await closedUrl(),
+                  required: true,
+                },
+              ] as AuditConfig["sinks"],
+            },
+          },
+        },
+      },
+    };
+    const spy = vi
+      .spyOn(DistributionAccess.prototype, "logout")
+      .mockImplementationOnce(async function (
+        this: DistributionAccess,
+        problems: string[] = [],
+      ) {
+        // The credential could not be revoked; the identity lock ran out.
+        (
+          this as unknown as {
+            options: { onEvent: (event: AccessEvent) => void };
+          }
+        ).options.onEvent({
+          event: "credential.revoke",
+          detail: { revocation: "failed" },
+        });
+        problems.push("revocation: the broker refused the request");
+        throw new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "lock wait", {
+          retryable: true,
+          sanitizedDetail: { reason: "lock-timeout" },
+        });
+      });
+    try {
+      // The retryable lock timeout is what the user sees, not the audit.
+      await expect(runLogout(governed)).rejects.toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err).toEqual([
+      "Warning: revocation: the broker refused the request",
+      expect.stringMatching(
+        /^Error: AUDIT_UNAVAILABLE: .*Required audit sink company \(http\) is unavailable/,
+      ),
+    ]);
+  });
 });

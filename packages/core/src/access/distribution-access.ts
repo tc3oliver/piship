@@ -1300,10 +1300,10 @@ export class DistributionAccess {
    * discarded marker in place of the session, so the session is signed out
    * all the same: nothing restores it, every later command retries the
    * deletion first and fails closed while it cannot, and no launch runs on
-   * it.
+   * it. A caller that must report what was found even when a lock wait
+   * runs out (and this throws) passes the list the problems are added to.
    */
-  async logout(): Promise<string[]> {
-    const problems: string[] = [];
+  async logout(problems: string[] = []): Promise<string[]> {
     const manager = await this.credentialManager();
     let providerError: unknown;
     const provider = await this.identityProvider().catch((error: unknown) => {
