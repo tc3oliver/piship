@@ -14,6 +14,7 @@ import {
   runRollback,
   runUpdate,
   runtimeStateDirectory,
+  sweepStateTemporaries,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
 import { runCapabilities, runPolicy } from "./commands/governance.js";
@@ -71,6 +72,8 @@ export async function launchPiDistribution(
   const agentDir = join(stateDir, "agent");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  // Temporaries of state writers killed before their rename.
+  sweepStateTemporaries(stateDir);
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),

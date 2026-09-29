@@ -1,6 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFileAtomic } from "../install/atomic.js";
 
 export interface AccessStatePaths {
   readonly identity: string;
@@ -28,12 +27,9 @@ export function accessStatePaths(stateDir: string): AccessStatePaths {
   };
 }
 
+/** Replace a state file atomically (see `writeFileAtomic`). */
 export function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    mode: 0o600,
-    flag: "wx",
+  writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`, {
+    directoryMode: 0o700,
   });
-  renameSync(temporary, path);
 }

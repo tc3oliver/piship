@@ -29,6 +29,7 @@ import {
   networkPolicyFor,
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
+import { removeAccessTemporaries } from "../install/temporaries.js";
 import {
   type BrandedContext,
   auditAccess,
@@ -295,6 +296,15 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
       `Warning: ${reason}; signing out locally without contacting the identity provider or credential broker`,
     );
     problems.push(...(await logoutLocally(ctx, manifest, reason, onEvent)));
+  }
+  // A writer killed before its rename leaves a temporary copy of identity or
+  // credential metadata; it must not outlive the sign-out.
+  try {
+    await removeAccessTemporaries(ctx.stateDir);
+  } catch (error) {
+    problems.push(
+      `abandoned temporary identity or credential files could not be removed (${redact(formatError(error))}); the next start removes them`,
+    );
   }
   // Revocation problems are shown before auditing, which can fail the command.
   for (const problem of problems) ctx.err(`Warning: ${problem}`);

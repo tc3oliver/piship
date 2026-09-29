@@ -3,21 +3,17 @@
 // Releases are immutable payload directories; switching the active release is
 // one atomic receipt rename, so an interruption leaves the old or the new
 // release active, never a mix.
-import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   binHome,
@@ -27,6 +23,8 @@ import {
   type DistributionLock,
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
+import { syncDirectory, writeFileAtomic } from "./atomic.js";
+import { removeStaleTemporaries } from "./temporaries.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
 
@@ -119,45 +117,7 @@ export function commandPathFor(command: string): string {
   );
 }
 
-/** Write `path` through a temporary file, fsync, and rename. */
-export function writeFileAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  const fd = openSync(temporary, "wx", 0o600);
-  try {
-    writeSync(fd, content);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temporary, path);
-  if (process.platform !== "win32")
-    try {
-      const dir = openSync(dirname(path), "r");
-      try {
-        fsyncSync(dir);
-      } finally {
-        closeSync(dir);
-      }
-    } catch {
-      // Directory fsync is best effort on filesystems that refuse it.
-    }
-}
-
-/** Flush a directory entry; best effort where the filesystem refuses it. */
-export function syncDirectory(path: string): void {
-  if (process.platform === "win32") return;
-  try {
-    const fd = openSync(path, "r");
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    // Some filesystems refuse fsync on directories.
-  }
-}
+export { syncDirectory, writeFileAtomic } from "./atomic.js";
 
 /**
  * Flush every file and directory of a release to stable storage, so a power
@@ -296,10 +256,13 @@ export function acquireLock(
 
 /**
  * Remove leftovers of an interrupted operation: staging directories and
- * release directories the receipt does not reference. Idempotent.
+ * release directories the receipt does not reference, and abandoned
+ * temporaries of the receipt (only the returned names are under `apps`).
+ * Idempotent.
  */
 export function recoverInstallation(id: string): string[] {
   const receipt = readInstallReceipt(id);
+  removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);
   const apps = appDirectory(id);
   const keep = new Set([
     ...receipt.releases.map((item) => item.version),
