@@ -129,6 +129,7 @@ describe("STATE_DATA_CLASSES", () => {
     ).toEqual([
       "identity/session.json",
       "credentials-metadata/inference.json",
+      "credentials-metadata/sandbox.json",
       "secrets",
       "agent",
     ]);
@@ -321,6 +322,48 @@ describe("checkStateMigration", () => {
     // Schemaless credential classes are kept, never cleared by schema.
     expect(item(report, "file secret fallback").action).toBe("keep");
     expect(item(report, "Pi agent configuration").action).toBe("keep");
+  });
+
+  it("clears the sandbox credential for a target whose lock predates its schema key", () => {
+    const dir = populated();
+    write(dir, "credentials-metadata/sandbox.json", {
+      schema: "piship-sandbox-credential-metadata/v1",
+      credential_ref: "piship:acmepi:sandbox#1",
+      generation: 1,
+    });
+    // A lock written before the key existed lists only the six older keys.
+    const { sandboxCredential: _absent, ...older } = STATE_SCHEMAS;
+    for (const schemas of [older, LEGACY_STATE_SCHEMAS]) {
+      const report = checkStateMigration(
+        dir,
+        target("0.87.1", schemas),
+        current,
+      );
+      expect(report.verdict).toBe("safe");
+      expect(item(report, "sandbox credential metadata")).toMatchObject({
+        verdict: "safe",
+        action: "clear-and-reacquire",
+        current: "piship-sandbox-credential-metadata/v1",
+      });
+    }
+    // This release reads it, so a switch between two such releases keeps it.
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "sandbox credential metadata",
+      ).action,
+    ).toBe("keep");
+    // A discarded marker is never readable: always cleared.
+    write(dir, "credentials-metadata/sandbox.json", {
+      schema: "piship-credential-discarded/v1",
+      orphans: ["piship:acmepi:sandbox#1"],
+    });
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "sandbox credential metadata",
+      ).action,
+    ).toBe("clear-and-reacquire");
   });
 
   it("handles the state marker for current and legacy targets", () => {

@@ -18,3 +18,13 @@ export {
 } from "./network.js";
 export { type AccessStatePaths, accessStatePaths } from "./state.js";
 export type { AccessEvent, AccessOptions, ActivatedAccess } from "./types.js";
+export {
+  openSandboxCredential,
+  SANDBOX_SECRET_MAX_LENGTH,
+  SandboxCredential,
+  type SandboxCredentialOptions,
+  type SandboxCredentialProvider,
+  type SandboxCredentialState,
+  type SandboxCredentialStatus,
+  sandboxOrigin,
+} from "./sandbox-credential.js";

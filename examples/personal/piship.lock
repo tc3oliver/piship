@@ -943,6 +943,9 @@
       ],
       "audit": [
         "piship-audit/v1"
+      ],
+      "sandboxCredential": [
+        "piship-sandbox-credential-metadata/v1"
       ]
     }
   },

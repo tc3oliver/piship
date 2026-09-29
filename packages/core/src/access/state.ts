@@ -7,6 +7,8 @@ export interface AccessStatePaths {
   /** The principal that owns this state's user-scoped PiShip data. */
   readonly principal: string;
   readonly credential: string;
+  /** The stored sandbox credential's metadata (`sandbox login`). */
+  readonly sandboxCredential: string;
   /** Failed remote revocations, non-secret. */
   readonly revocationRetry: string;
   readonly preferences: string;
@@ -18,6 +20,7 @@ export function accessStatePaths(stateDir: string): AccessStatePaths {
     identity: join(stateDir, "identity", "session.json"),
     principal: join(stateDir, "identity", "principal.json"),
     credential: join(stateDir, "credentials-metadata", "inference.json"),
+    sandboxCredential: join(stateDir, "credentials-metadata", "sandbox.json"),
     revocationRetry: join(
       stateDir,
       "credentials-metadata",

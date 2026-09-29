@@ -13,7 +13,11 @@ import { auditLogFiles } from "@piship/audit";
 export const STATE_MARKER_SCHEMA = "piship-state/v1";
 export const STATE_MARKER_FILE = "state.json";
 
-/** State file schemas one PiShip version reads, recorded in `piship.lock`. */
+/**
+ * State file schemas one PiShip version reads, recorded in `piship.lock`. A
+ * key added after a release is absent from that release's lock: the release
+ * reads none of that class's schemas.
+ */
 export interface StateSchemaSupport {
   readonly state: readonly string[];
   readonly identity: readonly string[];
@@ -21,6 +25,7 @@ export interface StateSchemaSupport {
   readonly preferences: readonly string[];
   readonly metrics: readonly string[];
   readonly audit: readonly string[];
+  readonly sandboxCredential?: readonly string[];
 }
 
 /** What this PiShip version reads and writes. */
@@ -31,6 +36,7 @@ export const STATE_SCHEMAS: StateSchemaSupport = Object.freeze({
   preferences: ["piship-preferences/v1"],
   metrics: ["piship-metrics/v1"],
   audit: ["piship-audit/v1"],
+  sandboxCredential: ["piship-sandbox-credential-metadata/v1"],
 });
 
 /**
@@ -110,6 +116,23 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     migration:
       "never copied; when the target cannot read it (always for a discarded marker), its secrets are deleted and the deletion confirmed before the switch, and it is reacquired. A secret that cannot be deleted stops the switch",
     schema: "credential",
+    credential: true,
+  },
+  {
+    // Also the discarded marker (piship-credential-discarded/v1) left when a
+    // secret could not be deleted: no release reads it as a credential.
+    name: "sandbox credential metadata",
+    path: "credentials-metadata/sandbox.json",
+    kind: "file",
+    scope: "user, bound to the principal that stored it",
+    sensitivity: "secret-reference",
+    retention:
+      "until sandbox logout, logout, a change of principal, or purge; never the secret, which is in the secret store",
+    clear:
+      "sandbox logout, logout (also without the runtime variables), change of principal (at login, and at launch for one bound to another principal), purge",
+    migration:
+      "never copied; when the target cannot read it (every release before it, and always for a discarded marker), its secrets are deleted and the deletion confirmed before the switch, and the user runs sandbox login again. A secret that cannot be deleted stops the switch",
+    schema: "sandboxCredential",
     credential: true,
   },
   {
@@ -412,7 +435,8 @@ export function checkStateMigration(
               ? "unreadable"
               : null
           : readSchema(path);
-    const supported = target.schemas[dataClass.schema];
+    // A target whose lock predates this schema key reads none of the class.
+    const supported = target.schemas[dataClass.schema] ?? [];
     if (schema === null) {
       items.push({
         name: dataClass.name,

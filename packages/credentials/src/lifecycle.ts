@@ -34,6 +34,20 @@ import { heldLocks } from "./lock-heartbeat.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 /**
+ * Metadata of the stored sandbox credential. A schema of its own, so every
+ * release before it (which lists only the runtime credential's schema) sees a
+ * class it cannot read and clears it with its secrets, instead of keeping a
+ * file its logout and purge would not know.
+ */
+export const SANDBOX_CREDENTIAL_METADATA_SCHEMA =
+  "piship-sandbox-credential-metadata/v1";
+/**
+ * Which credential a manager keeps: the runtime (`inference`) credential, or
+ * the one sandbox credential a person stores for a remote sandbox backend.
+ * The slot selects the secret-store reference prefix and the metadata schema.
+ */
+export type CredentialSlot = "inference" | "sandbox";
+/**
  * Metadata left in place of a credential whose secrets could not all be
  * deleted: it lists only the references still to delete. No release reads it
  * as a credential (older ones see an incompatible schema and clear it), so a
@@ -53,8 +67,17 @@ export const REVOCATION_RETRY_LIMIT = 20;
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
-  readonly schema: typeof CREDENTIAL_METADATA_SCHEMA;
+  readonly schema:
+    | typeof CREDENTIAL_METADATA_SCHEMA
+    | typeof SANDBOX_CREDENTIAL_METADATA_SCHEMA;
   readonly mode: CredentialProvider["mode"];
+  /** Sandbox slot only: where the secret came from (`stored`). */
+  readonly source?: "stored";
+  /**
+   * Sandbox slot only: the origins (scheme://host:port) the secret may be
+   * sent to, recorded when it was stored.
+   */
+  readonly origins?: readonly string[];
   readonly credential_ref: string;
   readonly generation: number;
   readonly kind: RuntimeCredentialKind;
@@ -176,6 +199,10 @@ export interface CredentialManagerOptions {
   readonly onPhase?: (phase: CredentialPhase) => void | Promise<void>;
   /** Receives acquire, refresh, and revoke events; failures are ignored. */
   readonly onEvent?: (event: CredentialEvent) => void;
+  /** Default `inference`. Selects the reference prefix and metadata schema. */
+  readonly slot?: CredentialSlot;
+  /** Sandbox slot: the origins recorded with a newly stored secret. */
+  readonly origins?: readonly string[];
 }
 
 function writeAtomic(path: string, content: string): void {
@@ -291,12 +318,14 @@ export function readPendingRevocations(
 }
 
 /**
- * Every secret-store reference that credential or identity metadata (or a
- * discarded marker of either) of one distribution may own: the current
- * generation, recorded orphans, the next
- * generation (written before a crash that never reached metadata), and for
- * identity also the previous generation (a replacement whose delete failed).
- * References of other distributions are never returned.
+ * Every secret-store reference that credential, sandbox credential, or
+ * identity metadata (or a discarded marker of any) of one distribution may
+ * own: the current generation, recorded orphans, the next generation
+ * (written before a crash that never reached metadata), and for identity also
+ * the previous generation (a replacement whose delete failed). The
+ * generations of sandbox credential metadata are sandbox references, never
+ * runtime credential ones. References of other distributions are never
+ * returned.
  */
 export function metadataSecretRefs(
   raw: unknown,
@@ -306,6 +335,7 @@ export function metadataSecretRefs(
     raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const refs = new Set<string>();
   const inference = `piship:${distributionId}:inference#`;
+  const sandbox = `piship:${distributionId}:sandbox#`;
   const identity = `piship:${distributionId}:identity#`;
   for (const item of [
     value.credential_ref,
@@ -313,7 +343,9 @@ export function metadataSecretRefs(
   ])
     if (
       typeof item === "string" &&
-      (item.startsWith(inference) || item.startsWith(identity))
+      (item.startsWith(inference) ||
+        item.startsWith(sandbox) ||
+        item.startsWith(identity))
     )
       refs.add(item);
   const generation = Number(value.generation);
@@ -322,8 +354,14 @@ export function metadataSecretRefs(
     Number.isInteger(generation) &&
     generation >= 0
   ) {
-    refs.add(`${inference}${generation}`);
-    refs.add(`${inference}${generation + 1}`);
+    const prefix =
+      value.schema === SANDBOX_CREDENTIAL_METADATA_SCHEMA ||
+      (typeof value.credential_ref === "string" &&
+        value.credential_ref.startsWith(sandbox))
+        ? sandbox
+        : inference;
+    refs.add(`${prefix}${generation}`);
+    refs.add(`${prefix}${generation + 1}`);
   }
   if (
     typeof value.secretRef === "string" &&
@@ -659,6 +697,16 @@ export class CredentialManager {
     return this.options.provider.mode;
   }
 
+  get slot(): CredentialSlot {
+    return this.options.slot ?? "inference";
+  }
+
+  get #schema(): CredentialMetadata["schema"] {
+    return this.slot === "sandbox"
+      ? SANDBOX_CREDENTIAL_METADATA_SCHEMA
+      : CREDENTIAL_METADATA_SCHEMA;
+  }
+
   get storesSecrets(): boolean {
     return this.mode !== "pi-native" && this.mode !== "none";
   }
@@ -681,7 +729,15 @@ export class CredentialManager {
     detail: Record<string, string | number | boolean | null>,
   ): void {
     try {
-      this.options.onEvent?.({ event, detail: { mode: this.mode, ...detail } });
+      this.options.onEvent?.({
+        event,
+        // A sandbox credential is a stored secret for the sandbox service,
+        // not the runtime credential: events say so instead of its mode.
+        detail:
+          this.slot === "sandbox"
+            ? { purpose: "sandbox", source: "stored", ...detail }
+            : { mode: this.mode, ...detail },
+      });
     } catch {
       // Event consumers never break the credential lifecycle.
     }
@@ -698,7 +754,7 @@ export class CredentialManager {
       value = {};
     }
     if (
-      value.schema !== CREDENTIAL_METADATA_SCHEMA ||
+      value.schema !== this.#schema ||
       value.mode !== this.mode ||
       typeof value.credential_ref !== "string" ||
       typeof value.generation !== "number"
@@ -777,7 +833,7 @@ export class CredentialManager {
   }
 
   #ref(generation: number): string {
-    return `piship:${this.options.distributionId}:inference#${generation}`;
+    return `piship:${this.options.distributionId}:${this.slot}#${generation}`;
   }
 
   #toRef(metadata: CredentialMetadata): CredentialRef {
@@ -832,8 +888,14 @@ export class CredentialManager {
     const orphans = new Set(previous?.orphans ?? []);
     if (previous) orphans.add(previous.credential_ref);
     const metadata: CredentialMetadata = {
-      schema: CREDENTIAL_METADATA_SCHEMA,
+      schema: this.#schema,
       mode: this.mode,
+      ...(this.slot === "sandbox"
+        ? {
+            source: "stored" as const,
+            origins: [...new Set(this.options.origins ?? [])].sort(),
+          }
+        : {}),
       credential_ref: ref,
       generation,
       kind: credential.kind,
@@ -1238,22 +1300,28 @@ export class CredentialManager {
    * Record a gateway rejection so this and later processes renew before reuse.
    * `used` names the credential the failed request carried and the principal
    * it was issued to: only that issuance is marked, never a newer one, and
-   * never one issued to someone else, whatever is stored by now. Without
-   * `used`, the credential stored when the call is made is the one marked.
+   * never one issued to someone else, whatever is stored by now. A bare
+   * reference marks that generation only. Without `used`, the credential
+   * stored when the call is made is the one marked. A user-owned runtime
+   * secret is left unmarked (the rejection may be transient); a sandbox
+   * credential is marked, so doctor shows it and the next launch asks for a
+   * new one instead of sending it again.
    */
-  async markRejected(used?: RejectedCredential): Promise<void> {
-    if (!this.renewable) return;
-    const observed = used?.ref ?? this.readMetadata()?.credential_ref;
+  async markRejected(used?: RejectedCredential | string): Promise<void> {
+    if (!this.renewable && this.slot !== "sandbox") return;
+    const target = typeof used === "string" ? { ref: used } : used;
+    const observed = target?.ref ?? this.readMetadata()?.credential_ref;
     await this.#exclusive(async () => {
       const metadata = this.readMetadata();
       if (
         !metadata ||
         metadata.rejected_at ||
         metadata.credential_ref !== observed ||
-        (used &&
-          ((used.acquiredAt !== undefined &&
-            metadata.acquired_at !== used.acquiredAt) ||
-            !samePrincipal(metadata.principal ?? null, used.principal)))
+        (target &&
+          "principal" in target &&
+          ((target.acquiredAt !== undefined &&
+            metadata.acquired_at !== target.acquiredAt) ||
+            !samePrincipal(metadata.principal ?? null, target.principal)))
       )
         return;
       writeAtomic(

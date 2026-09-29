@@ -61,6 +61,7 @@ import { readPreferences, resolveEffectiveConfig } from "../config.js";
 import { type AdapterContext, loadAdapter } from "./adapters.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
+import { SandboxCredential } from "./sandbox-credential.js";
 import {
   networkPolicyFor,
   type ResolvedEndpoints,
@@ -385,6 +386,28 @@ export class DistributionAccess {
       fetch: this.#fetch,
       endpoints: this.endpoints,
     };
+  }
+
+  /**
+   * The stored sandbox credential slot, in the distribution's configured
+   * store, for `principal`. Login clears it when another principal signs in,
+   * and logout clears it.
+   */
+  sandboxCredential(principal: PrincipalKey | null = null): SandboxCredential {
+    const store = this.store ?? this.options.secretStore;
+    return new SandboxCredential({
+      distributionId: this.options.app.id,
+      command: this.options.app.command,
+      stateDir: this.options.stateDir,
+      ...(this.options.access
+        ? { storage: this.options.access.credential.storage }
+        : {}),
+      ...(store ? { secretStore: store } : {}),
+      principal,
+      onEvent: (event) => this.#emit(event.event, event.detail),
+      ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
+      now: this.#now,
+    });
   }
 
   // ------------------------------------------------------------ principal pin
@@ -1170,6 +1193,11 @@ export class DistributionAccess {
           );
       }
       await this.options.onPhase?.("credential-cleared");
+      // Another principal's sandbox credential goes too, its deletion
+      // confirmed, before the new identity is stored: the stored sandbox
+      // credential is never usable by anyone but the one who stored it.
+      await this.sandboxCredential().clearUnlessBoundTo(principal);
+      await this.options.onPhase?.("sandbox-credential-cleared");
       if (provider && identity && principal) {
         const binding = this.#bindPrincipal(principal);
         await this.options.onPhase?.("principal-bound");
@@ -1213,9 +1241,10 @@ export class DistributionAccess {
   }
 
   /**
-   * Revoke and clear runtime and identity credentials; sessions, preferences,
-   * and the principal binding are kept. Runs under the credential lock, then
-   * the identity lock, like a login. Every problem is returned: a failed
+   * Revoke and clear runtime and identity credentials and delete the stored
+   * sandbox credential; sessions, preferences, and the principal binding are
+   * kept. Runs under the credential lock, then the sandbox credential lock,
+   * then the identity lock, like a login. Every problem is returned: a failed
    * revocation, and a secret that cannot be deleted. Credential secrets that
    * could not be deleted stay tracked by the credential's discarded marker.
    * Identity token bundles that could not be deleted leave an identity
@@ -1240,6 +1269,12 @@ export class DistributionAccess {
       );
       this.#forgetSecret();
       this.#workload = null;
+      // What cannot be deleted stays tracked by its discarded marker.
+      problems.push(
+        ...(await this.sandboxCredential().clear()).map(
+          (problem) => `sandbox credential: ${problem}`,
+        ),
+      );
       if (!existsSync(this.paths.identity)) return;
       await withFileLock(this.paths.identity, async () => {
         const metadata = this.readIdentityMetadata();

@@ -38,6 +38,7 @@ import {
   PiNativeCredentialProvider,
   REVOCATION_RETRY_SCHEMA,
   readPendingRevocations,
+  SANDBOX_CREDENTIAL_METADATA_SCHEMA,
   RestrictedFileSecretStore,
   SecretServiceSecretStore,
   WindowsCredentialSecretStore,
@@ -2174,6 +2175,139 @@ describe("secret references", () => {
     await credentials.logout(ctx);
     expect(store.refs()).toEqual(["piship:other:inference#1"]);
     expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("sandbox credential slot", () => {
+  const path = () => join(temp, "credentials-metadata", "sandbox.json");
+  const alice = { issuer: "https://idp.example", subject: "alice" };
+  const manager = (
+    store: MemorySecretStore,
+    events: CredentialEvent[] = [],
+    provider: CredentialProvider = new LocalSecretCredentialProvider({
+      label: "Sandbox token",
+      kind: "bearer",
+      maxLength: 64,
+    }),
+  ) =>
+    new CredentialManager({
+      distributionId: "acmecode",
+      slot: "sandbox",
+      origins: [
+        "https://b.example",
+        "https://a.example:8443",
+        "https://b.example",
+      ],
+      provider,
+      store,
+      metadataPath: path(),
+      beforeExpirySeconds: 0,
+      onEvent: (event) => events.push(event),
+    });
+
+  it("keeps its own references, schema, and origins, never the runtime credential's", async () => {
+    const store = new MemorySecretStore();
+    await store.put(
+      "piship:acmecode:inference#1",
+      new SecretValue("sk-runtime-credential-1"),
+    );
+    const events: CredentialEvent[] = [];
+    const prompts: string[] = [];
+    const sandbox = manager(store, events);
+    await sandbox.ensure(
+      alice as IdentitySession,
+      {
+        ...ctx,
+        readSecret: async (prompt) => {
+          prompts.push(prompt);
+          return "fake-sandbox-token-1";
+        },
+      },
+      { allowAcquire: true },
+    );
+    expect(prompts).toEqual(["Sandbox token"]);
+    const metadata = JSON.parse(readFileSync(path(), "utf8"));
+    expect(metadata).toMatchObject({
+      schema: SANDBOX_CREDENTIAL_METADATA_SCHEMA,
+      source: "stored",
+      origins: ["https://a.example:8443", "https://b.example"],
+      credential_ref: "piship:acmecode:sandbox#1",
+      kind: "bearer",
+      principal: alice,
+    });
+    expect(store.refs().sort()).toEqual([
+      "piship:acmecode:inference#1",
+      "piship:acmecode:sandbox#1",
+    ]);
+    expect(metadataSecretRefs(metadata, "acmecode")).toEqual([
+      "piship:acmecode:sandbox#1",
+      "piship:acmecode:sandbox#2",
+    ]);
+    // Runtime credential metadata is not read as a sandbox credential.
+    const inference = new CredentialManager({
+      distributionId: "acmecode",
+      provider: new LocalSecretCredentialProvider(),
+      store,
+      metadataPath: path(),
+      beforeExpirySeconds: 0,
+    });
+    expect(inference.readMetadata()).toBeNull();
+    expect(sandbox.readMetadata()?.credential_ref).toBe(
+      "piship:acmecode:sandbox#1",
+    );
+    // Events name the purpose, never the mode, origins, or secret.
+    expect(events[0]).toMatchObject({
+      event: "credential.acquire",
+      detail: { purpose: "sandbox", source: "stored", kind: "bearer" },
+    });
+    expect(events[0]?.detail).not.toHaveProperty("mode");
+    expect(JSON.stringify(events)).not.toMatch(/fake-sandbox|example/);
+    await sandbox.logout(ctx);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
+  });
+
+  it("marks a rejection of a user-entered sandbox secret, only for that generation", async () => {
+    const store = new MemorySecretStore();
+    const sandbox = manager(store);
+    await sandbox.ensure(
+      null,
+      {
+        ...ctx,
+        readSecret: async () => "fake-sandbox-token-1",
+      },
+      { allowAcquire: true },
+    );
+    await sandbox.markRejected("piship:acmecode:sandbox#9");
+    expect(sandbox.readMetadata()?.rejected_at).toBeUndefined();
+    await sandbox.markRejected("piship:acmecode:sandbox#1");
+    expect(sandbox.status().state).toBe("rejected");
+  });
+
+  it("the local secret provider checks length and header safety", async () => {
+    const provider = new LocalSecretCredentialProvider({
+      label: "Sandbox API key",
+      kind: "api_key",
+      maxLength: 16,
+      userAction: "Run acme sandbox login",
+    });
+    const read = (value: string) =>
+      provider.acquire(null, { ...ctx, readSecret: async () => value });
+    for (const value of [
+      "short",
+      "x".repeat(17),
+      "fake key 01",
+      "fake\u0000key01",
+    ])
+      await expect(read(value)).rejects.toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+      });
+    const credential = await read(" fake-key-0001 ");
+    expect(credential.kind).toBe("api_key");
+    expect(credential.secret.reveal()).toBe("fake-key-0001");
+    await expect(provider.acquire(null, ctx)).rejects.toMatchObject({
+      code: "CREDENTIAL_REQUIRED",
+      userAction: "Run acme sandbox login",
+    });
   });
 });
 

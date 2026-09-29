@@ -595,14 +595,26 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
   }
 }
 
+export interface LocalSecretOptions {
+  /** What the prompt asks for. Default `API key`. */
+  readonly label?: string;
+  /** How the secret is sent. Default `api_key`. */
+  readonly kind?: "api_key" | "bearer";
+  /** Longest secret accepted; unlimited when absent. */
+  readonly maxLength?: number;
+  /** The command that stores it, for the error when none is entered. */
+  readonly userAction?: string;
+}
+
 /**
- * User-owned secret (`local-secret`), such as a personal provider API key,
- * captured interactively and kept in the configured SecretStore. It has no
- * expiry and no remote revocation.
+ * User-owned secret (`local-secret`), such as a personal provider API key or
+ * a sandbox service's API key or token, captured interactively and kept in
+ * the configured SecretStore. It has no expiry and no remote revocation.
  */
 export class LocalSecretCredentialProvider implements CredentialProvider {
   readonly mode = "local-secret" as const;
   readonly requiresIdentity = false;
+  constructor(readonly options: LocalSecretOptions = {}) {}
   async acquire(
     _identity: IdentitySession | null,
     ctx: CredentialContext,
@@ -613,11 +625,23 @@ export class LocalSecretCredentialProvider implements CredentialProvider {
         "No local secret is stored for this distribution",
         {
           component: "credential",
-          userAction: "Run the branded login command to store it",
+          userAction:
+            this.options.userAction ??
+            "Run the branded login command to store it",
         },
       );
-    const value = (await ctx.readSecret("API key")).trim();
-    if (value.length < 8 || /\s/.test(value))
+    const value = (
+      await ctx.readSecret(this.options.label ?? "API key")
+    ).trim();
+    // At least 8 visible ASCII characters: a space, a control character
+    // (CR, LF, NUL), or a non-ASCII character would break the request
+    // header it is sent in.
+    if (
+      value.length < 8 ||
+      HEADER_BREAKING.test(value) ||
+      (this.options.maxLength !== undefined &&
+        value.length > this.options.maxLength)
+    )
       throw new PiShipError(
         "CREDENTIAL_ACQUIRE_FAILED",
         "The entered secret is empty or malformed",
@@ -625,7 +649,10 @@ export class LocalSecretCredentialProvider implements CredentialProvider {
           component: "credential",
         },
       );
-    return { kind: "api_key", secret: new SecretValue(value) };
+    return {
+      kind: this.options.kind ?? "api_key",
+      secret: new SecretValue(value),
+    };
   }
 }
 
