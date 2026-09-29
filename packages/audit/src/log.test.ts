@@ -258,7 +258,11 @@ describe("AuditLog file sink retention", () => {
   });
 
   it("does not rotate twice when another writer already rotated", async () => {
-    const rotation = { maxBytes: 400, files: 3 };
+    // Nine rotated files hold more than the twelve events written, so no event
+    // leaves through retention however the two writers interleave. A writer
+    // that loses the rotation lock appends anyway, so how many events each
+    // file holds depends on timing; only the properties below do not.
+    const rotation = { maxBytes: 400, files: 9 };
     const open = () =>
       AuditLog.open({
         config: config([...sink], 1000),
@@ -274,13 +278,18 @@ describe("AuditLog file sink retention", () => {
     }
     await Promise.all([first.close(), second.close()]);
     const base = join(temp, "logs", "audit.jsonl");
-    const all = auditLogFiles(temp, rotation).flatMap((path) =>
+    const files = auditLogFiles(temp, rotation);
+    const all = files.flatMap((path) =>
       lines(path).map((line) => line.resource),
     );
-    // Twelve events of about 250 bytes fit in the four files; none is lost.
     expect(all.sort()).toEqual(
       [0, 1, 2, 3, 4, 5].flatMap((i) => [`a${i}`, `b${i}`]).sort(),
     );
+    // An event is about 156 bytes against a 400 byte limit, so a file is
+    // rotated only once it holds two events. A second rotation of the file
+    // another writer just started would leave a rotated file with one.
+    for (const path of files.slice(1))
+      expect(lines(path).length).toBeGreaterThanOrEqual(2);
     expect(existsSync(`${base}.rotate.lock`)).toBe(false);
   });
 
