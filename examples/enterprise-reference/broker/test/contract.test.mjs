@@ -1024,6 +1024,38 @@ describe("revoke: limits", () => {
     assert.equal((await spoof(proxied, "10.0.0.3, 10.0.0.2")).status, 429);
   });
 
+  it("stops the X-Forwarded-For walk at a hop that is not an address, and strips a proxy's port", async () => {
+    const { clientAddress } = await import("../src/broker.mjs");
+    const trusted = new Set(["127.0.0.1", "10.9.9.9"]);
+    const from = (header, peer = "::ffff:127.0.0.1") =>
+      clientAddress(
+        {
+          socket: { remoteAddress: peer },
+          headers: header === undefined ? {} : { "x-forwarded-for": header },
+        },
+        trusted,
+      );
+    assert.equal(from("198.51.100.7:4711"), "198.51.100.7");
+    assert.equal(from("[2001:db8::5]:443"), "2001:db8::5");
+    assert.equal(from("[2001:db8::5]"), "2001:db8::5");
+    assert.equal(from("2001:db8::5"), "2001:db8::5");
+    assert.equal(
+      from("203.0.113.9, 198.51.100.7:4711, 10.9.9.9"),
+      "198.51.100.7",
+    );
+    for (const header of [
+      "203.0.113.9, unknown",
+      "203.0.113.9, _hidden",
+      "203.0.113.9, 198.51.100.7:port",
+      "203.0.113.9, unknown, 10.9.9.9",
+      "203.0.113.9,",
+      "",
+      undefined,
+    ])
+      assert.equal(from(header), "127.0.0.1", String(header));
+    assert.equal(from("203.0.113.9", "192.0.2.50"), "192.0.2.50");
+  });
+
   it("503 with Retry-After: 1 past BROKER_REVOKE_MAX_CONCURRENT lookups in flight", async () => {
     const h = await harness({ BROKER_REVOKE_MAX_CONCURRENT: "1" });
     h.litellm.state.keyInfoDelayMs = 200;

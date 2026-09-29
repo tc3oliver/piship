@@ -242,21 +242,40 @@ function normalizeAddress(address) {
 }
 
 /**
+ * One `X-Forwarded-For` hop as a bare address: a port a proxy appended
+ * (`192.0.2.1:443`, `[2001:db8::1]:443`) is dropped. Null when the hop is
+ * not an IP address (`unknown`, an obfuscated identifier, garbage).
+ */
+function forwardedAddress(hop) {
+  const text = hop.trim();
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(text);
+  const withPort = /^(\d+\.\d+\.\d+\.\d+):\d+$/.exec(text);
+  const address = normalizeAddress(
+    bracketed ? bracketed[1] : withPort ? withPort[1] : text,
+  );
+  return isIP(address) === 0 ? null : address;
+}
+
+/**
  * The address a request came from: the socket's peer, or, when that peer is
  * a configured trusted proxy, the right-most `X-Forwarded-For` entry that is
  * not itself a trusted proxy. The header is ignored from anyone else, since
- * a client can write any value into it.
+ * a client can write any value into it. The walk stops at the first hop from
+ * the right that is not an address: everything left of it may be the
+ * client's own writing, so the peer counts instead.
  */
 export function clientAddress(req, trustedProxies) {
   const peer = normalizeAddress(req.socket?.remoteAddress);
   if (!trustedProxies.has(peer)) return peer;
   const header = req.headers["x-forwarded-for"];
-  const hops = (Array.isArray(header) ? header.join(",") : (header ?? ""))
-    .split(",")
-    .map((hop) => normalizeAddress(hop.trim()))
-    .filter((hop) => isIP(hop) !== 0);
-  for (let i = hops.length - 1; i >= 0; i--)
-    if (!trustedProxies.has(hops[i])) return hops[i];
+  const hops = (
+    Array.isArray(header) ? header.join(",") : (header ?? "")
+  ).split(",");
+  for (let i = hops.length - 1; i >= 0; i--) {
+    const address = forwardedAddress(hops[i]);
+    if (address === null) return peer;
+    if (!trustedProxies.has(address)) return address;
+  }
   return peer;
 }
 
