@@ -782,6 +782,318 @@ describe("http-broker failure and retry contract", () => {
   );
 });
 
+describe("http-broker idempotency and retry", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  let identity: IdentitySession;
+  const UUID =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /** An active access token for `subject` at the fixture identity provider. */
+  function signIn(subject: string): IdentitySession {
+    const token = `demo-at-${subject}-${Math.random().toString(36).slice(2)}`;
+    services.state.accessTokens.set(token, {
+      subject,
+      expires: Math.floor(Date.now() / 1000) + 600,
+    });
+    return {
+      subject,
+      issuer: services.issuer,
+      accessToken: new SecretValue(token),
+    };
+  }
+  beforeEach(async () => {
+    services = await startLocalServices({ knobs: { brokerIdempotency: true } });
+    identity = signIn("demo-user-1");
+  });
+  afterEach(() => services.close());
+  const broker = (extra: Record<string, unknown> = {}) =>
+    new HttpBrokerCredentialProvider({
+      endpoint: services.brokerUrl,
+      revokeEndpoint: services.revokeUrl,
+      expectedBaseUrl: services.gatewayUrl,
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+      ...extra,
+    });
+  const manager = (provider: CredentialProvider = broker()) =>
+    new CredentialManager({
+      distributionId: "acmecode",
+      provider,
+      store: new MemorySecretStore(),
+      metadataPath: join(temp, "credentials-metadata", "inference.json"),
+      beforeExpirySeconds: 300,
+    });
+  const brokerRequests = () =>
+    services.state.requests.filter(
+      (item: { path: string }) => item.path === "/broker/v1/llm-credential",
+    ).length;
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => {
+        throw new Error("expected a failure");
+      },
+      (error: unknown) => error as PiShipError,
+    );
+  /**
+   * No identity token and no credential the broker ever issued, including
+   * one whose answer was lost, appears in any rendering of the error.
+   */
+  function expectNoSecret(error: unknown, ...tokens: IdentitySession[]): void {
+    const renderings = [
+      String(error),
+      JSON.stringify(error),
+      inspect(error, { depth: 10, showHidden: true }),
+    ].join("\n");
+    for (const session of [identity, ...tokens])
+      expect(renderings).not.toContain(session.accessToken?.reveal());
+    for (const issued of services.state.credentials.keys())
+      expect(renderings).not.toContain(issued);
+  }
+
+  it("sends one random key per logical acquire, never derived from the identity", async () => {
+    const credentials = manager();
+    await credentials.ensure(identity, ctx, { allowAcquire: true });
+    // Reusing the stored credential sends nothing.
+    await credentials.ensure(identity, ctx, { allowAcquire: false });
+    await credentials.ensure(identity, ctx, {
+      allowAcquire: false,
+      forceRefresh: true,
+    });
+    const keys: string[] = services.state.idempotencyKeys;
+    expect(keys).toHaveLength(2);
+    for (const key of keys) {
+      expect(key).toMatch(UUID);
+      expect(key).not.toContain(identity.subject);
+      expect(identity.accessToken?.reveal()).not.toContain(key);
+    }
+    expect(keys[0]).not.toBe(keys[1]);
+    // A provider called directly with no key sends no header.
+    await broker().acquire(identity, ctx);
+    expect(services.state.idempotencyKeys).toHaveLength(2);
+    expect(brokerRequests()).toBe(3);
+  });
+
+  it("does not re-issue an acquire that timed out after the broker issued a credential", async () => {
+    // The broker issues the credential, then the answer never arrives.
+    Object.assign(services.knobs, {
+      brokerTimeoutMs: 5_000,
+      brokerTimeoutServes: true,
+    });
+    const credentials = manager(broker({ timeoutMs: 200 }));
+    const error = await failure(
+      credentials.ensure(identity, ctx, { allowAcquire: true }),
+    );
+    expect(error).toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: true,
+      sanitizedDetail: {
+        operation: "acquire",
+        reason: "timeout",
+        outcome: "unknown",
+        idempotencyKey: expect.stringMatching(UUID),
+      },
+    });
+    // Exactly one request left PiShip, and nothing was stored locally.
+    expect(brokerRequests()).toBe(1);
+    expect(services.state.credentialCount).toBe(1);
+    expect(credentials.status().state).toBe("absent");
+    expectNoSecret(error);
+
+    // The caller retries the same acquire with the reported key and gets
+    // the credential the broker already issued, not a second one.
+    Object.assign(services.knobs, { brokerTimeoutMs: 0 });
+    const key = String(error.sanitizedDetail?.idempotencyKey);
+    const retried = await credentials.ensure(
+      identity,
+      { ...ctx, idempotencyKey: key },
+      { allowAcquire: true },
+    );
+    expect(services.state.credentialCount).toBe(1);
+    expect(retried.ref?.credentialId).toBe("vk_demo_1");
+    expect(services.state.credentials.has(retried.secret?.reveal())).toBe(true);
+    expect(services.state.idempotencyKeys).toEqual([key, key]);
+  });
+
+  it.each([
+    [
+      "a connection reset after the broker issued a credential",
+      { brokerTimeoutMs: 50, brokerTimeoutServes: true },
+      "unreachable",
+      "unknown",
+      true,
+    ],
+    [
+      "a 503 with Retry-After",
+      { brokerStatus: 503, brokerRetryAfter: 3 },
+      "unavailable",
+      undefined,
+      true,
+    ],
+    [
+      "a 429 with Retry-After",
+      { brokerStatus: 429, brokerRetryAfter: 3 },
+      "rate-limited",
+      undefined,
+      true,
+    ],
+    ["a 401", { brokerStatus: 401 }, "authentication", undefined, false],
+  ])(
+    "sends an acquire once after %s",
+    async (_name, knobs, reason, outcome, retryable) => {
+      Object.assign(services.knobs, knobs);
+      const credentials = manager(broker({ timeoutMs: 5_000 }));
+      const error = await failure(
+        credentials.ensure(identity, ctx, { allowAcquire: true }),
+      );
+      expect(error).toMatchObject({
+        retryable,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason,
+          idempotencyKey: expect.stringMatching(UUID),
+          ...(outcome ? { outcome } : {}),
+        },
+      });
+      if (!outcome) expect(error.sanitizedDetail).not.toHaveProperty("outcome");
+      expect(brokerRequests()).toBe(1);
+      expectNoSecret(error);
+    },
+  );
+
+  it("replays the original credential for a repeated key and the same input", async () => {
+    const provider = broker();
+    const keyed = { ...ctx, idempotencyKey: "retry-key-1" };
+    const first = await provider.acquire(identity, keyed);
+    const second = await provider.acquire(identity, keyed);
+    expect(second.secret.reveal()).toBe(first.secret.reveal());
+    expect(second.credentialId).toBe(first.credentialId);
+    expect(services.state.credentialCount).toBe(1);
+    // A renewed identity token of the same user is the same input.
+    const renewed = signIn("demo-user-1");
+    const third = await provider.acquire(renewed, keyed);
+    expect(third.credentialId).toBe(first.credentialId);
+    expect(services.state.credentialCount).toBe(1);
+  });
+
+  it("rejects a replayed key with different input as a non-retryable conflict", async () => {
+    const provider = broker();
+    const keyed = { ...ctx, idempotencyKey: "retry-key-2" };
+    const original = await provider.acquire(identity, keyed);
+    const bob = signIn("demo-user-2");
+    for (const [session, context] of [
+      // Another distribution, same user.
+      [identity, { ...keyed, distributionId: "othercode" }],
+      // Another user, same distribution: never the first user's credential.
+      [bob, keyed],
+    ] as const) {
+      const error = await failure(provider.acquire(session, context));
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: false,
+        component: "credential",
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "idempotency-conflict",
+          status: 409,
+          idempotencyKey: "retry-key-2",
+        },
+      });
+      expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(
+        original.secret.reveal(),
+      );
+      expectNoSecret(error, bob);
+    }
+    expect(services.state.credentialCount).toBe(1);
+
+    // Through the manager, a conflict stores nothing.
+    const credentials = manager();
+    await expect(
+      credentials.ensure(bob, keyed, { allowAcquire: true }),
+    ).rejects.toMatchObject({
+      sanitizedDetail: { reason: "idempotency-conflict" },
+    });
+    expect(credentials.status().state).toBe("absent");
+  });
+
+  it("reads 409 and 422 as a key conflict only when the acquire sent a key", async () => {
+    for (const status of [409, 422]) {
+      services.knobs.brokerFaults.push({ status }, { status });
+      await expect(
+        broker().acquire(identity, { ...ctx, idempotencyKey: "retry-key-3" }),
+      ).rejects.toMatchObject({
+        retryable: false,
+        sanitizedDetail: { reason: "idempotency-conflict", status },
+      });
+      await expect(broker().acquire(identity, ctx)).rejects.toMatchObject({
+        retryable: false,
+        sanitizedDetail: { reason: "rejected", status },
+      });
+    }
+  });
+
+  it("refuses a malformed caller key before anything is sent", async () => {
+    const before = brokerRequests();
+    for (const key of ["", "has space", "line\r\nbreak", "k".repeat(256)]) {
+      const error = await failure(
+        broker().acquire(identity, { ...ctx, idempotencyKey: key }),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: false,
+        sanitizedDetail: { operation: "acquire", reason: "contract" },
+      });
+      expect(error.sanitizedDetail).not.toHaveProperty("idempotencyKey");
+    }
+    expect(brokerRequests()).toBe(before);
+  });
+
+  it("tells a request that was never sent from one whose outcome is unknown", async () => {
+    const keyed = { ...ctx, idempotencyKey: "retry-key-4" };
+    // Connection refused, through the managed fetch.
+    const provider = broker();
+    await services.close();
+    await expect(provider.acquire(identity, keyed)).rejects.toMatchObject({
+      retryable: true,
+      sanitizedDetail: {
+        reason: "unreachable",
+        outcome: "not-sent",
+        idempotencyKey: "retry-key-4",
+      },
+    });
+    services = await startLocalServices({ knobs: { brokerIdempotency: true } });
+    identity = signIn("demo-user-1");
+    const transport = (code: string) =>
+      broker({
+        fetch: async () => {
+          throw new TypeError("fetch failed", { cause: { code } });
+        },
+      }).acquire(identity, keyed);
+    for (const code of ["ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"])
+      await expect(transport(code)).rejects.toMatchObject({
+        sanitizedDetail: { reason: "unreachable", outcome: "not-sent" },
+      });
+    for (const code of ["ECONNRESET", "UND_ERR_SOCKET", "EPIPE"])
+      await expect(transport(code)).rejects.toMatchObject({
+        sanitizedDetail: { reason: "unreachable", outcome: "unknown" },
+      });
+    // Cancelled before sending, and cancelled while the broker works.
+    await expect(
+      broker().acquire(identity, { ...keyed, signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({
+      retryable: false,
+      sanitizedDetail: { reason: "cancelled", outcome: "not-sent" },
+    });
+    services.knobs.brokerTimeoutMs = 5_000;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 50);
+    await expect(
+      broker().acquire(identity, { ...keyed, signal: controller.signal }),
+    ).rejects.toMatchObject({
+      retryable: false,
+      sanitizedDetail: { reason: "cancelled", outcome: "unknown" },
+    });
+  });
+});
+
 function fakeProvider(
   options: {
     expiresInSeconds?: number;
@@ -1326,6 +1638,36 @@ describe("credential lifecycle events", () => {
     });
     // Local clearing still happened.
     expect(failing.store.refs()).toEqual([]);
+
+    // A secret store that cannot be read is a failed revocation the caller
+    // sees, not a silent skip: the credential may still be live remotely.
+    const unreadableStore = new MemorySecretStore();
+    const unreadable = eventsManager(
+      fakeProvider({ expiresInSeconds: 3600 }),
+      unreadableStore,
+    );
+    await unreadable.manager.ensure(null, ctx, { allowAcquire: true });
+    unreadableStore.get = async () => {
+      throw new PiShipError(
+        "SECRET_STORE_UNAVAILABLE",
+        "The keychain is locked",
+      );
+    };
+    expect(await unreadable.manager.logout(ctx)).toEqual([
+      "revocation: the stored credential could not be read (SECRET_STORE_UNAVAILABLE)",
+    ]);
+    expect(unreadable.events.at(-1)?.detail).toMatchObject({
+      revocation: "failed",
+    });
+    expect(unreadableStore.refs()).toEqual([]);
+    await unreadable.manager.ensure(null, ctx, { allowAcquire: true });
+    await expect(
+      unreadable.manager.revoke(ctx, "lifecycle"),
+    ).resolves.toMatchObject({
+      outcome: "failed",
+      problem: expect.stringContaining("could not be read"),
+    });
+    rmSync(join(temp, "credentials-metadata"), { recursive: true });
 
     const noRevoke: Partial<ReturnType<typeof fakeProvider>> = fakeProvider({
       expiresInSeconds: 3600,

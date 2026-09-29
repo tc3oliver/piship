@@ -94,11 +94,12 @@ POST {credential.broker.endpoint}
 Authorization: Bearer <identity access token>
 Content-Type: application/json
 Accept: application/json
+Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 
 {"distribution": "acmecode", "purpose": "inference"}
 ```
 
-`distribution` is `app.id`; `purpose` is always `inference`. Success is any 2xx with a JSON body:
+`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). Success is any 2xx with a JSON body:
 
 ```json
 {
@@ -123,14 +124,48 @@ Accept: application/json
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
 | 403 | `CREDENTIAL_DENIED`: user or distribution denied. Not retryable |
+| 409 or 422 | `CREDENTIAL_ACQUIRE_FAILED`, not retryable, `reason: idempotency-conflict`: the key was already used for a different request |
 | 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. No automatic retry |
 | 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` when sent. No automatic retry |
 | 3xx, other 4xx, malformed JSON, contract violation | `CREDENTIAL_ACQUIRE_FAILED`. Redirects are never followed |
-| Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
+| Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable. No automatic retry |
 | Cancelled by the caller | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
 | Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION`, unchanged |
 
-The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, or `contract`), and the HTTP `status` when there was one. Broker responses are never logged or echoed in errors.
+The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
+
+### Idempotency and retries
+
+A lost answer can hide an issued credential: the broker may create a gateway key, then the connection drops before PiShip reads it. PiShip therefore never re-sends a credential request by itself, and gives each request a key so that a retry can be recognized.
+
+**What PiShip sends.** Every acquire and renewal carries `Idempotency-Key`: a random UUID (version 4), unquoted, generated once per logical acquire. It is not secret and is never derived from the identity, a token, or the user. A renewal is a new logical acquire and gets a new key. A caller that retries the same acquire, for example after a timeout, sends the key it got back in the error's `detail.idempotencyKey`; PiShip itself does not.
+
+**What PiShip does not do.** It never retries an acquire, a renewal, or a revocation automatically, whatever the failure. The one exception is a 401: the broker rejected the identity token before doing any work, so PiShip refreshes the identity once and sends one new acquire.
+
+**What a broker should do** (PiShip works with a broker that ignores the key, but then the "unknown outcome" failures below can leave an unused credential behind):
+
+| Request | Broker answer |
+| --- | --- |
+| New key | Issue as usual. Store the answer under the key only when issuing started: never for a 401, 403, 429, or 503 |
+| Same key, same input, first request finished | Return the stored answer, same credential, same `credential_id`. Do not issue again |
+| Same key, different input | 422 (or 409). Do not issue, and never return the stored credential |
+| Same key while the first request is still running | 503 with `Retry-After`. Do not use 409 for this: PiShip reads 409 as a conflict |
+
+"Same input" is the authenticated principal (issuer and subject) plus the request body. It is **not** the access token: an identity refresh changes the token but not the user, and a retry after it must still match. A key sent by another principal is different input, so one user's key never returns another user's credential. Keep keys at least as long as a client could retry, such as 24 hours, and scope them to the principal.
+
+**Which failures are safe to retry.** The error's `retryable` says whether trying again can succeed; `detail.outcome` (on failures without an answer) says whether the broker may already have acted:
+
+| Failure | Did the broker act? | Safe to retry |
+| --- | --- | --- |
+| 401 | No: the token was rejected before any work | Yes, after an identity refresh (PiShip does this once) |
+| 429 with `Retry-After` | No: the broker refused the work | Yes, after `Retry-After` |
+| 503 with `Retry-After` | No: the broker refused the work | Yes, after `Retry-After` |
+| Refused before sending: `outcome: not-sent` (connection refused, DNS failure, connect timeout, a signal that was already cancelled) | No: the request never left PiShip | Yes |
+| Timeout, connection reset, or cancellation after sending: `outcome: unknown` | Maybe: a credential may have been issued | Only with the same `Idempotency-Key`, and only if the broker honors it |
+| 500, 502, 504 | Maybe, depending on where it failed | Only with the same key, if the broker honors it |
+| 403, 409 or 422 conflict, other 4xx, contract violation | Decided | No |
+
+A broker that cannot honor keys should keep credentials short-lived, so an unused one expires soon.
 
 ### Revoke
 
@@ -153,6 +188,7 @@ The bearer is the **runtime credential**, not the identity token; `credential_id
 - If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`, or with the identity error when sign-in is needed.
 - A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`. A 403 during renewal stays `CREDENTIAL_DENIED`.
 - A failed renewal keeps the broker failure's `retryable`, `Retry-After`, and `detail`, so a broker outage or rate limit on renewal is still retryable rather than a request to sign in again.
+- A renewal whose answer was lost is not re-sent. While the current credential is valid, PiShip keeps using it, and the next renewal is a new logical acquire with a new key; a credential the broker issued for the lost answer is never used, so let it expire.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
 - Concurrent launches share one renewal through a lock file. A live holder refreshes the lock, so it is never broken while held; only a lock left unrefreshed for 75 s is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 

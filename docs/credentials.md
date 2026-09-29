@@ -42,9 +42,12 @@ Acquire and refresh:
 POST <credential.broker.endpoint>
 Authorization: Bearer <identity access token>
 Content-Type: application/json
+Idempotency-Key: <random UUID, one per logical acquire>
 
 {"distribution": "<app id>", "purpose": "inference"}
 ```
+
+`Idempotency-Key` comes from `CredentialContext.idempotencyKey`. `CredentialManager` generates a random UUID for each acquire or renewal it sends, unless the caller passes a key; a caller retrying the same acquire passes the key from the failure's `detail.idempotencyKey`. A key must be 1 to 255 visible ASCII characters without spaces, or the acquire fails with `reason: contract` before anything is sent. A provider called directly without a key sends no header. What a broker does with the key, and which failures are safe to retry, is in the [enterprise integration contract](enterprise-integration.md#idempotency-and-retries).
 
 A 2xx response must be JSON:
 
@@ -76,6 +79,7 @@ Acquire and revoke share one transport. Each call has a 30 s timeout (`timeoutMs
 | 401 | `IDENTITY_EXPIRED`; PiShip refreshes the identity once and retries | Counts as revoked | no | `authentication` |
 | 403 | `CREDENTIAL_DENIED`: user or distribution denied | `CREDENTIAL_DENIED` | no | `denied` |
 | 404 | `CREDENTIAL_ACQUIRE_FAILED` | Counts as revoked | no | `rejected` |
+| 409 or 422 to an acquire that sent a key | `CREDENTIAL_ACQUIRE_FAILED`: the key was used for a different request | (no key sent) | no | `idempotency-conflict` |
 | 429 | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes, with `Retry-After` | `rate-limited` |
 | 5xx, including a proxy's HTML error page | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes, with `Retry-After` when sent | `unavailable` |
 | Other 3xx or 4xx | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | no | `rejected` |
@@ -85,7 +89,7 @@ Acquire and revoke share one transport. Each call has a 30 s timeout (`timeoutMs
 | Cancelled by the caller's signal | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | no | `cancelled` |
 | Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION` | same | no | none |
 
-`Retry-After` (seconds or HTTP date) becomes `retryAfterMs` and is shown as `Retry after: <n> s`. The error's `detail` holds only non-secret fields: `operation` (`acquire` or `revoke`), `reason`, and `status` when the broker answered. Error messages, actions, and details never contain the identity token, the runtime credential, or the broker's response body. A revoke failure is reported as a warning and never keeps the local secret.
+`Retry-After` (seconds or HTTP date) becomes `retryAfterMs` and is shown as `Retry after: <n> s`. The error's `detail` holds only non-secret fields: `operation` (`acquire` or `revoke`), `reason`, `status` when the broker answered, `idempotencyKey` on an acquire that sent one, and, for `timeout`, `unreachable`, and `cancelled`, `outcome`: `not-sent` when the request never left PiShip (connection refused, DNS failure, connect timeout, an already cancelled signal), `unknown` when the broker may have received it and issued a credential. Nothing is re-sent after an `unknown` outcome; retry the same acquire with the same key. Error messages, actions, and details never contain the identity token, the runtime credential, or the broker's response body. A revoke failure is reported as a warning and never keeps the local secret.
 
 ## Secret stores
 
@@ -110,7 +114,7 @@ The macOS, Windows, and Linux Secret Service stores limit the size of one item (
 - A gateway rejection of a broker or adapter credential marks the metadata `rejected_at`, so this and later processes renew before reuse. If renewal fails, the result is `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED`, `CREDENTIAL_DENIED`, or `NETWORK_DENIED` are kept. A failed renewal, forced or on expiry, keeps the failure's `retryable`, `retryAfterMs`, and `detail`, so a broker outage or rate limit stays retryable. A rejected `local-secret` cannot be renewed automatically, so it is left in place and the launch fails with `CREDENTIAL_REVOKED` and guidance to replace it with `login`.
 - Refreshes are serialized within a process and across processes by a lock file beside the metadata, so concurrent launches share one renewal instead of racing. The holder refreshes the lock as a heartbeat and before each blocking secret-store command, so a live holder's lock is never broken; only a lock left unrefreshed for 75 s is taken over (moved aside atomically after a re-check). A holder releases only its own lock, and a waiter that runs out of time fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 - Metadata from an incompatible version, or metadata whose secret is missing, is cleared rather than reused, together with every secret it references, and the user must sign in again.
-- `logout` revokes when supported, then deletes the current, orphaned, and possibly pending next-generation secrets and the metadata. The revocation outcome is audited as `credential.revoke` (`revoked`, `failed`, `unsupported`, or `skipped`), and `login` revokes the credential it replaces. `credential.acquire` is recorded only for a new acquisition, and renewals as `credential.refresh`.
+- `logout` revokes when supported, then deletes the current, orphaned, and possibly pending next-generation secrets and the metadata. The revocation outcome is audited as `credential.revoke` (`revoked`, `failed`, `unsupported`, or `skipped` when the store holds no secret for it). A secret store that cannot be read is a `failed` revocation with a problem entry, since the credential may still be valid at the broker. `login` revokes the credential it replaces. `credential.acquire` is recorded only for a new acquisition, and renewals as `credential.refresh`.
 - When update, rollback, or migration must clear a credential the target cannot read, the switching release first revokes it where supported (best effort; a failure is a warning), then deletes every reference, including orphaned and pending generations.
 - A credential adapter that requires an identity is rejected with `CONFIG_INVALID` under `identity.mode: none`.
 

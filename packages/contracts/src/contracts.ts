@@ -61,6 +61,15 @@ export interface CredentialContext {
    * timeout and never replaces it.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Names one logical acquire or renewal, so a broker that honors it answers
+   * a repeated request with the credential it already issued instead of a new
+   * one. Random and not secret; never derived from the identity or a token.
+   * `CredentialManager` generates one per acquire or renewal unless the
+   * caller passes one. A caller retrying the same acquire after a failure
+   * whose outcome is unknown passes the key the failure reported.
+   */
+  readonly idempotencyKey?: string;
   /** Interactive input for user-owned secrets; absent in headless flows. */
   readonly readSecret?: (prompt: string) => Promise<string>;
 }

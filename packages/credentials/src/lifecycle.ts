@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -74,8 +74,9 @@ export type CredentialRevokeReason = "logout" | "replace" | "lifecycle";
 
 /**
  * Outcome of a remote revocation attempt: `revoked` when the provider
- * accepted it, `failed` when it raised, `unsupported` when the provider has
- * no remote revocation, and `skipped` when the stored secret was unreadable.
+ * accepted it, `failed` when it raised or the secret store could not be read,
+ * `unsupported` when the provider has no remote revocation, and `skipped`
+ * when the secret store holds no secret for the credential.
  */
 export type RevocationOutcome =
   | "revoked"
@@ -657,6 +658,12 @@ export class CredentialManager {
       };
     }
     const notices: string[] = [];
+    // One idempotency key per logical acquire or renewal: the one request
+    // this call may send. Nothing here re-sends it; a caller that retries
+    // the same acquire passes the key back.
+    const attempt: CredentialContext = ctx.idempotencyKey
+      ? ctx
+      : { ...ctx, idempotencyKey: randomUUID() };
     if (this.#incompatibleMetadataPresent()) {
       await this.#clearMetadata();
       notices.push(
@@ -684,7 +691,7 @@ export class CredentialManager {
             userAction: "Run the branded login command",
           },
         );
-      const returned = await this.options.provider.acquire(identity, ctx);
+      const returned = await this.options.provider.acquire(identity, attempt);
       if (!returned)
         throw new PiShipError(
           "CREDENTIAL_ACQUIRE_FAILED",
@@ -714,8 +721,8 @@ export class CredentialManager {
       try {
         const provider = this.options.provider;
         const returned = provider.refresh
-          ? await provider.refresh(identity, current, ctx)
-          : await provider.acquire(identity, ctx);
+          ? await provider.refresh(identity, current, attempt)
+          : await provider.acquire(identity, attempt);
         if (!returned)
           throw new PiShipError(
             "CREDENTIAL_ACQUIRE_FAILED",
@@ -835,14 +842,20 @@ export class CredentialManager {
   ): Promise<{ outcome: RevocationOutcome; problem?: string }> {
     let outcome: RevocationOutcome;
     let problem: string | undefined;
-    const secret =
-      this.revocable && this.options.store
-        ? await this.options.store
-            .get(metadata.credential_ref)
-            .catch(() => null)
-        : null;
+    let secret: SecretValue | null = null;
+    let unreadable: unknown;
+    if (this.revocable && this.options.store)
+      try {
+        secret = await this.options.store.get(metadata.credential_ref);
+      } catch (error) {
+        unreadable = error;
+      }
     if (!this.revocable) outcome = "unsupported";
-    else if (!secret) outcome = "skipped";
+    else if (unreadable !== undefined) {
+      // The credential may still be live at the broker: say so, never skip it.
+      outcome = "failed";
+      problem = `revocation: the stored credential could not be read (${unreadable instanceof PiShipError ? unreadable.code : "secret store error"})`;
+    } else if (!secret) outcome = "skipped";
     else
       try {
         await this.options.provider.revoke?.(

@@ -36,6 +36,14 @@ export type BrokerOperation = "acquire" | "revoke";
  * - `authentication` (401), `denied` (403), `rate-limited` (429),
  *   `unavailable` (5xx), `rejected` (any other non-2xx)
  * - `contract`: a 2xx answer that breaks the http-broker contract
+ * - `idempotency-conflict` (409 or 422 to an acquire that carried an
+ *   idempotency key): the broker already used the key for other input
+ *
+ * A failure without an answer (`unreachable`, `timeout`, `cancelled`) also
+ * carries `outcome`: `not-sent` when the request never reached the broker,
+ * `unknown` when the broker may have received it and acted on it. An acquire
+ * that carried an idempotency key reports it as `idempotencyKey`, so a caller
+ * that retries the same acquire can send the same key.
  */
 export type BrokerFailureReason =
   | "unreachable"
@@ -46,7 +54,11 @@ export type BrokerFailureReason =
   | "rate-limited"
   | "unavailable"
   | "rejected"
-  | "contract";
+  | "contract"
+  | "idempotency-conflict";
+
+/** Non-secret detail an acquire adds to every failure: its idempotency key. */
+type ExtraDetail = Readonly<Record<string, string>>;
 
 function brokerFailure(
   operation: BrokerOperation,
@@ -56,6 +68,9 @@ function brokerFailure(
     readonly retryable?: boolean;
     readonly retryAfterMs?: number | undefined;
     readonly status?: number;
+    readonly outcome?: "not-sent" | "unknown";
+    readonly detail?: ExtraDetail;
+    readonly userAction?: string;
   } = {},
 ): PiShipError {
   const detail = {
@@ -64,10 +79,13 @@ function brokerFailure(
     ...(options.retryAfterMs === undefined
       ? {}
       : { retryAfterMs: options.retryAfterMs }),
+    ...(options.userAction ? { userAction: options.userAction } : {}),
     sanitizedDetail: {
       operation,
       reason,
       ...(options.status === undefined ? {} : { status: options.status }),
+      ...(options.outcome ? { outcome: options.outcome } : {}),
+      ...options.detail,
     },
   };
   return operation === "acquire"
@@ -82,6 +100,7 @@ function brokerFailure(
 function statusFailure(
   operation: BrokerOperation,
   response: Response,
+  detail: ExtraDetail = {},
 ): PiShipError {
   const status = response.status;
   if (status === 403)
@@ -93,7 +112,20 @@ function statusFailure(
       {
         component: "credential",
         userAction: "Ask your administrator for access",
-        sanitizedDetail: { operation, reason: "denied", status },
+        sanitizedDetail: { operation, reason: "denied", status, ...detail },
+      },
+    );
+  // Only an acquire that sent a key can conflict with an earlier use of it.
+  if ((status === 409 || status === 422) && detail.idempotencyKey)
+    return brokerFailure(
+      operation,
+      "idempotency-conflict",
+      "The credential broker refused an idempotency key it already used for a different request",
+      {
+        status,
+        detail,
+        userAction:
+          "Run the command again; a new request uses a new idempotency key",
       },
     );
   const reason: BrokerFailureReason =
@@ -118,6 +150,7 @@ function statusFailure(
       retryAfterMs: retryable
         ? parseRetryAfter(response.headers.get("retry-after"))
         : undefined,
+      detail,
     },
   );
 }
@@ -127,6 +160,9 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 /** CR, LF and NUL: never valid in a token that becomes a header value. */
 const HEADER_BREAKING = /[\r\n\0]/;
+
+/** An idempotency key: 1 to 255 visible ASCII characters, no spaces. */
+const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
 
 /**
  * A short, fixed description of a transport failure. Never an error message:
@@ -141,10 +177,40 @@ function transportCode(error: unknown): string {
     : "network error";
 }
 
+/**
+ * System errors raised while connecting, before any request byte reaches the
+ * broker: the broker cannot have acted on the request. Any other transport
+ * failure may come after the request was sent.
+ */
+const NOT_SENT_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * Whether a transport failure happened before the request was sent. The
+ * managed fetch keeps only the system code, at the end of its message; a
+ * message in another shape reads as possibly sent, never as not sent.
+ */
+function failedBeforeSend(error: unknown): boolean {
+  const code =
+    error instanceof PiShipError
+      ? error.code === "GATEWAY_UNREACHABLE"
+        ? /: ([A-Z][A-Z0-9_]{0,63})$/.exec(error.message)?.[1]
+        : undefined
+      : (error as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof code === "string" && NOT_SENT_CODES.has(code);
+}
+
 /** Read at most `MAX_BODY_BYTES` of a body; a larger one breaks the contract. */
 async function readBounded(
   response: Response,
   operation: BrokerOperation,
+  detail: ExtraDetail,
 ): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return "";
@@ -160,7 +226,7 @@ async function readBounded(
         operation,
         "contract",
         "The credential broker answer is too large",
-        { status: response.status },
+        { status: response.status, detail },
       );
     }
     chunks.push(value);
@@ -180,17 +246,35 @@ function discardBody(response: Response): void {
  * a stalled or huge error body never turns a 403 into a timeout. Transport
  * failures are credential failures, not gateway ones; other PiShip errors
  * from the managed fetch (network or TLS policy) keep their own codes.
+ *
+ * Nothing is retried here. A failure without an answer says whether the
+ * request may have reached the broker (`outcome`), because a broker may have
+ * issued a credential for a request whose answer was lost.
  */
 async function brokerRequest(
   fetch: ManagedFetch,
   url: string,
   init: RequestInit,
   operation: BrokerOperation,
-  options: { readonly signal?: AbortSignal; readonly timeoutMs?: number },
+  options: {
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+    readonly detail?: ExtraDetail;
+  },
 ): Promise<{
   readonly response: Response;
   readonly body: () => Promise<string>;
 }> {
+  const detail = options.detail ?? {};
+  const cancelled = (outcome: "not-sent" | "unknown") =>
+    brokerFailure(
+      operation,
+      "cancelled",
+      `The credential ${operation === "acquire" ? "request" : "revocation"} was cancelled`,
+      { outcome, detail },
+    );
+  // A signal that is already aborted never reaches the broker.
+  if (options.signal?.aborted) throw cancelled("not-sent");
   const deadline = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = options.signal
     ? AbortSignal.any([options.signal, deadline])
@@ -200,12 +284,7 @@ async function brokerRequest(
       ? "The credential broker"
       : "The credential revocation endpoint";
   const failure = (error: unknown): unknown => {
-    if (options.signal?.aborted)
-      return brokerFailure(
-        operation,
-        "cancelled",
-        `The credential ${operation === "acquire" ? "request" : "revocation"} was cancelled`,
-      );
+    if (options.signal?.aborted) return cancelled("unknown");
     if (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE")
       return error;
     if (
@@ -217,13 +296,17 @@ async function brokerRequest(
         operation,
         "timeout",
         `${subject} did not respond in time`,
-        { retryable: true },
+        { retryable: true, outcome: "unknown", detail },
       );
     return brokerFailure(
       operation,
       "unreachable",
       `${subject} is unreachable (${transportCode(error)})`,
-      { retryable: true },
+      {
+        retryable: true,
+        outcome: failedBeforeSend(error) ? "not-sent" : "unknown",
+        detail,
+      },
     );
   };
   let response: Response;
@@ -236,7 +319,7 @@ async function brokerRequest(
     response,
     body: async () => {
       try {
-        return await readBounded(response, operation);
+        return await readBounded(response, operation, detail);
       } catch (error) {
         throw failure(error);
       }
@@ -254,8 +337,10 @@ function normalizeUrl(value: string): string {
  *
  * POST <endpoint> with `Authorization: Bearer <identity access token>` returns
  * `{credential_type, credential, credential_id?, expires_at?, models?, base_url?}`.
- * Revocation POSTs `{credential_id}` to the optional revoke endpoint with the
- * runtime credential as bearer. Raw responses are never logged or echoed.
+ * `CredentialContext.idempotencyKey`, when set, is sent as `Idempotency-Key`;
+ * a failed acquire is never re-sent here. Revocation POSTs `{credential_id}`
+ * to the optional revoke endpoint with the runtime credential as bearer. Raw
+ * responses are never logged or echoed.
  */
 export class HttpBrokerCredentialProvider implements CredentialProvider {
   readonly mode = "http-broker" as const;
@@ -287,6 +372,17 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         "The identity session holds a malformed access token",
         { component: "credential", userAction: "Run login again" },
       );
+    const key = ctx.idempotencyKey;
+    if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
+      throw brokerFailure(
+        "acquire",
+        "contract",
+        "The idempotency key must be 1 to 255 visible ASCII characters",
+      );
+    // The key is not secret: it rides on every failure so a caller that
+    // retries this acquire can send it again.
+    const detail: ExtraDetail =
+      key === undefined ? {} : { idempotencyKey: key };
     const { response, body: readBody } = await brokerRequest(
       this.options.fetch,
       this.options.endpoint,
@@ -296,6 +392,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
           accept: "application/json",
+          ...(key === undefined ? {} : { "idempotency-key": key }),
         },
         body: JSON.stringify({
           distribution: ctx.distributionId,
@@ -308,6 +405,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         ...(this.options.timeoutMs
           ? { timeoutMs: this.options.timeoutMs }
           : {}),
+        detail,
       },
     );
     if (response.status >= 300) discardBody(response);
@@ -322,10 +420,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
             operation: "acquire",
             reason: "authentication",
             status: 401,
+            ...detail,
           },
         },
       );
-    if (response.status >= 300) throw statusFailure("acquire", response);
+    if (response.status >= 300)
+      throw statusFailure("acquire", response, detail);
     const text = await readBody();
     let body: Record<string, unknown>;
     try {
@@ -338,7 +438,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         "acquire",
         "contract",
         "The credential broker returned malformed JSON",
-        { status: response.status },
+        { status: response.status, detail },
       );
     }
     const type = body.credential_type;
@@ -362,7 +462,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         "acquire",
         "contract",
         "The credential broker response does not match the http-broker contract",
-        { status: response.status },
+        { status: response.status, detail },
       );
     if (
       typeof body.base_url === "string" &&
@@ -379,6 +479,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
             operation: "acquire",
             reason: "contract",
             status: response.status,
+            ...detail,
           },
         },
       );
