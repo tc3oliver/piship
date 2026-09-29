@@ -23,7 +23,7 @@ import {
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
 import { syncDirectory, writeFileAtomic } from "./atomic.js";
-import { acquireLifecycleLock } from "./lifecycle-lock.js";
+import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
@@ -223,29 +223,57 @@ export function releaseInfo(
   };
 }
 
+/** A lifecycle operation's hold on its distribution. */
+export interface LifecycleLock extends LifecycleHold {
+  /**
+   * Write `receipt`, the commit of the operation, only while the lock still
+   * names this operation. When another process took the lock over, nothing is
+   * written and the operation fails with a retryable error: the operation
+   * that holds the lock now owns the installation.
+   */
+  commit(receipt: InstallReceipt): void;
+}
+
 /**
  * One lifecycle operation per distribution at a time. The lock is a lease
- * (see lifecycle-lock.ts), so the lock of a crashed holder is recovered even
- * after an unrelated process reused its process ID.
+ * (see lifecycle-lock.ts): the lock of a crashed holder is recovered at once,
+ * or after a day when an unrelated process has reused its process ID.
  */
 export function acquireLock(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
-): () => void {
-  return acquireLifecycleLock(
-    join(appDirectory(id), ".lifecycle.lock"),
+): LifecycleLock {
+  const path = join(appDirectory(id), ".lifecycle.lock");
+  const operation = code === "UPDATE_FAILED" ? "update" : "rollback";
+  const hold = acquireLifecycleLock(
+    path,
     (pid) =>
       new PiShipError(
         code,
         `Another update, rollback, or uninstall of ${id} is running${pid === null ? "" : ` (process ${pid})`}`,
-        { retryable: true },
+        {
+          retryable: true,
+          userAction: `Try again when it finishes; if none is running, remove ${path}`,
+        },
       ),
-    () =>
-      new PiShipError(
-        code,
-        `Could not lock ${id} for ${code === "UPDATE_FAILED" ? "update" : "rollback"}`,
-      ),
+    () => new PiShipError(code, `Could not lock ${id} for ${operation}`),
   );
+  return {
+    ...hold,
+    commit(receipt) {
+      if (!hold.stillHeld())
+        throw new PiShipError(
+          code,
+          `The lock on ${id} was taken over while the ${operation} ran; nothing was committed`,
+          {
+            retryable: true,
+            userAction:
+              "Run the command again once no other update, rollback, or uninstall is running",
+          },
+        );
+      writeReceipt(receipt);
+    },
+  };
 }
 
 /**

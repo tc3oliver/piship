@@ -11,7 +11,6 @@ import {
   readInstallReceipt,
   recoverInstallation,
   requireManaged,
-  writeReceipt,
   type LifecycleOptions,
 } from "../install/receipt.js";
 import {
@@ -47,7 +46,7 @@ export async function rollbackDistribution(
 ): Promise<RollbackResult> {
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
-  const release = acquireLock(id, "ROLLBACK_FAILED");
+  const lifecycle = acquireLock(id, "ROLLBACK_FAILED");
   try {
     const receipt = readInstallReceipt(id);
     recoverInstallation(id);
@@ -119,7 +118,7 @@ export async function rollbackDistribution(
       .filter((item) => item.verdict === "requires-review")
       .map((item) => item.reason);
     notices.push(...(await clearCredentials(stateDir, id, migration, options)));
-    writeReceipt({
+    lifecycle.commit({
       ...readInstallReceipt(id),
       app: target.app,
       payload: previous.payload,
@@ -142,6 +141,6 @@ export async function rollbackDistribution(
       notices,
     };
   } finally {
-    release();
+    lifecycle.release();
   }
 }

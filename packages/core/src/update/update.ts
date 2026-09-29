@@ -19,7 +19,6 @@ import {
   requireManaged,
   syncDirectory,
   syncTree,
-  writeReceipt,
   type InstallReceipt,
   type LifecycleOptions,
 } from "../install/receipt.js";
@@ -150,7 +149,7 @@ export async function updateDistribution(
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
-  const release = acquireLock(id);
+  const lifecycle = acquireLock(id);
   try {
     // Read under the lock, so a concurrent commit cannot leave it stale.
     const receipt = readInstallReceipt(id);
@@ -181,7 +180,7 @@ export async function updateDistribution(
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     });
     const record = (result: string, extra: Partial<InstallReceipt> = {}) =>
-      writeReceipt({
+      lifecycle.commit({
         ...readInstallReceipt(id),
         ...extra,
         // A check reports on the requested channel without switching to it.
@@ -359,7 +358,7 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
-      writeReceipt(next);
+      lifecycle.commit(next);
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
       notices.push(...markActivated(stateDir, verified.lock));
@@ -382,13 +381,14 @@ export async function updateDistribution(
     } finally {
       try {
         rmSync(staging, { recursive: true, force: true });
-        recoverInstallation(id);
+        // An operation that took the lock over owns what is on disk now.
+        if (lifecycle.stillHeld()) recoverInstallation(id);
         options.faults?.("cleaned");
       } catch {
         // Recovery runs again before the next operation.
       }
     }
   } finally {
-    release();
+    lifecycle.release();
   }
 }
