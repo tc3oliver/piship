@@ -55,6 +55,7 @@ import {
 import { selectAdapter } from "./select.js";
 import {
   describeWorkspace,
+  hooksInWorkingTree,
   initialWorkspaceReport,
   localWorkspaceReport,
   verifyWorkspace,
@@ -999,7 +1000,9 @@ export async function activateSandbox(
         workspace:
           capabilities.isolation === "local"
             ? localWorkspaceReport(
-                live && planes.includes(GIT_CONTROL_PROTECTION),
+                live &&
+                  planes.includes(GIT_CONTROL_PROTECTION) &&
+                  !hooksInWorkingTree(profile.workspace, profile.writeProtect),
               )
             : initialWorkspaceReport(declaration),
       },

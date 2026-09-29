@@ -47,6 +47,7 @@ import {
 } from "./testing/workspace-fakes.js";
 import {
   describeWorkspace,
+  hooksInWorkingTree,
   removeSentinelDirectory,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -83,7 +84,14 @@ beforeEach(() => {
 });
 afterEach(() => {
   // Undo read-only modes a protection test set, then remove everything.
-  for (const path of [workspace, git, join(git, "hooks"), join(git, "info")])
+  for (const path of [
+    workspace,
+    git,
+    join(git, "hooks"),
+    join(git, "info"),
+    join(workspace, ".husky"),
+    join(workspace, ".husky", "_"),
+  ])
     if (existsSync(path)) chmodSync(path, 0o755);
   if (existsSync(join(git, "config"))) chmodSync(join(git, "config"), 0o644);
   rmSync(root, { recursive: true, force: true });
@@ -816,18 +824,31 @@ describe.skipIf(!posix)(
       });
     });
 
+    /**
+     * A backend that keeps every protected path out of reach: nothing in
+     * .git can be created, written, or renamed, and neither can .git itself.
+     * The sentinel directory is made up front so the host can still use it.
+     */
+    const outOfReach = (hooksInTree = false) => {
+      mkdirSync(join(git, "info"));
+      mkdirSync(join(git, "piship-workspace"), { mode: 0o700 });
+      if (hooksInTree)
+        mkdirSync(join(workspace, ".husky", "_"), { recursive: true });
+      chmodSync(join(git, "config"), 0o444);
+      chmodSync(join(git, "hooks"), 0o555);
+      chmodSync(join(git, "info"), 0o555);
+      chmodSync(git, 0o555);
+      if (hooksInTree) {
+        chmodSync(join(workspace, ".husky", "_"), 0o555);
+        chmodSync(join(workspace, ".husky"), 0o555);
+      }
+      chmodSync(workspace, 0o555);
+    };
+
     it.skipIf(root_)(
       "passes when the backend keeps them read-only, and finds nothing it could rename",
       async () => {
-        // A backend that also keeps missing files from appearing: nothing in
-        // .git can be created, and the sentinel directory is made up front.
-        mkdirSync(join(git, "info"));
-        mkdirSync(join(git, "piship-workspace"), { mode: 0o700 });
-        chmodSync(join(git, "config"), 0o444);
-        chmodSync(join(git, "hooks"), 0o555);
-        chmodSync(join(git, "info"), 0o555);
-        chmodSync(git, 0o555);
-        chmodSync(workspace, 0o555);
+        outOfReach();
         const fake = sharedBackend();
         const sandbox = await activate(fake, {
           protectedPaths: gitProtection(),
@@ -842,6 +863,35 @@ describe.skipIf(!posix)(
         expect(readdirSync(join(git, "hooks"))).toEqual(["pre-commit"]);
         expect(readdirSync(join(git, "info"))).toEqual([]);
         expect(existsSync(join(git, "commondir"))).toBe(false);
+        await sandbox.dispose();
+      },
+    );
+
+    it.skipIf(root_)(
+      "is not verified when core.hooksPath names a directory in the working tree, though that too is out of reach",
+      async () => {
+        outOfReach(true);
+        const protectedPaths = gitProtection();
+        const fake = sharedBackend();
+        const sandbox = await activate(fake, {
+          protectedPaths: {
+            ...protectedPaths,
+            directories: [
+              ...protectedPaths.directories,
+              join(workspace, ".husky", "_"),
+            ],
+          },
+          now: () => TIME,
+        });
+        expect((await run(sandbox, "echo agent")).output).toBe("agent\n");
+        // The workspace is fine and the commands run; the scripts git runs
+        // from the working tree are not something the check can vouch for.
+        expect(sandbox.workspace()).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+          gitControlProtection: "not-verified",
+          complete: true,
+        });
         await sandbox.dispose();
       },
     );
@@ -1296,6 +1346,36 @@ describe.skipIf(!posix)("the validity window", () => {
   });
 });
 
+describe("hooksInWorkingTree", () => {
+  const paths = (...directories: string[]): ProtectedPaths => ({
+    files: [],
+    directories,
+  });
+  it("is true only for a protected directory in the working tree", () => {
+    const ws = join(root, "ws");
+    expect(hooksInWorkingTree(ws, paths(join(ws, ".husky", "_")))).toBe(true);
+    expect(hooksInWorkingTree(ws, paths(join(ws, ".githooks")))).toBe(true);
+    expect(
+      hooksInWorkingTree(
+        ws,
+        paths(join(ws, ".git", "hooks"), join(ws, ".git", "worktrees")),
+      ),
+    ).toBe(false);
+    // Outside the workspace, or a git directory of a linked worktree.
+    expect(
+      hooksInWorkingTree(
+        ws,
+        paths(join(root, "elsewhere", "hooks"), join(root, "main", ".git")),
+      ),
+    ).toBe(false);
+    expect(hooksInWorkingTree(ws, paths())).toBe(false);
+    // A sibling whose name starts like .git is not the git directory.
+    expect(hooksInWorkingTree(ws, paths(join(ws, ".github", "hooks")))).toBe(
+      true,
+    );
+  });
+});
+
 describe("the workspace sentence", () => {
   const base = {
     windowMs: 10_000,
@@ -1406,6 +1486,30 @@ describe.skipIf(!nativeReady && !requireSandbox)(
       });
       expect(describeContainment(sandbox.report)).not.toContain("Workspace:");
       await sandbox.dispose();
+    });
+
+    it("does not report it as verified when core.hooksPath names a directory in the working tree", async () => {
+      mkdirSync(join(workspace, ".husky", "_"), { recursive: true });
+      const activateWith = (directory: string) =>
+        activateSandbox(policy(), {
+          workspace,
+          homeDir: join(root, "home"),
+          backend: fakeWrappingBackend(native, true),
+          protectedPaths: { files: [], directories: [directory] },
+        });
+      const inTree = await activateWith(join(workspace, ".husky", "_"));
+      // The plane is proven for the protected paths; the hook scripts the
+      // directory runs are project files, so the report cannot say verified.
+      expect(inTree.report.planes).toContain("git-control-protection");
+      expect(inTree.report.workspace).toMatchObject({
+        gitControlProtection: "not-verified",
+      });
+      await inTree.dispose();
+      const inGit = await activateWith(join(git, "hooks"));
+      expect(inGit.report.workspace).toMatchObject({
+        gitControlProtection: "verified",
+      });
+      await inGit.dispose();
     });
 
     it("warns, and does not claim it, for a backend that ignores writeProtect", async () => {

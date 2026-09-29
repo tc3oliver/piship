@@ -123,7 +123,30 @@ export function workspaceWindowMs(
     : SHARED_WINDOW_MS;
 }
 
-/** A local backend: commands run against this host's files. */
+/**
+ * Whether a protected directory lies in the working tree instead of in the
+ * workspace's own `.git`: `core.hooksPath` naming a directory such as
+ * husky's `.husky/_`. It is kept read-only like the others, but the scripts
+ * git runs from there are ordinary project files the sandbox can write, so
+ * git control cannot be reported as protected.
+ */
+export function hooksInWorkingTree(
+  workspace: string,
+  protectedPaths: ProtectedPaths,
+): boolean {
+  const dotGit = join(workspace, ".git");
+  return protectedPaths.directories.some(
+    (directory) =>
+      directory !== workspace &&
+      isWithin(directory, workspace) &&
+      !isWithin(directory, dotGit),
+  );
+}
+
+/**
+ * A local backend: commands run against this host's files. `gitControlProven`
+ * is the live probe's result, and false when the hooks are in the working tree.
+ */
 export function localWorkspaceReport(
   gitControlProven: boolean,
 ): WorkspaceReport {
@@ -730,11 +753,11 @@ export async function verifyWorkspace(
     // looked for a way to rename instead: a protected path, or a directory
     // above it, that is not a mount point and sits in a directory the sandbox
     // can write.
-    const gitControl: GitControlProtectionState = lines.some((line) =>
-      line.startsWith(`${WORKSPACE_MARKER} movable `),
-    )
-      ? "not-verified"
-      : "attested-renames";
+    const gitControl: GitControlProtectionState =
+      lines.some((line) => line.startsWith(`${WORKSPACE_MARKER} movable `)) ||
+      hooksInWorkingTree(workspace, ctx.protectedPaths)
+        ? "not-verified"
+        : "attested-renames";
     const verifiedAt = rfc3339(now());
     const base = { declared, windowMs, verifiedAt, complete: false } as const;
     if (unsafe)

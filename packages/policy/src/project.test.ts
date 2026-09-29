@@ -6,7 +6,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
@@ -17,6 +17,7 @@ import {
   discoverProjectResources,
   identifyProject,
   normalizeRemote,
+  parseHooksPaths,
   parseInstructionImports,
   parseOriginUrl,
   projectDimensionEffect,
@@ -217,6 +218,8 @@ describe("project git control paths", () => {
     expect(projectGitControlDirectories(root)).toEqual([
       `${git}/hooks`,
       `${git}/info`,
+      `${git}/modules`,
+      `${git}/worktrees`,
     ]);
   });
   it("covers the worktree gitdir and the shared directory it names", () => {
@@ -237,21 +240,163 @@ describe("project git control paths", () => {
         `${common}/config`,
       ]),
     );
+    const trees = (base: string) =>
+      ["hooks", "info", "modules", "worktrees"].map(
+        (name) => `${base}/${name}`,
+      );
     expect(projectGitControlDirectories(worktree)).toEqual([
-      posix(join(worktree, ".git", "hooks")),
-      posix(join(worktree, ".git", "info")),
-      `${own}/hooks`,
-      `${own}/info`,
-      `${common}/hooks`,
-      `${common}/info`,
+      ...trees(posix(join(worktree, ".git"))),
+      ...trees(own),
+      ...trees(common),
     ]);
   });
   it("still names the .git trees of a directory that is not a repository yet", () => {
     const plain = dir("control-plain");
+    const git = posix(join(plain, ".git"));
     expect(projectGitControlDirectories(plain)).toEqual([
-      posix(join(plain, ".git", "hooks")),
-      posix(join(plain, ".git", "info")),
+      `${git}/hooks`,
+      `${git}/info`,
+      `${git}/modules`,
+      `${git}/worktrees`,
     ]);
+  });
+  it("protects the submodule git directories and the linked-worktree metadata as whole trees", () => {
+    const root = dir("control-trees");
+    gitRepo(root);
+    const git = posix(join(root, ".git"));
+    const directories = projectGitControlDirectories(root);
+    // A submodule's config, hooks, and info, and a worktree's commondir,
+    // gitdir, and config.worktree, are all below one of these.
+    expect(directories).toEqual(
+      expect.arrayContaining([`${git}/modules`, `${git}/worktrees`]),
+    );
+  });
+  it("covers the git directory a submodule checkout points to", () => {
+    const parent = dir("control-parent");
+    gitRepo(parent);
+    const moduleGit = join(parent, ".git", "modules", "lib");
+    write(join(moduleGit, "config"), "[core]\n");
+    const sub = join(parent, "lib");
+    write(join(sub, ".git"), "gitdir: ../.git/modules/lib\n");
+    const module = posix(moduleGit);
+    expect(projectGitControlFiles(sub)).toEqual(
+      expect.arrayContaining([
+        posix(join(sub, ".git")),
+        `${module}/config`,
+        `${module}/config.worktree`,
+        `${module}/commondir`,
+      ]),
+    );
+    expect(projectGitControlDirectories(sub)).toEqual(
+      expect.arrayContaining([
+        `${module}/hooks`,
+        `${module}/info`,
+        `${module}/modules`,
+        `${module}/worktrees`,
+      ]),
+    );
+  });
+});
+
+describe("parseHooksPaths", () => {
+  it("reads core.hooksPath in any spelling and skips other sections", () => {
+    const config = [
+      "[core]",
+      "\tbare = false",
+      "\tHooksPath = .husky/_ # husky",
+      "[alias]",
+      "\thooksPath = not-this",
+      '[core "sub"]',
+      "\thooksPath = nor-this",
+      '[core] hookspath = "quoted dir"',
+      "[CORE]",
+      "  ; a comment",
+      "  hooksPath=/abs/hooks",
+      "  hooksPath =",
+      '[remote "origin"]',
+      "\turl = https://example.test/x.git",
+    ].join("\n");
+    expect(parseHooksPaths(config)).toEqual([
+      ".husky/_",
+      "quoted dir",
+      "/abs/hooks",
+    ]);
+    expect(parseHooksPaths("[core]\n\tbare = false\n")).toEqual([]);
+    expect(parseHooksPaths("")).toEqual([]);
+  });
+});
+
+describe("core.hooksPath", () => {
+  function repoWithHooksPath(value: string, section = "config"): string {
+    const root = dir("hooks-path");
+    write(join(root, ".git", section), `[core]\n\thooksPath = ${value}\n`);
+    if (section !== "config") gitRepo(root);
+    return root;
+  }
+  const base = (root: string) => posix(join(root, ".git"));
+
+  it("protects a hooks directory in the working tree, as husky sets it up", () => {
+    const root = repoWithHooksPath(".husky/_");
+    expect(projectGitControlDirectories(root)).toContain(
+      posix(join(root, ".husky", "_")),
+    );
+    // The config that names it is protected too, so it cannot be repointed.
+    expect(projectGitControlFiles(root)).toContain(`${base(root)}/config`);
+  });
+
+  it("protects an absolute directory, one outside the project, and one under the home directory", () => {
+    const outside = dir("shared-hooks");
+    const root = repoWithHooksPath(posix(outside));
+    expect(projectGitControlDirectories(root)).toContain(posix(outside));
+    const relative = repoWithHooksPath("../shared-hooks-rel");
+    expect(projectGitControlDirectories(relative)).toContain(
+      posix(join(relative, "..", "shared-hooks-rel")),
+    );
+    const unique = `piship-hooks-test-${process.pid}-${counter}`;
+    const home = repoWithHooksPath(`~/${unique}/hooks`);
+    expect(projectGitControlDirectories(home)).toContain(
+      posix(join(realpathSync(homedir()), unique, "hooks")),
+    );
+  });
+
+  it("reads it from config.worktree and from the shared config of a worktree", () => {
+    const root = repoWithHooksPath("wt-hooks", "config.worktree");
+    expect(projectGitControlDirectories(root)).toContain(
+      posix(join(root, "wt-hooks")),
+    );
+    const shared = dir("hooks-shared");
+    const main = dir("hooks-main");
+    write(
+      join(main, ".git", "config"),
+      `[core]\n\thooksPath = ${posix(shared)}\n`,
+    );
+    const worktreeGit = join(main, ".git", "worktrees", "wt");
+    write(join(worktreeGit, "commondir"), "../..\n");
+    const worktree = dir("hooks-worktree");
+    write(join(worktree, ".git"), `gitdir: ${worktreeGit}\n`);
+    expect(projectGitControlDirectories(worktree)).toContain(posix(shared));
+  });
+
+  it("protects every value when a later line overrides an earlier one", () => {
+    const root = dir("hooks-override");
+    write(
+      join(root, ".git", "config"),
+      "[core]\n\thooksPath = first\n\thooksPath = second\n",
+    );
+    const directories = projectGitControlDirectories(root);
+    expect(directories).toContain(posix(join(root, "first")));
+    expect(directories).toContain(posix(join(root, "second")));
+  });
+
+  it("leaves out a path that holds the project root, which would make it all read-only", () => {
+    for (const value of [".", "..", "./", "../.."]) {
+      const root = repoWithHooksPath(value);
+      const directories = projectGitControlDirectories(root);
+      expect(directories).not.toContain(posix(root));
+      expect(directories).not.toContain(posix(dirname(root)));
+      // The four .git trees are still there.
+      expect(directories).toHaveLength(4);
+    }
   });
 });
 

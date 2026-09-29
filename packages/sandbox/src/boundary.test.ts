@@ -165,6 +165,12 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       mkdirSync(join(ws, ".git", "info"), { recursive: true });
       writeFileSync(join(ws, ".git", "config"), GIT_CONFIG);
       writeFileSync(join(ws, ".git", "info", "exclude"), "# none\n");
+      // A submodule's git directory, which `git status` enters; `worktrees`
+      // does not exist yet.
+      mkdirSync(join(ws, ".git", "modules", "sub", "hooks"), {
+        recursive: true,
+      });
+      writeFileSync(join(ws, ".git", "modules", "sub", "config"), GIT_CONFIG);
       const env = {
         ...process.env,
         HOME: home,
@@ -175,10 +181,20 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         workspace: ws,
         homeDir: home,
         env,
-        // As the governance session passes them; hooks does not exist yet.
+        // As the governance session passes them; hooks and worktrees do not
+        // exist yet.
         protectedPaths: {
-          files: [join(ws, ".git", "config"), join(ws, ".git", "commondir")],
-          directories: [join(ws, ".git", "hooks"), join(ws, ".git", "info")],
+          files: [
+            join(ws, ".git", "config"),
+            join(ws, ".git", "config.worktree"),
+            join(ws, ".git", "commondir"),
+          ],
+          directories: [
+            join(ws, ".git", "hooks"),
+            join(ws, ".git", "info"),
+            join(ws, ".git", "modules"),
+            join(ws, ".git", "worktrees"),
+          ],
         },
       });
       open = await activateSandbox(
@@ -294,6 +310,67 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       );
       expect(allowed.exitCode, allowed.output).toBe(0);
       expect(readFileSync(join(git, "description"), "utf8")).toBe("named\n");
+    });
+
+    it("keeps submodule git directories and linked-worktree metadata read-only", async () => {
+      const git = join(ws, ".git");
+      const attempts = [
+        // A submodule's own config and hooks, which `git status` runs.
+        `echo '[core]' >> .git/modules/sub/config`,
+        "printf '#!/bin/sh\\ntouch pwned\\n' > .git/modules/sub/hooks/pre-commit",
+        // A new submodule git directory.
+        "mkdir -p .git/modules/evil && echo '[core]' > .git/modules/evil/config",
+        // A linked worktree's administrative directory, which does not
+        // exist, and files git follows in it.
+        "mkdir -p .git/worktrees/w && echo ../evil > .git/worktrees/w/commondir",
+        "echo ../evil > .git/config.worktree",
+        "echo ../evil > .git/commondir",
+      ];
+      for (const command of attempts) {
+        const result = await run(sandbox, command);
+        expect(result.exitCode, command).not.toBe(0);
+      }
+      expect(readFileSync(join(git, "modules", "sub", "config"), "utf8")).toBe(
+        GIT_CONFIG,
+      );
+      expect(readdirSync(join(git, "modules", "sub", "hooks"))).toEqual([]);
+      expect(existsSync(join(git, "modules", "evil"))).toBe(false);
+      expect(existsSync(join(git, "worktrees", "w"))).toBe(false);
+      expect(existsSync(join(git, "config.worktree"))).toBe(false);
+    });
+
+    it("keeps a core.hooksPath directory in the working tree read-only, and reports git control as not verified", async () => {
+      // husky's layout: hooksPath is .husky/_ and its scripts call .husky/*.
+      mkdirSync(join(ws, ".husky", "_"), { recursive: true });
+      writeFileSync(join(ws, ".husky", "_", "h"), "#!/bin/sh\n");
+      const husky = await activateSandbox(config, {
+        workspace: ws,
+        homeDir: home,
+        env: { ...process.env, HOME: home },
+        protectedPaths: {
+          files: [join(ws, ".git", "config")],
+          directories: [join(ws, ".husky", "_")],
+        },
+      });
+      try {
+        const box = async (command: string) =>
+          (await husky.exec(command, ws, { onData: () => {} })).exitCode;
+        expect(await box("echo hook >> .husky/_/h")).not.toBe(0);
+        expect(await box("echo hook > .husky/_/pre-commit")).not.toBe(0);
+        expect(readFileSync(join(ws, ".husky", "_", "h"), "utf8")).toBe(
+          "#!/bin/sh\n",
+        );
+        expect(existsSync(join(ws, ".husky", "_", "pre-commit"))).toBe(false);
+        // The rest of the working tree, .husky/pre-commit included, is not
+        // protected, which is why git control is not verified.
+        expect(await box("echo ok > .husky/pre-commit")).toBe(0);
+        expect(husky.report.planes).toContain("git-control-protection");
+        expect(husky.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      } finally {
+        await husky.dispose();
+      }
     });
 
     it.runIf(process.platform === "darwin")(

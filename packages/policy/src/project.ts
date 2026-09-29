@@ -1,6 +1,7 @@
 // Project identity, origin classification, and project resource discovery.
 // No git binary is executed: the origin remote is read from the git config.
 import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
 import type {
@@ -203,21 +204,98 @@ export function projectGitControlFiles(root: string): string[] {
 }
 
 /**
+ * The values of `core.hooksPath` in git config text. Git uses the last one;
+ * every value is returned, so a later override cannot take a directory out of
+ * the protected set.
+ */
+export function parseHooksPaths(config: string): string[] {
+  const values: string[] = [];
+  let inCore = false;
+  for (const raw of config.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    const section =
+      /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
+    if (section) {
+      inCore = section[1]?.toLowerCase() === "core" && section[2] === undefined;
+      // `[core] hooksPath = x` on one line.
+      line = line.slice(section[0].length).trim();
+      if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    }
+    if (!inCore) continue;
+    const equals = line.indexOf("=");
+    if (equals < 0) continue;
+    const key = line.slice(0, equals).trim();
+    if (key.toLowerCase() !== "hookspath") continue;
+    const value = unquote(line.slice(equals + 1));
+    if (value !== "") values.push(value);
+  }
+  return values;
+}
+
+/**
+ * The directories `core.hooksPath` names in the git config files that apply
+ * to `root`: the same files whose rewrite is already denied. A relative path
+ * is taken from the project root, where git runs hooks; `~/` is the home
+ * directory. A path that holds the project root itself cannot be a read-only
+ * tree without making the whole project read-only, so it is left out.
+ */
+function hooksPathDirectories(
+  root: string,
+  gitDir: string | undefined,
+): string[] {
+  const configs = [join(root, ".git", "config")];
+  if (gitDir) {
+    const common = commonDirectory(gitDir);
+    configs.push(
+      join(gitDir, "config"),
+      join(gitDir, "config.worktree"),
+      join(common, "config"),
+      join(common, "config.worktree"),
+    );
+  }
+  const project = real(root);
+  const directories: string[] = [];
+  for (const config of new Set(configs))
+    for (const value of parseHooksPaths(readText(config) ?? "")) {
+      const path = value.startsWith("~/")
+        ? join(homedir(), value.slice(2))
+        : isAbsolute(value)
+          ? value
+          : resolve(root, value);
+      const directory = real(path);
+      if (!isWithin(directory, project)) directories.push(directory);
+    }
+  return directories;
+}
+
+/**
  * The git directories whose contents git runs or trusts on the user's
- * behalf: `hooks` (run by the user's next git command, outside any sandbox)
- * and `info` (attributes and excludes), of the `.git` directory, of the git
- * directory a `.git` file points to, and of the shared directory a worktree
- * names. They are protected as whole trees, whether or not they exist yet.
+ * behalf, protected as whole trees whether or not they exist yet:
+ * - `hooks` (run by the user's next git command, outside any sandbox) and
+ *   `info` (attributes and excludes);
+ * - `modules` (the git directories of submodules, which `git status` enters:
+ *   each has its own `config`, `hooks`, and `info`) and `worktrees` (the
+ *   administrative directories of linked worktrees, each with its own
+ *   `commondir`, `gitdir`, and `config.worktree`);
+ * of the `.git` directory, of the git directory a `.git` file points to, and
+ * of the shared directory a worktree names. Also the directory
+ * `core.hooksPath` names in those configs, which may lie in the working tree
+ * (husky's `.husky/_`).
  * Paths are normalized (symlink-resolved, POSIX separators).
  */
 export function projectGitControlDirectories(root: string): string[] {
   const bases = [join(root, ".git")];
   const gitDir = gitDirectory(root);
   if (gitDir) bases.push(gitDir, commonDirectory(gitDir));
-  const directories = bases.flatMap((base) => [
-    real(join(base, "hooks")),
-    real(join(base, "info")),
-  ]);
+  const directories = [
+    ...bases.flatMap((base) =>
+      ["hooks", "info", "modules", "worktrees"].map((name) =>
+        real(join(base, name)),
+      ),
+    ),
+    ...hooksPathDirectories(root, gitDir),
+  ];
   return [...new Set(directories)];
 }
 
