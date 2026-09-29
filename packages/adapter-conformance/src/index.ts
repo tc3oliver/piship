@@ -1,7 +1,7 @@
 // Conformance kits for PiShip adapters. A kit imports only
 // @piship/adapter-sdk, so a company can test its adapter without PiShip
-// internals. The kits themselves arrive with their contracts; this module
-// holds the report shape they share.
+// internals. Each kit lives in its own file and is exported here; this
+// module holds the report shape they share.
 import type { AdapterKind } from "@piship/adapter-sdk";
 
 /** A behavior the kit could not exercise, such as one that needs a harness hook, is `skipped`. */
@@ -20,3 +20,4 @@ export interface ConformanceReport {
   readonly results: readonly ConformanceResult[];
 }
 export * from "./audit.js";
+export * from "./credential.js";

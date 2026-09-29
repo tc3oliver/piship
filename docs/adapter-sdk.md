@@ -2,7 +2,7 @@
 
 `@piship/adapter-sdk` is the supported surface for writing a company adapter: an identity adapter (`identity.mode: adapter`), a credential adapter (`credential.provider: adapter`), a custom sandbox backend (`sandbox.provider: custom`), or the audit collector behind the built-in `http` audit sink. An adapter imports nothing else from PiShip.
 
-Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are scaffolded and do not have kits yet.
+Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are described below; the identity and sandbox kits arrive with their contracts.
 
 The SDK is thin on purpose. It re-exports public contracts, and its helpers either return their argument unchanged or wrap one public function. It is not a framework: an adapter is still a plain module whose default export PiShip's loader calls.
 
@@ -79,6 +79,23 @@ it("conforms to piship-audit-batch/v1", async () => {
   const report = await testAuditSink((env) =>
     createSink({ url: env.url, fetch: env.fetch, token: env.credential }),
   );
+
+`packages/adapter-sdk/examples/` holds one example of each kind, written against placeholder `*.example.com` services: `identity.mjs` (a device-style sign-in), `credential.mjs` (exchanges the identity for a runtime credential and revokes it with itself), `sandbox.mjs` (a remote execution service), and `audit-sink.mjs` (a collector that stores each event once). Each is a single file that imports only the SDK and `node:` built-ins, which a unit test checks. Replace the placeholder service, declare its host in `network.allowHosts` when the distribution is private-only, and copy the file into the distribution.
+
+## Credential conformance kit
+
+`testCredentialAdapter` from `@piship/adapter-conformance` runs a credential adapter against a fake credential broker that the kit owns, and reports each behavior of the credential contract as `passed`, `failed`, or `skipped`. The fake broker answers through the managed `fetch` in the adapter's context, so a run needs no network, no real broker, and nothing from PiShip but the SDK. The kit imports only `@piship/adapter-sdk` and `node:` built-ins.
+
+```ts
+import { testCredentialAdapter } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+import { createAdapter } from "./credential-adapter.js";
+
+it("meets the PiShip credential contract", async () => {
+  // Build the adapter with a short request timeout for the kit.
+  const report = await testCredentialAdapter(createAdapter({ timeoutMs: 200 }), {
+    requestTimeoutMs: 200,
+  });
   expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
 });
 ```
@@ -101,3 +118,42 @@ Each result is `passed`, `failed` with a reason, or `skipped` with a reason. A r
 | duplicate handling | After the collector stored a batch but its answer was lost, the resent batch carries the same IDs in the same order and the same content, so a collector that stores each `id` once stores every event once. The sink accepts the collector's `2xx` for a batch it had already stored |
 
 `failed` means the sink breaks that statement; fix the sink, not the kit. Some defects fail two behaviors because one implies the other: a sink that swallows errors cannot fail closed, and a new `id` or `session` on each write makes a resent event differ from its first delivery. `skipped` means the check does not apply to this kind of sink, not that it passed. The kit's own tests (`packages/adapter-conformance/src/audit.test.ts`) run it against a reference plain sink and a reference buffering sink, which pass, and against sinks seeded with one defect each, which fail.
+
+The first argument is what the adapter module default-exports, the factory `defineCredentialAdapter` returns. The kit calls it once per behavior with a fresh context and a fresh broker, so no state carries over between behaviors. The context holds placeholder endpoints under `*.conformance.invalid` (`brokerEndpoint`, `brokerRevokeEndpoint`, `baseUrl`, `issuer`); every request reaches the fake broker whatever its URL. An adapter that uses any other client than the context's `fetch` fails `acquire`.
+
+Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `requestTimeoutMs` | `30000` | The adapter's own request timeout. The kit waits three times this plus 2 s for a stalled request to end before it reports a hang. With the default, the stalled-broker checks take several minutes, so build the adapter under test with a short timeout and pass the same value |
+| `issue(credential)` | the `http-broker` answer | The broker's success answer to an acquire or refresh, as a `Response`. The default is `{credential_type, credential, credential_id, expires_at}`; an adapter for another service encodes the issued credential the way that service does |
+| `revoked()` | 204 | The broker's success answer to a revoke |
+| `idempotency` | `true` | `false` when the adapter's service does not honor idempotency keys; `idempotency` is then `skipped` |
+| `endpoints`, `distributionId` | placeholders | Merged into the adapter's context |
+
+The report is `{kind: "credential", results}`, one result per behavior in this order. `CREDENTIAL_CONTRACT` exports the same statements, and `CREDENTIAL_BEHAVIORS` the names.
+
+| Behavior | The adapter passes when |
+| --- | --- |
+| `acquire` | It sends its request through the context's `fetch` and returns the credential the broker issued: kind `api_key`, `bearer`, or `opaque`, the secret as a `SecretValue`, the broker's credential ID, and `mode: "adapter"` (the built-in `http-broker` mode is also accepted, so the kit can test PiShip's own provider) |
+| `refresh` | `refresh()`, or `acquire()` when there is no `refresh()` (as PiShip renews), asks the broker again and returns the newly issued credential, never the current one |
+| `expiry` | `expiresAt` is the broker's expiry on acquire and on refresh, and a credential that has already expired is refused with `CREDENTIAL_EXPIRED` or `CREDENTIAL_ACQUIRE_FAILED`, never returned |
+| `revoke` | `revoke()` sends a request that names the credential (its ID or secret in the URL, a header, or the body) and resolves once the broker accepted it. `skipped` for an adapter without `revoke()` |
+| `401` | An acquire answered with 401 fails with `IDENTITY_EXPIRED`, not retryable, so PiShip refreshes the sign-in |
+| `403` | A 403 fails with `CREDENTIAL_DENIED`, not retryable, for acquire and revoke, and is decided from the status: an answer whose body never arrives is still a denial, not a timeout |
+| `429` | A 429 fails retryably with `CREDENTIAL_ACQUIRE_FAILED` (acquire) or `CREDENTIAL_REVOKED` (revoke), and `Retry-After`, in seconds or as an HTTP-date, becomes `retryAfterMs` |
+| `5xx` | A 500, 502, or 503 fails retryably with the same codes, with any `Retry-After` as `retryAfterMs` |
+| `timeout` | A broker that never answers ends in a retryable failure with the same codes after the adapter's own timeout, also when the caller passed a signal that never fires: the signal composes with the timeout and never replaces it (`withTimeout`) |
+| `abort` | The caller's signal ends the request in flight, and the failure, with the same codes, is not retryable; a signal that was already aborted also fails without being retryable |
+| `redaction` | No identity token, credential, or broker answer body appears in any error's message, stack, `sanitizedDetail`, `userAction`, `toJSON()`, `formatError` rendering, inspection, or cause chain, after a 403, 502, or 400 with a sentinel body, a success body that is not the expected answer, and a transport error whose message quotes the `Authorization` header; the returned credential never renders its secret |
+| `concurrent refresh` | Two refreshes of one credential, answered at the same moment, both resolve, and neither result carries the ID or expiry of the credential issued to the other call |
+| `retry behavior` | The adapter never re-sends by itself: after a timeout, a connection reset, a 502, a 503, a 429, or a 401 it has sent no more requests than one successful acquire sends. A transport failure (`ECONNREFUSED`, `ECONNRESET`) is retryable. A `NETWORK_DENIED` or `TLS_POLICY_VIOLATION` from the managed fetch is rethrown with its code and is not retryable |
+| `idempotency` | `CredentialContext.idempotencyKey` is sent as `Idempotency-Key` on every acquire and refresh request; an acquire whose answer was lost after the broker issued a credential fails with the key in `sanitizedDetail.idempotencyKey`; and a caller that retries with that key receives the credential the broker already issued, not a new one ([idempotency and retries](enterprise-integration.md#idempotency-and-retries)) |
+
+What a result means:
+
+- `passed`: the kit exercised the behavior and the adapter met every statement in its row.
+- `failed`: `reason` names the first statement the adapter broke, such as `acquire answered 403: expected CREDENTIAL_DENIED, got CREDENTIAL_ACQUIRE_FAILED` or `after a timeout: the adapter sent 2 requests where one acquire sends 1`. A call that did not end within the kit's bound reads `the call did not end within the kit's bound`. A reason names codes, statuses, and counts only, never an error message, a token, or a credential.
+- `skipped`: the kit could not exercise the behavior, and `reason` says why: the adapter has no `revoke()`, or the options declared its service ignores idempotency keys. A skipped behavior is never counted as passed.
+
+The kit judges failures with `isPiShipError`, which is the check PiShip applies when it reads an adapter's error. An adapter that bundles its own copy of the SDK throws errors of another `PiShipError` class, which fail every error check; import the SDK instead of bundling it.
