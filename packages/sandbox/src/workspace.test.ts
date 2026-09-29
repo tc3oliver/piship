@@ -745,9 +745,10 @@ describe.skipIf(!posix)(
 
       // A device number per path depth: every path differs from its parent,
       // as a mount point does.
-      const MOUNTS = `stat() { if [ "$3" = . ]; then echo 0; else n=$(printf '%s' "$3" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
+      // The check hands `stat` paths as `./<path>`; the shim reads `<path>`.
+      const MOUNTS = `stat() { p=\${3#./}; if [ "$p" = . ]; then echo 0; else n=$(printf '%s' "$p" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
       // The same, except that .git shares the device of the workspace root.
-      const UNPINNED_GIT = `stat() { if [ "$3" = . ] || [ "$3" = .git ]; then echo 0; else n=$(printf '%s' "$3" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
+      const UNPINNED_GIT = `stat() { p=\${3#./}; if [ "$p" = . ] || [ "$p" = .git ]; then echo 0; else n=$(printf '%s' "$p" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
       const SAME_DEVICE = "stat() { echo 1; }";
 
       const checked = async (fake: WorkspaceFake) => {
@@ -903,6 +904,69 @@ describe.skipIf(!posix)(
         await sandbox.dispose();
       },
     );
+
+    describe.skipIf(root_)("a protected path named like an option", () => {
+      // core.hooksPath = -h: the path reaches mkdir, stat, and cd, which would
+      // take it for a flag and make the check look at the wrong thing.
+      it("is tried as a directory, and fails closed when it is writable", async () => {
+        mkdirSync(join(workspace, "-h"));
+        const fake = sharedBackend();
+        const sandbox = await activate(fake, {
+          protectedPaths: { files: [], directories: [join(workspace, "-h")] },
+        });
+        await expect(run(sandbox, "echo agent")).rejects.toMatchObject({
+          code: "SANDBOX_UNAVAILABLE",
+          message: expect.stringContaining(
+            "a file could be created in a protected git directory",
+          ),
+        });
+        // The probe file is gone; the directory was there before.
+        expect(readdirSync(join(workspace, "-h"))).toEqual([]);
+        await sandbox.dispose();
+      });
+
+      it("passes as a directory the sandbox cannot write", async () => {
+        mkdirSync(join(workspace, "-h"));
+        chmodSync(join(workspace, "-h"), 0o555);
+        const fake = sharedBackend();
+        const sandbox = await activate(fake, {
+          protectedPaths: { files: [], directories: [join(workspace, "-h")] },
+        });
+        expect((await run(sandbox, "echo agent")).output).toBe("agent\n");
+        await sandbox.dispose();
+      });
+
+      it("is found movable when it is a file in a writable directory", async () => {
+        writeFileSync(join(workspace, "-h"), "");
+        chmodSync(join(workspace, "-h"), 0o444);
+        const fake = sharedBackend();
+        const sandbox = await activate(fake, {
+          protectedPaths: { files: [join(workspace, "-h")], directories: [] },
+        });
+        await run(sandbox, "echo agent");
+        expect(sandbox.workspace()).toMatchObject({
+          verification: "verified",
+          gitControlProtection: "not-verified",
+        });
+        await sandbox.dispose();
+      });
+
+      it("is a sentinel directory that works", async () => {
+        const fake = sharedBackend({
+          declaration: { mode: "shared", sentinelDir: "-x" },
+        });
+        const sandbox = await activate(fake, { projectOrigin: "company" });
+        await run(sandbox, "echo agent");
+        expect(sandbox.workspace()).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+        });
+        expect(readdirSync(join(workspace, "-x", "piship-workspace"))).toEqual(
+          [],
+        );
+        await sandbox.dispose();
+      });
+    });
 
     it("fails closed when the check exits non-zero", async () => {
       const fake = sharedBackend({

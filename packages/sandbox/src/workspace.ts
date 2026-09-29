@@ -502,7 +502,17 @@ const RENAME_FUNCTIONS = [
   "}",
 ];
 
-/** POSIX sh; every path is workspace-relative and quoted; output is tokens only. */
+/**
+ * A workspace-relative path that no command can take for an option: a path
+ * such as `-h` (a `core.hooksPath` of that name) would otherwise reach
+ * `mkdir`, `stat`, or `cd` as a flag and make the check look at the wrong
+ * thing, silently.
+ */
+function dotSlash(path: string): string {
+  return `./${path}`;
+}
+
+/** POSIX sh; every path is workspace-relative, prefixed `./`, and quoted; output is tokens only. */
 function checkScript(input: ScriptInput): string {
   const lines: string[] = [];
   const sentinel = input.sentinel;
@@ -510,34 +520,40 @@ function checkScript(input: ScriptInput): string {
     const h2s = `"$d/h2s"`;
     const token = quote(sentinel.hostToken);
     lines.push(
-      `d=${quote(sentinel.dir)}; n=${sentinel.polls}; i=0`,
+      `d=${quote(dotSlash(sentinel.dir))}; n=${sentinel.polls}; i=0`,
       `while [ "$(cat ${h2s} 2>/dev/null)" != ${token} ] && [ "$i" -lt "$n" ]; do if sleep 0.2 2>/dev/null; then i=$((i+1)); else sleep 1; i=$((i+5)); fi; done`,
       `if [ "$(cat ${h2s} 2>/dev/null)" = ${token} ]; then echo "${WORKSPACE_MARKER} h2s $i"; else echo "${WORKSPACE_MARKER} h2s missing"; fi`,
       // The directory exists here only if the host's write arrived; create
       // it so the other direction is tested on its own.
-      `if mkdir -p "$d" 2>/dev/null && printf '%s' ${quote(sentinel.sandboxToken)} > "$d/s2h.tmp" 2>/dev/null && mv -f "$d/s2h.tmp" "$d/s2h" 2>/dev/null; then echo "${WORKSPACE_MARKER} s2h written"; else echo "${WORKSPACE_MARKER} s2h failed"; fi`,
+      `if mkdir -p -- "$d" 2>/dev/null && printf '%s' ${quote(sentinel.sandboxToken)} > "$d/s2h.tmp" 2>/dev/null && mv -f "$d/s2h.tmp" "$d/s2h" 2>/dev/null; then echo "${WORKSPACE_MARKER} s2h written"; else echo "${WORKSPACE_MARKER} s2h failed"; fi`,
     );
   }
   input.files.forEach((file, index) => {
     // An existing file is opened for append and nothing is written; a missing
     // one must not be creatable (no-clobber, so nothing existing is touched).
+    const path = quote(dotSlash(file.relative));
     lines.push(
       file.missing
-        ? `if ( set -C; : > ${quote(file.relative)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} creatable file ${index}"; fi`
-        : `if ( : >> ${quote(file.relative)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable file ${index}"; fi`,
+        ? `if ( set -C; : > ${path} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} creatable file ${index}"; fi`
+        : `if ( : >> ${path} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable file ${index}"; fi`,
     );
   });
   input.directories.forEach((dir, index) => {
-    const probe = `${dir.relative}/.piship-probe-${input.nonce}`;
+    const path = quote(dotSlash(dir.relative));
+    const probe = quote(
+      dotSlash(`${dir.relative}/.piship-probe-${input.nonce}`),
+    );
     lines.push(
-      `if ( mkdir -p ${quote(dir.relative)} && : > ${quote(probe)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable dir ${index}"; fi`,
+      `if ( mkdir -p -- ${path} && : > ${probe} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable dir ${index}"; fi`,
     );
   });
   if (input.renames.length) {
     lines.push(...RENAME_FUNCTIONS);
     input.renames.forEach((candidate, index) => {
+      // The name is only ever joined onto a path; the paths are commands'
+      // operands.
       lines.push(
-        `if piship_movable ${quote(candidate.path)} ${quote(candidate.parent)} ${quote(candidate.name)}; then echo "${WORKSPACE_MARKER} movable ${index}"; fi`,
+        `if piship_movable ${quote(dotSlash(candidate.path))} ${quote(dotSlash(candidate.parent))} ${quote(candidate.name)}; then echo "${WORKSPACE_MARKER} movable ${index}"; fi`,
       );
     });
   }
