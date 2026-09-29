@@ -58,7 +58,7 @@ The realm is imported from [`keycloak/piship-reference-realm.json`](keycloak/pis
 | Redirect URI | `http://127.0.0.1/callback`, port-less, which Keycloak matches for any loopback port (RFC 8252 section 7.3). `localhost` is refused |
 | Access token | RS256, 5 minutes. `aud` includes `piship-reference-broker` for the broker to check; `groups` lists the user's groups |
 | Refresh | `offline_access` is allowed; refresh tokens rotate (`revokeRefreshToken`) |
-| Users | `alice` (group `engineering`) and `bob` (group `support`). The groups are the input for model entitlement |
+| Users | `alice` (group `/engineering`) and `bob` (group `/support`). The groups are the input for model entitlement |
 
 Keycloak runs in development mode (`start-dev`, plain HTTP, its built-in database). A service in the compose network reaches the back channel (token, JWKS) at `http://keycloak:8080/realms/piship-reference`; discovery requested there lists `jwks_uri` on that host, while the issuer stays the loopback URL above. The admin console is at `http://127.0.0.1:<KEYCLOAK_PORT>/admin` as `admin`.
 
@@ -95,7 +95,7 @@ Observed LiteLLM behavior tests should expect (v1.103.0, this config):
 
 ## Credential broker
 
-[`broker/`](broker/README.md) implements PiShip's `http-broker` contract: `POST /v1/credential` with the user's Keycloak access token returns a LiteLLM virtual key limited to the models of the user's groups (`engineering`: `acme/coder` and `acme/general`; `support`: `acme/coder`), on one LiteLLM user per `(iss, sub)` with a per-user budget and no team; `POST /v1/revoke` with that key deletes it. It holds the master key and no other secret. `node broker/live-check.mjs` runs the happy path against the stack; `node --test broker/test/*.test.mjs` is its contract test, which needs no Docker.
+[`broker/`](broker/README.md) implements PiShip's `http-broker` contract: `POST /v1/credential` with the user's Keycloak access token returns a LiteLLM virtual key limited to the models of the user's groups (`/engineering`: `acme/coder` and `acme/general`; `/support`: `acme/coder`), on one LiteLLM user per `(iss, sub)` with a per-user budget and no team; `POST /v1/revoke` with that key deletes it. It holds the master key and no other secret. `node broker/live-check.mjs` runs the happy path against the stack; `node --test broker/test/*.test.mjs` is its contract test, which needs no Docker.
 
 ## Tests against the stack
 
