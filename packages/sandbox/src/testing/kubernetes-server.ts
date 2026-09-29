@@ -15,6 +15,11 @@ export interface Cluster {
   expired?: Set<string>;
   /** Holds PATCH responses until it resolves. */
   patchGate?: Promise<void>;
+  /**
+   * The bearer token the API and the router require; a request without it
+   * gets 401 with a body that echoes what it was sent.
+   */
+  token?: string;
 }
 
 export async function kubernetesServer(
@@ -29,6 +34,17 @@ export async function kubernetesServer(
   return serve((request, response) => {
     const path = request.path.split("?")[0] ?? "";
     response.setHeader("Content-Type", "application/json");
+    if (
+      cluster.token !== undefined &&
+      request.headers.authorization !== `Bearer ${cluster.token}`
+    ) {
+      response.statusCode = 401;
+      return void response.end(
+        JSON.stringify({
+          message: `Unauthorized: ${request.headers.authorization ?? "no token"}`,
+        }),
+      );
+    }
     if (request.method === "GET" && path === CLAIMS)
       return void response.end(JSON.stringify({ items: [] }));
     if (request.method === "POST" && path === CLAIMS) {

@@ -19,6 +19,8 @@ export {
 export { type AccessStatePaths, accessStatePaths } from "./state.js";
 export type { AccessEvent, AccessOptions, ActivatedAccess } from "./types.js";
 export {
+  AdapterSandboxCredential,
+  type AdapterSandboxCredentialOptions,
   openSandboxCredential,
   SANDBOX_SECRET_MAX_LENGTH,
   SandboxCredential,

@@ -22,7 +22,11 @@ import {
   type Cluster,
   kubernetesServer,
 } from "./testing/kubernetes-server.js";
-import { closeMockServers, type Recorded } from "./testing/mock-server.js";
+import {
+  closeMockServers,
+  leaks,
+  type Recorded,
+} from "./testing/mock-server.js";
 
 const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox");
 
@@ -281,6 +285,88 @@ describe("e2b-compatible backend against a mock server", () => {
         expect(request.headers["connect-protocol-version"]).toBe("1");
       }
     }
+  });
+
+  it("sends a required API key only as X-API-Key to the control plane, never in a path, body, or envd request", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0001";
+    const mock = await e2bServer({ apiKey: key });
+    const sandbox = await activate(
+      e2b(mock.url, { credential: async () => key }),
+    );
+    await run(sandbox, "true");
+    await sandbox.dispose();
+    expect(leaks(mock.requests, key, ["x-api-key"])).toEqual([]);
+    for (const request of mock.requests)
+      if (request.headers["x-api-key"])
+        expect(request.path.startsWith("/sandboxes")).toBe(true);
+  });
+
+  it("reports a rejected key and never repeats the create; the echoed key stays out of the error", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0002";
+    const mock = await e2bServer({ apiKey: "fake-other-key-0000" });
+    let rejected = 0;
+    const error = await activate(
+      e2b(mock.url, {
+        credential: async () => key,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    expect(String((error as Error).message)).not.toContain(key);
+    expect(rejected).toBe(1);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === "/sandboxes",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("repeats a renewal once with a renewed key after a rejection", async () => {
+    const mock = await e2bServer({
+      apiKey: "fake-sandbox-key-SENTINEL-0003",
+      rejectOnce: ["/sandboxes/sbx1/timeout"],
+    });
+    let rejected = 0;
+    const sandbox = await activate(
+      e2b(mock.url, {
+        credential: async () => "fake-sandbox-key-SENTINEL-0003",
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    );
+    expect((await run(sandbox, "true")).exitCode).toBe(0);
+    await sandbox.dispose();
+    expect(rejected).toBe(1);
+    expect(
+      mock.requests.filter(
+        (request) => request.path === "/sandboxes/sbx1/timeout",
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not repeat a rejected request when the credential cannot be renewed", async () => {
+    const mock = await e2bServer({
+      apiKey: "fake-sandbox-key-SENTINEL-0004",
+      rejectOnce: ["/sandboxes/sbx1/timeout"],
+    });
+    await expect(
+      activate(
+        e2b(mock.url, {
+          credential: async () => "fake-sandbox-key-SENTINEL-0004",
+          credentialRejected: async () => false,
+        }),
+      ),
+    ).rejects.toThrow(/HTTP 401/);
+    expect(
+      mock.requests.filter(
+        (request) => request.path === "/sandboxes/sbx1/timeout",
+      ),
+    ).toHaveLength(1);
   });
 
   it("kills the remote process on timeout and reports PiShip's outcome", async () => {
@@ -838,6 +924,9 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
     for (const request of mock.requests)
       expect(request.headers.authorization).toBe("Bearer runtime-credential-2");
+    expect(
+      leaks(mock.requests, "runtime-credential-2", ["authorization"]),
+    ).toEqual([]);
   });
 
   it("quotes commands and environment for the runtime's shell-like split", () => {

@@ -8,9 +8,12 @@
 // is deleted (the deletion confirmed) and never used.
 import { randomUUID } from "node:crypto";
 import {
+  type CredentialProvider,
   type IdentitySession,
   PiShipError,
   type PrincipalKey,
+  principalKey,
+  type RuntimeCredential,
   type RuntimeCredentialKind,
   redact,
   type SandboxCredentialAccess,
@@ -27,6 +30,7 @@ import {
   type CredentialRevokeReason,
   createSecretStore,
   LocalSecretCredentialProvider,
+  normalizeCredential,
 } from "@piship/credentials";
 import { accessStatePaths } from "./state.js";
 
@@ -513,4 +517,213 @@ export function openSandboxCredential(
   options: SandboxCredentialOptions,
 ): SandboxCredential {
   return new SandboxCredential(options);
+}
+
+export interface AdapterSandboxCredentialOptions {
+  readonly distributionId: string;
+  /** The branded command, for the user actions of errors. */
+  readonly command: string;
+  /** A custom sandbox adapter module's `sandboxCredential` export. */
+  readonly provider: unknown;
+  /**
+   * The signed-in identity, passed to the provider; it must stay the
+   * launch's principal. Null without identity.
+   */
+  readonly identity: () => Promise<IdentitySession | null>;
+  readonly principal: PrincipalKey | null;
+  /** The origins the credential is sent to (the declared endpoint's). */
+  readonly origins: readonly string[];
+  /** Receives acquire, refresh, and revoke (purpose sandbox, source adapter). */
+  readonly onEvent?: (event: CredentialEvent) => void;
+  readonly now?: () => number;
+}
+
+/** Renew this long before the adapter credential's expiry. */
+const ADAPTER_RENEW_BEFORE_MS = 60_000;
+
+/**
+ * A custom sandbox adapter's own credential (`sandboxCredential`, a
+ * `CredentialProvider`): acquired for the launch's principal, held in this
+ * process's memory only, renewed before it expires and once after a
+ * rejection, and revoked (best effort) when the session ends. It never
+ * reaches the secret store, state, snapshots, or migration, so it cannot
+ * outlive the process or its principal.
+ */
+export class AdapterSandboxCredential {
+  readonly #options: AdapterSandboxCredentialOptions;
+  readonly #provider: CredentialProvider;
+  readonly #now: () => number;
+  #current: RuntimeCredential | null = null;
+  #pending: Promise<RuntimeCredential> | null = null;
+  #revoked = false;
+
+  constructor(options: AdapterSandboxCredentialOptions) {
+    const provider = options.provider as Partial<CredentialProvider> | null;
+    if (
+      !provider ||
+      typeof provider !== "object" ||
+      typeof provider.acquire !== "function" ||
+      (provider.refresh !== undefined &&
+        typeof provider.refresh !== "function") ||
+      (provider.revoke !== undefined && typeof provider.revoke !== "function")
+    )
+      throw new PiShipError(
+        "SANDBOX_UNAVAILABLE",
+        "The custom sandbox adapter's sandboxCredential export is not a credential provider (acquire, optional refresh and revoke)",
+        { component: "sandbox" },
+      );
+    this.#options = options;
+    this.#provider = provider as CredentialProvider;
+    this.#now = options.now ?? Date.now;
+  }
+
+  #unavailable(message: string): PiShipError {
+    return new PiShipError("SANDBOX_UNAVAILABLE", message, {
+      component: "sandbox",
+      userAction: `Check the custom sandbox adapter's credential source, then start ${this.#options.command} again`,
+    });
+  }
+
+  #emit(
+    event: CredentialEvent["event"],
+    detail: Record<string, string | number | boolean | null>,
+  ): void {
+    try {
+      this.#options.onEvent?.({
+        event,
+        detail: { purpose: "sandbox", source: "adapter", ...detail },
+      });
+    } catch {
+      // Event consumers never break the session.
+    }
+  }
+
+  /** The identity for the provider, which must still be the launch's principal. */
+  async #identity(): Promise<IdentitySession | null> {
+    const identity = await this.#options.identity();
+    const principal = identity ? principalKey(identity) : null;
+    if (!samePrincipal(principal, this.#options.principal))
+      throw this.#unavailable(
+        "The signed-in user changed; the sandbox credential is not obtained for another user",
+      );
+    return identity;
+  }
+
+  async #obtain(
+    reason: "acquire" | "expiring" | "rejected",
+  ): Promise<RuntimeCredential> {
+    const identity = await this.#identity();
+    const ctx = { distributionId: this.#options.distributionId };
+    const current = this.#current;
+    let returned: unknown;
+    try {
+      returned =
+        current && this.#provider.refresh
+          ? await this.#provider.refresh(identity, current, ctx)
+          : await this.#provider.acquire(identity, ctx);
+    } catch (error) {
+      // The adapter's own text may quote its token source: only a code.
+      throw this.#unavailable(
+        `The custom sandbox adapter could not provide its credential (${error instanceof PiShipError ? error.code : "adapter error"})`,
+      );
+    }
+    let credential: RuntimeCredential;
+    try {
+      credential = normalizeCredential(returned);
+    } catch (error) {
+      throw this.#unavailable(
+        `The custom sandbox adapter returned an unusable credential: ${(error as Error).message}`,
+      );
+    }
+    if (credential.kind === "opaque")
+      throw this.#unavailable(
+        "The custom sandbox adapter returned an opaque credential; a sandbox credential is an api_key or a bearer token",
+      );
+    if (credential.expiresAt && credential.expiresAt.getTime() <= this.#now())
+      throw this.#unavailable(
+        "The custom sandbox adapter returned an expired credential",
+      );
+    this.#current = credential;
+    this.#emit(
+      reason === "acquire" ? "credential.acquire" : "credential.refresh",
+      {
+        kind: credential.kind,
+        expiresAt: credential.expiresAt?.toISOString() ?? null,
+        ...(reason === "acquire" ? {} : { reason }),
+      },
+    );
+    return credential;
+  }
+
+  /** One acquisition or renewal at a time; concurrent callers share it. */
+  #renew(
+    reason: "acquire" | "expiring" | "rejected",
+  ): Promise<RuntimeCredential> {
+    if (!this.#pending) {
+      const started = this.#obtain(reason);
+      this.#pending = started;
+      void started
+        .finally(() => {
+          if (this.#pending === started) this.#pending = null;
+        })
+        .catch(() => {});
+    }
+    return this.#pending;
+  }
+
+  #expiring(credential: RuntimeCredential): boolean {
+    return (
+      !!credential.expiresAt &&
+      credential.expiresAt.getTime() - this.#now() < ADAPTER_RENEW_BEFORE_MS
+    );
+  }
+
+  /** Acquire for the session and return the accessor backends use. */
+  async access(): Promise<SandboxCredentialAccess> {
+    const first = await this.#renew("acquire");
+    return {
+      source: "adapter",
+      kind: sandboxKind(first.kind),
+      origins: [...this.#options.origins],
+      secret: async () => {
+        if (this.#revoked)
+          throw this.#unavailable("The sandbox credential was revoked");
+        const current = this.#current;
+        if (current && !this.#expiring(current)) {
+          // A principal change is refused even for a credential in hand.
+          await this.#identity();
+          return current.secret;
+        }
+        return (await this.#renew(current ? "expiring" : "acquire")).secret;
+      },
+      rejected: async () => {
+        if (this.#revoked) return;
+        await this.#renew("rejected");
+      },
+    };
+  }
+
+  /** Revoke the held credential where the provider can; best effort. */
+  async revoke(): Promise<void> {
+    if (this.#revoked) return;
+    this.#revoked = true;
+    const current = this.#current;
+    this.#current = null;
+    if (!current) return;
+    let revocation: "revoked" | "failed" | "unsupported" = "unsupported";
+    if (this.#provider.revoke)
+      try {
+        await this.#provider.revoke(current, {
+          distributionId: this.#options.distributionId,
+        });
+        revocation = "revoked";
+      } catch {
+        revocation = "failed";
+      }
+    this.#emit("credential.revoke", {
+      kind: current.kind,
+      reason: "logout",
+      revocation,
+    });
+  }
 }

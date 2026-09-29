@@ -21,6 +21,13 @@ export interface E2bScript {
   /** The envd user the sandbox accepts; others are refused. Default `user`. */
   user?: string;
   create?: number;
+  /**
+   * The API key the control plane requires; a request without it gets 401
+   * with a body that echoes what it was sent, as some services do.
+   */
+  apiKey?: string;
+  /** Control paths answered 401 once before the key is accepted. */
+  rejectOnce?: readonly string[];
   /** Stdout and exit code for a command; `hang` keeps the stream open. */
   command?: (start: StartRequest) => {
     stdout?: string;
@@ -32,11 +39,22 @@ export interface E2bScript {
 
 export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
   const hung = new Set<ServerResponse>();
+  const rejectOnce = new Set(script.rejectOnce ?? []);
   return serve((request, response) => {
     const path = request.path.split("?")[0] ?? "";
     if (path === "/health") {
       response.statusCode = script.health ?? 204;
       return void response.end();
+    }
+    if (path.startsWith("/sandboxes") && script.apiKey !== undefined) {
+      const presented = String(request.headers["x-api-key"] ?? "");
+      if (presented !== script.apiKey || rejectOnce.delete(path)) {
+        response.statusCode = 401;
+        response.setHeader("Content-Type", "application/json");
+        return void response.end(
+          JSON.stringify({ code: 401, message: `invalid key ${presented}` }),
+        );
+      }
     }
     if (request.method === "POST" && path === "/sandboxes") {
       response.statusCode = script.create ?? 201;

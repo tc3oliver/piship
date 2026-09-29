@@ -2,10 +2,17 @@ import type { LocalMetrics } from "@piship/audit";
 import type {
   ApprovalChannel,
   AuditEventType,
+  IdentitySession,
   ManagedFetch,
   PolicyAction,
+  PrincipalKey,
+  SandboxCredentialAccess,
 } from "@piship/contracts";
-import type { DistributionLock, GovernanceLock } from "@piship/core";
+import type {
+  AccessEvent,
+  DistributionLock,
+  GovernanceLock,
+} from "@piship/core";
 import type { ModelEvidence } from "@piship/policy";
 import type { BuiltinExtension, ResourceKind } from "@piship/schema";
 
@@ -30,6 +37,28 @@ export interface GovernanceOptions {
   readonly credential?: () => Promise<string | undefined>;
   /** Origins the runtime credential is issued for (the inference gateway). */
   readonly credentialOrigins?: readonly string[];
+  /**
+   * `sandbox.credential: stored`: the stored sandbox credential of the
+   * launch's principal, for the resolved endpoint (and router) URLs it
+   * would be sent to. Fails closed (SANDBOX_UNAVAILABLE) before the secret
+   * is read when it belongs to another principal, was rejected, or was
+   * stored for other origins. Absent when the launch has no principal to
+   * check it against.
+   */
+  readonly sandboxCredential?: (
+    targets: readonly string[],
+  ) => Promise<SandboxCredentialAccess>;
+  /**
+   * The launch's identity for a custom sandbox adapter's `sandboxCredential`
+   * export, which must stay the launch's principal. Absent when the launch
+   * has none to offer.
+   */
+  readonly sandboxIdentity?: {
+    readonly principal: PrincipalKey | null;
+    readonly current: () => Promise<IdentitySession | null>;
+  };
+  /** Receives sandbox credential lifecycle events (purpose sandbox). */
+  readonly onSandboxCredentialEvent?: (event: AccessEvent) => void;
   readonly homeDir?: string;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;

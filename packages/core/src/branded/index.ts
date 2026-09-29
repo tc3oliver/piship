@@ -3,6 +3,7 @@
 export {
   type BrandedContext,
   type DoctorLine,
+  eventDetail,
   type GovernedLock,
   governedLock,
   openAccess,

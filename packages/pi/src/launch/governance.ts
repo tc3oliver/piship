@@ -6,7 +6,13 @@ import {
   principalId,
   principalKey,
 } from "@piship/contracts";
-import { configuredModel, type GovernedLock, governedLock } from "@piship/core";
+import {
+  configuredModel,
+  eventDetail,
+  type GovernedLock,
+  governedLock,
+  openSandboxCredential,
+} from "@piship/core";
 import type { ModelEvidence } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import {
@@ -28,6 +34,15 @@ export function governanceOptions(
   interactive: boolean,
 ): GovernanceOptions {
   const { access, activated, metrics } = prepared ?? {};
+  const sandbox = lock.governance.manifest.sandbox;
+  // The principal the sandbox credential is checked against: the one this
+  // launch activated, or nobody for a distribution without access. Without
+  // either (an offline report), no sandbox credential is offered.
+  const principal = activated?.identity
+    ? principalKey(activated.identity)
+    : null;
+  const known = !ctx.metadata.access || !!activated;
+  const onSandboxCredentialEvent = prepared?.events.listener;
   return {
     lock,
     ...(metrics ? { metrics } : {}),
@@ -51,6 +66,41 @@ export function governanceOptions(
       ? principalId(principalKey(activated.identity))
       : null,
     model: selectedModelEvidence(ctx, prepared),
+    ...(onSandboxCredentialEvent ? { onSandboxCredentialEvent } : {}),
+    ...(known && sandbox.credential === "stored" && sandbox.provider
+      ? {
+          sandboxCredential: (targets: readonly string[]) =>
+            openSandboxCredential({
+              distributionId: lock.app.id,
+              command: lock.app.command,
+              stateDir: ctx.stateDir,
+              provider: sandbox.provider as NonNullable<
+                typeof sandbox.provider
+              >,
+              ...(ctx.metadata.access
+                ? { storage: ctx.metadata.access.credential.storage }
+                : {}),
+              ...(access?.store ? { secretStore: access.store } : {}),
+              principal,
+              targets,
+              ...(onSandboxCredentialEvent
+                ? { onEvent: onSandboxCredentialEvent }
+                : {}),
+            }).access(),
+        }
+      : {}),
+    ...(known
+      ? {
+          sandboxIdentity: {
+            principal,
+            // A renewed session of the same principal, never another's.
+            current: async () =>
+              access && principal
+                ? access.currentIdentity({ required: true })
+                : null,
+          },
+        }
+      : {}),
     ...(access && activated?.runtime.requiresCredential
       ? {
           credential: async () =>
@@ -115,12 +165,12 @@ export async function openGovernance(
   const { access } = prepared;
   // Only lifecycle changes are recorded: reusing a stored credential is not
   // an acquisition. Later refreshes during the session are forwarded live.
-  if (access)
-    prepared.events.forward((event) =>
-      gov.emit(event.event, {
-        detail: { mode: access.credentialMode, ...event.detail },
-      }),
-    );
+  // Sandbox credential events name their purpose instead of the mode.
+  prepared.events.forward((event) =>
+    gov.emit(event.event, {
+      detail: eventDetail(access?.credentialMode ?? "pi-native", event.detail),
+    }),
+  );
   return gov;
 }
 

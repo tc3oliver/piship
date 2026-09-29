@@ -16,6 +16,7 @@ import {
   type SandboxPrepareRequest,
 } from "../backend.js";
 import {
+  credentialedFetch,
   describeFailure,
   errorText,
   type RemoteBackendOptions,
@@ -332,15 +333,19 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     return `${this.#api}/apis/${GROUP}/namespaces/${this.#namespace}/sandboxclaims`;
   }
 
-  async #request(url: string, init: RequestInit): Promise<Response> {
-    const headers = new Headers(init.headers);
-    const credential = await this.#options.credential?.();
-    if (credential) headers.set("Authorization", `Bearer ${credential}`);
-    return this.#options.fetch(url, {
-      ...init,
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(30_000),
-    });
+  /**
+   * A request to the API or the router, both of which receive the
+   * credential as a bearer token. A POST (a claim or a command) may have
+   * created something and is never sent twice.
+   */
+  #request(url: string, init: RequestInit): Promise<Response> {
+    return credentialedFetch(
+      this.#options,
+      url,
+      init,
+      (credential) => ["Authorization", `Bearer ${credential}`],
+      init.method !== "POST",
+    );
   }
 
   async #claim(signal: AbortSignal | undefined): Promise<Claim> {

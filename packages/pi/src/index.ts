@@ -12,6 +12,7 @@ import {
   runLogin,
   runLogout,
   runRollback,
+  runSandbox,
   runUpdate,
   runtimeStateDirectory,
 } from "@piship/core";
@@ -93,7 +94,11 @@ export async function launchPiDistribution(
   }
   if (!requestedModel && args.length === 1 && command === "--help") {
     const governanceHelp = metadata.governance
-      ? "\n  policy explain <action> <resource> [--json] | capabilities [--json]"
+      ? `\n  policy explain <action> <resource> [--json] | capabilities [--json]${
+          metadata.governance.manifest.sandbox.credential === "stored"
+            ? "\n  sandbox login | sandbox logout"
+            : ""
+        }`
       : "";
     const managedHelp = metadata.access
       ? `\n\nCommands:\n  login | logout | doctor | models | version\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--smoke | --smoke-model]`
@@ -113,6 +118,10 @@ export async function launchPiDistribution(
     if (command === "update") return runUpdate(ctx, rest);
     if (args.length === 1 && command === "rollback") return runRollback(ctx);
     if (command === "config") return runConfig(ctx, rest);
+    // Every sandbox subcommand goes to the runner, which refuses anything
+    // but login and logout without echoing the command line: a mistyped one
+    // may hold the secret.
+    if (command === "sandbox") return runSandbox(ctx, rest);
     if (command === "policy") return runPolicy(ctx, rest);
     if (command === "capabilities") return runCapabilities(ctx, rest);
   }
