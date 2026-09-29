@@ -1,0 +1,166 @@
+# PiShip enterprise reference infrastructure: Keycloak, PostgreSQL, LiteLLM,
+# the reference credential broker,
+# and a deterministic OpenAI-compatible mock upstream.
+#
+# Secrets and ports come from `.env` beside this file, which
+# `node scripts/generate-env.mjs` creates with random values. It is git-ignored;
+# this file holds no secret. Every port is published on 127.0.0.1 only.
+#
+#   node scripts/generate-env.mjs
+#   docker compose up --wait
+#   docker compose down
+#
+# No service uses a named volume: PostgreSQL keeps its data on tmpfs and
+# Keycloak in its container, so `docker compose down` discards all state.
+name: piship-enterprise-reference
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    # Development mode with its built-in file database: the realm is imported
+    # from keycloak/ on every start, and no state outlives the container.
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/generate-env.mjs}
+      # One issuer for the host and for other containers: tokens always carry
+      # iss=http://127.0.0.1:<KEYCLOAK_PORT>/realms/piship-reference, while
+      # back-channel calls (token, JWKS) also work at http://keycloak:8080.
+      KC_HOSTNAME: http://127.0.0.1:${KEYCLOAK_PORT:-18080}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      # Placeholders in the realm import.
+      REFERENCE_ALICE_PASSWORD: ${REFERENCE_ALICE_PASSWORD:?run scripts/generate-env.mjs}
+      REFERENCE_BOB_PASSWORD: ${REFERENCE_BOB_PASSWORD:?run scripts/generate-env.mjs}
+    volumes:
+      - ./keycloak/piship-reference-realm.json:/opt/keycloak/data/import/piship-reference-realm.json:ro
+    ports:
+      - 127.0.0.1:${KEYCLOAK_PORT:-18080}:8080
+    healthcheck:
+      # Ready once the imported realm serves OIDC discovery. The image has
+      # bash but no curl, so this speaks HTTP over bash's /dev/tcp.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080 &&
+          printf 'GET /realms/piship-reference/.well-known/openid-configuration HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3 &&
+          body=$$(cat <&3) && [[ $$body == 'HTTP/1.1 200'* && $$body == *'"issuer"'* ]]
+      interval: 3s
+      timeout: 5s
+      retries: 100
+      start_period: 5s
+
+  postgres:
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_DB: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/generate-env.mjs}
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - 127.0.0.1:${POSTGRES_PORT:-15432}:5432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "litellm", "-d", "litellm", "-h", "127.0.0.1"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mock-upstream:
+    image: node:22.23.3-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+    command: ["node", "/srv/mock-upstream/server.mjs"]
+    environment:
+      MOCK_UPSTREAM_LISTEN_PORT: "8080"
+      MOCK_UPSTREAM_API_KEY: ${MOCK_UPSTREAM_API_KEY:?run scripts/generate-env.mjs}
+      MOCK_UPSTREAM_MODELS: gpt-4.1,gpt-4.1-mini
+    volumes:
+      - ./mock-upstream:/srv/mock-upstream:ro
+    ports:
+      - 127.0.0.1:${MOCK_UPSTREAM_PORT:-18090}:8080
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  litellm:
+    # LiteLLM v1.103.0, pinned by its multi-arch index digest. LITELLM_IMAGE
+    # may name a mirror of the same digest, such as
+    # docker.io/litellm/litellm:v1.103.0@sha256:bd089afd...; never a moving tag.
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.103.0@sha256:bd089afdcd35b894b14a93f9743cdc8b591f82da1a38dd43a010a7b0c9de5fd7}
+    # The proxy config is the enterprise-litellm example's, unchanged: its
+    # openai/* models reach the mock upstream through OPENAI_BASE_URL.
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run scripts/generate-env.mjs}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?run scripts/generate-env.mjs}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      OPENAI_API_KEY: ${MOCK_UPSTREAM_API_KEY}
+      OPENAI_BASE_URL: http://mock-upstream:8080/v1
+      # Use the model price map bundled in the image instead of fetching it.
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - ../enterprise-litellm/litellm-config.yaml:/etc/litellm/config.yaml:ro
+    ports:
+      - 127.0.0.1:${LITELLM_PORT:-14000}:4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-upstream:
+        condition: service_healthy
+    healthcheck:
+      # Readiness includes the database connection.
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=4).status == 200 else 1)"
+      interval: 3s
+      timeout: 5s
+      retries: 100
+      start_period: 5s
+
+  broker:
+    # The reference credential broker (broker/README.md): Node built-ins
+    # only, on the same pinned image as the mock. It holds the LiteLLM master
+    # key and nothing else from .env; the salt key stays with LiteLLM.
+    image: node:22.23.3-alpine3.24@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+    command: ["node", "/srv/broker/server.mjs"]
+    environment:
+      BROKER_LISTEN_HOST: 0.0.0.0
+      BROKER_LISTEN_PORT: "8080"
+      # Tokens carry the loopback issuer; the JWKS is read on the back channel.
+      BROKER_ISSUER: http://127.0.0.1:${KEYCLOAK_PORT:-18080}/realms/piship-reference
+      BROKER_JWKS_URL: http://keycloak:8080/realms/piship-reference/protocol/openid-connect/certs
+      BROKER_LITELLM_URL: http://litellm:4000
+      # Both back-channel URLs are plain http on the compose network. The
+      # broker refuses http for them unless this is set, and then only for a
+      # container name: a copied broker must use https.
+      BROKER_ALLOW_INSECURE_BACKCHANNEL: "true"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run scripts/generate-env.mjs}
+      # What PiShip declares as inference.baseUrl; returned as base_url.
+      BROKER_GATEWAY_BASE_URL: http://127.0.0.1:${LITELLM_PORT:-14000}/v1
+    volumes:
+      - ./broker:/srv/broker:ro
+    ports:
+      - 127.0.0.1:${BROKER_PORT:-18070}:8080
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 2s
+      timeout: 5s
+      retries: 30
