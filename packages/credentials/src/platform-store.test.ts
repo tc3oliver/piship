@@ -70,27 +70,66 @@ describe.runIf(live)("platform secret store (live)", () => {
 describe("Linux Secret Service store", () => {
   // A stateful `secret-tool` double with the limit seen on libsecret 0.21.4:
   // `store` keeps at most 8192 bytes of stdin, warns, and still exits 0.
+  // `lookup` and `clear` match on the given attributes, and `account` and
+  // `parent` are the ones PiShip uses. Knobs inject the failures under test.
   function fakeSecretTool() {
     const items = new Map<string, string>();
+    const parents = new Map<string, string>();
+    const knobs = {
+      /** Fail the nth `store` call (1-based) with a keyring error. */
+      failStoreAt: 0,
+      /** `clear` by `parent` removes one item per call, as on an old libsecret. */
+      clearOne: false,
+      /** `clear` by `parent` reports success and removes nothing. */
+      clearNothing: false,
+    };
+    let stores = 0;
+    const attribute = (args: string[], name: string) => {
+      const at = args.indexOf(name);
+      return at < 0 ? undefined : args[at + 1];
+    };
+    const matching = (args: string[]) => {
+      const parent = attribute(args, "parent");
+      const account = attribute(args, "account");
+      return [...items.keys()].filter((key) =>
+        parent === undefined ? key === account : parents.get(key) === parent,
+      );
+    };
     const run: CommandRunner = (_command, args, stdin) => {
-      const account = args[args.indexOf("account") + 1] ?? "";
+      const account = attribute(args, "account") ?? "";
       if (args[0] === "store") {
+        stores += 1;
+        if (stores === knobs.failStoreAt)
+          return {
+            status: 1,
+            stdout: "",
+            stderr: "secret-tool: keyring error",
+          };
         const text = stdin ?? "";
         items.set(account, text.slice(0, 8192));
+        const parent = attribute(args, "parent");
+        if (parent) parents.set(account, parent);
+        else parents.delete(account);
         const stderr =
           text.length > 8191 ? "secret-tool: password is too long" : "";
         return { status: 0, stdout: "", stderr };
       }
       if (args[0] === "lookup") {
-        const value = items.get(account);
-        return value === undefined
+        const [first] = matching(args);
+        return first === undefined
           ? { status: 1, stdout: "", stderr: "" }
-          : { status: 0, stdout: value, stderr: "" };
+          : { status: 0, stdout: items.get(first) ?? "", stderr: "" };
       }
-      items.delete(account);
+      if (attribute(args, "parent") !== undefined && knobs.clearNothing)
+        return { status: 0, stdout: "", stderr: "" };
+      const found = matching(args);
+      for (const key of knobs.clearOne ? found.slice(0, 1) : found) {
+        items.delete(key);
+        parents.delete(key);
+      }
       return { status: 0, stdout: "", stderr: "" };
     };
-    return { items, run };
+    return { items, parents, knobs, run };
   }
 
   it("splits a value larger than secret-tool stores and removes stale parts", async () => {
@@ -120,6 +159,82 @@ describe("Linux Secret Service store", () => {
     });
     await store.delete(ref);
     expect(items.size).toBe(0);
+  });
+
+  describe("a value split across parts", () => {
+    const ref = "piship:acmecode:identity";
+    const large = new SecretValue(
+      JSON.stringify({ idToken: "x".repeat(20_000) }),
+    );
+
+    it("leaves no part behind when a part write fails", async () => {
+      const { items, knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      knobs.failStoreAt = 2;
+      await expect(store.put(ref, large)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+      expect(items.size).toBe(0);
+      expect(await store.get(ref)).toBeNull();
+    });
+
+    it("drops a chunked value it could not replace instead of serving a mix of old and new", async () => {
+      const { items, knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, large);
+      // The second store call of the replacement, so a part is already written.
+      knobs.failStoreAt = items.size + 2;
+      await expect(
+        store.put(ref, new SecretValue("y".repeat(20_000))),
+      ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+      expect(items.size).toBe(0);
+      expect(await store.get(ref)).toBeNull();
+    });
+
+    it("keeps an earlier plain value when the chunked replacement fails", async () => {
+      const { items, knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, new SecretValue("sk-old"));
+      knobs.failStoreAt = 2;
+      await expect(store.put(ref, large)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+      expect([...items.keys()]).toEqual([ref]);
+      expect((await store.get(ref))?.reveal()).toBe("sk-old");
+    });
+
+    it("fails closed on an extra part", async () => {
+      const { items, parents, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, large);
+      const count = items.size - 1;
+      items.set(`${ref}+${count}`, "stray");
+      parents.set(`${ref}+${count}`, ref);
+      await expect(store.get(ref)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+      await store.delete(ref);
+      expect(items.size).toBe(0);
+    });
+
+    it("deletes every part even when one clear call removes one item", async () => {
+      const { items, knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, large);
+      knobs.clearOne = true;
+      await store.delete(ref);
+      expect(items.size).toBe(0);
+    });
+
+    it("reports a delete that removed nothing instead of claiming success", async () => {
+      const { knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, large);
+      knobs.clearNothing = true;
+      await expect(store.delete(ref)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+    });
   });
 
   it("reports a truncated store instead of keeping a cut-off secret", async () => {

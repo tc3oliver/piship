@@ -100,6 +100,8 @@ describe("platform secret stores", () => {
     "%s never places the secret in process arguments",
     async (_name, create, lookup) => {
       const { calls, runner } = recordingRunner({
+        // Secret Service parts are found by their `parent`; none exist here.
+        "lookup service piship parent": { status: 1 },
         [lookup]: { status: 0, stdout: encoded },
       });
       const store = create(runner);
@@ -107,7 +109,10 @@ describe("platform secret stores", () => {
       expect((await store.get("piship:acmecode:inference#1"))?.reveal()).toBe(
         secret.reveal(),
       );
-      await store.delete("piship:acmecode:inference#1");
+      // This double keeps answering the lookup after the delete, which the
+      // Secret Service store's verified delete reports; only the arguments of
+      // the calls matter here.
+      await store.delete("piship:acmecode:inference#1").catch(() => undefined);
       for (const call of calls) {
         expect(call.args.join(" ")).not.toContain(secret.reveal());
         expect(call.args.join(" ")).not.toContain(encoded);

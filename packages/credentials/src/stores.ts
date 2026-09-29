@@ -98,12 +98,15 @@ export class MemorySecretStore implements SecretStore {
 // `<ref>+<index>` and the primary item holds `chunks:<count>`. Neither can be
 // confused with a stored value: base64url has no ":", references have no "+".
 const CHUNK_MARKER = "chunks:";
+const MAX_CHUNKS = 1000;
 const MAC_CHUNK = 1024;
 const partRef = (ref: string, index: number) => `${ref}+${index}`;
 function chunkCount(raw: string | null): number {
   if (!raw?.startsWith(CHUNK_MARKER)) return 0;
   const count = Number(raw.slice(CHUNK_MARKER.length));
-  return Number.isInteger(count) && count > 0 && count <= 1000 ? count : 0;
+  return Number.isInteger(count) && count > 0 && count <= MAX_CHUNKS
+    ? count
+    : 0;
 }
 function splitChunks(value: string, size: number): string[] {
   const parts: string[] = [];
@@ -212,7 +215,7 @@ export class SecretServiceSecretStore implements SecretStore {
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
     return result.stdout.trim() || null;
   }
-  #write(account: string, text: string): void {
+  #write(account: string, text: string, parent?: string): void {
     const result = this.run(
       "secret-tool",
       [
@@ -222,6 +225,7 @@ export class SecretServiceSecretStore implements SecretStore {
         SERVICE,
         "account",
         account,
+        ...(parent ? ["parent", parent] : []),
       ],
       text,
     );
@@ -240,19 +244,68 @@ export class SecretServiceSecretStore implements SecretStore {
     if (result.status !== 0 && result.stderr.trim())
       throw unavailable(this.description, result.stderr);
   }
+  // Every part carries its primary's reference as a `parent` attribute, so the
+  // parts are found and cleared without knowing how many a failed or older
+  // write left behind. The primary has no `parent` attribute.
+  #hasParts(parent: string): boolean {
+    const result = this.run("secret-tool", [
+      "lookup",
+      "service",
+      SERVICE,
+      "parent",
+      parent,
+    ]);
+    if (result.status === 1 && !result.stderr.trim()) return false;
+    if (result.status !== 0) throw unavailable(this.description, result.stderr);
+    return true;
+  }
+  #clearParts(parent: string): void {
+    // Repeat until none is left, so the result does not depend on how many
+    // items one `clear` call removes.
+    for (let attempt = 0; attempt <= MAX_CHUNKS; attempt += 1) {
+      const result = this.run("secret-tool", [
+        "clear",
+        "service",
+        SERVICE,
+        "parent",
+        parent,
+      ]);
+      if (result.status !== 0 && result.stderr.trim())
+        throw unavailable(this.description, result.stderr);
+      if (!this.#hasParts(parent)) return;
+    }
+    throw unavailable(this.description, "the stored secret parts remain");
+  }
   async put(ref: string, value: SecretValue): Promise<void> {
     checkRef(ref);
     const encoded = encode(value);
-    const previous = chunkCount(this.#read(ref));
     const parts =
       encoded.length > SECRET_SERVICE_CHUNK
         ? splitChunks(encoded, SECRET_SERVICE_CHUNK)
         : [];
-    for (const [index, part] of parts.entries())
-      this.#write(partRef(ref, index), part);
-    this.#write(ref, parts.length ? `${CHUNK_MARKER}${parts.length}` : encoded);
-    for (let index = parts.length; index < previous; index += 1)
-      this.#remove(partRef(ref, index));
+    try {
+      // Parts of an earlier write go first, so none can pair with the new
+      // primary, and the primary is written last.
+      this.#clearParts(ref);
+      for (const [index, part] of parts.entries())
+        this.#write(partRef(ref, index), part, ref);
+      this.#write(
+        ref,
+        parts.length ? `${CHUNK_MARKER}${parts.length}` : encoded,
+      );
+    } catch (error) {
+      // A failed write leaves no part behind. An earlier chunked primary
+      // would now point at cleared parts, so it goes too; an earlier plain
+      // value is untouched and stays valid.
+      try {
+        this.#clearParts(ref);
+        if (chunkCount(this.#read(ref))) this.#remove(ref);
+      } catch {
+        // The store is down; the write error is the one to report, and
+        // delete() clears every part by attribute later.
+      }
+      throw error;
+    }
   }
   async get(ref: string): Promise<SecretValue | null> {
     checkRef(ref);
@@ -267,14 +320,19 @@ export class SecretServiceSecretStore implements SecretStore {
         throw unavailable(this.description, "a stored secret part is missing");
       joined += part;
     }
+    if (this.#read(partRef(ref, count)) !== null)
+      throw unavailable(this.description, "a stored secret has an extra part");
     return decode(joined);
   }
   async delete(ref: string): Promise<void> {
     checkRef(ref);
-    const count = chunkCount(this.#read(ref));
-    for (let index = 0; index < count; index += 1)
-      this.#remove(partRef(ref, index));
+    this.#clearParts(ref);
     this.#remove(ref);
+    if (this.#read(ref) !== null || this.#hasParts(ref))
+      throw unavailable(
+        this.description,
+        "the stored secret could not be deleted",
+      );
   }
 }
 
