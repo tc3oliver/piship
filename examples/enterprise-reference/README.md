@@ -295,16 +295,27 @@ The live routing is two files beside `compose.yaml`, which stays unchanged:
 | `LIVE_PROVIDER_BASE_URL` | The provider's API base URL. Default `https://api.openai.com/v1`; set it for any other provider |
 | `LIVE_PROVIDER_MODEL` | A LiteLLM model string, whose prefix picks the protocol: `openai/<model>` for OpenAI or any OpenAI-compatible API, `anthropic/<model>` for Anthropic. Default `openai/gpt-4.1-mini` |
 
-The workflow reads the three from repository secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
+The workflow reads the three from secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
 
 Dispatch inputs:
 
 | Input | Effect |
 | --- | --- |
 | `provider` | The provider name shown in the job summary. Free text; nothing else uses it |
-| `redact-provider` | Default `true`: the summary shows `redacted` instead of the name. The workflow's inputs are visible on the run page whatever this says, so leave `provider` empty when the name must not appear at all |
+| `redact-provider` | Default `true`: the summary shows `redacted` instead of the name. The summary is the only place the workflow writes the name, so this covers everything the run prints; the inputs themselves are visible on the run page whatever this says, so leave `provider` empty when the name must not appear at all |
 
-When the request fails, the job prints the last 300 lines of LiteLLM's and the broker's container logs, scrubbed of the stack's secrets and of every `LIVE_PROVIDER_*` value, and the job log masks the repository secrets too. Nothing is uploaded.
+The job log of a public repository is public, so the workflow prints nothing derived from the provider. When a provider answers with an error, LiteLLM's logs and AcmeCode's output name the provider, its host, and its model in forms (`OpenAIException`, a model name without its `openai/` prefix, `api.openai.com`) that secret masking and [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs) do not catch. So no step prints or uploads container logs, the test never puts AcmeCode's output or the provider's key in a failure message, and a failed run shows only the test's messages, the result JSON, and the container states. To find out why a request failed, run the test locally.
+
+### Protecting the provider key
+
+A repository secret is available to a run of this workflow from any branch. Keep the three secrets in a GitHub environment limited to `main` instead:
+
+1. In the repository's Settings, Environments, create the environment `live-provider`.
+2. Under Deployment branches and tags, choose Selected branches and add `main`. Optionally add a required reviewer, so every run waits for approval.
+3. Add `LIVE_PROVIDER_API_KEY`, `LIVE_PROVIDER_BASE_URL`, and `LIVE_PROVIDER_MODEL` as secrets of that environment, and delete the repository secrets of the same names.
+4. Add `environment: live-provider` to the `live` job in `live-provider.yml`.
+
+Do step 4 last. A job that names an environment that does not exist makes GitHub create it without protection rules, so the committed workflow names none. Between steps 3 and 4 a run fails at once with `The LIVE_PROVIDER_API_KEY secret is not set`.
 
 To run it locally, with Docker and after `npm run build`, set the variables and `PISHIP_LIVE_PROVIDER=1` for `npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts` at the repository root, without printing the key or leaving it in your shell history. It uses the same ports and project as the other tests in `tests/`.
 

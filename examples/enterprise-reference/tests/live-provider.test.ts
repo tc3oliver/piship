@@ -66,15 +66,19 @@ describe.skipIf(!live || process.platform === "win32")(
           }),
         );
 
+      // Nothing below prints AcmeCode's output or the provider's key, not even
+      // in a failure message: on an upstream error the output names the
+      // provider, its host, and its model, and the job log is public.
       const held = await acme.secrets();
-      // AcmeCode never had the provider's key; nor did it print its own.
+      expect(leaks(acme.output(), held?.values ?? [])).toEqual([]);
       expect(
-        leaks(acme.output(), [
-          ...(held?.values ?? []),
-          process.env.LIVE_PROVIDER_API_KEY ?? "",
-        ]),
-      ).toEqual([]);
-      expect(request.status, request.stderr).toBe(0);
+        acme.output().includes(process.env.LIVE_PROVIDER_API_KEY ?? ""),
+        "AcmeCode printed the provider's key",
+      ).toBe(false);
+      expect(
+        request.status,
+        "--smoke-model failed; its output is not shown because it can name the provider",
+      ).toBe(0);
       expect(modelRequest?.model).toBe(`acmecode/${MODEL}`);
       expect(modelRequest?.text.trim()).not.toBe("");
       expect(modelRequest?.stopReason).toBe("stop");
