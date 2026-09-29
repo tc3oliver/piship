@@ -449,6 +449,20 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         { status: response.status, detail },
       );
     }
+    // A broker may say whom it authenticated. If it does, it must be the
+    // identity PiShip sent: the reuse of a stored credential trusts the
+    // principal the identity adapter asserted, and a broker that answers for
+    // a different subject means the two disagree about who is asking.
+    if (
+      body.subject !== undefined &&
+      (typeof body.subject !== "string" || body.subject !== identity.subject)
+    )
+      throw brokerFailure(
+        "acquire",
+        "contract",
+        "The credential broker issued a credential for another subject",
+        { status: response.status },
+      );
     const type = body.credential_type;
     const secret = body.credential;
     if (

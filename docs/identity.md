@@ -61,14 +61,17 @@ export default (context) => ({
   async login() {
     // Read the token the platform provides: a projected service account
     // token, a CI job token, or a token exchange through context.fetch.
-    const document = JSON.parse(
-      readFileSync(process.env.ACME_WORKLOAD_IDENTITY_PATH, "utf8"),
+    const token = readFileSync(process.env.ACME_WORKLOAD_TOKEN_PATH, "utf8").trim();
+    // Take the principal from the token itself, never from a side field that
+    // can go stale. PiShip does not verify the token: the broker does.
+    const claims = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
     );
     return {
-      issuer: document.issuer,
-      subject: document.subject,
-      accessToken: document.token,
-      expiresAt: document.expiresAt,
+      issuer: claims.iss,
+      subject: claims.sub,
+      accessToken: token,
+      expiresAt: new Date(claims.exp * 1000),
     };
   },
 });
@@ -81,6 +84,9 @@ What a workload adapter must implement:
 - Network requests only through `context.fetch`, the managed fetch, so the distribution's TLS, proxy, CA, and private-only rules apply ([security](security.md#network-and-tls)).
 - Its token source outside credential-named environment variables. In a managed distribution PiShip removes variables such as `*_TOKEN`, `*_SECRET`, `*_API_KEY`, and provider prefixes before any adapter loads, so read a token file, a platform endpoint, or a non-secret variable that names where the token is (for example `ACME_WORKLOAD_IDENTITY_PATH`).
 - `refresh` and `logout` are not used for a workload identity: PiShip calls `login` again instead.
+- A token file the adapter reads is checked by the adapter: mode 0600 and owned by the job user, not a symlink, not inside the workspace the agent can read, and bounded in size. PiShip cannot check it for you.
+- A subject that identifies one workload. The subject is the isolation granularity: workloads that present the same `(iss, sub)` (for example every pod of one Kubernetes service account, or every run of one repository and branch) share one runtime credential, one entitlement, and one session history directory. Use a token whose subject names what must be kept apart.
+- One state directory per workload principal. Two workloads with different principals on one state directory (the default state home of one OS user) revoke each other's credential on every activation, because each finds the other's credential bound to a different principal. Give each workload its own `PISHIP_STATE_HOME`.
 
 How PiShip uses it:
 

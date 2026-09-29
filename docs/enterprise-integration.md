@@ -151,6 +151,7 @@ Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 | `credential_type` | yes | `api_key`, `bearer`, or `opaque`. All three are sent to the gateway as `Authorization: Bearer <credential>` |
 | `credential` | yes | String of at least 8 characters |
 | `credential_id` | no | Non-secret string; recorded in audit events and status output, and sent back on revoke |
+| `subject` | no | The subject the broker authenticated. If present it must equal the identity subject PiShip sent, or the acquire fails as a `contract` failure: a stored credential is reused on the strength of the principal the identity adapter asserted, and this makes a broker that authenticated someone else visible |
 | `expires_at` | no | ISO 8601, parsed with JavaScript `Date.parse`: include `Z` or an offset, or it is read as local time. Must be in the future. Without it the credential never expires locally and is replaced only after a gateway rejection |
 | `models` | no | Array of model IDs the credential is entitled to; narrows the catalog, never widens it |
 | `base_url` | no | If present, must equal `inference.baseUrl` (trailing slash ignored), or the response is rejected |

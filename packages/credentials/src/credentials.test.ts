@@ -540,6 +540,27 @@ describe("http-broker failure and retry contract", () => {
       }
     });
 
+    it("refuses a credential the broker issued for another subject, and accepts its own", async () => {
+      const answer = await realAnswer();
+      await expect(
+        broker({
+          fetch: async () => json({ ...answer, subject: identity.subject }),
+        }).acquire(identity, ctx),
+      ).resolves.toBeDefined();
+      for (const subject of ["someone-else", 42, null]) {
+        const error = await failure(
+          call.acquire(
+            broker({ fetch: async () => json({ ...answer, subject }) }),
+          ),
+        );
+        expect(error, String(subject)).toMatchObject({
+          code: "CREDENTIAL_ACQUIRE_FAILED",
+          sanitizedDetail: { reason: "contract" },
+        });
+        expectNoSecret(error);
+      }
+    });
+
     it("refuses an answer body larger than the broker contract allows", async () => {
       const answer = await realAnswer();
       const error = await failure(

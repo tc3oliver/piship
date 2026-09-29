@@ -110,8 +110,8 @@ A [workload identity](identity.md#workload-identity-headless-runs) is never stor
 
 | Runner | `storage.provider: system` | `storage.provider: file` with `acknowledgePlaintext: true` |
 | --- | --- | --- |
-| macOS | Works when the job can use an unlocked keychain; a job without a login session is not qualified | Works |
-| Windows | Works when the job runs with a user profile; not qualified for service accounts | Works |
+| macOS | Not qualified for a headless job (the headless E2E uses the file store); it works only where the job can use an unlocked keychain | Works |
+| Windows | Not qualified for a headless job (the headless E2E uses the file store); expected to work when the job runs with a user profile | Works |
 | Linux with an unlocked Secret Service (a desktop session, or `gnome-keyring-daemon` started in the job) | Works | Works |
 | Linux without a Secret Service (most containers and CI runners) | Fails closed with `SECRET_STORE_UNAVAILABLE` | Works: plaintext at rest under `<state>/secrets/`, 0600, deleted on renewal and `logout` |
 
