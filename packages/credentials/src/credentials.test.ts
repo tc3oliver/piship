@@ -2064,6 +2064,35 @@ describe("secret normalization", () => {
     }
     expect(toSecretValue("sk-direct-value")).toBeInstanceOf(SecretValue);
   });
+
+  it("refuses a secret a request header cannot carry, before it is stored", async () => {
+    for (const value of [
+      "sk with space",
+      "sk-tab\tvalue",
+      "sk-line\nbreak",
+      "sk-carriage\rreturn",
+      "sk-nul\0value",
+      "sk-escape\u001bvalue",
+      "sk-del\u007fvalue",
+      "sk-non-ascii-é",
+    ]) {
+      expect(() => toSecretValue(value)).toThrow(
+        expect.objectContaining({
+          code: "CREDENTIAL_ACQUIRE_FAILED",
+          message: expect.stringContaining("only visible ASCII"),
+        }),
+      );
+      // The message never quotes the secret.
+      try {
+        toSecretValue(value);
+      } catch (error) {
+        expect((error as Error).message).not.toContain(value);
+      }
+    }
+    expect(toSecretValue("sk-~!visible_ASCII.only:0").reveal()).toBe(
+      "sk-~!visible_ASCII.only:0",
+    );
+  });
 });
 
 describe("secret references", () => {
@@ -2214,16 +2243,23 @@ describe("principal binding and verified deletion", () => {
   });
 
   it("discards a credential that is not bound to the signed-in principal, including an unbound one", async () => {
-    const { manager, store } = make(fakeProvider({ expiresInSeconds: 3600 }));
+    const { manager, store, events } = make(
+      fakeProvider({ expiresInSeconds: 3600 }),
+    );
     // Written without identity, as credentials before principal binding were.
     await manager.ensure(null, ctx, { allowAcquire: true });
     expect(JSON.parse(readFileSync(path(), "utf8")).principal).toBeUndefined();
     const bound = await manager.ensure(alice as IdentitySession, ctx, {
       allowAcquire: true,
     });
+    // Replaced as a credential of an earlier release, not reported (or
+    // audited) as a change of user.
     expect(bound.notices).toEqual([
-      expect.stringContaining("not issued to the signed-in identity"),
+      "A credential from an earlier release was replaced",
     ]);
+    expect(
+      events.find((event) => event.event === "credential.revoke")?.detail,
+    ).toMatchObject({ reason: "unbound" });
     expect(bound.secret?.reveal()).toBe("sk-generation-2-secret");
     expect(store.refs()).toEqual(["piship:acmecode:inference#1"]);
     // And the other way round: a bound credential is not used without identity.
@@ -2389,6 +2425,7 @@ describe("principal binding and verified deletion", () => {
     expect(manager.pendingRevocations()).toEqual({
       readable: true,
       count: 0,
+      dropped: 0,
       oldestAgeSeconds: null,
       entries: [],
     });
@@ -2461,6 +2498,187 @@ describe("principal binding and verified deletion", () => {
     expect(error).toMatchObject({ code: "CREDENTIAL_EXPIRED" });
     expect(error.message).toContain("could not be renewed");
     expect(error.message).not.toContain("abc.def.ghijkl");
+  });
+
+  it("keeps a replaced generation whose deletion fails tracked, reports it, and retries it at the next renewal", async () => {
+    const store = new FailingDeletes();
+    // Always within refresh.beforeExpiry, so every ensure renews.
+    const { manager } = make(fakeProvider({ expiresInSeconds: 60 }), store);
+    await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    store.fail = true;
+    const renewed = await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    expect(renewed.secret?.reveal()).toBe("sk-generation-2-secret");
+    expect(renewed.notices).toEqual([
+      expect.stringContaining(
+        "A replaced credential could not be deleted from the secret store (piship:acmecode:inference#1",
+      ),
+    ]);
+    expect(renewed.notices[0]).not.toContain("abc.def.ghijkl");
+    expect(JSON.parse(readFileSync(path(), "utf8")).orphans).toEqual([
+      "piship:acmecode:inference#1",
+    ]);
+    expect(store.refs()).toEqual([
+      "piship:acmecode:inference#1",
+      "piship:acmecode:inference#2",
+    ]);
+    store.fail = false;
+    const again = await manager.ensure(alice as IdentitySession, ctx, {
+      allowAcquire: true,
+    });
+    expect(again.notices).toEqual([]);
+    expect(store.refs()).toEqual(["piship:acmecode:inference#3"]);
+    expect(JSON.parse(readFileSync(path(), "utf8")).orphans).toBeUndefined();
+  });
+
+  it("keeps at most 20 pending revocations and the count of the dropped ones", async () => {
+    let issued = 0;
+    const provider: CredentialProvider = {
+      mode: "http-broker",
+      requiresIdentity: false,
+      async acquire() {
+        issued += 1;
+        // No expiry: such an entry never resolves on its own.
+        return {
+          kind: "api_key",
+          secret: new SecretValue(`sk-never-expires-${issued}`),
+          credentialId: `vk_never_${issued}`,
+        };
+      },
+      async revoke() {
+        throw new Error("revoke endpoint returned HTTP 503");
+      },
+    };
+    const { manager } = make(provider);
+    for (let round = 0; round < 23; round++) {
+      await manager.ensure(alice as IdentitySession, ctx, {
+        allowAcquire: true,
+      });
+      await manager.logout(ctx, { reason: "replace" });
+    }
+    const file = JSON.parse(readFileSync(retryPath(), "utf8"));
+    expect(file.entries).toHaveLength(20);
+    expect(file.dropped).toBe(3);
+    // The oldest were dropped.
+    expect(file.entries[0].credential_id).toBe("vk_never_4");
+    expect(file.entries.at(-1).credential_id).toBe("vk_never_23");
+    expect(manager.pendingRevocations()).toMatchObject({
+      readable: true,
+      count: 20,
+      dropped: 3,
+    });
+    const notices = manager.checkPendingRevocations();
+    expect(notices).toHaveLength(21);
+    expect(notices.at(-1)).toContain("3 older credential(s)");
+    expect(JSON.stringify(file)).not.toContain("sk-never-expires");
+  });
+
+  it("runs a critical section under the credential lock, reentrantly, while other callers wait", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 3600 });
+    const { manager, store } = make(provider);
+    const other = make(provider, store).manager;
+    const order: string[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = manager.exclusive(async () => {
+      order.push("outer:start");
+      // Credential operations inside reuse the lock instead of waiting for it.
+      await manager.ensure(alice as IdentitySession, ctx, {
+        allowAcquire: true,
+      });
+      await manager.logout(ctx, { reason: "replace" });
+      await manager.ensure(alice as IdentitySession, ctx, {
+        allowAcquire: true,
+      });
+      entered();
+      await gate;
+      order.push("outer:end");
+    });
+    await inside;
+    // Another manager of the same file (another caller) waits for the lock.
+    const waiting = other
+      .ensure(alice as IdentitySession, ctx, { allowAcquire: false })
+      .then((active) => {
+        order.push("other");
+        return active;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(order).toEqual(["outer:start"]);
+    release();
+    await held;
+    const active = await waiting;
+    expect(order).toEqual(["outer:start", "outer:end", "other"]);
+    expect(active.ref?.credentialId).toBe("vk_2");
+  });
+
+  it("checks the caller's guard under the lock before anything is read or acquired", async () => {
+    const provider = fakeProvider({ expiresInSeconds: 3600 });
+    const { manager } = make(provider);
+    await expect(
+      manager.ensure(alice as IdentitySession, ctx, {
+        allowAcquire: true,
+        guard: () => {
+          throw new PiShipError("IDENTITY_REQUIRED", "the user changed");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
+    expect(provider.acquired()).toBe(0);
+    expect(existsSync(path())).toBe(false);
+  });
+
+  it("leaves a logout interrupted after the revocation or between deletions for the next one to finish", async () => {
+    const revoked: string[] = [];
+    const provider = fakeProvider({ expiresInSeconds: 3600, revoked });
+    const store = new MemorySecretStore();
+    for (const phase of ["revoked", "secret-deleted"]) {
+      await make(provider, store).manager.ensure(
+        alice as IdentitySession,
+        ctx,
+        { allowAcquire: true },
+      );
+      const crashing = make(provider, store, {
+        onPhase: (reached) => {
+          if (reached === phase) throw new Error("simulated crash");
+        },
+      }).manager;
+      await expect(crashing.logout(ctx)).rejects.toThrow("simulated crash");
+      // The metadata still names every secret, so nothing is untracked.
+      const metadata = JSON.parse(readFileSync(path(), "utf8"));
+      expect(metadata.schema).toBe(CREDENTIAL_METADATA_SCHEMA);
+      for (const ref of store.refs())
+        expect(metadataSecretRefs(metadata, "acmecode")).toContain(ref);
+      expect(await make(provider, store).manager.logout(ctx)).toEqual([]);
+      expect(store.refs()).toEqual([]);
+      expect(existsSync(path())).toBe(false);
+    }
+    // Revoked before each crash; the second retry finds the secret already
+    // deleted and skips the (already sent) revocation.
+    expect(revoked).toEqual(["vk_1", "vk_1", "vk_2"]);
+  });
+
+  it("lists an identity marker's remaining token bundles as its references", () => {
+    expect(
+      metadataSecretRefs(
+        {
+          schema: "piship-identity-discarded/v1",
+          orphans: [
+            "piship:acmecode:identity#3",
+            "piship:other:identity#1",
+            "piship:acmecode:inference#2",
+          ],
+        },
+        "acmecode",
+      ),
+    ).toEqual(["piship:acmecode:identity#3", "piship:acmecode:inference#2"]);
   });
 });
 

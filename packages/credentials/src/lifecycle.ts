@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -43,6 +44,12 @@ export const CREDENTIAL_DISCARDED_SCHEMA = "piship-credential-discarded/v1";
 export const REVOCATION_RETRY_SCHEMA = "piship-revocation-retry/v1";
 /** Default file name of pending revocations, beside the credential metadata. */
 export const REVOCATION_RETRY_FILE = "revocation-retry.json";
+/**
+ * Most pending revocations kept. An entry without an expiry never resolves on
+ * its own, so every failed switch would add one; beyond this the oldest are
+ * dropped and only their number is kept.
+ */
+export const REVOCATION_RETRY_LIMIT = 20;
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
@@ -92,13 +99,16 @@ export interface ActiveCredential {
 
 /**
  * Why a credential was revoked: `principal-change` is a stored credential
- * found bound to another principal than the signed-in one.
+ * found bound to another principal than the signed-in one; `unbound` is one
+ * from an earlier release that recorded no principal, replaced once an
+ * identity is signed in.
  */
 export type CredentialRevokeReason =
   | "logout"
   | "replace"
   | "lifecycle"
-  | "principal-change";
+  | "principal-change"
+  | "unbound";
 
 /**
  * Outcome of a remote revocation attempt: `revoked` when the provider
@@ -124,6 +134,17 @@ export interface CredentialEvent {
   readonly detail: Readonly<Record<string, string | number | boolean | null>>;
 }
 
+/**
+ * Points of a credential operation a crash-safety test can stop at:
+ * `revoked` after a remote revocation attempt and before any local deletion,
+ * `secret-deleted` after each confirmed deletion of a stored secret.
+ */
+export type CredentialPhase =
+  | "secret-written"
+  | "metadata-written"
+  | "revoked"
+  | "secret-deleted";
+
 export interface CredentialManagerOptions {
   readonly distributionId: string;
   readonly provider: CredentialProvider;
@@ -136,8 +157,11 @@ export interface CredentialManagerOptions {
    * `revocation-retry.json` beside the metadata.
    */
   readonly revocationRetryPath?: string;
-  /** Fault injection for crash-safety tests. */
-  readonly onPhase?: (phase: "secret-written" | "metadata-written") => void;
+  /**
+   * Fault injection for crash-safety tests: a hook that throws stops the
+   * operation at that point, as a crash would.
+   */
+  readonly onPhase?: (phase: CredentialPhase) => void | Promise<void>;
   /** Receives acquire, refresh, and revoke events; failures are ignored. */
   readonly onEvent?: (event: CredentialEvent) => void;
 }
@@ -168,6 +192,8 @@ export interface RevocationRetryEntry {
 interface RevocationRetryFile {
   readonly schema: typeof REVOCATION_RETRY_SCHEMA;
   readonly entries: readonly RevocationRetryEntry[];
+  /** How many older entries were dropped to keep the file bounded. */
+  readonly dropped?: number;
 }
 
 /** Pending revocations for diagnostics: counts and ages only, no secrets. */
@@ -175,6 +201,8 @@ export interface PendingRevocations {
   /** False when the file exists but cannot be read. */
   readonly readable: boolean;
   readonly count: number;
+  /** Older entries dropped beyond the limit; they may still be live. */
+  readonly dropped: number;
   readonly oldestAgeSeconds: number | null;
   readonly entries: readonly {
     readonly credentialId?: string;
@@ -203,6 +231,9 @@ function readRetryFile(path: string): RevocationRetryFile | null {
           typeof entry.failed_at === "string" &&
           typeof entry.generation === "number",
       ),
+      ...(Number.isInteger(value.dropped) && (value.dropped ?? 0) > 0
+        ? { dropped: value.dropped }
+        : {}),
     };
   } catch {
     return null;
@@ -219,7 +250,13 @@ export function readPendingRevocations(
 ): PendingRevocations {
   const file = readRetryFile(path);
   if (!file)
-    return { readable: false, count: 0, oldestAgeSeconds: null, entries: [] };
+    return {
+      readable: false,
+      count: 0,
+      dropped: 0,
+      oldestAgeSeconds: null,
+      entries: [],
+    };
   const entries = file.entries.map((entry) => ({
     ...(entry.credential_id ? { credentialId: entry.credential_id } : {}),
     reason: entry.reason,
@@ -233,6 +270,7 @@ export function readPendingRevocations(
   return {
     readable: true,
     count: entries.length,
+    dropped: file.dropped ?? 0,
     oldestAgeSeconds: entries.length
       ? Math.max(...entries.map((entry) => entry.ageSeconds))
       : null,
@@ -241,8 +279,9 @@ export function readPendingRevocations(
 }
 
 /**
- * Every secret-store reference that credential or identity metadata of one
- * distribution may own: the current generation, recorded orphans, the next
+ * Every secret-store reference that credential or identity metadata (or a
+ * discarded marker of either) of one distribution may own: the current
+ * generation, recorded orphans, the next
  * generation (written before a crash that never reached metadata), and for
  * identity also the previous generation (a replacement whose delete failed).
  * References of other distributions are never returned.
@@ -255,11 +294,16 @@ export function metadataSecretRefs(
     raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const refs = new Set<string>();
   const inference = `piship:${distributionId}:inference#`;
+  const identity = `piship:${distributionId}:identity#`;
   for (const item of [
     value.credential_ref,
     ...(Array.isArray(value.orphans) ? value.orphans : []),
   ])
-    if (typeof item === "string" && item.startsWith(inference)) refs.add(item);
+    if (
+      typeof item === "string" &&
+      (item.startsWith(inference) || item.startsWith(identity))
+    )
+      refs.add(item);
   const generation = Number(value.generation);
   if (
     value.generation !== undefined &&
@@ -269,7 +313,6 @@ export function metadataSecretRefs(
     refs.add(`${inference}${generation}`);
     refs.add(`${inference}${generation + 1}`);
   }
-  const identity = `piship:${distributionId}:identity#`;
   if (
     typeof value.secretRef === "string" &&
     value.secretRef.startsWith(identity)
@@ -308,12 +351,20 @@ export function toSecretValue(value: unknown): SecretValue {
     } catch {
       text = undefined;
     }
-  // CR, LF or NUL would break the header the secret is sent in, and a
-  // transport error could then echo it.
-  if (typeof text !== "string" || text.length === 0 || /[\r\n\0]/.test(text))
+  if (typeof text !== "string" || text.length === 0)
     throw new PiShipError(
       "CREDENTIAL_ACQUIRE_FAILED",
       "The credential provider returned a credential without a usable secret",
+      { component: "credential" },
+    );
+  // The secret is sent in a request header: anything but visible ASCII (a
+  // space, a control character, CR or LF) would fail every request, as a
+  // transport error that could even echo it. Refused here, before it is
+  // stored, the same way the broker's credentials are.
+  if (/[^\x21-\x7e]/.test(text))
+    throw new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential provider returned a secret a request header cannot carry: only visible ASCII characters are allowed, without spaces",
       { component: "credential" },
     );
   return new SecretValue(text);
@@ -380,13 +431,17 @@ export function normalizeCredential(value: unknown): RuntimeCredential {
 export async function deleteSecretsVerified(
   store: SecretStore,
   refs: readonly string[],
+  /** Called after each confirmed deletion (crash-safety tests). */
+  afterDelete?: (ref: string) => void | Promise<void>,
 ): Promise<{ ref: string; problem: string }[]> {
   const failed: { ref: string; problem: string }[] = [];
-  for (const ref of refs)
+  for (const ref of refs) {
+    let deleted = false;
     try {
       await store.delete(ref);
       if ((await store.get(ref)) !== null)
         failed.push({ ref, problem: "still present after deletion" });
+      else deleted = true;
     } catch (error) {
       failed.push({
         ref,
@@ -396,6 +451,9 @@ export async function deleteSecretsVerified(
             : redact(error instanceof Error ? error.message : String(error)),
       });
     }
+    // Outside the try: a hook that throws stops here, as a crash would.
+    if (deleted) await afterDelete?.(ref);
+  }
   return failed;
 }
 
@@ -429,6 +487,20 @@ const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 /** In-process queue per metadata file, so concurrent callers never race. */
 const queues = new Map<string, Promise<unknown>>();
+/**
+ * The lock files the current asynchronous call chain holds. A task that
+ * already holds a lock and asks for it again (a login that clears and
+ * acquires the credential under one lock) runs at once instead of waiting
+ * for itself. Other call chains, in this process or another, still wait.
+ * Work a task starts belongs to its chain, so a task must not start work
+ * that outlives it (it would still count as holding the lock).
+ */
+const heldByChain = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** Whether the current call chain holds the lock beside `path`. */
+export function holdsFileLock(path: string): boolean {
+  return heldByChain.getStore()?.has(`${path}.lock`) ?? false;
+}
 
 export interface FileLockTiming {
   readonly heartbeatMs?: number;
@@ -481,6 +553,7 @@ function breakStaleLock(lock: string, staleMs: number): void {
  * secret-store command), so a lock is broken only when it is stale: its
  * holder stopped refreshing it, such as a crashed process. A fresh lock is
  * never broken: after the wait, the caller fails with a retryable error.
+ * The lock is reentrant within one call chain (see `holdsFileLock`).
  */
 export async function withFileLock<T>(
   path: string,
@@ -490,8 +563,10 @@ export async function withFileLock<T>(
   const heartbeatMs = timing.heartbeatMs ?? LOCK_HEARTBEAT_MS;
   const staleMs = timing.staleMs ?? LOCK_STALE_MS;
   const waitMs = timing.waitMs ?? LOCK_WAIT_MS;
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const lock = `${path}.lock`;
+  const held = heldByChain.getStore();
+  if (held?.has(lock)) return task();
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -536,7 +611,7 @@ export async function withFileLock<T>(
   }, heartbeatMs);
   heartbeat.unref?.();
   try {
-    return await task();
+    return await heldByChain.run(new Set([...(held ?? []), lock]), task);
   } finally {
     clearInterval(heartbeat);
     heldLocks.delete(lock);
@@ -722,6 +797,7 @@ export class CredentialManager {
   async #commit(
     credential: RuntimeCredential,
     principal: PrincipalKey | null,
+    notices: string[],
   ): Promise<CredentialMetadata> {
     credential = normalizeCredential(credential);
     const store = this.#store();
@@ -729,7 +805,7 @@ export class CredentialManager {
     const generation = (previous?.generation ?? 0) + 1;
     const ref = this.#ref(generation);
     await store.put(ref, credential.secret);
-    this.options.onPhase?.("secret-written");
+    await this.options.onPhase?.("secret-written");
     const orphans = new Set(previous?.orphans ?? []);
     if (previous) orphans.add(previous.credential_ref);
     const metadata: CredentialMetadata = {
@@ -765,22 +841,29 @@ export class CredentialManager {
       this.options.metadataPath,
       `${JSON.stringify(metadata, null, 2)}\n`,
     );
-    this.options.onPhase?.("metadata-written");
-    return this.#collectOrphans(metadata);
+    await this.options.onPhase?.("metadata-written");
+    return this.#collectOrphans(metadata, notices);
   }
 
+  /**
+   * Delete replaced generations, confirming each deletion. One that fails
+   * stays listed in `orphans`, so the next commit, logout, or discard retries
+   * it, and is reported as a notice.
+   */
   async #collectOrphans(
     metadata: CredentialMetadata,
+    notices: string[],
   ): Promise<CredentialMetadata> {
     if (!metadata.orphans?.length) return metadata;
-    const remaining: string[] = [];
-    for (const orphan of metadata.orphans)
-      if (orphan !== metadata.credential_ref)
-        try {
-          await this.#store().delete(orphan);
-        } catch {
-          remaining.push(orphan);
-        }
+    const failed = await deleteSecretsVerified(
+      this.#store(),
+      metadata.orphans.filter((orphan) => orphan !== metadata.credential_ref),
+    );
+    const remaining = failed.map((item) => item.ref);
+    for (const item of failed)
+      notices.push(
+        `A replaced credential could not be deleted from the secret store (${item.ref}: ${item.problem}); it is not used, and the deletion is retried`,
+      );
     const next: CredentialMetadata = { ...metadata };
     delete (next as { orphans?: readonly string[] }).orphans;
     if (remaining.length)
@@ -812,6 +895,7 @@ export class CredentialManager {
     const failed = await deleteSecretsVerified(
       this.#store(),
       metadataSecretRefs(raw, this.options.distributionId),
+      () => this.options.onPhase?.("secret-deleted"),
     );
     if (!failed.length) {
       rmSync(this.options.metadataPath, { force: true });
@@ -849,7 +933,29 @@ export class CredentialManager {
   async ensure(
     identity: IdentitySession | null,
     ctx: CredentialContext,
-    options: { allowAcquire: boolean; forceRefresh?: boolean },
+    options: {
+      allowAcquire: boolean;
+      /**
+       * Renew even a valid credential: `true` after the gateway rejected it,
+       * `"entitlement"` to re-read its entitlement after a model denial. A
+       * failed entitlement re-read keeps the current credential and throws
+       * the renewal's own error; the credential was not rejected.
+       */
+      forceRefresh?: boolean | "entitlement";
+      /**
+       * The generation (`credential_ref`) the forced renewal is about; read
+       * now when omitted. Only that generation is renewed: one that another
+       * caller already replaced satisfies the request, so one denial never
+       * makes two processes each re-issue.
+       */
+      observed?: string;
+      /**
+       * Runs under the credential lock before anything is read, used, or
+       * acquired: the caller re-checks there that `identity` is still the
+       * signed-in principal, and throws to stop.
+       */
+      guard?: () => void | Promise<void>;
+    },
   ): Promise<ActiveCredential> {
     if (!this.storesSecrets) {
       await this.options.provider.acquire(identity, ctx);
@@ -861,15 +967,25 @@ export class CredentialManager {
     }
     // A forced renewal is satisfied by any renewal that lands after the
     // caller observed the rejected generation, including one by another caller.
-    const observed = this.readMetadata()?.credential_ref;
-    return this.#exclusive(() =>
-      this.#ensure(identity, ctx, {
-        ...options,
-        forceRefresh:
-          options.forceRefresh === true &&
-          this.readMetadata()?.credential_ref === observed,
-      }),
-    );
+    const observed = options.observed ?? this.readMetadata()?.credential_ref;
+    const { guard, observed: _observed, ...rest } = options;
+    return this.#exclusive(async () => {
+      await guard?.();
+      const current = this.readMetadata()?.credential_ref === observed;
+      return this.#ensure(identity, ctx, {
+        ...rest,
+        forceRefresh: current ? (options.forceRefresh ?? false) : false,
+      });
+    });
+  }
+
+  /**
+   * Run `task` under the credential lock, so a caller can make several
+   * changes (clear, sign in, acquire) that no other process or call
+   * interleaves with. Credential operations inside `task` reuse the lock.
+   */
+  exclusive<T>(task: () => Promise<T>): Promise<T> {
+    return this.#exclusive(task);
   }
 
   /**
@@ -879,6 +995,8 @@ export class CredentialManager {
    */
   #exclusive<T>(task: () => Promise<T>): Promise<T> {
     const path = this.options.metadataPath;
+    // Already held by this call chain: queueing behind itself would deadlock.
+    if (holdsFileLock(path)) return task();
     const previous = queues.get(path) ?? Promise.resolve();
     const run = previous.catch(() => {}).then(() => withFileLock(path, task));
     const tail = run.catch(() => {});
@@ -892,7 +1010,7 @@ export class CredentialManager {
   async #ensure(
     identity: IdentitySession | null,
     ctx: CredentialContext,
-    options: { allowAcquire: boolean; forceRefresh?: boolean },
+    options: { allowAcquire: boolean; forceRefresh?: boolean | "entitlement" },
   ): Promise<ActiveCredential> {
     if (!this.storesSecrets) {
       await this.options.provider.acquire(identity, ctx);
@@ -924,10 +1042,19 @@ export class CredentialManager {
     // else, including metadata written before credentials were bound to a
     // principal, is revoked where supported and deleted, never used.
     if (metadata && !samePrincipal(metadata.principal ?? null, principal)) {
-      const revoked = await this.#revoke(metadata, attempt, "principal-change");
+      // An earlier release recorded no principal: most likely the same
+      // user, but nothing proves it, so it is replaced all the same.
+      const unbound = !metadata.principal && !!principal;
+      const revoked = await this.#revoke(
+        metadata,
+        attempt,
+        unbound ? "unbound" : "principal-change",
+      );
       await this.#clearMetadata(metadata);
       notices.push(
-        "A stored credential that was not issued to the signed-in identity was discarded",
+        unbound
+          ? "A credential from an earlier release was replaced"
+          : "A stored credential that was not issued to the signed-in identity was discarded",
       );
       if (revoked.problem)
         notices.push(
@@ -965,12 +1092,19 @@ export class CredentialManager {
           },
         );
       const acquired = normalizeCredential(returned);
-      metadata = await this.#commit(acquired, principal);
+      metadata = await this.#commit(acquired, principal, notices);
       this.#emit("credential.acquire", this.#eventDetail(metadata));
       return { ref: this.#toRef(metadata), secret: acquired.secret, notices };
     }
     const status = this.status();
-    const force = options.forceRefresh || status.state === "rejected";
+    const rejected =
+      options.forceRefresh === true || status.state === "rejected";
+    // Only an entitlement re-read of a credential nothing else is wrong with.
+    const entitlement =
+      options.forceRefresh === "entitlement" &&
+      !rejected &&
+      status.state !== "expired";
+    const force = rejected || entitlement;
     if (force || status.state === "expiring" || status.state === "expired") {
       const current: RuntimeCredential = {
         kind: metadata.kind,
@@ -993,10 +1127,14 @@ export class CredentialManager {
             "Credential refresh returned nothing",
           );
         const next = normalizeCredential(returned);
-        metadata = await this.#commit(next, principal);
+        metadata = await this.#commit(next, principal, notices);
         this.#emit("credential.refresh", {
           ...this.#eventDetail(metadata),
-          reason: force ? "rejected" : status.state,
+          reason: entitlement
+            ? "entitlement"
+            : rejected
+              ? "rejected"
+              : status.state,
         });
         return { ref: this.#toRef(metadata), secret: next.secret, notices };
       } catch (error) {
@@ -1005,6 +1143,16 @@ export class CredentialManager {
         // is still valid.
         if (error instanceof PiShipError && error.code === "CREDENTIAL_DENIED")
           throw error;
+        // The credential is fine and stays in use; the re-read failed with
+        // its own error (a broker outage stays retryable, with its wait).
+        if (entitlement)
+          throw error instanceof PiShipError
+            ? error
+            : new PiShipError(
+                "CREDENTIAL_ACQUIRE_FAILED",
+                `The entitlement could not be re-read: ${redact(error instanceof Error ? error.message : String(error))}`,
+                { component: "credential", retryable: true },
+              );
         if (status.state === "expired" || force) {
           if (
             error instanceof PiShipError &&
@@ -1165,14 +1313,25 @@ export class CredentialManager {
     );
   }
 
-  #writeRetries(entries: readonly RevocationRetryEntry[]): void {
-    if (!entries.length) {
+  #writeRetries(
+    entries: readonly RevocationRetryEntry[],
+    dropped: number,
+  ): void {
+    if (!entries.length && !dropped) {
       rmSync(this.#retryPath, { force: true });
       return;
     }
     writeAtomic(
       this.#retryPath,
-      `${JSON.stringify({ schema: REVOCATION_RETRY_SCHEMA, entries }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          schema: REVOCATION_RETRY_SCHEMA,
+          entries,
+          ...(dropped ? { dropped } : {}),
+        },
+        null,
+        2,
+      )}\n`,
     );
   }
 
@@ -1182,7 +1341,8 @@ export class CredentialManager {
   ): void {
     // An unreadable file is replaced: it holds nothing secret, and losing the
     // record of an older failure is better than never recording this one.
-    const entries = (readRetryFile(this.#retryPath)?.entries ?? []).filter(
+    const file = readRetryFile(this.#retryPath);
+    const entries = (file?.entries ?? []).filter(
       (entry) =>
         !(
           entry.generation === metadata.generation &&
@@ -1200,7 +1360,10 @@ export class CredentialManager {
       ...(metadata.expires_at ? { expires_at: metadata.expires_at } : {}),
       checks: 0,
     });
-    this.#writeRetries(entries);
+    // Oldest first: the file stays bounded, and the count of what was
+    // dropped keeps the failure visible.
+    const over = Math.max(0, entries.length - REVOCATION_RETRY_LIMIT);
+    this.#writeRetries(entries.slice(over), (file?.dropped ?? 0) + over);
   }
 
   /** Pending revocations recorded by this manager, for diagnostics. */
@@ -1228,12 +1391,20 @@ export class CredentialManager {
         checks: (entry.checks ?? 0) + 1,
         checked_at: new Date(now).toISOString(),
       }));
+    const dropped = file.dropped ?? 0;
     if (remaining.length !== file.entries.length || remaining.length)
-      this.#writeRetries(remaining);
-    return remaining.map(
-      (entry) =>
-        `Credential ${entry.credential_id ?? `generation ${entry.generation}`} could not be revoked on ${entry.failed_at}; it may be valid at the provider ${entry.expires_at ? `until ${entry.expires_at}` : "until an administrator revokes it"}`,
-    );
+      this.#writeRetries(remaining, dropped);
+    return [
+      ...remaining.map(
+        (entry) =>
+          `Credential ${entry.credential_id ?? `generation ${entry.generation}`} could not be revoked on ${entry.failed_at}; it may be valid at the provider ${entry.expires_at ? `until ${entry.expires_at}` : "until an administrator revokes it"}`,
+      ),
+      ...(dropped
+        ? [
+            `${dropped} older credential(s) could not be revoked and are no longer listed; they may be valid at the provider until an administrator revokes them`,
+          ]
+        : []),
+    ];
   }
 
   async #logout(
@@ -1246,6 +1417,7 @@ export class CredentialManager {
     if (metadata) {
       const revoked = await this.#revoke(metadata, ctx, reason);
       if (revoked.problem) problems.push(revoked.problem);
+      await this.options.onPhase?.("revoked");
     }
     // Metadata this release cannot use may still reference secrets, and the
     // next generation may hold a secret written before a crash that never
