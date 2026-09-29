@@ -1130,6 +1130,29 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     );
   });
 
+  it("deletes the secrets a damaged credential file still names before clearing it", async () => {
+    await updated();
+    // A newer format, cut short: no longer JSON, but it still names #3.
+    write(
+      join(stateDir(), "credentials-metadata", "inference.json"),
+      `{"schema": "piship-credential-metadata/v2", "credential_ref": "piship:${ID}:inference#3", "generation": 3`,
+    );
+    const { store, memory, deleted } = testStore();
+    await memory.put(`piship:${ID}:inference#3`, new SecretValue(SENTINEL_V2));
+    const result = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      secretStore: store,
+    });
+    expect(deleted).toEqual([
+      `piship:${ID}:inference#3`,
+      `piship:${ID}:inference#4`,
+    ]);
+    expect(memory.refs()).toEqual([]);
+    expect(result.notices).toEqual([
+      "runtime credential metadata was cleared because the target cannot read it; sign in again",
+    ]);
+  });
+
   it("fails when there is no retained release", async () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);
@@ -1573,6 +1596,27 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       deletedSecrets: [],
     });
     expect(existsSync(stateDir())).toBe(false);
+  });
+
+  it("purge deletes the secrets a truncated credential file still names", async () => {
+    const state = stateDir();
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      `{"schema": "piship-credential-metadata/v1", "credential_ref": "piship:${ID}:inference#4", "generation": 4, "orphans": ["piship:${ID}:inference#2"`,
+    );
+    const { store, memory, deleted } = testStore();
+    for (const generation of [2, 4, 5])
+      await memory.put(
+        `piship:${ID}:inference#${generation}`,
+        new SecretValue(SENTINEL),
+      );
+    await purgeDistributionState(ID, { secretStore: store });
+    expect(deleted).toEqual([
+      `piship:${ID}:inference#2`,
+      `piship:${ID}:inference#4`,
+      `piship:${ID}:inference#5`,
+    ]);
+    expect(memory.refs()).toEqual([]);
   });
 
   it("purge deletes the platform secret-store entries the metadata references", async () => {

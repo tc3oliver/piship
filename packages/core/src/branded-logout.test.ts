@@ -231,6 +231,28 @@ describe("branded logout", () => {
     for (const secret of secrets) expect(text).not.toContain(secret);
   });
 
+  it("deletes the secrets damaged metadata still names when signing out without the runtime variables", async () => {
+    const { ctx, path } = context();
+    await signIn(ctx);
+    for (const file of [
+      path("identity", "session.json"),
+      path("credentials-metadata", "inference.json"),
+    ]) {
+      const text = readFileSync(file, "utf8");
+      // Cut short after the first secret reference: no longer JSON.
+      const end = text.indexOf(`piship:${ID}:`);
+      writeFileSync(file, text.slice(0, text.indexOf('"', end) + 1));
+    }
+    expect(readdirSync(path("secrets")).length).toBeGreaterThan(0);
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    await runLogout(ctx);
+    expect(readdirSync(path("secrets"))).toEqual([]);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(existsSync(path("credentials-metadata", "inference.json"))).toBe(
+      false,
+    );
+  });
+
   it("says what was cleared and fails when the runtime credential cannot be deleted", async () => {
     const { ctx, out, err, path } = context();
     const secrets = await signIn(ctx);

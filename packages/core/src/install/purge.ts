@@ -4,6 +4,7 @@ import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   createSecretStore,
   deleteSecretsVerified,
+  metadataFileSecretRefs,
   metadataSecretRefs,
 } from "@piship/credentials";
 import { accessStatePaths } from "../access/index.js";
@@ -35,17 +36,24 @@ export async function purgeDistributionState(
   const state = runtimeStateDirectory({ value: id });
   const paths = accessStatePaths(state);
   const refs = new Set<string>();
-  for (const path of [paths.identity, paths.credential])
+  for (const [path, refClass] of [
+    [paths.identity, "identity"],
+    [paths.credential, "inference"],
+  ] as const) {
+    if (!existsSync(path)) continue;
+    let parsed: unknown;
     try {
-      if (existsSync(path))
-        for (const ref of metadataSecretRefs(
-          JSON.parse(readFileSync(path, "utf8")),
-          id,
-        ))
-          refs.add(ref);
+      parsed = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      // Unreadable metadata names no secret; the file is removed below.
+      parsed = undefined;
     }
+    // A damaged file still names secrets in its text; they are deleted too.
+    for (const ref of [
+      ...metadataSecretRefs(parsed, id),
+      ...metadataFileSecretRefs(path, id, refClass),
+    ])
+      refs.add(ref);
+  }
   const deletedSecrets: string[] = [];
   // The restricted file fallback keeps its secrets under the state directory,
   // which is removed below; otherwise they live in the platform store.

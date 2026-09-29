@@ -31,6 +31,7 @@ import {
   deletionFailure,
   HttpBrokerCredentialProvider,
   LocalSecretCredentialProvider,
+  metadataFileSecretRefs,
   metadataSecretRefs,
   NoCredentialProvider,
   type PendingRevocations,
@@ -642,15 +643,26 @@ export class DistributionAccess {
 
   /**
    * Delete every token bundle `raw` (identity metadata or a discarded
-   * marker) references, confirming each deletion, then the file. What cannot
-   * be deleted is kept in a discarded marker in its place, so it stays
-   * tracked and is never restored as a session; the failures are returned.
-   * The caller holds the identity lock.
+   * marker) references, and every one the file names in its text (so a
+   * damaged file that is no longer JSON is not taken to name nothing),
+   * confirming each deletion, then the file. What cannot be deleted is kept
+   * in a discarded marker in its place, so it stays tracked and is never
+   * restored as a session; the failures are returned. The caller holds the
+   * identity lock.
    */
   async #discardIdentity(
     raw: unknown,
   ): Promise<{ ref: string; problem: string }[]> {
-    const refs = metadataSecretRefs(raw, this.options.app.id);
+    const refs = [
+      ...new Set([
+        ...metadataSecretRefs(raw, this.options.app.id),
+        ...metadataFileSecretRefs(
+          this.paths.identity,
+          this.options.app.id,
+          "identity",
+        ),
+      ]),
+    ].sort();
     const store = this.store;
     const failed = store
       ? await deleteSecretsVerified(store, refs)
@@ -754,6 +766,15 @@ export class DistributionAccess {
         ? Number(previous.secretRef.split("#")[1] ?? 0) + 1
         : 1;
       const ref = `piship:${this.options.app.id}:identity#${generation}`;
+      // Without metadata nothing would name the new token bundle if the
+      // process stopped before the metadata commit: a discarded marker names
+      // it first, so the next command deletes it and never restores it.
+      if (!previous)
+        writeIdentityDiscardedMarker(
+          this.paths.identity,
+          [ref],
+          new Date(this.#now()),
+        );
       await store.put(ref, identitySecret(session));
       const metadata = identityMetadata(session, ref);
       const stale = previous

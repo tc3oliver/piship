@@ -16,6 +16,7 @@ import {
   createSecretStore,
   deleteSecretsVerified,
   isLockTimeout,
+  metadataFileSecretRefs,
   metadataSecretRefs,
   withFileLock,
 } from "@piship/credentials";
@@ -216,12 +217,14 @@ async function logoutLocally(
         try {
           raw = JSON.parse(readFileSync(paths.identity, "utf8"));
         } catch {
-          // Unreadable metadata names no secret; the file is still removed.
+          // A damaged file still names token bundles in its text (below).
         }
-        const failed = await deleteSecretsVerified(
-          store,
-          metadataSecretRefs(raw, id),
-        );
+        const failed = await deleteSecretsVerified(store, [
+          ...new Set([
+            ...metadataSecretRefs(raw, id),
+            ...metadataFileSecretRefs(paths.identity, id, "identity"),
+          ]),
+        ]);
         const tokens = manifest.identity.mode !== "none";
         if (tokens)
           problems.push(`identity revocation: not attempted: ${reason}`);

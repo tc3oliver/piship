@@ -28,6 +28,7 @@ import {
   holdsFileLock,
   withFileLock,
 } from "./file-lock.js";
+import { metadataFileSecretRefs, secretRefsFromText } from "./ownership.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 /**
@@ -566,6 +567,25 @@ export class CredentialManager {
     return existsSync(this.options.metadataPath);
   }
 
+  /**
+   * Whether the metadata file is no longer JSON (`damaged`), and then whether
+   * its text still names a reference (`unrecoverable` when it names none).
+   */
+  #damaged(): "damaged" | "unrecoverable" | null {
+    let text: string;
+    try {
+      text = readFileSync(this.options.metadataPath, "utf8");
+      JSON.parse(text);
+      return null;
+    } catch {
+      text ??= "";
+    }
+    return secretRefsFromText(text, this.options.distributionId, "inference")
+      .length
+      ? "damaged"
+      : "unrecoverable";
+  }
+
   #discardedPending(): boolean {
     try {
       return (
@@ -671,6 +691,18 @@ export class CredentialManager {
     const previous = this.readMetadata();
     const generation = (previous?.generation ?? 0) + 1;
     const ref = this.#ref(generation);
+    // Without metadata nothing would name the new secret if the process
+    // stopped between writing it and committing metadata: a discarded
+    // marker names it first, so the next command deletes it, never uses it.
+    if (!previous)
+      this.#writeDiscarded([
+        ...metadataFileSecretRefs(
+          this.options.metadataPath,
+          this.options.distributionId,
+          "inference",
+        ),
+        ref,
+      ]);
     await store.put(ref, credential.secret);
     await this.options.onPhase?.("secret-written");
     const orphans = new Set(previous?.orphans ?? []);
@@ -750,36 +782,51 @@ export class CredentialManager {
     }
   }
 
-  /**
-   * Delete every secret the metadata may reference, then the metadata. When a
-   * deletion fails, the metadata is replaced by a discarded marker listing
-   * the references still to delete, so the secret stays tracked and is never
-   * used, and the failures are returned.
-   */
-  async #discardMetadata(
-    raw: unknown = this.#readRaw(),
-  ): Promise<{ ref: string; problem: string }[]> {
-    const failed = await deleteSecretsVerified(
-      this.#store(),
-      metadataSecretRefs(raw, this.options.distributionId),
-      () => this.options.onPhase?.("secret-deleted"),
-    );
-    if (!failed.length) {
-      rmSync(this.options.metadataPath, { force: true });
-      return failed;
-    }
+  #writeDiscarded(refs: readonly string[]): void {
     writeAtomic(
       this.options.metadataPath,
       `${JSON.stringify(
         {
           schema: CREDENTIAL_DISCARDED_SCHEMA,
-          orphans: failed.map((item) => item.ref).sort(),
+          orphans: [...new Set(refs)].sort(),
           discarded_at: new Date(this.#now()).toISOString(),
         },
         null,
         2,
       )}\n`,
     );
+  }
+
+  /**
+   * Delete every secret the metadata may reference, then the metadata. The
+   * references are those of `raw` and every one the file names, read from
+   * its text, so a damaged file that is no longer JSON still gets the
+   * secrets it names deleted before it is removed. When a deletion fails,
+   * the metadata is replaced by a discarded marker listing the references
+   * still to delete, so the secret stays tracked and is never used, and the
+   * failures are returned.
+   */
+  async #discardMetadata(
+    raw: unknown = this.#readRaw(),
+  ): Promise<{ ref: string; problem: string }[]> {
+    const refs = new Set([
+      ...metadataSecretRefs(raw, this.options.distributionId),
+      ...metadataFileSecretRefs(
+        this.options.metadataPath,
+        this.options.distributionId,
+        "inference",
+      ),
+    ]);
+    const failed = await deleteSecretsVerified(
+      this.#store(),
+      [...refs].sort(),
+      () => this.options.onPhase?.("secret-deleted"),
+    );
+    if (!failed.length) {
+      rmSync(this.options.metadataPath, { force: true });
+      return failed;
+    }
+    this.#writeDiscarded(failed.map((item) => item.ref));
     return failed;
   }
 
@@ -899,11 +946,16 @@ export class CredentialManager {
     const principal = identity ? principalKey(identity) : null;
     if (this.#incompatibleMetadataPresent()) {
       const discarded = this.#discardedPending();
+      const damaged = this.#damaged();
       await this.#clearMetadata();
       notices.push(
         discarded
           ? "The secrets of a discarded credential were deleted"
-          : "Incompatible credential metadata was cleared; a new credential is required",
+          : damaged === "unrecoverable"
+            ? "Damaged credential metadata named no secret reference that could be recovered and was cleared; a secret it referenced may remain in the secret store. A new credential is required"
+            : damaged === "damaged"
+              ? "Damaged credential metadata was cleared after the secrets it names were deleted; a new credential is required"
+              : "Incompatible credential metadata was cleared; a new credential is required",
       );
     }
     let metadata = this.readMetadata();

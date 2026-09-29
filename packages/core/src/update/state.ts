@@ -14,7 +14,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
-import { deleteSecretsVerified, metadataSecretRefs } from "@piship/credentials";
+import {
+  deleteSecretsVerified,
+  metadataFileSecretRefs,
+  metadataSecretRefs,
+} from "@piship/credentials";
 import { runtimeStateDirectory, type DistributionLock } from "../index.js";
 import { writeFileAtomic, type LifecycleOptions } from "../install/receipt.js";
 import {
@@ -163,15 +167,25 @@ export async function clearCredentials(
   for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
     let refs: string[] = [];
-    if (existsSync(path) && statSync(path).isFile())
+    if (existsSync(path) && statSync(path).isFile()) {
+      let parsed: unknown;
       try {
-        refs = metadataSecretRefs(
-          JSON.parse(readFileSync(path, "utf8")),
-          distributionId,
-        );
+        parsed = JSON.parse(readFileSync(path, "utf8"));
       } catch {
-        // Unreadable metadata names no secret; it is removed below.
+        parsed = undefined;
       }
+      // A damaged file still names secrets in its text; they are deleted too.
+      refs = [
+        ...new Set([
+          ...metadataSecretRefs(parsed, distributionId),
+          ...metadataFileSecretRefs(
+            path,
+            distributionId,
+            item.path.startsWith("identity/") ? "identity" : "inference",
+          ),
+        ]),
+      ].sort();
+    }
     if (!refs.length) continue;
     if (options.secretStore)
       failed.push(...(await deleteSecretsVerified(options.secretStore, refs)));
