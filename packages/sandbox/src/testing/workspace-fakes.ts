@@ -90,6 +90,14 @@ export interface WorkspaceFakeOptions {
   ) => Promise<SandboxExecResult>;
   /** The instance's epoch, read on every call. */
   readonly epoch?: () => string | undefined;
+  /**
+   * Run the agent's own commands (anything but PiShip's checks) instead of
+   * `/bin/sh`, for a test that has to run where there is no such shell.
+   */
+  readonly exec?: (
+    request: SandboxExecRequest,
+    io: SandboxExecIO,
+  ) => Promise<SandboxExecResult>;
 }
 
 export interface WorkspaceFake {
@@ -136,6 +144,7 @@ function fake(
           }
           if (isWorkspaceCheck(request) && options.check)
             return options.check(request, io);
+          if (options.exec) return options.exec(request, io);
           return runShell(side.root, request, io);
         },
         ...(options.epoch ? { epoch: options.epoch } : {}),

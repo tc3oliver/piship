@@ -373,7 +373,14 @@ describe("workspace declaration and guarantees", () => {
 describe("a snapshot backend", () => {
   it("is never checked and writes nothing into the workspace", async () => {
     const before = tree(workspace);
-    const fake = snapshotBackend();
+    // Reads the file from the backend's copy instead of running `cat`, so the
+    // test needs no shell (Windows has no /bin/sh).
+    const fake: WorkspaceFake = snapshotBackend({
+      exec: async (_request, io) => {
+        io.onStdout(readFileSync(join(fake.remote() ?? "", "README.md")));
+        return { exitCode: 0 };
+      },
+    });
     const sandbox = await activate(fake, { protectedPaths: gitProtection() });
     expect(sandbox.report.workspace).toEqual({
       declared: "snapshot",
