@@ -154,9 +154,14 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(doctor.stdout).toMatch(/state\s+delegated \(no PiShip secret\)/);
     expect(doctor.stdout).toMatch(/provider\s+pi-native/);
     expect(doctor.stdout).toMatch(/mcp notes\s+healthy \(stdio; 2 tool\(s\)\)/);
-    expect(doctor.stdout).toMatch(/audit\s+audit: disabled/);
+    expect(doctor.stdout).toMatch(/Audit\n {2}- state\s+disabled/);
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
     expect(doctor.stdout).toMatch(/- outbound\s+any host \(personal mode/);
+    expect(doctor.stdout).toMatch(
+      /- child environment\s+not restricted \(personal mode/,
+    );
+    expect(doctor.stdout).toMatch(/Secret Store\n {2}- backend\s+not used/);
+    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
     expect(doctor.stdout).not.toContain("personal owner policy");
 
     // The installed lock declares no enterprise endpoint: no identity,

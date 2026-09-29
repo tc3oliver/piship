@@ -272,10 +272,28 @@ v1alpha3 and v1alpha4 branded commands add:
 
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
-- `doctor` sections for Policy, Project (origin and each discovered project item with its effect), Resources (trust class, integrity, and whether each loads), Capabilities, Sandbox (the containment level proven by a live probe, network mode, and scope), MCP and audit (server health and sink state), and local metrics.
+- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (the workspace consistency the sandbox verified; `not reported` until sandbox backends report it), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
-Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` adds Supply Chain and Update sections ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+
+### Doctor report
+
+`doctor` prints its groups in one fixed order and leaves out a group that has nothing to report: Distribution, Supply Chain, Identity, Credential, Inference, Gateway, Resources, Policy, Project, Capabilities, Sandbox, Workspace, MCP, Secret Store, Audit, Network, Release, Update. `✓` is a passed check, `!` a warning, `-` information, and `✗` a failure; any failure makes `doctor` exit non-zero after it has printed the whole report.
+
+| Group | Shows |
+| --- | --- |
+| Identity | Identity mode, whether a session is signed in, and the configured issuer. No claim of the session (subject, name, email, groups) is shown. |
+| Credential | Provider, state or remaining validity, and, in managed mode, that ambient credentials are removed. Never a value, reference, or credential ID. |
+| Inference | Provider, activation, and the allowed and default models. |
+| Gateway | The managed endpoint's origin and whether its model list answers. |
+| Secret Store | The store PiShip keeps secrets in; the plaintext file store is a warning. |
+| Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment child processes receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode the child environment is not restricted. |
+| Release | Whether the running payload is a verified release artifact, a payload directory, or a build directory. |
+
+Every line is sanitized before it is printed: URL credentials, queries, and fragments are removed, and known secret values and token shapes are redacted, whatever an error message holds.
+
+For a governed distribution, `doctor` opens one governed session as a launch does, with the same network policy, the same child network environment, and the signed-in principal, so MCP servers start and the audit sinks receive real events. That session is recorded in audit like a short launch (`session.start`, `policy.loaded`, the resource, provider, and MCP decisions, any credential acquisition activation needed, and `session.end`). Delivering those events is what shows that the sinks work. A required sink that does not take every event makes `doctor` fail with `AUDIT_UNAVAILABLE` in the Audit group; the rest of the report is still printed.
 
 ## Lock
 

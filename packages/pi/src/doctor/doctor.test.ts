@@ -1,0 +1,747 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AuditLog, type AuditStatus } from "@piship/audit";
+import {
+  approvedNetworkEnvironment,
+  formatError,
+  NO_CONTENT_CAPTURE,
+  PiShipError,
+  SecretValue,
+} from "@piship/contracts";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { renderDoctor } from "../commands/doctor.js";
+import type { GovernanceInspection } from "../governance-session.js";
+import type { LaunchContext } from "../launch/context.js";
+import type { AccessData, DoctorData, GovernanceData } from "./data.js";
+import { sandboxIsolation } from "./data.js";
+import { DOCTOR_GROUPS, DoctorReport, sanitizeDoctorText } from "./report.js";
+
+let temp: string;
+const saved = { ...process.env };
+beforeEach(() => {
+  temp = mkdtempSync(join(tmpdir(), "piship-doctor-"));
+  // No installation is recorded here, so the lifecycle groups report a
+  // build directory.
+  process.env.PISHIP_INSTALL_HOME = join(temp, "install");
+});
+afterEach(() => {
+  rmSync(temp, { recursive: true, force: true });
+  for (const key of Object.keys(process.env))
+    if (!(key in saved)) delete process.env[key];
+  Object.assign(process.env, saved);
+});
+
+function context(mode: "managed" | "personal"): LaunchContext {
+  return {
+    metadata: {
+      schema: "piship-lock/v1alpha4",
+      app: {
+        id: "doctor-test",
+        name: "AcmeCode",
+        version: "1.0.0",
+        command: "acmecode",
+      },
+      runtime: { pishipVersion: "0.7.0" },
+      manifest: { schema: "piship/v1alpha4" },
+    },
+    mode,
+    distributionDir: temp,
+    stateDir: join(temp, "state"),
+    agentDir: join(temp, "agent"),
+    out: () => undefined,
+    err: () => undefined,
+  } as unknown as LaunchContext;
+}
+
+const metrics = {
+  schema: "piship-metrics/v1",
+  updatedAt: "2026-09-29T00:00:00.000Z",
+  policyDenials: {},
+  mcpHealth: {},
+  startupFailures: {},
+} as unknown as DoctorData["metrics"];
+
+function accessData(overrides: Partial<AccessData> = {}): AccessData {
+  const policy = {
+    inheritProxyEnvironment: true,
+    additionalCA: [] as string[],
+    privateOnly: true,
+    allowHosts: ["gateway.acme.example"],
+  };
+  return {
+    manifest: {
+      identity: { mode: "oidc" },
+      credential: { provider: "http-broker" },
+      inference: { provider: "openai-compatible" },
+      network: {
+        proxy: { inheritEnvironment: true },
+        tls: { additionalCA: [] },
+      },
+    } as unknown as AccessData["manifest"],
+    signedIn: true,
+    issuer: "https://idp.acme.example/realms/acme",
+    store: { kind: "macos-keychain", description: "macOS Keychain" },
+    credential: { state: "valid", remainingSeconds: 43 * 60 + 5 },
+    activation: {
+      runtime: "managed-endpoint",
+      gatewayOrigin: "https://gateway.acme.example",
+      allowedModels: 3,
+      selectedModel: "acme-large",
+    },
+    gateway: { listed: 3 },
+    network: {
+      privateOnly: true,
+      allowHosts: policy.allowHosts,
+      undeclared: [],
+      inheritProxy: true,
+      caBundles: 0,
+      approved: approvedNetworkEnvironment(policy, {}),
+      childrenRestricted: true,
+      notApproved: [],
+    },
+    removedEnvironment: [],
+    ...overrides,
+  };
+}
+
+function inspection(
+  sandbox: Partial<GovernanceInspection["sandbox"]> = {},
+): GovernanceInspection {
+  const report = {
+    level: "enforced",
+    adapter: "macos-seatbelt",
+    provider: "native",
+    required: true,
+    planes: ["filesystem-read-deny", "filesystem-write-allowlist"],
+    network: "deny",
+    verification: "live-probe",
+    localProcesses: true,
+    warnings: [],
+    ...sandbox,
+  };
+  return {
+    project: { origin: "company", root: "/work/acme" },
+    candidates: [],
+    sandbox: report,
+    containment: "enforced by macos-seatbelt (required)",
+    engine: { id: "acme-engineering@1", diagnostics: [] },
+    capabilities: [],
+    resources: [],
+  } as unknown as GovernanceInspection;
+}
+
+const okStatus: AuditStatus = {
+  state: "ok",
+  rejected: 0,
+  sinks: [
+    {
+      id: "local",
+      type: "file",
+      required: true,
+      state: "ok",
+      delivered: 3,
+      pending: 0,
+      dropped: 0,
+    },
+  ],
+};
+
+function governanceData(
+  overrides: Partial<GovernanceData> = {},
+): GovernanceData {
+  const inspected = inspection();
+  return {
+    manifest: {
+      policy: { default: "deny", enforced: [], defaults: [], adapter: null },
+      capabilities: [],
+      mcp: { servers: [] },
+      audit: { sinks: [{ id: "local", type: "file", required: true }] },
+    } as unknown as GovernanceData["manifest"],
+    inspection: inspected,
+    isolation: sandboxIsolation(inspected.sandbox),
+    workspace: {},
+    mcp: [],
+    audit: {
+      status: okStatus,
+      targets: [{ id: "local", target: "local file" }],
+    },
+    ...overrides,
+  };
+}
+
+function doctorData(
+  mode: "managed" | "personal",
+  parts: Pick<DoctorData, "access" | "governance">,
+): DoctorData {
+  return {
+    ctx: context(mode),
+    piVersion: "0.87.1",
+    metrics,
+    ...parts,
+  };
+}
+
+/** The lines of one group, without the heading. */
+function group(output: string, name: string): string[] {
+  const lines = output.split("\n");
+  const start = lines.indexOf(name);
+  if (start < 0) return [];
+  const end = lines.indexOf("", start);
+  return lines.slice(start + 1, end < 0 ? undefined : end);
+}
+
+describe("DoctorReport", () => {
+  it("prints groups in the fixed order, whatever order they are written in, and skips empty ones", () => {
+    const report = new DoctorReport("AcmeCode Doctor");
+    report.section("Network").ok("outbound", "private-only");
+    report.section("Distribution").ok("AcmeCode", "1.0.0");
+    report.section("Audit");
+    report.section("Identity").info("mode", "none");
+    expect(report.render()).toBe(
+      [
+        "AcmeCode Doctor",
+        "",
+        "Distribution",
+        `  ✓ ${"AcmeCode".padEnd(20)} 1.0.0`,
+        "",
+        "Identity",
+        `  - ${"mode".padEnd(20)} none`,
+        "",
+        "Network",
+        `  ✓ ${"outbound".padEnd(20)} private-only`,
+      ].join("\n"),
+    );
+  });
+
+  it("fails only on a failed line", () => {
+    const report = new DoctorReport("AcmeCode Doctor");
+    const out = report.section("Gateway");
+    out.ok("a", "b");
+    out.warn("c", "d");
+    out.info("e", "f");
+    expect(report.failed).toBe(false);
+    out.bad("g", "h");
+    expect(report.failed).toBe(true);
+    expect(report.render()).toContain(`  ✗ ${"g".padEnd(20)} h`);
+    expect(report.render()).toContain(`  ! ${"c".padEnd(20)} d`);
+  });
+
+  it("sanitizes URL credentials, queries, fragments, tokens, and control characters", () => {
+    expect(
+      sanitizeDoctorText(
+        "proxy http://alice:s3cret@proxy.acme.example:3128/path?key=abc#frag",
+      ),
+    ).toBe("proxy http://proxy.acme.example:3128/path");
+    expect(
+      sanitizeDoctorText("Authorization: Bearer abcdefghijklmnop"),
+    ).not.toContain("abcdefghijklmnop");
+    expect(sanitizeDoctorText("a\u001b[31mred\u0007\nnext")).toBe(
+      "a[31mred\nnext",
+    );
+  });
+
+  it("names every enterprise diagnostics group", () => {
+    for (const name of [
+      "Distribution",
+      "Identity",
+      "Credential",
+      "Inference",
+      "Gateway",
+      "Resources",
+      "Policy",
+      "Sandbox",
+      "Workspace",
+      "Secret Store",
+      "Audit",
+      "Network",
+      "Release",
+    ])
+      expect(DOCTOR_GROUPS).toContain(name);
+  });
+});
+
+describe("renderDoctor", () => {
+  it("reports a managed, governed distribution in every group", () => {
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData(),
+      }),
+    );
+    const output = report.render();
+    expect(report.failed).toBe(false);
+    const headings = output
+      .split("\n")
+      .filter((line) => line && !line.startsWith(" "))
+      .slice(1);
+    // No resources or capabilities are declared in this data.
+    expect(headings).toEqual(
+      DOCTOR_GROUPS.filter(
+        (name) => name !== "Resources" && name !== "Capabilities",
+      ),
+    );
+    expect(group(output, "Identity")).toEqual([
+      `  ✓ ${"mode".padEnd(20)} oidc`,
+      `  ✓ ${"session".padEnd(20)} signed in`,
+      `  ✓ ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
+    ]);
+    expect(group(output, "Credential")).toContain(
+      `  ✓ ${"valid".padEnd(20)} 43m remaining`,
+    );
+    expect(group(output, "Gateway")).toEqual([
+      `  ✓ ${"endpoint".padEnd(20)} https://gateway.acme.example`,
+      `  ✓ ${"gateway".padEnd(20)} reachable (3 listed)`,
+    ]);
+    expect(group(output, "Secret Store")).toEqual([
+      `  ✓ ${"backend".padEnd(20)} macOS Keychain`,
+    ]);
+    expect(group(output, "Sandbox")).toContain(
+      `  ✓ ${"isolation".padEnd(20)} local (commands run on this host inside the sandbox)`,
+    );
+    expect(group(output, "Workspace")).toEqual([
+      `  - ${"consistency".padEnd(20)} not reported; the sandbox backend does not report workspace consistency yet`,
+    ]);
+    expect(group(output, "Audit")).toEqual([
+      `  ✓ ${"state".padEnd(20)} healthy`,
+      `  ✓ ${"sink local".padEnd(20)} file, required, local file: healthy; delivered 3, pending 0, dropped 0`,
+      `  ✓ ${"local metrics".padEnd(20)} 0 policy denial(s)`,
+    ]);
+    expect(group(output, "Release")).toEqual([
+      `  ✓ ${"release".padEnd(20)} none; running from a build directory`,
+    ]);
+  });
+
+  it("never shows identity claims", () => {
+    const output = renderDoctor(
+      doctorData("managed", { access: accessData() }),
+    ).render();
+    expect(output).not.toMatch(/subject|email|display/i);
+  });
+
+  it("fails when the user is not signed in", () => {
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData({ signedIn: false }),
+      }),
+    );
+    expect(report.failed).toBe(true);
+    expect(group(report.render(), "Identity")).toContain(
+      `  ✗ ${"session".padEnd(20)} not signed in; run acmecode login`,
+    );
+  });
+
+  it("warns about the plaintext file secret store and says when no store is used", () => {
+    const file = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          store: {
+            kind: "file",
+            description: "restricted plaintext file (explicit opt-in fallback)",
+          },
+        }),
+      }),
+    ).render();
+    expect(group(file, "Secret Store")).toEqual([
+      `  ! ${"backend".padEnd(20)} restricted plaintext file (explicit opt-in fallback)`,
+    ]);
+    const { store: _store, ...withoutStore } = accessData();
+    const none = renderDoctor(
+      doctorData("personal", { access: withoutStore }),
+    ).render();
+    expect(group(none, "Secret Store")).toEqual([
+      `  - ${"backend".padEnd(20)} not used; this distribution stores no PiShip secret`,
+    ]);
+  });
+
+  it("reports a Pi-native distribution without access", () => {
+    const output = renderDoctor(doctorData("personal", {})).render();
+    expect(group(output, "Identity")).toEqual([
+      `  ✓ ${"mode".padEnd(20)} personal Pi-native (no identity; Pi auth in isolated state)`,
+    ]);
+    expect(group(output, "Network")).toContain(
+      `  - ${"child environment".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
+    );
+    expect(group(output, "Audit")[0]).toBe(
+      `  - ${"state".padEnd(20)} not configured (the distribution declares no audit)`,
+    );
+    expect(output).not.toContain("Gateway");
+    expect(output).not.toContain("Workspace");
+  });
+});
+
+describe("Network group", () => {
+  const policy = {
+    inheritProxyEnvironment: true,
+    additionalCA: ["/etc/acme/root.pem", "/etc/acme/issuing.pem"],
+    privateOnly: true,
+    allowHosts: ["gateway.acme.example"],
+  };
+
+  it("states the proxy, NO_PROXY, CA bundles, and the withheld child variables by name and reason", () => {
+    const approved = approvedNetworkEnvironment(policy, {
+      HTTPS_PROXY: "http://proxy.acme.example:3128",
+      NO_PROXY: "localhost,.acme.internal",
+    });
+    const base = accessData();
+    const output = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          network: {
+            ...base.network,
+            caBundles: 2,
+            approved,
+            notApproved: ["SSL_CERT_FILE"],
+          },
+        }),
+      }),
+    ).render();
+    const lines = group(output, "Network");
+    expect(lines).toEqual([
+      `  ✓ ${"TLS verification".padEnd(20)} on`,
+      `  ✓ ${"outbound".padEnd(20)} private-only: declared hosts only (gateway.acme.example); public fallback denied`,
+      `  ✓ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128)`,
+      `  ✓ ${"NO_PROXY".padEnd(20)} set`,
+      `  ✓ ${"enterprise CA".padEnd(20)} 2 additional bundle(s) declared`,
+      `  ✓ ${"child environment".padEnd(20)} approved network variables only: HTTPS_PROXY, https_proxy, NO_PROXY, no_proxy`,
+      `  ! ${"withheld NODE_EXTRA_CA_CERTS".padEnd(20)} not passed to child processes: network.tls.additionalCA lists several bundles and a child accepts one file`,
+      `  - ${"withheld SSL_CERT_FILE".padEnd(20)} not passed to child processes: not approved by the network policy`,
+    ]);
+    // NO_PROXY is reported as set, never by value.
+    expect(output).not.toContain("acme.internal");
+  });
+
+  it("says when no proxy is set and when the proxy environment is ignored", () => {
+    const base = accessData();
+    const unset = group(
+      renderDoctor(doctorData("managed", { access: base })).render(),
+      "Network",
+    );
+    expect(unset).toContain(
+      `  ✓ ${"proxy".padEnd(20)} none set in the environment`,
+    );
+    expect(unset).toContain(`  ✓ ${"NO_PROXY".padEnd(20)} not set`);
+    const ignored = group(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            network: { ...base.network, inheritProxy: false },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(ignored).toContain(
+      `  ✓ ${"proxy".padEnd(20)} not used; network.proxy.inheritEnvironment is off`,
+    );
+    expect(ignored.join("\n")).not.toContain("NO_PROXY");
+  });
+
+  it("says that a personal distribution does not restrict the child environment", () => {
+    const base = accessData();
+    const lines = group(
+      renderDoctor(
+        doctorData("personal", {
+          access: accessData({
+            network: {
+              ...base.network,
+              privateOnly: false,
+              childrenRestricted: false,
+            },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(lines).toContain(
+      `  - ${"outbound".padEnd(20)} any host (personal mode; network.privateOnly is off)`,
+    );
+    expect(lines.at(-1)).toBe(
+      `  - ${"child environment".padEnd(20)} not restricted (personal mode; child processes keep the shell's proxy and CA variables)`,
+    );
+    expect(lines.join("\n")).not.toContain("withheld");
+  });
+
+  it("fails on disabled TLS verification", () => {
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          tlsError: formatError(
+            new PiShipError("TLS_POLICY_VIOLATION", "TLS disabled"),
+          ),
+        }),
+      }),
+    );
+    expect(report.failed).toBe(true);
+    expect(group(report.render(), "Network")[0]).toBe(
+      `  ✗ ${"TLS verification".padEnd(20)} DISABLED in environment`,
+    );
+    expect(group(report.render(), "Inference")).toContain(
+      `  ✗ ${"activation".padEnd(20)} TLS_POLICY_VIOLATION: TLS disabled`,
+    );
+  });
+});
+
+describe("Sandbox and Workspace groups", () => {
+  it("derives the isolation kind from the containment report", () => {
+    expect(sandboxIsolation(inspection().sandbox)).toBe("local");
+    expect(
+      sandboxIsolation(
+        inspection({
+          adapter: "custom",
+          provider: "custom",
+          planes: ["host-filesystem-isolation", "environment-filter"],
+          localProcesses: false,
+        }).sandbox,
+      ),
+    ).toBe("remote");
+    expect(
+      sandboxIsolation(
+        inspection({ level: "not-required", planes: [] }).sandbox,
+      ),
+    ).toBe("none");
+  });
+
+  it("shows the remote isolation, the containment summary, and a workspace mode once reported", () => {
+    const inspected = inspection({
+      adapter: "custom",
+      provider: "custom",
+      planes: ["host-filesystem-isolation", "environment-filter"],
+    });
+    const output = renderDoctor(
+      doctorData("managed", {
+        governance: governanceData({
+          inspection: inspected,
+          isolation: sandboxIsolation(inspected.sandbox),
+          workspace: { consistency: "shared" },
+        }),
+      }),
+    ).render();
+    const sandbox = group(output, "Sandbox");
+    expect(sandbox[0]).toBe(`  ✓ ${"provider".padEnd(20)} custom`);
+    expect(sandbox).toContain(
+      `  ✓ ${"isolation".padEnd(20)} remote (commands run on another machine; host files unreachable)`,
+    );
+    expect(sandbox).toContain(
+      `  - ${"summary".padEnd(20)} enforced by macos-seatbelt (required)`,
+    );
+    expect(group(output, "Workspace")).toEqual([
+      `  ✓ ${"consistency".padEnd(20)} shared`,
+    ]);
+  });
+});
+
+describe("Audit group", () => {
+  it("reports each sink's counts and a failed required delivery at session end without losing the report", () => {
+    const status: AuditStatus = {
+      state: "failed",
+      rejected: 1,
+      sinks: [
+        okStatus.sinks[0],
+        {
+          id: "siem",
+          type: "http",
+          required: true,
+          state: "failed",
+          delivered: 1,
+          pending: 2,
+          dropped: 4,
+          lastError: "HTTP 503",
+        },
+      ],
+    };
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({
+          audit: {
+            status,
+            closeError: formatError(
+              new PiShipError(
+                "AUDIT_UNAVAILABLE",
+                "The session ended: 6 audit event(s) were not delivered to required audit sink siem (2 pending, 4 dropped)",
+              ),
+            ),
+            targets: [
+              { id: "local", target: "local file" },
+              { id: "siem", target: "host audit.acme.example" },
+            ],
+          },
+        }),
+      }),
+    );
+    expect(report.failed).toBe(true);
+    const output = report.render();
+    const audit = group(output, "Audit");
+    expect(audit[0]).toMatch(
+      /^ {2}✗ state {16}failed; governed actions fail closed/,
+    );
+    expect(audit).toContain(
+      `  ✗ ${"sink siem".padEnd(20)} http, required, host audit.acme.example: failed; delivered 1, pending 2, dropped 4; last error: HTTP 503`,
+    );
+    expect(audit).toContain(
+      `  ! ${"rejected".padEnd(20)} 1 malformed event(s) rejected`,
+    );
+    expect(audit.join("\n")).toContain(
+      `  ✗ ${"session end".padEnd(20)} AUDIT_UNAVAILABLE: The session ended`,
+    );
+    // Every other group is still reported.
+    for (const name of ["Identity", "Gateway", "Sandbox", "Network", "Release"])
+      expect(group(output, name).length).toBeGreaterThan(0);
+  });
+
+  it("reports a required sink that could not open, and an optional sink that dropped events", () => {
+    const opened = renderDoctor(
+      doctorData("managed", {
+        governance: governanceData({
+          mcp: undefined,
+          audit: {
+            openError:
+              "AUDIT_UNAVAILABLE: Required audit sink siem (http) is unavailable",
+            targets: [],
+          },
+        }),
+      }),
+    );
+    expect(opened.failed).toBe(true);
+    const output = opened.render();
+    expect(group(output, "Audit")[0]).toBe(
+      `  ✗ ${"state".padEnd(20)} AUDIT_UNAVAILABLE: Required audit sink siem (http) is unavailable`,
+    );
+    expect(group(output, "MCP")).toEqual([
+      `  - ${"mcp".padEnd(20)} not started; the governed session did not open`,
+    ]);
+    const degraded = renderDoctor(
+      doctorData("managed", {
+        governance: governanceData({
+          audit: {
+            status: {
+              state: "degraded",
+              rejected: 0,
+              sinks: [
+                {
+                  id: "siem",
+                  type: "http",
+                  required: false,
+                  state: "degraded",
+                  delivered: 0,
+                  pending: 0,
+                  dropped: 3,
+                },
+              ],
+            },
+            targets: [{ id: "siem", target: "host audit.acme.example" }],
+          },
+        }),
+      }),
+    );
+    expect(degraded.failed).toBe(false);
+    expect(group(degraded.render(), "Audit").slice(0, 2)).toEqual([
+      `  ! ${"state".padEnd(20)} degraded`,
+      `  ! ${"sink siem".padEnd(20)} http, optional, host audit.acme.example: degraded; delivered 0, pending 0, dropped 3`,
+    ]);
+  });
+});
+
+describe("doctor secret scan", () => {
+  it("never prints a planted credential, token, proxy credential, or audit URL query", async () => {
+    const opaque = "planted-opaque-credential-4417";
+    // A value that went through SecretValue.reveal() is redacted wherever it
+    // appears, even without a recognizable shape.
+    new SecretValue(opaque).reveal();
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwbGFudGVkLXN1YmplY3QifQ.c2lnbmF0dXJl";
+    const policy = {
+      inheritProxyEnvironment: true,
+      additionalCA: [],
+      privateOnly: true,
+      allowHosts: ["gateway.acme.example"],
+    };
+    const approved = approvedNetworkEnvironment(policy, {
+      HTTPS_PROXY: "http://proxyuser:proxy-pass-8812@proxy.acme.example:3128",
+      HTTP_PROXY: "http://proxy.acme.example:3128/?token=proxy-query-5521",
+      NO_PROXY: "no-proxy-host-7731.internal",
+    });
+    // A real audit log with an HTTP sink whose URL carries a routing secret
+    // and whose transport error echoes the URL and a bearer token.
+    const sinkUrl =
+      "https://audit.acme.example/ingest?routing=audit-query-6604";
+    const log = await AuditLog.open({
+      config: {
+        enabled: true,
+        sinks: [{ id: "siem", type: "http", url: sinkUrl, required: false }],
+        buffer: { maxEvents: 10, flushIntervalMs: 0 },
+        capture: NO_CONTENT_CAPTURE,
+      },
+      distribution: "doctor-test",
+      stateDir: join(temp, "state"),
+      fetch: async () => {
+        throw new Error(
+          `request to https://AUDIT.acme.example/ingest?routing=audit-query-6604 failed; Authorization: Bearer planted-bearer-9931abcdef`,
+        );
+      },
+    });
+    log.emit({ event: "session.start", user: null, session: "s1" });
+    await log.flush();
+    const status = await log.close();
+    expect(status.sinks[0]?.lastError).toBeDefined();
+    const base = accessData();
+    const output = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          issuer:
+            "https://idp-user:idp-pass-3390@idp.acme.example/realms/acme?x=idp-query-2280",
+          gateway: {
+            error: formatError(
+              new PiShipError(
+                "GATEWAY_UNREACHABLE",
+                `request with sk-planted0credential0123 to https://gw-user:gw-pass-1174@gateway.acme.example/v1/models?key=gw-query-4459 failed`,
+              ),
+            ),
+          },
+          activationError: `refresh failed for ${jwt} (${opaque})`,
+          network: { ...base.network, approved },
+        }),
+        governance: governanceData({
+          mcp: [
+            {
+              id: "docs",
+              state: "failed",
+              transport: "streamable-http",
+              tools: [],
+              required: false,
+              reason: `401 for token ${opaque}`,
+            },
+          ] as unknown as GovernanceData["mcp"],
+          audit: {
+            status,
+            targets: [{ id: "siem", target: "host audit.acme.example" }],
+          },
+        }),
+      }),
+    ).render();
+    for (const planted of [
+      opaque,
+      jwt,
+      "proxyuser",
+      "proxy-pass-8812",
+      "proxy-query-5521",
+      "no-proxy-host-7731",
+      "audit-query-6604",
+      "routing=",
+      "planted-bearer-9931abcdef",
+      "sk-planted0credential0123",
+      "gw-user",
+      "gw-pass-1174",
+      "gw-query-4459",
+      "idp-user",
+      "idp-pass-3390",
+      "idp-query-2280",
+    ])
+      expect(output, planted).not.toContain(planted);
+    // What is safe to show still is.
+    expect(output).toContain("http://proxy.acme.example:3128");
+    expect(output).toContain("host audit.acme.example");
+    expect(output).toContain("https://idp.acme.example/realms/acme");
+  });
+});

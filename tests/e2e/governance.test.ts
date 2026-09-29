@@ -388,6 +388,13 @@ describe("governed distribution (local fixtures)", () => {
     expect(doctor.stdout).toMatch(
       windows ? /containment\s+not-required/ : /containment\s+enforced/,
     );
+    expect(doctor.stdout).toMatch(
+      windows ? /isolation\s+none/ : /isolation\s+local/,
+    );
+    expect(doctor.stdout).toMatch(
+      /Workspace\n {2}- consistency\s+not reported/,
+    );
+    expect(doctor.stdout).toMatch(/Audit\n {2}. state\s+/);
 
     // Certified content changed after review never loads.
     const skill = join(

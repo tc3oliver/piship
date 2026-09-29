@@ -1,23 +1,42 @@
-// The doctor sections that need no Pi runtime or governed session.
+// The doctor groups that need no Pi runtime or governed session.
 import { LocalMetrics } from "@piship/audit";
 import { resolveTemplate } from "@piship/schema";
 import { lifecycleStatus } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
 import { installedHere } from "./lifecycle.js";
 
-/** Supply chain and update sections of doctor. */
+/** The doctor groups whose lines need no Pi runtime or governed session. */
+export type LifecycleDoctorGroup = "Supply Chain" | "Release" | "Update";
+
+/**
+ * One lifecycle group of doctor: Supply Chain (manifest, lock, and payload
+ * verification), Release (where the running payload came from), or Update
+ * (release tracking, channel, trust, rollback). Each group is its own call,
+ * so the caller decides where it goes.
+ */
 export function lifecycleDoctor(
   ctx: BrandedContext,
-  lines: string[],
+  group: LifecycleDoctorGroup,
   ok: DoctorLine,
   warn: DoctorLine,
 ): void {
+  if (group === "Supply Chain") supplyChainDoctor(ctx, ok);
+  else if (group === "Release") releaseDoctor(ctx, ok, warn);
+  else updateDoctor(ctx, ok, warn);
+}
+
+function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
   const { metadata } = ctx;
-  lines.push("", "Supply Chain");
   ok("manifest", `verified (${metadata.manifest.schema})`);
   ok("lockfile", `verified (${metadata.schema})`);
   ok("integrity", "payload inventory verified at launch");
-  const status = lifecycleStatus(metadata.app.id, metadata);
+}
+
+function releaseDoctor(
+  ctx: BrandedContext,
+  ok: DoctorLine,
+  warn: DoctorLine,
+): void {
   const here = installedHere(ctx);
   const active = here?.releases.find((item) => item.version === here.active);
   if (active?.release)
@@ -27,11 +46,21 @@ export function lifecycleDoctor(
     );
   else if (here)
     warn("release", "installed from a payload directory, not a release");
-  lines.push("", "Update");
+  else ok("release", "none; running from a build directory");
+}
+
+function updateDoctor(
+  ctx: BrandedContext,
+  ok: DoctorLine,
+  warn: DoctorLine,
+): void {
+  const { metadata } = ctx;
+  const here = installedHere(ctx);
   if (!here) {
     warn("installation", "not installed; running from a build directory");
     return;
   }
+  const status = lifecycleStatus(metadata.app.id, metadata);
   if (!status.tracked) {
     warn(
       "installation",

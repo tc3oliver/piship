@@ -358,11 +358,27 @@ describe("managed distribution (local fixtures)", () => {
 
     const doctor = await run(["doctor"]);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
-    expect(doctor.stdout).toContain("✓ gateway              reachable");
-    expect(doctor.stdout).toContain("! secret store");
+    expect(doctor.stdout).toMatch(
+      /Gateway\n(?:.*\n)*? {2}✓ gateway\s+reachable/,
+    );
+    expect(doctor.stdout).toMatch(
+      /Identity\n {2}✓ mode\s+oidc\n {2}✓ session\s+signed in/,
+    );
+    expect(doctor.stdout).toMatch(
+      /Secret Store\n {2}! backend\s+restricted plaintext file/,
+    );
     expect(doctor.stdout).toMatch(
       /✓ outbound\s+private-only: declared hosts only/,
     );
+    expect(doctor.stdout).toMatch(/Network\n(?:.*\n)*? {2}✓ proxy\s+/);
+    expect(doctor.stdout).toMatch(
+      /✓ child environment\s+approved network variables only/,
+    );
+    expect(doctor.stdout).toMatch(
+      /Workspace\n {2}- consistency\s+not reported/,
+    );
+    expect(doctor.stdout).toMatch(/Audit\n {2}. state\s+/);
+    expect(doctor.stdout).toMatch(/Release\n {2}. release\s+/);
     // The fixture lives in this process, so network-using CLI calls must not block it.
     const cliDoctor = await new Promise<Result>((resolve) => {
       const child = spawn(process.execPath, [bin, "doctor", artifact], {
