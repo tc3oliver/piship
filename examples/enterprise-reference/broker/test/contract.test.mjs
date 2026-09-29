@@ -704,10 +704,27 @@ describe("revoke", () => {
     assert.ok(h.litellm.keys.has(b.credential), "the other key is untouched");
   });
 
-  it("403 for a key this broker did not issue; it stays", async () => {
+  it("a key this broker did not issue, or issued for another distribution, gets the same 404 as an unknown key; it stays", async () => {
+    const unknown = await h.revoke("sk-never-issued-SENTINEL-002", null);
+    assert.equal(unknown.status, 404);
     const foreign = h.litellm.addForeignKey("someone");
-    assert.equal((await h.revoke(foreign, null)).status, 403);
-    assert.ok(h.litellm.keys.has(foreign));
+    const other = h.litellm.addBrokerKey("someone", {
+      metadata: {
+        distribution: "othercode",
+        issued_by: "piship-reference-broker",
+      },
+    });
+    for (const key of [foreign, other]) {
+      const res = await h.revoke(key, null);
+      assert.equal(res.status, unknown.status);
+      assert.equal(res.text, unknown.text, "same body as an unknown key");
+      assert.equal(
+        res.headers.get("www-authenticate"),
+        unknown.headers.get("www-authenticate"),
+      );
+      assert.ok(h.litellm.keys.has(key));
+      assert.equal(JSON.parse(h.logLines.at(-1)).reason, "foreign-key");
+    }
   });
 
   it("401 without a bearer, 403 for another distribution, 400 for a bad body", async () => {
@@ -783,6 +800,86 @@ describe("revoke", () => {
     assert.equal(res.status, 503);
     assert.equal(res.headers.get("retry-after"), "5");
     assert.ok(h.litellm.keys.has(issued.credential));
+  });
+});
+
+describe("revoke: limits", () => {
+  const infoCalls = (h) =>
+    h.litellm.calls.filter((call) => call.path === "/key/info").length;
+
+  it("429 with Retry-After past BROKER_REVOKE_LIMIT_PER_MINUTE from one address, before LiteLLM is asked", async () => {
+    const h = await harness({ BROKER_REVOKE_LIMIT_PER_MINUTE: "3" });
+    for (let i = 0; i < 3; i++)
+      assert.equal((await h.revoke(`sk-unknown-SENTINEL-00${i}`)).status, 404);
+    const before = infoCalls(h);
+    // Any request counts, a malformed one too.
+    const limited = await h.revoke(undefined);
+    assert.equal(limited.status, 429);
+    const wait = Number(limited.headers.get("retry-after"));
+    assert.ok(Number.isInteger(wait) && wait >= 1 && wait <= 60);
+    assert.equal(
+      (await h.revoke("sk-unknown-SENTINEL-009")).status,
+      429,
+      "still limited",
+    );
+    assert.equal(infoCalls(h), before, "no lookup once limited");
+  });
+
+  it("ignores X-Forwarded-For unless the peer is a configured trusted proxy", async () => {
+    const direct = await harness({ BROKER_REVOKE_LIMIT_PER_MINUTE: "1" });
+    const spoof = (h, address) =>
+      h.revoke("sk-unknown-SENTINEL-010", null, "acmecode", {
+        "x-forwarded-for": address,
+      });
+    assert.equal((await spoof(direct, "10.0.0.1")).status, 404);
+    assert.equal(
+      (await spoof(direct, "10.0.0.2")).status,
+      429,
+      "a client cannot pick its own address",
+    );
+
+    const proxied = await harness({
+      BROKER_REVOKE_LIMIT_PER_MINUTE: "1",
+      BROKER_TRUSTED_PROXIES: "127.0.0.1",
+    });
+    assert.equal((await spoof(proxied, "10.0.0.1")).status, 404);
+    assert.equal((await spoof(proxied, "10.0.0.2")).status, 404);
+    assert.equal((await spoof(proxied, "10.0.0.1")).status, 429);
+    // The right-most untrusted hop counts, not what the client prepended.
+    assert.equal((await spoof(proxied, "10.0.0.3, 10.0.0.2")).status, 429);
+  });
+
+  it("503 with Retry-After: 1 past BROKER_REVOKE_MAX_CONCURRENT lookups in flight", async () => {
+    const h = await harness({ BROKER_REVOKE_MAX_CONCURRENT: "1" });
+    h.litellm.state.keyInfoDelayMs = 200;
+    const first = h.revoke("sk-unknown-SENTINEL-011");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = await h.revoke("sk-unknown-SENTINEL-012");
+    h.litellm.state.keyInfoDelayMs = 0;
+    assert.equal(second.status, 503);
+    assert.equal(second.headers.get("retry-after"), "1");
+    assert.equal((await first).status, 404);
+    assert.equal(
+      (await h.revoke("sk-unknown-SENTINEL-013")).status,
+      404,
+      "the slot is released",
+    );
+  });
+
+  it("the rate limiter keeps at most maxCallers windows", async () => {
+    const { createRateLimiter } = await import("../src/broker.mjs");
+    let now = 0;
+    const limiter = createRateLimiter({
+      limitPerMinute: 5,
+      maxCallers: 2,
+      now: () => now,
+    });
+    assert.equal(limiter.take("a"), 0);
+    now = 10_000;
+    assert.equal(limiter.take("b"), 0);
+    assert.equal(limiter.take("c"), 50, "waits for the oldest window");
+    now = 60_000;
+    assert.equal(limiter.take("c"), 0, "a's window ended");
   });
 });
 

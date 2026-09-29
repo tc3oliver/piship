@@ -68,6 +68,7 @@ export async function startHarness(overrides = {}) {
     credential,
     credentialId = null,
     distribution = "acmecode",
+    headers = {},
   ) {
     const response = await fetch(`${url}/v1/revoke`, {
       method: "POST",
@@ -76,6 +77,7 @@ export async function startHarness(overrides = {}) {
           ? {}
           : { authorization: `Bearer ${credential}` }),
         "content-type": "application/json",
+        ...headers,
       },
       body: JSON.stringify({ credential_id: credentialId, distribution }),
     });

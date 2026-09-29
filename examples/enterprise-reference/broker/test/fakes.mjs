@@ -17,6 +17,7 @@ export const CLIENT = "acmecode";
 export const MASTER_KEY = "sk-master-SENTINEL-0000000000000000";
 /** Every fake LiteLLM error body carries this, to prove the broker never passes one on. */
 export const UPSTREAM_BODY_MARK = "SENTINEL-UPSTREAM-BODY";
+const ISSUER_MARK = "piship-reference-broker";
 
 async function listen(handler) {
   const server = createServer(handler);
@@ -141,6 +142,8 @@ export async function startFakeLiteLLM() {
     holderKeyInfoStatus: undefined,
     /** Answer a master-key /key/info with this status. */
     adminKeyInfoStatus: undefined,
+    /** Delay /key/info by this many milliseconds. */
+    keyInfoDelayMs: 0,
   };
   const hash = (key) => createHash("sha256").update(key).digest("hex");
   const denied = (res, key) =>
@@ -186,6 +189,10 @@ export async function startFakeLiteLLM() {
       });
     }
     if (path === "/key/info" && req.method === "GET") {
+      if (state.keyInfoDelayMs)
+        await new Promise((resolve) =>
+          setTimeout(resolve, state.keyInfoDelayMs),
+        );
       const describe = (key) =>
         reply(res, 200, {
           key: key.token,
@@ -330,6 +337,26 @@ export async function startFakeLiteLLM() {
         metadata: {},
         expires: null,
         created_at: new Date().toISOString(),
+      });
+      issued.push(key);
+      return key;
+    },
+    /**
+     * Add a key that carries the broker's mark, as an earlier broker run
+     * would have left it. `fields` override the record (created_at,
+     * metadata).
+     */
+    addBrokerKey(userId, fields = {}) {
+      const key = `sk-issued-SENTINEL-${randomBytes(12).toString("hex")}`;
+      keys.set(key, {
+        token: hash(key),
+        key_alias: `pb-${randomBytes(12).toString("hex")}`,
+        user_id: userId,
+        models: ["acme/coder"],
+        metadata: { distribution: "acmecode", issued_by: ISSUER_MARK },
+        expires: null,
+        created_at: new Date(Date.now() - 3_600_000).toISOString(),
+        ...fields,
       });
       issued.push(key);
       return key;

@@ -8,6 +8,7 @@
 // Every answer is JSON with `cache-control: no-store`. Error bodies are a
 // fixed code, never an upstream message. Nothing secret is logged: see log.mjs.
 import { createHash, randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { JwksUnavailableError, TokenError } from "./token.mjs";
 import { ISSUER_MARK, UpstreamError } from "./litellm.mjs";
 
@@ -124,27 +125,63 @@ export function createIdempotencyStore({
   };
 }
 
-/** Acquires per principal per minute, fixed window. */
-export function createRateLimiter({ limitPerMinute, now = Date.now }) {
+/**
+ * Requests per caller per minute, fixed window. At most `maxCallers` windows
+ * are kept; while that many callers are counted, a new one waits for the
+ * oldest window to end.
+ */
+export function createRateLimiter({
+  limitPerMinute,
+  now = Date.now,
+  maxCallers = 10_000,
+}) {
   /** @type {Map<string, { windowStart: number, count: number }>} */
   const windows = new Map();
+  const secondsLeft = (window, at) =>
+    Math.max(1, Math.ceil((window.windowStart + 60_000 - at) / 1000));
   return {
     /** @returns {number} 0 when allowed, else seconds until the window resets */
-    take(userId) {
+    take(caller) {
       const at = now();
       for (const [id, window] of windows)
         if (at - window.windowStart >= 60_000) windows.delete(id);
-      const window = windows.get(userId) ?? { windowStart: at, count: 0 };
-      if (window.count >= limitPerMinute)
-        return Math.max(
-          1,
-          Math.ceil((window.windowStart + 60_000 - at) / 1000),
-        );
+      let window = windows.get(caller);
+      if (!window) {
+        // Windows are inserted in time order, so the first is the oldest.
+        if (windows.size >= maxCallers)
+          return secondsLeft(windows.values().next().value, at);
+        window = { windowStart: at, count: 0 };
+        windows.set(caller, window);
+      }
+      if (window.count >= limitPerMinute) return secondsLeft(window, at);
       window.count += 1;
-      windows.set(userId, window);
       return 0;
     },
   };
+}
+
+/** Strip the IPv4-mapped IPv6 prefix, so one client has one address. */
+function normalizeAddress(address) {
+  return typeof address === "string" ? address.replace(/^::ffff:/i, "") : "";
+}
+
+/**
+ * The address a request came from: the socket's peer, or, when that peer is
+ * a configured trusted proxy, the right-most `X-Forwarded-For` entry that is
+ * not itself a trusted proxy. The header is ignored from anyone else, since
+ * a client can write any value into it.
+ */
+export function clientAddress(req, trustedProxies) {
+  const peer = normalizeAddress(req.socket?.remoteAddress);
+  if (!trustedProxies.has(peer)) return peer;
+  const header = req.headers["x-forwarded-for"];
+  const hops = (Array.isArray(header) ? header.join(",") : (header ?? ""))
+    .split(",")
+    .map((hop) => normalizeAddress(hop.trim()))
+    .filter((hop) => isIP(hop) !== 0);
+  for (let i = hops.length - 1; i >= 0; i--)
+    if (!trustedProxies.has(hops[i])) return hops[i];
+  return peer;
 }
 
 function send(res, status, body, headers = {}) {
@@ -232,6 +269,14 @@ export function createBroker(
     limitPerMinute: config.acquireLimitPerMinute,
     now,
   });
+  const revokeLimiter = createRateLimiter({
+    limitPerMinute: config.revokeLimitPerMinute,
+    now,
+  });
+  const trustedProxies = new Set(config.trustedProxies.map(normalizeAddress));
+  // Revokes waiting on LiteLLM, across all callers: each costs one or two
+  // /key/info calls, so this caps what revoke can make LiteLLM do at once.
+  let revokesInFlight = 0;
 
   async function acquire(req) {
     const token = bearer(req);
@@ -466,6 +511,11 @@ export function createBroker(
   }
 
   async function revoke(req) {
+    // Revoke is authenticated only by the key it revokes, so it is limited
+    // by where it comes from, before anything else is looked at.
+    const wait = revokeLimiter.take(clientAddress(req, trustedProxies));
+    if (wait)
+      return failure(429, "rate_limited", { "retry-after": String(wait) });
     const credential = bearer(req);
     if (
       !credential ||
@@ -491,6 +541,12 @@ export function createBroker(
     if (body.distribution !== config.distribution)
       return { ...failure(403, "distribution_denied"), reason: "distribution" };
 
+    if (revokesInFlight >= config.revokeMaxConcurrent)
+      return {
+        ...failure(503, "busy", { "retry-after": "1" }),
+        reason: "revoke-concurrency",
+      };
+    revokesInFlight += 1;
     try {
       // Holding the key is the proof: LiteLLM describes the key only to its
       // holder. A refusal there does not mean the key is gone (LiteLLM also
@@ -506,16 +562,14 @@ export function createBroker(
         typeof info.key_alias === "string" ? info.key_alias : undefined;
       const userId =
         typeof info.user_id === "string" ? info.user_id : undefined;
-      // Only keys this broker issued are deleted through it.
+      // Only keys this broker issued are deleted through it. Any other key is
+      // answered exactly like an unknown one, so revoke cannot be used to
+      // learn whether a string is a working LiteLLM key; the log keeps why.
       if (
         info.metadata?.issued_by !== ISSUER_MARK ||
         info.metadata?.distribution !== config.distribution
       )
-        return {
-          ...failure(403, "not_a_broker_credential"),
-          userId,
-          reason: "foreign-key",
-        };
+        return { ...failure(404, "not_found"), userId, reason: "foreign-key" };
       const deleted = await litellm.deleteKeys({ keys: [credential] });
       if (!deleted)
         return {
@@ -543,6 +597,8 @@ export function createBroker(
         reason: error.operation,
         upstreamStatus: error.status,
       };
+    } finally {
+      revokesInFlight -= 1;
     }
   }
 

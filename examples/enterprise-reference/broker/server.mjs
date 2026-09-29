@@ -3,6 +3,7 @@
 // Configuration comes from the environment only; see README.md. No
 // dependencies beyond Node 22.
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBroker } from "./src/broker.mjs";
@@ -44,6 +45,15 @@ export function loadConfig(env) {
     )
       throw new Error(`${name} must be a number from ${min} to ${max}`);
     return parsed;
+  };
+  /** A comma-separated list of IP addresses; empty when unset. */
+  const addresses = (name) => {
+    const value = env[name];
+    if (value === undefined || value.trim() === "") return [];
+    const list = value.split(",").map((entry) => entry.trim());
+    if (!list.every((entry) => isIP(entry) !== 0))
+      throw new Error(`${name} must be a comma-separated list of IP addresses`);
+    return list;
   };
   const masterKey = required("LITELLM_MASTER_KEY");
   if (!masterKey.startsWith("sk-") || masterKey.length < 16)
@@ -94,6 +104,15 @@ export function loadConfig(env) {
       min: 0,
       max: 300,
     }),
+    revokeLimitPerMinute: number("BROKER_REVOKE_LIMIT_PER_MINUTE", 60, {
+      min: 1,
+      max: 10_000,
+    }),
+    revokeMaxConcurrent: number("BROKER_REVOKE_MAX_CONCURRENT", 16, {
+      min: 1,
+      max: 1000,
+    }),
+    trustedProxies: addresses("BROKER_TRUSTED_PROXIES"),
   };
 }
 

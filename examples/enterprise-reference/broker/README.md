@@ -33,13 +33,13 @@ Every answer is JSON with `cache-control: no-store`. An error body is only `{"er
 | 200 | Issued, or an idempotent replay; revoke done | Success |
 | 400 | Body not a JSON object, `purpose` not `inference`, `Idempotency-Key` not 1 to 255 visible ASCII characters | `CREDENTIAL_ACQUIRE_FAILED`, `rejected` |
 | 401 | No bearer, or the access token fails any check below. Revoke: no bearer | `IDENTITY_EXPIRED` (PiShip refreshes the identity once and retries); on revoke, "revoked" |
-| 403 | Valid token but not entitled: no `groups` claim, or no group in the table below; another `distribution`. Revoke: a key this broker did not issue, or another distribution | `CREDENTIAL_DENIED` |
-| 404 | Revoke of a key LiteLLM does not have (deleted, or never issued), confirmed under the master key | Revoked |
+| 403 | Valid token but not entitled: no `groups` claim, or no group in the table below; another `distribution`. Revoke: another `distribution` in the body | `CREDENTIAL_DENIED` |
+| 404 | Revoke of a key LiteLLM does not have (deleted, or never issued), confirmed under the master key; or of a key this broker did not issue, answered the same way | Revoked |
 | 413, 415 | Body over 4 KiB; not `application/json` | `rejected` |
 | 422 | `Idempotency-Key` already used with other input | `idempotency-conflict` |
-| 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute | Retryable, `rate-limited` |
+| 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute; more than `BROKER_REVOKE_LIMIT_PER_MINUTE` revokes from this client address | Retryable, `rate-limited` |
 | 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; retry with the same key |
-| 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted; on revoke, the key may still exist); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress (`Retry-After: 1`) | Retryable, `unavailable` |
+| 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted; on revoke, the key may still exist); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress, or `BROKER_REVOKE_MAX_CONCURRENT` revokes are already waiting on LiteLLM (`Retry-After: 1`) | Retryable, `unavailable` |
 
 ## Token validation
 
@@ -95,7 +95,9 @@ When LiteLLM fails after `/key/generate` may have created a key (the connection 
 
 ## Revoke
 
-The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **with that key as the bearer**: only its holder can, and the answer describes that key. LiteLLM refusing that lookup does not mean the key is gone: it also refuses a key that still exists but is expired, over budget, blocked, or not allowed the route. So after any 4xx there the broker asks again under the master key, `GET /key/info?key=<SHA-256 hex of the key>` (LiteLLM stores keys hashed and accepts the hash, so the key never appears in a URL or an access log). Only if that lookup also answers 404 is the key already revoked: 404. If it fails, the answer is 503, never a 404 for a key that may still work. A key without the broker's `issued_by` mark or for another distribution is refused with 403. Otherwise the broker deletes it with `POST /key/delete` `{"keys": [<key>]}` under the master key (a key of an `internal_user_viewer` cannot delete itself); a 404 from LiteLLM there also means revoked. The `credential_id` in the body is informational: the key presented is what is revoked, and a mismatch is logged. LiteLLM rejects a deleted key at once with 401.
+The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **with that key as the bearer**: only its holder can, and the answer describes that key. LiteLLM refusing that lookup does not mean the key is gone: it also refuses a key that still exists but is expired, over budget, blocked, or not allowed the route. So after any 4xx there the broker asks again under the master key, `GET /key/info?key=<SHA-256 hex of the key>` (LiteLLM stores keys hashed and accepts the hash, so the key never appears in a URL or an access log). Only if that lookup also answers 404 is the key already revoked: 404. If it fails, the answer is 503, never a 404 for a key that may still work. A key without the broker's `issued_by` mark, or marked for another distribution, is not deleted and gets the same 404 as an unknown key, so revoke cannot tell a caller whether a string is a working LiteLLM key; the log records `reason: foreign-key`. Otherwise the broker deletes it with `POST /key/delete` `{"keys": [<key>]}` under the master key (a key of an `internal_user_viewer` cannot delete itself); a 404 from LiteLLM there also means revoked. The `credential_id` in the body is informational: the key presented is what is revoked, and a mismatch is logged. LiteLLM rejects a deleted key at once with 401.
+
+Revoke is authenticated only by the key it revokes, so it is limited by where it comes from: at most `BROKER_REVOKE_LIMIT_PER_MINUTE` (default 60) requests per client address per minute, counted before anything else is checked, then 429. The address is the socket's peer; `X-Forwarded-For` is read only when that peer is listed in `BROKER_TRUSTED_PROXIES`, and then its right-most address that is not a trusted proxy counts. At most `BROKER_REVOKE_MAX_CONCURRENT` (default 16) revokes wait on LiteLLM at once, across all callers; the next one gets 503 with `Retry-After: 1`.
 
 ## Secrets and logs
 
@@ -122,6 +124,16 @@ The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **
 | `BROKER_MAX_KEYS_PER_USER` | `3` | Live broker keys kept per user by rotation |
 | `BROKER_ACQUIRE_LIMIT_PER_MINUTE` | `20` | New acquires per principal per minute |
 | `BROKER_CLOCK_TOLERANCE_SECONDS` | `30` | Skew allowed on `exp`, `nbf`, `iat` |
+| `BROKER_REVOKE_LIMIT_PER_MINUTE` | `60` | Revokes per client address per minute |
+| `BROKER_REVOKE_MAX_CONCURRENT` | `16` | Revokes waiting on LiteLLM at once, across all callers |
+| `BROKER_TRUSTED_PROXIES` | unset | Comma-separated IP addresses of reverse proxies whose `X-Forwarded-For` is believed; unset, the header is ignored |
+
+## Limits
+
+What this reference deliberately leaves to a production broker:
+
+- **One instance.** The idempotency records and every rate limit are in memory: a restart forgets them, and two instances would each keep their own. A production broker keeps them in a shared store.
+- **Revoke is limited per client address, not per user.** Behind Docker's port publishing every client on the host reaches the broker from the same address and shares one revoke window; behind a reverse proxy, set `BROKER_TRUSTED_PROXIES` so the forwarded address counts.
 
 ## Run and test
 
