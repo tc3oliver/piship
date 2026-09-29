@@ -1,6 +1,6 @@
 # Experimental manifest and lock
 
-Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5 and the in-progress v0.6 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
+Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5, v0.6, and the in-progress v0.7 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
 
 - `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The personal example used it in v0.1; it now uses `piship/v1alpha4`.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
