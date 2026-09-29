@@ -405,6 +405,79 @@ describe("approvedNetworkEnvironment", () => {
       expect(isNetworkEnvironmentName(name)).toBe(true);
   });
 
+  it("names the per-tool proxy, trust and verification variables too", () => {
+    for (const name of [
+      "npm_config_https_proxy",
+      "NPM_CONFIG_PROXY",
+      "npm_config_strict_ssl",
+      "npm_config_cafile",
+      "YARN_HTTPS_PROXY",
+      "PIP_CERT",
+      "PIP_PROXY",
+      "PYTHONHTTPSVERIFY",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_VALUE_12",
+      "GIT_CONFIG_PARAMETERS",
+      "GIT_CONFIG_GLOBAL",
+      "CARGO_HTTP_PROXY",
+      "CARGO_HTTP_CAINFO",
+      "DENO_CERT",
+      "JAVA_TOOL_OPTIONS",
+      "_JAVA_OPTIONS",
+      "CURL_HOME",
+      "WGETRC",
+      "FTP_PROXY",
+      "SOCKS_PROXY",
+    ])
+      expect(isNetworkEnvironmentName(name), name).toBe(true);
+    // Other npm settings and unrelated git variables are not network settings.
+    for (const name of [
+      "npm_config_registry",
+      "npm_config_loglevel",
+      "GIT_CONFIG_NOSYSTEM",
+      "GIT_AUTHOR_NAME",
+    ])
+      expect(isNetworkEnvironmentName(name), name).toBe(false);
+  });
+
+  it("names NODE_OPTIONS only when it changes trust roots or TLS behavior", () => {
+    expect(isNetworkEnvironmentName("NODE_OPTIONS")).toBe(false);
+    expect(
+      isNetworkEnvironmentName("NODE_OPTIONS", "--max-old-space-size=4096"),
+    ).toBe(false);
+    for (const value of [
+      "--use-system-ca",
+      "--max-old-space-size=4096 --use-openssl-ca",
+      "--use-bundled-ca",
+      "--tls-min-v1.0",
+      "--openssl-config=/tmp/x.cnf",
+    ])
+      expect(isNetworkEnvironmentName("node_options", value), value).toBe(true);
+  });
+
+  it("withholds a proxy URL that carries anything beyond a host and port", () => {
+    for (const value of [
+      "http://proxy.corp.example:3128/?token=abc123",
+      "http://proxy.corp.example:3128/k/abc123",
+      "http://proxy.corp.example:3128/#frag",
+      "http://proxy.corp.example\\u:pw@evil.example:3128",
+    ]) {
+      const network = approvedNetworkEnvironment(inherited, {
+        HTTPS_PROXY: value,
+      });
+      expect(network.variables, value).toEqual({});
+      expect(
+        network.withheld.map((entry) => entry.name),
+        value,
+      ).toEqual(["HTTPS_PROXY"]);
+    }
+    const plain = approvedNetworkEnvironment(inherited, {
+      HTTPS_PROXY: "http://proxy.corp.example:3128/",
+    });
+    expect(plain.variables.HTTPS_PROXY).toBe("http://proxy.corp.example:3128/");
+  });
+
   it("names variables case-insensitively and leaves everything else alone", () => {
     for (const name of [
       "https_proxy",

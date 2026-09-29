@@ -94,7 +94,10 @@ export function withApprovedNetwork(
 ): Record<string, string> {
   const output: Record<string, string> = {};
   for (const [name, value] of Object.entries(env))
-    if (value !== undefined && !(network && isNetworkEnvironmentName(name)))
+    if (
+      value !== undefined &&
+      !(network && isNetworkEnvironmentName(name, value))
+    )
       output[name] = value;
   return network ? { ...output, ...network.variables } : output;
 }

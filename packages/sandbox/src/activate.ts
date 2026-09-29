@@ -353,23 +353,27 @@ function commandEnvironment(
     {},
     session.platform,
   );
-  // A local command in a sandbox that allows the network gets the approved
-  // proxy and CA settings when the distribution is managed. A remote backend
-  // never does: they name this host's proxy and files. With the network denied
-  // there is nothing to configure, and a personal distribution has no
-  // approved settings, so its command keeps what the sandbox allowed.
-  if (session.capabilities?.isolation !== "remote") {
-    const network = processNetworkEnvironment();
-    return sessionEnvironment(
-      session.profile,
-      session.profile.network === "allow" && network
-        ? withApprovedNetwork(filtered, network)
-        : filtered,
-    );
-  }
+  // In a managed distribution no command receives a proxy, CA or TLS setting
+  // that the allowlist happened to name: `withApprovedNetwork` drops them all.
+  // A local command in a sandbox that allows the network then gets the approved
+  // proxy and CA settings. A remote backend never does (they name this host's
+  // proxy and files), and with the network denied there is nothing to
+  // configure. A personal distribution has no approved settings, so its
+  // command keeps what the sandbox allowed.
+  const network = processNetworkEnvironment();
+  const local = session.capabilities?.isolation !== "remote";
+  const scoped = network
+    ? withApprovedNetwork(
+        filtered,
+        local && session.profile.network === "allow"
+          ? network
+          : { ...network, variables: {} },
+      )
+    : filtered;
+  if (local) return sessionEnvironment(session.profile, scoped);
   const hostBound = new Set<string>(HOST_BOUND_VARIABLES);
   const output: Record<string, string> = {};
-  for (const [name, value] of Object.entries(filtered))
+  for (const [name, value] of Object.entries(scoped))
     if (!hostBound.has(name.toUpperCase())) output[name] = value;
   return output;
 }

@@ -373,15 +373,20 @@ export function governedBashOperations(
           ...(options.env ? { env: options.env } : {}),
         });
       // In a managed distribution an uncontained command still gets only the
-      // approved network settings. A personal distribution has none, and a
-      // `!` command carries no environment from Pi, so both keep the process
+      // approved network settings. Pi passes the agent's commands an
+      // environment; if a Pi version stops doing so, the process environment
+      // is the base, so the agent's command is never left unrestricted. A
+      // personal distribution has no approved settings, and a user's `!`
+      // command carries no environment from Pi: both keep the process
       // environment.
       const network = processNetworkEnvironment();
+      const base =
+        options.env ?? (source === "bash" ? { ...process.env } : undefined);
       return local.exec(
         command,
         cwd,
-        options.env && network
-          ? { ...options, env: withApprovedNetwork(options.env, network) }
+        base && network
+          ? { ...options, env: withApprovedNetwork(base, network) }
           : options,
       );
     },

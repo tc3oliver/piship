@@ -157,21 +157,26 @@ describe("the network environment of sandboxed commands", () => {
     });
   });
 
-  it("gives a local command in a deny-mode sandbox nothing it did not allowlist", async () => {
+  it("gives a local command in a deny-mode sandbox no network setting, even one it allowlisted", async () => {
+    // The fixture allowlists HTTPS_PROXY, and the launch environment holds a
+    // proxy URL with credentials: neither may reach a command that has no
+    // network to configure.
     const env = await environmentOf("deny", LOCAL, declared());
-    expect(Object.keys(env).sort()).toEqual(["HTTPS_PROXY", "PATH"]);
-    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(Object.keys(env).sort()).toEqual(["PATH"]);
+    expect(JSON.stringify(env)).not.toContain("ambient-pw");
   });
 
-  it("never sends this host's proxy or CA to a remote backend", async () => {
+  it("never sends this host's proxy or CA to a remote backend, an allowlisted one included", async () => {
     const env = await environmentOf("allow", REMOTE, declared());
     for (const name of [
+      "HTTPS_PROXY",
       "https_proxy",
       "NO_PROXY",
       "no_proxy",
       "NODE_EXTRA_CA_CERTS",
     ])
-      expect(env[name]).toBeUndefined();
+      expect(env[name], name).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain("ambient-pw");
   });
 
   it("withholds a proxy URL that embeds credentials", async () => {

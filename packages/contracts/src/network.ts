@@ -48,16 +48,44 @@ const PROXY_VARIABLES = [
 ];
 const CA_VARIABLES = ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"];
 // Other variables that pick a child's proxy or trust roots, or turn TLS
-// verification off, for curl, git, Python requests, and Node.
+// verification off or on, for curl, wget, git, Python, npm, Cargo, Deno, Java
+// and Node. Names are matched case-insensitively.
 const OTHER_NETWORK_VARIABLES = [
   "ALL_PROXY",
   "all_proxy",
+  "FTP_PROXY",
+  "ftp_proxy",
+  "RSYNC_PROXY",
+  "SOCKS_PROXY",
+  "SOCKS5_SERVER",
   "CURL_CA_BUNDLE",
+  "CURL_HOME",
+  "WGETRC",
   "REQUESTS_CA_BUNDLE",
+  "PIP_CERT",
+  "PIP_PROXY",
+  "PIP_TRUSTED_HOST",
+  "PYTHONHTTPSVERIFY",
   "GIT_SSL_CAINFO",
+  "GIT_SSL_CAPATH",
   "GIT_SSL_NO_VERIFY",
+  "GIT_PROXY_COMMAND",
+  "CARGO_HTTP_PROXY",
+  "CARGO_HTTP_CAINFO",
+  "DENO_CERT",
+  "JAVA_TOOL_OPTIONS",
+  "_JAVA_OPTIONS",
   "NODE_TLS_REJECT_UNAUTHORIZED",
 ];
+// Families that carry the same settings through per-tool configuration.
+const NETWORK_NAME_PATTERNS = [
+  /^NPM_CONFIG_(?:HTTPS?_PROXY|PROXY|NO_?PROXY|CAFILE|CA|CAPATH|STRICT_SSL|CERT|LOCAL_ADDRESS)$/,
+  /^YARN_(?:HTTPS?_PROXY|CA_FILE_PATH|ENABLE_STRICT_SSL|NETWORK_SETTINGS)$/,
+  /^GIT_CONFIG_(?:COUNT|PARAMETERS|GLOBAL|SYSTEM|KEY_\d+|VALUE_\d+)$/,
+];
+// Node options that change trust roots or TLS behavior.
+const TRUST_NODE_OPTIONS =
+  /--(?:use-(?:openssl|bundled|system)-ca|openssl-|tls-|insecure-http-parser)/;
 /** The one CA variable that adds to the default roots instead of replacing them. */
 const CHILD_CA_VARIABLE = "NODE_EXTRA_CA_CERTS";
 // Agent sockets are local IPC paths, not secret values; git and signing need them.
@@ -354,12 +382,23 @@ const GOVERNED_NETWORK_NAMES = new Set(
 );
 
 /**
- * Whether a variable name picks a proxy, trust roots, or TLS verification for
- * a child process. A child environment keeps such a variable only when it is
- * approved.
+ * Whether a variable picks a proxy, trust roots, or TLS verification for a
+ * child process. A child environment keeps such a variable only when it is
+ * approved. Give the value to also catch `NODE_OPTIONS` that changes trust
+ * roots or TLS behavior; without a value only the names are checked.
  */
-export function isNetworkEnvironmentName(name: string): boolean {
-  return GOVERNED_NETWORK_NAMES.has(name.toUpperCase());
+export function isNetworkEnvironmentName(
+  name: string,
+  value?: string,
+): boolean {
+  const upper = name.toUpperCase();
+  if (GOVERNED_NETWORK_NAMES.has(upper)) return true;
+  if (NETWORK_NAME_PATTERNS.some((pattern) => pattern.test(upper))) return true;
+  return (
+    upper === "NODE_OPTIONS" &&
+    value !== undefined &&
+    TRUST_NODE_OPTIONS.test(value)
+  );
 }
 
 function checkProxyUrl(value: string): {
@@ -370,10 +409,22 @@ function checkProxyUrl(value: string): {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:")
       return { shown: undefined, refusal: "it is not an http or https URL" };
+    // A proxy is a host and port. A path, query or fragment can carry a
+    // token, and a backslash is read as a path separator by one URL parser
+    // and as part of the authority by another.
+    const plain =
+      (url.pathname === "/" || url.pathname === "") &&
+      !url.search &&
+      !url.hash &&
+      !value.includes("\\");
     return {
       shown: `${url.protocol}//${url.host}`,
       refusal:
-        url.username || url.password ? "the URL embeds credentials" : undefined,
+        url.username || url.password
+          ? "the URL embeds credentials"
+          : plain
+            ? undefined
+            : "the URL has a path, query, fragment, or backslash",
     };
   } catch {
     return { shown: undefined, refusal: "it is not a valid URL" };
