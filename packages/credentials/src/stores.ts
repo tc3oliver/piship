@@ -189,44 +189,92 @@ export class MacKeychainSecretStore implements SecretStore {
   }
 }
 
+// `secret-tool store` reads at most 8191 bytes from stdin: beyond that it warns
+// "password is too long", keeps the first 8192 bytes, and still exits 0 (seen
+// with libsecret 0.21.4). Larger values are split into parts below that limit;
+// anything that already fit stays one item, so stored values keep their form.
+const SECRET_SERVICE_CHUNK = 8000;
+
 /** Linux Secret Service (GNOME Keyring, KWallet) through libsecret's secret-tool. */
 export class SecretServiceSecretStore implements SecretStore {
   readonly kind = "secret-service";
   readonly description = "Linux Secret Service";
   constructor(private readonly run: CommandRunner = runCommand) {}
-  async put(ref: string, value: SecretValue): Promise<void> {
-    checkRef(ref);
-    const result = this.run(
-      "secret-tool",
-      ["store", `--label=PiShip ${ref}`, "service", SERVICE, "account", ref],
-      encode(value),
-    );
-    if (result.status !== 0) throw unavailable(this.description, result.stderr);
-  }
-  async get(ref: string): Promise<SecretValue | null> {
-    checkRef(ref);
+  #read(account: string): string | null {
     const result = this.run("secret-tool", [
       "lookup",
       "service",
       SERVICE,
       "account",
-      ref,
+      account,
     ]);
     if (result.status === 1 && !result.stderr.trim()) return null;
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
-    return result.stdout.trim() ? decode(result.stdout) : null;
+    return result.stdout.trim() || null;
   }
-  async delete(ref: string): Promise<void> {
-    checkRef(ref);
+  #write(account: string, text: string): void {
+    const result = this.run(
+      "secret-tool",
+      [
+        "store",
+        `--label=PiShip ${account}`,
+        "service",
+        SERVICE,
+        "account",
+        account,
+      ],
+      text,
+    );
+    // A truncated store still exits 0, so the warning is the only signal.
+    if (result.status !== 0 || /too long/i.test(result.stderr))
+      throw unavailable(this.description, result.stderr);
+  }
+  #remove(account: string): void {
     const result = this.run("secret-tool", [
       "clear",
       "service",
       SERVICE,
       "account",
-      ref,
+      account,
     ]);
     if (result.status !== 0 && result.stderr.trim())
       throw unavailable(this.description, result.stderr);
+  }
+  async put(ref: string, value: SecretValue): Promise<void> {
+    checkRef(ref);
+    const encoded = encode(value);
+    const previous = chunkCount(this.#read(ref));
+    const parts =
+      encoded.length > SECRET_SERVICE_CHUNK
+        ? splitChunks(encoded, SECRET_SERVICE_CHUNK)
+        : [];
+    for (const [index, part] of parts.entries())
+      this.#write(partRef(ref, index), part);
+    this.#write(ref, parts.length ? `${CHUNK_MARKER}${parts.length}` : encoded);
+    for (let index = parts.length; index < previous; index += 1)
+      this.#remove(partRef(ref, index));
+  }
+  async get(ref: string): Promise<SecretValue | null> {
+    checkRef(ref);
+    const raw = this.#read(ref);
+    if (raw === null) return null;
+    const count = chunkCount(raw);
+    if (!count) return decode(raw);
+    let joined = "";
+    for (let index = 0; index < count; index += 1) {
+      const part = this.#read(partRef(ref, index));
+      if (part === null)
+        throw unavailable(this.description, "a stored secret part is missing");
+      joined += part;
+    }
+    return decode(joined);
+  }
+  async delete(ref: string): Promise<void> {
+    checkRef(ref);
+    const count = chunkCount(this.#read(ref));
+    for (let index = 0; index < count; index += 1)
+      this.#remove(partRef(ref, index));
+    this.#remove(ref);
   }
 }
 
