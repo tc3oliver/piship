@@ -24,6 +24,10 @@ import {
 // An ID token with a long `name` claim: the bundle encodes to about 22,000
 // characters.
 const LONG_NAME = `Store Tester ${"x".repeat(12_000)}`;
+// Found in every ID token the fixture issues from then on: the base64url of
+// the long run of "x" in its payload, whatever the run's alignment. The
+// name itself is not a secret and appears in the identity metadata.
+const ID_TOKEN_MARK = "eHh4".repeat(100);
 
 for (const { storage, skip } of STORAGES)
   describe(`secret store lifecycle: ${storage} storage (local fixtures)${skip ? ` [skipped: ${skip}]` : ""}`, () => {
@@ -45,6 +49,7 @@ for (const { storage, skip } of STORAGES)
           credential: read(credentialFile).credential_ref as string,
         });
         const issued = () => [
+          ID_TOKEN_MARK,
           ...services.state.credentials.keys(),
           ...services.state.accessTokens.keys(),
           ...services.state.refreshTokens.keys(),
@@ -59,12 +64,13 @@ for (const { storage, skip } of STORAGES)
             .credentialId as string;
 
         /**
-         * The store holds exactly `expected` and no token is in plain text
-         * on disk; in the platform store the identity bundle is split into
-         * parts.
+         * The store holds exactly `expected` and no token (runtime
+         * credential, access, refresh or ID token) is in plain text anywhere
+         * under the scenario: state, home, install home, and releases; in
+         * the platform store the identity bundle is split into parts.
          */
         const expectStored = (expected: readonly string[]) => {
-          expect(scan(s.state, issued())).toEqual([]);
+          expect(scan(s.temp, issued())).toEqual([]);
           const listed = s.expectSecretStore(expected);
           if (storage === "system")
             for (const ref of expected.filter((item) =>
