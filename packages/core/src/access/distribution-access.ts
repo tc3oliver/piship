@@ -1088,6 +1088,31 @@ export class DistributionAccess {
     await (await this.credentialManager()).markRejected();
   }
 
+  /** The credential generation a model denial already re-read. */
+  #entitlementReread: string | undefined;
+
+  /**
+   * Re-read the credential entitlement after the gateway denied a model (403
+   * `MODEL_DENIED` on a request). A credential without `expires_at` is never
+   * renewed otherwise, so its entitlement would stay as issued until the next
+   * login. The re-read is one forced renewal through the refresh path, at
+   * most once per credential generation: a denial of the renewed credential
+   * is the organization's current answer. A failed renewal keeps the current
+   * credential and throws. The entitlement only narrows the distribution
+   * allowlist at the next activation, never widens it. Returns whether the
+   * entitlement was re-read.
+   */
+  async refreshEntitlement(): Promise<boolean> {
+    const manager = await this.credentialManager();
+    const current = manager.renewable
+      ? manager.readMetadata()?.credential_ref
+      : undefined;
+    if (!current || current === this.#entitlementReread) return false;
+    await this.requestSecret({ force: true });
+    this.#entitlementReread = manager.readMetadata()?.credential_ref;
+    return true;
+  }
+
   /** Token-free context for approved extensions. */
   enterpriseContext(
     activated: ActivatedAccess,

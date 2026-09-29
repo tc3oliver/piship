@@ -147,6 +147,75 @@ describe("model catalog", () => {
   });
 });
 
+describe("effective model catalog (§10)", () => {
+  const [A, B, C] = ["acme/coder", "acme/general", "acme/review"];
+  const offered = (constraints: Parameters<typeof buildModelDefinitions>[2]) =>
+    buildModelDefinitions("acmecode", catalog, constraints)
+      .filter((model) => model.availability.available)
+      .map((model) => model.id);
+
+  it("narrows to the credential entitlement", () => {
+    expect(offered({ allowed: [A, B, C], entitled: [A] })).toEqual([A]);
+  });
+
+  it("never offers an entitled model outside the distribution allowlist", () => {
+    const models = buildModelDefinitions("acmecode", catalog, {
+      allowed: [A],
+      entitled: [A, B, C, "other/unlisted"],
+    });
+    expect(models.map((model) => model.id)).toEqual([A]);
+  });
+
+  it("lets the live gateway remove a model but never authorize one", () => {
+    expect(offered({ allowed: [A, B], live: [A] })).toEqual([A]);
+    expect(
+      offered({ allowed: [A], live: [A, B, C, "other/unlisted"] }),
+    ).toEqual([A]);
+  });
+
+  it("lets a user preference only narrow the catalog", () => {
+    expect(offered({ allowed: [A, B], userAllowed: [B, C] })).toEqual([B]);
+  });
+
+  it("treats the allowlist as the ceiling whatever every other list says", () => {
+    expect(
+      buildModelDefinitions("acmecode", catalog, {
+        allowed: [],
+        entitled: [A, B, C],
+        live: [A, B, C],
+        userAllowed: [A, B, C],
+      }),
+    ).toEqual([]);
+  });
+
+  it("reports an unentitled allowed model as MODEL_UNAVAILABLE and a model outside the allowlist as MODEL_DENIED", () => {
+    const models = buildModelDefinitions("acmecode", catalog, {
+      allowed: [A, B],
+      entitled: [A],
+    });
+    const ctx = { models, allowed: [A] };
+    expect(() => resolveRequestedModel(B, ctx)).toThrow(
+      expect.objectContaining({
+        code: "MODEL_UNAVAILABLE",
+        message: expect.stringContaining("runtime credential entitlement"),
+      }),
+    );
+    expect(() => resolveRequestedModel(C, ctx)).toThrow(
+      expect.objectContaining({ code: "MODEL_DENIED" }),
+    );
+  });
+
+  it("yields exactly B for allowlist A,B, entitlement B,C, and live gateway B,C,D", () => {
+    expect(
+      offered({
+        allowed: [A, B],
+        entitled: [B, C],
+        live: [B, C, "acme/unlisted"],
+      }),
+    ).toEqual([B]);
+  });
+});
+
 describe("OpenAI-compatible endpoint", () => {
   let services: Awaited<ReturnType<typeof startLocalServices>>;
   beforeEach(async () => {
