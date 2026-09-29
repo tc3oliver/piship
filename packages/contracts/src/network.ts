@@ -229,6 +229,13 @@ export function createManagedFetch(
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());
     checkDestination(target, policy, component);
+    // Platform secret store calls block the event loop (PowerShell on
+    // Windows for seconds), and a keep-alive connection the server closed
+    // meanwhile still looks idle and usable until its close is read. One
+    // turn of the event loop reads it, so the request never goes out on a
+    // dead connection, which fails with ECONNRESET and, for a broker call,
+    // an unknown outcome that is never retried.
+    await new Promise((resolve) => setImmediate(resolve));
     try {
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),

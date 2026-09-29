@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -351,6 +352,57 @@ describe("network policy", () => {
     await expect(direct("http://127.0.0.1:59999/broker")).rejects.toMatchObject(
       { code: "GATEWAY_UNREACHABLE" },
     );
+  });
+});
+
+const KEEP_ALIVE_SERVER = `
+const server = require("node:net").createServer((socket) => {
+  let idle;
+  let buffered = "";
+  socket.on("error", () => {});
+  socket.on("data", (chunk) => {
+    clearTimeout(idle);
+    buffered += chunk.toString("latin1");
+    for (let end = buffered.indexOf("\\r\\n\\r\\n"); end !== -1; end = buffered.indexOf("\\r\\n\\r\\n")) {
+      const length = Number(/content-length: *(\\d+)/i.exec(buffered.slice(0, end))?.[1] ?? 0);
+      if (buffered.length < end + 4 + length) break;
+      buffered = buffered.slice(end + 4 + length);
+      socket.write("HTTP/1.1 200 OK\\r\\ncontent-length: 2\\r\\nconnection: keep-alive\\r\\n\\r\\nok");
+    }
+    idle = setTimeout(() => socket.destroy(), 50);
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+`;
+
+describe("managed fetch after the event loop was blocked", () => {
+  // A platform secret store call runs its tool synchronously (PowerShell on
+  // Windows takes seconds), so the process sees nothing of a keep-alive
+  // connection the server closed meanwhile. The next request must not be
+  // written into that dead connection: a broker POST that fails that way
+  // has an unknown outcome and is never retried.
+  it("does not reuse a connection the server closed while it was blocked", async () => {
+    // An HTTP/1.1 server in another process, as a broker is, that keeps
+    // connections alive without a Keep-Alive hint and closes one after
+    // 50 ms idle, as a short server keep-alive timeout does.
+    const server = spawn(process.execPath, ["-e", KEEP_ALIVE_SERVER], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    cleanup.push(() => {
+      server.kill();
+    });
+    const port = await new Promise<string>((resolve) =>
+      server.stdout.once("data", (chunk) => resolve(String(chunk).trim())),
+    );
+    const url = `http://127.0.0.1:${port}/broker`;
+    const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    const block = new Int32Array(new SharedArrayBuffer(4));
+    for (let round = 0; round < 5; round += 1) {
+      await (await fetch(url, { method: "POST", body: "a" })).text();
+      Atomics.wait(block, 0, 0, 200);
+      const second = await fetch(url, { method: "POST", body: "b" });
+      expect(await second.text()).toBe("ok");
+    }
   });
 });
 
