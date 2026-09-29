@@ -78,7 +78,7 @@ A `piship/v1alpha3` or `piship/v1alpha4` payload runs the access steps above for
 7. MCP: authorizes and starts servers and lists their tools.
 8. Capabilities and providers: computes the six capability axes and adds effective non-builtin provider extensions.
 
-The selected model is then decided as `model.use`, and Pi starts with only the admitted resources, the governed tools, and PiShip's inline extensions. When the session ends, PiShip records `session.end`, stops MCP servers, removes the session temp directory, and flushes audit. `doctor`, `policy explain`, and `capabilities` inspect the same state without starting MCP servers or asking for approvals.
+The selected model is then decided as `model.use`, and Pi starts with only the admitted resources, the governed tools, and PiShip's inline extensions. When the session ends, PiShip records `session.end`, stops MCP servers, removes the session temp directory, and flushes audit; if a required audit sink lost events, the session ends with `AUDIT_UNAVAILABLE`. `doctor`, `policy explain`, and `capabilities` inspect the same state without starting MCP servers or asking for approvals.
 
 Governance uses these public Pi seams:
 
