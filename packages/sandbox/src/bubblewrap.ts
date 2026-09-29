@@ -6,7 +6,8 @@
 //   3. write-allowed paths bound read-write and extra read-only paths bound
 //      read-only, outermost first so a nested entry wins over its parent;
 //   4. protected paths inside writable ones (git control files and hooks)
-//      bound read-only, their parent directories pinned as mount points;
+//      bound read-only, the directories above those that exist pinned as
+//      mount points;
 //   5. read-denied directories replaced by an empty, mode 0000, read-only
 //      tmpfs and read-denied files by /dev/null, last, so a deny always wins
 //      over an allow, including a deny nested inside a writable workspace.
@@ -87,7 +88,7 @@ export function bubblewrapArgs(
   const protect = writableProtected(profile, posix);
   // A directory bound onto itself is a mount point, which cannot be renamed
   // or removed, so a protected path below it cannot be moved aside.
-  const pins = protectedAncestors(profile, protect, posix).filter(
+  const pins = protectedAncestors(profile, protect, posix, exists).filter(
     (path) => exists(path) && isDir(path),
   );
   const binds = byDepth([

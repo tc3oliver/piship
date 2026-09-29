@@ -107,13 +107,13 @@ export function seatbeltProfile(
     `(allow file-write*\n  ${[...writable, ...DEVICE_WRITES].join("\n  ")})`,
   );
   // Protected paths stay read-only inside the write allowlist. The
-  // directories above them may not be renamed, removed, or created, so a
-  // protected path cannot be moved aside for a replacement.
+  // directories above one that exists may not be renamed, removed, or
+  // created, so it cannot be moved aside for a replacement.
   const protect = writableProtected(profile, posix);
   if (protect.length)
     lines.push(
       `(deny file-write*\n  ${[
-        ...protectedAncestors(profile, protect, posix).map(
+        ...protectedAncestors(profile, protect, posix, exists).map(
           (path) => `(literal ${sbplString(path)})`,
         ),
         ...protect.map(({ path, directory }) =>

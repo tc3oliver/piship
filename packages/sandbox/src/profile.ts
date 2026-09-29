@@ -270,15 +270,21 @@ export function writableProtected(
 /**
  * Directories between a writable root and a protected path, outermost
  * first. Their contents stay writable, but renaming or removing one would
- * move the protected path aside and let a replacement take its place.
+ * move the protected path aside and let a replacement take its place. A
+ * protected path that does not exist has none: there is nothing to move
+ * aside, git control is reported not verified for such a path anyway, and
+ * pinning its directories would only stop commands from moving or removing
+ * a directory that may hold it later.
  */
 export function protectedAncestors(
   profile: SandboxProfile,
   entries: readonly ProtectedEntry[],
   paths: ProfilePaths = NATIVE_PATHS,
+  exists: (path: string) => boolean = pathExists,
 ): string[] {
   const ancestors = new Set<string>();
   for (const { path } of entries) {
+    if (!exists(path)) continue;
     const roots = profile.writeAllow.filter((allowed) =>
       within(paths, path, allowed),
     );
