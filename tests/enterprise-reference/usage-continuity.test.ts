@@ -140,6 +140,7 @@ describe("usage continuity across credential rotation (live reference stack)", (
         : undefined;
     });
     aliceResetAt = spend.row.budget_reset_at;
+    expect(aliceResetAt).toEqual(expect.any(String));
   });
 
   it("rotation (a new key, then the old ones deleted) keeps the spend and the budget", async () => {
@@ -227,12 +228,18 @@ describe("usage continuity across credential rotation (live reference stack)", (
     const settled = await settledSpend(alice, 8 + sent);
     expect(settled.spend).toBeGreaterThanOrEqual(BUDGET);
     expect(settled.spend - lastCost).toBeLessThan(BUDGET);
-    expect(
-      sum(
-        settled.logs
-          .filter((log) => log.status !== "success")
-          .map((log) => log.spend),
-      ),
-    ).toBe(0);
+    // LiteLLM logs each refusal as a `failure` record (on D and on E), in
+    // batches of their own.
+    const { value: refusals } = await poll("refusal records", async () => {
+      const failures = (await stack.userSpend(alice)).logs.filter(
+        (log) => log.status === "failure",
+      );
+      return failures.length >= 2 ? failures : undefined;
+    });
+    expect(new Set(refusals.map((log) => log.api_key))).toEqual(
+      new Set([d.hash, e.hash]),
+    );
+    expect(sum(refusals.map((log) => log.spend))).toBe(0);
+    expect((await stack.userSpend(alice)).spend).toBe(settled.spend);
   });
 });

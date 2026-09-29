@@ -14,9 +14,10 @@ import {
 // Observed with LiteLLM v1.103.0 (the pinned image):
 // - Concurrency: 429, type `throttling_error`, message "Rate limit exceeded
 //   for api_key: <key hash>. Limit type: max_parallel_requests. Current
-//   limit: 2, Remaining: 0 ...". The mock answers within milliseconds, yet 10
-//   requests sent at once saw 2 to 6 pass and the rest refused: a slot is
-//   freed when a request finishes, so it limits concurrency, not volume.
+//   limit: 2, Remaining: 0 ...". A slot is freed when a request finishes, so
+//   it limits concurrency, not volume: with the mock answering in
+//   milliseconds, 10 requests sent at once saw 2 to 6 pass. Holding each
+//   request 500 ms in the mock (`[mock:delay=500]`) makes it exactly 2.
 // - Budget reservations interact with concurrency: LiteLLM reserves each
 //   running request's maximum cost (up to the model's maximum output, about
 //   $0.26 for gpt-4.1) against the user's budget. A user whose remaining
@@ -46,17 +47,18 @@ describe("per-key concurrency and model entitlement (live reference stack)", () 
     const key = await stack.acquire("alice");
     expect((await stack.keyInfo(key.hash)).max_parallel_requests).toBe(2);
 
+    // Each request is held 500 ms by the mock, so the two that get a slot
+    // keep it while the other eight arrive.
     const upstreamBefore = (await stack.upstreamRequests()).length;
     const answers = await Promise.all(
-      Array.from({ length: 10 }, () => stack.chat(key.key, { words: 2 })),
+      Array.from({ length: 10 }, () =>
+        stack.chat(key.key, { words: 2, delayMs: 500 }),
+      ),
     );
     const passed = answers.filter((answer) => answer.status === 200);
     const refused = answers.filter((answer) => answer.status !== 200);
-    console.info(
-      `10 concurrent requests, limit 2: ${passed.length} passed, ${refused.length} refused`,
-    );
-    expect(passed.length).toBeGreaterThanOrEqual(2);
-    expect(refused.length).toBeGreaterThanOrEqual(1);
+    expect(passed).toHaveLength(2);
+    expect(refused).toHaveLength(8);
     for (const answer of refused) {
       expect(answer.status).toBe(429);
       expect(errorType(answer)).toBe("throttling_error");

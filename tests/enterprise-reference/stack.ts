@@ -18,6 +18,9 @@ const reference = fileURLToPath(
   new URL("../../examples/enterprise-reference/", import.meta.url),
 );
 
+/** Every Compose project and temporary directory of these tests starts with this, then the owning PID. */
+export const PROJECT_PREFIX = "piship-reftest-";
+
 /** Host ports on 127.0.0.1. KEYCLOAK_PORT and the others in the environment override them. */
 export const DEFAULT_TEST_PORTS = {
   KEYCLOAK_PORT: 28080,
@@ -159,7 +162,7 @@ export interface ReferenceStack {
   /** A chat completion sent straight to LiteLLM with a virtual key. */
   chat(
     key: string,
-    options?: { model?: string; words?: number },
+    options?: { model?: string; words?: number; delayMs?: number },
   ): Promise<HttpResult>;
   /** GET /v1/models with a virtual key. */
   models(key: string): Promise<HttpResult>;
@@ -189,8 +192,12 @@ export function startReferenceStack({
   name: string;
   brokerEnv?: Record<string, string>;
 }): ReferenceStack {
-  const project = `piship-reftest-${name}-${randomBytes(3).toString("hex")}`;
-  const directory = mkdtempSync(join(tmpdir(), "piship-reftest-"));
+  // The owning process's PID is part of both names, so global-setup.ts can
+  // remove what a killed run left behind without touching a live one.
+  const project = `${PROJECT_PREFIX}${process.pid}-${name}-${randomBytes(3).toString("hex")}`;
+  const directory = mkdtempSync(
+    join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`),
+  );
   const envFile = join(directory, ".env");
   const ports = Object.fromEntries(
     Object.entries(DEFAULT_TEST_PORTS).map(([variable, fallback]) => [
@@ -227,10 +234,19 @@ export function startReferenceStack({
   const compose = ["compose", "-p", project, "--env-file", envFile, ...files];
 
   let stopped = false;
+  const onSignal = (signal: NodeJS.Signals) => {
+    try {
+      stop();
+    } finally {
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    }
+  };
   const stop = () => {
     if (stopped) return;
     stopped = true;
     process.off("exit", stop);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     // No `-v`: the stack has no named volume and keeps its data on tmpfs.
     const down = run([...compose, "down", "--remove-orphans"]);
     rmSync(directory, { recursive: true, force: true });
@@ -239,8 +255,12 @@ export function startReferenceStack({
         `docker compose down failed for ${project}: ${down.stderr.trim()}`,
       );
   };
-  // A worker that dies between start and afterAll still removes the stack.
+  // A worker that exits, or is interrupted or terminated (Ctrl-C, a vitest
+  // timeout), between start and afterAll still removes the stack. A worker
+  // killed outright cannot: global-setup.ts removes that stack on the next run.
   process.once("exit", stop);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   const started = performance.now();
   const up = run([...compose, "up", "-d", "--wait", "--wait-timeout", "300"]);
@@ -324,15 +344,16 @@ export function startReferenceStack({
       });
     },
     admin,
-    chat(key, { model = "acme/coder", words = 10 } = {}) {
-      // The mock counts prompt tokens as whitespace-separated words.
+    chat(key, { model = "acme/coder", words = 10, delayMs } = {}) {
+      // The mock counts prompt tokens as whitespace-separated words, and
+      // holds a request that carries `[mock:delay=MS]`.
+      const content = Array(words).fill("word");
+      if (delayMs !== undefined) content.push(`[mock:delay=${delayMs}]`);
       return request(`${gateway}/v1/chat/completions`, {
         bearer: key,
         body: {
           model,
-          messages: [
-            { role: "user", content: Array(words).fill("word").join(" ") },
-          ],
+          messages: [{ role: "user", content: content.join(" ") }],
         },
       });
     },

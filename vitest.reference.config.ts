@@ -15,7 +15,8 @@ export default defineConfig({
       "examples/enterprise-reference/tests/**/*.test.ts",
     ],
     fileParallelism: false,
-    globalSetup: [],
+    // Removes stacks and temporary directories a killed earlier run left.
+    globalSetup: ["tests/enterprise-reference/global-setup.ts"],
     testTimeout: 120_000,
     hookTimeout: 300_000,
   },

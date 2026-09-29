@@ -17,6 +17,10 @@
 // `{"status": 503, "count": 1, "retryAfter": 2}` queues a failure for the
 // next `count` completion requests whatever their content.
 //
+// A user message containing `[mock:delay=MS]` (0 to 10000) holds that
+// request for MS milliseconds before it is answered, so a test can keep a
+// gateway's concurrency slot occupied.
+//
 // This is test infrastructure. It is not a model and not evidence of a live
 // provider integration. The control endpoints have no authentication: publish
 // the port on loopback only.
@@ -118,6 +122,17 @@ function requestedFailure(messages) {
     if (match && isFailureStatus(Number(match[1]))) return Number(match[1]);
   }
   return undefined;
+}
+
+const MAX_DELAY_MS = 10_000;
+
+function requestedDelay(messages) {
+  for (const message of messages) {
+    if (message?.role !== "user") continue;
+    const match = /\[mock:delay=(\d{1,5})\]/.exec(text(message.content));
+    if (match) return Math.min(Number(match[1]), MAX_DELAY_MS);
+  }
+  return 0;
 }
 
 function record(entry) {
@@ -238,6 +253,8 @@ async function handle(request, response) {
       stream: payload.stream === true,
       status: status ?? 200,
     });
+    const delay = requestedDelay(messages);
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     if (status) return sendError(response, status, fault?.retryAfter);
     return complete(response, payload);
   }
