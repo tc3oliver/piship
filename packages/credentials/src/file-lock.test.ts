@@ -1,8 +1,12 @@
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -11,6 +15,22 @@ import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFileLock } from "./index.js";
+
+/**
+ * Attempts to create a lock file. A waiter that loops without pausing blocks
+ * the event loop, so no timer (a test timeout included) could stop it; this
+ * counter is the hard limit: past it the create fails the test at once.
+ */
+const attempts = vi.hoisted(() => ({ count: 0, limit: 2_000 }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const openSync = ((path: string, ...rest: unknown[]) => {
+    if (String(path).endsWith(".lock") && ++attempts.count > attempts.limit)
+      throw new Error(`the lock loop spun: ${attempts.count} attempts`);
+    return (actual.openSync as (...args: unknown[]) => number)(path, ...rest);
+  }) as typeof actual.openSync;
+  return { ...actual, openSync, default: { ...actual, openSync } };
+});
 
 let temp: string;
 /** Added to the wall clock; monotonic time (performance.now) runs on. */
@@ -21,6 +41,7 @@ const HOUR = 60 * 60_000;
 beforeEach(() => {
   temp = mkdtempSync(join(tmpdir(), "piship-file-lock-"));
   offset = 0;
+  attempts.count = 0;
   vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
 });
 afterEach(() => {
@@ -191,5 +212,94 @@ describe("file lock ownership over a changing wall clock", () => {
       clearInterval(adjust);
     }
     expect(live.events).toEqual(["holder:start", "holder:end", "waiter"]);
+  });
+});
+
+// Permissions and what a directory at a file's path does differ on Windows,
+// and a root user reads a mode 000 file, so these run on POSIX as a normal user.
+const posixUser = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe.runIf(posixUser)("a lock path whose content cannot be read", () => {
+  /** A generous bound on attempts in `waitMs`: the loop pauses 50 ms per pass. */
+  const paused = (waitMs: number) => Math.ceil(waitMs / 50) * 4;
+
+  it("times out on a directory at the lock path instead of spinning, and leaves it alone", async () => {
+    const path = join(temp, "inference.json");
+    const lock = `${path}.lock`;
+    mkdirSync(lock);
+    const started = performance.now();
+    const error = await withFileLock(path, async () => "ran", {
+      staleMs: 150,
+      waitMs: 500,
+    }).catch((caught: unknown) => caught);
+    const elapsed = performance.now() - started;
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error).toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: true,
+    });
+    expect(elapsed).toBeGreaterThanOrEqual(450);
+    expect(elapsed).toBeLessThan(2_000);
+    expect(attempts.count).toBeLessThan(paused(500));
+    // Not a lock, so never moved aside or deleted.
+    expect(lstatSync(lock).isDirectory()).toBe(true);
+    expect(readdirSync(temp)).toEqual(["inference.json.lock"]);
+  });
+
+  it("times out on a dangling symlink at the lock path instead of spinning", async () => {
+    const path = join(temp, "inference.json");
+    const lock = `${path}.lock`;
+    symlinkSync(join(temp, "nowhere"), lock);
+    const started = performance.now();
+    const error = await withFileLock(path, async () => "ran", {
+      staleMs: 150,
+      waitMs: 500,
+    }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(450);
+    expect(attempts.count).toBeLessThan(paused(500));
+    expect(lstatSync(lock).isSymbolicLink()).toBe(true);
+  });
+
+  it("takes over an unreadable lock its holder no longer refreshes, after the stale interval", async () => {
+    const path = join(temp, "inference.json");
+    const lock = `${path}.lock`;
+    // What a crashed `sudo <brand> login` leaves: a file this user cannot read.
+    writeFileSync(lock, "4242-crashed-holder");
+    chmodSync(lock, 0o000);
+    const started = performance.now();
+    const result = await within(
+      withFileLock(path, async () => "recovered", {
+        staleMs: 300,
+        waitMs: 5_000,
+      }),
+      4_000,
+    );
+    expect(result).toBe("recovered");
+    expect(performance.now() - started).toBeGreaterThanOrEqual(280);
+    expect(attempts.count).toBeLessThan(paused(1_000));
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it("does not take over an unreadable lock whose modification time keeps changing", async () => {
+    const path = join(temp, "inference.json");
+    const lock = `${path}.lock`;
+    writeFileSync(lock, "4242-live-holder");
+    chmodSync(lock, 0o000);
+    let beat = realNow();
+    const heartbeat = setInterval(() => {
+      beat += 1_000;
+      utimesSync(lock, new Date(beat), new Date(beat));
+    }, 40);
+    try {
+      const error = await withFileLock(path, async () => "ran", {
+        staleMs: 200,
+        waitMs: 800,
+      }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+      expect(existsSync(lock)).toBe(true);
+    } finally {
+      clearInterval(heartbeat);
+    }
   });
 });

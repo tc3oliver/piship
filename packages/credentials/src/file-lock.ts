@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -68,14 +69,25 @@ export interface FileLockTiming {
 /**
  * What a waiter observes of a lock: its holder's token and the heartbeat
  * (the mtime the holder keeps changing). Only equality is ever compared,
- * never the mtime against the clock. Undefined when the lock is gone.
+ * never the mtime against the clock. A lock that exists but cannot be read (a
+ * root-owned file a crashed `sudo` command left, a directory) is observed by
+ * its mtime alone: a holder that heartbeats still changes it, and one that
+ * does not is taken over like any other. Undefined when the lock is gone or
+ * cannot be statted (a dangling symlink), so a waiter never mistakes what it
+ * cannot see for progress.
  */
 function observe(lock: string): string | undefined {
+  let mtimeMs: number;
   try {
-    const { mtimeMs } = statSync(lock);
-    return `${readFileSync(lock, "utf8")}\n${mtimeMs}`;
+    mtimeMs = statSync(lock).mtimeMs;
   } catch {
     return undefined;
+  }
+  try {
+    return `${readFileSync(lock, "utf8")}\n${mtimeMs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    return `?\n${mtimeMs}`;
   }
 }
 
@@ -87,6 +99,13 @@ function observe(lock: string): string | undefined {
  * new lock already took its place.
  */
 function breakStaleLock(lock: string, observed: string): void {
+  // Only a regular file is a lock: never move or delete a directory or a
+  // symlink someone put at the lock's path.
+  try {
+    if (!lstatSync(lock).isFile()) return;
+  } catch {
+    return;
+  }
   const aside = `${lock}.${process.pid}-${randomBytes(6).toString("hex")}.stale`;
   try {
     renameSync(lock, aside);
@@ -99,7 +118,11 @@ function breakStaleLock(lock: string, observed: string): void {
     } catch {
       // A new holder already created the lock.
     }
-  rmSync(aside, { force: true });
+  try {
+    rmSync(aside, { force: true });
+  } catch {
+    // Left behind; the lock's own path is free either way.
+  }
 }
 
 /**
@@ -143,9 +166,12 @@ export async function withFileLock<T>(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const state = observe(lock);
-      if (state === undefined) continue;
       const now = monotonic();
-      if (seen?.state !== state) seen = { state, since: now };
+      // A lock that cannot be observed (released just now, or a dangling
+      // symlink) waits like any other: the deadline and the pause apply on
+      // every pass, so no state of the lock path can make a waiter spin.
+      if (state === undefined) seen = undefined;
+      else if (seen?.state !== state) seen = { state, since: now };
       else if (now - seen.since > staleMs) {
         breakStaleLock(lock, state);
         seen = undefined;
