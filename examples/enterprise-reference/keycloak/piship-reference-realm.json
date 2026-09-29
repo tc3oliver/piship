@@ -1,0 +1,117 @@
+{
+  "realm": "piship-reference",
+  "displayName": "PiShip enterprise reference",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "groups": [
+    {
+      "name": "engineering",
+      "path": "/engineering"
+    },
+    {
+      "name": "support",
+      "path": "/support"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "acmecode",
+      "name": "AcmeCode (PiShip reference)",
+      "description": "Native public client: Authorization Code with PKCE S256, loopback redirect on any port.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "fullScopeAllowed": true,
+      "redirectUris": ["http://127.0.0.1/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "use.refresh.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "broker audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "piship-reference-broker",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@acme.example",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Engineer",
+      "enabled": true,
+      "realmRoles": ["default-roles-piship-reference"],
+      "groups": ["/engineering"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${REFERENCE_ALICE_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@acme.example",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Support",
+      "enabled": true,
+      "realmRoles": ["default-roles-piship-reference"],
+      "groups": ["/support"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${REFERENCE_BOB_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
