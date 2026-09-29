@@ -31,7 +31,7 @@ interface ModelRequest {
 // OpenAI-compatible endpoint on loopback, standing in for a local model
 // server.
 describe("personal local model variant (loopback model server)", () => {
-  it("keeps its committed lock current, stores a local secret, and calls the local endpoint directly", async () => {
+  it("keeps its committed lock current, stores a local secret, calls the local endpoint directly, and resumes its session after logout and login", async () => {
     const key = "sk-mypi-local-owner-key";
     const server = await startModelServer({ key });
     const temp = mkdtempSync(join(tmpdir(), "piship-mypi-local-"));
@@ -102,7 +102,8 @@ describe("personal local model variant (loopback model server)", () => {
 
     const smoke = await run(["--smoke-model"]);
     expect(smoke.status, smoke.stderr).toBe(0);
-    expect(JSON.parse(smoke.stdout)).toMatchObject({
+    const first = JSON.parse(smoke.stdout) as { sessionId: string };
+    expect(first).toMatchObject({
       piVersion: "0.87.1",
       instructions: [expect.stringContaining("AGENTS.md")],
       access: {
@@ -133,6 +134,21 @@ describe("personal local model variant (loopback model server)", () => {
     const logout = await run(["logout"]);
     expect(logout.status, logout.stderr).toBe(0);
     expect((await run(["--smoke"])).stderr).toContain("CREDENTIAL_REQUIRED");
+
+    // Signing in again resumes the earlier session: with no identity there
+    // is no principal, so nothing about the user changed.
+    const relogin = await run(["login"], `${key}\n`);
+    expect(relogin.status, relogin.stderr).toBe(0);
+    const resumed = await run(["--smoke"]);
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(JSON.parse(resumed.stdout)).toMatchObject({
+      sessionId: first.sessionId,
+      resumed: true,
+      access: { identity: null, credential: { mode: "local-secret" } },
+    });
+    expect(existsSync(join(temp, "state", "mypi-local", "identity"))).toBe(
+      false,
+    );
     expect(existsSync(join(temp, "home", ".pi"))).toBe(false);
   }, 600000);
 });

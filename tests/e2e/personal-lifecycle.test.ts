@@ -252,6 +252,13 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     ]);
     expect(outbound.status).toBe(1);
     expect(proxy.hits).toEqual(["CONNECT updates.example.invalid:443"]);
+    // Pi-native sign-in stays Pi's: the branded commands refuse and write
+    // nothing, so no identity or principal record appears.
+    for (const command of ["login", "logout"]) {
+      const delegated = await s.run([command]);
+      expect(delegated.status).toBe(1);
+      expect(delegated.stderr).toContain("POLICY_DENIED");
+    }
     const state = join(s.state, "mypi");
     for (const enterprise of [
       "identity",

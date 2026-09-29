@@ -2175,6 +2175,43 @@ describe("principal binding and verified deletion", () => {
     expect(store.refs()).toEqual([]);
   });
 
+  it("keeps using an unbound local secret while no identity is configured", async () => {
+    // A personal distribution (identity.mode none) has no principal. Its
+    // local secret, including one stored by a release before credentials
+    // were bound (the same metadata without `principal`), stays usable.
+    const store = new MemorySecretStore();
+    const ref = "piship:mypi:inference#1";
+    await store.put(ref, new SecretValue("sk-personal-sentinel-0001"));
+    mkdirSync(join(temp, "credentials-metadata"), { recursive: true });
+    const legacy = `${JSON.stringify(
+      {
+        schema: CREDENTIAL_METADATA_SCHEMA,
+        mode: "local-secret",
+        credential_ref: ref,
+        generation: 1,
+        kind: "api_key",
+        acquired_at: "2026-09-01T00:00:00.000Z",
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(path(), legacy);
+    const { manager, events } = make(
+      new LocalSecretCredentialProvider(),
+      store,
+      { distributionId: "mypi" },
+    );
+    for (let launch = 0; launch < 2; launch++) {
+      const active = await manager.ensure(null, ctx, { allowAcquire: false });
+      expect(active.secret?.reveal()).toBe("sk-personal-sentinel-0001");
+      expect(active.notices).toEqual([]);
+    }
+    expect(readFileSync(path(), "utf8")).toBe(legacy);
+    expect(store.refs()).toEqual([ref]);
+    expect(events).toEqual([]);
+    expect(existsSync(retryPath())).toBe(false);
+  });
+
   it("fails closed and keeps a discarded marker when another principal's secret cannot be deleted", async () => {
     const store = new FailingDeletes();
     const { manager } = make(fakeProvider({ expiresInSeconds: 3600 }), store);
