@@ -231,25 +231,33 @@ let processNetwork: ApprovedNetworkEnvironment | undefined;
 /**
  * Apply the policy to in-process HTTP used by the Pi runtime: add enterprise
  * CA roots and install a proxy-aware dispatcher. TLS verification stays on.
- * Also records the network environment child processes may receive
- * (`processNetworkEnvironment`), read from the launch environment as it is
- * now, so call it after `sanitizeManagedEnvironment`.
+ *
+ * With `restrictChildren` (a managed distribution) it also records the network
+ * environment child processes may receive (`processNetworkEnvironment`), read
+ * from the launch environment as it is now, so call it after
+ * `sanitizeManagedEnvironment`. Without it (a personal distribution) children
+ * keep the launch environment as it is, and any earlier record is cleared.
  */
-export function applyProcessNetworkPolicy(policy: NetworkPolicy): void {
+export function applyProcessNetworkPolicy(
+  policy: NetworkPolicy,
+  options: { readonly restrictChildren?: boolean } = {},
+): void {
   assertTlsVerificationEnabled();
   const extra = loadCertificates(policy.additionalCA);
   const roots = trustRoots(extra);
   if (roots && typeof tls.setDefaultCACertificates === "function")
     tls.setDefaultCACertificates(roots);
   setGlobalDispatcher(createDispatcher(policy));
-  processNetwork = approvedNetworkEnvironment(policy);
+  processNetwork = options.restrictChildren
+    ? approvedNetworkEnvironment(policy)
+    : undefined;
 }
 
 /**
  * The network environment child processes of this process may receive, or
- * undefined until `applyProcessNetworkPolicy` ran (a distribution with no
- * network policy, such as a `piship/v1alpha1` personal one, keeps its
- * children's environment as it is).
+ * undefined when they keep their environment as it is: before
+ * `applyProcessNetworkPolicy` ran, and for a personal distribution, whose
+ * children see the same proxy and CA variables as the user's shell.
  */
 export function processNetworkEnvironment():
   | ApprovedNetworkEnvironment

@@ -79,7 +79,11 @@ export async function prepareAccess(
       access.network,
       ctx.metadata.access.variables,
     );
-  applyProcessNetworkPolicy(access.network);
+  // Only a managed distribution narrows what child processes inherit; a
+  // personal one keeps the environment of the user's shell.
+  applyProcessNetworkPolicy(access.network, {
+    restrictChildren: ctx.mode === "managed",
+  });
   try {
     const activated = await access.activate(
       requestedModel ? { requestedModel } : {},

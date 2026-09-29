@@ -372,20 +372,16 @@ export function governedBashOperations(
             : {}),
           ...(options.env ? { env: options.env } : {}),
         });
-      // Uncontained, the command still gets only the approved network
-      // settings. A `!` command carries no environment from Pi, so it keeps
-      // the process environment.
+      // In a managed distribution an uncontained command still gets only the
+      // approved network settings. A personal distribution has none, and a
+      // `!` command carries no environment from Pi, so both keep the process
+      // environment.
+      const network = processNetworkEnvironment();
       return local.exec(
         command,
         cwd,
-        options.env
-          ? {
-              ...options,
-              env: withApprovedNetwork(
-                options.env,
-                processNetworkEnvironment(),
-              ),
-            }
+        options.env && network
+          ? { ...options, env: withApprovedNetwork(options.env, network) }
           : options,
       );
     },

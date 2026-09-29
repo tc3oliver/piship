@@ -103,8 +103,9 @@ async function environmentOf(
   mode: "deny" | "allow",
   capabilities: SandboxCapabilities,
   network?: NetworkPolicy,
+  restrictChildren = true,
 ): Promise<Record<string, string>> {
-  if (network) applyProcessNetworkPolicy(network);
+  if (network) applyProcessNetworkPolicy(network, { restrictChildren });
   const fake = backend(capabilities);
   const sandbox = await activateSandbox(policy(mode), {
     workspace,
@@ -130,6 +131,16 @@ describe("the network environment of sandboxed commands", () => {
   // Must stay first: applying a policy is recorded for the rest of the process.
   it("changes nothing for a process with no network policy", async () => {
     expect(await environmentOf("allow", LOCAL)).toEqual({
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://ambient-user:ambient-pw@ambient.example:3128",
+    });
+  });
+
+  it("leaves a personal distribution's command exactly as the sandbox allowed it", async () => {
+    // A policy is applied (the launch does that) but children are not
+    // restricted: the command gets what the sandbox allowlist gave it before,
+    // the ambient proxy URL included, whatever the policy declares.
+    expect(await environmentOf("allow", LOCAL, declared(), false)).toEqual({
       PATH: "/usr/bin",
       HTTPS_PROXY: "http://ambient-user:ambient-pw@ambient.example:3128",
     });

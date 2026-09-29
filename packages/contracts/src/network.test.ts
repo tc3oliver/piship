@@ -421,12 +421,24 @@ describe("approvedNetworkEnvironment", () => {
     const { Agent, setGlobalDispatcher } = await import("undici");
     cleanup.push(() => setGlobalDispatcher(new Agent()));
     withProxyEnvironment({ HTTPS_PROXY: "http://proxy.corp.example:3128" });
-    applyProcessNetworkPolicy(inherited);
+    applyProcessNetworkPolicy(inherited, { restrictChildren: true });
     expect(processNetworkEnvironment()?.variables).toMatchObject({
       HTTPS_PROXY: "http://proxy.corp.example:3128",
       https_proxy: "http://proxy.corp.example:3128",
     });
-    applyProcessNetworkPolicy(direct);
+    applyProcessNetworkPolicy(direct, { restrictChildren: true });
     expect(processNetworkEnvironment()?.variables).toEqual({});
+  });
+
+  it("records nothing for a personal distribution and clears an earlier record", async () => {
+    const { Agent, setGlobalDispatcher } = await import("undici");
+    cleanup.push(() => setGlobalDispatcher(new Agent()));
+    withProxyEnvironment({ HTTPS_PROXY: "http://proxy.corp.example:3128" });
+    applyProcessNetworkPolicy(inherited, { restrictChildren: true });
+    expect(processNetworkEnvironment()).toBeDefined();
+    applyProcessNetworkPolicy(inherited);
+    expect(processNetworkEnvironment()).toBeUndefined();
+    applyProcessNetworkPolicy(inherited, { restrictChildren: false });
+    expect(processNetworkEnvironment()).toBeUndefined();
   });
 });

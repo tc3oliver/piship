@@ -42,7 +42,7 @@ The proxy, CA, and `privateOnly` policy is also applied to the Pi process's defa
 
 ### Child process network environment
 
-A command the agent runs through the `bash` tool receives the network environment the policy approves and no other. PiShip derives it from `network` and the launch environment:
+In a managed distribution, a command the agent runs through the `bash` tool receives the network environment the policy approves and no other. A personal distribution is not restricted: its commands keep the proxy and CA variables of the shell that started it, as before. PiShip derives the approved environment from `network` and the launch environment:
 
 | Variable | A child receives it when |
 | --- | --- |
@@ -56,7 +56,7 @@ How each kind of child gets it:
 - **Enforced local sandbox that allows the network** (`sandbox.network.mode: allow`). The approved variables are added to the allowlisted ones. With `deny` there is no network to configure and none are added.
 - **Remote sandbox backend** (`isolation: remote`, such as E2B and Kubernetes). Never: the proxy address and the CA file name this host, and are meaningless in another one.
 - **MCP stdio servers** keep receiving only their declared environment, as before; a variable a server lists in `env.allow` is passed as it is.
-- A distribution with no network policy (`piship/v1alpha1`) is unchanged.
+- A personal distribution, and a distribution with no network policy (`piship/v1alpha1`), is unchanged.
 
 This is environment hygiene, not enforcement: a child can ignore or unset the variables. The launcher's own process keeps a proxy URL that embeds credentials, because PiShip's clients need it, so any process that inherits the whole environment, such as a user's `!` command, can read it.
 
