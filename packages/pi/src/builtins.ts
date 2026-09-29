@@ -21,6 +21,10 @@ export const DEFAULT_BUILD_PROMPT =
 
 function attach(gov: GovernanceSession, ctx: ExtensionContext): void {
   gov.toolApproval = uiChannel(ctx);
+  // Session notices (a workspace weaker than declared) reach the screen once
+  // the session has a UI; without one they stay held, not lost.
+  if (ctx.hasUI)
+    gov.attachNotices((message) => ctx.ui.notify(message, "warning"));
 }
 
 async function decideToolCall(

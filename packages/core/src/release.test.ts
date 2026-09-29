@@ -392,6 +392,8 @@ describe("lock piship-lock/v1alpha4", () => {
     const links = entries.filter(([, value]) => value.link);
     expect(links.map(([path]) => path).sort()).toEqual(
       [
+        "adapter-conformance",
+        "adapter-sdk",
         "audit",
         "cli",
         "contracts",

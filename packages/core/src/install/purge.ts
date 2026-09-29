@@ -21,8 +21,9 @@ export interface PurgeResult {
 
 /**
  * Delete one distribution's PiShip-owned state after uninstall, including
- * the platform secret-store entries (identity token bundles and runtime
- * credentials) that its metadata references. Each metadata file (or
+ * the platform secret-store entries (identity token bundles, runtime
+ * credentials, and the stored sandbox credential) that its metadata
+ * references. Each metadata file (or
  * discarded marker) records which store holds its references: the platform
  * store's are deleted from it, and the file store's go with the state
  * directory, so a state left by a change of storage provider loses neither.
@@ -49,6 +50,7 @@ export async function purgeDistributionState(
   for (const [path, refClass] of [
     [paths.identity, "identity"],
     [paths.credential, "inference"],
+    [paths.sandboxCredential, "sandbox"],
   ] as const) {
     if (!existsSync(path)) continue;
     let parsed: unknown;

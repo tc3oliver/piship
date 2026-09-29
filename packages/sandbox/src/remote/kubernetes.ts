@@ -16,6 +16,7 @@ import {
   type SandboxPrepareRequest,
 } from "../backend.js";
 import {
+  credentialedFetch,
   describeFailure,
   errorText,
   type RemoteBackendOptions,
@@ -65,12 +66,14 @@ const TERMINAL_REASONS = new Set([
 // A pod on the cluster: the host's files are out of reach, but PiShip's path
 // rules are not mapped into it, so no filesystem-* plane is claimed. Network
 // denial is the SandboxTemplate's NetworkPolicy: the backend declares it, and
-// PiShip checks an outbound connection before use.
+// PiShip checks an outbound connection before use. The pod comes from a warm
+// pool whose volumes PiShip does not know, so its workspace is a snapshot.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
   planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
   network: ["deny", "allow"],
   localProcesses: false,
+  workspace: { mode: "snapshot" },
 };
 
 interface Claim {
@@ -193,6 +196,8 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       Promise.resolve(await this.#claim(signal)),
     );
     let disposed = false;
+    /** The claim the last command ran in: a replaced claim is a new environment. */
+    let lastClaim: string | undefined;
     const release = async (entry: Lease) => {
       if (entry.users > 0) return;
       if (entry.keepalive) clearInterval(entry.keepalive);
@@ -241,6 +246,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       exec: async (request, io) => {
         if (disposed) throw new Error("the sandbox was disposed");
         const [entry, claim] = await acquire(io);
+        lastClaim = claim.claim;
         entry.users++;
         entry.keepalive ??= setInterval(() => {
           if (entry.retired) return;
@@ -263,6 +269,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
           await release(entry);
         }
       },
+      epoch: () => lastClaim,
       dispose: async () => {
         if (disposed) return;
         disposed = true;
@@ -326,15 +333,19 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     return `${this.#api}/apis/${GROUP}/namespaces/${this.#namespace}/sandboxclaims`;
   }
 
-  async #request(url: string, init: RequestInit): Promise<Response> {
-    const headers = new Headers(init.headers);
-    const credential = await this.#options.credential?.();
-    if (credential) headers.set("Authorization", `Bearer ${credential}`);
-    return this.#options.fetch(url, {
-      ...init,
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(30_000),
-    });
+  /**
+   * A request to the API or the router, both of which receive the
+   * credential as a bearer token. A POST (a claim or a command) may have
+   * created something and is never sent twice.
+   */
+  #request(url: string, init: RequestInit): Promise<Response> {
+    return credentialedFetch(
+      this.#options,
+      url,
+      init,
+      (credential) => ["Authorization", `Bearer ${credential}`],
+      init.method !== "POST",
+    );
   }
 
   async #claim(signal: AbortSignal | undefined): Promise<Claim> {

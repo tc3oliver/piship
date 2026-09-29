@@ -4,6 +4,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +127,59 @@ describe("resolveProfile", () => {
       { path: join(ws, ".git", "hooks"), directory: true },
     ]);
     expect(protectedAncestors(profile, entries)).toEqual([join(ws, ".git")]);
+  });
+
+  it("pins the directories above a protected path that exists, and none above one that does not", () => {
+    const ws = join(root, "ws");
+    mkdirSync(join(ws, "config"), { recursive: true });
+    writeFileSync(join(ws, "config", "local.cfg"), "");
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "t"),
+      protectedPaths: {
+        files: [
+          join(ws, "config", "local.cfg"),
+          join(ws, "absent", "dir", "local.cfg"),
+        ],
+        directories: [],
+      },
+    });
+    const entries = writableProtected(profile);
+    expect(entries.map((entry) => entry.path)).toEqual([
+      join(ws, "config", "local.cfg"),
+      join(ws, "absent", "dir", "local.cfg"),
+    ]);
+    // Moving `config` aside would move the file that exists; there is nothing
+    // to move aside for the one that does not.
+    expect(protectedAncestors(profile, entries)).toEqual([join(ws, "config")]);
+    expect(
+      protectedAncestors(profile, entries, undefined, () => false),
+    ).toEqual([]);
+  });
+
+  it("carries the reason a protected list is incomplete into the profile and its warnings", () => {
+    const ctx = { workspace: join(root, "ws"), homeDir: root, tmpDir: root };
+    const complete = resolveProfile(policy(), {
+      ...ctx,
+      protectedPaths: { files: [], directories: [] },
+    });
+    expect(complete.writeProtect).toEqual({ files: [], directories: [] });
+    expect(complete.warnings).toEqual([]);
+    const incomplete = resolveProfile(policy(), {
+      ...ctx,
+      protectedPaths: {
+        files: [],
+        directories: [],
+        unverified: "the git config lists too much",
+      },
+    });
+    expect(incomplete.writeProtect.unverified).toBe(
+      "the git config lists too much",
+    );
+    expect(incomplete.warnings).toEqual([
+      "git control is not verified: the git config lists too much",
+    ]);
   });
 
   it("warns when a deny hides a writable path", () => {

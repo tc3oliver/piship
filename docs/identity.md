@@ -13,7 +13,7 @@ interface IdentityProvider {
 }
 ```
 
-`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `@piship/identity` exports `WorkloadIdentityProvider` and `isWorkloadIdentityProvider` for it.
+`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `WorkloadIdentityProvider` is defined in `@piship/contracts` (and reaches adapter authors through `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged and adds the `isWorkloadIdentityProvider` guard.
 
 ## Modes
 
@@ -36,7 +36,7 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
 
-Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The tokens are one secret in the configured secret store, under a generation reference.
+Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The allowlist is `RETAINED_CLAIMS`, defined in `@piship/contracts` (and exported by `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged with `retainClaims`, the filter. The tokens are one secret in the configured secret store, under a generation reference.
 
 ## Principal
 

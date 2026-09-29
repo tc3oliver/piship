@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
-import type { SandboxPolicy } from "./profile.js";
+import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import {
   connectEnvelope,
   E2bCompatibleBackend,
@@ -22,7 +22,11 @@ import {
   type Cluster,
   kubernetesServer,
 } from "./testing/kubernetes-server.js";
-import { closeMockServers, type Recorded } from "./testing/mock-server.js";
+import {
+  closeMockServers,
+  leaks,
+  type Recorded,
+} from "./testing/mock-server.js";
 
 const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox");
 
@@ -127,6 +131,9 @@ describe("remote capability reporting", () => {
       expect(capabilities.planes).not.toContain("filesystem-read-deny");
       expect(capabilities.planes).not.toContain("filesystem-write-allowlist");
       expect(capabilities.localProcesses).toBe(false);
+      // Neither backend knows the developer's workspace: a template or a
+      // warm-pool pod holds a copy of the code at best.
+      expect(capabilities.workspace).toEqual({ mode: "snapshot" });
     }
   });
 
@@ -140,8 +147,23 @@ describe("remote capability reporting", () => {
     ]);
     const line = describeContainment(sandbox.report);
     expect(line).toBe(
-      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools.",
+      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
     );
+    expect(sandbox.report).toMatchObject({
+      isolation: "remote",
+      workspace: {
+        declared: "snapshot",
+        effective: "snapshot",
+        verification: "not-required",
+        gitControlProtection: "not-applicable",
+        complete: false,
+      },
+    });
+    // A snapshot is never checked: no sentinel reaches the service.
+    expect((await run(sandbox, "true")).exitCode).toBe(0);
+    expect(sandbox.workspace()?.verification).toBe("not-required");
+    const wire = mock.requests.map((request) => request.body.toString());
+    expect(wire.join("\n")).not.toMatch(/piship-ws|\.git\/piship-workspace/);
     expect(line).not.toMatch(/filesystem-read-deny|filesystem-write-allowlist/);
     await sandbox.dispose();
   });
@@ -263,6 +285,88 @@ describe("e2b-compatible backend against a mock server", () => {
         expect(request.headers["connect-protocol-version"]).toBe("1");
       }
     }
+  });
+
+  it("sends a required API key only as X-API-Key to the control plane, never in a path, body, or envd request", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0001";
+    const mock = await e2bServer({ apiKey: key });
+    const sandbox = await activate(
+      e2b(mock.url, { credential: async () => key }),
+    );
+    await run(sandbox, "true");
+    await sandbox.dispose();
+    expect(leaks(mock.requests, key, ["x-api-key"])).toEqual([]);
+    for (const request of mock.requests)
+      if (request.headers["x-api-key"])
+        expect(request.path.startsWith("/sandboxes")).toBe(true);
+  });
+
+  it("reports a rejected key and never repeats the create; the echoed key stays out of the error", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0002";
+    const mock = await e2bServer({ apiKey: "fake-other-key-0000" });
+    let rejected = 0;
+    const error = await activate(
+      e2b(mock.url, {
+        credential: async () => key,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    expect(String((error as Error).message)).not.toContain(key);
+    expect(rejected).toBe(1);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === "/sandboxes",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("repeats a renewal once with a renewed key after a rejection", async () => {
+    const mock = await e2bServer({
+      apiKey: "fake-sandbox-key-SENTINEL-0003",
+      rejectOnce: ["/sandboxes/sbx1/timeout"],
+    });
+    let rejected = 0;
+    const sandbox = await activate(
+      e2b(mock.url, {
+        credential: async () => "fake-sandbox-key-SENTINEL-0003",
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    );
+    expect((await run(sandbox, "true")).exitCode).toBe(0);
+    await sandbox.dispose();
+    expect(rejected).toBe(1);
+    expect(
+      mock.requests.filter(
+        (request) => request.path === "/sandboxes/sbx1/timeout",
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not repeat a rejected request when the credential cannot be renewed", async () => {
+    const mock = await e2bServer({
+      apiKey: "fake-sandbox-key-SENTINEL-0004",
+      rejectOnce: ["/sandboxes/sbx1/timeout"],
+    });
+    await expect(
+      activate(
+        e2b(mock.url, {
+          credential: async () => "fake-sandbox-key-SENTINEL-0004",
+          credentialRejected: async () => false,
+        }),
+      ),
+    ).rejects.toThrow(/HTTP 401/);
+    expect(
+      mock.requests.filter(
+        (request) => request.path === "/sandboxes/sbx1/timeout",
+      ),
+    ).toHaveLength(1);
   });
 
   it("kills the remote process on timeout and reports PiShip's outcome", async () => {
@@ -716,6 +820,37 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
   });
 
+  it("reports a new epoch once an expired claim is replaced", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    const mock = await kubernetesServer();
+    const instance = await kubernetes(mock.url, {
+      lifetimeSeconds: 60,
+      now: () => now,
+    }).prepare({ profile: {} as SandboxProfile });
+    const io = {
+      signal: new AbortController().signal,
+      onStdout: () => {},
+      onStderr: () => {},
+    };
+    const request = {
+      command: "true",
+      cwd: workspace,
+      workspacePath: ".",
+      env: {},
+    };
+    expect(instance.epoch?.()).toBeUndefined();
+    await instance.exec(request, io);
+    const first = instance.epoch?.();
+    expect(first).toBe(claimNames(mock.requests)[0]);
+    await instance.exec(request, io);
+    expect(instance.epoch?.()).toBe(first);
+    now += 61_000;
+    await instance.exec(request, io);
+    expect(instance.epoch?.()).toBe(claimNames(mock.requests)[1]);
+    expect(instance.epoch?.()).not.toBe(first);
+    await instance.dispose();
+  });
+
   it("creates no claim after dispose, even mid-renewal", async () => {
     let now = Date.parse("2026-09-28T18:00:00Z");
     let open!: () => void;
@@ -789,6 +924,9 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
     for (const request of mock.requests)
       expect(request.headers.authorization).toBe("Bearer runtime-credential-2");
+    expect(
+      leaks(mock.requests, "runtime-credential-2", ["authorization"]),
+    ).toEqual([]);
   });
 
   it("quotes commands and environment for the runtime's shell-like split", () => {

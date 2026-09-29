@@ -284,8 +284,13 @@ export interface SandboxConfig {
   readonly workdir?: string;
   /** `e2b-compatible`: the sandbox user commands run as (default `user`). */
   readonly user?: string;
-  /** Sent to the endpoint: only `runtime` sends the runtime credential. */
-  readonly credential?: "runtime";
+  /**
+   * Sent to the endpoint (and, for Kubernetes, the router): `runtime` sends
+   * the runtime credential when the endpoint is on its origin; `stored`
+   * sends the sandbox credential a person stored with `sandbox login`,
+   * bound to the principal and the endpoint origins. Omitted is `none`.
+   */
+  readonly credential?: "runtime" | "stored";
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };

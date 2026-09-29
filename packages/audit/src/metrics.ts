@@ -78,6 +78,30 @@ export interface VersionsMetric {
   readonly updatedAt: string;
 }
 
+/** A sandbox workspace mode, or `UNKNOWN` for any value PiShip does not define. */
+export type WorkspaceModeMetric =
+  | "shared"
+  | "synchronized"
+  | "snapshot"
+  | "UNKNOWN";
+/** A workspace verification state, or `UNKNOWN`. */
+export type WorkspaceVerificationMetric =
+  | "not-required"
+  | "pending"
+  | "verified"
+  | "unverifiable"
+  | "failed"
+  | "UNKNOWN";
+
+/** The most recent sandbox workspace verification a session ran; enums and a time only. */
+export interface WorkspaceMetric {
+  readonly declared: WorkspaceModeMetric;
+  readonly effective: WorkspaceModeMetric;
+  readonly verification: WorkspaceVerificationMetric;
+  /** Time of the verification. */
+  readonly checkedAt: string;
+}
+
 /** Load failures by component class: `resource` or `provider`. */
 export type LoadFailureKind = "resource" | "provider";
 
@@ -103,6 +127,7 @@ export interface MetricsSnapshot {
   /** Provider load failures by PiShip error code (`UNKNOWN` otherwise). */
   readonly providerLoadFailures?: Readonly<Record<string, number>>;
   readonly versions?: VersionsMetric;
+  readonly workspace?: WorkspaceMetric;
 }
 
 export type LifecycleMetricKind = "update" | "check" | "rollback";
@@ -127,6 +152,14 @@ const CONTAINMENT = new Set<string>([
   "unavailable",
   "not-required",
 ]);
+const WORKSPACE_MODES = new Set<string>(["shared", "synchronized", "snapshot"]);
+const WORKSPACE_VERIFICATIONS = new Set<string>([
+  "not-required",
+  "pending",
+  "verified",
+  "unverifiable",
+  "failed",
+]);
 const MAX_ENTRIES = 256;
 
 function isIdentifier(value: unknown): value is string {
@@ -148,6 +181,18 @@ const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(?:-[0-9A-Za-z.-]{1,32})?$/;
 
 function isVersion(value: unknown): value is string {
   return typeof value === "string" && VERSION.test(value);
+}
+
+function workspaceMode(value: unknown): WorkspaceModeMetric {
+  return typeof value === "string" && WORKSPACE_MODES.has(value)
+    ? (value as WorkspaceModeMetric)
+    : "UNKNOWN";
+}
+
+function workspaceVerification(value: unknown): WorkspaceVerificationMetric {
+  return typeof value === "string" && WORKSPACE_VERIFICATIONS.has(value)
+    ? (value as WorkspaceVerificationMetric)
+    : "UNKNOWN";
 }
 
 function isErrorKey(key: string): boolean {
@@ -221,6 +266,7 @@ export class LocalMetrics {
   #resourceLoadFailures: Record<string, number> = {};
   #providerLoadFailures: Record<string, number> = {};
   #versions: VersionsMetric | undefined;
+  #workspace: WorkspaceMetric | undefined;
   #updatedAt: string;
 
   constructor(stateDir: string, options: { readonly now?: () => Date } = {}) {
@@ -372,6 +418,28 @@ export class LocalMetrics {
     };
   }
 
+  /**
+   * The outcome of a sandbox workspace verification: the declared and
+   * effective modes, the verification state, and its time (an RFC 3339 UTC
+   * time; now when absent or malformed). A value PiShip does not define is
+   * stored as `UNKNOWN`; never a path, token, or reason.
+   */
+  recordWorkspace(
+    declared: string,
+    effective: string,
+    verification: string,
+    checkedAt?: string,
+  ): void {
+    const at = isTime(checkedAt) ? checkedAt : undefined;
+    this.#workspace = {
+      declared: workspaceMode(declared),
+      effective: workspaceMode(effective),
+      verification: workspaceVerification(verification),
+      checkedAt: at ?? this.#time(),
+    };
+    this.#touch();
+  }
+
   /** Count an update, check, or rollback by outcome (`ok` or an error code). */
   recordLifecycle(kind: LifecycleMetricKind, outcome: string): void {
     if (!LIFECYCLE_KINDS.has(kind)) return;
@@ -408,6 +476,7 @@ export class LocalMetrics {
         ? { providerLoadFailures: { ...this.#providerLoadFailures } }
         : {}),
       ...(this.#versions ? { versions: { ...this.#versions } } : {}),
+      ...(this.#workspace ? { workspace: { ...this.#workspace } } : {}),
     };
   }
 
@@ -554,6 +623,18 @@ export class LocalMetrics {
           ? { node: versions.node as string }
           : {}),
         updatedAt: versions.updatedAt,
+      };
+    const workspace = value.workspace as Record<string, unknown> | undefined;
+    if (
+      workspace &&
+      typeof workspace === "object" &&
+      isTime(workspace.checkedAt)
+    )
+      this.#workspace = {
+        declared: workspaceMode(workspace.declared),
+        effective: workspaceMode(workspace.effective),
+        verification: workspaceVerification(workspace.verification),
+        checkedAt: workspace.checkedAt,
       };
   }
 }

@@ -36,6 +36,8 @@ export interface AccessEvent {
  * besides the credential manager's own (`CredentialPhase`).
  * - `login-locked`: login holds the credential lock, nothing is changed yet.
  * - `credential-cleared`: the previous runtime credential is gone.
+ * - `sandbox-credential-cleared`: another principal's stored sandbox
+ *   credential is gone.
  * - `principal-bound`: the principal binding names the new principal.
  * - `identity-cleared`: another principal's identity session is gone.
  * - `identity-stored`: the new identity is stored (or held, for a workload).
@@ -47,6 +49,7 @@ export type AccessPhase =
   | CredentialPhase
   | "login-locked"
   | "credential-cleared"
+  | "sandbox-credential-cleared"
   | "principal-bound"
   | "identity-cleared"
   | "identity-stored"

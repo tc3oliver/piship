@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,11 +26,21 @@ export const CONTAINMENT_PLANES = [
   "filesystem-write-allowlist",
   "network-deny",
   "environment-filter",
+  "git-control-protection",
 ] as const;
 export type ContainmentPlane = (typeof CONTAINMENT_PLANES)[number];
 
 export type ProbeResult =
-  | { readonly ok: true; readonly planes: readonly ContainmentPlane[] }
+  | {
+      readonly ok: true;
+      readonly planes: readonly ContainmentPlane[];
+      /**
+       * Checks that failed without failing the probe: only
+       * `git-control-protection`, which is probed and reported but not yet
+       * required of local backends.
+       */
+      readonly warnings?: readonly string[];
+    }
   | { readonly ok: false; readonly reason: string };
 
 export interface ProbeOptions {
@@ -52,6 +63,9 @@ interface ProbeReport {
   readonly env: readonly string[];
   readonly external: boolean;
   readonly loopback: boolean;
+  readonly protectedFileWrite: boolean;
+  readonly protectedDirWrite: boolean;
+  readonly pinnedRename: boolean;
 }
 
 // Runs inside the sandbox; reports only booleans and names, never contents.
@@ -62,6 +76,7 @@ const c = JSON.parse(process.argv[1]);
 const write = (p) => { try { fs.writeFileSync(p, "probe"); return true; } catch { return false; } };
 const dirLeaks = (p) => { try { return fs.readdirSync(p).length > 0; } catch { return false; } };
 const fileLeaks = (p) => { try { return fs.readFileSync(p).length > 0; } catch { return false; } };
+const rename = (from, to) => { try { fs.renameSync(from, to); return true; } catch { return false; } };
 const connect = (host, port) => new Promise((done) => {
   const socket = net.connect({ host, port });
   const timer = setTimeout(() => { socket.destroy(); done(false); }, c.connectTimeoutMs);
@@ -79,6 +94,9 @@ const connect = (host, port) => new Promise((done) => {
     env: Object.keys(process.env),
     external: c.network ? await connect(c.externalHost, 443) : false,
     loopback: c.network ? await connect("127.0.0.1", c.loopbackPort) : false,
+    protectedFileWrite: write(c.protectedFile),
+    protectedDirWrite: write(c.protectedDirFile),
+    pinnedRename: rename(c.pinnedDir, c.pinnedMoved),
   };
   process.stdout.write(JSON.stringify(report));
 })();
@@ -156,6 +174,38 @@ function evaluate(
   return failures;
 }
 
+/** Why `git-control-protection` does not hold, from the probe's own protected paths. */
+function gitControlFailures(
+  report: ProbeReport,
+  paths: {
+    protectedFile: string;
+    protectedDirFile: string;
+    pinnedDir: string;
+    pinnedMoved: string;
+  },
+): string[] {
+  const failures: string[] = [];
+  let intact = false;
+  try {
+    intact = readFileSync(paths.protectedFile, "utf8") === PROTECTED_CONTENT;
+  } catch {
+    // missing counts as changed
+  }
+  if (report.protectedFileWrite || !intact)
+    failures.push("a protected file inside an allowed path was writable");
+  if (report.protectedDirWrite || existsSync(paths.protectedDirFile))
+    failures.push("a file could be created in a protected directory");
+  if (
+    report.pinnedRename ||
+    !existsSync(paths.pinnedDir) ||
+    existsSync(paths.pinnedMoved)
+  )
+    failures.push("the directory holding a protected file could be renamed");
+  return failures;
+}
+
+const PROTECTED_CONTENT = "protected";
+
 /**
  * Something the probe can run a child in: an adapter, or a backend that
  * prepares a wrapping instance for the probe's own profile.
@@ -191,18 +241,39 @@ export async function probeSandbox(
     mkdirSync(deniedDir, { recursive: true });
     writeFileSync(join(deniedDir, "secret"), secret);
     writeFileSync(deniedFile, secret);
+    // git-control-protection: a protected file, a protected directory, and
+    // a protected file whose parent directory must stay pinned in place.
+    const protectedFile = join(allowedDir, "protected-file");
+    const protectedDir = join(allowedDir, "protected-dir");
+    const pinnedDir = join(allowedDir, "pinned");
+    const pinnedFile = join(pinnedDir, "control");
+    mkdirSync(protectedDir);
+    mkdirSync(pinnedDir);
+    writeFileSync(protectedFile, PROTECTED_CONTENT);
+    writeFileSync(pinnedFile, PROTECTED_CONTENT);
     const probeProfile: SandboxProfile = {
       ...profile,
       writeAllow: [...profile.writeAllow, allowedDir],
       readDeny: [...profile.readDeny, deniedDir, deniedFile],
+      writeProtect: {
+        files: [...profile.writeProtect.files, protectedFile, pinnedFile],
+        directories: [...profile.writeProtect.directories, protectedDir],
+      },
     };
     const paths = {
       outsideFile: join(outsideDir, "write-probe"),
       insideFile: join(allowedDir, "write-probe"),
       deniedDirWriteFile: join(deniedDir, "write-probe"),
     };
+    const gitPaths = {
+      protectedFile,
+      protectedDirFile: join(protectedDir, "write-probe"),
+      pinnedDir,
+      pinnedMoved: join(allowedDir, "pinned-moved"),
+    };
     const input = JSON.stringify({
       ...paths,
+      ...gitPaths,
       deniedDir,
       deniedDirFile: join(deniedDir, "secret"),
       deniedFile,
@@ -284,7 +355,19 @@ export async function probeSandbox(
     ];
     if (profile.network === "deny") planes.push("network-deny");
     planes.push("environment-filter");
-    return { ok: true, planes };
+    const git = gitControlFailures(report, gitPaths);
+    if (!git.length) planes.push("git-control-protection");
+    return {
+      ok: true,
+      planes,
+      ...(git.length
+        ? {
+            warnings: [
+              `git-control-protection is not proven, so the project's git control files and hooks may be writable from sandboxed commands: ${git.join("; ")}`,
+            ],
+          }
+        : {}),
+    };
   } finally {
     listener?.server.close();
     rmSync(probeDir, { recursive: true, force: true });

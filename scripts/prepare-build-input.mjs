@@ -21,6 +21,7 @@ for (const name of [
   "core",
   "pi",
   "cli",
+  "adapter-sdk",
 ]) {
   const source = join(workspace, "packages", name);
   const target = join(input, "packages", name);

@@ -24,6 +24,7 @@ These decisions constrain every change to PiShip. Each names where it is enforce
 | 18 | PiShip owns contracts, not every implementation; upstream Pi and certified or distribution providers are used where appropriate. | Capability provider trust classes |
 | 19 | Product parity requirements of one consumer belong to that consumer's profile, not to the universal contract. | Review rule; see [contributing](../CONTRIBUTING.md) |
 | 20 | Personal mode is a profile, not a separate architecture: identity, broker, gateway, sandbox, and audit may be omitted, while manifest, lock, isolation, resources, compatibility, and lifecycle stay shared. | One schema family and lifecycle for both `deployment.mode` values |
+| 21 | Adapter authors use two packages of their own: `@piship/adapter-sdk` (the supported surface for writing an adapter) and `@piship/adapter-conformance` (kits that test an adapter through the SDK only). The SDK is not a `@piship/contracts` subpath: its sandbox helper wraps `customBackend()` from `@piship/sandbox`, which depends on `contracts`, so a subpath would make `contracts` and `sandbox` depend on each other. Both are built to a publishable shape (`exports`, `files`, no private imports) but stay `private: true`; publishing them needs a separate maintainer decision. The SDK ships in every payload, so a single-file adapter can import it; the conformance kits never do. | `scripts/check-boundaries.mjs` (the SDK may import only `contracts` and `sandbox`, the kits only the SDK); `workspacePackages` in `@piship/core` |
 
 ## Scope test
 

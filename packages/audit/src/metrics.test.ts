@@ -270,6 +270,89 @@ describe("LocalMetrics", () => {
     });
   });
 
+  it("records the last workspace verification as enums and a time only", () => {
+    const metrics = new LocalMetrics(temp, { now });
+    expect(metrics.snapshot()).not.toHaveProperty("workspace");
+    metrics.recordWorkspace(
+      "shared",
+      "synchronized",
+      "verified",
+      "2026-09-28T09:30:00Z",
+    );
+    metrics.save();
+    const expected = {
+      declared: "shared",
+      effective: "synchronized",
+      verification: "verified",
+      checkedAt: "2026-09-28T09:30:00Z",
+    };
+    expect(metrics.snapshot().workspace).toEqual(expected);
+    expect(LocalMetrics.load(temp, { now }).snapshot().workspace).toEqual(
+      expected,
+    );
+    // A later result replaces it; anything PiShip does not define is UNKNOWN,
+    // and a time that is not an RFC 3339 UTC time becomes the record time.
+    metrics.recordWorkspace(
+      "/home/alice/project/.git/piship-workspace",
+      "mounted at https://sandbox.acme.example",
+      "token 0123456789abcdef0123456789abcdef",
+      "yesterday at /tmp/x",
+    );
+    metrics.save();
+    const text = readFileSync(join(temp, "logs", "metrics.json"), "utf8");
+    expect(JSON.parse(text).workspace).toEqual({
+      declared: "UNKNOWN",
+      effective: "UNKNOWN",
+      verification: "UNKNOWN",
+      checkedAt: "2026-09-28T10:00:00.000Z",
+    });
+    expect(text).not.toMatch(
+      /alice|piship-workspace|acme|https|0123456789|tmp/,
+    );
+    for (const leaf of stringLeaves(JSON.parse(text).workspace))
+      expect(leaf).toMatch(
+        /^(declared|effective|verification|checkedAt|UNKNOWN|shared|synchronized|snapshot|not-required|pending|verified|unverifiable|failed|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z)$/,
+      );
+  });
+
+  it("drops tampered workspace entries when loading", () => {
+    const path = join(temp, "logs", "metrics.json");
+    new LocalMetrics(temp, { now }).save();
+    const write = (workspace: unknown) =>
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schema: METRICS_SCHEMA,
+          updatedAt: "2026-09-28T09:00:00.000Z",
+          policyDenials: {},
+          mcpHealth: {},
+          startupFailures: {},
+          workspace,
+        }),
+      );
+    write({
+      declared: "shared",
+      effective: "/home/alice/secret",
+      verification: "verified",
+      checkedAt: "2026-09-28T09:00:00Z",
+      reason: "the sandbox did not see /home/alice",
+    });
+    expect(LocalMetrics.load(temp, { now }).snapshot().workspace).toEqual({
+      declared: "shared",
+      effective: "UNKNOWN",
+      verification: "verified",
+      checkedAt: "2026-09-28T09:00:00Z",
+    });
+    write({ declared: "shared", effective: "shared", checkedAt: "never" });
+    expect(LocalMetrics.load(temp, { now }).snapshot()).not.toHaveProperty(
+      "workspace",
+    );
+    write("shared");
+    expect(LocalMetrics.load(temp, { now }).snapshot()).not.toHaveProperty(
+      "workspace",
+    );
+  });
+
   it("drops tampered observability entries when loading", () => {
     const path = join(temp, "logs", "metrics.json");
     new LocalMetrics(temp, { now }).save();

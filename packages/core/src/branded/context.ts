@@ -126,6 +126,17 @@ export async function recordAudit(
   if (loss) throw loss;
 }
 
+/**
+ * An access event's audit detail with the runtime credential's mode, except
+ * for a sandbox credential event, which names its purpose and source instead.
+ */
+export function eventDetail(
+  mode: string,
+  detail: AccessEvent["detail"],
+): AccessEvent["detail"] {
+  return detail.purpose === "sandbox" ? detail : { mode, ...detail };
+}
+
 /** Identity and credential lifecycle events outside a session. */
 export async function auditAccess(
   ctx: BrandedContext,
@@ -140,7 +151,7 @@ export async function auditAccess(
       event: event.event,
       user,
       session: null,
-      detail: { mode: access.credentialMode, ...event.detail },
+      detail: eventDetail(access.credentialMode, event.detail),
     })),
   );
 }

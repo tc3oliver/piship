@@ -29,7 +29,12 @@ import type {
   ProjectIdentity,
   ProjectResourceCandidate,
 } from "@piship/policy";
-import { type ActiveSandbox, activateSandbox } from "@piship/sandbox";
+import {
+  type ActiveSandbox,
+  activateSandbox,
+  describeWorkspace,
+  type WorkspaceReport,
+} from "@piship/sandbox";
 import type { BuiltinExtension, GovernanceManifest } from "@piship/schema";
 import { approvalSubject, terminalApproval } from "./governance/approval.js";
 import { computeCapabilities } from "./governance/capabilities.js";
@@ -62,6 +67,7 @@ export type {
 } from "./governance/options.js";
 
 const STRICTNESS = { allow: 0, ask: 1, deny: 2 } as const;
+const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 
 /**
  * Local metrics are operational telemetry: a record or save that fails (a
@@ -140,6 +146,9 @@ export class GovernanceSession {
         homeDir,
         extraReadOnly: [options.distributionDir],
         protectedPaths: gitProtection(project.root),
+        // A backend's working-tree sentinel directory is used only in a
+        // company-origin project; any other origin keeps the check in .git.
+        projectOrigin: project.origin,
       });
       const { level, adapter } = sandbox.report;
       bestEffort(() => metrics.recordSandbox(level, adapter));
@@ -161,10 +170,13 @@ export class GovernanceSession {
         engine,
         `${Date.now().toString(36)}-${process.pid}`,
       );
+      sandbox.onWorkspaceReport((report) => session.#workspaceReport(report));
+      const workspace = sandbox.report.workspace;
       session.emit("session.start", {
         detail: {
           project: project.origin,
           sandbox: sandbox.report.level,
+          ...(workspace ? { workspace: workspace.declared } : {}),
         },
       });
       session.emit("policy.loaded", {
@@ -297,6 +309,59 @@ export class GovernanceSession {
   }
   /** Current piship-workflow mode; null when the workflow is not active. */
   workflowMode: "plan" | "build" | null = null;
+
+  #workspaceWarned = false;
+  #pendingNotices: string[] = [];
+  #notify: ((message: string) => void) | undefined;
+
+  /**
+   * Show session notices through `notify` (the governance extension's UI).
+   * Notices raised before a sink is attached are shown when it is.
+   */
+  attachNotices(notify: (message: string) => void): void {
+    this.#notify = notify;
+    for (const message of this.#pendingNotices.splice(0)) this.#notice(message);
+  }
+
+  #notice(message: string): void {
+    if (!this.#notify) {
+      this.#pendingNotices.push(message);
+      return;
+    }
+    try {
+      this.#notify(message);
+    } catch {
+      // a notice never decides a command
+    }
+  }
+
+  /**
+   * A workspace verification result: recorded in local metrics (enums and a
+   * time only), and one notice per session when the effective mode is lower
+   * than declared. A lower mode is a warning, not a failure; only an unsafe
+   * workspace (writable git control files) fails its command closed.
+   */
+  #workspaceReport(report: WorkspaceReport): void {
+    this.metrics.recordWorkspace(
+      report.declared,
+      report.effective,
+      report.verification,
+      report.verifiedAt,
+    );
+    if (
+      this.#workspaceWarned ||
+      WORKSPACE_STRENGTH[report.effective] >=
+        WORKSPACE_STRENGTH[report.declared]
+    )
+      return;
+    this.#workspaceWarned = true;
+    // The sentence holds modes, a time, and a fixed reason; never a path,
+    // token, or endpoint. Whether commands still run is not said here: an
+    // unsafe workspace fails its command with its own error.
+    this.#notice(
+      `The sandbox workspace is weaker than the distribution declares. ${describeWorkspace(report)}`,
+    );
+  }
 
   /** Whether a capability is effective (all six axes). */
   effective(name: string): boolean {

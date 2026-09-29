@@ -19,7 +19,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "0.87.1",
     "pishipVersion": "0.1.0",
-    "npmLockSha256": "7544b897972f253d90abdf44ef6b93970e1b935eb87e0d3681b0c5671636731b",
+    "npmLockSha256": "a124a9f5f4e9d0fea29d66d0dc872981ba33f1d8188ebd158132c0083995096c",
     "packages": [
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",
@@ -943,6 +943,9 @@
       ],
       "audit": [
         "piship-audit/v1"
+      ],
+      "sandboxCredential": [
+        "piship-sandbox-credential-metadata/v1"
       ]
     }
   },

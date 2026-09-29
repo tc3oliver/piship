@@ -14,6 +14,7 @@ import {
   type SandboxPrepareRequest,
 } from "../backend.js";
 import {
+  credentialedFetch,
   describeFailure,
   errorText,
   type RemoteBackendOptions,
@@ -50,12 +51,15 @@ const SIGNAL_TIMEOUT_MS = 5000;
 
 // A remote VM: the host's files are out of reach, but PiShip's path rules
 // are not mapped into it, so no filesystem-* plane is claimed. The network
-// is denied at creation (allow_internet_access) and checked before use.
+// is denied at creation (allow_internet_access) and checked before use. The
+// sandbox is created from a template and sees a copy of the code, never the
+// files PiShip's file tools edit: its workspace is a snapshot.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
   planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
   network: ["deny", "allow"],
   localProcesses: false,
+  workspace: { mode: "snapshot" },
 };
 
 interface CreatedSandbox {
@@ -158,6 +162,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
           const response = await this.#control(
             `sandboxes/${created.sandboxId}`,
             { method: "DELETE" },
+            true,
           );
           await response.body?.cancel().catch(() => undefined);
         } catch {
@@ -171,34 +176,46 @@ export class E2bCompatibleBackend implements SandboxBackend {
     return new URL(path, this.#endpoint);
   }
 
-  async #control(path: string, init: RequestInit): Promise<Response> {
-    const headers = new Headers(init.headers);
-    const credential = await this.#options.credential?.();
-    if (credential) headers.set("X-API-Key", credential);
-    return this.#options.fetch(this.#url(path), {
-      ...init,
-      headers,
-      signal: init.signal ?? AbortSignal.timeout(30_000),
-    });
+  /**
+   * A control-plane request: the only one that carries the credential, as
+   * `X-API-Key`. `repeatable` is false for a request that may have created
+   * something, which is never sent twice.
+   */
+  #control(
+    path: string,
+    init: RequestInit,
+    repeatable: boolean,
+  ): Promise<Response> {
+    return credentialedFetch(
+      this.#options,
+      this.#url(path),
+      init,
+      (credential) => ["X-API-Key", credential],
+      repeatable,
+    );
   }
 
   async #create(
     network: "deny" | "allow",
     signal: AbortSignal | undefined,
   ): Promise<CreatedSandbox> {
-    const response = await this.#control("sandboxes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // Nothing from the host environment is sent: commands receive only the
-      // approved environment, one command at a time.
-      body: JSON.stringify({
-        templateID: this.#options.template ?? "base",
-        timeout: this.#lifetime(),
-        metadata: { "created-by": "piship" },
-        allow_internet_access: network === "allow",
-      }),
-      ...(signal ? { signal } : {}),
-    });
+    const response = await this.#control(
+      "sandboxes",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Nothing from the host environment is sent: commands receive only the
+        // approved environment, one command at a time.
+        body: JSON.stringify({
+          templateID: this.#options.template ?? "base",
+          timeout: this.#lifetime(),
+          metadata: { "created-by": "piship" },
+          allow_internet_access: network === "allow",
+        }),
+        ...(signal ? { signal } : {}),
+      },
+      false,
+    );
     if (!response.ok)
       throw new Error(
         `creating the sandbox failed: ${await describeFailure(response)}`,
@@ -252,6 +269,7 @@ export class E2bCompatibleBackend implements SandboxBackend {
         body: JSON.stringify({ timeout: this.#lifetime() }),
         signal: io.signal,
       },
+      true,
     );
     if (!renewed.ok)
       throw new Error(
