@@ -12,4 +12,5 @@ export {
   type LifecyclePhase,
 } from "./receipt.js";
 export { lifecycleStatus, type LifecycleStatus } from "./status.js";
+export { sweepStateTemporaries } from "./temporaries.js";
 export { uninstallDistribution } from "./uninstall.js";

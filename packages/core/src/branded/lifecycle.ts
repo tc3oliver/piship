@@ -7,7 +7,10 @@ import {
   type SecretStore,
   formatError,
 } from "@piship/contracts";
-import { createSecretStore } from "@piship/credentials";
+import {
+  createSecretStore,
+  type SecretStoreProvider,
+} from "@piship/credentials";
 import { resolveTemplate } from "@piship/schema";
 import { accessStatePaths } from "../access/index.js";
 import {
@@ -76,8 +79,19 @@ function credentialRevoker(ctx: BrandedContext) {
  * cannot delete fails the switch instead of leaving secrets behind.
  */
 function secretStore(ctx: BrandedContext): SecretStore {
+  return storeOf(
+    ctx,
+    ctx.metadata.access?.credential.storage.provider ?? "system",
+  );
+}
+
+/** The store of `provider`, which credential metadata may record instead. */
+function storeOf(
+  ctx: BrandedContext,
+  provider: SecretStoreProvider,
+): SecretStore {
   return createSecretStore({
-    provider: ctx.metadata.access?.credential.storage.provider ?? "system",
+    provider,
     fileDirectory: accessStatePaths(ctx.stateDir).secrets,
   });
 }
@@ -204,6 +218,7 @@ export async function runUpdate(
       acceptReview: flags.has("--accept-review"),
       fetcher,
       secretStore: secretStore(ctx),
+      secretStoreFor: (provider) => storeOf(ctx, provider),
       ...(revokeCredential && !check ? { revokeCredential } : {}),
     });
   } catch (error) {
@@ -247,6 +262,7 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
   try {
     result = await rollbackDistribution(app.id, {
       secretStore: secretStore(ctx),
+      secretStoreFor: (provider) => storeOf(ctx, provider),
       ...(revokeCredential ? { revokeCredential } : {}),
     });
   } catch (error) {

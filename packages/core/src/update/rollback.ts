@@ -11,7 +11,6 @@ import {
   readInstallReceipt,
   recoverInstallation,
   requireManaged,
-  writeReceipt,
   type LifecycleOptions,
 } from "../install/receipt.js";
 import {
@@ -20,11 +19,12 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import { payloadStateSchemas, runPayloadCommand } from "../release/index.js";
+import { storageOf } from "../storage-transition.js";
 import {
   checkPayload,
   clearCredentials,
+  markActivated,
   repairStateMarker,
-  writeStateMarker,
 } from "./state.js";
 
 export interface RollbackResult {
@@ -46,7 +46,7 @@ export async function rollbackDistribution(
 ): Promise<RollbackResult> {
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
-  const release = acquireLock(id, "ROLLBACK_FAILED");
+  const lifecycle = acquireLock(id, "ROLLBACK_FAILED");
   try {
     const receipt = readInstallReceipt(id);
     recoverInstallation(id);
@@ -98,8 +98,13 @@ export async function rollbackDistribution(
         version: target.app.version,
         pi: target.runtime.version,
         schemas: payloadStateSchemas(target),
+        ...storageOf(target),
       },
-      { version: receipt.active, pi: current.runtime.version },
+      {
+        version: receipt.active,
+        pi: current.runtime.version,
+        ...storageOf(current),
+      },
     );
     if (migration.verdict === "unsupported")
       throw new PiShipError(
@@ -113,7 +118,7 @@ export async function rollbackDistribution(
       .filter((item) => item.verdict === "requires-review")
       .map((item) => item.reason);
     notices.push(...(await clearCredentials(stateDir, id, migration, options)));
-    writeReceipt({
+    lifecycle.commit({
       ...readInstallReceipt(id),
       app: target.app,
       payload: previous.payload,
@@ -125,8 +130,9 @@ export async function rollbackDistribution(
         result: `rolled back ${receipt.active} -> ${receipt.previous}`,
       },
     });
+    // Committed: from here on nothing reports the rollback as failed.
     options.faults?.("committed");
-    writeStateMarker(stateDir, target);
+    notices.push(...markActivated(stateDir, target));
     return {
       id,
       from: receipt.active,
@@ -135,6 +141,6 @@ export async function rollbackDistribution(
       notices,
     };
   } finally {
-    release();
+    lifecycle.release();
   }
 }

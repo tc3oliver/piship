@@ -19,11 +19,16 @@ function governanceRows(ctx: BrandedContext) {
     overridable: false,
     ...(note ? { note } : {}),
   });
+  // The same precedence the policy engine applies to config/policy.json.
+  const userRules =
+    ctx.mode === "managed"
+      ? "user rules in config/policy.json are narrowing only: they may tighten a default, never relax a default or an enforced rule (allow rules are ignored)"
+      : "user rules in config/policy.json take a matching default's place, so they may relax it, but never override an enforced rule";
   return [
     row(
       "policy",
       `${policy.id}@${policy.version}`,
-      `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); user rules in config/policy.json may only relax defaults`,
+      `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); ${userRules}`,
     ),
     row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
     row(
