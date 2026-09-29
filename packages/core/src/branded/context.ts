@@ -1,8 +1,19 @@
 // Shared context of the branded management commands a built distribution
 // runs (login, logout, config, update, rollback, and parts of doctor). None
 // of these need the Pi runtime; the Pi integration adds its runtime state.
-import { AuditLog, type LocalMetrics } from "@piship/audit";
-import { createManagedFetch, formatError } from "@piship/contracts";
+import {
+  type AuditEmitInput,
+  AuditLog,
+  type AuditStatus,
+  type LocalMetrics,
+  requiredAuditLoss,
+} from "@piship/audit";
+import {
+  createManagedFetch,
+  formatError,
+  type NetworkPolicy,
+  PiShipError,
+} from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import {
   type AccessEvent,
@@ -60,23 +71,30 @@ export function saveMetrics(metrics: LocalMetrics | undefined): void {
 }
 
 /**
- * Identity lifecycle events outside a session. Best effort: signing out must
- * work while the company sink is down, so a failure is reported, not fatal.
+ * Record audit events of a command that runs outside a governed session
+ * (login, logout, update, rollback). The events describe an operation that
+ * has already happened, so recording never undoes it. Optional sinks stay
+ * best effort: a failure is a warning. A required sink must take every
+ * event: when it cannot be opened or does not take them all, this throws
+ * AUDIT_UNAVAILABLE and the command fails.
  */
-export async function auditAccess(
+export async function recordAudit(
   ctx: BrandedContext,
-  access: DistributionAccess,
-  user: string | null,
-  events: readonly AccessEvent[],
+  network: NetworkPolicy,
+  events: readonly AuditEmitInput[],
 ): Promise<void> {
   const lock = governedLock(ctx);
   if (!lock || !events.length) return;
+  const config = lock.governance.manifest.audit;
+  const required = config.enabled && config.sinks.some((sink) => sink.required);
+  const prefix = "The operation completed, but its audit was not recorded";
+  let status: AuditStatus;
   try {
     const log = await AuditLog.open({
-      config: lock.governance.manifest.audit,
+      config,
       distribution: lock.app.id,
       stateDir: ctx.stateDir,
-      fetch: createManagedFetch(access.network, "audit"),
+      fetch: createManagedFetch(network, "audit"),
       resolveUrl: (template) =>
         resolveTemplate(
           "audit.sinks.url",
@@ -85,15 +103,42 @@ export async function auditAccess(
           process.env,
         ),
     });
-    for (const event of events)
-      log.emit({
-        event: event.event,
-        user,
-        session: null,
-        detail: { mode: access.credentialMode, ...event.detail },
-      });
-    await log.close();
+    for (const event of events) log.emit(event);
+    status = await log.close();
   } catch (error) {
-    ctx.err(`Warning: audit events were not recorded: ${formatError(error)}`);
+    if (!required) {
+      ctx.err(`Warning: audit events were not recorded: ${formatError(error)}`);
+      return;
+    }
+    throw new PiShipError(
+      "AUDIT_UNAVAILABLE",
+      `${prefix}: ${error instanceof PiShipError ? error.message : formatError(error)}`,
+      {
+        component: "audit",
+        userAction:
+          "Restore the required audit sink and report the unrecorded activity to the distribution administrator",
+      },
+    );
   }
+  const loss = requiredAuditLoss(status, prefix);
+  if (loss) throw loss;
+}
+
+/** Identity and credential lifecycle events outside a session. */
+export async function auditAccess(
+  ctx: BrandedContext,
+  access: DistributionAccess,
+  user: string | null,
+  events: readonly AccessEvent[],
+): Promise<void> {
+  await recordAudit(
+    ctx,
+    access.network,
+    events.map((event) => ({
+      event: event.event,
+      user,
+      session: null,
+      detail: { mode: access.credentialMode, ...event.detail },
+    })),
+  );
 }

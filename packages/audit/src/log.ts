@@ -131,6 +131,8 @@ export function auditLogFiles(
 const BATCH_LIMIT = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_CLOSE_DEADLINE_MS = 5_000;
+/** Pause between delivery attempts of a required sink while closing. */
+const CLOSE_RETRY_MS = 200;
 
 const DISABLED_CONFIG: AuditConfig = {
   enabled: false,
@@ -469,7 +471,16 @@ export class AuditLog implements AuditEmitter {
 
   emit(input: AuditEmitInput): void {
     try {
-      if (this.#state === "disabled" || this.#closed) return;
+      if (this.#state === "disabled") return;
+      if (this.#closed) {
+        // Nothing delivers after close: count the event as lost everywhere.
+        for (const sink of this.#sinks) {
+          sink.dropped += 1;
+          sink.state = sink.config.required ? "failed" : "degraded";
+        }
+        this.#update();
+        return;
+      }
       // One ID per emission, shared by every sink and kept across retries.
       const event: AuditEvent = {
         ...sanitizeEvent(
@@ -522,6 +533,10 @@ export class AuditLog implements AuditEmitter {
   /** Deliver pending events to every sink. Never rejects. */
   flush(): Promise<void> {
     if (this.#state === "disabled" || this.#closed) return this.#flushing;
+    return this.#flush();
+  }
+
+  #flush(): Promise<void> {
     if (this.#flushQueued) return this.#flushing;
     this.#flushQueued = true;
     this.#flushing = this.#flushing.then(async () => {
@@ -533,16 +548,18 @@ export class AuditLog implements AuditEmitter {
   }
 
   /**
-   * Stop the timer, run a final flush bounded by `deadlineMs`, and abort any
-   * delivery still running at the deadline. Undelivered events stay counted
-   * as pending in the returned status.
+   * Stop the timer and flush, retrying a required sink until it has taken
+   * every event or `deadlineMs` passes; then abort any delivery still
+   * running. Undelivered events stay counted as pending in the returned
+   * status: check it with `requiredAuditLoss`, since a required sink must
+   * never lose events silently.
    */
   async close(deadlineMs = DEFAULT_CLOSE_DEADLINE_MS): Promise<AuditStatus> {
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = undefined;
     if (this.#state !== "disabled" && !this.#closed) {
-      const final = this.flush();
       this.#closed = true;
+      const final = this.#finalFlush();
       let timer: NodeJS.Timeout | undefined;
       const deadline = new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.max(0, deadlineMs));
@@ -554,6 +571,28 @@ export class AuditLog implements AuditEmitter {
     }
     this.#closed = true;
     return this.status();
+  }
+
+  async #finalFlush(): Promise<void> {
+    const signal = this.#abort.signal;
+    await this.#flush();
+    while (
+      !signal.aborted &&
+      this.#sinks.some((sink) => sink.config.required && sink.queue.length)
+    ) {
+      // A referenced timer: an unreferenced one could let the process exit
+      // with the retry, and the events, still pending.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, CLOSE_RETRY_MS);
+        signal.addEventListener("abort", done, { once: true });
+        function done() {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        }
+      });
+      if (!signal.aborted) await this.#flush();
+    }
   }
 
   status(): AuditStatus {
@@ -659,6 +698,45 @@ async function openSink(
       throw unavailable(config, sink.describeError(error));
     }
   return sink;
+}
+
+/**
+ * AUDIT_UNAVAILABLE when a required sink ended with events it did not take
+ * (still pending, or dropped because its buffer was full or the log was
+ * closed); otherwise undefined. `prefix` says what happened to the operation
+ * those events describe. The message holds counts, sink IDs, and the
+ * already-redacted last error only.
+ */
+export function requiredAuditLoss(
+  status: AuditStatus,
+  prefix = "Audit events were lost",
+): PiShipError | undefined {
+  const lost = status.sinks.filter(
+    (sink) => sink.required && (sink.pending > 0 || sink.dropped > 0),
+  );
+  if (!lost.length) return undefined;
+  const sinks = lost
+    .map(
+      (sink) =>
+        `${sink.id} (${sink.pending} pending, ${sink.dropped} dropped${sink.lastError ? `; last error: ${sink.lastError}` : ""})`,
+    )
+    .join(", ");
+  return new PiShipError(
+    "AUDIT_UNAVAILABLE",
+    `${prefix}: ${lost.reduce((sum, sink) => sum + sink.pending + sink.dropped, 0)} audit event(s) were not delivered to required audit sink ${sinks}`,
+    {
+      component: "audit",
+      userAction:
+        "Restore the required audit sink and report the unrecorded activity to the distribution administrator",
+      sanitizedDetail: {
+        sinks: lost.map((sink) => ({
+          id: sink.id,
+          pending: sink.pending,
+          dropped: sink.dropped,
+        })),
+      },
+    },
+  );
 }
 
 /** Required sinks fail launch; optional sinks start degraded. */

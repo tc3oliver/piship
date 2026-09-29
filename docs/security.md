@@ -104,9 +104,10 @@ Audit is metadata first. Events (`piship-audit/v1`) record the event type, time,
 | Required | Delivery fails | Events stay buffered and are retried; governed actions continue |
 | Required | Buffer full while delivery keeps failing | New events are dropped and counted; governed actions fail closed with `AUDIT_UNAVAILABLE` until the buffer drains |
 | Optional | Cannot be opened, delivery fails, or buffer full | Sink is degraded; affected batches or events are dropped and counted; governed actions continue |
-| Any | Close deadline passes | In-flight delivery is aborted; optional batches count as dropped, required ones stay pending |
+| Optional | Close deadline passes | In-flight delivery is aborted; the batch counts as dropped |
+| Required | Events still undelivered when the session or command ends, or dropped earlier | Delivery is retried until the close deadline (5 s). Whatever the sink has not taken is reported, never discarded silently: the session ends with `AUDIT_UNAVAILABLE` (the command exits non-zero), and a launch that is already failing keeps its own error and counts `AUDIT_UNAVAILABLE` among the startup failures `doctor` shows |
 
-`doctor` reports each sink's state and delivered, pending, and dropped counts. Login and logout events are recorded best effort, so signing out still works while a company sink is down.
+A required sink is the whole policy for mandatory audit: events are buffered up to `audit.buffer.maxEvents` while the sink is down, and governed actions fail closed once that buffer is full. There is no separate setting. `doctor` reports each sink's state and delivered, pending, and dropped counts. `login`, `logout`, `update`, and `rollback` record their events after the operation, so signing out still works while a company sink is down. With only optional sinks that is best effort (a failure is a warning). With a required sink that cannot be reached or does not take every event, the command fails with `AUDIT_UNAVAILABLE` after the operation, which is not undone; a refused `update` or `rollback` keeps its own error and prints the audit failure.
 
 ### Sandbox
 

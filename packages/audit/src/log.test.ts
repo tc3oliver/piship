@@ -29,6 +29,7 @@ import {
   auditLogFiles,
   describeAuditStatus,
   formatAuditFailureMatrix,
+  requiredAuditLoss,
 } from "./index.js";
 
 const posix = process.platform !== "win32";
@@ -638,9 +639,16 @@ describe("AuditLog http sink", () => {
     const flushed = await log.close(2_000);
     expect(flushed.sinks[0]).toMatchObject({ delivered: 1, pending: 0 });
     expect(events(collector)).toEqual(["session.end"]);
-    // Emission after close is ignored.
+    expect(requiredAuditLoss(flushed)).toBeUndefined();
+    // Emission after close is never delivered, so it counts as dropped.
     log.emit({ event: "session.start", user: null, session: null });
-    expect(log.status().sinks[0]?.pending).toBe(0);
+    expect(log.status()).toMatchObject({
+      state: "failed",
+      sinks: [{ pending: 0, dropped: 1 }],
+    });
+    expect(requiredAuditLoss(log.status())).toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+    });
 
     const slow = await AuditLog.open({
       config: config([
@@ -657,6 +665,101 @@ describe("AuditLog http sink", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(status.sinks[0]?.delivered).toBe(0);
     expect(status.sinks[0]?.pending).toBe(1);
+    expect(requiredAuditLoss(status, "The session ended")?.message).toMatch(
+      /^The session ended: 1 audit event\(s\) were not delivered to required audit sink company \(1 pending, 0 dropped/,
+    );
+  });
+
+  it("close() retries a required sink that fails during shutdown until the deadline", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config([
+        { id: "company", type: "http", url: collector.url, required: true },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    // Fault injection: the collector is down when the final flush starts and
+    // comes back a moment later.
+    collector.status = 503;
+    log.emit({ event: "session.end", user: null, session: null });
+    setTimeout(() => {
+      collector.status = 200;
+    }, 300);
+    const status = await log.close(3_000);
+    expect(status.sinks[0]).toMatchObject({ delivered: 1, pending: 0 });
+    expect(requiredAuditLoss(status)).toBeUndefined();
+    expect(events(collector)).toEqual(["session.end"]);
+  });
+
+  it("reports a required sink that stays down through close without leaking its url", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config([
+        { id: "company", type: "http", url: collector.url, required: true },
+        { id: "local", type: "file", required: false },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    collector.status = 500;
+    log.emit({ event: "tool.allowed", user: null, session: null });
+    log.emit({ event: "session.end", user: null, session: null });
+    const started = Date.now();
+    const status = await log.close(1_000);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    // Retried until the deadline, not just once.
+    expect(collector.requests.length).toBeGreaterThan(2);
+    expect(status.sinks).toMatchObject([
+      { id: "company", pending: 2, delivered: 0 },
+      { id: "local", pending: 0, delivered: 2 },
+    ]);
+    const loss = requiredAuditLoss(status);
+    expect(loss).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    expect(loss?.message).toContain("2 audit event(s)");
+    expect(loss?.message).toContain("HTTP 500");
+    expect(JSON.stringify(loss?.toJSON())).not.toContain("route=audit");
+  });
+
+  it("does not report optional sinks that drop events as a required loss", async () => {
+    const collector = await startCollector();
+    collector.status = 0;
+    const log = await AuditLog.open({
+      config: config(
+        [{ id: "company", type: "http", url: collector.url, required: false }],
+        2,
+      ),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    for (let index = 0; index < 4; index += 1)
+      log.emit({ event: "tool.request", user: null, session: null });
+    const status = await log.close(500);
+    expect(status.sinks[0]?.dropped).toBe(4);
+    expect(requiredAuditLoss(status)).toBeUndefined();
+  });
+
+  it("reports events a full required buffer dropped, even after the sink recovers", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config(
+        [{ id: "company", type: "http", url: collector.url, required: true }],
+        2,
+      ),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    collector.status = 503;
+    for (let index = 0; index < 3; index += 1)
+      log.emit({ event: "tool.request", user: null, session: null });
+    collector.status = 200;
+    const status = await log.close(2_000);
+    expect(status.sinks[0]).toMatchObject({ pending: 0, dropped: 1 });
+    expect(requiredAuditLoss(status)?.message).toContain("1 dropped");
   });
 });
 
