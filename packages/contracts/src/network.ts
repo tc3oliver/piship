@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import tls from "node:tls";
 import {
   Agent,
@@ -8,6 +9,7 @@ import {
   setGlobalDispatcher,
 } from "undici";
 import { PiShipError } from "./errors.js";
+import { redact } from "./secret.js";
 
 export interface NetworkPolicy {
   /** Honor HTTP_PROXY, HTTPS_PROXY, and NO_PROXY from the launch environment. */
@@ -16,7 +18,11 @@ export interface NetworkPolicy {
   readonly additionalCA: readonly string[];
   /** When true, only allowHosts may be contacted; no public fallback. */
   readonly privateOnly: boolean;
-  /** Lowercase hostnames permitted when privateOnly is set. */
+  /**
+   * Lowercase hostnames permitted when privateOnly is set. Only the hostname
+   * is compared: the port and scheme are ignored, and nothing checks that the
+   * host is a private address.
+   */
   readonly allowHosts: readonly string[];
 }
 
@@ -41,6 +47,19 @@ const PROXY_VARIABLES = [
   "no_proxy",
 ];
 const CA_VARIABLES = ["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"];
+// Other variables that pick a child's proxy or trust roots, or turn TLS
+// verification off, for curl, git, Python requests, and Node.
+const OTHER_NETWORK_VARIABLES = [
+  "ALL_PROXY",
+  "all_proxy",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "GIT_SSL_CAINFO",
+  "GIT_SSL_NO_VERIFY",
+  "NODE_TLS_REJECT_UNAUTHORIZED",
+];
+/** The one CA variable that adds to the default roots instead of replacing them. */
+const CHILD_CA_VARIABLE = "NODE_EXTRA_CA_CERTS";
 // Agent sockets are local IPC paths, not secret values; git and signing need them.
 const PRESERVED_VARIABLES = ["SSH_AUTH_SOCK", "GPG_AGENT_INFO"];
 
@@ -207,9 +226,14 @@ export function createManagedFetch(
   };
 }
 
+let processNetwork: ApprovedNetworkEnvironment | undefined;
+
 /**
  * Apply the policy to in-process HTTP used by the Pi runtime: add enterprise
  * CA roots and install a proxy-aware dispatcher. TLS verification stays on.
+ * Also records the network environment child processes may receive
+ * (`processNetworkEnvironment`), read from the launch environment as it is
+ * now, so call it after `sanitizeManagedEnvironment`.
  */
 export function applyProcessNetworkPolicy(policy: NetworkPolicy): void {
   assertTlsVerificationEnabled();
@@ -218,6 +242,19 @@ export function applyProcessNetworkPolicy(policy: NetworkPolicy): void {
   if (roots && typeof tls.setDefaultCACertificates === "function")
     tls.setDefaultCACertificates(roots);
   setGlobalDispatcher(createDispatcher(policy));
+  processNetwork = approvedNetworkEnvironment(policy);
+}
+
+/**
+ * The network environment child processes of this process may receive, or
+ * undefined until `applyProcessNetworkPolicy` ran (a distribution with no
+ * network policy, such as a `piship/v1alpha1` personal one, keeps its
+ * children's environment as it is).
+ */
+export function processNetworkEnvironment():
+  | ApprovedNetworkEnvironment
+  | undefined {
+  return processNetwork;
 }
 
 const CREDENTIAL_VARIABLE =
@@ -270,4 +307,145 @@ export function sanitizeManagedEnvironment(
     }
   }
   return removed.sort();
+}
+
+/**
+ * The network environment a child process may receive, derived from the
+ * policy and the launch environment. Children get exactly these variables and
+ * no other proxy, CA, or TLS-verification variable, so the settings a
+ * distribution declares are the ones its children run with.
+ */
+export interface ApprovedNetworkEnvironment {
+  /**
+   * Variables a child may receive, by name. Never a credential, and never a
+   * setting that relaxes TLS verification.
+   */
+  readonly variables: Readonly<Record<string, string>>;
+  readonly proxy: {
+    /** Whether the policy inherits the launch proxy environment. */
+    readonly inherited: boolean;
+    /** The proxy PiShip's own clients use, as `scheme://host:port` (no credentials). */
+    readonly http: string | undefined;
+    readonly https: string | undefined;
+    /** Whether the launch environment excludes hosts from the proxy. */
+    readonly noProxy: boolean;
+  };
+  /** How many enterprise CA bundles the policy declares. */
+  readonly caBundles: number;
+  /** Variables PiShip configured but did not give to children, and why. Never values. */
+  readonly withheld: readonly {
+    readonly name: string;
+    readonly reason: string;
+  }[];
+}
+
+const GOVERNED_NETWORK_NAMES = new Set(
+  [...PROXY_VARIABLES, ...CA_VARIABLES, ...OTHER_NETWORK_VARIABLES].map(
+    (name) => name.toUpperCase(),
+  ),
+);
+
+/**
+ * Whether a variable name picks a proxy, trust roots, or TLS verification for
+ * a child process. A child environment keeps such a variable only when it is
+ * approved.
+ */
+export function isNetworkEnvironmentName(name: string): boolean {
+  return GOVERNED_NETWORK_NAMES.has(name.toUpperCase());
+}
+
+function checkProxyUrl(value: string): {
+  shown: string | undefined;
+  refusal: string | undefined;
+} {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:")
+      return { shown: undefined, refusal: "it is not an http or https URL" };
+    return {
+      shown: `${url.protocol}//${url.host}`,
+      refusal:
+        url.username || url.password ? "the URL embeds credentials" : undefined,
+    };
+  } catch {
+    return { shown: undefined, refusal: "it is not a valid URL" };
+  }
+}
+
+/**
+ * Derive the network environment child processes may receive. Fail closed:
+ *
+ * - Proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, in both cases)
+ *   only when the policy inherits them, with the value PiShip's own clients
+ *   use (a lowercase name wins, as in undici). A proxy URL that embeds
+ *   credentials, is not an http(s) URL, or looks like a credential is
+ *   withheld: a child never receives a proxy credential.
+ * - `NODE_EXTRA_CA_CERTS` only from a single declared `network.tls.additionalCA`
+ *   bundle, the one CA variable that adds to the default roots. Several
+ *   bundles cannot be expressed as one file and are withheld; `SSL_CERT_FILE`
+ *   and `SSL_CERT_DIR` replace the roots, so they are never passed.
+ * - Nothing that relaxes TLS verification, whatever the environment holds.
+ */
+export function approvedNetworkEnvironment(
+  policy: NetworkPolicy,
+  env: NodeJS.ProcessEnv = process.env,
+): ApprovedNetworkEnvironment {
+  const variables: Record<string, string> = {};
+  const withheld: { name: string; reason: string }[] = [];
+  const proxy: {
+    inherited: boolean;
+    http: string | undefined;
+    https: string | undefined;
+    noProxy: boolean;
+  } = {
+    inherited: policy.inheritProxyEnvironment,
+    http: undefined,
+    https: undefined,
+    noProxy: false,
+  };
+  const withhold = (name: string, refusal: string) =>
+    withheld.push({
+      name,
+      reason: `not passed to child processes: ${refusal}`,
+    });
+  if (policy.inheritProxyEnvironment) {
+    const effective = (name: string) => env[name.toLowerCase()] ?? env[name];
+    for (const [name, key] of [
+      ["HTTP_PROXY", "http"],
+      ["HTTPS_PROXY", "https"],
+    ] as const) {
+      const value = effective(name);
+      if (!value) continue;
+      const check = checkProxyUrl(value);
+      proxy[key] = check.shown;
+      const refusal =
+        check.refusal ??
+        (redact(value) === value
+          ? undefined
+          : "the value looks like a credential");
+      if (refusal) {
+        withhold(name, refusal);
+        continue;
+      }
+      variables[name] = value;
+      variables[name.toLowerCase()] = value;
+    }
+    const noProxy = effective("NO_PROXY");
+    if (noProxy) {
+      proxy.noProxy = true;
+      if (redact(noProxy) === noProxy) {
+        variables.NO_PROXY = noProxy;
+        variables.no_proxy = noProxy;
+      } else withhold("NO_PROXY", "the value looks like a credential");
+    }
+  }
+  const [bundle] = policy.additionalCA;
+  if (bundle && policy.additionalCA.length === 1)
+    variables[CHILD_CA_VARIABLE] = resolve(bundle);
+  else if (policy.additionalCA.length > 1)
+    withhold(
+      CHILD_CA_VARIABLE,
+      "network.tls.additionalCA lists several bundles and a child accepts one file",
+    );
+  return { variables, proxy, caBundles: policy.additionalCA.length, withheld };
 }

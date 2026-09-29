@@ -1,6 +1,8 @@
 // Environment and diagnostic hygiene for governed child processes.
 import {
+  type ApprovedNetworkEnvironment,
   DEFAULT_NETWORK_POLICY,
+  isNetworkEnvironmentName,
   PiShipError,
   redact,
   sanitizeManagedEnvironment,
@@ -77,6 +79,24 @@ export function stripCredentials(
   for (const [name, value] of Object.entries(env))
     if (value !== undefined && !isCredentialName(name)) output[name] = value;
   return output;
+}
+
+/**
+ * Give a child environment the approved network environment and no other:
+ * every proxy, CA, and TLS-verification variable it holds is dropped (an
+ * allowlisted `HTTPS_PROXY` included), then the approved variables are added.
+ * Without a network environment (no policy was applied to this process) the
+ * environment is returned unchanged.
+ */
+export function withApprovedNetwork(
+  env: Readonly<Record<string, string | undefined>>,
+  network: ApprovedNetworkEnvironment | undefined,
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env))
+    if (value !== undefined && !(network && isNetworkEnvironmentName(name)))
+      output[name] = value;
+  return network ? { ...output, ...network.variables } : output;
 }
 
 export const STDERR_TRUNCATION_MARKER = "[stderr truncated: ";

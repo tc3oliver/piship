@@ -1,3 +1,8 @@
+import { resolve } from "node:path";
+import {
+  approvedNetworkEnvironment,
+  DEFAULT_NETWORK_POLICY,
+} from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
   filterEnvironment,
@@ -5,6 +10,7 @@ import {
   STDERR_TRUNCATION_MARKER,
   sanitizeStderr,
   stripCredentials,
+  withApprovedNetwork,
 } from "./environment.js";
 
 describe("filterEnvironment", () => {
@@ -84,6 +90,74 @@ describe("filterEnvironment", () => {
     ).toEqual({
       PATH: "/bin",
     });
+  });
+});
+
+describe("withApprovedNetwork", () => {
+  const network = approvedNetworkEnvironment(
+    { ...DEFAULT_NETWORK_POLICY, additionalCA: ["/etc/corp/ca.pem"] },
+    {
+      HTTPS_PROXY: "http://proxy.corp.example:3128",
+      NO_PROXY: "localhost",
+    },
+  );
+
+  it("gives a child the approved network environment and no other proxy, CA, or TLS variable", () => {
+    const output = withApprovedNetwork(
+      {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://svc:hunter2@other.example:3128",
+        ALL_PROXY: "socks5://other.example:1080",
+        SSL_CERT_FILE: "/etc/ambient.pem",
+        NODE_EXTRA_CA_CERTS: "/etc/ambient.pem",
+        REQUESTS_CA_BUNDLE: "/etc/ambient.pem",
+        GIT_SSL_NO_VERIFY: "1",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        GONE: undefined,
+      },
+      network,
+    );
+    expect(output).toEqual({
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://proxy.corp.example:3128",
+      https_proxy: "http://proxy.corp.example:3128",
+      NO_PROXY: "localhost",
+      no_proxy: "localhost",
+      NODE_EXTRA_CA_CERTS: resolve("/etc/corp/ca.pem"),
+    });
+    expect(JSON.stringify(output)).not.toContain("hunter2");
+  });
+
+  it("drops ambient network variables even when nothing is approved", () => {
+    expect(
+      withApprovedNetwork(
+        { PATH: "/usr/bin", https_proxy: "http://p:1", Ssl_Cert_File: "/x" },
+        approvedNetworkEnvironment(
+          { ...DEFAULT_NETWORK_POLICY, inheritProxyEnvironment: false },
+          {},
+        ),
+      ),
+    ).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("never adds a credential-looking name", () => {
+    for (const name of Object.keys(network.variables))
+      expect(isCredentialName(name)).toBe(false);
+  });
+
+  it("returns the environment unchanged when no network policy was applied", () => {
+    const env = {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://proxy.corp.example:3128",
+      SSL_CERT_FILE: "/etc/ambient.pem",
+    };
+    expect(withApprovedNetwork(env, undefined)).toEqual(env);
+  });
+
+  it("does not change its input", () => {
+    const env = { HTTPS_PROXY: "http://ambient:1", PATH: "/usr/bin" };
+    withApprovedNetwork(env, network);
+    expect(env).toEqual({ HTTPS_PROXY: "http://ambient:1", PATH: "/usr/bin" });
   });
 });
 
