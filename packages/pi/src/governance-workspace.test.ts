@@ -182,10 +182,10 @@ async function open(options: {
   return { session, root, workspace, git };
 }
 
-/** A Pi context with a UI whose notices are collected. */
-function context(notices: string[] = []): ExtensionContext {
+/** A Pi context whose UI, when it has one, collects the notices. */
+function context(notices: string[] = [], hasUI = true): ExtensionContext {
   return {
-    hasUI: true,
+    hasUI,
     ui: {
       confirm: async () => true,
       select: async () => undefined,
@@ -296,7 +296,7 @@ describe.skipIf(!posix || asRoot)(
       });
       const hooks = load(session, false);
       // A notice raised before the UI attaches is held, then shown once.
-      await userBash(hooks, workspace, "echo one");
+      await userBash(hooks, workspace, "echo one", context([], false));
       const notices: string[] = [];
       session.attachNotices((message) => notices.push(message));
       await userBash(hooks, workspace, "echo two");
@@ -352,6 +352,21 @@ describe.skipIf(!posix || asRoot)(
         ])
           expect(text).not.toContain(path);
       }
+    });
+
+    it("shows the notice through the session's UI as soon as it is raised, once", async () => {
+      const { session, workspace } = await open({
+        declaration: { mode: "shared", sentinelDir: "sync-probe" },
+        company: false,
+      });
+      const hooks = load(session, false);
+      const notices: string[] = [];
+      const ctx = context(notices);
+      await userBash(hooks, workspace, "echo one", ctx);
+      await userBash(hooks, workspace, "echo two", ctx);
+      expect(notices).toEqual([
+        expect.stringContaining("The sandbox workspace is weaker"),
+      ]);
     });
 
     it("writes no sentinel in Plan mode, then checks once before the first command in Build mode (T10)", async () => {
