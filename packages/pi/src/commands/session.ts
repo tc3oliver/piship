@@ -47,13 +47,18 @@ async function endSession(
   // Credential refreshes during the session land in the same metrics.
   saveMetrics(prepared.metrics);
   publishContext(null);
-  const [first, ...rest] = failures;
-  if (first === undefined) return;
+  if (failures.length === 0) return;
   if (sessionFailed) {
     for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
     return;
   }
-  for (const error of rest) ctx.err(`Error: ${formatError(error)}`);
+  // Lost required audit outranks a cleanup error, as it does in close().
+  const lost = failures.findIndex(
+    (error) =>
+      error instanceof PiShipError && error.code === "AUDIT_UNAVAILABLE",
+  );
+  const [first] = failures.splice(Math.max(lost, 0), 1);
+  for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
   throw first;
 }
 
@@ -277,6 +282,28 @@ export async function runInteractive(
     gov,
   );
   let sessionFailed = false;
+  // Pi ends an interactive session with process.exit() from inside
+  // runtime.dispose() (Ctrl+D, /quit, SIGTERM, SIGHUP), so nothing after
+  // `run()` runs: the governance session has to end inside that dispose call,
+  // or `session.end` and the final flush would never happen. A teardown
+  // failure cannot change the exit code Pi passes afterwards, so it is
+  // reported and the exit code is forced to 1.
+  const piDispose = runtime.dispose.bind(runtime);
+  let ending: Promise<void> | undefined;
+  const end = (failed: boolean): Promise<void> => {
+    ending ??= endSession(ctx, prepared, { dispose: piDispose }, gov, failed);
+    return ending;
+  };
+  runtime.dispose = async () => {
+    try {
+      await end(false);
+    } catch (error) {
+      ctx.err(`Error: ${formatError(error)}`);
+      const exit = process.exit.bind(process);
+      process.exit = ((code?: number) =>
+        exit(code ? code : 1)) as typeof process.exit;
+    }
+  };
   try {
     await new InteractiveMode(
       runtime,
@@ -286,6 +313,6 @@ export async function runInteractive(
     sessionFailed = true;
     throw error;
   } finally {
-    await endSession(ctx, prepared, runtime, gov, sessionFailed);
+    await end(sessionFailed);
   }
 }

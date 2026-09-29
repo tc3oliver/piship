@@ -193,6 +193,11 @@ export class GovernanceSession {
     return this.engine.id;
   }
 
+  /** Throws AUDIT_UNAVAILABLE while a required audit sink has lost events. */
+  assertAuditAvailable(): void {
+    this.audit.assertAvailable();
+  }
+
   emit(
     event: AuditEventType,
     fields: Omit<Parameters<AuditLog["emit"]>[0], "event"> = {},

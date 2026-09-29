@@ -28,6 +28,12 @@ export interface ModelPolicy {
   allows(provider: string, id: string): boolean;
   /** Called when a request for a disallowed model is refused. */
   denied?(provider: string, id: string): void;
+  /**
+   * Called before every request; throws to refuse it. A prompt can carry
+   * workspace content, so a request must not leave while a required control
+   * (a required audit sink that lost events) is down.
+   */
+  available?(): void;
 }
 
 export interface GovernedRuntime {
@@ -107,6 +113,7 @@ export function governModelRuntime(
       policy?.denied?.(model.provider, model.id);
       throw denied(model.provider, model.id);
     }
+    policy?.available?.();
   };
 
   const target = runtime as unknown as Record<string, unknown>;

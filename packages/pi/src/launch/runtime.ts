@@ -250,10 +250,17 @@ export async function startGoverned(
     return await startRuntime(ctx, prepared, sessionDir, gov);
   } catch (error) {
     // The start error stays the command's error; a close that lost audit
-    // events is reported next to it instead of replacing it.
+    // events is reported next to it instead of replacing it. Both are counted
+    // in the local startup failures, as an open failure is.
+    const count = (failure: unknown) =>
+      prepared.metrics?.recordStartupFailure(
+        failure instanceof PiShipError ? failure.code : "CONFIG_UNAVAILABLE",
+      );
+    count(error);
     try {
       await gov?.close();
     } catch (closeError) {
+      count(closeError);
       ctx.err(`Error: ${formatError(closeError)}`);
     }
     saveMetrics(prepared.metrics);

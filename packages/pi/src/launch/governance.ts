@@ -176,5 +176,6 @@ export async function modelPolicy(
     },
     denied: (provider, id) =>
       gov.emit("model.denied", { resource: `${provider}/${id}` }),
+    available: () => gov.assertAuditAvailable(),
   };
 }

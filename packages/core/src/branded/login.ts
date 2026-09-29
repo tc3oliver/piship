@@ -90,8 +90,14 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
     // A login can fail after it stored the new identity or revoked the
     // previous credential (a broker refusal, say): what happened is still
     // recorded, and the login error stays the command's error.
+    // Read from the stored session, which needs no credential manager: a
+    // credential adapter that failed to load must not turn this into an
+    // event about nobody. With no identity provider a leftover session from an
+    // earlier configuration is not the user of this login.
     const subject =
-      (await access.status().catch(() => undefined))?.identity?.subject ?? null;
+      access.identityMode === "none"
+        ? null
+        : (access.readIdentityMetadata()?.subject ?? null);
     await auditAccess(ctx, access, subject, events).catch((auditError) =>
       ctx.err(`Error: ${formatError(auditError)}`),
     );
