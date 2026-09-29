@@ -17,12 +17,16 @@ import {
   type SandboxExecIO,
   type SandboxExecRequest,
   type SandboxExecResult,
-  type SandboxInstance,
 } from "./backend.js";
-import type { SandboxCommand, WrappedCommand } from "./adapter.js";
 import { customBackend } from "./custom.js";
-import type { SandboxPolicy, SandboxProfile } from "./profile.js";
+import type { SandboxPolicy } from "./profile.js";
 import { selectAdapter } from "./select.js";
+import {
+  fakeBackend,
+  fakeWrappingBackend,
+  PATH_PLANES,
+  REMOTE_CAPABILITIES as REMOTE,
+} from "./testing/fake-backend.js";
 
 const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
   required: true,
@@ -33,82 +37,6 @@ const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
   },
   ...overrides,
 });
-
-const REMOTE: SandboxCapabilities = {
-  isolation: "remote",
-  planes: ["host-filesystem-isolation", "network-deny", "environment-filter"],
-  network: ["deny", "allow"],
-  localProcesses: false,
-};
-const PATH_PLANES = [
-  "filesystem-read-deny",
-  "filesystem-write-allowlist",
-] as const;
-
-/** Answer PiShip's check command the way a contained shell would. */
-function answerCheck(request: SandboxExecRequest, io: SandboxExecIO): void {
-  io.onStdout(
-    Buffer.from(
-      `${SANDBOX_READY_MARKER} ${request.env.PISHIP_PROBE_UNLISTED ?? "unset"}\n`,
-    ),
-  );
-  if (request.command.includes("piship-network"))
-    io.onStdout(Buffer.from("piship-network-blocked\n"));
-}
-
-interface FakeOptions {
-  capabilities?: SandboxCapabilities;
-  available?: () => Promise<
-    { available: true } | { available: false; reason: string }
-  >;
-  prepare?: () => Promise<void>;
-  exec?: (
-    request: SandboxExecRequest,
-    io: SandboxExecIO,
-  ) => Promise<SandboxExecResult>;
-  check?: (request: SandboxExecRequest, io: SandboxExecIO) => void;
-}
-
-/** A company backend as a custom adapter module would return it. */
-function fakeBackend(options: FakeOptions = {}) {
-  const events: string[] = [];
-  const requests: SandboxExecRequest[] = [];
-  const raw = {
-    id: "acme-sandbox",
-    available: async () => {
-      events.push("available");
-      return options.available
-        ? options.available()
-        : { available: true as const };
-    },
-    capabilities: () => {
-      events.push("capabilities");
-      return options.capabilities ?? REMOTE;
-    },
-    prepare: async (): Promise<SandboxInstance> => {
-      events.push("prepare");
-      await options.prepare?.();
-      return {
-        exec: async (request, io) => {
-          requests.push(request);
-          if (request.command.includes(SANDBOX_READY_MARKER)) {
-            events.push("check");
-            (options.check ?? answerCheck)(request, io);
-            return { exitCode: 0 };
-          }
-          events.push("exec");
-          if (options.exec) return options.exec(request, io);
-          io.onStdout(Buffer.from(`ran ${request.command}\n`));
-          return { exitCode: 0 };
-        },
-        dispose: async () => {
-          events.push("dispose");
-        },
-      };
-    },
-  };
-  return { backend: customBackend(raw), events, requests };
-}
 
 let root: string;
 let workspace: string;
@@ -696,27 +624,8 @@ const nativeReady = (await native.available()).available;
 const requireSandbox = process.env.PISHIP_REQUIRE_SANDBOX === "1";
 
 describe("a local custom backend is proven by the live probe", () => {
-  const LOCAL: SandboxCapabilities = {
-    isolation: "local",
-    planes: [...PATH_PLANES, "network-deny", "environment-filter"],
-    network: ["deny", "allow"],
-    localProcesses: true,
-  };
   /** A company wrapper around a local mechanism; `contain: false` wraps nothing. */
-  const local = (contain: boolean) =>
-    customBackend({
-      id: "acme-local",
-      available: async () => ({ available: true }),
-      capabilities: () => LOCAL,
-      prepare: async ({ profile }: { profile: SandboxProfile }) => ({
-        wrap: (command: SandboxCommand): WrappedCommand =>
-          contain
-            ? native.wrap(profile, command)
-            : { ...command, args: [...command.args] },
-        exec: async () => ({ exitCode: 0 }),
-        dispose: async () => {},
-      }),
-    });
+  const local = (contain: boolean) => fakeWrappingBackend(native, contain);
 
   it.skipIf(process.platform === "win32")(
     "rejects a local backend whose wrap contains nothing",

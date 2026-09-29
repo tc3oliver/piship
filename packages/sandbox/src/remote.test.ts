@@ -1,19 +1,9 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  activateSandbox,
-  describeContainment,
-  SANDBOX_READY_MARKER,
-} from "./activate.js";
+import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxPolicy } from "./profile.js";
 import {
   connectEnvelope,
@@ -26,48 +16,13 @@ import {
   type KubernetesAgentSandboxOptions,
   runtimeCommand,
 } from "./remote/kubernetes.js";
-
-interface Recorded {
-  readonly method: string;
-  readonly path: string;
-  readonly headers: IncomingMessage["headers"];
-  readonly body: Buffer;
-}
-
-type Handler = (
-  request: Recorded,
-  response: ServerResponse,
-  raw: IncomingMessage,
-) => void | Promise<void>;
-
-async function serve(handler: Handler): Promise<{
-  server: Server;
-  url: string;
-  requests: Recorded[];
-}> {
-  const requests: Recorded[] = [];
-  const server = createServer((raw, response) => {
-    const chunks: Buffer[] = [];
-    raw.on("data", (chunk: Buffer) => chunks.push(chunk));
-    raw.on("end", () => {
-      const request = {
-        method: raw.method ?? "GET",
-        path: raw.url ?? "/",
-        headers: raw.headers,
-        body: Buffer.concat(chunks),
-      };
-      requests.push(request);
-      void Promise.resolve(handler(request, response, raw)).catch(() => {
-        response.statusCode = 500;
-        response.end();
-      });
-    });
-  });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  return { server, url: `http://127.0.0.1:${port}`, requests };
-}
+import { e2bServer, type StartRequest } from "./testing/e2b-server.js";
+import {
+  CLAIMS,
+  type Cluster,
+  kubernetesServer,
+} from "./testing/kubernetes-server.js";
+import { closeMockServers, type Recorded } from "./testing/mock-server.js";
 
 const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox");
 
@@ -97,138 +52,17 @@ const ENV = {
 
 let root: string;
 let workspace: string;
-let servers: Server[] = [];
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "piship-remote-")));
   workspace = join(root, "ws");
   mkdirSync(join(workspace, "sub"), { recursive: true });
 });
 afterEach(async () => {
-  for (const server of servers) {
-    server.closeAllConnections();
-    await new Promise((done) => server.close(done));
-  }
-  servers = [];
+  await closeMockServers();
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A check-command answer: the marker line and a blocked outbound check. */
-function checkAnswer(unlisted: string | undefined): string {
-  return `${SANDBOX_READY_MARKER} ${unlisted ?? "unset"}\npiship-network-blocked\n`;
-}
-
 // ------------------------------------------------------------------ E2B
-
-interface StartRequest {
-  process: {
-    cmd: string;
-    args: string[];
-    envs: Record<string, string>;
-    cwd: string;
-  };
-  stdin: boolean;
-}
-
-interface E2bScript {
-  health?: number;
-  /** The envd user the sandbox accepts; others are refused. Default `user`. */
-  user?: string;
-  create?: number;
-  /** Stdout and exit code for a command; `hang` keeps the stream open. */
-  command?: (start: StartRequest) => {
-    stdout?: string;
-    exitCode?: number;
-    hang?: boolean;
-    streamError?: string;
-  };
-}
-
-async function e2bServer(script: E2bScript = {}) {
-  const hung = new Set<ServerResponse>();
-  const started = await serve((request, response) => {
-    const path = request.path.split("?")[0] ?? "";
-    if (path === "/health") {
-      response.statusCode = script.health ?? 204;
-      return void response.end();
-    }
-    if (request.method === "POST" && path === "/sandboxes") {
-      response.statusCode = script.create ?? 201;
-      response.setHeader("Content-Type", "application/json");
-      return void response.end(
-        script.create && script.create >= 400
-          ? JSON.stringify({ code: script.create, message: "no capacity" })
-          : JSON.stringify({
-              sandboxID: "sbx1",
-              templateID: "piship-workspace",
-              envdVersion: "0.4.0",
-              envdAccessToken: "envd-token-1",
-              domain: null,
-            }),
-      );
-    }
-    if (path === "/sandboxes/sbx1/timeout" || path === "/sandboxes/sbx1") {
-      response.statusCode = 204;
-      return void response.end();
-    }
-    if (path === "/process.Process/SendSignal") {
-      for (const open of hung) open.end(connectEnvelope({}, 0x02));
-      hung.clear();
-      response.setHeader("Content-Type", "application/json");
-      return void response.end("{}");
-    }
-    if (path === "/process.Process/Start") {
-      // envd authenticates the process user with HTTP Basic `<user>:`.
-      const expected = `Basic ${Buffer.from(`${script.user ?? "user"}:`).toString("base64")}`;
-      if (request.headers.authorization !== expected) {
-        response.statusCode = 401;
-        response.setHeader("Content-Type", "application/json");
-        return void response.end(
-          '{"code":"unauthenticated","message":"invalid user"}',
-        );
-      }
-      const [frame] = new EnvelopeReader().push(request.body);
-      const start = frame?.message as StartRequest;
-      const script_ = start.process.args[2] ?? "";
-      const answer = script_.includes(SANDBOX_READY_MARKER)
-        ? { stdout: checkAnswer(start.process.envs.PISHIP_PROBE_UNLISTED) }
-        : (script.command?.(start) ?? { stdout: "", exitCode: 0 });
-      response.setHeader("Content-Type", "application/connect+json");
-      response.write(connectEnvelope({ event: { start: { pid: 42 } } }));
-      if (answer.stdout)
-        response.write(
-          connectEnvelope({
-            event: {
-              data: { stdout: Buffer.from(answer.stdout).toString("base64") },
-            },
-          }),
-        );
-      if (answer.hang) return void hung.add(response);
-      if (answer.streamError)
-        return void response.end(
-          connectEnvelope(
-            { error: { code: "internal", message: answer.streamError } },
-            0x02,
-          ),
-        );
-      response.write(
-        connectEnvelope({
-          event: {
-            end: {
-              ...(answer.exitCode ? { exitCode: answer.exitCode } : {}),
-              exited: true,
-              status: `exit status ${answer.exitCode ?? 0}`,
-            },
-          },
-        }),
-      );
-      return void response.end(connectEnvelope({}, 0x02));
-    }
-    response.statusCode = 404;
-    response.end();
-  });
-  servers.push(started.server);
-  return started;
-}
 
 function e2b(url: string, options: Partial<E2bCompatibleOptions> = {}) {
   return new E2bCompatibleBackend({
@@ -548,89 +382,6 @@ describe("e2b-compatible backend against a mock server", () => {
 });
 
 // ------------------------------------------------ Kubernetes Agent Sandbox
-
-const CLAIMS =
-  "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agents/sandboxclaims";
-
-/** Cluster behavior a test can change while the mock runs. */
-interface Cluster {
-  /** Status for DELETE; 500 simulates an API outage during cleanup. */
-  deleteStatus?: number;
-  /** Claims the cluster already removed (their shutdownTime passed). */
-  expired?: Set<string>;
-  /** Holds PATCH responses until it resolves. */
-  patchGate?: Promise<void>;
-}
-
-async function kubernetesServer(
-  execute?: (command: string) => {
-    stdout?: string;
-    exit_code?: number;
-    hang?: boolean;
-  },
-  cluster: Cluster = {},
-) {
-  const polls = new Map<string, number>();
-  const started = await serve((request, response) => {
-    const path = request.path.split("?")[0] ?? "";
-    response.setHeader("Content-Type", "application/json");
-    if (request.method === "GET" && path === CLAIMS)
-      return void response.end(JSON.stringify({ items: [] }));
-    if (request.method === "POST" && path === CLAIMS) {
-      response.statusCode = 201;
-      return void response.end(request.body);
-    }
-    if (path.startsWith(`${CLAIMS}/`)) {
-      const name = path.slice(CLAIMS.length + 1);
-      if (request.method === "DELETE") {
-        response.statusCode = cluster.deleteStatus ?? 200;
-        return void response.end(
-          response.statusCode >= 400 ? '{"message":"etcd unavailable"}' : "{}",
-        );
-      }
-      if (request.method === "PATCH")
-        return void (cluster.patchGate ?? Promise.resolve()).then(() => {
-          response.statusCode = cluster.expired?.has(name) ? 404 : 200;
-          response.end("{}");
-        });
-      const seen = (polls.get(name) ?? 0) + 1;
-      polls.set(name, seen);
-      return void response.end(
-        JSON.stringify({
-          status:
-            seen < 2
-              ? { conditions: [{ type: "Ready", status: "False" }] }
-              : {
-                  conditions: [{ type: "Ready", status: "True" }],
-                  sandbox: { name: `pool-${name}` },
-                },
-        }),
-      );
-    }
-    if (request.method === "POST" && path === "/execute") {
-      const { command } = JSON.parse(request.body.toString()) as {
-        command: string;
-      };
-      if (command.includes(SANDBOX_READY_MARKER))
-        return void response.end(
-          JSON.stringify({
-            stdout: checkAnswer(
-              command.includes("'PISHIP_PROBE_UNLISTED=") ? "1" : undefined,
-            ),
-            stderr: "",
-            exit_code: 0,
-          }),
-        );
-      const answer = execute?.(command) ?? { stdout: "", exit_code: 0 };
-      if (answer.hang) return;
-      return void response.end(JSON.stringify({ stderr: "", ...answer }));
-    }
-    response.statusCode = 404;
-    response.end("{}");
-  });
-  servers.push(started.server);
-  return started;
-}
 
 function kubernetes(
   url: string,
