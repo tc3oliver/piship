@@ -142,13 +142,16 @@ export function normalizeIdentitySession(value: unknown): IdentitySession {
 export function assertSamePrincipal(
   refreshed: IdentitySession,
   previous: IdentitySession,
+  refusal: { readonly message: string; readonly userAction: string } = {
+    message: "Refreshed identity does not match the signed-in subject",
+    userAction: "Run login again",
+  },
 ): IdentitySession {
   if (!samePrincipal(principalKey(refreshed), principalKey(previous)))
-    throw new PiShipError(
-      "IDENTITY_INVALID",
-      "Refreshed identity does not match the signed-in subject",
-      { component: "identity", userAction: "Run login again" },
-    );
+    throw new PiShipError("IDENTITY_INVALID", refusal.message, {
+      component: "identity",
+      userAction: refusal.userAction,
+    });
   return refreshed;
 }
 
