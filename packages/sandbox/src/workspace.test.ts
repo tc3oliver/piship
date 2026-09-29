@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -36,6 +38,7 @@ import type { ProtectedPaths, SandboxPolicy } from "./profile.js";
 import { selectAdapter } from "./select.js";
 import { fakeWrappingBackend } from "./testing/fake-backend.js";
 import {
+  runShell,
   sharedBackend,
   snapshotBackend,
   syncedBackend,
@@ -79,14 +82,27 @@ beforeEach(() => {
 });
 afterEach(() => {
   // Undo read-only modes a protection test set, then remove everything.
-  for (const path of [join(git, "hooks"), join(git, "info")])
+  for (const path of [workspace, git, join(git, "hooks"), join(git, "info")])
     if (existsSync(path)) chmodSync(path, 0o755);
   if (existsSync(join(git, "config"))) chmodSync(join(git, "config"), 0o644);
   rmSync(root, { recursive: true, force: true });
 });
 
-/** The git control paths as the governance session passes them. */
+/**
+ * The git control paths as the governance session passes them: the config
+ * exists, `commondir` and `config.worktree` normally do not.
+ */
 const gitProtection = (): ProtectedPaths => ({
+  files: [
+    join(git, "config"),
+    join(git, "config.worktree"),
+    join(git, "commondir"),
+  ],
+  directories: [join(git, "hooks"), join(git, "info")],
+});
+
+/** Only the protected files that exist: what a backend guarding them by path does. */
+const existingProtection = (): ProtectedPaths => ({
   files: [join(git, "config")],
   directories: [join(git, "hooks"), join(git, "info")],
 });
@@ -565,6 +581,8 @@ describe.skipIf(!posix)(
       expect(hash(join(git, "hooks"))).toBe(hooks);
       expect(readdirSync(join(git, "hooks"))).toEqual(["pre-commit"]);
       expect(existsSync(join(git, "info"))).toBe(false);
+      expect(existsSync(join(git, "commondir"))).toBe(false);
+      expect(existsSync(join(git, "config.worktree"))).toBe(false);
       expect(sentinels()).toEqual([]);
       expect(sandbox.workspace()).toMatchObject({
         effective: "snapshot",
@@ -577,7 +595,9 @@ describe.skipIf(!posix)(
     it("fails closed when only a protected directory is writable", async () => {
       const fake = sharedBackend();
       chmodSync(join(git, "config"), 0o444);
-      const sandbox = await activate(fake, { protectedPaths: gitProtection() });
+      const sandbox = await activate(fake, {
+        protectedPaths: existingProtection(),
+      });
       const result = run(sandbox, "echo agent");
       if (root_) await result.catch(() => undefined);
       else
@@ -592,13 +612,105 @@ describe.skipIf(!posix)(
       await sandbox.dispose();
     });
 
+    it("fails closed when a protected file that does not exist yet can be created", async () => {
+      // A backend that guards only what exists on the host: the existing
+      // config and the hooks and info trees are read-only, .git is not.
+      mkdirSync(join(git, "info"));
+      chmodSync(join(git, "config"), 0o444);
+      chmodSync(join(git, "hooks"), 0o555);
+      chmodSync(join(git, "info"), 0o555);
+      const fake = sharedBackend();
+      const sandbox = await activate(fake, { protectedPaths: gitProtection() });
+      const result = run(sandbox, "echo agent");
+      if (root_) await result.catch(() => undefined);
+      else
+        await expect(result).rejects.toMatchObject({
+          code: "SANDBOX_UNAVAILABLE",
+          message: expect.stringContaining(
+            "a protected git control file that does not exist yet could be created from the sandbox",
+          ),
+        });
+      expect(fake.commands()).toEqual([]);
+      // What the probe created is gone; the existing files are untouched.
+      expect(existsSync(join(git, "commondir"))).toBe(false);
+      expect(existsSync(join(git, "config.worktree"))).toBe(false);
+      expect(readFileSync(join(git, "config"), "utf8")).toBe(CONFIG);
+      expect(readdirSync(join(git, "hooks"))).toEqual(["pre-commit"]);
+      expect(readdirSync(join(git, "info"))).toEqual([]);
+      expect(sentinels()).toEqual([]);
+      await sandbox.dispose();
+    });
+
+    it.skipIf(root_)(
+      "removes only the empty files the probe created",
+      async () => {
+        const fake = sharedBackend({
+          check: async (request, io) => {
+            const result = await runShell(workspace, request, io);
+            // Someone fills one of the files the probe created; a link takes
+            // the other one's place.
+            writeFileSync(join(git, "commondir"), "../evil\n");
+            renameSync(join(git, "config.worktree"), join(root, "moved"));
+            symlinkSync(join(root, "moved"), join(git, "config.worktree"));
+            return result;
+          },
+        });
+        const sandbox = await activate(fake, {
+          protectedPaths: gitProtection(),
+        });
+        await expect(run(sandbox, "echo agent")).rejects.toMatchObject({
+          code: "SANDBOX_UNAVAILABLE",
+        });
+        expect(readFileSync(join(git, "commondir"), "utf8")).toBe("../evil\n");
+        expect(lstatSync(join(git, "config.worktree")).isSymbolicLink()).toBe(
+          true,
+        );
+        expect(existsSync(join(root, "moved"))).toBe(true);
+        await sandbox.dispose();
+      },
+    );
+
+    it.skipIf(root_)(
+      "removes nothing through a link that replaced the git directory",
+      async () => {
+        const other = join(root, "other-git");
+        mkdirSync(other);
+        for (const name of ["commondir", "config.worktree"])
+          writeFileSync(join(other, name), "");
+        const fake = sharedBackend({
+          check: async (request, io) => {
+            const result = await runShell(workspace, request, io);
+            renameSync(git, join(root, "moved-git"));
+            symlinkSync(other, git);
+            return result;
+          },
+        });
+        const sandbox = await activate(fake, {
+          protectedPaths: gitProtection(),
+        });
+        await expect(run(sandbox, "echo agent")).rejects.toMatchObject({
+          code: "SANDBOX_UNAVAILABLE",
+        });
+        expect(readdirSync(other).sort()).toEqual([
+          "commondir",
+          "config.worktree",
+        ]);
+        await sandbox.dispose();
+      },
+    );
+
     it.skipIf(root_)(
       "passes when the backend keeps them read-only, and records that renames stay attested",
       async () => {
+        // A backend that also keeps missing files from appearing: nothing in
+        // .git can be created, and the sentinel directory is made up front.
         mkdirSync(join(git, "info"));
+        mkdirSync(join(git, "piship-workspace"), { mode: 0o700 });
         chmodSync(join(git, "config"), 0o444);
         chmodSync(join(git, "hooks"), 0o555);
         chmodSync(join(git, "info"), 0o555);
+        chmodSync(git, 0o555);
+        chmodSync(workspace, 0o555);
         const fake = sharedBackend();
         const sandbox = await activate(fake, {
           protectedPaths: gitProtection(),
@@ -612,6 +724,7 @@ describe.skipIf(!posix)(
         });
         expect(readdirSync(join(git, "hooks"))).toEqual(["pre-commit"]);
         expect(readdirSync(join(git, "info"))).toEqual([]);
+        expect(existsSync(join(git, "commondir"))).toBe(false);
         await sandbox.dispose();
       },
     );
@@ -662,9 +775,7 @@ describe.skipIf(!posix)(
                 resolvePromise({ exitCode: 0 }),
               );
             });
-          return import("./testing/workspace-fakes.js").then(({ runShell }) =>
-            runShell(workspace, request, io),
-          );
+          return runShell(workspace, request, io);
         },
       });
       const sandbox = await activate(fake);

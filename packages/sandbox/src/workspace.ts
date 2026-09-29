@@ -312,6 +312,15 @@ interface ProtectedTarget {
   readonly segments: readonly string[];
 }
 
+interface ProtectedFile extends ProtectedTarget {
+  /**
+   * Absent on the host when the check started. Git reads such a file if it
+   * appears (`.git/commondir` redirects the git directory), so the check
+   * tries to create it instead of appending to it.
+   */
+  readonly missing: boolean;
+}
+
 function insideWorkspace(
   workspace: string,
   paths: readonly string[],
@@ -332,7 +341,7 @@ interface ScriptInput {
     readonly sandboxToken: string;
     readonly polls: number;
   };
-  readonly files: readonly ProtectedTarget[];
+  readonly files: readonly ProtectedFile[];
   readonly directories: readonly ProtectedTarget[];
   readonly nonce: string;
 }
@@ -354,8 +363,12 @@ function checkScript(input: ScriptInput): string {
     );
   }
   input.files.forEach((file, index) => {
+    // An existing file is opened for append and nothing is written; a missing
+    // one must not be creatable (no-clobber, so nothing existing is touched).
     lines.push(
-      `if ( : >> ${quote(file.relative)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable file ${index}"; fi`,
+      file.missing
+        ? `if ( set -C; : > ${quote(file.relative)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} creatable file ${index}"; fi`
+        : `if ( : >> ${quote(file.relative)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable file ${index}"; fi`,
     );
   });
   input.directories.forEach((dir, index) => {
@@ -410,6 +423,32 @@ function cleanProtected(
   });
 }
 
+/**
+ * Remove the protected files the check created because the sandbox could:
+ * only those that were missing before it ran and are empty regular files
+ * now, reached through plain directories.
+ */
+function cleanCreatedFiles(
+  workspace: string,
+  files: readonly ProtectedFile[],
+): void {
+  for (const file of files) {
+    if (!file.missing) continue;
+    try {
+      const parent = plainDirectory(
+        workspace,
+        file.segments.slice(0, -1),
+        false,
+      );
+      const path = join(parent, file.segments[file.segments.length - 1] ?? "");
+      const stat = lstatOrUndefined(path);
+      if (stat?.isFile() && stat.size === 0) unlinkSync(path);
+    } catch {
+      // not there, or not a plain directory: nothing PiShip may remove
+    }
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
@@ -453,8 +492,15 @@ export async function verifyWorkspace(
   const windowMs = workspaceWindowMs(ctx.declaration);
   const nonce = randomBytes(16).toString("hex");
   const workspace = ctx.workspace;
-  const files = insideWorkspace(workspace, ctx.protectedPaths.files).filter(
-    (file) => lstatOrUndefined(join(workspace, ...file.segments))?.isFile(),
+  // A protected file that exists as a regular file is appended to; one that
+  // does not exist yet is tried for creation. Anything else that exists (a
+  // directory, a link) is not a file to probe.
+  const files = insideWorkspace(workspace, ctx.protectedPaths.files).flatMap(
+    (file): ProtectedFile[] => {
+      const stat = lstatOrUndefined(join(workspace, ...file.segments));
+      if (!stat) return [{ ...file, missing: true }];
+      return stat.isFile() ? [{ ...file, missing: false }] : [];
+    },
   );
   const directories = insideWorkspace(
     workspace,
@@ -532,6 +578,13 @@ export async function verifyWorkspace(
       )
     )
       unsafe = "a protected git control file was writable from the sandbox";
+    else if (
+      lines.some((line) =>
+        line.startsWith(`${WORKSPACE_MARKER} creatable file `),
+      )
+    )
+      unsafe =
+        "a protected git control file that does not exist yet could be created from the sandbox";
     else if (
       lines.some((line) => line.startsWith(`${WORKSPACE_MARKER} writable dir `))
     )
@@ -622,6 +675,7 @@ export async function verifyWorkspace(
       }
     }
     cleanProtected(workspace, directories, missing, nonce);
+    cleanCreatedFiles(workspace, files);
   }
 }
 
