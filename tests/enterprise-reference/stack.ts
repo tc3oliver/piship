@@ -94,7 +94,8 @@ function readEnvFile(path: string): Record<string, string> {
   return values;
 }
 
-async function request(
+/** One HTTP request; the bearer, if any, goes only into the header. */
+export async function request(
   url: string,
   init: { method?: string; bearer?: string; body?: unknown } = {},
 ): Promise<HttpResult> {
@@ -149,14 +150,22 @@ export async function poll<T>(
   }
 }
 
+export type TestPorts = Record<keyof typeof DEFAULT_TEST_PORTS, number>;
+
 export interface ReferenceStack {
   project: string;
+  /** The host ports the stack publishes on 127.0.0.1. */
+  ports: TestPorts;
   gateway: string;
   broker: string;
+  /** The mock upstream, for its `/__mock` control endpoints. */
+  mock: string;
   /** Seconds `docker compose up --wait` took. */
   startupSeconds: number;
   /** A Keycloak access token for alice or bob, by the Authorization Code + PKCE flow. */
   accessToken(user: "alice" | "bob"): string;
+  /** A fixture user's password, for the Keycloak sign-in form only. */
+  password(user: "alice" | "bob"): string;
   /** Sign the user in and acquire a credential from the real broker. */
   acquire(user: "alice" | "bob"): Promise<Credential>;
   /** Revoke a credential through the broker, as PiShip does. */
@@ -181,6 +190,8 @@ export interface ReferenceStack {
     row: Record<string, unknown>;
     logs: SpendLog[];
   }>;
+  /** Stop one service of this stack, or start it again and wait for its healthcheck. */
+  service(action: "stop" | "start", name: string): void;
   stop(): void;
 }
 
@@ -188,13 +199,17 @@ export interface ReferenceStack {
  * Start the reference stack under a Compose project of its own and wait for
  * every healthcheck (`up --wait`, no sleeps). `brokerEnv` adds broker
  * settings (budget, limits) through an override file beside the `.env`.
+ * `ports` replaces DEFAULT_TEST_PORTS for this stack; a variable set in the
+ * environment still wins.
  */
 export function startReferenceStack({
   name,
   brokerEnv = {},
+  ports: portDefaults = {},
 }: {
   name: string;
   brokerEnv?: Record<string, string>;
+  ports?: Partial<TestPorts>;
 }): ReferenceStack {
   // The owning process's PID is part of both names, so global-setup.ts can
   // remove what a killed run left behind without touching a live one.
@@ -206,7 +221,8 @@ export function startReferenceStack({
   const ports = Object.fromEntries(
     Object.entries(DEFAULT_TEST_PORTS).map(([variable, fallback]) => [
       variable,
-      process.env[variable] ?? String(fallback),
+      process.env[variable] ??
+        String(portDefaults[variable as keyof TestPorts] ?? fallback),
     ]),
   );
   const generated = spawnSync(
@@ -317,10 +333,22 @@ export function startReferenceStack({
 
   return {
     project,
+    ports: Object.fromEntries(
+      Object.keys(DEFAULT_TEST_PORTS).map((variable) => [
+        variable,
+        Number(env[variable]),
+      ]),
+    ) as TestPorts,
     gateway,
     broker,
+    mock,
     startupSeconds,
     accessToken,
+    password(user) {
+      const value = env[`REFERENCE_${user.toUpperCase()}_PASSWORD`];
+      if (!value) throw new Error(`no password generated for ${user}`);
+      return value;
+    },
     async acquire(user) {
       const response = await request(`${broker}/v1/credential`, {
         bearer: accessToken(user),
@@ -395,6 +423,24 @@ export function startReferenceStack({
         row,
         logs: logs.body as SpendLog[],
       };
+    },
+    service(action, name) {
+      const done =
+        action === "stop"
+          ? run([...compose, "stop", name])
+          : run([
+              ...compose,
+              "up",
+              "-d",
+              "--wait",
+              "--wait-timeout",
+              "120",
+              name,
+            ]);
+      if (done.status !== 0)
+        throw new Error(
+          `docker compose ${action} ${name} failed for ${project}: ${scrub(done.stderr.trim())}`,
+        );
     },
     stop,
   };
