@@ -15,6 +15,7 @@ import {
   type ManagedFetch,
   PiShipError,
   type PiShipErrorCode,
+  RETAINED_CLAIMS,
   type ResolvedEndpoints,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
@@ -114,24 +115,10 @@ export const IDENTITY_BEHAVIORS: readonly IdentityBehavior[] =
   IDENTITY_CONTRACT.map((entry) => entry.behavior);
 
 /**
- * The claims an adapter may return, the allowlist of docs/identity.md. Kept
- * here because the conformance package may import only the SDK, which does
- * not re-export it; it must equal `RETAINED_CLAIMS` of `@piship/identity`.
+ * The claims an adapter may return, the allowlist of docs/identity.md:
+ * PiShip's own `RETAINED_CLAIMS`, as the SDK re-exports it.
  */
-export const IDENTITY_ALLOWED_CLAIMS: readonly string[] = [
-  "sub",
-  "iss",
-  "aud",
-  "azp",
-  "exp",
-  "iat",
-  "auth_time",
-  "name",
-  "preferred_username",
-  "email",
-  "email_verified",
-  "groups",
-];
+export const IDENTITY_ALLOWED_CLAIMS: readonly string[] = RETAINED_CLAIMS;
 
 /** Which provider method the kit is calling. */
 export type IdentityOperation = "login" | "refresh" | "logout";

@@ -23,8 +23,8 @@ export {
   withTimeout,
 } from "./define.js";
 
-// Contracts: the adapter context, identity, credentials, audit, secrets,
-// redaction, the managed fetch, and error normalization.
+// Contracts: the adapter context, identity and the principal, credentials,
+// audit, secrets, redaction, the managed fetch, and error normalization.
 export {
   type AdapterContext,
   AUDIT_BATCH_SCHEMA,
@@ -48,14 +48,19 @@ export {
   PiShipError,
   type PiShipErrorCode,
   type PiShipErrorOptions,
+  type PrincipalKey,
   parseRetryAfter,
+  principalKey,
   REDACTED_TEXT,
+  RETAINED_CLAIMS,
   type ResolvedEndpoints,
   type RuntimeCredential,
   type RuntimeCredentialKind,
   redact,
   redactValue,
   SecretValue,
+  samePrincipal,
+  type WorkloadIdentityProvider,
 } from "@piship/contracts";
 
 // Sandbox backends: the contract a custom backend implements and the

@@ -72,14 +72,17 @@ describe("the SDK surface", () => {
         "PISHIP_ERROR_CODES",
         "PiShipError",
         "REDACTED_TEXT",
+        "RETAINED_CLAIMS",
         "SANDBOX_GUARANTEES",
         "SecretValue",
         "formatError",
         "isPiShipError",
         "isSecretValue",
         "parseRetryAfter",
+        "principalKey",
         "redact",
         "redactValue",
+        "samePrincipal",
       ].sort(),
     );
   });

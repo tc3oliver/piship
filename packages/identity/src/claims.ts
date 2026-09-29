@@ -1,22 +1,8 @@
-/**
- * The only ID-token claims PiShip keeps in session state, which is written to
- * the plaintext `identity/session.json`: identifiers, validity times, and
- * display fields. Anything else an IdP or adapter returns is dropped.
- */
-export const RETAINED_CLAIMS: readonly string[] = [
-  "sub",
-  "iss",
-  "aud",
-  "azp",
-  "exp",
-  "iat",
-  "auth_time",
-  "name",
-  "preferred_username",
-  "email",
-  "email_verified",
-  "groups",
-];
+// The allowlist lives in @piship/contracts, where adapter authors reach it
+// through the SDK; this package keeps exporting it.
+import { RETAINED_CLAIMS } from "@piship/contracts";
+
+export { RETAINED_CLAIMS };
 
 function claimValue(value: unknown): boolean {
   if (["string", "number", "boolean"].includes(typeof value)) return true;
