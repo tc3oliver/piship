@@ -58,7 +58,7 @@ const VERIFICATION_TEXT = {
 const GIT_CONTROL_TEXT = {
   verified: "verified by the live probe",
   "attested-renames":
-    "verified from outside (writes); renames attested by the backend",
+    "verified from outside (writes); renames ruled out by mount and permission structure, not tried",
   pending: "pending: checked before the first sandboxed command",
   "not-verified": "not verified; sandboxed commands may be able to change them",
   "not-applicable": "n/a (the sandbox cannot reach this host's files)",
