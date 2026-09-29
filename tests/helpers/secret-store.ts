@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { expect } from "vitest";
 
 // The platform secret store as the E2E scenarios see it. A scenario stores
 // secrets in the restricted `file` fallback (every run) or in the `system`
@@ -250,3 +251,30 @@ export const primaryRefs = (refs: readonly string[]): string[] =>
 /** The parts `<ref>+<n>` of one reference in a listing. */
 export const partsOf = (refs: readonly string[], ref: string): string[] =>
   refs.filter((item) => item.startsWith(`${ref}+`));
+
+/**
+ * The platform store part names of each primary must be exactly
+ * `<ref>+0` to `<ref>+<n-1>`, and a primary seen at the previous check must
+ * still have the same number of parts: a reference is written once per
+ * generation, so a changed count means a stray or a lost part.
+ */
+export function expectOwnParts(
+  listed: readonly string[],
+  primaries: readonly string[],
+  counts: Map<string, number>,
+): void {
+  for (const ref of primaries) {
+    const parts = partsOf(listed, ref).sort(
+      (a, b) =>
+        Number(a.slice(ref.length + 1)) - Number(b.slice(ref.length + 1)),
+    );
+    expect(parts, `the parts of ${ref}`).toEqual(
+      parts.map((_, index) => `${ref}+${index}`),
+    );
+    const before = counts.get(ref);
+    if (before !== undefined)
+      expect(parts.length, `the part count of ${ref}`).toBe(before);
+  }
+  counts.clear();
+  for (const ref of primaries) counts.set(ref, partsOf(listed, ref).length);
+}
