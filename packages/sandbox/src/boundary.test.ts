@@ -321,10 +321,16 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         // A new submodule git directory.
         "mkdir -p .git/modules/evil && echo '[core]' > .git/modules/evil/config",
         // A linked worktree's administrative directory, which does not
-        // exist, and files git follows in it.
+        // exist, and the files git follows in it.
         "mkdir -p .git/worktrees/w && echo ../evil > .git/worktrees/w/commondir",
-        "echo ../evil > .git/config.worktree",
-        "echo ../evil > .git/commondir",
+        // Seatbelt also denies files that do not exist yet; bubblewrap cannot
+        // guard one (its mount point would be an empty file on the host).
+        ...(process.platform === "darwin"
+          ? [
+              "echo ../evil > .git/config.worktree",
+              "echo ../evil > .git/commondir",
+            ]
+          : []),
       ];
       for (const command of attempts) {
         const result = await run(sandbox, command);
@@ -336,7 +342,8 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       expect(readdirSync(join(git, "modules", "sub", "hooks"))).toEqual([]);
       expect(existsSync(join(git, "modules", "evil"))).toBe(false);
       expect(existsSync(join(git, "worktrees", "w"))).toBe(false);
-      expect(existsSync(join(git, "config.worktree"))).toBe(false);
+      if (process.platform === "darwin")
+        expect(existsSync(join(git, "config.worktree"))).toBe(false);
     });
 
     it("keeps a core.hooksPath directory in the working tree read-only, and reports git control as not verified", async () => {
