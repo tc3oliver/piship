@@ -1,20 +1,13 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
-  closeSync,
   existsSync,
-  linkSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   rmSync,
-  statSync,
-  utimesSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type CredentialContext,
   type CredentialProvider,
@@ -30,7 +23,11 @@ import {
   SecretValue,
   samePrincipal,
 } from "@piship/contracts";
-import { heldLocks } from "./lock-heartbeat.js";
+import {
+  type FileLockTiming,
+  holdsFileLock,
+  withFileLock,
+} from "./file-lock.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 /**
@@ -176,6 +173,8 @@ export interface CredentialManagerOptions {
   readonly onPhase?: (phase: CredentialPhase) => void | Promise<void>;
   /** Receives acquire, refresh, and revoke events; failures are ignored. */
   readonly onEvent?: (event: CredentialEvent) => void;
+  /** Timing of the cross-process credential lock (tests shorten it). */
+  readonly lockTiming?: FileLockTiming;
 }
 
 function writeAtomic(path: string, content: string): void {
@@ -485,163 +484,8 @@ export function deletionFailure(
   );
 }
 
-/** A held lock is refreshed this often, so only an abandoned one goes stale. */
-const LOCK_HEARTBEAT_MS = 5_000;
-/**
- * Longer than the worst gap between refreshes: one blocking secret-store
- * command (30 s timeout; locks are touched before each one) plus a missed
- * heartbeat, with margin. Still below the wait, so an abandoned lock is
- * broken before a waiter gives up.
- */
-const LOCK_STALE_MS = 75_000;
-const LOCK_WAIT_MS = 90_000;
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
 /** In-process queue per metadata file, so concurrent callers never race. */
 const queues = new Map<string, Promise<unknown>>();
-/**
- * The lock files the current asynchronous call chain holds. A task that
- * already holds a lock and asks for it again (a login that clears and
- * acquires the credential under one lock) runs at once instead of waiting
- * for itself. Other call chains, in this process or another, still wait.
- * Work a task starts belongs to its chain, so a task must not start work
- * that outlives it (it would still count as holding the lock).
- */
-const heldByChain = new AsyncLocalStorage<ReadonlySet<string>>();
-
-/** Whether the current call chain holds the lock beside `path`. */
-export function holdsFileLock(path: string): boolean {
-  return heldByChain.getStore()?.has(`${path}.lock`) ?? false;
-}
-
-export interface FileLockTiming {
-  readonly heartbeatMs?: number;
-  readonly staleMs?: number;
-  readonly waitMs?: number;
-}
-
-function lockAge(lock: string): number | undefined {
-  try {
-    return Date.now() - statSync(lock).mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-function readToken(lock: string): string | undefined {
-  try {
-    return readFileSync(lock, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Break a stale lock without racing another waiter: move it aside under a
- * unique name (atomic), re-check that what was moved is still stale, and only
- * then delete it. A lock that turned out fresh is put back unless a new lock
- * already took its place.
- */
-function breakStaleLock(lock: string, staleMs: number): void {
-  const aside = `${lock}.${process.pid}-${randomBytes(6).toString("hex")}.stale`;
-  try {
-    renameSync(lock, aside);
-  } catch {
-    return;
-  }
-  const age = lockAge(aside);
-  if (age !== undefined && age <= staleMs)
-    try {
-      linkSync(aside, lock);
-    } catch {
-      // A new holder already created the lock.
-    }
-  rmSync(aside, { force: true });
-}
-
-const LOCK_TIMEOUT = "lock-timeout";
-
-/** Whether `error` is a wait for a cross-process lock that ran out. */
-export function isLockTimeout(error: unknown): boolean {
-  return (
-    error instanceof PiShipError &&
-    error.sanitizedDetail?.reason === LOCK_TIMEOUT
-  );
-}
-
-/**
- * Cross-process lock beside the metadata file. The holder refreshes the
- * lock's mtime while its task runs (on an interval, and before each blocking
- * secret-store command), so a lock is broken only when it is stale: its
- * holder stopped refreshing it, such as a crashed process. A fresh lock is
- * never broken: after the wait, the caller fails with a retryable error.
- * The lock is reentrant within one call chain (see `holdsFileLock`).
- */
-export async function withFileLock<T>(
-  path: string,
-  task: () => Promise<T>,
-  timing: FileLockTiming = {},
-): Promise<T> {
-  const heartbeatMs = timing.heartbeatMs ?? LOCK_HEARTBEAT_MS;
-  const staleMs = timing.staleMs ?? LOCK_STALE_MS;
-  const waitMs = timing.waitMs ?? LOCK_WAIT_MS;
-  const lock = `${path}.lock`;
-  const held = heldByChain.getStore();
-  if (held?.has(lock)) return task();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      const fd = openSync(lock, "wx", 0o600);
-      try {
-        writeSync(fd, token);
-      } finally {
-        closeSync(fd);
-      }
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const age = lockAge(lock);
-      if (age === undefined) continue;
-      if (age > staleMs) {
-        breakStaleLock(lock, staleMs);
-        continue;
-      }
-      if (Date.now() > deadline)
-        throw new PiShipError(
-          "CREDENTIAL_ACQUIRE_FAILED",
-          `Another process is still updating ${basename(path)}; gave up after ${Math.round(waitMs / 1000)} s`,
-          {
-            component: "credential",
-            retryable: true,
-            userAction:
-              "Try again when the other session finishes signing in or refreshing",
-            sanitizedDetail: { reason: LOCK_TIMEOUT },
-          },
-        );
-      await sleep(50);
-    }
-  }
-  heldLocks.add(lock);
-  const heartbeat = setInterval(() => {
-    try {
-      const now = new Date();
-      utimesSync(lock, now, now);
-    } catch {
-      // The lock was removed from outside; the task still finishes.
-    }
-  }, heartbeatMs);
-  heartbeat.unref?.();
-  try {
-    return await heldByChain.run(new Set([...(held ?? []), lock]), task);
-  } finally {
-    clearInterval(heartbeat);
-    heldLocks.delete(lock);
-    // Release only this holder's lock, never one another process took over.
-    if (readToken(lock) === token) rmSync(lock, { force: true });
-  }
-}
 
 /**
  * Implements acquire → expiry → refresh → atomic replace → revoke/logout for
@@ -1021,7 +865,9 @@ export class CredentialManager {
     // Already held by this call chain: queueing behind itself would deadlock.
     if (holdsFileLock(path)) return task();
     const previous = queues.get(path) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(() => withFileLock(path, task));
+    const run = previous
+      .catch(() => {})
+      .then(() => withFileLock(path, task, this.options.lockTiming));
     const tail = run.catch(() => {});
     queues.set(path, tail);
     void tail.then(() => {

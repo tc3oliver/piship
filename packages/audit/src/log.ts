@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import {
   chmod,
+  link,
   mkdir,
   open,
   readFile,
@@ -97,6 +98,11 @@ export interface AuditRotation {
   readonly maxBytes: number;
   /** Rotated files kept (`audit.jsonl.1` is the newest); older ones are deleted. */
   readonly files: number;
+  /**
+   * How long (monotonic) a rotation lock must be seen unchanged before it is
+   * taken over as abandoned. Default 30 s.
+   */
+  readonly lockStaleMs?: number;
 }
 
 /** 10 MB per file, five rotated files: at most about 60 MB of local audit. */
@@ -109,8 +115,27 @@ export const AUDIT_ROTATION: AuditRotation = Object.freeze({
 export type AuditEmitInput = Omit<AuditEventInput, "distribution">;
 
 export const AUDIT_LOG_FILE = join("logs", "audit.jsonl");
-/** A rotation older than this is treated as abandoned by a crashed process. */
+/**
+ * A rotation lock seen unchanged (same holder token, same mtime) for this
+ * long on the monotonic clock is treated as abandoned by a crashed process.
+ */
 const ROTATION_LOCK_STALE_MS = 30_000;
+/**
+ * Rotation locks this process found held: what it saw (token and mtime) and
+ * since when, on the monotonic clock. Ownership never depends on how old an
+ * mtime looks against the wall clock, which can jump.
+ */
+const rotationLocksSeen = new Map<string, { state: string; since: number }>();
+
+/** The holder token and mtime of a rotation lock; undefined when it is gone. */
+async function rotationLockState(lock: string): Promise<string | undefined> {
+  try {
+    const { mtimeMs } = await statOpen(lock);
+    return `${await readFile(lock, "utf8")}\n${mtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The file sink's files that exist, newest first: `logs/audit.jsonl`, then
@@ -270,10 +295,13 @@ class FileSinkWriter implements AuditSink {
   }
 
   /**
-   * Create the rotation lock holding `token`. A lock older than the stale
-   * limit is taken over by renaming it to a unique name first: only one
-   * process's rename of that file succeeds, and a lock that turns out to be
-   * fresh (another process took over in between) is given up, not reused.
+   * Create the rotation lock holding `token`. A held lock is taken over only
+   * after this process has seen it unchanged (the same holder's token and
+   * mtime) for the stale interval, measured on the monotonic clock across
+   * its later appends: a wall clock that jumps forward never makes a live
+   * rotation look abandoned. The takeover renames the lock to a unique name
+   * first, so only one process's rename of that file succeeds; a lock that
+   * changed in between is put back and given up, not reused.
    */
   private async acquireRotationLock(
     lock: string,
@@ -281,6 +309,7 @@ class FileSinkWriter implements AuditSink {
   ): Promise<boolean> {
     const create = async () => {
       await writeFile(lock, token, { flag: "wx", mode: 0o600 });
+      rotationLocksSeen.delete(lock);
       return true;
     };
     try {
@@ -289,13 +318,29 @@ class FileSinkWriter implements AuditSink {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
     }
     try {
-      if (Date.now() - (await statOpen(lock)).mtimeMs <= ROTATION_LOCK_STALE_MS)
+      const state = await rotationLockState(lock);
+      if (state === undefined) return false;
+      const now = performance.now();
+      const seen = rotationLocksSeen.get(lock);
+      if (seen?.state !== state) {
+        rotationLocksSeen.set(lock, { state, since: now });
         return false;
+      }
+      if (
+        now - seen.since <=
+        (this.rotation.lockStaleMs ?? ROTATION_LOCK_STALE_MS)
+      )
+        return false;
+      rotationLocksSeen.delete(lock);
       const taken = `${lock}.${randomBytes(6).toString("hex")}.stale`;
       await rename(lock, taken);
-      const age = Date.now() - (await statOpen(taken)).mtimeMs;
+      const moved = await rotationLockState(taken);
+      if (moved !== state) {
+        await link(taken, lock).catch(() => undefined);
+        await rm(taken, { force: true });
+        return false;
+      }
       await rm(taken, { force: true });
-      if (age <= ROTATION_LOCK_STALE_MS) return false;
       return await create();
     } catch {
       return false;
