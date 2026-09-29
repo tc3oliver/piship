@@ -352,7 +352,7 @@ export function startReferenceStack({
     async acquire(user) {
       const response = await request(`${broker}/v1/credential`, {
         bearer: accessToken(user),
-        body: { distribution: "acmecode", purpose: "inference" },
+        body: { distribution: "acmecode-reference", purpose: "inference" },
       });
       if (response.status !== 200)
         throw new Error(
@@ -375,7 +375,7 @@ export function startReferenceStack({
         bearer: credential.key,
         body: {
           credential_id: credential.credentialId,
-          distribution: "acmecode",
+          distribution: "acmecode-reference",
         },
       });
     },

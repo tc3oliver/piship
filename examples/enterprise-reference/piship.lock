@@ -2,10 +2,10 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "a176a1d0357b7d23c7a75e9e356386004562e8d28cefd3b9590df1ff0d79c655"
+    "sha256": "36092d849f5058b3d1c4c05a9e93325a36bc4d3aad1606806fb7afcf4ce62262"
   },
   "app": {
-    "id": "acmecode",
+    "id": "acmecode-reference",
     "name": "AcmeCode",
     "command": "acmecode",
     "version": "1.0.0",
@@ -1168,7 +1168,7 @@
           {
             "id": "acme.models",
             "action": "model.use",
-            "resource": "acmecode/**",
+            "resource": "acmecode-reference/**",
             "effect": "allow"
           },
           {
@@ -1362,7 +1362,7 @@
   },
   "digests": {
     "resources": "sha256-4a4a3cc477b9e63dacd22b6e947a9878ae36e25a7d5c7ff71208d30d8ef56084",
-    "policy": "sha256-78184c01aefc3b9a31cdfbbe86fe771ca97ee43bfb7a8ebcc9ea9bf4a41f9ebb",
+    "policy": "sha256-46875264b4f021e64b701d5b047032cebaa18a7a23bf5380d7420cc8e324393e",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
     "sandbox": "sha256-71471e2d35df62ee3f87be257a8600d9a380a9f9aac440b9184c16a20da9bd64",

@@ -6,7 +6,9 @@ schema: piship/v1alpha4
 # follows section by section, without that example's MCP server, certified
 # skill, or company extension: none of them touches the stack.
 app:
-  id: acmecode
+  # Its own ID, so its state and secret-store entries (piship:<id>:*) never
+  # meet those of an installed `acmecode` such as the demo company's.
+  id: acmecode-reference
   name: AcmeCode
   command: acmecode
   version: 1.0.0
@@ -131,7 +133,7 @@ policy:
   defaults:
     - id: acme.models
       action: model.use
-      resource: "acmecode/**"
+      resource: "acmecode-reference/**"
       effect: allow
     - id: acme.skills
       action: skill.load

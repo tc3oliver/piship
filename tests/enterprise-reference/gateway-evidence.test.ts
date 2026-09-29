@@ -219,7 +219,7 @@ function inferenceClient(
   allowed: readonly string[] = ["acme/coder", "acme/general"],
 ) {
   return new OpenAICompatibleInferenceProvider({
-    providerId: "acmecode",
+    providerId: "acmecode-reference",
     baseUrl: `${stack.gateway}/v1`,
     api: "openai-completions",
     catalog: CATALOG,

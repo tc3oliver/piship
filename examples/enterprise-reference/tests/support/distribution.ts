@@ -298,7 +298,7 @@ async function assemble(
   };
   if (edited) must(cli("lock", manifest), "piship lock");
   must(cli("build", manifest), "piship build");
-  const artifact = join(temp, "dist", "acmecode");
+  const artifact = join(temp, "dist", "acmecode-reference");
   const installed = spawnSync(
     process.execPath,
     [join(artifact, "piship.mjs"), "install", artifact],
@@ -309,7 +309,7 @@ async function assemble(
       `install failed (exit ${installed.status}):\n${installed.stderr}`,
     );
   const command = join(binHome, "acmecode");
-  const stateRoot = join(state, "acmecode");
+  const stateRoot = join(state, "acmecode-reference");
 
   function run(
     args: readonly string[],

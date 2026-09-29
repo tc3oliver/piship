@@ -88,7 +88,7 @@ describe.skipIf(process.platform === "win32")(
         expect(aliceSmoke.resumed).toBe(false);
         expect(aliceSmoke.access).toMatchObject({
           identity: { issuer: stack.issuer },
-          selectedModel: "acmecode/acme/general",
+          selectedModel: "acmecode-reference/acme/general",
           allowedModels: ALICE_MODELS,
         });
         alice = await held(aliceSecrets);
@@ -124,7 +124,9 @@ describe.skipIf(process.platform === "win32")(
         expect(bob.credential).not.toBe(alice.credential);
         expect(bob.refreshToken).not.toBe(alice.refreshToken);
         // Alice's model selection is gone, and Bob's entitlement applies.
-        expect(bobSmoke.access.selectedModel).toBe("acmecode/acme/coder");
+        expect(bobSmoke.access.selectedModel).toBe(
+          "acmecode-reference/acme/coder",
+        );
         expect(bobSmoke.access.allowedModels).toEqual(BOB_MODELS);
         expect(bobSmoke.access.models).toEqual([
           { id: "acme/coder", available: true },
@@ -193,7 +195,7 @@ describe.skipIf(process.platform === "win32")(
           (await acme.run(["config", "set", "model", "acme/coder"])).status,
         ).toBe(0);
         expect((await acme.smoke()).access.selectedModel).toBe(
-          "acmecode/acme/coder",
+          "acmecode-reference/acme/coder",
         );
       });
 
@@ -220,7 +222,9 @@ describe.skipIf(process.platform === "win32")(
         );
         expect(again.access.allowedModels).toEqual(ALICE_MODELS);
         // Her earlier model selection was cleared when Bob signed in.
-        expect(again.access.selectedModel).toBe("acmecode/acme/coder");
+        expect(again.access.selectedModel).toBe(
+          "acmecode-reference/acme/coder",
+        );
         // Her session history is hers again, and Bob's is not resumed.
         expect(again).toMatchObject({
           resumed: true,

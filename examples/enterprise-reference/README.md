@@ -193,6 +193,7 @@ These figures are from one developer machine. Running on GitHub's `ubuntu-latest
 
 | Section | Value |
 | --- | --- |
+| `app` | ID `acmecode-reference`, command `acmecode`. The ID differs from the demo company's `acmecode`, so the two never share a state directory or secret-store entries (`piship:<id>:*`); the broker serves this ID (`BROKER_DISTRIBUTION` in `compose.yaml`), and model IDs in the Pi runtime read `acmecode-reference/<model>` |
 | `identity.oidc` | Issuer `${ACMECODE_OIDC_ISSUER}` (the Keycloak realm), public client `acmecode`, scopes `openid profile email`, redirect `http://127.0.0.1/callback` (port-less, so PiShip listens on an ephemeral loopback port and Keycloak matches it) |
 | `credential` | `http-broker` at `${ACMECODE_CREDENTIAL_BROKER_URL}` with revoke at `${ACMECODE_CREDENTIAL_REVOKE_URL}` (the reference broker), stored in the platform secret store (`provider: system`) |
 | `inference` | `openai-compatible` at `${ACMECODE_LLM_GATEWAY_URL}` (LiteLLM), with the live model catalog |
@@ -237,14 +238,14 @@ export ACMECODE_CREDENTIAL_REVOKE_URL=http://127.0.0.1:18070/v1/revoke
 export ACMECODE_LLM_GATEWAY_URL=http://127.0.0.1:14000/v1
 
 npm exec -- piship build examples/enterprise-reference/piship.yaml
-node dist/acmecode/piship.mjs install dist/acmecode
+node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
 ~/.local/bin/acmecode login              # sign in as alice on the Keycloak page
 ~/.local/bin/acmecode models
 ~/.local/bin/acmecode --smoke-model
 ~/.local/bin/acmecode login              # sign in as bob, without a logout
 ~/.local/bin/acmecode models             # acme/general is no longer available
 ~/.local/bin/acmecode logout
-node dist/acmecode/piship.mjs uninstall acmecode
+node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 ( cd examples/enterprise-reference && docker compose down )
 ```
 
@@ -261,7 +262,7 @@ node dist/acmecode/piship.mjs uninstall acmecode
 
 Each file starts its stack under a Compose project of its own, `piship-reftest-<pid>-distribution-<random>`, as the files under `tests/enterprise-reference/` do, on loopback ports 38080 (Keycloak), 34000 (LiteLLM), 38090 (mock), 35432 (PostgreSQL), and 38070 (broker), so they run beside a stack on the default ports. Set `KEYCLOAK_PORT`, `LITELLM_PORT`, `MOCK_UPSTREAM_PORT`, `POSTGRES_PORT`, `BROKER_PORT` to change the ports. The generated env file and the installed distribution live in temporary directories named `piship-reftest-<pid>-*`. The stack is stopped and the directories removed when the file ends, when the worker exits, and on Ctrl-C or termination; a worker killed outright leaves them to the suite's global setup, which removes them at the start of the next run. A second run at the same time fails to bind the ports rather than stopping the first run's stack. The tests never print a token, key, or password.
 
-Secret store: the platform store writes to the login keychain or keyring of whoever runs the tests, so, like the platform-store test, the tests use it only with `PISHIP_LIVE_SECRET_STORE=1` (the CI check jobs set it) and then never fall back to a file. On macOS they refuse it unless `CI` is also set: the Keychain is resolved through the real `HOME`, which cannot be isolated, so on a developer's Mac the run would write to and delete from that user's login keychain. Without it, they build a copy of the distribution with the restricted plaintext file store; the store in use is named in the title of the credential test and in the first line of the output. On macOS in CI the platform-store run keeps the real `HOME`; every other run isolates `HOME`.
+Secret store: the platform store writes to the login keychain or keyring of whoever runs the tests, so, like the platform-store test, the tests use it only with `PISHIP_LIVE_SECRET_STORE=1` (the CI check jobs set it) and then never fall back to a file. On macOS they refuse it unless `CI` is also set: the Keychain is resolved through the real `HOME`, which cannot be isolated, so on a developer's Mac the run would write to and delete from that user's login keychain. Without it, they build a copy of the distribution with the restricted plaintext file store; the store in use is named in the title of the credential test and in the first line of the output. On macOS in CI the platform-store run keeps the real `HOME`; every other run isolates `HOME`. The distribution's own ID keeps its entries apart from those of an installed `acmecode`.
 
 Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images already present and the file store: `distribution-flow.test.ts` 47 s and `user-switching.test.ts` 62 s, each including the stack start and stop. The platform-store run (`PISHIP_LIVE_SECRET_STORE=1`) has not been recorded: the Keychain refuses writes from a session without user interaction, and then the tests fail with `SECRET_STORE_UNAVAILABLE` instead of using a file.
 

@@ -94,9 +94,9 @@ describe.skipIf(process.platform === "win32")(
         );
         expect(built.status, built.stderr).toBe(0);
         expect(built.stderr).not.toContain("stale");
-        expect(existsSync(join(out, "dist", "acmecode", "piship.mjs"))).toBe(
-          true,
-        );
+        expect(
+          existsSync(join(out, "dist", "acmecode-reference", "piship.mjs")),
+        ).toBe(true);
       } finally {
         rmSync(out, { recursive: true, force: true });
       }
@@ -145,7 +145,7 @@ describe.skipIf(process.platform === "win32")(
       expect(first.access).toMatchObject({
         identity: { issuer: stack.issuer },
         credential: { mode: "http-broker" },
-        selectedModel: "acmecode/acme/coder",
+        selectedModel: "acmecode-reference/acme/coder",
         allowedModels: ALICE_MODELS,
       });
       const { credentialId, expiresAt } = first.access.credential;
@@ -201,7 +201,7 @@ describe.skipIf(process.platform === "win32")(
       const request = await acme.run(["--smoke-model"]);
       expect(request.status, request.stderr).toBe(0);
       expect(JSON.parse(request.stdout).modelRequest).toMatchObject({
-        model: "acmecode/acme/coder",
+        model: "acmecode-reference/acme/coder",
         text: "Reference mock reply from gpt-4.1.",
         stopReason: "stop",
       });
@@ -213,7 +213,7 @@ describe.skipIf(process.platform === "win32")(
       ]);
       expect(general.status, general.stderr).toBe(0);
       expect(JSON.parse(general.stdout).modelRequest).toMatchObject({
-        model: "acmecode/acme/general",
+        model: "acmecode-reference/acme/general",
         text: "Reference mock reply from gpt-4.1-mini.",
       });
       // The upstream saw both requests, as streams, after LiteLLM mapped the

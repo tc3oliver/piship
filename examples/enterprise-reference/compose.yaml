@@ -143,6 +143,8 @@ services:
       # broker refuses http for them unless this is set, and then only for a
       # container name: a copied broker must use https.
       BROKER_ALLOW_INSECURE_BACKCHANNEL: "true"
+      # The reference distribution's app.id, which PiShip sends as `distribution`.
+      BROKER_DISTRIBUTION: acmecode-reference
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run scripts/generate-env.mjs}
       # What PiShip declares as inference.baseUrl; returned as base_url.
       BROKER_GATEWAY_BASE_URL: http://127.0.0.1:${LITELLM_PORT:-14000}/v1
