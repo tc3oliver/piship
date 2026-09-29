@@ -2,11 +2,13 @@
 // mechanism that makes the service's isolation claims true: Seatbelt on
 // macOS (deny by default, then the sandbox's own directory), bubblewrap on
 // Linux (only the system directories and the sandbox's own directory). Where
-// neither works, `isolator` is undefined and the sandbox tests are skipped.
+// neither works, `isolator` is undefined and the sandbox tests are skipped
+// with a printed reason, or fail under PISHIP_REQUIRE_ISOLATOR=1
+// (./isolator-gate.ts).
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { findBwrap } from "./isolator-gate.js";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 /** The PATH a command inside the fake sandbox receives when it has none. */
@@ -64,14 +66,6 @@ function bubblewrap(spec: Isolation, cwd: string): string[] {
     cwd,
   );
   return args;
-}
-
-function findBwrap(): string | undefined {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    const candidate = join(dir, "bwrap");
-    if (dir && existsSync(candidate)) return candidate;
-  }
-  return undefined;
 }
 
 const bwrap = process.platform === "linux" ? findBwrap() : undefined;

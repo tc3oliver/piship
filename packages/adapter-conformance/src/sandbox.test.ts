@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   type CustomBackendContext,
   defineSandboxAdapter,
@@ -28,6 +28,10 @@ import {
   type SandboxProfile,
 } from "@piship/adapter-sdk";
 import { describe, expect, it } from "vitest";
+import {
+  describeIsolated,
+  findBwrap,
+} from "../../../tests/adapter-kits/isolator-gate.js";
 import {
   type ConformanceReport,
   SANDBOX_BEHAVIORS,
@@ -44,18 +48,11 @@ import {
 // default, then the sandbox's own directories), bubblewrap on Linux (only
 // the system directories and the sandbox's own directories mounted). Where
 // neither works (Windows, a Linux host without unprivileged user
-// namespaces) the kit's tests are skipped.
+// namespaces) the kit's tests are skipped with a printed reason, or fail
+// under PISHIP_REQUIRE_ISOLATOR=1 (tests/adapter-kits/isolator-gate.ts).
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
-
-function findBwrap(): string | undefined {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    const candidate = join(dir, "bwrap");
-    if (dir && existsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
 
 interface Isolation {
   /** Directories the sandbox reads and writes: its own root, or the mounted workspace. */
@@ -880,7 +877,7 @@ describe("sandbox conformance kit: contract", () => {
   });
 });
 
-describe.skipIf(!isolator)(
+describeIsolated(isolator)(
   `sandbox conformance kit against reference backends (${isolator ?? "no isolator"})`,
   () => {
     it.concurrent.each([

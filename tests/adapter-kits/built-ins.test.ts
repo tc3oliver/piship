@@ -29,6 +29,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { E2B_ENDPOINT, E2bService } from "./e2b-service.js";
 import { ExecutionService } from "./execution-service.js";
 import { isolator } from "./isolator.js";
+import { describeIsolated } from "./isolator-gate.js";
 import {
   examplesPayload,
   reasons,
@@ -98,7 +99,7 @@ describe("PiShip's built-in implementations under the conformance kits", () => {
     });
   }, 60_000);
 
-  describe.skipIf(!isolator)("sandbox backends", () => {
+  describeIsolated(isolator)("sandbox backends", () => {
     it("the native backend passes every sandbox behavior of a local backend", async () => {
       const report = record(
         `built-in NativeBackend (${isolator})`,

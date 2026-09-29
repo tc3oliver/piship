@@ -21,6 +21,7 @@ import type {
 import { afterAll, describe, expect, it } from "vitest";
 import { ExecutionService } from "./execution-service.js";
 import { isolator } from "./isolator.js";
+import { itIsolated } from "./isolator-gate.js";
 import {
   examplesPayload,
   reasons,
@@ -96,7 +97,7 @@ describe("the SDK example adapters under the conformance kits", () => {
       expect(reasons(report)[behavior]).toMatch(/^needs harness: /);
   }, 60_000);
 
-  it.skipIf(!isolator)(
+  itIsolated(isolator)(
     "sandbox.mjs passes every sandbox behavior a deny-only snapshot backend can show",
     async () => {
       const adapter = await payload.load<SandboxAdapterFactory>("sandbox.mjs");
