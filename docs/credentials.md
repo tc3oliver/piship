@@ -54,8 +54,8 @@ A 2xx response must be JSON:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `credential_type` | yes | `api_key`, `bearer`, or `opaque` |
-| `credential` | yes | The secret, at least 8 characters |
-| `credential_id` | no | Non-secret identifier, used for display and revocation |
+| `credential` | yes | The secret, at least 8 characters, visible ASCII only (it is sent in a header) |
+| `credential_id` | no | Non-secret identifier, used for display and revocation: 1 to 256 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-` |
 | `expires_at` | no | ISO 8601 time; an already expired credential is rejected |
 | `models` | no | Entitled model IDs; narrows the catalog |
 | `base_url` | no | Must match the declared `inference.baseUrl` |

@@ -158,8 +158,16 @@ function statusFailure(
 /** Largest broker answer body read; the http-broker answer is a few hundred bytes. */
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** CR, LF and NUL: never valid in a token that becomes a header value. */
-const HEADER_BREAKING = /[\r\n\0]/;
+/**
+ * Anything but visible ASCII: a token that becomes a header value is refused
+ * before it is sent or stored. Beyond CR, LF and NUL, which break the header,
+ * any other control character, space, or non-ASCII character makes the
+ * request fail in the HTTP client on every use.
+ */
+const HEADER_BREAKING = /[^\x21-\x7e]/;
+
+/** A broker credential ID: non-secret, shown, audited, and sent back on revoke. */
+const CREDENTIAL_ID = /^[A-Za-z0-9._:-]{1,256}$/;
 
 /** An idempotency key: 1 to 255 visible ASCII characters, no spaces. */
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
@@ -449,7 +457,8 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       secret.length < 8 ||
       HEADER_BREAKING.test(secret) ||
       (body.credential_id !== undefined &&
-        typeof body.credential_id !== "string") ||
+        (typeof body.credential_id !== "string" ||
+          !CREDENTIAL_ID.test(body.credential_id))) ||
       (body.expires_at !== undefined &&
         (typeof body.expires_at !== "string" ||
           Number.isNaN(Date.parse(body.expires_at)))) ||

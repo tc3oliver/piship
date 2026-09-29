@@ -450,7 +450,16 @@ describe("http-broker failure and retry contract", () => {
       const never = async (): Promise<Response> => {
         throw new Error("no request may be sent");
       };
-      for (const control of ["\r", "\n", "\0"]) {
+      for (const control of [
+        "\r",
+        "\n",
+        "\0",
+        "\t",
+        "\x1b",
+        "\x7f",
+        " ",
+        "é",
+      ]) {
         const bad = {
           ...identity,
           accessToken: new SecretValue(`demo-at${control}injected`),
@@ -475,12 +484,52 @@ describe("http-broker failure and retry contract", () => {
       await expect(
         broker({ fetch: async () => json(answer) }).acquire(identity, ctx),
       ).resolves.toBeDefined();
-      for (const control of ["\r", "\n", "\0"]) {
+      for (const control of [
+        "\r",
+        "\n",
+        "\0",
+        "\t",
+        "\x1b",
+        "\x7f",
+        " ",
+        "é",
+      ]) {
         const error = await failure(
           call.acquire(
             broker({
               fetch: async () =>
                 json({ ...answer, credential: `sk-live${control}injected` }),
+            }),
+          ),
+        );
+        expect(error).toMatchObject({
+          code: "CREDENTIAL_ACQUIRE_FAILED",
+          sanitizedDetail: { reason: "contract" },
+        });
+      }
+    });
+
+    it("refuses a credential ID outside the broker contract", async () => {
+      const answer = await realAnswer();
+      for (const id of ["vk_demo.1:a-b", "x".repeat(256)])
+        await expect(
+          broker({
+            fetch: async () => json({ ...answer, credential_id: id }),
+          }).acquire(identity, ctx),
+        ).resolves.toMatchObject({ credentialId: id });
+      for (const id of [
+        "",
+        "vk demo",
+        "vk\n1",
+        "vk/../1",
+        "vk_é",
+        "x".repeat(257),
+        7,
+      ]) {
+        const error = await failure(
+          call.acquire(
+            broker({
+              fetch: async () => json({ ...answer, credential_id: id }),
             }),
           ),
         );
