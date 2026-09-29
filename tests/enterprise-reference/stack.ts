@@ -4,6 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  keepLogs,
+  logDirectory,
+} from "../../examples/enterprise-reference/tests/support/logs.js";
 
 // The live enterprise reference stack (examples/enterprise-reference) for
 // `npm run test:reference`. Each test file starts its own copy under its own
@@ -247,6 +251,10 @@ export function startReferenceStack({
     process.off("exit", stop);
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    if (logDirectory()) {
+      const logs = run([...compose, "logs", "--no-color", "--timestamps"]);
+      keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
+    }
     // No `-v`: the stack has no named volume and keeps its data on tmpfs.
     const down = run([...compose, "down", "--remove-orphans"]);
     rmSync(directory, { recursive: true, force: true });

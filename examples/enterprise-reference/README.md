@@ -166,7 +166,7 @@ On macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0, Compose
 
 All four images have native `linux/arm64` and `linux/amd64` builds; nothing ran under emulation. Image sizes on this machine (compressed / unpacked): Keycloak 266 MB / 756 MB, LiteLLM 398 MB / 1.66 GB, PostgreSQL 115 MB / 416 MB, Node 61 MB / 233 MB. Resident memory when idle: LiteLLM about 810 MiB, Keycloak about 680 MiB, PostgreSQL about 115 MiB, mock about 23 MiB.
 
-These figures are from one developer machine. Running on GitHub's `ubuntu-latest` is proven only by the reference E2E workflow (V07-54), not by this measurement.
+These figures are from one developer machine. Running on GitHub's `ubuntu-latest` is proven by the [Reference E2E workflow](#reference-e2e-workflow), which records its own pull and startup times in the run's job summary.
 
 ## AcmeCode reference distribution
 
@@ -245,3 +245,16 @@ The tests use their own compose project (`piship-reference-distribution`) and lo
 Secret store: the platform store writes to the login keychain or keyring of whoever runs the tests, so, like the platform-store test, the tests use it only with `PISHIP_LIVE_SECRET_STORE=1` (the CI check jobs set it) and then never fall back to a file. Without it, they build a copy of the distribution with the restricted plaintext file store; the store in use is named in the title of the credential test and in the first line of the output. On macOS the platform-store run keeps the real `HOME`, because the default keychain is resolved through it; every other run isolates `HOME`.
 
 Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images already present and the file store: `distribution-flow.test.ts` 47 s and `user-switching.test.ts` 62 s, each including the stack start and stop. The platform-store run (`PISHIP_LIVE_SECRET_STORE=1`) has not been recorded: the Keychain refuses writes from a session without user interaction, and then the tests fail with `SECRET_STORE_UNAVAILABLE` instead of using a file.
+
+## Reference E2E workflow
+
+[`.github/workflows/reference-e2e.yml`](../../.github/workflows/reference-e2e.yml) (`Reference E2E`) runs everything above on a clean `ubuntu-latest` runner. It is part of `Release qualification`, whose `Release candidate` waits for it, and also runs nightly and by `workflow_dispatch`; it is not a pull request gate. One job, in order:
+
+1. Install bubblewrap (AcmeCode requires the OS sandbox) and GNOME Keyring with `secret-tool`, then `npm ci` and `npm run build`.
+2. Generate an `.env` outside the workspace, pull the images, `docker compose up --wait --wait-timeout 300`, and run `node broker/live-check.mjs` against the stack. The pull and startup times go into the job summary. The stack is then stopped and its `.env` deleted.
+3. `node --test test/*.test.mjs` in `broker/`: the broker's contract tests.
+4. `npm run test:reference` on a private D-Bus session with an unlocked GNOME Keyring, set up as in the `CI` check job, and `PISHIP_LIVE_SECRET_STORE=1`: AcmeCode stores its credential in the Linux Secret Service and fails with `SECRET_STORE_UNAVAILABLE` rather than use a file.
+
+Every step that can hang has a `timeout-minutes`. When a step fails, the run uploads `reference-e2e-logs` (kept 14 days): the container logs of the step-2 stack and of every stack a test file started. The workflow's stack and the test stacks write their logs only through [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs), which replaces every value of the stack's `.env` except the ports, and anything shaped like a LiteLLM key, a JWT, or a bearer or basic credential; no `.env` or token is uploaded. The tests keep logs only when `PISHIP_REFERENCE_LOG_DIR` names a directory, one file per stack, `<project>-<time>.log`; the workflow sets it. A failed nightly run opens or updates the `Nightly Reference E2E is failing` issue.
+
+What the job does not cover: the reference tests send no request that makes the agent run a command, so the sandbox runs no command against this stack, and `update` and `rollback` of AcmeCode are not exercised here. The installed lifecycle and sandboxed commands are covered against local fixtures by Portable E2E.

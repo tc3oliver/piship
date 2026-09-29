@@ -4,8 +4,9 @@ import base from "./vitest.config.js";
 // `npm run test:reference`: tests that run against the live enterprise
 // reference stack (Keycloak, LiteLLM, PostgreSQL, the broker) started with
 // Docker Compose. They need Docker, so `npm test` excludes them and the
-// reference workflow (a following change) will run them. One file at a time:
-// each starts its own stack, and the stacks are slow to start.
+// Reference E2E workflow (.github/workflows/reference-e2e.yml) runs them.
+// One file at a time: each starts its own stack, and the stacks are slow to
+// start.
 export default defineConfig({
   ...base,
   test: {

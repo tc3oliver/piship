@@ -1,0 +1,177 @@
+name: Reference E2E
+# The AcmeCode reference distribution against the live enterprise reference
+# stack (examples/enterprise-reference): Keycloak, the credential broker,
+# LiteLLM, PostgreSQL, and the mock upstream in Docker Compose. Release
+# qualification and nightly evidence, not a pull request gate (see AGENTS.md,
+# CI evidence tiers): it pulls about 0.85 GB of images and starts the stack once
+# per test file.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  # Called from Release qualification, github.workflow names the caller; the
+  # literal prefix keeps this group apart from its sibling reusable workflows.
+  group: reference-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      npm_config_prefer_offline: "true"
+      COMPOSE_PROJECT: piship-reference-e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
+      - run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
+      # AcmeCode requires the OS sandbox (bubblewrap and unprivileged user
+      # namespaces, which Ubuntu restricts through AppArmor by default) and
+      # stores its credential in the Linux Secret Service (GNOME Keyring, a
+      # D-Bus session, and secret-tool), as in the CI check job.
+      - timeout-minutes: 5
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends bubblewrap gnome-keyring dbus dbus-x11 libsecret-tools
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --version
+      - timeout-minutes: 10
+        run: npm ci
+      - timeout-minutes: 10
+        run: npm run build
+      - run: git diff --exit-code
+
+      # Every secret of the stack lives in an env file outside the workspace,
+      # and the log directory, the only thing uploaded, holds scrubbed
+      # container logs only (scripts/scrub-logs.mjs).
+      - name: Prepare the stack's env file and log directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/reference" "$RUNNER_TEMP/reference-logs"
+          echo "REFERENCE_ENV_FILE=$RUNNER_TEMP/reference/.env" >> "$GITHUB_ENV"
+          echo "PISHIP_REFERENCE_LOG_DIR=$RUNNER_TEMP/reference-logs" >> "$GITHUB_ENV"
+          node examples/enterprise-reference/scripts/generate-env.mjs --out "$RUNNER_TEMP/reference/.env"
+
+      # Pull once, so the timings below and every test's `up --wait` measure
+      # startup and not the registries (ghcr.io, quay.io, Docker Hub).
+      - name: Pull the stack images
+        timeout-minutes: 15
+        working-directory: examples/enterprise-reference
+        run: |
+          started=$(date +%s)
+          docker compose -p "$COMPOSE_PROJECT" --env-file "$REFERENCE_ENV_FILE" pull --quiet
+          echo "PULL_SECONDS=$(( $(date +%s) - started ))" >> "$GITHUB_ENV"
+
+      # The stack as a user starts it (README, "Run it"), with the broker's
+      # happy path against it, before the tests start their own copies.
+      - name: Start the stack and run the broker live check
+        timeout-minutes: 10
+        working-directory: examples/enterprise-reference
+        run: |
+          started=$(date +%s)
+          docker compose -p "$COMPOSE_PROJECT" --env-file "$REFERENCE_ENV_FILE" up --wait --wait-timeout 300
+          up=$(( $(date +%s) - started ))
+          node broker/live-check.mjs --env-file "$REFERENCE_ENV_FILE"
+          {
+            echo "### Reference stack on ubuntu-latest"
+            echo
+            echo "| Step | Seconds |"
+            echo "| --- | --- |"
+            echo "| docker compose pull | $PULL_SECONDS |"
+            echo "| docker compose up --wait (all five services healthy) | $up |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop the stack
+        if: always()
+        timeout-minutes: 5
+        working-directory: examples/enterprise-reference
+        run: |
+          [ -f "$REFERENCE_ENV_FILE" ] || exit 0
+          compose=(docker compose -p "$COMPOSE_PROJECT" --env-file "$REFERENCE_ENV_FILE")
+          { "${compose[@]}" logs --no-color --timestamps 2>&1 \
+            | node scripts/scrub-logs.mjs --env-file "$REFERENCE_ENV_FILE" > "$PISHIP_REFERENCE_LOG_DIR/$COMPOSE_PROJECT.log"; } \
+            || echo "the container logs were not kept" >&2
+          # No `-v`: the stack keeps no volume.
+          "${compose[@]}" down --remove-orphans --timeout 10
+          rm -f "$REFERENCE_ENV_FILE"
+
+      - name: Broker contract tests
+        timeout-minutes: 5
+        working-directory: examples/enterprise-reference/broker
+        run: node --test test/*.test.mjs
+
+      # Each test file starts its own stack under its own Compose project and
+      # removes it (npm run test:reference, examples/enterprise-reference
+      # README): OIDC sign-in on the real Keycloak, credential exchange at the
+      # broker, the Secret Service store, gateway authentication and limits,
+      # model requests through LiteLLM, doctor, user switching, and logout.
+      # The keyring runs on a private D-Bus session exactly as in the CI check
+      # job; PISHIP_LIVE_SECRET_STORE=1 makes the tests use it and fail with
+      # SECRET_STORE_UNAVAILABLE rather than fall back to a file.
+      - name: Reference tests with the Linux Secret Service
+        timeout-minutes: 45
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            XDG_DATA_HOME="$(mktemp -d)"
+            export XDG_DATA_HOME
+            head -c 32 /dev/urandom | base64 | gnome-keyring-daemon --unlock --foreground --components=secrets > /dev/null &
+            ready() {
+              dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2> /dev/null | grep true > /dev/null &&
+                dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.DBus.Properties.Get string:org.freedesktop.Secret.Collection string:Locked 2> /dev/null | grep false > /dev/null
+            }
+            for _ in $(seq 100); do ready && break; sleep 0.1; done
+            ready || { echo "GNOME Keyring did not unlock its login collection" >&2; exit 1; }
+            npm run test:reference
+          '
+        env:
+          PISHIP_LIVE_SECRET_STORE: "1"
+
+      - name: List leftover stacks
+        if: failure()
+        run: |
+          docker compose ls --all
+          docker ps --all --format '{{.Names}} {{.Status}}'
+      - name: Upload the scrubbed container logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: reference-e2e-logs
+          path: ${{ runner.temp }}/reference-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # A scheduled failure opens (or comments on) one tracking issue, so a
+  # nightly regression becomes a visible follow-up without blocking pull
+  # requests. Manual and Release qualification runs report in the Actions UI
+  # only.
+  report:
+    needs: reference
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: Nightly Reference E2E is failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="The scheduled Reference E2E run failed on main: $RUN_URL"
+          number="$(gh issue list --state open --search "\"$TITLE\" in:title" --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n 1)"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

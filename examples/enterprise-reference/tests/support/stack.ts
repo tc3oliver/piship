@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { keepLogs, logDirectory } from "./logs.js";
 
 // The enterprise reference stack (Keycloak, PostgreSQL, LiteLLM, the broker and
 // the mock upstream) started with Docker Compose for one test file. The stack
@@ -127,6 +128,14 @@ export async function startStack(): Promise<Stack> {
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    if (logDirectory()) {
+      const logs = docker(project, envFile, environment, [
+        "logs",
+        "--no-color",
+        "--timestamps",
+      ]);
+      keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
+    }
     // No `-v`: the stack keeps no volume, and a volume is never pruned here.
     docker(project, envFile, environment, ["down", "--timeout", "10"]);
     rmSync(directory, { recursive: true, force: true });

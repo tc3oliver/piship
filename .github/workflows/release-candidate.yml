@@ -3,9 +3,9 @@ name: Release candidate
 # (acmecode) and the personal example (mypi).
 # Output stays in workflow artifacts: nothing is published or released here.
 # Release qualification (release-qualification.yml) calls it on the exact
-# candidate HEAD after CI, CodeQL, and Portable E2E pass; it can also be
-# dispatched alone. It is not triggered by pull requests or main pushes (see
-# AGENTS.md, CI evidence tiers).
+# candidate HEAD after CI, CodeQL, Portable E2E, and Reference E2E pass; it
+# can also be dispatched alone. It is not triggered by pull requests or main
+# pushes (see AGENTS.md, CI evidence tiers).
 on:
   workflow_dispatch:
   workflow_call:
