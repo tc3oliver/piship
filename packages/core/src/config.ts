@@ -1,12 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { PiShipError } from "@piship/contracts";
 import {
   CONFIG_KEYS,
@@ -14,6 +6,7 @@ import {
   type ConfigKey,
   THINKING_LEVELS,
 } from "@piship/schema";
+import { writeJsonAtomic } from "./access/state.js";
 
 export const PREFERENCES_SCHEMA = "piship-preferences/v1";
 
@@ -96,12 +89,7 @@ export function readPreferences(path: string): UserPreferences {
 }
 
 function writePreferences(path: string, preferences: UserPreferences): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(preferences, null, 2)}\n`, {
-    mode: 0o600,
-  });
-  renameSync(temporary, path);
+  writeJsonAtomic(path, preferences);
 }
 
 interface PolicyView {

@@ -16,7 +16,11 @@ import {
   createSecretStore,
   deleteSecretsVerified,
   isLockTimeout,
+  metadataFileSecretRefs,
+  metadataFileSecretStore,
   metadataSecretRefs,
+  type SecretStoreProvider,
+  storeForRecorded,
   withFileLock,
 } from "@piship/credentials";
 import { type IdentityMetadata, parseIdentityMetadata } from "@piship/identity";
@@ -28,6 +32,7 @@ import {
   networkPolicyFor,
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
+import { removeAccessTemporaries } from "../install/temporaries.js";
 import {
   type BrandedContext,
   auditAccess,
@@ -162,6 +167,9 @@ function storedIdentity(path: string): IdentityMetadata | null {
  * provider could have revoked is recorded as a pending revocation, and
  * identity tokens as not revoked, since both may still be valid remotely.
  * A secret that cannot be deleted keeps its metadata, so it stays tracked.
+ * The identity's tokens are deleted from the store its session records,
+ * which is not the configured one after a change of storage provider; when
+ * that store is not available here they stay tracked in a discarded marker.
  */
 async function logoutLocally(
   ctx: BrandedContext,
@@ -171,10 +179,10 @@ async function logoutLocally(
 ): Promise<string[]> {
   const id = ctx.metadata.app.id;
   const paths = accessStatePaths(ctx.stateDir);
-  const store = createSecretStore({
-    provider: manifest.credential.storage.provider,
-    fileDirectory: paths.secrets,
-  });
+  const provider = manifest.credential.storage.provider;
+  const storeOf = (which: SecretStoreProvider) =>
+    createSecretStore({ provider: which, fileDirectory: paths.secrets });
+  const store = storeOf(provider);
   const mode = manifest.credential.provider;
   const revocable =
     mode === "adapter" ||
@@ -216,12 +224,30 @@ async function logoutLocally(
         try {
           raw = JSON.parse(readFileSync(paths.identity, "utf8"));
         } catch {
-          // Unreadable metadata names no secret; the file is still removed.
+          // A damaged file still names token bundles in its text (below).
         }
-        const failed = await deleteSecretsVerified(
+        const refs = [
+          ...new Set([
+            ...metadataSecretRefs(raw, id),
+            ...metadataFileSecretRefs(paths.identity, id, "identity"),
+          ]),
+        ].sort();
+        // The store the session records holds its tokens: looking them up in
+        // the configured one would find nothing after a change of storage
+        // provider, and the deletion would count as confirmed.
+        const recorded = metadataFileSecretStore(paths.identity) ?? provider;
+        const identityStore = storeForRecorded(
           store,
-          metadataSecretRefs(raw, id),
+          provider,
+          recorded,
+          storeOf,
         );
+        const failed = identityStore
+          ? await deleteSecretsVerified(identityStore, refs)
+          : refs.map((ref) => ({
+              ref,
+              problem: `the ${recorded} secret store that holds it is not available`,
+            }));
         const tokens = manifest.identity.mode !== "none";
         if (tokens)
           problems.push(`identity revocation: not attempted: ${reason}`);
@@ -239,6 +265,8 @@ async function logoutLocally(
           writeIdentityDiscardedMarker(
             paths.identity,
             failed.map((item) => item.ref),
+            new Date(),
+            recorded,
           );
       });
     return problems;
@@ -275,17 +303,46 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     identity: existsSync(paths.identity),
     credential: existsSync(paths.credential),
   };
-  let problems: string[] = [];
-  if (access)
+  // Only what happened is recorded: credential.revoke with its remote
+  // revocation outcome when a credential existed, identity.logout when
+  // there was an identity session.
+  const auditEvents = () =>
+    recordAudit(
+      ctx,
+      network,
+      events.map((event) => ({
+        event: event.event,
+        user: signedIn ? principalId(signedIn) : null,
+        session: null,
+        detail: { mode: manifest.credential.provider, ...event.detail },
+      })),
+    );
+  const problems: string[] = [];
+  if (access) {
+    // What logout found before a lock wait ran out; when the local sign-out
+    // redoes the work instead, it is dropped.
+    const found: string[] = [];
     try {
-      problems = await access.logout();
+      problems.push(...(await access.logout(found)));
     } catch (error) {
       // Another process still holds a lock: nothing is wrong with the
       // configuration, and deleting around that process is what the locks
       // prevent. Say so instead of signing out locally.
-      if (isLockTimeout(error)) throw error;
+      if (isLockTimeout(error)) {
+        // What this command already did (a credential it revoked before the
+        // identity lock ran out) is still shown and recorded. The lock
+        // timeout stays the command's error, which a required audit sink
+        // that is down must not replace: it is retryable, the audit failure
+        // is reported beside it.
+        for (const problem of found) ctx.err(`Warning: ${problem}`);
+        await auditEvents().catch((auditError) =>
+          ctx.err(`Error: ${formatError(auditError)}`),
+        );
+        throw error;
+      }
       unavailable = error;
     }
+  }
   if (unavailable !== undefined) {
     const reason = redact(formatError(unavailable));
     ctx.err(
@@ -293,21 +350,18 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     );
     problems.push(...(await logoutLocally(ctx, manifest, reason, onEvent)));
   }
+  // A writer killed before its rename leaves a temporary copy of identity or
+  // credential metadata; it must not outlive the sign-out.
+  try {
+    await removeAccessTemporaries(ctx.stateDir);
+  } catch (error) {
+    problems.push(
+      `abandoned temporary identity or credential files could not be removed (${redact(formatError(error))}); the next start removes them`,
+    );
+  }
   // Revocation problems are shown before auditing, which can fail the command.
   for (const problem of problems) ctx.err(`Warning: ${problem}`);
-  // Only what happened is recorded: credential.revoke with its remote
-  // revocation outcome when a credential existed, identity.logout when
-  // there was an identity session.
-  await recordAudit(
-    ctx,
-    network,
-    events.map((event) => ({
-      event: event.event,
-      user: signedIn ? principalId(signedIn) : null,
-      session: null,
-      detail: { mode: manifest.credential.provider, ...event.detail },
-    })),
-  );
+  await auditEvents();
   // Whatever metadata is left names a secret that could not be deleted. A
   // distribution without a stored runtime credential never clears one.
   const classes = [

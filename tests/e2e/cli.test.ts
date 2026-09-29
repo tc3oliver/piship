@@ -377,6 +377,15 @@ describe("CLI", () => {
           });
     expect(brandedHelp.status, brandedHelp.stderr).toBe(0);
     expect(brandedHelp.stdout).toContain("MyPi personal distribution");
+    // Pi-native sign-in happens inside the session: branded login and
+    // logout would always refuse, so help never advertises them.
+    expect(brandedHelp.stdout).not.toMatch(/(^|\s)log(in|out)(\s|$)/m);
+    expect(brandedHelp.stdout).toContain(
+      "start mypi, then use /login and /logout, and /model",
+    );
+    expect(brandedHelp.stdout).toContain("doctor | models | version");
+    expect(brandedHelp.stdout).toContain("config explain [--json]");
+    expect(brandedHelp.stdout).toContain("update [--channel <name>]");
     const firstResult = JSON.parse(first.stdout) as {
       sessionId: string;
       resumed: boolean;
