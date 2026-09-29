@@ -36,6 +36,41 @@ export function removeNpmBins(directory: string): void {
     else if (lstatSync(path).isDirectory()) removeNpmBins(path);
   }
 }
+/**
+ * Remove optional packages whose npm lock `os`/`cpu` exclude this target.
+ * npm skips them for ordinary dependencies but installs every platform build
+ * inside a shrinkwrapped dependency (Pi ships one), which put all 26 esbuild
+ * binaries into each payload. Returns the removed lock paths.
+ */
+export function removeForeignPlatformPackages(
+  root: string,
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string[] {
+  const lock = JSON.parse(
+    readFileSync(join(root, "package-lock.json"), "utf8"),
+  ) as {
+    packages?: Record<
+      string,
+      { optional?: boolean; os?: string[]; cpu?: string[] }
+    >;
+  };
+  const removed: string[] = [];
+  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+    if (!path.startsWith("node_modules/") || entry.optional !== true) continue;
+    if (supports(entry.os, platform) && supports(entry.cpu, arch)) continue;
+    rmSync(join(root, ...path.split("/")), { recursive: true, force: true });
+    removed.push(path);
+  }
+  return removed;
+}
+/** npm's `os`/`cpu` rule: `!value` excludes; any plain value must match. */
+function supports(values: readonly string[] | undefined, value: string) {
+  if (!values?.length) return true;
+  if (values.includes(`!${value}`)) return false;
+  const allowed = values.filter((item) => !item.startsWith("!"));
+  return allowed.length === 0 || allowed.includes(value);
+}
 export function verifyPayload(directory: string): DistributionLock {
   return verifyPayloadContents(directory, { requireTarget: true });
 }
