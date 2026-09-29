@@ -548,6 +548,16 @@ function expectSecretStore(
 ): string[] {
   const expected = [...refs].sort();
   const fallback = join(state, "secrets");
+  // Each metadata file records the store its secret was written to.
+  for (const path of [
+    join(state, "identity", "session.json"),
+    join(state, "credentials-metadata", "inference.json"),
+  ])
+    if (existsSync(path))
+      expect(
+        JSON.parse(readFileSync(path, "utf8")).secret_store,
+        `the store ${path} records`,
+      ).toBe(storage);
   if (storage === "file") {
     expect(existsSync(fallback) ? readdirSync(fallback).sort() : []).toEqual(
       expected
