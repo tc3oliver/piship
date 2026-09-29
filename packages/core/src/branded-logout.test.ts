@@ -22,7 +22,7 @@ import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
-import { DistributionAccess } from "./access/index.js";
+import { type AccessEvent, DistributionAccess } from "./access/index.js";
 import type { BrandedContext } from "./branded/context.js";
 import { runLogout } from "./branded/login.js";
 import { resolveLock } from "./index.js";
@@ -327,6 +327,38 @@ describe("branded logout", () => {
     expect(existsSync(path("identity", "session.json"))).toBe(true);
     expect(readdirSync(path("secrets"))).toHaveLength(refs);
     expect(err.join("\n")).not.toContain("signing out locally");
+  });
+
+  it("still audits what it did before a lock wait ran out", async () => {
+    const { ctx } = context();
+    await signIn(ctx);
+    const spy = vi
+      .spyOn(DistributionAccess.prototype, "logout")
+      .mockImplementationOnce(async function (this: DistributionAccess) {
+        // The credential was revoked and cleared; the identity lock ran out.
+        (
+          this as unknown as {
+            options: { onEvent: (event: AccessEvent) => void };
+          }
+        ).options.onEvent({
+          event: "credential.revoke",
+          detail: { revocation: "revoked" },
+        });
+        throw new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "lock wait", {
+          retryable: true,
+          sanitizedDetail: { reason: "lock-timeout" },
+        });
+      });
+    try {
+      await expect(runLogout(ctx)).rejects.toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(auditEvents(ctx).map((event) => event.event)).toEqual([
+      "credential.revoke",
+    ]);
   });
 
   it("reports an identity provider that cannot be loaded as a failed revocation, not an unsupported one", async () => {

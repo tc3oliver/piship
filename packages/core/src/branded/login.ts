@@ -279,6 +279,20 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     identity: existsSync(paths.identity),
     credential: existsSync(paths.credential),
   };
+  // Only what happened is recorded: credential.revoke with its remote
+  // revocation outcome when a credential existed, identity.logout when
+  // there was an identity session.
+  const auditEvents = () =>
+    recordAudit(
+      ctx,
+      network,
+      events.map((event) => ({
+        event: event.event,
+        user: signedIn ? principalId(signedIn) : null,
+        session: null,
+        detail: { mode: manifest.credential.provider, ...event.detail },
+      })),
+    );
   let problems: string[] = [];
   if (access)
     try {
@@ -287,7 +301,12 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
       // Another process still holds a lock: nothing is wrong with the
       // configuration, and deleting around that process is what the locks
       // prevent. Say so instead of signing out locally.
-      if (isLockTimeout(error)) throw error;
+      if (isLockTimeout(error)) {
+        // What this command already did (a credential it revoked before the
+        // identity lock ran out) is still recorded.
+        await auditEvents();
+        throw error;
+      }
       unavailable = error;
     }
   if (unavailable !== undefined) {
@@ -308,19 +327,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   }
   // Revocation problems are shown before auditing, which can fail the command.
   for (const problem of problems) ctx.err(`Warning: ${problem}`);
-  // Only what happened is recorded: credential.revoke with its remote
-  // revocation outcome when a credential existed, identity.logout when
-  // there was an identity session.
-  await recordAudit(
-    ctx,
-    network,
-    events.map((event) => ({
-      event: event.event,
-      user: signedIn ? principalId(signedIn) : null,
-      session: null,
-      detail: { mode: manifest.credential.provider, ...event.detail },
-    })),
-  );
+  await auditEvents();
   // Whatever metadata is left names a secret that could not be deleted. A
   // distribution without a stored runtime credential never clears one.
   const classes = [
