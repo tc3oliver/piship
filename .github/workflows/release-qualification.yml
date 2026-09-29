@@ -1,0 +1,39 @@
+name: Release qualification
+# One manual run on the exact candidate HEAD produces all release evidence
+# for that commit: the fast merge gate, CodeQL, and the full Portable E2E in
+# parallel, then the Release candidate build, attestation, and verification
+# once all three pass (see AGENTS.md, CI evidence tiers).
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-qualification-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  codeql:
+    uses: ./.github/workflows/codeql.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  portable-e2e:
+    uses: ./.github/workflows/portable-e2e.yml
+    # The nested issue report runs only on schedule, but a reusable
+    # workflow's job permissions must fit within the caller's grant.
+    permissions:
+      contents: read
+      issues: write
+
+  release-candidate:
+    needs: [ci, codeql, portable-e2e]
+    uses: ./.github/workflows/release-candidate.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write

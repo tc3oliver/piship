@@ -2,15 +2,19 @@ name: Release candidate
 # Builds, verifies, and attests the release archives of the managed demo
 # (acmecode) and the personal example (mypi).
 # Output stays in workflow artifacts: nothing is published or released here.
-# Release qualification runs manually on the exact candidate HEAD before a
-# release; it is not triggered by pull requests or main pushes (see
+# Release qualification (release-qualification.yml) calls it on the exact
+# candidate HEAD after CI, CodeQL, and Portable E2E pass; it can also be
+# dispatched alone. It is not triggered by pull requests or main pushes (see
 # AGENTS.md, CI evidence tiers).
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Called from Release qualification, github.workflow names the caller; the
+  # literal prefix keeps this group apart from its sibling reusable workflows.
+  group: release-candidate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   # Every target is built twice, on two separate runners, each from a fresh
@@ -93,7 +97,8 @@ jobs:
           node -e 'require("node:fs").cpSync("examples/personal", require("node:path").join(process.env.RUNNER_TEMP, "personal"), { recursive: true })'
       - name: Build the releases
         run: |
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
           mkdir -p "$RUNNER_TEMP/upload"
           for pair in demo:acmecode personal:mypi; do
             dir="${pair%%:*}" id="${pair##*:}"

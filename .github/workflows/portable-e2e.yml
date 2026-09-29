@@ -5,10 +5,13 @@ on:
   schedule:
     - cron: "0 18 * * *"
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Called from Release qualification, github.workflow names the caller; the
+  # literal prefix keeps this group apart from its sibling reusable workflows.
+  group: portable-e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   portable:
@@ -57,7 +60,8 @@ jobs:
 
   # A scheduled failure opens (or comments on) one tracking issue, so a
   # nightly regression becomes a visible follow-up without blocking pull
-  # requests. Manual runs report in the Actions UI only.
+  # requests. Manual and Release qualification runs report in the Actions UI
+  # only.
   report:
     needs: portable
     if: ${{ failure() && github.event_name == 'schedule' }}
