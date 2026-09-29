@@ -375,10 +375,6 @@ export async function runCli(
       output.stdout(
         `Purged ${purged.state}${purged.deletedSecrets.length ? `\nDeleted ${purged.deletedSecrets.length} secret-store entr${purged.deletedSecrets.length === 1 ? "y" : "ies"}` : ""}`,
       );
-      for (const problem of purged.problems)
-        output.stderr(
-          `Warning: ${problem}; remove it with the platform secret-store tool`,
-        );
     } else if (command === "inspect") {
       if (existsSync(resolve(target)) && statSync(resolve(target)).isFile()) {
         const lock = requireCurrentLock(target);

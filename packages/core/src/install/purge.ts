@@ -15,11 +15,6 @@ export interface PurgeResult {
   readonly state: string;
   /** Secret-store references that were deleted from the platform store. */
   readonly deletedSecrets: readonly string[];
-  /**
-   * Always empty: a secret that cannot be deleted now fails the purge before
-   * any state is removed. Kept so existing callers still compile.
-   */
-  readonly problems: readonly string[];
 }
 
 /**
@@ -75,5 +70,5 @@ export async function purgeDistributionState(
     deletedSecrets.push(...sorted);
   }
   rmSync(state, { recursive: true, force: true });
-  return { state, deletedSecrets, problems: [] };
+  return { state, deletedSecrets };
 }
