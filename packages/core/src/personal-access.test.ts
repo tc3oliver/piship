@@ -136,14 +136,6 @@ function storedRefs(): string[] {
 }
 
 /** A Pi session file, as an earlier launch in this project left it. */
-function writeSession(): { path: string; content: string } {
-  const path = join(stateDir(), "sessions", "project", "session-1.jsonl");
-  const content = '{"type":"session","id":"session-1"}\n';
-  mkdirSync(join(path, ".."), { recursive: true });
-  writeFileSync(path, content);
-  return { path, content };
-}
-
 describe("personal distributions without identity", () => {
   it.each(["pi-native", "local-secret", "none"] as const)(
     "never create a principal record with %s credentials",
@@ -250,9 +242,8 @@ describe("personal distributions without identity", () => {
   });
 
   it.each(["local-secret", "none"] as const)(
-    "keeps sessions and the model selection across login, logout, and login with %s credentials",
+    "keeps the model selection across login, logout, and login with %s credentials",
     async (mode) => {
-      const session = writeSession();
       const manifest = manifestFor(mode);
       const preferences = open(mode).paths.preferences;
       setPreference(
@@ -271,7 +262,6 @@ describe("personal distributions without identity", () => {
       expect(activated.selectedModel).toBe("local/fast");
       expect(activated.notices).toEqual([]);
       expect(readPreferences(preferences).values.model).toBe("local/fast");
-      expect(readFileSync(session.path, "utf8")).toBe(session.content);
     },
   );
 

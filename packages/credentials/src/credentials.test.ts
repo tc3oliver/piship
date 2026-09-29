@@ -1324,6 +1324,43 @@ describe("credential lifecycle", () => {
       credentials.ensure(null, ctx, { allowAcquire: false }),
     ).rejects.toMatchObject({ code: "CREDENTIAL_DENIED", retryable: false });
   });
+  it("refuses a credential ID outside the identifier alphabet, whichever provider issued it", async () => {
+    for (const credentialId of [
+      "key/1",
+      "user@example.com",
+      "a b",
+      "x".repeat(257),
+      "id\nline",
+    ]) {
+      const provider = {
+        ...fakeProvider(),
+        async acquire(): Promise<RuntimeCredential> {
+          return {
+            kind: "api_key",
+            secret: new SecretValue("sk-adapter-issued-secret"),
+            credentialId,
+          };
+        },
+      };
+      const { manager: credentials } = manager(provider);
+      await expect(
+        credentials.ensure(null, ctx, { allowAcquire: true }),
+      ).rejects.toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+    }
+    const ok = {
+      ...fakeProvider(),
+      async acquire(): Promise<RuntimeCredential> {
+        return {
+          kind: "api_key",
+          secret: new SecretValue("sk-adapter-issued-secret"),
+          credentialId: "vk_1.a:b-c",
+        };
+      },
+    };
+    await expect(
+      manager(ok).manager.ensure(null, ctx, { allowAcquire: true }),
+    ).resolves.toMatchObject({ ref: { credentialId: "vk_1.a:b-c" } });
+  });
   it("forces re-acquisition after a gateway rejection", async () => {
     const provider = fakeProvider({ expiresInSeconds: 3600 });
     const { manager: credentials } = manager(provider);

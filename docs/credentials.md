@@ -22,7 +22,7 @@ interface SecretStore {
 }
 ```
 
-A `RuntimeCredential` has `kind` (`api_key`, `bearer`, or `opaque`), a `SecretValue`, and optional `expiresAt`, `credentialId`, and metadata such as entitled `models` and `baseUrl`.
+A `RuntimeCredential` has `kind` (`api_key`, `bearer`, or `opaque`), a `SecretValue`, and optional `expiresAt`, `credentialId`, and metadata such as entitled `models` and `baseUrl`. A `credentialId` is 1 to 256 letters, digits, `.`, `_`, `:`, or `-` whichever provider issues it (it reaches notices, audit events, and `doctor`); any other value fails the acquire with `CREDENTIAL_ACQUIRE_FAILED`.
 
 ## Modes
 

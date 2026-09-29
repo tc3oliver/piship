@@ -461,7 +461,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         "acquire",
         "contract",
         "The credential broker issued a credential for another subject",
-        { status: response.status },
+        { status: response.status, detail },
       );
     const type = body.credential_type;
     const secret = body.credential;
@@ -517,6 +517,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         "The credential broker issued an already expired credential",
         {
           component: "credential",
+          sanitizedDetail: {
+            operation: "acquire",
+            reason: "contract",
+            status: response.status,
+            ...detail,
+          },
         },
       );
     return {
