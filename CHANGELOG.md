@@ -297,3 +297,4 @@ Preview milestone; not published to npm. Commits `0251289` through `6b2be68` (#9
 ### Changed
 
 - Major npm upgrades are kept in explicit review (#2).
+- **Behavior change:** a change of `credential.storage.provider` (file to system or back) now also clears the stored sandbox credential during `update` and `rollback`, deleting it from the store its metadata records, and the sandbox credential's own operations (`sandbox login`, `sandbox logout`, launch, `logout`, `login`) reach that recorded store. Before, the metadata was kept, so after such a switch its deletion failed closed and blocked every `login`, `logout`, `sandbox login` and launch until the provider was changed back.

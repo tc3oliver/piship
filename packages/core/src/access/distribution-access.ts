@@ -426,6 +426,9 @@ export class DistributionAccess {
         ? { storage: this.options.access.credential.storage }
         : {}),
       ...(store ? { secretStore: store } : {}),
+      ...(this.options.secretStoreFor
+        ? { secretStoreFor: this.options.secretStoreFor }
+        : {}),
       principal,
       onEvent: (event) => this.#emit(event.event, event.detail),
       ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),

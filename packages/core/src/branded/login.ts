@@ -285,7 +285,9 @@ async function logoutLocally(
           distributionId: id,
           command: ctx.metadata.app.command,
           stateDir: ctx.stateDir,
+          storage: { provider },
           secretStore: store,
+          secretStoreFor: storeOf,
           principal: null,
           onEvent,
         }).clear()

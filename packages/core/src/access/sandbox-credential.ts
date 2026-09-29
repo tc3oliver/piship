@@ -32,6 +32,7 @@ import {
   LocalSecretCredentialProvider,
   normalizeCredential,
   type RejectedCredential,
+  type SecretStoreResolver,
 } from "@piship/credentials";
 import { accessStatePaths } from "./state.js";
 
@@ -70,6 +71,14 @@ export interface SandboxCredentialOptions {
   readonly storage?: { readonly provider: "system" | "file" };
   /** A store to use instead of the configured one (shared or a test's). */
   readonly secretStore?: SecretStore;
+  /**
+   * The store of another provider, for deleting references that metadata
+   * recorded for it (`credential.storage.provider` changed since). By default
+   * it is the other provider's store beside the state, except with an
+   * injected in-memory `secretStore`, which has none. Without one, such
+   * references stay tracked and fail closed.
+   */
+  readonly secretStoreFor?: SecretStoreResolver;
   /** The principal the credential is used by or stored for; null without identity. */
   readonly principal: PrincipalKey | null;
   /**
@@ -166,6 +175,15 @@ export class SandboxCredential {
   readonly #options: SandboxCredentialOptions;
   readonly #metadataPath: string;
   readonly #revocationRetryPath: string;
+  readonly #storeFor: SecretStoreResolver = (provider) =>
+    this.#options.secretStoreFor
+      ? this.#options.secretStoreFor(provider)
+      : this.store.kind === "memory"
+        ? null
+        : createSecretStore({
+            provider,
+            fileDirectory: accessStatePaths(this.#options.stateDir).secrets,
+          });
 
   constructor(options: SandboxCredentialOptions) {
     this.#options = options;
@@ -216,6 +234,12 @@ export class SandboxCredential {
         },
       },
       store: this.store,
+      // What the configured store is, and how to reach the one that state
+      // recorded before the provider changed.
+      ...(this.#options.storage
+        ? { storeProvider: this.#options.storage.provider }
+        : {}),
+      storeFor: this.#storeFor,
       metadataPath: this.#metadataPath,
       revocationRetryPath: this.#revocationRetryPath,
       beforeExpirySeconds: 0,
