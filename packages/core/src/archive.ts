@@ -327,7 +327,9 @@ export async function createArchive(
   try {
     await pipeline(
       Readable.from(tarStream(entries, mtime)),
-      createGzip({ level: 9 }),
+      // Level 9 compressed about 2.7x slower than 6 for an archive under
+      // 0.5% smaller.
+      createGzip({ level: 6 }),
       createWriteStream(partial),
     );
     // zlib records the build platform in the OS byte; normalize it.
