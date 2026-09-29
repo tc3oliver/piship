@@ -516,6 +516,8 @@ interface Execution {
   readonly settled: Promise<Settled>;
   /** Resolves once stdout contains `text`. */
   readonly saw: (text: string) => Promise<void>;
+  /** When the first stdout arrived, in `Date.now()` terms; undefined before. */
+  readonly firstOutputAt: () => number | undefined;
 }
 
 interface Ran {
@@ -547,6 +549,23 @@ async function whileRunning(execution: Execution): Promise<boolean> {
     sleep(RUNNING_MS * 3),
   ]);
   return !ended;
+}
+
+/**
+ * Wait until a command that did not stop would have written its marker. The
+ * marker comes LATE_MS after the command started, and the kit knows the
+ * command started when its first output arrives: a backend under load can
+ * start it long after the kit asked, so the wait counts from the output and
+ * grows if the output arrives while the kit waits. A command that has
+ * printed nothing is counted from `from`, when the kit aborted or disposed.
+ */
+async function markerWindow(execution: Execution, from: number): Promise<void> {
+  for (;;) {
+    const remaining =
+      (execution.firstOutputAt() ?? from) + LATE_MS + MARGIN_MS - Date.now();
+    if (remaining <= 0) return;
+    await sleep(remaining);
+  }
 }
 
 /** Why a sentinel outcome breaks the declaration, or undefined. */
@@ -893,6 +912,7 @@ class Harness {
     const controller = new AbortController();
     let stdout = "";
     let stderr = "";
+    let firstOutput: number | undefined;
     const waiters: { text: string; resolve: () => void }[] = [];
     const wake = () => {
       for (const waiter of [...waiters])
@@ -919,6 +939,7 @@ class Harness {
           {
             signal: controller.signal,
             onStdout: (chunk: Buffer) => {
+              firstOutput ??= Date.now();
               if (stdout.length < 65_536) stdout += chunk.toString("utf8");
               wake();
             },
@@ -949,6 +970,7 @@ class Harness {
           waiters.push({ text, resolve });
           wake();
         }),
+      firstOutputAt: () => firstOutput,
     };
   }
 
@@ -1579,7 +1601,6 @@ const checks: Record<SandboxBehavior, Check> = {
       `mkdir -p ${quote(h.scratch)}`,
       "creating a directory",
     );
-    const started = Date.now();
     const execution = h.start(
       instance,
       `echo started; ( sleep 1; printf late > ${quote(marker)} ) & wait`,
@@ -1589,12 +1610,13 @@ const checks: Record<SandboxBehavior, Check> = {
       "the command ended before its timeout, so the kit could not time it out while it ran",
     );
     execution.controller.abort();
+    const aborted = Date.now();
     const settled = await settle(() => execution.settled, h.settleMs);
     check(
       settled.kind === "resolved",
       `exec() did not settle within ${h.settleMs} ms after io.signal aborted for a timeout, so PiShip would retire the instance and end the session`,
     );
-    await sleep(started + LATE_MS + MARGIN_MS - Date.now());
+    await markerWindow(execution, aborted);
     const present = await h.marker(instance, marker);
     check(
       present === false,
@@ -1628,13 +1650,13 @@ const checks: Record<SandboxBehavior, Check> = {
       marker: string,
       when: "before it started" | "while it ran",
     ): Promise<string | undefined> => {
-      const started = Date.now();
       const execution = h.start(instance, command);
       // Before it started: while the backend is still setting it up. While
       // it ran: before it printed anything (a timeout usually hits a command
       // that is streaming output; the timeout check covers that).
       if (when === "while it ran") await sleep(RUNNING_MS);
       execution.controller.abort();
+      const aborted = Date.now();
       const settled = await settle(() => execution.settled, h.settleMs);
       if (settled.kind !== "resolved") {
         // PiShip retires a backend that did not stop the command.
@@ -1650,7 +1672,7 @@ const checks: Record<SandboxBehavior, Check> = {
           `a command cancelled ${when} did not stop, and exec() did not settle even after dispose()`,
         );
       }
-      await sleep(started + LATE_MS + MARGIN_MS - Date.now());
+      await markerWindow(execution, aborted);
       const present = await h.marker(retired ? undefined : instance, marker);
       if (present === undefined)
         return `skipped: the backend did not stop a command cancelled ${when}, so the kit retired the instance, and it cannot see inside a disposed sandbox whether dispose() stopped it`;
@@ -1661,8 +1683,10 @@ const checks: Record<SandboxBehavior, Check> = {
       return undefined;
     };
     const early = `${h.scratch}/cancel-early-${randomBytes(4).toString("hex")}`;
+    // The first command prints a line as it starts, which tells the kit when
+    // a backend that starts it late did; it is cancelled before that line.
     const skip = await cancel(
-      `sleep 1; printf late > ${quote(early)}`,
+      `echo started; sleep 1; printf late > ${quote(early)}`,
       early,
       "before it started",
     );
@@ -1726,7 +1750,6 @@ const checks: Record<SandboxBehavior, Check> = {
     );
     const marker = `${h.scratch}/dispose-${randomBytes(4).toString("hex")}`;
     const ranAfter = `${h.scratch}/after-dispose-${randomBytes(4).toString("hex")}`;
-    const started = Date.now();
     const execution = h.start(
       instance,
       `echo started; sleep 1; printf late > ${quote(marker)}`,
@@ -1735,6 +1758,7 @@ const checks: Record<SandboxBehavior, Check> = {
       await whileRunning(execution),
       "the command ended before dispose(), so the kit could not dispose while it ran",
     );
+    const disposing = Date.now();
     const first = await h.dispose(instance);
     check(
       first.kind !== "hung",
@@ -1765,7 +1789,7 @@ const checks: Record<SandboxBehavior, Check> = {
       "exec() after dispose() reported a command as run",
     );
     if (h.observable) {
-      await sleep(started + LATE_MS + MARGIN_MS - Date.now());
+      await markerWindow(execution, disposing);
       check(
         !existsSync(join(h.workspace, marker)),
         "a command that was running at dispose() kept running and wrote its marker",

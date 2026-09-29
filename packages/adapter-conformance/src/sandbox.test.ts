@@ -249,6 +249,9 @@ type Fault =
   | "claims network denial but connects"
   | "ignores a timeout once the command streams output"
   | "ignores cancellation"
+  | "starts a timed-out command late and leaves it running"
+  | "starts a cancelled command late and leaves it running"
+  | "starts a command late and ignores dispose()"
   | "dispose leaves the sandbox running"
   | "dispose throws the second time"
   | "answers PiShip's check command itself"
@@ -265,7 +268,48 @@ interface ReferenceOptions {
   readonly networkModes?: readonly ("deny" | "allow")[];
   /** Deliver a command's output only when it ends, as a batch API does. */
   readonly buffered?: boolean;
+  /**
+   * Start each command that writes a marker only after `LATE_START_MS`, as a
+   * service under load does. A sound backend gives up on the command when it
+   * is aborted or its sandbox disposed, so the kit passes it.
+   */
+  readonly slowStart?: boolean;
 }
+
+/** How long a service under load takes to start a command, for `slowStart`. */
+const LATE_START_MS = 1_700;
+
+/**
+ * The seeded slow starts. Each names the marker file its behavior's command
+ * writes (the kit puts the name in the command's text) and how long the
+ * defective service takes to start that command. The marker then appears
+ * after a kit that counts from its own request has looked, and the command's
+ * first line reaches the kit before a kit that counts from that line looks.
+ * The kit's command that only looks for the marker is not slowed.
+ */
+const LATE_FAULTS: Partial<
+  Record<Fault, { readonly marker: string; readonly delayMs: number }>
+> = {
+  "starts a timed-out command late and leaves it running": {
+    marker: "timeout",
+    delayMs: 1_700,
+  },
+  "starts a cancelled command late and leaves it running": {
+    marker: "cancel-early",
+    delayMs: 1_000,
+  },
+  "starts a command late and ignores dispose()": {
+    marker: "dispose",
+    delayMs: 1_700,
+  },
+};
+
+/** Whether `command` writes a marker (as opposed to looking for one). */
+const writesMarker = (command: string, prefix = "") =>
+  new RegExp(`printf late > '[^']*/${prefix}`).test(command);
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface Session {
   readonly id: string;
@@ -448,6 +492,51 @@ function referenceAdapter(options: ReferenceOptions) {
       });
     };
 
+    /** Wait for a slow start, and give up when aborted or disposed. */
+    const startLate = async (
+      session: Session,
+      io: SandboxExecIO,
+      delayMs: number,
+    ): Promise<void> => {
+      const end = Date.now() + delayMs;
+      while (Date.now() < end && !io.signal.aborted && !session.disposed)
+        await sleep(25);
+    };
+
+    /**
+     * A defective service: it starts the command `delayMs` after the request
+     * whatever happens meanwhile, settles the call as soon as its signal
+     * aborts or its sandbox is disposed, and never stops the command.
+     */
+    const leaveRunning = (
+      session: Session,
+      request: SandboxExecRequest,
+      io: SandboxExecIO,
+      delayMs: number,
+    ): Promise<SandboxExecResult> => {
+      let watch: ReturnType<typeof setInterval> | undefined;
+      const stopped = new Promise<SandboxExecResult>((resolve) => {
+        const stop = () => resolve({ exitCode: null });
+        io.signal.addEventListener("abort", stop, { once: true });
+        if (io.signal.aborted) stop();
+        watch = setInterval(() => {
+          if (session.disposed) stop();
+        }, 25);
+      });
+      // The command runs on with a signal nothing aborts.
+      const ran = sleep(delayMs).then(() =>
+        spawnCommand(session, request, {
+          ...io,
+          signal: new AbortController().signal,
+        }),
+      );
+      ran.catch(() => undefined);
+      const finished = Promise.race([ran, stopped]);
+      const release = () => clearInterval(watch);
+      finished.then(release, release);
+      return finished;
+    };
+
     const exec = async (
       session: Session,
       request: SandboxExecRequest,
@@ -456,9 +545,23 @@ function referenceAdapter(options: ReferenceOptions) {
       if (session.disposed) throw new Error("the sandbox session is closed");
       // A round trip to the service before the command starts.
       await new Promise((resolve) => setImmediate(resolve));
+      const late = fault ? LATE_FAULTS[fault] : undefined;
+      if (late && writesMarker(request.command, `${late.marker}-`))
+        return leaveRunning(session, request, io, late.delayMs);
+      if (options.slowStart && writesMarker(request.command))
+        await startLate(session, io, LATE_START_MS);
       if (fault !== "ignores cancellation" && io.signal.aborted)
         return { exitCode: null };
       if (session.disposed) throw new Error("the sandbox session is closed");
+      return spawnCommand(session, request, io);
+    };
+
+    /** Run the command in the isolator; settle with how it ended. */
+    const spawnCommand = async (
+      session: Session,
+      request: SandboxExecRequest,
+      io: SandboxExecIO,
+    ): Promise<SandboxExecResult> => {
       if (
         fault === "answers PiShip's check command itself" &&
         request.command.includes("piship-sandbox-ready")
@@ -819,6 +922,11 @@ describe.skipIf(!isolator)(
       expect(statuses(report)).toEqual(expected.shared);
     }, 120_000);
 
+    it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
+      const report = await run({ variant: "shared", slowStart: true });
+      expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
     it("skips cleanup without the sandboxes hook, and the network check for a deny-only backend", async () => {
       const service = new ControlService();
       const report = await testSandboxAdapter(
@@ -1068,6 +1176,18 @@ describe.skipIf(!isolator)(
         /cancelled before it started ran on and wrote its marker/,
       ],
       [
+        "starts a timed-out command late and leaves it running",
+        "shared",
+        "timeout",
+        /the timed-out command kept running and wrote its marker/,
+      ],
+      [
+        "starts a cancelled command late and leaves it running",
+        "shared",
+        "cancellation",
+        /cancelled before it started ran on and wrote its marker/,
+      ],
+      [
         "dispose leaves the sandbox running",
         "shared",
         "cleanup",
@@ -1078,6 +1198,12 @@ describe.skipIf(!isolator)(
         "shared",
         "dispose",
         /second dispose\(\) did not resolve/,
+      ],
+      [
+        "starts a command late and ignores dispose()",
+        "shared",
+        "dispose",
+        /a command that was running at dispose\(\) kept running and wrote its marker/,
       ],
       [
         "answers PiShip's check command itself",
