@@ -168,7 +168,20 @@ sandbox:
   required: true
   filesystem:
     read:
-      deny: [~/.ssh, ~/.aws, ~/.gnupg]
+      # Credential stores an agent has no reason to read. Extend it with your
+      # organization's own (cloud CLIs, package registries, VPN profiles).
+      deny:
+        - ~/.ssh
+        - ~/.aws
+        - ~/.gnupg
+        - ~/.netrc
+        - ~/.git-credentials
+        - ~/.docker/config.json
+        - ~/.kube
+        - ~/.npmrc
+        - ~/.config/gh
+        - ~/.local/share/keyrings
+        - ~/Library/Keychains
     write:
       allow: [workspace, tmp]
   network:
