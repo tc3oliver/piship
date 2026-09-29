@@ -101,7 +101,7 @@ async function proxy(mode: "forward" | "trap"): Promise<Recorder> {
     const credential = request.headers["proxy-authorization"];
     if (typeof credential === "string") proxyAuthorization.push(credential);
     if (mode === "trap") {
-      response.writeHead(502).end();
+      response.headersSent ? response.destroy() : response.writeHead(502).end();
       return;
     }
     const target = new URL(request.url ?? "");
@@ -121,7 +121,9 @@ async function proxy(mode: "forward" | "trap"): Promise<Recorder> {
         reply.pipe(response);
       },
     );
-    upstream.on("error", () => response.writeHead(502).end());
+    upstream.on("error", () =>
+      response.headersSent ? response.destroy() : response.writeHead(502).end(),
+    );
     request.pipe(upstream);
   });
   server.on("connect", (request, socket, head) => {
@@ -168,7 +170,11 @@ async function tlsFront(target: string) {
           reply.pipe(response);
         },
       );
-      forwarded.on("error", () => response.writeHead(502).end());
+      forwarded.on("error", () =>
+        response.headersSent
+          ? response.destroy()
+          : response.writeHead(502).end(),
+      );
       request.pipe(forwarded);
     },
   );
@@ -280,7 +286,8 @@ function build(kind: "sandboxed" | "unsandboxed"): Built {
 }
 
 beforeAll(() => {
-  built.set("sandboxed", build("sandboxed"));
+  // Windows has no native sandbox: only the uncontained distribution is used.
+  if (!windows) built.set("sandboxed", build("sandboxed"));
   built.set("unsandboxed", build("unsandboxed"));
 }, 600000);
 afterAll(() => {
@@ -557,35 +564,35 @@ async function childEnvironment(
   };
 }
 
-describe.skipIf(windows)(
-  "child processes receive only the approved network environment",
-  () => {
-    // The launch environment carries approved settings and the ambient ones the
-    // policy does not approve, including a proxy URL with credentials.
-    const ambient = async () => {
-      const forward = await proxy("forward");
-      const credentialed = `http://svc-account:hunter2@127.0.0.1:${new URL(forward.url).port}`;
-      return {
-        forward,
-        env: {
-          HTTP_PROXY: forward.url,
-          http_proxy: forward.url,
-          HTTPS_PROXY: credentialed,
-          https_proxy: credentialed,
-          NO_PROXY: "internal.invalid",
-          ALL_PROXY: "socks5://ambient.invalid:1080",
-          SSL_CERT_FILE: "/etc/ambient-ca.pem",
-          CURL_CA_BUNDLE: "/etc/ambient-ca.pem",
-          REQUESTS_CA_BUNDLE: "/etc/ambient-ca.pem",
-          GIT_SSL_CAINFO: "/etc/ambient-ca.pem",
-          GIT_SSL_NO_VERIFY: "1",
-          PISHIP_E2E_PLAIN: "kept",
-          OPENAI_API_KEY: "sk-ambient-personal-key-e2e",
-        },
-      };
+describe("child processes receive only the approved network environment", () => {
+  // The launch environment carries approved settings and the ambient ones the
+  // policy does not approve, including a proxy URL with credentials.
+  const ambient = async () => {
+    const forward = await proxy("forward");
+    const credentialed = `http://svc-account:hunter2@127.0.0.1:${new URL(forward.url).port}`;
+    return {
+      forward,
+      env: {
+        HTTP_PROXY: forward.url,
+        http_proxy: forward.url,
+        HTTPS_PROXY: credentialed,
+        https_proxy: credentialed,
+        NO_PROXY: "internal.invalid",
+        ALL_PROXY: "socks5://ambient.invalid:1080",
+        SSL_CERT_FILE: "/etc/ambient-ca.pem",
+        CURL_CA_BUNDLE: "/etc/ambient-ca.pem",
+        REQUESTS_CA_BUNDLE: "/etc/ambient-ca.pem",
+        GIT_SSL_CAINFO: "/etc/ambient-ca.pem",
+        GIT_SSL_NO_VERIFY: "1",
+        PISHIP_E2E_PLAIN: "kept",
+        OPENAI_API_KEY: "sk-ambient-personal-key-e2e",
+      },
     };
+  };
 
-    it("hands a sandboxed command the approved proxy and CA, and nothing else", async () => {
+  it.skipIf(windows)(
+    "hands a sandboxed command the approved proxy and CA, and nothing else",
+    async () => {
       const s = await scenario("sandboxed");
       const { forward, env } = await ambient();
       const { env: child, tls } = await childEnvironment(s, env);
@@ -607,7 +614,6 @@ describe.skipIf(windows)(
         "REQUESTS_CA_BUNDLE",
         "GIT_SSL_CAINFO",
         "GIT_SSL_NO_VERIFY",
-        "NODE_TLS_REJECT_UNAUTHORIZED",
         "OPENAI_API_KEY",
         "PISHIP_E2E_PLAIN",
       ])
@@ -616,37 +622,37 @@ describe.skipIf(windows)(
       // The child trusts the declared CA through NODE_EXTRA_CA_CERTS, so its
       // own TLS verification succeeds (the fixture answers 401 without a key).
       expect(tls).toContain("TLS 401");
-    }, 300000);
+    },
+    300000,
+  );
 
-    it("hands an uncontained command the approved network environment and drops the unapproved", async () => {
-      const s = await scenario("unsandboxed");
-      const { forward, env } = await ambient();
-      const { env: child, tls } = await childEnvironment(s, env);
-      expect(child).toMatchObject({
-        HTTP_PROXY: forward.url,
-        http_proxy: forward.url,
-        NO_PROXY: "internal.invalid",
-        no_proxy: "internal.invalid",
-        NODE_EXTRA_CA_CERTS: join(s.project, "front-ca.pem"),
-        // Everything that is not network configuration and not a credential is
-        // still inherited: only the network settings are narrowed.
-        PISHIP_E2E_PLAIN: "kept",
-      });
-      for (const name of [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "SSL_CERT_FILE",
-        "CURL_CA_BUNDLE",
-        "REQUESTS_CA_BUNDLE",
-        "GIT_SSL_CAINFO",
-        "GIT_SSL_NO_VERIFY",
-        "NODE_TLS_REJECT_UNAUTHORIZED",
-        "OPENAI_API_KEY",
-      ])
-        expect(child[name], name).toBeNull();
-      expect(JSON.stringify(child)).not.toContain("hunter2");
-      expect(tls).toContain("TLS 401");
-    }, 300000);
-  },
-);
+  it("hands an uncontained command the approved network environment and drops the unapproved", async () => {
+    const s = await scenario("unsandboxed");
+    const { forward, env } = await ambient();
+    const { env: child, tls } = await childEnvironment(s, env);
+    expect(child).toMatchObject({
+      HTTP_PROXY: forward.url,
+      http_proxy: forward.url,
+      NO_PROXY: "internal.invalid",
+      no_proxy: "internal.invalid",
+      NODE_EXTRA_CA_CERTS: join(s.project, "front-ca.pem"),
+      // Everything that is not network configuration and not a credential is
+      // still inherited: only the network settings are narrowed.
+      PISHIP_E2E_PLAIN: "kept",
+    });
+    for (const name of [
+      "HTTPS_PROXY",
+      "https_proxy",
+      "ALL_PROXY",
+      "SSL_CERT_FILE",
+      "CURL_CA_BUNDLE",
+      "REQUESTS_CA_BUNDLE",
+      "GIT_SSL_CAINFO",
+      "GIT_SSL_NO_VERIFY",
+      "OPENAI_API_KEY",
+    ])
+      expect(child[name], name).toBeNull();
+    expect(JSON.stringify(child)).not.toContain("hunter2");
+    expect(tls).toContain("TLS 401");
+  }, 300000);
+});

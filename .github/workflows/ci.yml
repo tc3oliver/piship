@@ -79,9 +79,11 @@ jobs:
         env:
           PISHIP_LIVE_SECRET_STORE: "1"
       - if: runner.os == 'Linux'
+        timeout-minutes: 5
         run: |
           dbus-run-session -- bash -euo pipefail -c '
-            export XDG_DATA_HOME="$(mktemp -d)"
+            XDG_DATA_HOME="$(mktemp -d)"
+            export XDG_DATA_HOME
             head -c 32 /dev/urandom | base64 | gnome-keyring-daemon --unlock --foreground --components=secrets > /dev/null &
             ready() {
               dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2> /dev/null | grep true > /dev/null &&

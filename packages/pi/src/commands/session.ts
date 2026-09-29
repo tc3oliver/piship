@@ -22,6 +22,7 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
+import { endInsideDispose } from "./dispose-hook.js";
 
 /**
  * Pi keeps its session history in a directory PiShip chooses. With an identity
@@ -308,28 +309,14 @@ export async function runInteractive(
     gov,
   );
   let sessionFailed = false;
-  // Pi ends an interactive session with process.exit() from inside
-  // runtime.dispose() (Ctrl+D, /quit, SIGTERM, SIGHUP), so nothing after
-  // `run()` runs: the governance session has to end inside that dispose call,
-  // or `session.end` and the final flush would never happen. A teardown
-  // failure cannot change the exit code Pi passes afterwards, so it is
-  // reported and the exit code is forced to 1.
+  // Pi's shutdown awaits runtime.dispose() and then calls process.exit(), so
+  // the governance session ends inside that dispose (see dispose-hook.ts).
   const piDispose = runtime.dispose.bind(runtime);
-  let ending: Promise<void> | undefined;
-  const end = (failed: boolean): Promise<void> => {
-    ending ??= endSession(ctx, prepared, { dispose: piDispose }, gov, failed);
-    return ending;
-  };
-  runtime.dispose = async () => {
-    try {
-      await end(false);
-    } catch (error) {
-      ctx.err(`Error: ${formatError(error)}`);
-      const exit = process.exit.bind(process);
-      process.exit = ((code?: number) =>
-        exit(code ? code : 1)) as typeof process.exit;
-    }
-  };
+  const end = endInsideDispose(
+    runtime,
+    (failed) => endSession(ctx, prepared, { dispose: piDispose }, gov, failed),
+    (error) => ctx.err(`Error: ${formatError(error)}`),
+  );
   try {
     await new InteractiveMode(
       runtime,

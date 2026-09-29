@@ -141,6 +141,8 @@ async function open(
     homeDir: join(root, "home"),
     user: "alice",
     ...(options.metrics ? { metrics: options.metrics } : {}),
+    // A required sink that stays down is reported after this, not after 5 s.
+    auditCloseDeadlineMs: 300,
   });
   sessions.push(session);
   const auditFile = join(root, "state", "logs", "audit.jsonl");
@@ -199,7 +201,7 @@ const MCP = [
 ];
 
 describe("governed session audit events (real flows)", () => {
-  it("emits every §18 event name, metadata only", async () => {
+  it("emits every audit event name, metadata only", async () => {
     // A personal session: resources, a trusted provider, MCP, tools, models.
     const full = await open([
       "policy:",

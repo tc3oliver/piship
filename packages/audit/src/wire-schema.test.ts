@@ -275,7 +275,7 @@ describe("piship-audit-batch/v1 wire schema", () => {
     const [sent] = batch.events as [AuditEvent];
     const variants: unknown[] = [
       { ...batch, schema: "piship-audit-batch/v2" },
-      { events: [{ ...sent, event: "made.up" }] },
+      { ...batch, events: [{ ...sent, event: "made.up" }] },
       { ...batch, events: [{ ...sent, id: undefined }] },
       { ...batch, events: [{ ...sent, token: "t" }] },
       { ...batch, events: [{ ...sent, detail: { "9bad": 1 } }] },

@@ -103,23 +103,25 @@ async function startRuntime(
     name: "piship-governance",
     factory: (pi) => {
       pi.on("message_end", async (event) => {
-        if (isModelDenial(event.message)) {
-          // The gateway refused the model with 403: what the credential is
-          // entitled to may have changed, so re-read it once. The rejected
-          // request is not replayed, and the new entitlement applies from
-          // the next launch.
-          await access
-            ?.refreshEntitlement()
-            .catch((error: Error) =>
-              ctx.err(
-                `Notice: the model entitlement could not be re-read: ${formatError(error)}`,
-              ),
-            );
+        // A message that reads as both ("403 invalid api key") is a rejected
+        // credential first.
+        if (isCredentialRejection(event.message)) {
+          governedRef?.markCredentialRejected();
+          await access?.markCredentialRejected();
           return;
         }
-        if (!isCredentialRejection(event.message)) return;
-        governedRef?.markCredentialRejected();
-        await access?.markCredentialRejected();
+        if (!isModelDenial(event.message)) return;
+        // The gateway refused the model with 403: what the credential is
+        // entitled to may have changed, so re-read it once. The rejected
+        // request is not replayed, and the new entitlement applies from the
+        // next launch.
+        await access
+          ?.refreshEntitlement()
+          .catch((error: Error) =>
+            ctx.err(
+              `Notice: the model entitlement could not be re-read: ${formatError(error)}`,
+            ),
+          );
       });
       pi.on("model_select", (event) => {
         if (activated && access)

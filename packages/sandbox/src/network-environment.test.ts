@@ -94,6 +94,9 @@ beforeEach(() => {
       else process.env[name] = value;
     const { Agent, setGlobalDispatcher } = await import("undici");
     setGlobalDispatcher(new Agent());
+    // Applying a policy is recorded for the process: clear the record so the
+    // next test starts as a process with no network policy.
+    applyProcessNetworkPolicy(DEFAULT_NETWORK_POLICY);
   };
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -128,7 +131,6 @@ describe("the network environment of sandboxed commands", () => {
     additionalCA: [bundle],
   });
 
-  // Must stay first: applying a policy is recorded for the rest of the process.
   it("changes nothing for a process with no network policy", async () => {
     expect(await environmentOf("allow", LOCAL)).toEqual({
       PATH: "/usr/bin",

@@ -107,6 +107,8 @@ function context(audit: Partial<AuditConfig["sinks"][number]>[]) {
     mode: "managed",
     out: () => {},
     err: (message) => errors.push(message),
+    // A required sink that keeps failing is reported after this, not after 5 s.
+    auditCloseDeadlineMs: 300,
   };
   return { ctx, errors };
 }

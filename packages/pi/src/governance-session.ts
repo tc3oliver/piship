@@ -180,7 +180,7 @@ export class GovernanceSession {
       } finally {
         // The launch fails with its own error; events a required sink did
         // not take are recorded locally, where doctor reports them.
-        const status = await audit?.close();
+        const status = await audit?.close(options.auditCloseDeadlineMs);
         if (status && requiredAuditLoss(status))
           metrics.recordStartupFailure("AUDIT_UNAVAILABLE");
         metrics.save();
@@ -311,7 +311,7 @@ export class GovernanceSession {
       }
     } finally {
       try {
-        status = await this.audit.close();
+        status = await this.audit.close(this.options.auditCloseDeadlineMs);
       } finally {
         this.metrics.save();
       }

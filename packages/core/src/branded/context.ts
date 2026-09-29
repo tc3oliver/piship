@@ -29,6 +29,8 @@ export interface BrandedContext {
   readonly mode: "personal" | "managed";
   readonly out: (message: string) => void;
   readonly err: (message: string) => void;
+  /** Test seam: how long the final audit flush may retry a required sink. */
+  readonly auditCloseDeadlineMs?: number;
 }
 
 /** One doctor report line: a label and its value. */
@@ -104,7 +106,7 @@ export async function recordAudit(
         ),
     });
     for (const event of events) log.emit(event);
-    status = await log.close();
+    status = await log.close(ctx.auditCloseDeadlineMs);
   } catch (error) {
     if (!required) {
       ctx.err(`Warning: audit events were not recorded: ${formatError(error)}`);
