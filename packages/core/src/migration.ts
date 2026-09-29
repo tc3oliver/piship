@@ -78,30 +78,63 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     schema: "state",
   },
   {
+    // Also the identity discarded marker (piship-identity-discarded/v1) left
+    // when a signed-out or replaced session's tokens could not be deleted:
+    // only the references still to delete, no claim. No release restores it
+    // as a session, and every command retries the deletion first.
     name: "identity session",
     path: "identity/session.json",
     kind: "file",
     scope: "user",
     sensitivity: "secret-reference",
-    retention: "until logout",
-    clear: "logout, purge",
+    retention:
+      "until logout; a session whose tokens cannot be deleted is replaced by a discarded marker that keeps them tracked and is never used",
+    clear: "logout (also without the runtime variables), purge",
     migration:
-      "never copied; cleared and reacquired by login when the target cannot read it",
+      "never copied; when the target cannot read it, its secrets are deleted and the deletion confirmed before the switch, and login reacquires it. A secret that cannot be deleted stops the switch",
     schema: "identity",
     credential: true,
   },
   {
+    // Also the discarded marker (piship-credential-discarded/v1) left when a
+    // secret could not be deleted: no release reads it, so every switch
+    // clears it.
     name: "runtime credential metadata",
     path: "credentials-metadata/inference.json",
     kind: "file",
     scope: "user",
     sensitivity: "secret-reference",
     retention: "until logout or expiry",
-    clear: "logout, purge",
+    clear:
+      "logout (also without the runtime variables), change of principal, purge",
     migration:
-      "never copied; cleared and reacquired when the target cannot read it",
+      "never copied; when the target cannot read it (always for a discarded marker), its secrets are deleted and the deletion confirmed before the switch, and it is reacquired. A secret that cannot be deleted stops the switch",
     schema: "credential",
     credential: true,
+  },
+  {
+    name: "principal binding",
+    path: "identity/principal.json",
+    kind: "file",
+    scope: "user",
+    sensitivity: "private",
+    retention:
+      "kept by logout; replaced when another principal (issuer and subject) signs in",
+    clear: "purge",
+    migration:
+      "kept in place; no secret. An unreadable record counts as a change of principal, and so does a missing one unless the stored session is the signing-in principal's (a signed-in user upgrading from a release without it keeps the model selection, and the record is created)",
+  },
+  {
+    name: "pending revocations",
+    path: "credentials-metadata/revocation-retry.json",
+    kind: "file",
+    scope: "user",
+    sensitivity: "metadata",
+    retention:
+      "until the credential expires; written when a revocation fails or cannot be sent (logout without the runtime variables); at most 20 entries, older ones dropped and counted; checked at every login and reported by doctor",
+    clear: "login once the credential expired, purge",
+    migration:
+      "kept in place; credential IDs and times only, never a secret, so nothing can be revoked or restored from it",
   },
   {
     name: "file secret fallback",

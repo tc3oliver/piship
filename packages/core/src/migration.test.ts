@@ -135,6 +135,34 @@ describe("STATE_DATA_CLASSES", () => {
     for (const entry of STATE_DATA_CLASSES.filter((value) => value.credential))
       expect(entry.migration).toMatch(/never/);
   });
+
+  it("matches the state table in docs/architecture.md, row for row", () => {
+    const doc = readFileSync(
+      new URL("../../../docs/architecture.md", import.meta.url),
+      "utf8",
+    );
+    const section = doc.slice(
+      doc.indexOf("| State path |"),
+      doc.indexOf("Other data PiShip creates"),
+    );
+    const rows = [...section.matchAll(/^\| `([^`]+)` \|/gm)].map((match) =>
+      (match[1] as string).replace(/\/$/, ""),
+    );
+    expect(rows.length).toBeGreaterThan(10);
+    const covers = (path: string, row: string) =>
+      row === path || row.startsWith(`${path}/`);
+    // Every class has a row, and every row belongs to a class.
+    for (const entry of STATE_DATA_CLASSES)
+      expect(
+        rows.some((row) => covers(entry.path, row)),
+        entry.path,
+      ).toBe(true);
+    for (const row of rows)
+      expect(
+        STATE_DATA_CLASSES.some((entry) => covers(entry.path, row)),
+        row,
+      ).toBe(true);
+  });
 });
 
 describe("checkStateMigration", () => {

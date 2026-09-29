@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
-import { PiShipError, redact } from "@piship/contracts";
+import {
+  PiShipError,
+  processNetworkEnvironment,
+  redact,
+} from "@piship/contracts";
 import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
 import {
   capabilityMismatch,
@@ -28,7 +32,11 @@ import {
   type SandboxInstance,
   type SandboxProvider,
 } from "./backend.js";
-import { filterEnvironment, stripCredentials } from "./environment.js";
+import {
+  filterEnvironment,
+  stripCredentials,
+  withApprovedNetwork,
+} from "./environment.js";
 import { NativeBackend } from "./native.js";
 import { type ProbeTarget, probeSandbox } from "./probe.js";
 import { spawnProcess } from "./process.js";
@@ -345,11 +353,27 @@ function commandEnvironment(
     {},
     session.platform,
   );
-  if (session.capabilities?.isolation !== "remote")
-    return sessionEnvironment(session.profile, filtered);
+  // In a managed distribution no command receives a proxy, CA or TLS setting
+  // that the allowlist happened to name: `withApprovedNetwork` drops them all.
+  // A local command in a sandbox that allows the network then gets the approved
+  // proxy and CA settings. A remote backend never does (they name this host's
+  // proxy and files), and with the network denied there is nothing to
+  // configure. A personal distribution has no approved settings, so its
+  // command keeps what the sandbox allowed.
+  const network = processNetworkEnvironment();
+  const local = session.capabilities?.isolation !== "remote";
+  const scoped = network
+    ? withApprovedNetwork(
+        filtered,
+        local && session.profile.network === "allow"
+          ? network
+          : { ...network, variables: {} },
+      )
+    : filtered;
+  if (local) return sessionEnvironment(session.profile, scoped);
   const hostBound = new Set<string>(HOST_BOUND_VARIABLES);
   const output: Record<string, string> = {};
-  for (const [name, value] of Object.entries(filtered))
+  for (const [name, value] of Object.entries(scoped))
     if (!hostBound.has(name.toUpperCase())) output[name] = value;
   return output;
 }

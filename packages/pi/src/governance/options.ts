@@ -21,6 +21,11 @@ export interface GovernanceOptions {
   readonly resolveTemplate: (key: string, template: string) => string;
   /** Identity subject for audit events; never a token. */
   readonly user?: string | null;
+  /**
+   * How long the final audit flush may retry a required sink before the loss
+   * is reported (default 5 s). A test seam: fault-injection tests shorten it.
+   */
+  readonly auditCloseDeadlineMs?: number;
   /** Bearer for `credential: runtime` MCP servers. */
   readonly credential?: () => Promise<string | undefined>;
   /** Origins the runtime credential is issued for (the inference gateway). */

@@ -1,6 +1,6 @@
 # Experimental manifest and lock
 
-Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5 and the in-progress v0.6 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
+Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5, v0.6, and the in-progress v0.7 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
 
 - `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The personal example used it in v0.1; it now uses `piship/v1alpha4`.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
@@ -32,10 +32,10 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, `structuredOutput`, and `policyTags` |
 | `config.enforced`, `config.defaults` | Values for `model`, `theme`, and `thinkingLevel` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `models.default` rather than `config.defaults.model` |
 | `config.userOverridable` | Keys users may set; defaults to every key not enforced |
-| `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`) |
-| `network.tls.additionalCA` | PEM bundle paths added to the default trust roots |
+| `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`). In a managed distribution, commands the agent runs receive these variables only when this is `true`, and never a proxy URL that embeds credentials ([security](security.md#child-process-network-environment)) |
+| `network.tls.additionalCA` | PEM bundle paths added to the default trust roots. A single bundle is also passed to commands the agent runs as `NODE_EXTRA_CA_CERTS` |
 | `network.publicFallback` | `deny` or `allow`; managed requires `deny`, which makes managed launches private-only whatever `network.privateOnly` says |
-| `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
+| `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts`. The match is on the hostname only: ports and schemes are ignored, so a declared host admits every port on it, and PiShip does not check that a host is a private address. It is a hostname allowlist, not a network boundary |
 
 The IdP, broker, and gateway these fields point to must implement the [enterprise integration contract](enterprise-integration.md).
 
@@ -272,10 +272,28 @@ v1alpha3 and v1alpha4 branded commands add:
 
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
-- `doctor` sections for Policy, Project (origin and each discovered project item with its effect), Resources (trust class, integrity, and whether each loads), Capabilities, Sandbox (the containment level proven by a live probe, network mode, and scope), MCP and audit (server health and sink state), and local metrics.
+- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (the workspace consistency the sandbox verified; `not reported` until sandbox backends report it), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
-Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` adds Supply Chain and Update sections ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+
+### Doctor report
+
+`doctor` prints its groups in one fixed order and leaves out a group that has nothing to report: Distribution, Supply Chain, Identity, Credential, Inference, Gateway, Resources, Policy, Project, Capabilities, Sandbox, Workspace, MCP, Secret Store, Audit, Network, Release, Update. `✓` is a passed check, `!` a warning, `-` information, and `✗` a failure; any failure makes `doctor` exit non-zero after it has printed the whole report.
+
+| Group | Shows |
+| --- | --- |
+| Identity | Identity mode, whether a session is signed in, and the configured issuer. No claim of the session (subject, name, email, groups) is shown. |
+| Credential | Provider, state or remaining validity, and, in managed mode, that ambient credentials are removed. Never a value, reference, or credential ID. |
+| Inference | Provider, activation, and the allowed and default models. |
+| Gateway | The managed endpoint's origin and whether its model list answers. |
+| Secret Store | The store PiShip keeps secrets in; the plaintext file store is a warning. |
+| Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment the agent's commands (the `bash` tool) receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode it is not restricted. MCP stdio servers get only their own `env.allow`. |
+| Release | Whether the running payload is a verified release artifact, a payload directory, or a build directory. |
+
+Every line is sanitized before it is printed: URL credentials, queries, and fragments are removed, and known secret values and token shapes are redacted, whatever an error message holds.
+
+For a governed distribution, `doctor` opens one governed session as a launch does, with the same network policy, the same child network environment, and the signed-in principal, so MCP servers start and the audit sinks receive real events. That session is recorded in audit like a short launch (`session.start`, `policy.loaded`, the resource, provider, and MCP decisions, any credential acquisition activation needed, and `session.end`). Delivering those events is what shows that the sinks work. A required sink that does not take every event makes `doctor` fail with `AUDIT_UNAVAILABLE` in the Audit group; the rest of the report is still printed.
 
 ## Lock
 

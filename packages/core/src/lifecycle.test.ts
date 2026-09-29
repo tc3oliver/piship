@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { SecretValue } from "@piship/contracts";
+import { type SecretStore, SecretValue } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiShipError } from "@piship/contracts";
@@ -302,6 +302,35 @@ async function rejection(
     return error as Error & { code?: string; retryable?: boolean };
   }
   throw new Error("expected a rejection");
+}
+
+/**
+ * A memory secret store that records deletions. While `locked` answers true
+ * for a reference, `get` and `delete` throw SECRET_STORE_UNAVAILABLE, as a
+ * locked keyring does.
+ */
+function testStore(locked: (ref: string) => boolean = () => false) {
+  const memory = new MemorySecretStore();
+  const deleted: string[] = [];
+  const refuse = () =>
+    new PiShipError("SECRET_STORE_UNAVAILABLE", "The keychain is locked", {
+      component: "credential",
+    });
+  const store: SecretStore = {
+    kind: memory.kind,
+    description: "test store",
+    put: (ref, value) => memory.put(ref, value),
+    async get(ref) {
+      if (locked(ref)) throw refuse();
+      return memory.get(ref);
+    },
+    async delete(ref) {
+      deleted.push(ref);
+      if (locked(ref)) throw refuse();
+      await memory.delete(ref);
+    },
+  };
+  return { store, memory, deleted };
 }
 
 function flipByte(path: string): void {
@@ -758,6 +787,53 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(treeHash(stateDir())).toEqual(state);
   });
 
+  it("stops before activation when a credential the target cannot read cannot be deleted", async () => {
+    const { a, opts } = await fixture();
+    seedState();
+    // Credential metadata in a format the 1.1.0 target cannot read.
+    write(
+      join(stateDir(), "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#1`,
+        generation: 1,
+      }),
+    );
+    await installDistribution(a.archive, true);
+    const lock = { on: true };
+    const { store, memory } = testStore(() => lock.on);
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL_V2));
+    const credentials = treeHash(join(stateDir(), "credentials-metadata"));
+    const error = await rejection(
+      updateDistribution(ID, { ...opts, secretStore: store }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.message).toMatch(
+      /piship:acmepi:inference#1: SECRET_STORE_UNAVAILABLE: The keychain is locked.*so the switch stopped before activation/,
+    );
+    // The staged 1.1.0 is gone and the metadata still names the secret.
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(treeHash(join(stateDir(), "credentials-metadata"))).toEqual(
+      credentials,
+    );
+    expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
+    // Unlocked, the update deletes it and activates.
+    lock.on = false;
+    const result = await updateDistribution(ID, {
+      ...opts,
+      secretStore: store,
+    });
+    expect(result.status).toBe("updated");
+    expect(result.notices).toEqual([
+      "runtime credential metadata was cleared because the target cannot read it; sign in again",
+    ]);
+    expect(memory.refs()).toEqual([]);
+    expect(containing(SENTINEL_V2)).toEqual([]);
+    // The 1.0.0 file fallback secret goes with the cleared credential class.
+    expect(containing(SENTINEL)).toEqual([]);
+  });
+
   it("fetches through the declared https source", async () => {
     const { a, channelDir } = await fixture();
     await installDistribution(a.archive);
@@ -1109,16 +1185,15 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       join(stateDir(), "identity", "session.json"),
       "utf8",
     );
-    const deleted: string[] = [];
-    const deleteSecret = vi.fn(async (ref: string) => {
-      deleted.push(ref);
-    });
+    const { store, memory, deleted } = testStore();
+    await memory.put(`piship:${ID}:inference#2`, new SecretValue(SENTINEL_V2));
     const result = await rollbackDistribution(ID, {
       runCheck: fakeRun,
-      deleteSecret,
+      secretStore: store,
     });
     // Only references in this distribution's own namespace are deleted.
     expect(deleted).toEqual([`piship:${ID}:inference#2`]);
+    expect(memory.refs()).toEqual([]);
     expect(result.notices).toEqual([
       "runtime credential metadata was cleared because the target cannot read it; sign in again",
     ]);
@@ -1142,30 +1217,180 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
-  it("reports a secret that could not be deleted and still clears the metadata", async () => {
+  it("stops before activation while the secret store is locked, and keeps every secret tracked", async () => {
     await updated();
+    const identityPath = join(stateDir(), "identity", "session.json");
+    const credentialPath = join(
+      stateDir(),
+      "credentials-metadata",
+      "inference.json",
+    );
     write(
-      join(stateDir(), "identity", "session.json"),
+      identityPath,
       JSON.stringify({
         schema: "piship-identity-metadata/v7",
         secretRef: `piship:${ID}:identity#1`,
       }),
     );
+    write(
+      credentialPath,
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#1`,
+        generation: 1,
+      }),
+    );
+    const lock = { on: true };
+    const { store, memory } = testStore(() => lock.on);
+    await memory.put(`piship:${ID}:identity#1`, new SecretValue(SENTINEL));
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL_V2));
+    const revokeCredential = vi.fn(async () => ({ outcome: "failed" }));
+    const receipt = readInstallReceipt(ID);
+    const marker = readStateMarker(stateDir());
+    const metadata = {
+      identity: readFileSync(identityPath, "utf8"),
+      credential: readFileSync(credentialPath, "utf8"),
+    };
+    const error = await rejection(
+      rollbackDistribution(ID, {
+        runCheck: fakeRun,
+        secretStore: store,
+        revokeCredential,
+      }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.message).toMatch(
+      /could not be deleted from the secret store \(piship:acmepi:identity#1: SECRET_STORE_UNAVAILABLE: The keychain is locked; .*\), so the switch stopped before activation/,
+    );
+    // Nothing was activated, and the metadata still names both secrets.
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(readStateMarker(stateDir())).toEqual(marker);
+    expect(readFileSync(identityPath, "utf8")).toBe(metadata.identity);
+    expect(readFileSync(credentialPath, "utf8")).toBe(metadata.credential);
+    expect(memory.refs()).toEqual([
+      `piship:${ID}:identity#1`,
+      `piship:${ID}:inference#1`,
+    ]);
+    // Once the store is unlocked, the same rollback deletes them and switches.
+    lock.on = false;
     const result = await rollbackDistribution(ID, {
       runCheck: fakeRun,
-      deleteSecret: async () => {
-        throw new Error("keychain locked");
-      },
+      secretStore: store,
     });
-    // The current and the possibly pending next generation both fail.
-    expect(result.notices).toEqual([
-      "Could not delete a stored secret: keychain locked",
-      "Could not delete a stored secret: keychain locked",
-      "identity session was cleared because the target cannot read it; sign in again",
+    expect(result.to).toBe("1.0.0");
+    expect(memory.refs()).toEqual([]);
+    expect(existsSync(identityPath)).toBe(false);
+    expect(existsSync(credentialPath)).toBe(false);
+    expect(containing(SENTINEL)).toEqual([]);
+    expect(containing(SENTINEL_V2)).toEqual([]);
+  });
+
+  it("stops rather than dropping secret references when no secret store is available", async () => {
+    await updated();
+    const credentialPath = join(
+      stateDir(),
+      "credentials-metadata",
+      "inference.json",
+    );
+    write(
+      credentialPath,
+      JSON.stringify({
+        schema: "piship-credential-metadata/v2",
+        credential_ref: `piship:${ID}:inference#4`,
+        generation: 4,
+      }),
+    );
+    const error = await rejection(
+      rollbackDistribution(ID, { runCheck: fakeRun }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.message).toContain(
+      `piship:${ID}:inference#4: no secret store is available to delete it`,
+    );
+    expect(existsSync(credentialPath)).toBe(true);
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+  });
+
+  it("clears every credential class the target cannot read and keeps the non-secret revocation record", async () => {
+    await updated();
+    const path = (...parts: string[]) => join(stateDir(), ...parts);
+    // Identity tokens in a newer format, a discarded credential whose secrets
+    // are still to be deleted, and a pending revocation (no secret).
+    write(
+      path("identity", "session.json"),
+      JSON.stringify({
+        schema: "piship-identity-metadata/v7",
+        secretRef: `piship:${ID}:identity#2`,
+      }),
+    );
+    write(
+      path("credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-discarded/v1",
+        orphans: [`piship:${ID}:inference#3`, `piship:${ID}:inference#4`],
+        discarded_at: "2026-09-29T00:00:00.000Z",
+      }),
+    );
+    const retry = JSON.stringify({
+      schema: "piship-revocation-retry/v1",
+      entries: [
+        {
+          credential_id: "vk_retry",
+          mode: "http-broker",
+          generation: 2,
+          reason: "logout",
+          failed_at: "2026-09-29T00:00:00.000Z",
+          checks: 0,
+        },
+      ],
+    });
+    write(path("credentials-metadata", "revocation-retry.json"), retry);
+    const principal = JSON.stringify({
+      schema: "piship-principal-binding/v1",
+      issuer: "https://idp.example",
+      subject: "user-1",
+    });
+    write(path("identity", "principal.json"), principal);
+    const { store, memory } = testStore();
+    const sentinels = {
+      [`piship:${ID}:identity#2`]: "sentinel-identity-tokens-51c0",
+      [`piship:${ID}:identity#3`]: "sentinel-identity-next-9a1d",
+      [`piship:${ID}:inference#3`]: "sentinel-discarded-3-77e2",
+      [`piship:${ID}:inference#4`]: "sentinel-discarded-4-0b4f",
+      "piship:another-app:inference#1": "sentinel-other-app-6d39",
+    };
+    for (const [ref, value] of Object.entries(sentinels))
+      await memory.put(ref, new SecretValue(value));
+    const result = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      secretStore: store,
+    });
+    expect(
+      result.migration.items
+        .filter((item) => item.action === "clear-and-reacquire")
+        .map((item) => [item.name, item.current]),
+    ).toEqual([
+      ["identity session", "piship-identity-metadata/v7"],
+      ["runtime credential metadata", "piship-credential-discarded/v1"],
     ]);
-    expect(existsSync(join(stateDir(), "identity", "session.json"))).toBe(
+    // Every secret of this distribution is gone; another app's is untouched.
+    expect(memory.refs()).toEqual(["piship:another-app:inference#1"]);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(existsSync(path("credentials-metadata", "inference.json"))).toBe(
       false,
     );
+    // The pending revocation and the principal binding hold no secret and stay.
+    expect(
+      readFileSync(
+        path("credentials-metadata", "revocation-retry.json"),
+        "utf8",
+      ),
+    ).toBe(retry);
+    expect(readFileSync(path("identity", "principal.json"), "utf8")).toBe(
+      principal,
+    );
+    for (const value of Object.values(sentinels))
+      expect(containing(value)).toEqual([]);
     expect(containing(SENTINEL)).toEqual([]);
   });
 
@@ -1191,13 +1416,11 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
         secretRef: `piship:${ID}:identity#4`,
       }),
     );
-    const deleted: string[] = [];
+    const { store, deleted } = testStore();
     const revokeCredential = vi.fn(async () => ({ outcome: "revoked" }));
     const result = await rollbackDistribution(ID, {
       runCheck: fakeRun,
-      deleteSecret: async (ref) => {
-        deleted.push(ref);
-      },
+      secretStore: store,
       revokeCredential,
     });
     expect(revokeCredential).toHaveBeenCalledTimes(1);
@@ -1233,10 +1456,15 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       }),
     );
     const order: string[] = [];
+    const { store } = testStore();
     const result = await rollbackDistribution(ID, {
       runCheck: fakeRun,
-      deleteSecret: async (ref) => {
-        order.push(`delete ${ref}`);
+      secretStore: {
+        ...store,
+        delete: async (ref) => {
+          order.push(`delete ${ref}`);
+          await store.delete(ref);
+        },
       },
       revokeCredential: async () => {
         order.push("revoke");
@@ -1271,12 +1499,10 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
         generation: 2,
       }),
     );
-    const deleted: string[] = [];
+    const { store, deleted } = testStore();
     const result = await rollbackDistribution(ID, {
       runCheck: fakeRun,
-      deleteSecret: async (ref) => {
-        deleted.push(ref);
-      },
+      secretStore: store,
       revokeCredential: async () => {
         throw new Error("broker unreachable");
       },
@@ -1345,7 +1571,6 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(await purgeDistributionState(ID)).toEqual({
       state: stateDir(),
       deletedSecrets: [],
-      problems: [],
     });
     expect(existsSync(stateDir())).toBe(false);
   });
@@ -1368,27 +1593,35 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         orphans: [`piship:${ID}:inference#1`, "piship:other:inference#1"],
       }),
     );
-    const store = new MemorySecretStore();
+    const lock = { on: true };
+    const { store, memory, deleted } = testStore(
+      (ref) => lock.on && ref.endsWith("identity#3"),
+    );
     const refs = [
       `piship:${ID}:identity#2`,
+      `piship:${ID}:identity#3`,
       `piship:${ID}:inference#1`,
       `piship:${ID}:inference#3`,
       "piship:other:inference#1",
     ];
-    for (const ref of refs) await store.put(ref, new SecretValue("s3cret-v"));
-    const deleted: string[] = [];
-    const tracking = {
-      kind: store.kind,
-      description: "test store",
-      put: store.put.bind(store),
-      get: store.get.bind(store),
-      async delete(ref: string) {
-        deleted.push(ref);
-        if (ref.endsWith("identity#3")) throw new Error("locked keychain");
-        await store.delete(ref);
-      },
-    };
-    const result = await purgeDistributionState(ID, { secretStore: tracking });
+    for (const ref of refs) await memory.put(ref, new SecretValue("s3cret-v"));
+    // A secret that cannot be deleted fails the purge and removes no state,
+    // so the metadata still names it.
+    const error = await rejection(
+      purgeDistributionState(ID, { secretStore: store }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(error.message).toBe(
+      `Could not delete piship:${ID}:identity#3 from the test store (SECRET_STORE_UNAVAILABLE: The keychain is locked); no state was removed, so the metadata still names this secret`,
+    );
+    expect(existsSync(join(state, "identity", "session.json"))).toBe(true);
+    expect(memory.refs()).toEqual([
+      `piship:${ID}:identity#3`,
+      "piship:other:inference#1",
+    ]);
+    lock.on = false;
+    deleted.length = 0;
+    const result = await purgeDistributionState(ID, { secretStore: store });
     // Current, adjacent, and orphaned generations of this distribution only.
     expect(deleted).toEqual([
       `piship:${ID}:identity#1`,
@@ -1397,10 +1630,11 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       `piship:${ID}:inference#1`,
       `piship:${ID}:inference#3`,
     ]);
-    expect(store.refs()).toEqual(["piship:other:inference#1"]);
-    expect(result.problems).toEqual([
-      `Could not delete piship:${ID}:identity#3 from the test store: locked keychain`,
-    ]);
+    expect(memory.refs()).toEqual(["piship:other:inference#1"]);
+    expect(result).toEqual({
+      state,
+      deletedSecrets: deleted,
+    });
     expect(existsSync(state)).toBe(false);
   });
 });

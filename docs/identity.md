@@ -13,13 +13,13 @@ interface IdentityProvider {
 }
 ```
 
-`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL.
+`IdentitySession` carries `subject`, `issuer`, optional `displayName`, `email`, `expiresAt`, non-secret `claims`, and `accessToken`, `idToken`, and `refreshToken` as `SecretValue`. `LoginContext.openUrl` presents the authorization URL. An identity adapter may also declare `interactive: false` to supply a [workload identity](#workload-identity-headless-runs); `@piship/identity` exports `WorkloadIdentityProvider` and `isWorkloadIdentityProvider` for it.
 
 ## Modes
 
 | `identity.mode` | Behavior |
 | --- | --- |
-| `none` | No enterprise identity. Personal only |
+| `none` | No enterprise identity, so no principal: credentials and state are bound to nobody and are not compared with anyone at launch. Personal only |
 | `oidc` | Built-in OIDC Authorization Code + PKCE |
 | `adapter` | A packaged module that default-exports a factory `(context) => IdentityProvider`, where `context` has `distributionId`, the managed `fetch`, and resolved `endpoints`. The adapter is locked and integrity-checked like other resources |
 
@@ -31,12 +31,73 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 - Authorization Code with PKCE `S256`, `state`, and `nonce`. `audience` is sent when configured.
 - ID token checks: issuer, audience, authorized party, signature (`enableNonRepudiationChecks`), expiry and not-before with 30 seconds of clock tolerance, and nonce.
 - A loopback redirect (RFC 8252). PiShip listens on the registered `redirectUri`, for example `http://127.0.0.1:8765/callback`, answers only that path, accepts the first callback, and closes the listener after completion, a 5-minute timeout, or cancellation. Register the exact URI with the provider.
-- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
+- Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer; otherwise the refresh fails with `IDENTITY_INVALID` and the stored session is kept. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
 - On `logout`, refresh and access tokens are revoked when the provider advertises a revocation endpoint.
 
 The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
 
 Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The tokens are one secret in the configured secret store, under a generation reference.
+
+## Principal
+
+The signed-in user is the normalized principal `(iss, sub)`: the issuer and the subject, compared as exact strings. Email, display name, username, and other claims are attributes that may change and never identify the user. `@piship/contracts` exports the key (`PrincipalKey`, `principalKey`, `samePrincipal`), a string form for attribution (`principalId`: the issuer with `%` and `#` percent-encoded, `#`, then the subject), and a fixed-length digest for per-principal directory names (`principalDigest`).
+
+- A refresh, from the built-in provider or an identity adapter, must return the same principal; anything else is `IDENTITY_INVALID`, whatever the provider returned.
+- The runtime credential, its entitlement, and the model selection belong to the principal. Signing in as another principal clears them first; see [user switching](security.md#user-switching).
+- `identity/principal.json` records the principal that owns the state. `logout` keeps it, so a different user signing in after a logout is still recognized as a change of user. An unreadable record counts as a change; so does a missing one (state from a release before v0.7), unless the stored session is the signing-in principal's, in which case the record is created and nothing is cleared.
+- A running session is pinned to the principal it started with: once another user signs in elsewhere, it fails with `IDENTITY_REQUIRED` instead of using either user's credential ([user switching](security.md#user-switching)).
+
+## Workload identity (headless runs)
+
+A managed distribution can run without a person: in CI, scheduled automation, a headless RPC service, or a managed worker. The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
+
+```js
+// resources/adapters/workload-identity.mjs, declared as
+//   identity: { mode: adapter, adapter: ./adapters/workload-identity.mjs }
+import { readFileSync } from "node:fs";
+
+export default (context) => ({
+  kind: "acme-workload",
+  interactive: false,
+  async login() {
+    // Read the token the platform provides: a projected service account
+    // token, a CI job token, or a token exchange through context.fetch.
+    const token = readFileSync(process.env.ACME_WORKLOAD_TOKEN_PATH, "utf8").trim();
+    // Take the principal from the token itself, never from a side field that
+    // can go stale. PiShip does not verify the token: the broker does.
+    const claims = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    );
+    return {
+      issuer: claims.iss,
+      subject: claims.sub,
+      accessToken: token,
+      expiresAt: new Date(claims.exp * 1000),
+    };
+  },
+});
+```
+
+What a workload adapter must implement:
+
+- `interactive: false`. Anything other than `true`, `false`, or absent is refused with `CONFIG_INVALID`; absent or `true` is the interactive path described above, unchanged.
+- `login(ctx)`, which returns a session without a person: `issuer` and `subject` (the principal), the `accessToken` the broker accepts as the bearer (or whatever the credential adapter needs), and `expiresAt` when the token expires. `expiresAt` is required: a session without it is refused with `IDENTITY_INVALID`. It must never call `ctx.openUrl`: the one it receives fails the run with `IDENTITY_INVALID`, even if the adapter catches the refusal and returns a session anyway. A session that is already expired fails with `IDENTITY_EXPIRED`.
+- An answer within 30 seconds (`ctx.signal` is aborted then, and on a cancelled `login`). A `login` that takes longer fails the run with a retryable `GATEWAY_UNREACHABLE` ("The workload identity adapter did not answer"). Anything else it throws fails the run with `IDENTITY_INVALID` ("could not obtain a session") and without the adapter's own message, which may quote the token source; PiShip's own coded errors from `context.fetch` (such as `NETWORK_DENIED`) keep their code.
+- Network requests only through `context.fetch`, the managed fetch, so the distribution's TLS, proxy, CA, and private-only rules apply ([security](security.md#network-and-tls)).
+- Its token source outside credential-named environment variables. In a managed distribution PiShip removes variables such as `*_TOKEN`, `*_SECRET`, `*_API_KEY`, and provider prefixes before any adapter loads, so read a token file, a platform endpoint, or a non-secret variable that names where the token is (for example `ACME_WORKLOAD_IDENTITY_PATH`).
+- `refresh` and `logout` are not used for a workload identity: PiShip calls `login` again instead, and never hands any session (a workload's or a stored person's) to the adapter's `logout`.
+- A token file the adapter reads is checked by the adapter: mode 0600 and owned by the job user, not a symlink, not inside the workspace the agent can read, and bounded in size. PiShip cannot check it for you.
+- A subject that identifies one workload. The subject is the isolation granularity: workloads that present the same `(iss, sub)` (for example every pod of one Kubernetes service account, or every run of one repository and branch) share one runtime credential, one entitlement, and one session history directory. Use a token whose subject names what must be kept apart.
+- One state directory per workload principal. Two workloads with different principals on one state directory (the default state home of one OS user) revoke each other's credential on every activation, because each finds the other's credential bound to a different principal. Give each workload its own `PISHIP_STATE_HOME`.
+
+How PiShip uses it:
+
+- Every launch, `doctor`, and `login` obtains the session from `login()`; no prior `login` and no stored session are needed. The session is held in memory for the process and never stored: no `identity/session.json` and no identity secret in the secret store. `login` works too (it replaces the runtime credential) and needs no browser.
+- The session is obtained again when it expires within 60 seconds, when it is five minutes old (so a token the platform rotated is picked up even if the old one is valid longer), and once when the broker rejects its token (HTTP 401). Concurrent callers in one process share one `login()` call. A new session inside one process must name the same principal, or the run fails with `IDENTITY_INVALID`; if the adapter keeps returning a rejected token, the run fails with `IDENTITY_EXPIRED`.
+- The workload principal follows the same rules as a person ([principal](#principal), [user switching](security.md#user-switching)). The runtime credential and entitlement are bound to it, the principal binding records it, and when a later run's workload identity is another principal, the previous principal's credential is revoked where supported and deleted, its model selection cleared, and a stored identity session of another principal, or one that cannot be read, deleted (confirmed) before anything is used. A deletion that cannot be confirmed fails the run closed.
+- `identity.login` (and `identity.refresh` for a renewed session) is audited with `workload: true`.
+
+The runtime credential still comes from `credential.provider: http-broker`, with the workload access token as the bearer, or from a credential adapter. It is stored in the configured secret store ([headless storage](credentials.md#headless-runs)).
 
 ## Errors
 
@@ -46,7 +107,7 @@ Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `ia
 | Denied or rejected authorization, failed ID token or discovery check, revocation failure | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |
 
-Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`); an OIDC request that times out (30 s) is a retryable `GATEWAY_UNREACHABLE`. When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.
+Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`); an OIDC request that times out (30 s) is a retryable `GATEWAY_UNREACHABLE`. A token endpoint answer of 5xx (including an HTML error page from a proxy), `server_error`, or `temporarily_unavailable` is also a retryable `GATEWAY_UNREACHABLE`, and a 429 is a retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After` when it sends one. `invalid_grant` stays `IDENTITY_EXPIRED`. When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.
 
 ## Extension context
 

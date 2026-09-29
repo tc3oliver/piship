@@ -45,7 +45,7 @@ export const runCommand: CommandRunner = (command, args, stdin) => {
 
 const SERVICE = "piship";
 function checkRef(ref: string): void {
-  if (!/^[A-Za-z0-9:._#-]{1,200}$/.test(ref))
+  if (!/^[A-Za-z0-9][A-Za-z0-9:._#-]{0,199}$/.test(ref))
     throw new PiShipError(
       "CONFIG_INVALID",
       `Invalid secret reference ${JSON.stringify(ref)}`,
@@ -98,12 +98,17 @@ export class MemorySecretStore implements SecretStore {
 // `<ref>+<index>` and the primary item holds `chunks:<count>`. Neither can be
 // confused with a stored value: base64url has no ":", references have no "+".
 const CHUNK_MARKER = "chunks:";
+const MAX_CHUNKS = 1000;
+// `secret-tool clear` removes every match in one call.
+const MAX_CLEAR_ATTEMPTS = 3;
 const MAC_CHUNK = 1024;
 const partRef = (ref: string, index: number) => `${ref}+${index}`;
 function chunkCount(raw: string | null): number {
   if (!raw?.startsWith(CHUNK_MARKER)) return 0;
   const count = Number(raw.slice(CHUNK_MARKER.length));
-  return Number.isInteger(count) && count > 0 && count <= 1000 ? count : 0;
+  return Number.isInteger(count) && count > 0 && count <= MAX_CHUNKS
+    ? count
+    : 0;
 }
 function splitChunks(value: string, size: number): string[] {
   const parts: string[] = [];
@@ -189,44 +194,184 @@ export class MacKeychainSecretStore implements SecretStore {
   }
 }
 
+// `secret-tool store` reads at most 8191 bytes from stdin: beyond that it warns
+// "password is too long", keeps the first 8192 bytes, and still exits 0 (seen
+// with libsecret 0.21.4). Larger values are split into parts below that limit;
+// anything that already fit stays one item, so stored values keep their form.
+const SECRET_SERVICE_CHUNK = 8000;
+
 /** Linux Secret Service (GNOME Keyring, KWallet) through libsecret's secret-tool. */
 export class SecretServiceSecretStore implements SecretStore {
   readonly kind = "secret-service";
   readonly description = "Linux Secret Service";
   constructor(private readonly run: CommandRunner = runCommand) {}
-  async put(ref: string, value: SecretValue): Promise<void> {
-    checkRef(ref);
-    const result = this.run(
-      "secret-tool",
-      ["store", `--label=PiShip ${ref}`, "service", SERVICE, "account", ref],
-      encode(value),
-    );
-    if (result.status !== 0) throw unavailable(this.description, result.stderr);
+  /**
+   * A lookup that finds nothing exits 1 with no message, and so does one on a
+   * locked keyring (libsecret 0.21.4): a locked keyring would read as an
+   * absent secret. `secret-tool search` lists the attributes of an existing
+   * item even when the keyring is locked, so a miss is confirmed with it.
+   */
+  #confirmAbsent(attributes: readonly string[]): void {
+    const result = this.run("secret-tool", [
+      "search",
+      "service",
+      SERVICE,
+      ...attributes,
+    ]);
+    if (result.status !== 0 && result.stderr.trim())
+      throw unavailable(this.description, result.stderr);
+    if (result.stdout.trim())
+      throw unavailable(
+        this.description,
+        "the keyring is locked; unlock it and try again",
+      );
   }
-  async get(ref: string): Promise<SecretValue | null> {
-    checkRef(ref);
+  #read(account: string, extra: readonly string[] = []): string | null {
+    const attributes = ["account", account, ...extra];
     const result = this.run("secret-tool", [
       "lookup",
       "service",
       SERVICE,
-      "account",
-      ref,
+      ...attributes,
     ]);
-    if (result.status === 1 && !result.stderr.trim()) return null;
+    if (result.status === 1 && !result.stderr.trim()) {
+      this.#confirmAbsent(attributes);
+      return null;
+    }
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
-    return result.stdout.trim() ? decode(result.stdout) : null;
+    return result.stdout.trim() || null;
   }
-  async delete(ref: string): Promise<void> {
-    checkRef(ref);
+  #write(account: string, text: string, extra: readonly string[] = []): void {
+    const result = this.run(
+      "secret-tool",
+      [
+        "store",
+        `--label=PiShip ${account}`,
+        "service",
+        SERVICE,
+        "account",
+        account,
+        ...extra,
+      ],
+      text,
+    );
+    // A truncated store still exits 0, so the warning is the only signal.
+    if (result.status !== 0 || /too long/i.test(result.stderr))
+      throw unavailable(this.description, result.stderr);
+  }
+  #remove(account: string): void {
     const result = this.run("secret-tool", [
       "clear",
       "service",
       SERVICE,
       "account",
-      ref,
+      account,
     ]);
     if (result.status !== 0 && result.stderr.trim())
       throw unavailable(this.description, result.stderr);
+  }
+  // Every part carries its primary's reference as a `parent` attribute and a
+  // random `write` id, which the primary also records. Parts are found and
+  // cleared by `parent` without knowing how many a failed or older write left
+  // behind, and `get` reads only the parts of the write its primary names, so
+  // two writers of one reference can never leave a value made of both. The
+  // primary has neither attribute.
+  #hasParts(parent: string): boolean {
+    const attributes = ["parent", parent];
+    const result = this.run("secret-tool", [
+      "lookup",
+      "service",
+      SERVICE,
+      ...attributes,
+    ]);
+    if (result.status === 1 && !result.stderr.trim()) {
+      this.#confirmAbsent(attributes);
+      return false;
+    }
+    if (result.status !== 0) throw unavailable(this.description, result.stderr);
+    return true;
+  }
+  #clearParts(parent: string): void {
+    // One `clear` removes every match (checked on libsecret 0.21.4 with five
+    // parts of one parent, and with parts of two writes). The repeat is only a
+    // guard: a store that keeps answering with parts is broken, not slow.
+    for (let attempt = 0; attempt < MAX_CLEAR_ATTEMPTS; attempt += 1) {
+      const result = this.run("secret-tool", [
+        "clear",
+        "service",
+        SERVICE,
+        "parent",
+        parent,
+      ]);
+      if (result.status !== 0 && result.stderr.trim())
+        throw unavailable(this.description, result.stderr);
+      if (!this.#hasParts(parent)) return;
+    }
+    throw unavailable(this.description, "the stored secret parts remain");
+  }
+  async put(ref: string, value: SecretValue): Promise<void> {
+    checkRef(ref);
+    const encoded = encode(value);
+    const parts =
+      encoded.length > SECRET_SERVICE_CHUNK
+        ? splitChunks(encoded, SECRET_SERVICE_CHUNK)
+        : [];
+    const write = randomBytes(8).toString("hex");
+    try {
+      // Parts of an earlier write go first, so none can pair with the new
+      // primary, and the primary is written last.
+      this.#clearParts(ref);
+      for (const [index, part] of parts.entries())
+        this.#write(partRef(ref, index), part, ["parent", ref, "write", write]);
+      this.#write(
+        ref,
+        parts.length ? `${CHUNK_MARKER}${parts.length}:${write}` : encoded,
+      );
+    } catch (error) {
+      // A failed write leaves no part behind. An earlier chunked primary
+      // would now point at cleared parts, so it goes too; an earlier plain
+      // value is untouched and stays valid.
+      try {
+        this.#clearParts(ref);
+        if (this.#read(ref)?.startsWith(CHUNK_MARKER)) this.#remove(ref);
+      } catch {
+        // The store is down; the write error is the one to report, and
+        // delete() clears every part by attribute later.
+      }
+      throw error;
+    }
+  }
+  async get(ref: string): Promise<SecretValue | null> {
+    checkRef(ref);
+    const raw = this.#read(ref);
+    if (raw === null) return null;
+    if (!raw.startsWith(CHUNK_MARKER)) return decode(raw);
+    const marker = /^chunks:([1-9]\d{0,3}):([0-9a-f]{16})$/.exec(raw);
+    const count = Number(marker?.[1]);
+    const write = marker?.[2];
+    if (!write || count > MAX_CHUNKS)
+      throw unavailable(this.description, "a stored secret part is missing");
+    const scope = ["parent", ref, "write", write];
+    let joined = "";
+    for (let index = 0; index < count; index += 1) {
+      const part = this.#read(partRef(ref, index), scope);
+      if (part === null)
+        throw unavailable(this.description, "a stored secret part is missing");
+      joined += part;
+    }
+    if (this.#read(partRef(ref, count), scope) !== null)
+      throw unavailable(this.description, "a stored secret has an extra part");
+    return decode(joined);
+  }
+  async delete(ref: string): Promise<void> {
+    checkRef(ref);
+    this.#clearParts(ref);
+    this.#remove(ref);
+    if (this.#read(ref) !== null || this.#hasParts(ref))
+      throw unavailable(
+        this.description,
+        "the stored secret could not be deleted",
+      );
   }
 }
 

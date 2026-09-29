@@ -34,8 +34,8 @@ describe("production lifecycle: signed update (local fixtures)", () => {
       resumed: true,
     });
     const doctor = await s.run(["doctor"]);
-    expect(doctor.stdout).toContain("Supply Chain");
-    expect(doctor.stdout).toMatch(/release\s+verified/);
+    expect(doctor.stdout).toMatch(/Supply Chain\n {2}✓ manifest\s+verified/);
+    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
     expect(doctor.stdout).toMatch(/rollback\s+1\.0\.0 retained/);
 
     // After a newer sequence is seen, replaying older signed metadata is refused.

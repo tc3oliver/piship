@@ -35,6 +35,18 @@ The effective catalog is an intersection that can only narrow:
 
 A model outside the distribution allowlist, or a Pi model in managed mode, is refused with `MODEL_DENIED`. An allowed model that is unentitled, not listed by the gateway, or excluded by user preference is `MODEL_UNAVAILABLE`, with the reason. PiShip never substitutes another model. If no allowed model is available, launch fails with `MODEL_UNAVAILABLE`.
 
+The distribution allowlist is the ceiling: every other list only removes models from it. With `models.allowed: [A, B]`, a credential entitled to `B, C`, and a gateway listing `B, C, D`, the only available model is `B`; `A` is `MODEL_UNAVAILABLE` (not entitled), and `C` and `D` are `MODEL_DENIED`. A gateway listing never authorizes a model, and an enforced model does not override a narrower entitlement: if the enforced model is not entitled, launch fails with `MODEL_UNAVAILABLE`.
+
+### Entitlement freshness
+
+The entitlement is the `models` list the broker or adapter returned with the credential, stored in the credential metadata. It is read again only when the credential is acquired or renewed:
+
+- at every `login`, which always replaces the runtime credential;
+- when a credential with `expires_at` is renewed before it expires;
+- after the gateway denies a model (HTTP 403, `MODEL_DENIED`) on a request: `DistributionAccess.refreshEntitlement()` renews the credential once through the refresh path. It does this at most once per credential generation, so a denial of the renewed credential is taken as the organization's answer and re-issues nothing. A failed renewal keeps the current credential and is reported; the next denial tries again.
+
+A credential without `expires_at` is otherwise never renewed, so between these events its entitlement stays as issued: a model the organization adds is not offered, and a model it withdraws is still offered until the gateway denies it. The new entitlement applies from the next launch; within a session the gateway enforces its own decision. However wide a re-read entitlement is, it only narrows the distribution allowlist.
+
 The model is chosen from `--model <id>`, then the configuration layers: an enforced value always wins; otherwise a user preference applies if the key is user-overridable; otherwise the distribution default (`models.default`) applies. When `config.enforced.model` is set, it is the only selectable model: `--model`, a preference, and in-session `/model` cannot choose another. `models` lists the catalog with availability and reasons; `config explain` shows each value and its source.
 
 ## Gateway status
@@ -50,7 +62,7 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 | 5xx, network failure, timeout (15 s, including the body) | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, malformed list | `GATEWAY_PROTOCOL_ERROR` |
 
-During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation. `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.
+During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.
 
 ## Failure policy
 
@@ -60,9 +72,11 @@ During a session, Pi performs the request. PiShip recognizes an authentication r
 | Not signed in | `IDENTITY_REQUIRED` |
 | Broker returns 5xx or 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
 | Broker unreachable or timed out | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
+| Broker denies the request (403) | `CREDENTIAL_DENIED`, not retryable |
+| Caller cancels the acquire | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
 | No stored `local-secret` | `CREDENTIAL_REQUIRED` |
 | Credential expired and cannot be renewed | `CREDENTIAL_EXPIRED` |
-| Gateway rejects the credential | One automatic renewal; if renewal fails, `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED`, `NETWORK_DENIED`, and `TLS_POLICY_VIOLATION` are kept |
+| Gateway rejects the credential | One automatic renewal; if renewal fails, `CREDENTIAL_REVOKED` with the failure's `retryable` and `retryAfterMs`, except that specific codes such as `IDENTITY_EXPIRED`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`, and `CREDENTIAL_DENIED` are kept |
 | Selected model misses an enabled capability's `requirements`, or its metadata is unknown | `MODEL_INCOMPATIBLE`; no substitution |
 | Gateway outage | `GATEWAY_UNREACHABLE` at launch with `liveCatalog: true` and in `doctor`; otherwise Pi reports the failed request |
 | Model outside the allowlist | `MODEL_DENIED` |

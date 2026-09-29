@@ -3,7 +3,12 @@
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
-import { AuditLog, LocalMetrics } from "@piship/audit";
+import {
+  AuditLog,
+  type AuditStatus,
+  LocalMetrics,
+  requiredAuditLoss,
+} from "@piship/audit";
 import {
   type ApprovalChannel,
   type AuditEventType,
@@ -170,15 +175,27 @@ export class GovernanceSession {
       const code =
         error instanceof PiShipError ? error.code : "CONFIG_UNAVAILABLE";
       metrics.recordStartupFailure(code);
-      metrics.save();
-      await sandbox?.dispose();
-      await audit?.close();
+      try {
+        await sandbox?.dispose();
+      } finally {
+        // The launch fails with its own error; events a required sink did
+        // not take are recorded locally, where doctor reports them.
+        const status = await audit?.close(options.auditCloseDeadlineMs);
+        if (status && requiredAuditLoss(status))
+          metrics.recordStartupFailure("AUDIT_UNAVAILABLE");
+        metrics.save();
+      }
       throw error;
     }
   }
 
   get policyId(): string {
     return this.engine.id;
+  }
+
+  /** Throws AUDIT_UNAVAILABLE while a required audit sink has lost events. */
+  assertAuditAvailable(): void {
+    this.audit.assertAvailable();
   }
 
   emit(
@@ -274,13 +291,34 @@ export class GovernanceSession {
     );
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  /**
+   * End the session: record `session.end`, stop MCP servers, dispose the
+   * sandbox, and flush audit. Audit is flushed and metrics saved even when a
+   * cleanup step fails. Throws AUDIT_UNAVAILABLE, after cleanup, when a
+   * required sink did not take every event of the session (that error wins
+   * over a cleanup error); otherwise returns the final audit status.
+   */
+  async close(): Promise<AuditStatus> {
+    if (this.#closed) return this.audit.status();
     this.#closed = true;
     this.emit("session.end");
-    await this.mcp?.close();
-    await this.sandbox.dispose();
-    await this.audit.close();
-    this.metrics.save();
+    let status: AuditStatus | undefined;
+    try {
+      try {
+        await this.mcp?.close();
+      } finally {
+        await this.sandbox.dispose();
+      }
+    } finally {
+      try {
+        status = await this.audit.close(this.options.auditCloseDeadlineMs);
+      } finally {
+        this.metrics.save();
+      }
+      const loss = requiredAuditLoss(status, "The session ended");
+      // biome-ignore lint/correctness/noUnsafeFinally: undelivered required audit outranks a cleanup error
+      if (loss) throw loss;
+    }
+    return status;
   }
 }

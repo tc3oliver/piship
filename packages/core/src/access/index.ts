@@ -1,5 +1,8 @@
 export type { AdapterContext } from "./adapters.js";
-export { DistributionAccess } from "./distribution-access.js";
+export {
+  DistributionAccess,
+  writeIdentityDiscardedMarker,
+} from "./distribution-access.js";
 export {
   type ExplainRow,
   explainConfiguration,

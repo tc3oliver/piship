@@ -14,10 +14,15 @@ import {
 import {
   ENTERPRISE_CONTEXT_SYMBOL,
   type EnterpriseContext,
+  formatError,
   PiShipError,
 } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
-import { isCredentialRejection, type GovernedRuntime } from "../governance.js";
+import {
+  type GovernedRuntime,
+  isCredentialRejection,
+  isModelDenial,
+} from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { governedTools } from "../governed-tools.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -98,9 +103,25 @@ async function startRuntime(
     name: "piship-governance",
     factory: (pi) => {
       pi.on("message_end", async (event) => {
-        if (!isCredentialRejection(event.message)) return;
-        governedRef?.markCredentialRejected();
-        await access?.markCredentialRejected();
+        // A message that reads as both ("403 invalid api key") is a rejected
+        // credential first.
+        if (isCredentialRejection(event.message)) {
+          governedRef?.markCredentialRejected();
+          await access?.markCredentialRejected();
+          return;
+        }
+        if (!isModelDenial(event.message)) return;
+        // The gateway refused the model with 403: what the credential is
+        // entitled to may have changed, so re-read it once. The rejected
+        // request is not replayed, and the new entitlement applies from the
+        // next launch.
+        await access
+          ?.refreshEntitlement()
+          .catch((error: Error) =>
+            ctx.err(
+              `Notice: the model entitlement could not be re-read: ${formatError(error)}`,
+            ),
+          );
       });
       pi.on("model_select", (event) => {
         if (activated && access)
@@ -248,7 +269,20 @@ export async function startGoverned(
   try {
     return await startRuntime(ctx, prepared, sessionDir, gov);
   } catch (error) {
-    await gov?.close();
+    // The start error stays the command's error; a close that lost audit
+    // events is reported next to it instead of replacing it. Both are counted
+    // in the local startup failures, as an open failure is.
+    const count = (failure: unknown) =>
+      prepared.metrics?.recordStartupFailure(
+        failure instanceof PiShipError ? failure.code : "CONFIG_UNAVAILABLE",
+      );
+    count(error);
+    try {
+      await gov?.close();
+    } catch (closeError) {
+      count(closeError);
+      ctx.err(`Error: ${formatError(closeError)}`);
+    }
     saveMetrics(prepared.metrics);
     throw error;
   }

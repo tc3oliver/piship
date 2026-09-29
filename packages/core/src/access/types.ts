@@ -4,7 +4,11 @@ import type {
   RuntimeProviderConfiguration,
   SecretStore,
 } from "@piship/contracts";
-import type { ActiveCredential, CredentialEvent } from "@piship/credentials";
+import type {
+  ActiveCredential,
+  CredentialEvent,
+  CredentialPhase,
+} from "@piship/credentials";
 import type {
   AccessManifest,
   CapabilityConfig,
@@ -26,6 +30,28 @@ export interface AccessEvent {
   readonly detail: Readonly<Record<string, string | number | boolean | null>>;
 }
 
+/**
+ * Points of sign-in, sign-out, and activation a test can stop or hold at,
+ * besides the credential manager's own (`CredentialPhase`).
+ * - `login-locked`: login holds the credential lock, nothing is changed yet.
+ * - `credential-cleared`: the previous runtime credential is gone.
+ * - `principal-bound`: the principal binding names the new principal.
+ * - `identity-cleared`: another principal's identity session is gone.
+ * - `identity-stored`: the new identity is stored (or held, for a workload).
+ * - `identity-resolved`: activation has its identity, before the credential.
+ * - `credential-rejected`: activation recorded a gateway rejection, before
+ *   the renewal.
+ */
+export type AccessPhase =
+  | CredentialPhase
+  | "login-locked"
+  | "credential-cleared"
+  | "principal-bound"
+  | "identity-cleared"
+  | "identity-stored"
+  | "identity-resolved"
+  | "credential-rejected";
+
 export interface AccessOptions {
   readonly app: Manifest["app"];
   readonly mode: "personal" | "managed";
@@ -43,6 +69,12 @@ export interface AccessOptions {
   readonly onEvent?: (event: AccessEvent) => void;
   /** Local operational metrics; recorder failures are ignored. */
   readonly metrics?: AccessMetrics;
+  /**
+   * Fault injection for crash-safety and concurrency tests: a hook that
+   * throws stops the operation there, as a crash would, and one that waits
+   * holds it there (with its locks). Never set in production.
+   */
+  readonly onPhase?: (phase: AccessPhase) => void | Promise<void>;
 }
 
 export interface ActivatedAccess {

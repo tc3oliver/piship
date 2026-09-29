@@ -789,3 +789,65 @@ describe("Pi session seams used by governance", () => {
     );
   });
 });
+
+describe("Pi ends an interactive session by awaiting dispose, then exiting", () => {
+  // PiShip ends its governance session inside `runtime.dispose()` because
+  // nothing after `InteractiveMode.run()` ever runs: Pi's shutdown awaits the
+  // runtime host's dispose and then calls process.exit(0). If a Pi upgrade
+  // exits before that await, or stops calling dispose, the audit flush would
+  // be silently skipped again.
+  for (const fromSignal of [false, true]) {
+    it(`shutdown${fromSignal ? " from a signal" : ""} resolves dispose before it exits`, async () => {
+      const order: string[] = [];
+      let disposed = false;
+      const self = {
+        isShuttingDown: false,
+        themeController: { disableAutoSync: () => {} },
+        ui: { terminal: { drainInput: async () => {} } },
+        stop: () => {},
+        sessionManager: {
+          getSessionFile: () => undefined,
+          getSessionId: () => "s",
+        },
+        runtimeHost: {
+          dispose: async () => {
+            await new Promise((done) => setTimeout(done, 20));
+            disposed = true;
+            order.push("dispose");
+          },
+        },
+      };
+      const exit = process.exit;
+      process.exit = ((code?: number) => {
+        order.push(`exit:${code}:${disposed}`);
+        throw new Error("exit");
+      }) as typeof process.exit;
+      try {
+        await (
+          upstreamPi.InteractiveMode.prototype as unknown as {
+            shutdown(
+              this: unknown,
+              options?: { fromSignal?: boolean },
+            ): Promise<void>;
+          }
+        ).shutdown
+          .call(self, fromSignal ? { fromSignal: true } : undefined)
+          .catch((error: Error) => {
+            if (error.message !== "exit") throw error;
+          });
+      } finally {
+        process.exit = exit;
+      }
+      expect(order).toEqual(["dispose", "exit:0:true"]);
+    });
+  }
+
+  // PiShip replaces `dispose` on the runtime object it hands to
+  // InteractiveMode. That only works while Pi disposes that same object, not a
+  // wrapper or a copy of it.
+  it("keeps the runtime it is given as the one it disposes", () => {
+    const source = String(upstreamPi.InteractiveMode);
+    expect(source).toMatch(/constructor\(\s*runtimeHost\b/);
+    expect(source).toMatch(/this\.runtimeHost\s*=\s*runtimeHost\s*;/);
+  });
+});

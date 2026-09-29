@@ -1,12 +1,15 @@
 import { realpathSync } from "node:fs";
-import { AuditLog, LocalMetrics } from "@piship/audit";
+import { LocalMetrics } from "@piship/audit";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
+  type SecretStore,
   formatError,
 } from "@piship/contracts";
+import { createSecretStore } from "@piship/credentials";
 import { resolveTemplate } from "@piship/schema";
+import { accessStatePaths } from "../access/index.js";
 import {
   type AccessEvent,
   formatMigrationReport,
@@ -19,6 +22,7 @@ import {
   auditAccess,
   governedLock,
   openAccess,
+  recordAudit,
 } from "./context.js";
 
 /** The installed receipt when this payload is the active installed release. */
@@ -55,63 +59,71 @@ function credentialRevoker(ctx: BrandedContext) {
     try {
       return await access.revokeCredential();
     } finally {
-      await auditAccess(ctx, access, null, events);
+      // Reported, not thrown: the switch is under way. A required sink that
+      // is still down also fails the runtime.update or runtime.rollback
+      // record at the end of the command.
+      await auditAccess(ctx, access, null, events).catch((error) =>
+        ctx.err(`Error: ${formatError(error)}`),
+      );
     }
   };
 }
 
-/** Deletes secret-store entries for credentials a target release cannot read. */
-function secretDeleter(ctx: BrandedContext) {
-  if (!ctx.metadata.access) return undefined;
-  try {
-    const store = openAccess(ctx).store;
-    return store ? (ref: string) => store.delete(ref) : undefined;
-  } catch {
-    return undefined;
-  }
+/**
+ * The secret store of this distribution's credentials, for deleting those a
+ * target release cannot read. It is selected from the lock alone, like the
+ * store sign-in wrote to, so it needs no runtime variable; a store that
+ * cannot delete fails the switch instead of leaving secrets behind.
+ */
+function secretStore(ctx: BrandedContext): SecretStore {
+  return createSecretStore({
+    provider: ctx.metadata.access?.credential.storage.provider ?? "system",
+    fileDirectory: accessStatePaths(ctx.stateDir).secrets,
+  });
 }
 
-/** runtime.update and runtime.rollback at their activation boundary; best effort. */
-async function auditLifecycle(
+/**
+ * runtime.update and runtime.rollback at their activation boundary. Best
+ * effort for optional sinks; throws AUDIT_UNAVAILABLE when a required sink
+ * does not take the event (see recordAudit).
+ */
+export async function auditLifecycle(
   ctx: BrandedContext,
   event: "runtime.update" | "runtime.rollback",
   decision: "allowed" | "denied",
   detail: Record<string, string>,
 ): Promise<void> {
-  const lock = governedLock(ctx);
-  if (!lock) return;
+  if (!governedLock(ctx)) return;
+  let network = DEFAULT_NETWORK_POLICY;
   try {
-    let network = DEFAULT_NETWORK_POLICY;
-    try {
-      if (ctx.metadata.access) network = openAccess(ctx).network;
-    } catch {
-      // The default policy still applies to an HTTP sink.
-    }
-    const log = await AuditLog.open({
-      config: lock.governance.manifest.audit,
-      distribution: lock.app.id,
-      stateDir: ctx.stateDir,
-      fetch: createManagedFetch(network, "audit"),
-      resolveUrl: (template) =>
-        resolveTemplate(
-          "audit.sinks.url",
-          template,
-          ctx.metadata.access?.variables ?? [],
-          process.env,
-        ),
-    });
-    log.emit({
+    if (ctx.metadata.access) network = openAccess(ctx).network;
+  } catch {
+    // The default policy still applies to an HTTP sink.
+  }
+  await recordAudit(ctx, network, [
+    {
       event,
       user: null,
       session: null,
       resource: ctx.metadata.app.id,
       decision,
       detail,
-    });
-    await log.close();
-  } catch (error) {
-    ctx.err(`Warning: audit events were not recorded: ${formatError(error)}`);
-  }
+    },
+  ]);
+}
+
+/**
+ * Record a refusal while its error is propagating: an audit failure is
+ * printed so it is not lost, and the refusal stays the command's error.
+ */
+async function auditRefusal(
+  ctx: BrandedContext,
+  event: "runtime.update" | "runtime.rollback",
+  detail: Record<string, string>,
+): Promise<void> {
+  await auditLifecycle(ctx, event, "denied", detail).catch((error) =>
+    ctx.err(`Error: ${formatError(error)}`),
+  );
 }
 
 function recordLifecycleMetric(
@@ -165,7 +177,6 @@ export async function runUpdate(
   }
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");
-  const deleteSecret = secretDeleter(ctx);
   const revokeCredential = credentialRevoker(ctx);
   let network = DEFAULT_NETWORK_POLICY;
   try {
@@ -192,17 +203,14 @@ export async function runUpdate(
       check,
       acceptReview: flags.has("--accept-review"),
       fetcher,
-      ...(deleteSecret ? { deleteSecret } : {}),
+      secretStore: secretStore(ctx),
       ...(revokeCredential && !check ? { revokeCredential } : {}),
     });
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "UPDATE_FAILED";
     recordLifecycleMetric(ctx, check ? "check" : "update", code);
     if (!check)
-      await auditLifecycle(ctx, "runtime.update", "denied", {
-        from: app.version,
-        code,
-      });
+      await auditRefusal(ctx, "runtime.update", { from: app.version, code });
     throw error;
   }
   recordLifecycleMetric(ctx, check ? "check" : "update", "ok");
@@ -234,21 +242,17 @@ export async function runUpdate(
 export async function runRollback(ctx: BrandedContext): Promise<void> {
   const { app } = ctx.metadata;
   requireInstalled(ctx, `${app.command} rollback`);
-  const deleteSecret = secretDeleter(ctx);
   const revokeCredential = credentialRevoker(ctx);
   let result: Awaited<ReturnType<typeof rollbackDistribution>>;
   try {
     result = await rollbackDistribution(app.id, {
-      ...(deleteSecret ? { deleteSecret } : {}),
+      secretStore: secretStore(ctx),
       ...(revokeCredential ? { revokeCredential } : {}),
     });
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "ROLLBACK_FAILED";
     recordLifecycleMetric(ctx, "rollback", code);
-    await auditLifecycle(ctx, "runtime.rollback", "denied", {
-      from: app.version,
-      code,
-    });
+    await auditRefusal(ctx, "runtime.rollback", { from: app.version, code });
     throw error;
   }
   recordLifecycleMetric(ctx, "rollback", "ok");

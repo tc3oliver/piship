@@ -28,6 +28,12 @@ export interface ModelPolicy {
   allows(provider: string, id: string): boolean;
   /** Called when a request for a disallowed model is refused. */
   denied?(provider: string, id: string): void;
+  /**
+   * Called before every request; throws to refuse it. A prompt can carry
+   * workspace content, so a request must not leave while a required control
+   * (a required audit sink that lost events) is down.
+   */
+  available?(): void;
 }
 
 export interface GovernedRuntime {
@@ -107,6 +113,7 @@ export function governModelRuntime(
       policy?.denied?.(model.provider, model.id);
       throw denied(model.provider, model.id);
     }
+    policy?.available?.();
   };
 
   const target = runtime as unknown as Record<string, unknown>;
@@ -230,5 +237,21 @@ export function isCredentialRejection(message: unknown): boolean {
     /(^|\D)401(\D|$)|unauthori[sz]ed|invalid api key|authentication failed/i.test(
       value.errorMessage ?? "",
     )
+  );
+}
+
+/**
+ * Whether an assistant message ended because the gateway denied the model
+ * (HTTP 403): the credential may be fine while what it is entitled to has
+ * changed, so the entitlement is re-read once (`refreshEntitlement`).
+ */
+export function isModelDenial(message: unknown): boolean {
+  const value = message as
+    | { role?: string; stopReason?: string; errorMessage?: string }
+    | undefined;
+  return (
+    value?.role === "assistant" &&
+    value.stopReason === "error" &&
+    /(^|\D)403(\D|$)|forbidden/i.test(value.errorMessage ?? "")
   );
 }

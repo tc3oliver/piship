@@ -24,7 +24,7 @@ For pull requests, follow the title and evidence guidance in `CONTRIBUTING.md`.
 
 Keep pull request feedback fast. Do not put full release qualification on the normal pull request path.
 
-- A pull request validates whether a change is safe to merge. Pull requests run the fast merge gate, one `CI` job per target plus CodeQL: cross-platform build and unit checks, Pi compatibility, the live platform secret store on macOS and Windows, and security and static analysis. Every check runs on every pull request; do not path-scope a check, because a required check that never reports blocks the merge.
+- A pull request validates whether a change is safe to merge. Pull requests run the fast merge gate, one `CI` job per target plus CodeQL: cross-platform build and unit checks, Pi compatibility, the live platform secret store on Linux, macOS, and Windows, and security and static analysis. Every check runs on every pull request; do not path-scope a check, because a required check that never reports blocks the merge.
 - Full Portable E2E validates the cross-platform integration surface. It runs nightly, manually, and inside Release qualification; it is not a normal pull request merge gate.
 - Release qualification proves that a specific commit and its artifacts are ready to ship. The `Release qualification` workflow is dispatched manually on the exact candidate HEAD before a release: it runs `CI`, CodeQL, and the full Portable E2E in parallel, then the `Release candidate` build, attestation, and verification once all three pass. It is not triggered by every pull request or every `main` merge.
 - Moving an expensive check out of the pull request path never permits deleting its coverage. Preserve the evidence at the appropriate tier.

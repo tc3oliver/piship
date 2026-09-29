@@ -40,11 +40,13 @@ jobs:
           cache: npm
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       # The OS sandbox tests need bubblewrap and unprivileged user
-      # namespaces, which Ubuntu restricts through AppArmor by default.
+      # namespaces, which Ubuntu restricts through AppArmor by default. The live
+      # secret-store test needs GNOME Keyring, a D-Bus session, and secret-tool;
+      # without recommended packages this stays clear of the desktop stack.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
+          sudo apt-get install -y -qq --no-install-recommends bubblewrap gnome-keyring dbus dbus-x11 libsecret-tools
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
       - run: npm ci
@@ -64,10 +66,32 @@ jobs:
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
       - run: npm run test:compatibility
-      # Real platform secret stores (Keychain, Credential Manager). Linux
-      # runners have no unlocked Secret Service session; its backend is
-      # covered by the command-runner tests above.
+      # Real platform secret stores: Keychain, Credential Manager, and the
+      # Linux Secret Service. A Linux runner has no desktop session, so its
+      # test runs on a private D-Bus session with GNOME Keyring in a fresh data
+      # directory (an existing keyring would refuse the new password). The
+      # keyring is unlocked with a throwaway password that is generated here
+      # and only travels through a pipe. The daemon runs in the foreground and
+      # the test waits until its login collection is unlocked: started as a
+      # daemon, its first secret-tool call failed about half the time.
       - if: runner.os != 'Linux'
         run: npx vitest run packages/credentials/src/platform-store.test.ts
+        env:
+          PISHIP_LIVE_SECRET_STORE: "1"
+      - if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            XDG_DATA_HOME="$(mktemp -d)"
+            export XDG_DATA_HOME
+            head -c 32 /dev/urandom | base64 | gnome-keyring-daemon --unlock --foreground --components=secrets > /dev/null &
+            ready() {
+              dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2> /dev/null | grep true > /dev/null &&
+                dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.DBus.Properties.Get string:org.freedesktop.Secret.Collection string:Locked 2> /dev/null | grep false > /dev/null
+            }
+            for _ in $(seq 100); do ready && break; sleep 0.1; done
+            ready || { echo "GNOME Keyring did not unlock its login collection" >&2; exit 1; }
+            npx vitest run packages/credentials/src/platform-store.test.ts
+          '
         env:
           PISHIP_LIVE_SECRET_STORE: "1"

@@ -6,7 +6,13 @@ import {
   InteractiveMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { PiShipError, redact } from "@piship/contracts";
+import {
+  formatError,
+  PiShipError,
+  principalDigest,
+  principalKey,
+  redact,
+} from "@piship/contracts";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import {
@@ -16,8 +22,73 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
+import { endInsideDispose } from "./dispose-hook.js";
+
+/**
+ * Pi keeps its session history in a directory PiShip chooses. With an identity
+ * session the directory is per principal, so a different user on the same OS
+ * account does not resume the previous user's sessions; the same user resumes
+ * across logout and login. Without an identity (a personal distribution) it is
+ * the shared directory, as before.
+ */
+function sessionDirectory(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  kind: "user" | "acceptance",
+): string {
+  const identity = prepared.activated?.identity;
+  const base = join(ctx.stateDir, "sessions", kind);
+  const dir = identity
+    ? join(base, principalDigest(principalKey(identity)))
+    : base;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
 
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";
+
+/**
+ * Ends a session: dispose the runtime, close the governance session (which
+ * throws `AUDIT_UNAVAILABLE` when a required sink lost events), then save the
+ * metrics and drop the published context. Every step runs even when an earlier
+ * one failed. A failure of the session itself stays the command's error, and
+ * teardown failures are then only reported; otherwise the first one is thrown.
+ */
+async function endSession(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  runtime: { dispose(): Promise<void> },
+  gov: GovernanceSession | null,
+  sessionFailed: boolean,
+): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await runtime.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await gov?.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  // Credential refreshes during the session land in the same metrics.
+  saveMetrics(prepared.metrics);
+  publishContext(null);
+  if (failures.length === 0) return;
+  if (sessionFailed) {
+    for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
+    return;
+  }
+  // Lost required audit outranks a cleanup error, as it does in close().
+  const lost = failures.findIndex(
+    (error) =>
+      error instanceof PiShipError && error.code === "AUDIT_UNAVAILABLE",
+  );
+  const [first] = failures.splice(Math.max(lost, 0), 1);
+  for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
+  throw first;
+}
 
 function accessSummary(
   prepared: PreparedAccess,
@@ -62,12 +133,13 @@ export async function runSmoke(
   const cacheDir = join(ctx.stateDir, "cache");
   const logsDir = join(ctx.stateDir, "logs");
   const dataDir = join(ctx.stateDir, "data");
-  const sessionDir = join(ctx.stateDir, "sessions", "acceptance");
-  for (const path of [cacheDir, logsDir, dataDir, sessionDir])
+  for (const path of [cacheDir, logsDir, dataDir])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
   const gov = await openGovernance(ctx, prepared, false);
   const { runtime } = await startGoverned(ctx, prepared, sessionDir, gov);
+  let sessionFailed = false;
   try {
     const { resourceLoader } = runtime.services;
     const sessionManager = runtime.session.sessionManager;
@@ -171,12 +243,11 @@ export async function runSmoke(
         "GATEWAY_PROTOCOL_ERROR",
         `The acceptance model request failed: ${String(modelRequest.error ?? modelRequest.stopReason)}`,
       );
+  } catch (error) {
+    sessionFailed = true;
+    throw error;
   } finally {
-    await runtime.dispose();
-    await gov?.close();
-    // Credential refreshes during the session land in the same metrics.
-    saveMetrics(prepared.metrics);
-    publishContext(null);
+    await endSession(ctx, prepared, runtime, gov, sessionFailed);
   }
 }
 
@@ -220,11 +291,10 @@ export async function runInteractive(
   ctx: LaunchContext,
   requestedModel: string | undefined,
 ): Promise<void> {
-  const sessionDir = join(ctx.stateDir, "sessions", "user");
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
-  mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  const sessionDir = sessionDirectory(ctx, prepared, "user");
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
   const gov = await openGovernance(
@@ -238,16 +308,24 @@ export async function runInteractive(
     sessionDir,
     gov,
   );
+  let sessionFailed = false;
+  // Pi's shutdown awaits runtime.dispose() and then calls process.exit(), so
+  // the governance session ends inside that dispose (see dispose-hook.ts).
+  const piDispose = runtime.dispose.bind(runtime);
+  const end = endInsideDispose(
+    runtime,
+    (failed) => endSession(ctx, prepared, { dispose: piDispose }, gov, failed),
+    (error) => ctx.err(`Error: ${formatError(error)}`),
+  );
   try {
     await new InteractiveMode(
       runtime,
       theme ? { initialThemeSetting: theme } : {},
     ).run();
+  } catch (error) {
+    sessionFailed = true;
+    throw error;
   } finally {
-    await runtime.dispose();
-    await gov?.close();
-    // Credential refreshes during the session land in the same metrics.
-    saveMetrics(prepared.metrics);
-    publishContext(null);
+    await end(sessionFailed);
   }
 }

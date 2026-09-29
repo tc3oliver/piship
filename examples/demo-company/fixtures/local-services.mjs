@@ -64,14 +64,118 @@ function json(response, status, value, headers = {}) {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+/** Sorted-key JSON, so the same fields in another order are the same input. */
+function canonicalJson(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), (_key, value) =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)),
+          )
+        : value,
+    );
+  } catch {
+    return text;
+  }
+}
+
+/** `Retry-After` header for a fault: seconds (number), HTTP-date (Date), or a verbatim string. */
+function retryAfterHeader(value) {
+  if (value === undefined) return {};
+  return {
+    "retry-after": value instanceof Date ? value.toUTCString() : String(value),
+  };
+}
+
+/**
+ * Wait for `ms`, or until the client hangs up. Resolves true when the client
+ * is still connected, so a held request never outlives its connection.
+ */
+function pause(response, ms) {
+  return new Promise((resolve) => {
+    if (response.destroyed) return resolve(false);
+    const finish = () => {
+      clearTimeout(timer);
+      response.off("close", finish);
+      resolve(!response.destroyed);
+    };
+    const timer = setTimeout(finish, ms);
+    response.once("close", finish);
+  });
+}
+
+/**
+ * Write a `{status, body?, headers?}` result; a missing body sends no body.
+ * An undefined result means the request was dropped, so nothing is written.
+ */
+function respond(response, result) {
+  if (result === undefined) return;
+  if (result.body === undefined) {
+    response.writeHead(result.status, result.headers ?? {});
+    return response.end();
+  }
+  if (typeof result.body === "string") {
+    response.writeHead(result.status, {
+      "content-type": "text/html",
+      "cache-control": "no-store",
+      ...result.headers,
+    });
+    return response.end(result.body);
+  }
+  return json(response, result.status, result.body, result.headers);
+}
+
 /**
  * Start all fixture services on one loopback port.
- * `knobs` can be mutated by tests to inject negative behaviors.
+ *
+ * `knobs` can be mutated by tests to inject behaviors, and `state` can be read
+ * to inspect what the services recorded. Every knob below is off by default.
+ *
+ * Who signs in (captured when the browser approves, so it can change between
+ * logins against the same provider):
+ *   subject          `sub` of the next sign-in (default "demo-user-1")
+ *   email            `email` claim (default "developer@demo.example")
+ *   displayName      `name` claim (default "Demo Developer")
+ *   refreshSubject   `sub` a refresh grant claims instead of the session's own
+ *
+ * Broker idempotency (POST /broker/v1/llm-credential):
+ *   brokerIdempotency        true: read the key, record it in
+ *                            `state.idempotencyKeys`, replay the original
+ *                            result for a repeated key with the same subject
+ *                            and body, answer 409 for the same key with
+ *                            different input. Only successful issues are kept.
+ *   brokerIdempotencyHeader  header carrying the key (default "Idempotency-Key")
+ *
+ * Fault injection, the same seven knobs for each endpoint, where <e> is
+ * `broker` (credential acquire), `revoke` (credential revoke) or `token`
+ * (the identity provider's token endpoint):
+ *   <e>Status         answer this HTTP status instead of serving, every time
+ *   <e>RetryAfter     `Retry-After` on that answer: seconds (number), an
+ *                     HTTP-date (Date) or a verbatim string
+ *   <e>Body           body of that answer: an object is sent as JSON, a
+ *                     string verbatim as text/html (a proxy error page).
+ *                     Default: a small JSON error object
+ *   <e>DelayMs        serve normally, but only after this delay (slow mode)
+ *   <e>TimeoutMs      never answer: hold the request this long, then drop the
+ *                     connection. A client that leaves earlier ends it early
+ *   <e>TimeoutServes  true: with <e>TimeoutMs, do the work (issue, revoke, mint
+ *                     tokens) first and withhold only the answer. False: the
+ *                     request never reaches the service logic
+ *   <e>Faults         one-shot queue of {status, retryAfter, body, delayMs,
+ *                     timeoutMs, timeoutServes}. Each request takes the oldest
+ *                     entry instead of the knobs above; {} serves normally;
+ *                     an empty queue falls back to the knobs
  */
 export async function startLocalServices(options = {}) {
   const clientId = options.clientId ?? "demo-company-cli";
   const signingKey = keyPair("demo-signing-key");
-  const rogueKey = keyPair("demo-signing-key");
+  // Same key id, other key material. Generated on first use: most services
+  // never sign with it, and an RSA key costs tens of milliseconds.
+  let rogue;
+  const rogueKey = () => {
+    rogue ??= keyPair("demo-signing-key");
+    return rogue;
+  };
   const knobs = {
     denyLogin: false,
     stateOverride: undefined,
@@ -82,7 +186,33 @@ export async function startLocalServices(options = {}) {
     idTokenExpired: false,
     idTokenNotBefore: false,
     accessTokenTtl: 3600,
+    subject: "demo-user-1",
+    email: undefined,
+    displayName: undefined,
+    refreshSubject: undefined,
     brokerStatus: undefined,
+    brokerRetryAfter: undefined,
+    brokerBody: undefined,
+    brokerDelayMs: 0,
+    brokerTimeoutMs: 0,
+    brokerTimeoutServes: false,
+    brokerFaults: [],
+    brokerIdempotency: false,
+    brokerIdempotencyHeader: "Idempotency-Key",
+    revokeStatus: undefined,
+    revokeRetryAfter: undefined,
+    revokeBody: undefined,
+    revokeDelayMs: 0,
+    revokeTimeoutMs: 0,
+    revokeTimeoutServes: false,
+    revokeFaults: [],
+    tokenStatus: undefined,
+    tokenRetryAfter: undefined,
+    tokenBody: undefined,
+    tokenDelayMs: 0,
+    tokenTimeoutMs: 0,
+    tokenTimeoutServes: false,
+    tokenFaults: [],
     brokerBaseUrl: undefined,
     credentialTtl: 3600,
     entitledModels: ["acme/coder", "acme/general"],
@@ -106,6 +236,10 @@ export async function startLocalServices(options = {}) {
     toolResults: [],
     authorizations: [],
     credentialCount: 0,
+    // Every idempotency key the broker received, in order, repeats included.
+    idempotencyKeys: [],
+    // key -> { fingerprint, result }: what a repeated key replays.
+    idempotency: new Map(),
   };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", base);
@@ -146,8 +280,8 @@ export async function startLocalServices(options = {}) {
       iat: knobs.idTokenExpired ? issued - 1200 : issued,
       ...(knobs.idTokenNotBefore ? { nbf: issued + 3600 } : {}),
       ...(nonce === undefined ? {} : { nonce: knobs.idTokenNonce ?? nonce }),
-      name: "Demo Developer",
-      email: "developer@demo.example",
+      name: session.displayName ?? "Demo Developer",
+      email: session.email ?? "developer@demo.example",
       email_verified: true,
     };
     return {
@@ -155,7 +289,10 @@ export async function startLocalServices(options = {}) {
       token_type: "Bearer",
       expires_in: knobs.accessTokenTtl,
       refresh_token: refreshToken,
-      id_token: signJwt(knobs.signWithRogueKey ? rogueKey : signingKey, claims),
+      id_token: signJwt(
+        knobs.signWithRogueKey ? rogueKey() : signingKey,
+        claims,
+      ),
       scope: session.scope,
     };
   }
@@ -199,6 +336,152 @@ export async function startLocalServices(options = {}) {
       model,
       choices: [{ index: 0, delta, finish_reason: finish ?? null }],
     };
+  }
+
+  const FAULT_BODIES = {
+    broker: { error: "broker_failure" },
+    revoke: { error: "broker_failure" },
+    token: { error: "server_error" },
+  };
+
+  /** The fault the next request to `kind` gets: the oldest queued one, else the knobs. */
+  function nextFault(kind) {
+    const queued = knobs[`${kind}Faults`];
+    if (Array.isArray(queued) && queued.length > 0) return queued.shift();
+    return {
+      status: knobs[`${kind}Status`],
+      retryAfter: knobs[`${kind}RetryAfter`],
+      body: knobs[`${kind}Body`],
+      delayMs: knobs[`${kind}DelayMs`],
+      timeoutMs: knobs[`${kind}TimeoutMs`],
+      timeoutServes: knobs[`${kind}TimeoutServes`],
+    };
+  }
+
+  /**
+   * Run `serve`, which returns a `{status, body?, headers?}` result, under the
+   * endpoint's fault. Resolves the result to write, or undefined when the
+   * request was dropped or the client left first.
+   */
+  async function faulted(kind, response, serve) {
+    const fault = nextFault(kind);
+    if (fault.delayMs && !(await pause(response, fault.delayMs)))
+      return undefined;
+    if (fault.timeoutMs) {
+      if (fault.timeoutServes) serve();
+      await pause(response, fault.timeoutMs);
+      response.destroy();
+      return undefined;
+    }
+    if (fault.status)
+      return {
+        status: fault.status,
+        body: fault.body ?? FAULT_BODIES[kind],
+        headers: retryAfterHeader(fault.retryAfter),
+      };
+    return serve();
+  }
+
+  function tokenGrant(text) {
+    const form = new URLSearchParams(text);
+    if (form.get("client_id") !== clientId)
+      return { status: 401, body: { error: "invalid_client" } };
+    if (form.get("grant_type") === "authorization_code") {
+      const entry = state.codes.get(form.get("code") ?? "");
+      state.codes.delete(form.get("code") ?? "");
+      const verifier = form.get("code_verifier") ?? "";
+      if (
+        !entry ||
+        entry.redirect !== form.get("redirect_uri") ||
+        createHash("sha256").update(verifier).digest("base64url") !==
+          entry.challenge
+      )
+        return { status: 400, body: { error: "invalid_grant" } };
+      return {
+        status: 200,
+        body: issueTokens(
+          {
+            subject: entry.subject,
+            scope: entry.scope,
+            email: entry.email,
+            displayName: entry.displayName,
+          },
+          entry.nonce,
+        ),
+      };
+    }
+    if (form.get("grant_type") === "refresh_token") {
+      const token = form.get("refresh_token") ?? "";
+      const session = state.refreshTokens.get(token);
+      if (!session) return { status: 400, body: { error: "invalid_grant" } };
+      state.refreshTokens.delete(token);
+      return {
+        status: 200,
+        body: issueTokens(
+          knobs.refreshSubject === undefined
+            ? session
+            : { ...session, subject: knobs.refreshSubject },
+          undefined,
+        ),
+      };
+    }
+    return { status: 400, body: { error: "unsupported_grant_type" } };
+  }
+
+  function acquireCredential(request, text) {
+    const identity = activeAccess(request.headers.authorization);
+    if (!identity) return { status: 401, body: { error: "invalid_token" } };
+    let key;
+    let fingerprint;
+    if (knobs.brokerIdempotency) {
+      const header =
+        request.headers[String(knobs.brokerIdempotencyHeader).toLowerCase()];
+      key = (Array.isArray(header) ? header[0] : header) || undefined;
+    }
+    if (key !== undefined) {
+      state.idempotencyKeys.push(key);
+      fingerprint = createHash("sha256")
+        .update(JSON.stringify([identity.subject, canonicalJson(text)]))
+        .digest("hex");
+      const seen = state.idempotency.get(key);
+      if (seen)
+        return seen.fingerprint === fingerprint
+          ? { ...seen.result, headers: { "idempotent-replayed": "true" } }
+          : { status: 409, body: { error: "idempotency_key_reuse" } };
+    }
+    state.credentialCount += 1;
+    const credential = `sk-demo-${random()}`;
+    const credentialId = `vk_demo_${state.credentialCount}`;
+    const expires = now() + knobs.credentialTtl;
+    state.credentials.set(credential, {
+      id: credentialId,
+      subject: identity.subject,
+      expires,
+      models: [...knobs.entitledModels],
+      revoked: false,
+    });
+    const result = {
+      status: 200,
+      body: {
+        credential_type: "api_key",
+        credential,
+        credential_id: credentialId,
+        expires_at: new Date(expires * 1000).toISOString(),
+        models: [...knobs.entitledModels],
+        ...(knobs.brokerBaseUrl ? { base_url: knobs.brokerBaseUrl } : {}),
+      },
+    };
+    if (key !== undefined) state.idempotency.set(key, { fingerprint, result });
+    return result;
+  }
+
+  function revokeCredential(request) {
+    const entry = activeCredential(request.headers.authorization);
+    if (entry) {
+      entry.revoked = true;
+      state.revokedCredentials.push(entry.id);
+    }
+    return { status: 204 };
   }
 
   async function route(url, request, response, text) {
@@ -250,6 +533,10 @@ export async function startLocalServices(options = {}) {
           nonce: url.searchParams.get("nonce") ?? undefined,
           redirect,
           scope: url.searchParams.get("scope") ?? "openid",
+          // Who signed in is decided when the browser approves.
+          subject: knobs.subject,
+          email: knobs.email,
+          displayName: knobs.displayName,
         });
         redirectUrl.searchParams.set("code", code);
         if (stateParam !== null)
@@ -259,39 +546,11 @@ export async function startLocalServices(options = {}) {
       response.writeHead(302, { location: redirectUrl.toString() });
       return response.end();
     }
-    if (path === "/idp/token" && request.method === "POST") {
-      const form = new URLSearchParams(text);
-      if (form.get("client_id") !== clientId)
-        return json(response, 401, { error: "invalid_client" });
-      if (form.get("grant_type") === "authorization_code") {
-        const entry = state.codes.get(form.get("code") ?? "");
-        state.codes.delete(form.get("code") ?? "");
-        const verifier = form.get("code_verifier") ?? "";
-        if (
-          !entry ||
-          entry.redirect !== form.get("redirect_uri") ||
-          createHash("sha256").update(verifier).digest("base64url") !==
-            entry.challenge
-        )
-          return json(response, 400, { error: "invalid_grant" });
-        return json(
-          response,
-          200,
-          issueTokens(
-            { subject: "demo-user-1", scope: entry.scope },
-            entry.nonce,
-          ),
-        );
-      }
-      if (form.get("grant_type") === "refresh_token") {
-        const token = form.get("refresh_token") ?? "";
-        const session = state.refreshTokens.get(token);
-        if (!session) return json(response, 400, { error: "invalid_grant" });
-        state.refreshTokens.delete(token);
-        return json(response, 200, issueTokens(session, undefined));
-      }
-      return json(response, 400, { error: "unsupported_grant_type" });
-    }
+    if (path === "/idp/token" && request.method === "POST")
+      return respond(
+        response,
+        await faulted("token", response, () => tokenGrant(text)),
+      );
     if (path === "/idp/revoke" && request.method === "POST") {
       const token = new URLSearchParams(text).get("token") ?? "";
       state.revokedTokens.push(token.slice(0, 8));
@@ -300,40 +559,18 @@ export async function startLocalServices(options = {}) {
       response.writeHead(200);
       return response.end();
     }
-    if (path === "/broker/v1/llm-credential" && request.method === "POST") {
-      if (knobs.brokerStatus)
-        return json(response, knobs.brokerStatus, { error: "broker_failure" });
-      const identity = activeAccess(request.headers.authorization);
-      if (!identity) return json(response, 401, { error: "invalid_token" });
-      state.credentialCount += 1;
-      const credential = `sk-demo-${random()}`;
-      const credentialId = `vk_demo_${state.credentialCount}`;
-      const expires = now() + knobs.credentialTtl;
-      state.credentials.set(credential, {
-        id: credentialId,
-        subject: identity.subject,
-        expires,
-        models: [...knobs.entitledModels],
-        revoked: false,
-      });
-      return json(response, 200, {
-        credential_type: "api_key",
-        credential,
-        credential_id: credentialId,
-        expires_at: new Date(expires * 1000).toISOString(),
-        models: knobs.entitledModels,
-        ...(knobs.brokerBaseUrl ? { base_url: knobs.brokerBaseUrl } : {}),
-      });
-    }
-    if (path === "/broker/v1/revoke" && request.method === "POST") {
-      const entry = activeCredential(request.headers.authorization);
-      if (entry) {
-        entry.revoked = true;
-        state.revokedCredentials.push(entry.id);
-      }
-      response.writeHead(204);
-      return response.end();
-    }
+    if (path === "/broker/v1/llm-credential" && request.method === "POST")
+      return respond(
+        response,
+        await faulted("broker", response, () =>
+          acquireCredential(request, text),
+        ),
+      );
+    if (path === "/broker/v1/revoke" && request.method === "POST")
+      return respond(
+        response,
+        await faulted("revoke", response, () => revokeCredential(request)),
+      );
     if (path === "/gateway/v1/models") {
       const entry = activeCredential(request.headers.authorization);
       if (!entry)

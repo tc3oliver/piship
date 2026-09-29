@@ -2,7 +2,9 @@ import {
   type IdentityProvider,
   type IdentitySession,
   PiShipError,
+  principalKey,
   SecretValue,
+  samePrincipal,
 } from "@piship/contracts";
 
 import { retainClaims } from "./claims.js";
@@ -133,19 +135,71 @@ export function normalizeIdentitySession(value: unknown): IdentitySession {
   };
 }
 
-/** Wrap an adapter so every session it returns is normalized. */
+/**
+ * Refuse a refreshed session whose principal `(iss, sub)` differs from the
+ * session it refreshed: a refresh never switches the user.
+ */
+export function assertSamePrincipal(
+  refreshed: IdentitySession,
+  previous: IdentitySession,
+  refusal: { readonly message: string; readonly userAction: string } = {
+    message: "Refreshed identity does not match the signed-in subject",
+    userAction: "Run login again",
+  },
+): IdentitySession {
+  if (!samePrincipal(principalKey(refreshed), principalKey(previous)))
+    throw new PiShipError("IDENTITY_INVALID", refusal.message, {
+      component: "identity",
+      userAction: refusal.userAction,
+    });
+  return refreshed;
+}
+
+/**
+ * An identity adapter that obtains its session without a person: the
+ * identity of a CI job, a scheduled automation, or a managed worker.
+ * `login()` must never call `openUrl`; PiShip obtains a session from it at
+ * every activation, holds the session in memory only, and never stores it.
+ */
+export interface WorkloadIdentityProvider extends IdentityProvider {
+  readonly interactive: false;
+}
+
+/** Whether an identity provider declared itself non-interactive (a workload identity). */
+export function isWorkloadIdentityProvider(
+  provider: IdentityProvider,
+): provider is WorkloadIdentityProvider {
+  return (provider as { interactive?: unknown }).interactive === false;
+}
+
+/**
+ * Wrap an adapter so every session it returns is normalized and a refresh
+ * keeps the signed-in principal. An `interactive` declaration other than a
+ * boolean is refused, so a typo never changes how a session is obtained.
+ */
 export function normalizedIdentityProvider(
   provider: IdentityProvider,
 ): IdentityProvider {
+  const interactive = (provider as { interactive?: unknown }).interactive;
+  if (interactive !== undefined && typeof interactive !== "boolean")
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "The identity adapter's interactive declaration must be true or false",
+      { component: "identity" },
+    );
   const refresh = provider.refresh?.bind(provider);
   const logout = provider.logout?.bind(provider);
   return {
     kind: provider.kind,
+    ...(interactive === false ? { interactive } : {}),
     login: async (ctx) => normalizeIdentitySession(await provider.login(ctx)),
     ...(refresh
       ? {
           refresh: async (session: IdentitySession) =>
-            normalizeIdentitySession(await refresh(session)),
+            assertSamePrincipal(
+              normalizeIdentitySession(await refresh(session)),
+              session,
+            ),
         }
       : {}),
     ...(logout ? { logout } : {}),

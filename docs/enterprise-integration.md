@@ -9,11 +9,13 @@ You provide three services. Their URLs are `${NAME}` [runtime references](manife
 | Service | Manifest field | Called by | When |
 | --- | --- | --- | --- |
 | OIDC identity provider | `identity.oidc.issuer` | PiShip; the browser for the authorization page | `login`; launches that need a fresh identity token; `logout` |
+| Workload identity (headless, instead of OIDC) | `identity.adapter` with `interactive: false` | The adapter, in the PiShip process | Every launch, `doctor`, and `login` ([headless runs](#headless-and-workload-runs)) |
 | Credential broker: acquire | `credential.broker.endpoint` | PiShip | `login`; any launch or model request without a valid runtime credential |
 | Credential broker: revoke (optional) | `credential.broker.revokeEndpoint` | PiShip | `logout`; `login` (replaces the previous credential); update, rollback, or migration that must clear it |
 | LLM gateway: model list | `inference.baseUrl` + `/models` | PiShip | Launch with `inference.liveCatalog: true`; `doctor` |
 | LLM gateway: inference | `inference.baseUrl` + `/chat/completions` or `/responses` | Pi, in the same process | Every model turn and `--smoke-model` |
 | Sandbox backend (optional) | `sandbox.provider`, `sandbox.endpoint` | PiShip | Launch (create and check), each `bash` or `!` command, session end |
+| Audit collector (optional) | `audit.sinks[].url` (`type: http`) | PiShip | Launch and `login`, `logout`, `update`, `rollback` (readiness probe of a required sink), then batches during and at the end of each |
 
 ```text
 user ──login──▶ IdP (browser, PKCE) ──tokens──▶ PiShip
@@ -78,6 +80,41 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 | Refresh | `grant_type=refresh_token` when the access token has less than 60 s left (from `expires_in`) or after the broker returns 401. A rotated refresh token is stored; refresh is serialized across processes. Without a refresh token, the user must run `login` again when the access token expires |
 | Revocation | On `logout`, if discovery advertises `revocation_endpoint`: the refresh token, then the access token (RFC 7009 with `token_type_hint`). A failure is a warning; local state is still cleared |
 | Timeouts | 30 s per OIDC HTTP request; a timeout fails with retryable `GATEWAY_UNREACHABLE`. The browser sign-in waits up to 5 minutes |
+| Token endpoint failures | A 5xx (including a proxy's HTML error page) or a `server_error` / `temporarily_unavailable` error fails with retryable `GATEWAY_UNREACHABLE`, and a 429 with retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After`. `invalid_grant` is `IDENTITY_EXPIRED` ("run login"); other token errors are `IDENTITY_INVALID`. PiShip never retries a token request automatically, because a refresh token may rotate on use |
+
+## Headless and workload runs
+
+A managed distribution can run in CI, scheduled automation, a headless RPC service, or a managed worker, with no person, no browser, and no prior `login`. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
+
+```yaml
+identity:
+  mode: adapter
+  adapter: ./adapters/workload-identity.mjs   # interactive: false
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${ACMECODE_CREDENTIAL_REVOKE_URL}
+  storage: { provider: file, acknowledgePlaintext: true }   # headless Linux; see below
+  refresh: { beforeExpiry: 5m }
+```
+
+```text
+workload platform ──token (file, endpoint)──▶ identity adapter ──session (memory only)──▶ PiShip
+PiShip ──POST broker (Bearer workload access token)──▶ runtime credential
+Pi ──POST gateway (Bearer runtime credential)──▶ completions
+```
+
+| You provide | Detail |
+| --- | --- |
+| The workload token | Issued by your platform (a Kubernetes projected service account token, a CI job's OIDC token, a token exchange at your IdP). The adapter reads it; PiShip never stores it |
+| The identity adapter | `interactive: false` and a `login()` that returns `issuer`, `subject`, `accessToken`, and `expiresAt` without a person. It must not call `openUrl`, must use `context.fetch` for any request, and must not expect a token in a credential-named environment variable: managed mode removes those before adapters load |
+| Broker acceptance of the workload token | The broker validates the workload token as it validates a person's access token (issuer, audience, signature, expiry) and decides which models the workload gets. Idempotency, retries, and revocation are unchanged ([below](#credential-broker-http-broker)) |
+| A credential store the runner can use | `system` where the runner has an unlocked platform store; otherwise the file store with `acknowledgePlaintext: true` ([headless storage](credentials.md#headless-runs)) |
+
+What PiShip does on every run: it obtains the session from the adapter, binds the runtime credential to the workload principal `(iss, sub)`, reuses the stored credential while it is valid, renews it within `refresh.beforeExpiry` presenting the current workload token, obtains a new session when the old one expires within 60 s or the broker answers 401, and enforces the manifest's model allowlist, entitlement, and network policy exactly as for a person. A run whose workload principal differs from the previous run's gets nothing of it: the previous credential is revoked where supported and deleted, and its model selection cleared. Provider keys in the environment and any personal Pi sign-in (`~/.pi/agent/auth.json`, another distribution's state) are never used, and a missing or failing workload identity fails the run closed; there is no fallback.
+
+What a headless run can and cannot prove is in [security](security.md#headless-and-workload-runs).
 
 ## Credential broker (`http-broker`)
 
@@ -92,11 +129,12 @@ POST {credential.broker.endpoint}
 Authorization: Bearer <identity access token>
 Content-Type: application/json
 Accept: application/json
+Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 
 {"distribution": "acmecode", "purpose": "inference"}
 ```
 
-`distribution` is `app.id`; `purpose` is always `inference`. Success is any 2xx with a JSON body:
+`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). Success is any 2xx with a JSON body:
 
 ```json
 {
@@ -111,8 +149,9 @@ Accept: application/json
 | Field | Required | Rules |
 | --- | --- | --- |
 | `credential_type` | yes | `api_key`, `bearer`, or `opaque`. All three are sent to the gateway as `Authorization: Bearer <credential>` |
-| `credential` | yes | String of at least 8 characters |
-| `credential_id` | no | Non-secret string; recorded in audit events and status output, and sent back on revoke |
+| `credential` | yes | String of at least 8 characters, visible ASCII only (no spaces or control characters), because it is sent as a header value |
+| `credential_id` | no | Non-secret string of 1 to 256 letters, digits, `.`, `_`, `:`, or `-` (`/^[A-Za-z0-9._:-]{1,256}$/`); any other value rejects the response with `CREDENTIAL_ACQUIRE_FAILED`. Recorded in audit events and status output, and sent back on revoke |
+| `subject` | no | The subject the broker authenticated. If present it must equal the identity subject PiShip sent, or the acquire fails as a `contract` failure: a stored credential is reused on the strength of the principal the identity adapter asserted, and this makes a broker that authenticated someone else visible |
 | `expires_at` | no | ISO 8601, parsed with JavaScript `Date.parse`: include `Z` or an offset, or it is read as local time. Must be in the future. Without it the credential never expires locally and is replaced only after a gateway rejection |
 | `models` | no | Array of model IDs the credential is entitled to; narrows the catalog, never widens it |
 | `base_url` | no | If present, must equal `inference.baseUrl` (trailing slash ignored), or the response is rejected |
@@ -120,13 +159,49 @@ Accept: application/json
 | Broker status | PiShip behavior |
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
-| 403 | `CREDENTIAL_ACQUIRE_FAILED`: user or distribution denied |
+| 403 | `CREDENTIAL_DENIED`: user or distribution denied. Not retryable |
+| 409 or 422 | `CREDENTIAL_ACQUIRE_FAILED`, not retryable, `reason: idempotency-conflict`: the key was already used for a different request |
 | 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. No automatic retry |
-| 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable. No automatic retry |
+| 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` when sent. No automatic retry |
 | 3xx, other 4xx, malformed JSON, contract violation | `CREDENTIAL_ACQUIRE_FAILED`. Redirects are never followed |
-| Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
+| Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable. No automatic retry |
+| Cancelled by the caller | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
+| Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION`, unchanged |
 
-Broker responses are never logged or echoed in errors.
+The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
+
+### Idempotency and retries
+
+A lost answer can hide an issued credential: the broker may create a gateway key, then the connection drops before PiShip reads it. PiShip therefore never re-sends a credential request by itself, and gives each request a key so that a retry can be recognized.
+
+**What PiShip sends.** Every acquire and renewal carries `Idempotency-Key`: a random UUID (version 4), unquoted, generated once per logical acquire. It is not secret and is never derived from the identity, a token, or the user. A renewal is a new logical acquire and gets a new key. A caller that retries the same acquire, for example after a timeout, sends the key it got back in the error's `detail.idempotencyKey`; PiShip itself does not.
+
+**What PiShip does not do.** It never retries an acquire, a renewal, or a revocation automatically, whatever the failure. The one exception is a 401: the broker rejected the identity token before doing any work, so PiShip refreshes the identity once and sends one new acquire.
+
+**What a broker should do** (PiShip works with a broker that ignores the key, but then the "unknown outcome" failures below can leave an unused credential behind):
+
+| Request | Broker answer |
+| --- | --- |
+| New key | Issue as usual. Store the answer under the key only when issuing started: never for a 401, 403, 429, or 503 |
+| Same key, same input, first request finished | Return the stored answer, same credential, same `credential_id`. Do not issue again |
+| Same key, different input | 422 (or 409). Do not issue, and never return the stored credential |
+| Same key while the first request is still running | 503 with `Retry-After`. Do not use 409 for this: PiShip reads 409 as a conflict |
+
+"Same input" is the authenticated principal (issuer and subject) plus the request body. It is **not** the access token: an identity refresh changes the token but not the user, and a retry after it must still match. A key sent by another principal is different input, so one user's key never returns another user's credential. Keep keys at least as long as a client could retry, such as 24 hours, and scope them to the principal.
+
+**Which failures are safe to retry.** The error's `retryable` says whether trying again can succeed; `detail.outcome` (on failures without an answer) says whether the broker may already have acted:
+
+| Failure | Did the broker act? | Safe to retry |
+| --- | --- | --- |
+| 401 | No: the token was rejected before any work | Yes, after an identity refresh (PiShip does this once) |
+| 429 with `Retry-After` | No: the broker refused the work | Yes, after `Retry-After` |
+| 503 with `Retry-After` | No: the broker refused the work | Yes, after `Retry-After` |
+| Refused before sending: `outcome: not-sent` (connection refused, DNS failure, connect timeout, a signal that was already cancelled) | No: the request never left PiShip | Yes |
+| Timeout, connection reset, or cancellation after sending: `outcome: unknown` | Maybe: a credential may have been issued | Only with the same `Idempotency-Key`, and only if the broker honors it |
+| 500, 502, 504 | Maybe, depending on where it failed | Only with the same key, if the broker honors it |
+| 403, 409 or 422 conflict, other 4xx, contract violation | Decided | No |
+
+A broker that cannot honor keys should keep credentials short-lived, so an unused one expires soon.
 
 ### Revoke
 
@@ -140,14 +215,16 @@ Content-Type: application/json
 {"credential_id": "vk_1234", "distribution": "acmecode"}
 ```
 
-The bearer is the **runtime credential**, not the identity token; `credential_id` is `null` if the broker did not return one. Any 2xx, 401, or 404 counts as revoked. Other statuses and transport failures are reported as a warning, and local secrets are deleted anyway. Timeout: 30 s. Without a revoke endpoint, a credential stays valid at the gateway until it expires.
+The bearer is the **runtime credential**, not the identity token; `credential_id` is `null` if the broker did not return one. Any 2xx, 401, or 404 counts as revoked. Other statuses and transport failures are reported as a warning, and local secrets are deleted anyway. Revocation uses the same transport, timeout (30 s), cancellation, and `detail` as acquisition: a 403 is `CREDENTIAL_DENIED`; a 429, 5xx, timeout, or unreachable endpoint is a retryable `CREDENTIAL_REVOKED` with any `Retry-After`; other statuses and a cancellation are a non-retryable `CREDENTIAL_REVOKED`. Without a revoke endpoint, a credential stays valid at the gateway until it expires.
 
 ### Caching and renewal
 
 - The credential is stored in the platform secret store (Keychain, Secret Service, Credential Manager); non-secret metadata (`credential_id`, `expires_at`, `models`) is kept in distribution state.
 - It is reused until it is within `credential.refresh.beforeExpiry` (default `5m`) of `expires_at`, then renewed with the acquire call. Choose a lifetime well above that window, or every request renews.
 - If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`, or with the identity error when sign-in is needed.
-- A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`.
+- A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`. A 403 during renewal stays `CREDENTIAL_DENIED`.
+- A failed renewal keeps the broker failure's `retryable`, `Retry-After`, and `detail`, so a broker outage or rate limit on renewal is still retryable rather than a request to sign in again.
+- A renewal whose answer was lost is not re-sent. While the current credential is valid, PiShip keeps using it, and the next renewal is a new logical acquire with a new key; a credential the broker issued for the lost answer is never used, so let it expire.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
 - Concurrent launches share one renewal through a lock file. A live holder refreshes the lock, so it is never broken while held; only a lock left unrefreshed for 75 s is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 
@@ -223,6 +300,102 @@ sandbox:
 | Checks declared capabilities and fails closed on a gap, an unavailable service, or a failed check | Honoring the declared capabilities, including network denial for `sandbox.network.mode: deny` |
 | Times out and cancels commands, then kills the remote process or deletes the claim | Stopping commands promptly and removing sandboxes that are deleted or expire |
 
+## Audit collector (`piship-audit-batch/v1`)
+
+An `http` audit sink POSTs metadata-only audit events to a collector you run, for example an ingest endpoint in front of your SIEM. PiShip ships no vendor-specific adapter; anything that accepts this contract works.
+
+```yaml
+variables: [ACMECODE_AUDIT_URL]
+audit:
+  enabled: true
+  sinks:
+    - { id: local, type: file, required: false }
+    - { id: company, type: http, url: "${ACMECODE_AUDIT_URL}", required: true }
+  buffer: { maxEvents: 1000, flushInterval: 2s }
+```
+
+**Request.** `POST <url>` with `content-type: application/json` and one batch as the body. The URL must be `https` (plain `http` only on loopback), must not embed credentials, and goes through the managed fetch (proxy, CA, and private-only rules above; list its host in `network.allowHosts`). PiShip sends **no authentication header**: expose the collector only on the company network or behind your own ingress. Redirects are not followed. Any `2xx` means the whole batch was stored; any other status, a network error, or no answer within 10 seconds is a failure. The response body is ignored.
+
+**Readiness probe.** When a required sink opens (every launch, and every `login`, `logout`, `update`, and `rollback` that records events), PiShip first sends an empty batch, `{"schema":"piship-audit-batch/v1","events":[]}`, and needs a `2xx`. Optional sinks are not probed.
+
+**Batching.** Each sink has its own queue of at most `audit.buffer.maxEvents` events. PiShip delivers every `audit.buffer.flushInterval`, as soon as a queue is half full, and when the session or command ends (within 5 seconds). One request carries at most 500 events, oldest first.
+
+**Retries and de-duplication.** A failed batch for a required sink stays queued and is sent again, with the same events, on the next flush; for an optional sink it is dropped and counted. PiShip cannot tell whether a failed request was stored (a timeout after your collector wrote the batch, for example), so an event can arrive more than once. Every event carries an `id`, a random UUID assigned once when it is emitted and never changed by a retry. To de-duplicate, store an event only if its `id` is not already stored (a unique key on `id` does this), and still answer `2xx` for a batch whose events are all or partly duplicates; otherwise PiShip keeps resending it. Store a hash of the whole event next to each `id`: every property, including `id`, `time`, and `user`, in a canonical form such as RFC 8785 JSON Canonicalization (not just the `content` property, which is usually absent). A retry resends identical content, so an `id` that arrives again with a different hash is not a retry. Still answer `2xx`, because any other status makes PiShip resend the batch forever; keep both events in full, treat neither as the authoritative one, and raise an alert (a faulty or hostile sender). Events are unauthenticated claims: any host that can reach the collector can submit events or claim ids in advance, so restrict and identify senders at your own ingress, and treat `id` as a correlation key, not an integrity guarantee. Retries of one event can span a whole session, so compare against every stored ID rather than a short window. Order events by `time`, not by arrival: a retried batch can arrive after newer events. On the wire `id` is always present, and the schema requires it. Only lines in a local `audit.jsonl` written before `id` was added have none, and PiShip never sends those. What PiShip does when a required collector keeps failing is the [audit failure policy](security.md#audit).
+
+**Privacy.** Events hold metadata: the event type, time, identity subject (never a token), session, distribution, and, where relevant, resource, decision, policy, rule, enforcement plane, and a short `detail` map. Prompt, response, command, and source content appear in `content` only for classes the distribution opts in to under `audit.capture`, and are redacted. Credential and token values are never sent: values of secret-named `detail` keys become `[REDACTED]`, and token shapes are scrubbed from every string.
+
+**Schema.** The body is valid against this JSON Schema (draft 2020-12). A receiver should accept properties it does not know: `piship-audit-batch/v1` may gain optional properties, as it gained `id`, without a version change.
+
+<!-- piship-audit-batch/v1 schema: tested by packages/audit/src/wire-schema.test.ts -->
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "piship-audit-batch/v1",
+  "type": "object",
+  "required": ["schema", "events"],
+  "properties": {
+    "schema": { "const": "piship-audit-batch/v1" },
+    "events": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["schema", "id", "event", "time", "user", "session", "distribution"],
+      "properties": {
+        "schema": { "const": "piship-audit/v1" },
+        "id": { "type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+        "event": {
+          "enum": [
+            "session.start", "session.end",
+            "identity.login", "identity.refresh", "identity.logout",
+            "credential.acquire", "credential.refresh", "credential.revoke",
+            "model.request", "model.denied",
+            "resource.load", "resource.denied",
+            "provider.load", "provider.denied",
+            "tool.request", "tool.allowed", "tool.denied",
+            "mcp.server.start", "mcp.call", "mcp.denied",
+            "policy.loaded", "policy.violation",
+            "runtime.update", "runtime.rollback"
+          ]
+        },
+        "time": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$" },
+        "user": { "type": ["string", "null"], "maxLength": 512 },
+        "session": { "type": ["string", "null"], "maxLength": 512 },
+        "distribution": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resource": { "type": "string", "maxLength": 512 },
+        "decision": { "enum": ["allowed", "denied", "asked", "approved"] },
+        "policy": { "type": "string", "maxLength": 512 },
+        "rule": { "type": "string", "maxLength": 512 },
+        "enforcement": { "enum": ["control-plane", "sandbox", "audit-only"] },
+        "detail": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+          "additionalProperties": { "type": ["string", "number", "boolean", "null"], "maxLength": 256 }
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt": { "type": "string", "maxLength": 8192 },
+            "response": { "type": "string", "maxLength": 8192 },
+            "command": { "type": "string", "maxLength": 8192 },
+            "source": { "type": "string", "maxLength": 8192 }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
+
 ## Network and TLS
 
 Applies to every PiShip-managed request above and to Pi's in-process requests ([security](security.md#network-and-tls)).
@@ -230,9 +403,10 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | Rule | Detail |
 | --- | --- |
 | HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION` |
-| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots |
-| Proxy | `HTTP(S)_PROXY` and `NO_PROXY` are honored unless `network.proxy.inheritEnvironment: false` |
-| Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The authorization page opens in the browser and is not subject to this rule |
+| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots. A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
+| Proxy | `HTTP(S)_PROXY` and `NO_PROXY` (either case) are honored unless `network.proxy.inheritEnvironment: false`. A host in `NO_PROXY` is contacted directly; every other request, including to a private endpoint, goes through the proxy |
+| Child processes | In a managed distribution, commands the agent runs receive only the proxy variables the policy approves (never a proxy URL that embeds credentials) and, for a single declared bundle, `NODE_EXTRA_CA_CERTS`. Other proxy, CA, and TLS-verification variables are dropped ([security](security.md#child-process-network-environment)) |
+| Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The match is on the hostname only: a declared host admits every port and scheme on it, and PiShip does not check that the host is a private address. The authorization page opens in the browser and is not subject to this rule |
 | MCP and the runtime credential | A `credential: runtime` Streamable HTTP MCP server must have the same origin (scheme, host, port) as `inference.baseUrl`; otherwise it fails to start with `MCP_UNHEALTHY` and never receives the credential |
 | Redirects | Not followed; serve each endpoint directly |
 | Ambient keys | In managed mode, provider keys such as `OPENAI_*` are removed from the runtime environment |

@@ -29,6 +29,7 @@ import {
   auditLogFiles,
   describeAuditStatus,
   formatAuditFailureMatrix,
+  requiredAuditLoss,
 } from "./index.js";
 
 const posix = process.platform !== "win32";
@@ -258,7 +259,11 @@ describe("AuditLog file sink retention", () => {
   });
 
   it("does not rotate twice when another writer already rotated", async () => {
-    const rotation = { maxBytes: 400, files: 3 };
+    // Nine rotated files hold more than the twelve events written, so no event
+    // leaves through retention however the two writers interleave. A writer
+    // that loses the rotation lock appends anyway, so how many events each
+    // file holds depends on timing; only the properties below do not.
+    const rotation = { maxBytes: 400, files: 9 };
     const open = () =>
       AuditLog.open({
         config: config([...sink], 1000),
@@ -274,13 +279,18 @@ describe("AuditLog file sink retention", () => {
     }
     await Promise.all([first.close(), second.close()]);
     const base = join(temp, "logs", "audit.jsonl");
-    const all = auditLogFiles(temp, rotation).flatMap((path) =>
+    const files = auditLogFiles(temp, rotation);
+    const all = files.flatMap((path) =>
       lines(path).map((line) => line.resource),
     );
-    // Twelve events of about 250 bytes fit in the four files; none is lost.
     expect(all.sort()).toEqual(
       [0, 1, 2, 3, 4, 5].flatMap((i) => [`a${i}`, `b${i}`]).sort(),
     );
+    // An event is about 156 bytes against a 400 byte limit, so a file is
+    // rotated only once it holds two events. A second rotation of the file
+    // another writer just started would leave a rotated file with one.
+    for (const path of files.slice(1))
+      expect(lines(path).length).toBeGreaterThanOrEqual(2);
     expect(existsSync(`${base}.rotate.lock`)).toBe(false);
   });
 
@@ -536,6 +546,45 @@ describe("AuditLog http sink", () => {
     await log.close();
   });
 
+  it("resends a batch the collector stored but did not acknowledge with the same event ids", async () => {
+    // Fault injection: the collector stores the first batch, then fails the
+    // request (as a timeout after the write would); PiShip retries it.
+    const received: { id: string; event: string }[][] = [];
+    let failures = 1;
+    const log = await AuditLog.open({
+      config: config([
+        {
+          id: "company",
+          type: "http",
+          url: "https://audit.example/ingest",
+          required: true,
+        },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch: async (_url, init) => {
+        received.push(JSON.parse(String(init?.body)).events);
+        if (received.length > 1 && failures-- > 0)
+          return new Response(null, { status: 504 });
+        return new Response(null, { status: 200 });
+      },
+    });
+    log.emit({ event: "tool.request", user: null, session: null });
+    log.emit({ event: "tool.allowed", user: null, session: null });
+    await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 2, delivered: 0 });
+    await log.flush();
+    expect(log.status().sinks[0]).toMatchObject({ pending: 0, delivered: 2 });
+    await log.close();
+    const [, first, second] = received;
+    expect(second).toEqual(first);
+    // A receiver that keeps one row per id stores each event once.
+    const stored = new Map(
+      received.flat().map((event) => [event.id, event.event]),
+    );
+    expect([...stored.values()]).toEqual(["tool.request", "tool.allowed"]);
+  });
+
   it("enters failed when a required sink stays down until the buffer is full", async () => {
     const collector = await startCollector();
     const log = await AuditLog.open({
@@ -590,9 +639,16 @@ describe("AuditLog http sink", () => {
     const flushed = await log.close(2_000);
     expect(flushed.sinks[0]).toMatchObject({ delivered: 1, pending: 0 });
     expect(events(collector)).toEqual(["session.end"]);
-    // Emission after close is ignored.
+    expect(requiredAuditLoss(flushed)).toBeUndefined();
+    // Emission after close is never delivered, so it counts as dropped.
     log.emit({ event: "session.start", user: null, session: null });
-    expect(log.status().sinks[0]?.pending).toBe(0);
+    expect(log.status()).toMatchObject({
+      state: "failed",
+      sinks: [{ pending: 0, dropped: 1 }],
+    });
+    expect(requiredAuditLoss(log.status())).toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+    });
 
     const slow = await AuditLog.open({
       config: config([
@@ -609,6 +665,101 @@ describe("AuditLog http sink", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(status.sinks[0]?.delivered).toBe(0);
     expect(status.sinks[0]?.pending).toBe(1);
+    expect(requiredAuditLoss(status, "The session ended")?.message).toMatch(
+      /^The session ended: 1 audit event\(s\) were not delivered to required audit sink company \(1 pending, 0 dropped/,
+    );
+  });
+
+  it("close() retries a required sink that fails during shutdown until the deadline", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config([
+        { id: "company", type: "http", url: collector.url, required: true },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    // Fault injection: the collector is down when the final flush starts and
+    // comes back a moment later.
+    collector.status = 503;
+    log.emit({ event: "session.end", user: null, session: null });
+    setTimeout(() => {
+      collector.status = 200;
+    }, 300);
+    const status = await log.close(3_000);
+    expect(status.sinks[0]).toMatchObject({ delivered: 1, pending: 0 });
+    expect(requiredAuditLoss(status)).toBeUndefined();
+    expect(events(collector)).toEqual(["session.end"]);
+  });
+
+  it("reports a required sink that stays down through close without leaking its url", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config([
+        { id: "company", type: "http", url: collector.url, required: true },
+        { id: "local", type: "file", required: false },
+      ]),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    collector.status = 500;
+    log.emit({ event: "tool.allowed", user: null, session: null });
+    log.emit({ event: "session.end", user: null, session: null });
+    const started = Date.now();
+    const status = await log.close(1_000);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    // Retried until the deadline, not just once.
+    expect(collector.requests.length).toBeGreaterThan(2);
+    expect(status.sinks).toMatchObject([
+      { id: "company", pending: 2, delivered: 0 },
+      { id: "local", pending: 0, delivered: 2 },
+    ]);
+    const loss = requiredAuditLoss(status);
+    expect(loss).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    expect(loss?.message).toContain("2 audit event(s)");
+    expect(loss?.message).toContain("HTTP 500");
+    expect(JSON.stringify(loss?.toJSON())).not.toContain("route=audit");
+  });
+
+  it("does not report optional sinks that drop events as a required loss", async () => {
+    const collector = await startCollector();
+    collector.status = 0;
+    const log = await AuditLog.open({
+      config: config(
+        [{ id: "company", type: "http", url: collector.url, required: false }],
+        2,
+      ),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    for (let index = 0; index < 4; index += 1)
+      log.emit({ event: "tool.request", user: null, session: null });
+    const status = await log.close(500);
+    expect(status.sinks[0]?.dropped).toBe(4);
+    expect(requiredAuditLoss(status)).toBeUndefined();
+  });
+
+  it("reports events a full required buffer dropped, even after the sink recovers", async () => {
+    const collector = await startCollector();
+    const log = await AuditLog.open({
+      config: config(
+        [{ id: "company", type: "http", url: collector.url, required: true }],
+        2,
+      ),
+      distribution: "acmecode",
+      stateDir: temp,
+      fetch,
+    });
+    collector.status = 503;
+    for (let index = 0; index < 3; index += 1)
+      log.emit({ event: "tool.request", user: null, session: null });
+    collector.status = 200;
+    const status = await log.close(2_000);
+    expect(status.sinks[0]).toMatchObject({ pending: 0, dropped: 1 });
+    expect(requiredAuditLoss(status)?.message).toContain("1 dropped");
   });
 });
 

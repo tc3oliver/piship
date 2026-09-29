@@ -154,9 +154,14 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(doctor.stdout).toMatch(/state\s+delegated \(no PiShip secret\)/);
     expect(doctor.stdout).toMatch(/provider\s+pi-native/);
     expect(doctor.stdout).toMatch(/mcp notes\s+healthy \(stdio; 2 tool\(s\)\)/);
-    expect(doctor.stdout).toMatch(/audit\s+audit: disabled/);
+    expect(doctor.stdout).toMatch(/Audit\n {2}- state\s+disabled/);
     expect(doctor.stdout).toMatch(/trusted keys\s+1/);
     expect(doctor.stdout).toMatch(/- outbound\s+any host \(personal mode/);
+    expect(doctor.stdout).toMatch(
+      /- agent commands\s+not restricted \(personal mode/,
+    );
+    expect(doctor.stdout).toMatch(/Secret Store\n {2}- backend\s+not used/);
+    expect(doctor.stdout).toMatch(/Release\n {2}✓ release\s+verified/);
     expect(doctor.stdout).not.toContain("personal owner policy");
 
     // The installed lock declares no enterprise endpoint: no identity,
@@ -247,6 +252,13 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     ]);
     expect(outbound.status).toBe(1);
     expect(proxy.hits).toEqual(["CONNECT updates.example.invalid:443"]);
+    // Pi-native sign-in stays Pi's: the branded commands refuse and write
+    // nothing, so no identity or principal record appears.
+    for (const command of ["login", "logout"]) {
+      const delegated = await s.run([command]);
+      expect(delegated.status).toBe(1);
+      expect(delegated.stderr).toContain("POLICY_DENIED");
+    }
     const state = join(s.state, "mypi");
     for (const enterprise of [
       "identity",
