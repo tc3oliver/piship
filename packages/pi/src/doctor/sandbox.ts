@@ -8,6 +8,8 @@ const ISOLATION_TEXT = {
   remote: "remote (commands run on another machine; host files unreachable)",
   none: "none (tool subprocesses run with the user's privileges)",
 } as const;
+const REMOTE_WORKSPACE_TEXT =
+  "remote (commands run on another machine; host files reachable only through the workspace)";
 
 export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
@@ -24,7 +26,14 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       "containment",
       `${containment}${report.reason ? `: ${report.reason}` : ""}`,
     );
-  if (governance.isolation)
+  const declared = governance.workspace.declared;
+  // A mounted or synced workspace makes host files reachable, through it.
+  if (
+    governance.isolation === "remote" &&
+    (declared === "shared" || declared === "synchronized")
+  )
+    out.ok("isolation", REMOTE_WORKSPACE_TEXT);
+  else if (governance.isolation)
     out.ok("isolation", ISOLATION_TEXT[governance.isolation]);
   out.ok("network", report.network);
   out.ok(

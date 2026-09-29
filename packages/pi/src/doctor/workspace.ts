@@ -92,9 +92,16 @@ export function workspaceGroup(data: DoctorData, out: DoctorSection): void {
     );
   else out.info("consistency", consistency);
   if (!workspace.local) out.info("declared", workspace.declared ?? "snapshot");
+  // Doctor never runs the check; a launch records its last result in local
+  // metrics, shown when it was made under the same declaration.
+  const last = data.metrics.workspace;
+  const recorded =
+    verification === "pending" && last && last.declared === workspace.declared
+      ? `; last session check ${last.verification} (${last.effective}) at ${last.checkedAt}`
+      : "";
   out.info(
     "verification",
-    `${VERIFICATION_TEXT[verification]}${workspace.verifiedAt ? ` at ${workspace.verifiedAt}` : ""}`,
+    `${VERIFICATION_TEXT[verification]}${workspace.verifiedAt ? ` at ${workspace.verifiedAt}` : ""}${recorded}`,
   );
   if (workspace.complete)
     out.ok("complete", "yes: a complete coding-agent workspace");

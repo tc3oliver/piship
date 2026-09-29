@@ -645,6 +645,91 @@ describe("Sandbox and Workspace groups", () => {
     );
   });
 
+  it("says host files are reachable through a shared or synchronized remote workspace", () => {
+    const pending = (declared: "shared" | "synchronized"): WorkspaceReport => ({
+      declared,
+      effective: "snapshot",
+      verification: "pending",
+      gitControlProtection: "pending",
+      complete: false,
+    });
+    for (const declared of ["shared", "synchronized"] as const) {
+      const inspected = inspection({
+        adapter: "custom",
+        provider: "custom",
+        planes: [
+          "workspace-confinement",
+          "git-control-protection",
+          "environment-filter",
+        ],
+        localProcesses: false,
+        isolation: "remote",
+        workspace: pending(declared),
+      });
+      const sandbox = group(
+        renderDoctor(
+          doctorData("managed", {
+            governance: governanceData({
+              inspection: inspected,
+              isolation: sandboxIsolation(inspected.sandbox),
+              workspace: workspaceData(inspected),
+            }),
+          }),
+        ).render(),
+        "Sandbox",
+      );
+      expect(sandbox).toContain(
+        `  ✓ ${"isolation".padEnd(20)} remote (commands run on another machine; host files reachable only through the workspace)`,
+      );
+      expect(sandbox.join("\n")).not.toContain("host files unreachable");
+    }
+  });
+
+  it("shows the last session's workspace check from local metrics while doctor's own is pending", () => {
+    const inspected = remote({
+      declared: "shared",
+      effective: "snapshot",
+      verification: "pending",
+      gitControlProtection: "pending",
+      complete: false,
+    });
+    const render = (workspace: unknown) =>
+      group(
+        renderDoctor({
+          ...doctorData("managed", {
+            governance: governanceData({
+              inspection: inspected,
+              isolation: sandboxIsolation(inspected.sandbox),
+              workspace: workspaceData(inspected),
+            }),
+          }),
+          metrics: { ...metrics, workspace } as DoctorData["metrics"],
+        }).render(),
+        "Workspace",
+      );
+    expect(
+      render({
+        declared: "shared",
+        effective: "synchronized",
+        verification: "verified",
+        checkedAt: "2026-09-29T11:00:00Z",
+      }),
+    ).toContain(
+      `  - ${"verification".padEnd(20)} pending: verified before the first sandboxed command; not run by doctor; last session check verified (synchronized) at 2026-09-29T11:00:00Z`,
+    );
+    // A result recorded under another declaration says nothing about this one.
+    expect(
+      render({
+        declared: "synchronized",
+        effective: "synchronized",
+        verification: "verified",
+        checkedAt: "2026-09-29T11:00:00Z",
+      }),
+    ).toContain(
+      `  - ${"verification".padEnd(20)} pending: verified before the first sandboxed command; not run by doctor`,
+    );
+  });
+
   it("reports a local backend's workspace as shared by construction", () => {
     expect(workspaceLines(inspection())).toEqual([
       `  ✓ ${"consistency".padEnd(20)} shared (commands run on this host's files)`,
