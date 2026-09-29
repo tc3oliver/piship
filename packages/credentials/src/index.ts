@@ -1,3 +1,4 @@
+export * from "./atomic.js";
 export * from "./file-lock.js";
 export * from "./lifecycle.js";
 export * from "./ownership.js";

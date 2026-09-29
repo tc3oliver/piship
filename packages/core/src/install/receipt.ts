@@ -14,7 +14,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
-import type { SecretStoreResolver } from "@piship/credentials";
+import {
+  type SecretStoreResolver,
+  syncDirectory,
+  writeFileAtomic,
+} from "@piship/credentials";
 import {
   binHome,
   installHome,
@@ -23,7 +27,6 @@ import {
   type DistributionLock,
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
-import { syncDirectory, writeFileAtomic } from "./atomic.js";
 import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
 
@@ -131,7 +134,7 @@ export function commandPathFor(command: string): string {
   );
 }
 
-export { syncDirectory, writeFileAtomic } from "./atomic.js";
+export { syncDirectory, writeFileAtomic } from "@piship/credentials";
 
 /**
  * Flush every file and directory of a release to stable storage, so a power

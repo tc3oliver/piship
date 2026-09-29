@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { writeFileAtomic } from "../install/atomic.js";
+import { writeFileAtomic } from "@piship/credentials";
 
 export interface AccessStatePaths {
   readonly identity: string;

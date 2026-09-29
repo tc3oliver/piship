@@ -5,13 +5,12 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
+import { writeFileAtomic } from "./atomic.js";
 import { touchHeldLocks } from "./lock-heartbeat.js";
 
 export interface CommandResult {
@@ -565,15 +564,9 @@ export class RestrictedFileSecretStore implements SecretStore {
   async put(ref: string, value: SecretValue): Promise<void> {
     this.#prepare();
     const path = this.#path(ref);
-    const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
     try {
-      writeFileSync(temporary, JSON.stringify({ ref, value: encode(value) }), {
-        mode: 0o600,
-        flag: "wx",
-      });
-      renameSync(temporary, path);
+      writeFileAtomic(path, JSON.stringify({ ref, value: encode(value) }));
     } catch (error) {
-      rmSync(temporary, { force: true });
       throw unavailable(this.description, (error as Error).message);
     }
   }

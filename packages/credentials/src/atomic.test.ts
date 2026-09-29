@@ -10,11 +10,11 @@ import {
   type FsFault,
   fired,
   injectFault,
-} from "../../../../tests/helpers/fs-faults.js";
+} from "../../../tests/helpers/fs-faults.js";
 import { temporarySibling, writeFileAtomic } from "./atomic.js";
 
 vi.mock("node:fs", async (importOriginal) =>
-  (await import("../../../../tests/helpers/fs-faults.js")).faultyFs(
+  (await import("../../../tests/helpers/fs-faults.js")).faultyFs(
     await importOriginal(),
   ),
 );

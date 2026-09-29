@@ -1,7 +1,8 @@
 // Crash-safe replacement of a small state file (the install receipt, the
-// state marker, access and preference state): write a sibling temporary
-// completely, flush it, and rename it over the target, so a reader sees the
-// previous file or the new one, never a truncated one.
+// state marker, identity and credential metadata, preferences, and the file
+// secret store's entries): write a sibling temporary completely, flush it,
+// and rename it over the target, so a reader sees the previous file or the
+// new one, never a truncated one.
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -71,8 +72,8 @@ export interface AtomicWriteOptions {
  * fsync it, then rename it over `path` and flush the directory (best effort;
  * Windows cannot flush a directory). Until the rename, `path` keeps its
  * previous content. Any failure before the rename removes the temporary; a
- * process killed before the rename leaves it for `removeStaleTemporaries`.
- * The file is owner-only (0600).
+ * process killed before the rename leaves it for the sweep the distribution
+ * runs when it next starts. The file is owner-only (0600).
  */
 export function writeFileAtomic(
   path: string,

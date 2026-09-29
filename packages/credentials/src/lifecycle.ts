@@ -1,12 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type CredentialContext,
@@ -23,6 +16,7 @@ import {
   SecretValue,
   samePrincipal,
 } from "@piship/contracts";
+import { writeFileAtomic } from "./atomic.js";
 import {
   type FileLockTiming,
   holdsFileLock,
@@ -203,11 +197,9 @@ export interface CredentialManagerOptions {
   readonly storeFor?: SecretStoreResolver;
 }
 
+/** Credential metadata, its discarded marker, and the pending revocations. */
 function writeAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
-  renameSync(temporary, path);
+  writeFileAtomic(path, content, { directoryMode: 0o700 });
 }
 
 /**
