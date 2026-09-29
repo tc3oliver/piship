@@ -1,8 +1,10 @@
 import { generateKeyPairSync, sign } from "node:crypto";
+import { inspect } from "node:util";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   type ManagedFetch,
+  PiShipError,
   SecretValue,
 } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -134,6 +136,136 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
         "OIDC discovery failed: the identity provider did not respond in time",
     });
   });
+  describe("token endpoint failures", () => {
+    const PAGE_SENTINEL = "proxy-page-sentinel-0123456789";
+    /** No token in the message, action, detail, cause, or any rendering. */
+    function expectNoSecret(error: unknown, secrets: readonly string[]): void {
+      const rendered = [
+        String(error),
+        JSON.stringify(error),
+        inspect(error, { depth: 10, showHidden: true }),
+        String((error as { cause?: unknown }).cause ?? ""),
+      ].join("\n");
+      for (const secret of [...secrets, PAGE_SENTINEL])
+        expect(rendered).not.toContain(secret);
+    }
+    const inThirtySeconds = () => new Date(Date.now() + 30_000);
+
+    // Regression: a transient 5xx or 429 used to map to the non-retryable
+    // IDENTITY_INVALID ("contact your administrator").
+    it.each([
+      [{ status: 503, retryAfter: 7 }, "GATEWAY_UNREACHABLE", 7_000],
+      [{ status: 500 }, "GATEWAY_UNREACHABLE", undefined],
+      [
+        {
+          status: 502,
+          body: `<html><body>${PAGE_SENTINEL} Bad gateway</body></html>`,
+          retryAfter: 3,
+        },
+        "GATEWAY_UNREACHABLE",
+        3_000,
+      ],
+      [{ status: 429, retryAfter: 4 }, "GATEWAY_RATE_LIMITED", 4_000],
+      [{ status: 429, retryAfter: "date" }, "GATEWAY_RATE_LIMITED", "date"],
+      [
+        { status: 400, body: { error: "temporarily_unavailable" } },
+        "GATEWAY_UNREACHABLE",
+        undefined,
+      ],
+    ] as const)(
+      "refresh: maps %j to retryable %s",
+      async (fault, code, wait) => {
+        const identity = provider();
+        const session = await identity.login({ openUrl: approve });
+        services.knobs.tokenFaults.push({
+          ...fault,
+          ...(fault.retryAfter === "date"
+            ? { retryAfter: inThirtySeconds() }
+            : {}),
+        });
+        const error = (await identity
+          .refresh(session)
+          .catch((caught: unknown) => caught)) as PiShipError;
+        expect(error).toBeInstanceOf(PiShipError);
+        expect(error).toMatchObject({
+          code,
+          retryable: true,
+          component: "identity",
+          message: expect.stringContaining(`HTTP ${fault.status}`),
+        });
+        if (wait === "date") {
+          expect(error.retryAfterMs).toBeGreaterThan(20_000);
+          expect(error.retryAfterMs).toBeLessThanOrEqual(30_000);
+        } else expect(error.retryAfterMs).toBe(wait);
+        expectNoSecret(error, [
+          session.accessToken?.reveal() ?? "missing",
+          session.refreshToken?.reveal() ?? "missing",
+        ]);
+        // The refresh token was not spent, so the next refresh succeeds.
+        await expect(identity.refresh(session)).resolves.toMatchObject({
+          subject: session.subject,
+        });
+      },
+    );
+
+    it.each([
+      [{ status: 400, body: { error: "invalid_grant" } }, "IDENTITY_EXPIRED"],
+      [{ status: 401, body: { error: "invalid_client" } }, "IDENTITY_INVALID"],
+      [
+        { status: 404, body: `<html>${PAGE_SENTINEL}</html>` },
+        "IDENTITY_INVALID",
+      ],
+    ] as const)(
+      "refresh: keeps %j non-retryable as %s",
+      async (fault, code) => {
+        const identity = provider();
+        const session = await identity.login({ openUrl: approve });
+        services.knobs.tokenFaults.push(fault);
+        const error = await identity
+          .refresh(session)
+          .catch((caught: unknown) => caught);
+        expect(error).toMatchObject({ code, retryable: false });
+        expectNoSecret(error, [
+          session.accessToken?.reveal() ?? "missing",
+          session.refreshToken?.reveal() ?? "missing",
+        ]);
+      },
+    );
+
+    it("sign-in: a token endpoint outage is retryable", async () => {
+      services.knobs.tokenFaults.push({ status: 503, retryAfter: 2 });
+      const error = await provider()
+        .login({ openUrl: approve })
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: true,
+        retryAfterMs: 2_000,
+        message: expect.stringMatching(/^Sign-in failed:/),
+      });
+      expectNoSecret(error, []);
+    });
+
+    it("refresh: a token endpoint that never answers times out retryably", async () => {
+      const identity = provider({ timeoutSeconds: 1 });
+      const session = await identity.login({ openUrl: approve });
+      services.knobs.tokenFaults.push({ timeoutMs: 5_000 });
+      const started = Date.now();
+      const error = await identity
+        .refresh(session)
+        .catch((caught: unknown) => caught);
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(error).toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: true,
+      });
+      expectNoSecret(error, [
+        session.accessToken?.reveal() ?? "missing",
+        session.refreshToken?.reveal() ?? "missing",
+      ]);
+    });
+  });
+
   it("reports a denied sign-in, cancellation, and timeout visibly", async () => {
     services.knobs.denyLogin = true;
     await expect(provider().login({ openUrl: approve })).rejects.toMatchObject({

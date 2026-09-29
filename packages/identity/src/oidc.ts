@@ -6,6 +6,7 @@ import {
   type LoginContext,
   type ManagedFetch,
   PiShipError,
+  parseRetryAfter,
   SecretValue,
 } from "@piship/contracts";
 import { retainClaims } from "./claims.js";
@@ -49,6 +50,39 @@ function mapError(error: unknown, action: string): PiShipError {
       );
   const code = (error as { code?: string })?.code ?? "";
   const cause = (error as { cause?: unknown })?.cause;
+  // A provider outage or rate limit, including a proxy's HTML error page in
+  // front of it, is retryable with the server's wait. It says nothing about
+  // the identity, so it is never IDENTITY_INVALID or IDENTITY_EXPIRED. The
+  // managed fetch may return another realm's Response, so match its shape.
+  const answer = (
+    error instanceof client.ResponseBodyError ? error.response : cause
+  ) as Partial<Response> | undefined;
+  const status =
+    typeof answer?.status === "number" &&
+    typeof answer.headers?.get === "function"
+      ? answer.status
+      : undefined;
+  if (
+    status !== undefined &&
+    (status >= 500 ||
+      status === 429 ||
+      (error instanceof client.ResponseBodyError &&
+        (error.error === "server_error" ||
+          error.error === "temporarily_unavailable")))
+  ) {
+    const limited = status === 429;
+    const retryAfterMs = parseRetryAfter(answer?.headers?.get("retry-after"));
+    return new PiShipError(
+      limited ? "GATEWAY_RATE_LIMITED" : "GATEWAY_UNREACHABLE",
+      `${action}: the identity provider ${limited ? "is rate limiting requests" : "is temporarily unavailable"} (HTTP ${status})`,
+      {
+        component: "identity",
+        retryable: true,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        userAction: "Try again later",
+      },
+    );
+  }
   // oauth4webapi puts the precise failed check (claim, state, signature) in the cause.
   const detail =
     cause instanceof Error && cause.message

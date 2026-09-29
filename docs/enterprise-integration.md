@@ -78,6 +78,7 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 | Refresh | `grant_type=refresh_token` when the access token has less than 60 s left (from `expires_in`) or after the broker returns 401. A rotated refresh token is stored; refresh is serialized across processes. Without a refresh token, the user must run `login` again when the access token expires |
 | Revocation | On `logout`, if discovery advertises `revocation_endpoint`: the refresh token, then the access token (RFC 7009 with `token_type_hint`). A failure is a warning; local state is still cleared |
 | Timeouts | 30 s per OIDC HTTP request; a timeout fails with retryable `GATEWAY_UNREACHABLE`. The browser sign-in waits up to 5 minutes |
+| Token endpoint failures | A 5xx (including a proxy's HTML error page) or a `server_error` / `temporarily_unavailable` error fails with retryable `GATEWAY_UNREACHABLE`, and a 429 with retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After`. `invalid_grant` is `IDENTITY_EXPIRED` ("run login"); other token errors are `IDENTITY_INVALID`. PiShip never retries a token request automatically, because a refresh token may rotate on use |
 
 ## Credential broker (`http-broker`)
 
