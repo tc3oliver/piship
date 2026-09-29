@@ -8,6 +8,7 @@ import {
   checkGovernance,
   checkPiVersion,
   checkStateMigration,
+  storageOf,
   compareReleases,
   diffLocks,
   explainConfiguration,
@@ -532,8 +533,13 @@ async function runLifecycle(
           pi: target.runtime.version,
           schemas:
             verified?.metadata.stateSchemas ?? payloadStateSchemas(target),
+          ...storageOf(target),
         },
-        { version: receipt.active, pi: current.runtime.version },
+        {
+          version: receipt.active,
+          pi: current.runtime.version,
+          ...storageOf(current),
+        },
       );
       output.stdout(formatMigrationReport(report));
       if (report.verdict === "unsupported") return 1;

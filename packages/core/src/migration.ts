@@ -5,6 +5,14 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditLogFiles } from "@piship/audit";
+import type { SecretStoreProvider } from "@piship/credentials";
+import { applyStorageTransition } from "./storage-transition.js";
+
+export {
+  applyStorageTransition,
+  storageOf,
+  storageTransition,
+} from "./storage-transition.js";
 
 /**
  * State marker naming the release that last used this state; written at
@@ -268,6 +276,11 @@ export interface MigrationItem {
   /** `keep`, `clear-and-reacquire`, `review`, or `refuse`. */
   readonly action: "keep" | "clear-and-reacquire" | "review" | "refuse";
   readonly reason: string;
+  /** Set when the class is cleared because the secret store changes. */
+  readonly storageTransition?: {
+    readonly from: SecretStoreProvider;
+    readonly to: SecretStoreProvider;
+  };
 }
 
 export interface MigrationReport {
@@ -284,6 +297,8 @@ export interface MigrationTarget {
   readonly version: string;
   readonly pi: string;
   readonly schemas: StateSchemaSupport;
+  /** The target's `credential.storage.provider`; see `current.storage`. */
+  readonly storage?: SecretStoreProvider;
 }
 
 export interface StateMarker {
@@ -386,7 +401,16 @@ function worst(verdicts: readonly MigrationVerdict[]): MigrationVerdict {
 export function checkStateMigration(
   stateDir: string,
   target: MigrationTarget,
-  current: { readonly version: string | null; readonly pi: string | null },
+  current: {
+    readonly version: string | null;
+    readonly pi: string | null;
+    /**
+     * The active release's `credential.storage.provider`. When it differs
+     * from the target's, identity and credential state is cleared from the
+     * active store and reacquired (see `applyStorageTransition`).
+     */
+    readonly storage?: SecretStoreProvider;
+  },
 ): MigrationReport {
   const items: MigrationItem[] = [];
   const marker = readStateMarker(stateDir);
@@ -491,11 +515,16 @@ export function checkStateMigration(
       reason: `The target reads ${supported.join(", ") || "no version"} of this file, not ${schema}; it would be reinterpreted`,
     });
   }
+  const checked = applyStorageTransition(
+    items,
+    current.storage,
+    target.storage,
+  );
   return {
-    verdict: worst(items.map((item) => item.verdict)),
+    verdict: worst(checked.map((item) => item.verdict)),
     from: { version: fromVersion, pi: fromPi },
     to: { version: target.version, pi: target.pi },
-    items,
+    items: checked,
   };
 }
 

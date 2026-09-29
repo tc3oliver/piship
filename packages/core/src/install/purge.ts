@@ -4,6 +4,8 @@ import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   createSecretStore,
   deleteSecretsVerified,
+  metadataFileSecretRefs,
+  metadataFileSecretStore,
   metadataSecretRefs,
 } from "@piship/credentials";
 import { accessStatePaths } from "../access/index.js";
@@ -21,10 +23,15 @@ export interface PurgeResult {
  * Delete one distribution's PiShip-owned state after uninstall, including
  * the platform secret-store entries (identity token bundles, runtime
  * credentials, and the stored sandbox credential) that its metadata
- * references. Every deletion is confirmed;
- * when a secret cannot be deleted this throws SECRET_STORE_UNAVAILABLE and
- * removes no state, so the metadata still names the secret and a later
- * purge retries it.
+ * references. Each metadata file (or
+ * discarded marker) records which store holds its references: the platform
+ * store's are deleted from it, and the file store's go with the state
+ * directory, so a state left by a change of storage provider loses neither.
+ * A file written before the store was recorded is taken to be the file
+ * store's when that store holds any secret, as before. Every deletion is
+ * confirmed; when a secret cannot be deleted this throws
+ * SECRET_STORE_UNAVAILABLE and removes no state, so the metadata still names
+ * the secret and a later purge retries it.
  */
 export async function purgeDistributionState(
   id: string,
@@ -35,28 +42,36 @@ export async function purgeDistributionState(
     throw new Error(`Uninstall ${id} before purging its state`);
   const state = runtimeStateDirectory({ value: id });
   const paths = accessStatePaths(state);
-  const refs = new Set<string>();
-  for (const path of [
-    paths.identity,
-    paths.credential,
-    paths.sandboxCredential,
-  ])
-    try {
-      if (existsSync(path))
-        for (const ref of metadataSecretRefs(
-          JSON.parse(readFileSync(path, "utf8")),
-          id,
-        ))
-          refs.add(ref);
-    } catch {
-      // Unreadable metadata names no secret; the file is removed below.
-    }
-  const deletedSecrets: string[] = [];
   // The restricted file fallback keeps its secrets under the state directory,
   // which is removed below; otherwise they live in the platform store.
   const fileFallback =
     existsSync(paths.secrets) && readdirSync(paths.secrets).length > 0;
-  if (refs.size && (options.secretStore || !fileFallback)) {
+  const refs = new Set<string>();
+  for (const [path, refClass] of [
+    [paths.identity, "identity"],
+    [paths.credential, "inference"],
+    [paths.sandboxCredential, "sandbox"],
+  ] as const) {
+    if (!existsSync(path)) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      parsed = undefined;
+    }
+    const recorded = metadataFileSecretStore(path);
+    const platform =
+      recorded === "system" || (recorded === undefined && !fileFallback);
+    if (!platform) continue;
+    // A damaged file still names secrets in its text; they are deleted too.
+    for (const ref of [
+      ...metadataSecretRefs(parsed, id),
+      ...metadataFileSecretRefs(path, id, refClass),
+    ])
+      refs.add(ref);
+  }
+  const deletedSecrets: string[] = [];
+  if (refs.size) {
     const store =
       options.secretStore ??
       createSecretStore({ provider: "system", fileDirectory: paths.secrets });

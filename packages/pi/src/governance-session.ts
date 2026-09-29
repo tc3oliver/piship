@@ -69,6 +69,20 @@ export type {
 const STRICTNESS = { allow: 0, ask: 1, deny: 2 } as const;
 const WORKSPACE_STRENGTH = { snapshot: 0, synchronized: 1, shared: 2 } as const;
 
+/**
+ * Local metrics are operational telemetry: a record or save that fails (a
+ * full, read-only, or unreachable state directory) is dropped, so it never
+ * decides whether a governed session starts or closes, and never replaces
+ * the error a failing launch reports.
+ */
+function bestEffort(record: () => void): void {
+  try {
+    record();
+  } catch {
+    // Local metrics never block a governed session.
+  }
+}
+
 export class GovernanceSession {
   readonly manifest: GovernanceManifest;
   readonly resources: ResourceEvidence[] = [];
@@ -136,7 +150,8 @@ export class GovernanceSession {
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,
       });
-      metrics.recordSandbox(sandbox.report.level, sandbox.report.adapter);
+      const { level, adapter } = sandbox.report;
+      bestEffort(() => metrics.recordSandbox(level, adapter));
       const engine = await buildEngine(
         options,
         project,
@@ -180,13 +195,13 @@ export class GovernanceSession {
       await resolveProject(session, session.#projectServers);
       await startMcp(session, session.#projectServers);
       await computeCapabilities(session);
-      metrics.recordStartupLatency(Date.now() - started);
-      metrics.save();
+      bestEffort(() => metrics.recordStartupLatency(Date.now() - started));
+      bestEffort(() => metrics.save());
       return session;
     } catch (error) {
       const code =
         error instanceof PiShipError ? error.code : "CONFIG_UNAVAILABLE";
-      metrics.recordStartupFailure(code);
+      bestEffort(() => metrics.recordStartupFailure(code));
       try {
         await sandbox?.dispose();
       } finally {
@@ -194,8 +209,8 @@ export class GovernanceSession {
         // not take are recorded locally, where doctor reports them.
         const status = await audit?.close(options.auditCloseDeadlineMs);
         if (status && requiredAuditLoss(status))
-          metrics.recordStartupFailure("AUDIT_UNAVAILABLE");
-        metrics.save();
+          bestEffort(() => metrics.recordStartupFailure("AUDIT_UNAVAILABLE"));
+        bestEffort(() => metrics.save());
       }
       throw error;
     }
@@ -359,9 +374,10 @@ export class GovernanceSession {
   /**
    * End the session: record `session.end`, stop MCP servers, dispose the
    * sandbox, and flush audit. Audit is flushed and metrics saved even when a
-   * cleanup step fails. Throws AUDIT_UNAVAILABLE, after cleanup, when a
-   * required sink did not take every event of the session (that error wins
-   * over a cleanup error); otherwise returns the final audit status.
+   * cleanup step fails; a failed metrics save never fails the close. Throws
+   * AUDIT_UNAVAILABLE, after cleanup, when a required sink did not take every
+   * event of the session (that error wins over a cleanup error); otherwise
+   * returns the final audit status.
    */
   async close(): Promise<AuditStatus> {
     if (this.#closed) return this.audit.status();
@@ -378,7 +394,7 @@ export class GovernanceSession {
       try {
         status = await this.audit.close(this.options.auditCloseDeadlineMs);
       } finally {
-        this.metrics.save();
+        bestEffort(() => this.metrics.save());
       }
       const loss = requiredAuditLoss(status, "The session ended");
       // biome-ignore lint/correctness/noUnsafeFinally: undelivered required audit outranks a cleanup error

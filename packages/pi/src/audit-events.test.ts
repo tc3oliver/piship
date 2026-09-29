@@ -437,4 +437,96 @@ describe("GovernanceSession.close with a required sink", () => {
       AUDIT_UNAVAILABLE: 1,
     });
   }, 15_000);
+
+  describe("with local metrics that cannot be written", () => {
+    /** Fault injection: a full disk under every metrics record and save. */
+    class FullDiskMetrics extends LocalMetrics {
+      saves = 0;
+      #fail(): never {
+        throw Object.assign(
+          new Error("ENOSPC: no space left on device, write"),
+          { code: "ENOSPC" },
+        );
+      }
+      override save(): void {
+        this.saves += 1;
+        this.#fail();
+      }
+      override recordSandbox(): void {
+        this.#fail();
+      }
+      override recordStartupLatency(): void {
+        this.#fail();
+      }
+      override recordStartupFailure(): void {
+        this.#fail();
+      }
+    }
+    const REQUIRED_MCP = [
+      ...REQUIRED,
+      "mcp:",
+      "  mode: allowlist",
+      "  servers:",
+      "    docs: { transport: stdio, module: ./mcp/docs.mjs, required: true }",
+    ];
+
+    it("starts and closes a session that is otherwise valid", async () => {
+      const { state, fetch } = collector();
+      const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
+      roots.push(root);
+      const metrics = new FullDiskMetrics(root);
+      const { session } = await open(REQUIRED, { fetch, metrics });
+      await expect(session.close()).resolves.toMatchObject({ state: "ok" });
+      expect(metrics.saves).toBe(2);
+      // Required audit took every event regardless.
+      expect(state.batches.flat().map((event) => event.event)).toEqual([
+        "session.start",
+        "policy.loaded",
+        "session.end",
+      ]);
+    });
+
+    it("starts and closes when the metrics file cannot be replaced on disk", async () => {
+      const { fetch } = collector();
+      const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
+      roots.push(root);
+      // A directory where logs/metrics.json belongs: every save fails.
+      mkdirSync(join(root, "logs", "metrics.json", "occupied"), {
+        recursive: true,
+      });
+      const metrics = new LocalMetrics(root);
+      expect(() => metrics.save()).toThrow();
+      const { session } = await open(REQUIRED, { fetch, metrics });
+      await expect(session.close()).resolves.toMatchObject({ state: "ok" });
+    });
+
+    it("keeps the original startup error and code", async () => {
+      const { fetch } = collector();
+      const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
+      roots.push(root);
+      const metrics = new FullDiskMetrics(root);
+      await expect(
+        open(REQUIRED_MCP, { fetch, metrics }),
+      ).rejects.toMatchObject({ code: "MCP_DENIED" });
+      expect(metrics.saves).toBe(1);
+    }, 15_000);
+
+    it("still fails closed on a required audit loss", async () => {
+      const { state, fetch } = collector();
+      const root = mkdtempSync(join(tmpdir(), "piship-audit-metrics-"));
+      roots.push(root);
+      const metrics = new FullDiskMetrics(root);
+      const { session } = await open(REQUIRED, { fetch, metrics });
+      state.status = 503;
+      await expect(session.close()).rejects.toMatchObject({
+        code: "AUDIT_UNAVAILABLE",
+      });
+      // A failing launch whose required sink is down keeps its own error.
+      const failing = new FullDiskMetrics(root);
+      await expect(
+        open(REQUIRED_MCP, { fetch, metrics: failing }),
+      ).rejects.toMatchObject({ code: "MCP_DENIED" });
+      expect(failing.saves).toBe(1);
+    }, 15_000);
+  });
 });

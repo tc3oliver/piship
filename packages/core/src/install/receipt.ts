@@ -3,22 +3,22 @@
 // Releases are immutable payload directories; switching the active release is
 // one atomic receipt rename, so an interruption leaves the old or the new
 // release active, never a mix.
-import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
-  writeFileSync,
-  writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
+import {
+  type SecretStoreResolver,
+  syncDirectory,
+  writeFileAtomic,
+} from "@piship/credentials";
 import {
   binHome,
   installHome,
@@ -27,6 +27,8 @@ import {
   type DistributionLock,
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
+import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
+import { removeStaleTemporaries } from "./temporaries.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
 
@@ -73,6 +75,11 @@ export interface InstallReceipt {
 export type LifecyclePhase =
   | "staged"
   | "verified"
+  | "snapshot-directory"
+  | "snapshot-file"
+  | "snapshot-files"
+  | "snapshot-manifest"
+  | "snapshot-publish"
   | "installed"
   | "committed"
   | "cleaned";
@@ -90,6 +97,14 @@ export interface LifecycleOptions {
    * from, stops the switch.
    */
   readonly secretStore?: SecretStore;
+  /**
+   * The store of the other storage provider, for deleting what a credential
+   * file records as held by it (`credential.storage.provider` changed since
+   * it was written). Production creates it; without a resolver, such
+   * references stay tracked and stop the switch, so a test with an injected
+   * `secretStore` never reaches a real platform store by accident.
+   */
+  readonly secretStoreFor?: SecretStoreResolver;
   /**
    * Best-effort remote revocation of the runtime credential by the release
    * that can still read it, before it is cleared. A failure is a warning;
@@ -119,45 +134,7 @@ export function commandPathFor(command: string): string {
   );
 }
 
-/** Write `path` through a temporary file, fsync, and rename. */
-export function writeFileAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  const fd = openSync(temporary, "wx", 0o600);
-  try {
-    writeSync(fd, content);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(temporary, path);
-  if (process.platform !== "win32")
-    try {
-      const dir = openSync(dirname(path), "r");
-      try {
-        fsyncSync(dir);
-      } finally {
-        closeSync(dir);
-      }
-    } catch {
-      // Directory fsync is best effort on filesystems that refuse it.
-    }
-}
-
-/** Flush a directory entry; best effort where the filesystem refuses it. */
-export function syncDirectory(path: string): void {
-  if (process.platform === "win32") return;
-  try {
-    const fd = openSync(path, "r");
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    // Some filesystems refuse fsync on directories.
-  }
-}
+export { syncDirectory, writeFileAtomic } from "@piship/credentials";
 
 /**
  * Flush every file and directory of a release to stable storage, so a power
@@ -258,48 +235,68 @@ export function releaseInfo(
   };
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+/** A lifecycle operation's hold on its distribution. */
+export interface LifecycleLock extends LifecycleHold {
+  /**
+   * Write `receipt`, the commit of the operation, only while the lock still
+   * names this operation. When another process took the lock over, nothing is
+   * written and the operation fails with a retryable error: the operation
+   * that holds the lock now owns the installation.
+   */
+  commit(receipt: InstallReceipt): void;
 }
 
-/** One lifecycle operation per distribution at a time. */
+/**
+ * One lifecycle operation per distribution at a time. The lock is a lease
+ * (see lifecycle-lock.ts): the lock of a crashed holder is recovered at once,
+ * or after a day when an unrelated process has reused its process ID.
+ */
 export function acquireLock(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
-): () => void {
+): LifecycleLock {
   const path = join(appDirectory(id), ".lifecycle.lock");
-  for (let attempt = 0; attempt < 2; attempt += 1)
-    try {
-      writeFileSync(path, String(process.pid), { flag: "wx" });
-      return () => rmSync(path, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number(readFileSync(path, "utf8"));
-      if (Number.isSafeInteger(owner) && owner > 0 && processAlive(owner))
+  const operation = code === "UPDATE_FAILED" ? "update" : "rollback";
+  const hold = acquireLifecycleLock(
+    path,
+    (pid) =>
+      new PiShipError(
+        code,
+        `Another update, rollback, or uninstall of ${id} is running${pid === null ? "" : ` (process ${pid})`}`,
+        {
+          retryable: true,
+          userAction: `Try again when it finishes; if none is running, remove ${path}`,
+        },
+      ),
+    () => new PiShipError(code, `Could not lock ${id} for ${operation}`),
+  );
+  return {
+    ...hold,
+    commit(receipt) {
+      if (!hold.stillHeld())
         throw new PiShipError(
           code,
-          `Another update, rollback, or uninstall of ${id} is running (process ${owner})`,
-          { retryable: true },
+          `The lock on ${id} was taken over while the ${operation} ran; nothing was committed`,
+          {
+            retryable: true,
+            userAction:
+              "Run the command again once no other update, rollback, or uninstall is running",
+          },
         );
-      rmSync(path, { force: true });
-    }
-  throw new PiShipError(
-    code,
-    `Could not lock ${id} for ${code === "UPDATE_FAILED" ? "update" : "rollback"}`,
-  );
+      writeReceipt(receipt);
+    },
+  };
 }
 
 /**
  * Remove leftovers of an interrupted operation: staging directories and
- * release directories the receipt does not reference. Idempotent.
+ * release directories the receipt does not reference, and abandoned
+ * temporaries of the receipt (only the returned names are under `apps`).
+ * Idempotent.
  */
 export function recoverInstallation(id: string): string[] {
   const receipt = readInstallReceipt(id);
+  removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);
   const apps = appDirectory(id);
   const keep = new Set([
     ...receipt.releases.map((item) => item.version),

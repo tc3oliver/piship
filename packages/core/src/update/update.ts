@@ -19,7 +19,6 @@ import {
   requireManaged,
   syncDirectory,
   syncTree,
-  writeReceipt,
   type InstallReceipt,
   type LifecycleOptions,
 } from "../install/receipt.js";
@@ -28,6 +27,7 @@ import {
   compareVersions,
   type MigrationReport,
 } from "../migration.js";
+import { storageOf } from "../storage-transition.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -39,9 +39,9 @@ import {
 import {
   checkPayload,
   clearCredentials,
+  markActivated,
   repairStateMarker,
   snapshotState,
-  writeStateMarker,
 } from "./state.js";
 
 export interface ChannelSelection {
@@ -149,7 +149,7 @@ export async function updateDistribution(
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
-  const release = acquireLock(id);
+  const lifecycle = acquireLock(id);
   try {
     // Read under the lock, so a concurrent commit cannot leave it stale.
     const receipt = readInstallReceipt(id);
@@ -180,7 +180,7 @@ export async function updateDistribution(
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     });
     const record = (result: string, extra: Partial<InstallReceipt> = {}) =>
-      writeReceipt({
+      lifecycle.commit({
         ...readInstallReceipt(id),
         ...extra,
         // A check reports on the requested channel without switching to it.
@@ -201,7 +201,7 @@ export async function updateDistribution(
       // Finishes an update interrupted between its commit and the marker.
       const stateDir = runtimeStateDirectory({ value: id });
       if (!options.check && existsSync(stateDir))
-        writeStateMarker(stateDir, lock);
+        notices.push(...markActivated(stateDir, lock));
       return {
         status: "up-to-date",
         id,
@@ -260,8 +260,13 @@ export async function updateDistribution(
           version: entry.version,
           pi: target.pi.version,
           schemas: target.stateSchemas,
+          ...storageOf(verified.lock),
         },
-        { version: receipt.active, pi: lock.runtime.version },
+        {
+          version: receipt.active,
+          pi: lock.runtime.version,
+          ...storageOf(lock),
+        },
       );
       if (migration.verdict === "unsupported")
         throw new PiShipError(
@@ -309,6 +314,7 @@ export async function updateDistribution(
         receipt.active,
         entry.version,
         now(),
+        options.faults,
       );
       const destination = join(apps, entry.version);
       rmSync(destination, { recursive: true, force: true });
@@ -352,10 +358,15 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
-      writeReceipt(next);
+      lifecycle.commit(next);
+      // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
-      writeStateMarker(stateDir, verified.lock);
-      verified.cleanup();
+      notices.push(...markActivated(stateDir, verified.lock));
+      try {
+        verified.cleanup();
+      } catch {
+        // The staging directory is removed below or by the next recovery.
+      }
       return {
         status: "updated",
         id,
@@ -368,15 +379,16 @@ export async function updateDistribution(
         notices,
       };
     } finally {
-      rmSync(staging, { recursive: true, force: true });
       try {
-        recoverInstallation(id);
+        rmSync(staging, { recursive: true, force: true });
+        // An operation that took the lock over owns what is on disk now.
+        if (lifecycle.stillHeld()) recoverInstallation(id);
         options.faults?.("cleaned");
       } catch {
         // Recovery runs again before the next operation.
       }
     }
   } finally {
-    release();
+    lifecycle.release();
   }
 }

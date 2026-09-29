@@ -1,20 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  linkSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   type CredentialContext,
   type CredentialProvider,
@@ -30,7 +16,20 @@ import {
   SecretValue,
   samePrincipal,
 } from "@piship/contracts";
-import { heldLocks } from "./lock-heartbeat.js";
+import { writeFileAtomic } from "./atomic.js";
+import {
+  type FileLockTiming,
+  holdsFileLock,
+  withFileLock,
+} from "./file-lock.js";
+import { metadataFileSecretRefs, secretRefsFromText } from "./ownership.js";
+import {
+  metadataFileSecretStore,
+  type SecretStoreProvider,
+  type SecretStoreResolver,
+  secretStoreProvider,
+  storeForRecorded,
+} from "./store-owner.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 /**
@@ -94,6 +93,13 @@ export interface CredentialMetadata {
   readonly principal?: PrincipalKey;
   /** References whose deletion failed and must be retried. */
   readonly orphans?: readonly string[];
+  /**
+   * The secret store holding every reference above. Metadata of another
+   * store than the configured one is never read as a credential: its
+   * references are deleted from the store it records. Absent in metadata
+   * written before the store was recorded.
+   */
+  readonly secret_store?: SecretStoreProvider;
   /** Set when the gateway rejected this credential; forces renewal on next use. */
   readonly rejected_at?: string;
 }
@@ -201,17 +207,28 @@ export interface CredentialManagerOptions {
   readonly onPhase?: (phase: CredentialPhase) => void | Promise<void>;
   /** Receives acquire, refresh, and revoke events; failures are ignored. */
   readonly onEvent?: (event: CredentialEvent) => void;
+  /** Timing of the cross-process credential lock (tests shorten it). */
+  readonly lockTiming?: FileLockTiming;
+  /**
+   * The configured `credential.storage.provider`, recorded in metadata;
+   * derived from `store` when omitted.
+   */
+  readonly storeProvider?: SecretStoreProvider;
+  /**
+   * The store of another provider, for deleting references that metadata
+   * recorded for it (the storage provider changed). Without it, such
+   * references stay tracked and fail closed.
+   */
+  readonly storeFor?: SecretStoreResolver;
   /** Default `inference`. Selects the reference prefix and metadata schema. */
   readonly slot?: CredentialSlot;
   /** Sandbox slot: the origins recorded with a newly stored secret. */
   readonly origins?: readonly string[];
 }
 
+/** Credential metadata, its discarded marker, and the pending revocations. */
 function writeAtomic(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-  writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
-  renameSync(temporary, path);
+  writeFileAtomic(path, content, { directoryMode: 0o700 });
 }
 
 /**
@@ -534,163 +551,8 @@ export function deletionFailure(
   );
 }
 
-/** A held lock is refreshed this often, so only an abandoned one goes stale. */
-const LOCK_HEARTBEAT_MS = 5_000;
-/**
- * Longer than the worst gap between refreshes: one blocking secret-store
- * command (30 s timeout; locks are touched before each one) plus a missed
- * heartbeat, with margin. Still below the wait, so an abandoned lock is
- * broken before a waiter gives up.
- */
-const LOCK_STALE_MS = 75_000;
-const LOCK_WAIT_MS = 90_000;
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
 /** In-process queue per metadata file, so concurrent callers never race. */
 const queues = new Map<string, Promise<unknown>>();
-/**
- * The lock files the current asynchronous call chain holds. A task that
- * already holds a lock and asks for it again (a login that clears and
- * acquires the credential under one lock) runs at once instead of waiting
- * for itself. Other call chains, in this process or another, still wait.
- * Work a task starts belongs to its chain, so a task must not start work
- * that outlives it (it would still count as holding the lock).
- */
-const heldByChain = new AsyncLocalStorage<ReadonlySet<string>>();
-
-/** Whether the current call chain holds the lock beside `path`. */
-export function holdsFileLock(path: string): boolean {
-  return heldByChain.getStore()?.has(`${path}.lock`) ?? false;
-}
-
-export interface FileLockTiming {
-  readonly heartbeatMs?: number;
-  readonly staleMs?: number;
-  readonly waitMs?: number;
-}
-
-function lockAge(lock: string): number | undefined {
-  try {
-    return Date.now() - statSync(lock).mtimeMs;
-  } catch {
-    return undefined;
-  }
-}
-
-function readToken(lock: string): string | undefined {
-  try {
-    return readFileSync(lock, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Break a stale lock without racing another waiter: move it aside under a
- * unique name (atomic), re-check that what was moved is still stale, and only
- * then delete it. A lock that turned out fresh is put back unless a new lock
- * already took its place.
- */
-function breakStaleLock(lock: string, staleMs: number): void {
-  const aside = `${lock}.${process.pid}-${randomBytes(6).toString("hex")}.stale`;
-  try {
-    renameSync(lock, aside);
-  } catch {
-    return;
-  }
-  const age = lockAge(aside);
-  if (age !== undefined && age <= staleMs)
-    try {
-      linkSync(aside, lock);
-    } catch {
-      // A new holder already created the lock.
-    }
-  rmSync(aside, { force: true });
-}
-
-const LOCK_TIMEOUT = "lock-timeout";
-
-/** Whether `error` is a wait for a cross-process lock that ran out. */
-export function isLockTimeout(error: unknown): boolean {
-  return (
-    error instanceof PiShipError &&
-    error.sanitizedDetail?.reason === LOCK_TIMEOUT
-  );
-}
-
-/**
- * Cross-process lock beside the metadata file. The holder refreshes the
- * lock's mtime while its task runs (on an interval, and before each blocking
- * secret-store command), so a lock is broken only when it is stale: its
- * holder stopped refreshing it, such as a crashed process. A fresh lock is
- * never broken: after the wait, the caller fails with a retryable error.
- * The lock is reentrant within one call chain (see `holdsFileLock`).
- */
-export async function withFileLock<T>(
-  path: string,
-  task: () => Promise<T>,
-  timing: FileLockTiming = {},
-): Promise<T> {
-  const heartbeatMs = timing.heartbeatMs ?? LOCK_HEARTBEAT_MS;
-  const staleMs = timing.staleMs ?? LOCK_STALE_MS;
-  const waitMs = timing.waitMs ?? LOCK_WAIT_MS;
-  const lock = `${path}.lock`;
-  const held = heldByChain.getStore();
-  if (held?.has(lock)) return task();
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      const fd = openSync(lock, "wx", 0o600);
-      try {
-        writeSync(fd, token);
-      } finally {
-        closeSync(fd);
-      }
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const age = lockAge(lock);
-      if (age === undefined) continue;
-      if (age > staleMs) {
-        breakStaleLock(lock, staleMs);
-        continue;
-      }
-      if (Date.now() > deadline)
-        throw new PiShipError(
-          "CREDENTIAL_ACQUIRE_FAILED",
-          `Another process is still updating ${basename(path)}; gave up after ${Math.round(waitMs / 1000)} s`,
-          {
-            component: "credential",
-            retryable: true,
-            userAction:
-              "Try again when the other session finishes signing in or refreshing",
-            sanitizedDetail: { reason: LOCK_TIMEOUT },
-          },
-        );
-      await sleep(50);
-    }
-  }
-  heldLocks.add(lock);
-  const heartbeat = setInterval(() => {
-    try {
-      const now = new Date();
-      utimesSync(lock, now, now);
-    } catch {
-      // The lock was removed from outside; the task still finishes.
-    }
-  }, heartbeatMs);
-  heartbeat.unref?.();
-  try {
-    return await heldByChain.run(new Set([...(held ?? []), lock]), task);
-  } finally {
-    clearInterval(heartbeat);
-    heldLocks.delete(lock);
-    // Release only this holder's lock, never one another process took over.
-    if (readToken(lock) === token) rmSync(lock, { force: true });
-  }
-}
 
 /**
  * Implements acquire → expiry → refresh → atomic replace → revoke/logout for
@@ -768,7 +630,9 @@ export class CredentialManager {
       value.schema !== this.#schema ||
       value.mode !== this.mode ||
       typeof value.credential_ref !== "string" ||
-      typeof value.generation !== "number"
+      typeof value.generation !== "number" ||
+      (value.secret_store !== undefined &&
+        value.secret_store !== this.#storeProvider)
     )
       return null;
     return value as CredentialMetadata;
@@ -787,6 +651,25 @@ export class CredentialManager {
    */
   hasStoredCredential(): boolean {
     return existsSync(this.options.metadataPath);
+  }
+
+  /**
+   * Whether the metadata file is no longer JSON (`damaged`), and then whether
+   * its text still names a reference (`unrecoverable` when it names none).
+   */
+  #damaged(): "damaged" | "unrecoverable" | null {
+    let text: string;
+    try {
+      text = readFileSync(this.options.metadataPath, "utf8");
+      JSON.parse(text);
+      return null;
+    } catch {
+      text ??= "";
+    }
+    return secretRefsFromText(text, this.options.distributionId, this.slot)
+      .length
+      ? "damaged"
+      : "unrecoverable";
   }
 
   #discardedPending(): boolean {
@@ -811,6 +694,13 @@ export class CredentialManager {
         metadata: null,
         notice:
           "A discarded credential is still being deleted from the secret store; it is never used",
+      };
+    const foreign = this.#foreignStore();
+    if (foreign && this.#incompatibleMetadataPresent())
+      return {
+        state: "absent",
+        metadata: null,
+        notice: `The stored credential is in the ${foreign} secret store, not the configured ${this.#storeProvider} store; it is never used, and the next launch or login deletes it`,
       };
     if (this.#incompatibleMetadataPresent())
       return {
@@ -873,6 +763,58 @@ export class CredentialManager {
     };
   }
 
+  /** The configured `credential.storage.provider`. */
+  get #storeProvider(): SecretStoreProvider {
+    return (
+      this.options.storeProvider ??
+      (this.options.store ? secretStoreProvider(this.options.store) : "system")
+    );
+  }
+
+  /**
+   * The provider another store than the configured one recorded in the
+   * metadata file (the storage provider changed), or undefined.
+   */
+  #foreignStore(): SecretStoreProvider | undefined {
+    let recorded: SecretStoreProvider | undefined;
+    try {
+      recorded = metadataFileSecretStore(this.options.metadataPath);
+    } catch {
+      return undefined;
+    }
+    return recorded && recorded !== this.#storeProvider ? recorded : undefined;
+  }
+
+  /**
+   * Credential metadata that is complete but recorded for another store
+   * than the configured one, with that store (null when it is not available
+   * here): revoked from there, never used.
+   */
+  #foreignMetadata(): {
+    metadata: CredentialMetadata;
+    store: SecretStore | null;
+  } | null {
+    const recorded = this.#foreignStore();
+    if (!recorded) return null;
+    const value = this.#readRaw() as Partial<CredentialMetadata>;
+    if (
+      value.schema !== CREDENTIAL_METADATA_SCHEMA ||
+      value.mode !== this.mode ||
+      typeof value.credential_ref !== "string" ||
+      typeof value.generation !== "number"
+    )
+      return null;
+    return {
+      metadata: value as CredentialMetadata,
+      store: storeForRecorded(
+        this.options.store,
+        this.#storeProvider,
+        recorded,
+        this.options.storeFor,
+      ),
+    };
+  }
+
   #store(): SecretStore {
     if (!this.options.store)
       throw new PiShipError(
@@ -894,6 +836,18 @@ export class CredentialManager {
     const previous = this.readMetadata();
     const generation = (previous?.generation ?? 0) + 1;
     const ref = this.#ref(generation);
+    // Without metadata nothing would name the new secret if the process
+    // stopped between writing it and committing metadata: a discarded
+    // marker names it first, so the next command deletes it, never uses it.
+    if (!previous)
+      this.#writeDiscarded([
+        ...metadataFileSecretRefs(
+          this.options.metadataPath,
+          this.options.distributionId,
+          this.slot,
+        ),
+        ref,
+      ]);
     await store.put(ref, credential.secret);
     await this.options.onPhase?.("secret-written");
     const orphans = new Set(previous?.orphans ?? []);
@@ -932,6 +886,7 @@ export class CredentialManager {
           }
         : {}),
       ...(orphans.size ? { orphans: [...orphans].sort() } : {}),
+      secret_store: this.#storeProvider,
     };
     writeAtomic(
       this.options.metadataPath,
@@ -979,35 +934,73 @@ export class CredentialManager {
     }
   }
 
-  /**
-   * Delete every secret the metadata may reference, then the metadata. When a
-   * deletion fails, the metadata is replaced by a discarded marker listing
-   * the references still to delete, so the secret stays tracked and is never
-   * used, and the failures are returned.
-   */
-  async #discardMetadata(
-    raw: unknown = this.#readRaw(),
-  ): Promise<{ ref: string; problem: string }[]> {
-    const failed = await deleteSecretsVerified(
-      this.#store(),
-      metadataSecretRefs(raw, this.options.distributionId),
-      () => this.options.onPhase?.("secret-deleted"),
-    );
-    if (!failed.length) {
-      rmSync(this.options.metadataPath, { force: true });
-      return failed;
-    }
+  #writeDiscarded(
+    refs: readonly string[],
+    store: SecretStoreProvider = this.#storeProvider,
+  ): void {
     writeAtomic(
       this.options.metadataPath,
       `${JSON.stringify(
         {
           schema: CREDENTIAL_DISCARDED_SCHEMA,
-          orphans: failed.map((item) => item.ref).sort(),
+          orphans: [...new Set(refs)].sort(),
+          secret_store: store,
           discarded_at: new Date(this.#now()).toISOString(),
         },
         null,
         2,
       )}\n`,
+    );
+  }
+
+  /**
+   * Delete every secret the metadata may reference, then the metadata. The
+   * references are those of `raw` and every one the file names, read from
+   * its text, so a damaged file that is no longer JSON still gets the
+   * secrets it names deleted before it is removed. When a deletion fails,
+   * the metadata is replaced by a discarded marker listing the references
+   * still to delete, so the secret stays tracked and is never used, and the
+   * failures are returned.
+   */
+  async #discardMetadata(
+    raw: unknown = this.#readRaw(),
+  ): Promise<{ ref: string; problem: string }[]> {
+    const refs = [
+      ...new Set([
+        ...metadataSecretRefs(raw, this.options.distributionId),
+        ...metadataFileSecretRefs(
+          this.options.metadataPath,
+          this.options.distributionId,
+          this.slot,
+        ),
+      ]),
+    ].sort();
+    // References are deleted from the store that holds them, never looked
+    // up in another one: after a storage provider change, that is the store
+    // the file records.
+    const recorded =
+      metadataFileSecretStore(this.options.metadataPath) ?? this.#storeProvider;
+    const store = storeForRecorded(
+      this.#store(),
+      this.#storeProvider,
+      recorded,
+      this.options.storeFor,
+    );
+    const failed = store
+      ? await deleteSecretsVerified(store, refs, () =>
+          this.options.onPhase?.("secret-deleted"),
+        )
+      : refs.map((ref) => ({
+          ref,
+          problem: `the ${recorded} secret store that holds it is not available`,
+        }));
+    if (!failed.length) {
+      rmSync(this.options.metadataPath, { force: true });
+      return failed;
+    }
+    this.#writeDiscarded(
+      failed.map((item) => item.ref),
+      recorded,
     );
     return failed;
   }
@@ -1094,7 +1087,9 @@ export class CredentialManager {
     // Already held by this call chain: queueing behind itself would deadlock.
     if (holdsFileLock(path)) return task();
     const previous = queues.get(path) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(() => withFileLock(path, task));
+    const run = previous
+      .catch(() => {})
+      .then(() => withFileLock(path, task, this.options.lockTiming));
     const tail = run.catch(() => {});
     queues.set(path, tail);
     void tail.then(() => {
@@ -1126,11 +1121,34 @@ export class CredentialManager {
     const principal = identity ? principalKey(identity) : null;
     if (this.#incompatibleMetadataPresent()) {
       const discarded = this.#discardedPending();
+      const damaged = this.#damaged();
+      const foreign = this.#foreignStore();
+      // A credential the other store holds is revoked where supported before
+      // it is deleted from that store, as any credential that is replaced.
+      const held = foreign ? this.#foreignMetadata() : null;
+      if (held) {
+        const revoked = await this.#revoke(
+          held.metadata,
+          attempt,
+          "lifecycle",
+          held.store,
+        );
+        if (revoked.problem)
+          notices.push(
+            `The credential in the ${foreign} secret store could not be revoked; it is recorded for follow-up: ${revoked.problem}`,
+          );
+      }
       await this.#clearMetadata();
       notices.push(
         discarded
           ? "The secrets of a discarded credential were deleted"
-          : "Incompatible credential metadata was cleared; a new credential is required",
+          : foreign
+            ? `The credential stored in the ${foreign} secret store was deleted from it: this distribution now stores credentials in the ${this.#storeProvider} store. A new credential is required`
+            : damaged === "unrecoverable"
+              ? "Damaged credential metadata named no secret reference that could be recovered and was cleared; a secret it referenced may remain in the secret store. A new credential is required"
+              : damaged === "damaged"
+                ? "Damaged credential metadata was cleared after the secrets it names were deleted; a new credential is required"
+                : "Incompatible credential metadata was cleared; a new credential is required",
       );
     }
     let metadata = this.readMetadata();
@@ -1377,14 +1395,25 @@ export class CredentialManager {
     metadata: CredentialMetadata,
     ctx: CredentialContext,
     reason: CredentialRevokeReason,
+    /**
+     * The store holding the secret when it is not the configured one; null
+     * when that store is not available here.
+     */
+    holder?: SecretStore | null,
   ): Promise<{ outcome: RevocationOutcome; problem?: string }> {
     let outcome: RevocationOutcome;
     let problem: string | undefined;
     let secret: SecretValue | null = null;
     let unreadable: unknown;
-    if (this.revocable && this.options.store)
+    const from = holder === undefined ? this.options.store : holder;
+    if (this.revocable && holder === null)
+      unreadable = new PiShipError(
+        "SECRET_STORE_UNAVAILABLE",
+        "The secret store that holds the credential is not available",
+      );
+    else if (this.revocable && from)
       try {
-        secret = await this.options.store.get(metadata.credential_ref);
+        secret = await from.get(metadata.credential_ref);
       } catch (error) {
         unreadable = error;
       }
@@ -1540,8 +1569,11 @@ export class CredentialManager {
     const problems: string[] = [];
     if (!this.hasStoredCredential()) return problems;
     const metadata = this.readMetadata();
-    if (metadata) {
-      const revoked = await this.#revoke(metadata, ctx, reason);
+    const foreign = metadata ? null : this.#foreignMetadata();
+    if (metadata || foreign) {
+      const revoked = foreign
+        ? await this.#revoke(foreign.metadata, ctx, reason, foreign.store)
+        : await this.#revoke(metadata as CredentialMetadata, ctx, reason);
       if (revoked.problem) problems.push(revoked.problem);
       await this.options.onPhase?.("revoked");
     }

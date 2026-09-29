@@ -226,7 +226,7 @@ The bearer is the **runtime credential**, not the identity token; `credential_id
 - A failed renewal keeps the broker failure's `retryable`, `Retry-After`, and `detail`, so a broker outage or rate limit on renewal is still retryable rather than a request to sign in again.
 - A renewal whose answer was lost is not re-sent. While the current credential is valid, PiShip keeps using it, and the next renewal is a new logical acquire with a new key; a credential the broker issued for the lost answer is never used, so let it expire.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
-- Concurrent launches share one renewal through a lock file. A live holder refreshes the lock, so it is never broken while held; only a lock left unrefreshed for 75 s is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
+- Concurrent launches share one renewal through a lock file. A live holder keeps changing the lock, so it is never broken while held, whatever the wall clock does; only a lock a waiter has seen unchanged for 75 s (monotonic) is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 
 ## LLM gateway (OpenAI-compatible)
 

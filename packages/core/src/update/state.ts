@@ -7,16 +7,32 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
-import { deleteSecretsVerified, metadataSecretRefs } from "@piship/credentials";
+import {
+  deleteSecretsVerified,
+  metadataFileSecretRefs,
+  metadataFileSecretStore,
+  metadataSecretRefs,
+  secretStoreProvider,
+  storeForRecorded,
+  withFileLock,
+} from "@piship/credentials";
+import { accessStatePaths } from "../access/state.js";
 import { runtimeStateDirectory, type DistributionLock } from "../index.js";
-import { writeFileAtomic, type LifecycleOptions } from "../install/receipt.js";
+import {
+  syncDirectory,
+  syncTree,
+  writeFileAtomic,
+  type LifecycleOptions,
+} from "../install/receipt.js";
+import { abandoned } from "../install/temporaries.js";
 import {
   STATE_DATA_CLASSES,
   STATE_MARKER_FILE,
@@ -25,54 +41,189 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import type { ReleaseTestRunner } from "../release/index.js";
+import { storageTransitionNotice } from "../storage-transition.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";
 const SNAPSHOT_RETENTION = 3;
+/** A snapshot being built: `.staging-p<pid>-<random>` beside the snapshots. */
+const SNAPSHOT_STAGING = /^\.staging-p(\d+)-/;
 
-/** Copy preferences and user policy (never credentials) before activation. */
+interface CompletedSnapshot {
+  readonly name: string;
+  /** Creation order; 0 for a snapshot written before sequences. */
+  readonly sequence: number;
+  readonly time: string;
+}
+
+/** The snapshot `snapshot.json` describes, or null when it is not one. */
+function readSnapshot(root: string, name: string): CompletedSnapshot | null {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(root, name, "snapshot.json"), "utf8"),
+    ) as { schema?: unknown; sequence?: unknown; time?: unknown };
+    if (manifest.schema !== SNAPSHOT_SCHEMA) return null;
+    const { sequence } = manifest;
+    if (
+      sequence !== undefined &&
+      !(Number.isSafeInteger(sequence) && (sequence as number) > 0)
+    )
+      return null;
+    return {
+      name,
+      sequence: (sequence as number | undefined) ?? 0,
+      time: typeof manifest.time === "string" ? manifest.time : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `snapshot.json` names another schema than this release reads: the
+ * snapshot of a newer release, seen when the CLI is downgraded. It is not
+ * this release's to count or to delete.
+ */
+function foreignSnapshot(root: string, name: string): boolean {
+  try {
+    const { schema } = JSON.parse(
+      readFileSync(join(root, name, "snapshot.json"), "utf8"),
+    ) as { schema?: unknown };
+    return typeof schema === "string" && schema !== SNAPSHOT_SCHEMA;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Completed snapshots in creation order, oldest first. The order is the
+ * snapshot's sequence, never the wall clock, so a clock set back or forward
+ * cannot make a new snapshot look older than the ones before it. Snapshots
+ * written before sequences come first, in their recorded time order.
+ * Directories without a valid `snapshot.json` are returned as incomplete,
+ * except those whose manifest names another schema (see `foreignSnapshot`),
+ * which are neither.
+ */
+function listSnapshots(root: string): {
+  completed: CompletedSnapshot[];
+  incomplete: string[];
+} {
+  const completed: CompletedSnapshot[] = [];
+  const incomplete: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const snapshot = readSnapshot(root, entry.name);
+    if (snapshot) completed.push(snapshot);
+    else if (!foreignSnapshot(root, entry.name)) incomplete.push(entry.name);
+  }
+  completed.sort(
+    (a, b) =>
+      a.sequence - b.sequence ||
+      a.time.localeCompare(b.time) ||
+      a.name.localeCompare(b.name),
+  );
+  return { completed, incomplete };
+}
+
+/**
+ * Remove what interrupted snapshots left behind: staging directories whose
+ * process is gone (or that are too old to belong to a live one), and
+ * snapshot directories without a valid `snapshot.json`. A snapshot whose
+ * manifest names another schema is kept: a newer release wrote it, and a
+ * downgraded CLI must not delete what it cannot read.
+ */
+function reclaimSnapshots(root: string): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const staging = SNAPSHOT_STAGING.exec(entry.name);
+    if (!entry.isDirectory() || !staging) continue;
+    const path = join(root, entry.name);
+    if (abandoned(Number(staging[1]), statSync(path).mtimeMs))
+      rmSync(path, { recursive: true, force: true });
+  }
+  for (const name of listSnapshots(root).incomplete)
+    rmSync(join(root, name), { recursive: true, force: true });
+}
+
+/**
+ * Copy preferences and user policy (never credentials) before activation.
+ * The snapshot is built in a staging directory, `snapshot.json` last, and
+ * published by one rename, so a snapshot directory is always complete. Only
+ * completed snapshots count toward the retention of the newest three, in
+ * sequence order; the wall-clock time is recorded for people only.
+ */
 export function snapshotState(
   stateDir: string,
   from: string,
   to: string,
   now: Date,
+  faults?: LifecycleOptions["faults"],
 ): string | null {
   if (!existsSync(stateDir)) return null;
   const root = join(stateDir, "migration", "snapshots");
-  const name = `${now.toISOString().replace(/[:.]/g, "-")}-${from}-to-${to}`;
-  const target = join(root, name);
-  const files: string[] = [];
-  for (const path of ["config/preferences.json", "config/policy.json"]) {
-    const source = join(stateDir, ...path.split("/"));
-    if (!existsSync(source)) continue;
-    mkdirSync(dirname(join(target, ...path.split("/"))), {
-      recursive: true,
-      mode: 0o700,
-    });
-    copyFileSync(source, join(target, ...path.split("/")));
-    files.push(path);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  reclaimSnapshots(root);
+  const sequence = (listSnapshots(root).completed.at(-1)?.sequence ?? 0) + 1;
+  const staging = mkdtempSync(join(root, `.staging-p${process.pid}-`));
+  let published = false;
+  try {
+    faults?.("snapshot-directory");
+    const files: string[] = [];
+    for (const path of ["config/preferences.json", "config/policy.json"]) {
+      const source = join(stateDir, ...path.split("/"));
+      if (!existsSync(source)) continue;
+      mkdirSync(dirname(join(staging, ...path.split("/"))), {
+        recursive: true,
+        mode: 0o700,
+      });
+      copyFileSync(source, join(staging, ...path.split("/")));
+      files.push(path);
+      faults?.("snapshot-file");
+    }
+    faults?.("snapshot-files");
+    writeFileSync(
+      join(staging, "snapshot.json"),
+      `${JSON.stringify(
+        {
+          schema: SNAPSHOT_SCHEMA,
+          sequence,
+          from,
+          to,
+          time: now.toISOString(),
+          files,
+          excluded: STATE_DATA_CLASSES.filter((item) => item.credential).map(
+            (item) => item.path,
+          ),
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600, flag: "wx" },
+    );
+    if (
+      readSnapshot(dirname(staging), basename(staging))?.sequence !== sequence
+    )
+      throw new Error(`The snapshot manifest in ${staging} did not read back`);
+    faults?.("snapshot-manifest");
+    syncTree(staging);
+    faults?.("snapshot-publish");
+    const target = join(
+      root,
+      `${String(sequence).padStart(8, "0")}-${from}-to-${to}`,
+    );
+    renameSync(staging, target);
+    published = true;
+    syncDirectory(root);
+    const { completed } = listSnapshots(root);
+    for (const old of completed.slice(0, -SNAPSHOT_RETENTION))
+      rmSync(join(root, old.name), { recursive: true, force: true });
+    return target;
+  } finally {
+    if (!published)
+      try {
+        rmSync(staging, { recursive: true, force: true });
+      } catch {
+        // Reclaimed by the next snapshot.
+      }
   }
-  mkdirSync(target, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(target, "snapshot.json"),
-    `${JSON.stringify(
-      {
-        schema: SNAPSHOT_SCHEMA,
-        from,
-        to,
-        time: now.toISOString(),
-        files,
-        excluded: STATE_DATA_CLASSES.filter((item) => item.credential).map(
-          (item) => item.path,
-        ),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  const snapshots = readdirSync(root).sort();
-  for (const old of snapshots.slice(0, -SNAPSHOT_RETENTION))
-    rmSync(join(root, old), { recursive: true, force: true });
-  return target;
 }
 
 export function writeStateMarker(
@@ -97,8 +248,31 @@ export function writeStateMarker(
 }
 
 /**
+ * Write the state marker once an activation has committed. The receipt is
+ * the commit point, so the release it names is active whatever happens
+ * here: a marker that cannot be written (a full, read-only, or failing state
+ * filesystem) keeps its previous content and is reported as a notice, never
+ * as a failed activation. The next update or rollback repairs it before it
+ * compares state (see `repairStateMarker`).
+ */
+export function markActivated(
+  stateDir: string,
+  lock: DistributionLock,
+): string[] {
+  try {
+    writeStateMarker(stateDir, lock);
+    return [];
+  } catch (error) {
+    return [
+      `${lock.app.version} is active, but its state marker could not be written (${redact(error instanceof Error ? error.message : String(error))}); the next update or rollback repairs it`,
+    ];
+  }
+}
+
+/**
  * Repair a state marker that names another release than the active one. An
- * operation interrupted after its receipt commit leaves it behind; the next
+ * operation interrupted after its receipt commit, or one whose marker could
+ * not be written (see `markActivated`), leaves it behind; the next
  * update or rollback fixes it before comparing state against a target. A
  * missing marker is left alone: the migration check then uses the active
  * release.
@@ -120,17 +294,27 @@ export function repairStateMarker(id: string, lock: DistributionLock): void {
  * current release can read it and the distribution supports revocation. The
  * target signs in or reacquires; an old credential is never restored.
  *
- * Every deletion is confirmed. When a secret cannot be deleted, or there is
- * no secret store to delete it from, no metadata is removed, so every secret
+ * Every deletion is confirmed, from the store each file records as holding
+ * its references (`options.secretStoreFor` resolves the one that is not the
+ * configured store). When a secret cannot be deleted, or there is no secret
+ * store to delete it from, no metadata is removed, so every secret
  * stays tracked, and this throws SECRET_STORE_UNAVAILABLE before anything is
  * activated: a release that cannot read the metadata must never be left with
  * secrets that nothing references.
+ *
+ * The deletion and the removal of the metadata run under the credential lock
+ * and then the identity lock, the order a sign-in takes them: a live session
+ * of the active release cannot commit a new generation between the two and
+ * leave its secret with no metadata naming it.
  */
 export async function clearCredentials(
   stateDir: string,
   distributionId: string,
   report: MigrationReport,
-  options: Pick<LifecycleOptions, "secretStore" | "revokeCredential">,
+  options: Pick<
+    LifecycleOptions,
+    "secretStore" | "secretStoreFor" | "revokeCredential"
+  >,
 ): Promise<string[]> {
   const notices: string[] = [];
   const items = report.items.filter(
@@ -159,27 +343,77 @@ export async function clearCredentials(
         `The runtime credential could not be revoked remotely (${redact(error instanceof Error ? error.message : String(error))}); it was cleared locally`,
       );
     }
+  if (items.length) {
+    const paths = accessStatePaths(stateDir);
+    // A lock needs its directory; where it is missing, nothing was written.
+    const locked = (path: string, task: () => Promise<void>) =>
+      existsSync(dirname(path)) ? withFileLock(path, task) : task();
+    await locked(paths.credential, () =>
+      locked(paths.identity, () =>
+        clearItems(stateDir, distributionId, items, notices, options),
+      ),
+    );
+  }
+  return notices;
+}
+
+/** Delete the secrets of `items` and confirm it, then remove their metadata. */
+async function clearItems(
+  stateDir: string,
+  distributionId: string,
+  items: MigrationReport["items"],
+  notices: string[],
+  options: Pick<LifecycleOptions, "secretStore" | "secretStoreFor">,
+): Promise<void> {
   const failed: { ref: string; problem: string }[] = [];
   for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
     let refs: string[] = [];
-    if (existsSync(path) && statSync(path).isFile())
+    if (existsSync(path) && statSync(path).isFile()) {
+      let parsed: unknown;
       try {
-        refs = metadataSecretRefs(
-          JSON.parse(readFileSync(path, "utf8")),
-          distributionId,
-        );
+        parsed = JSON.parse(readFileSync(path, "utf8"));
       } catch {
-        // Unreadable metadata names no secret; it is removed below.
+        parsed = undefined;
       }
+      // A damaged file still names secrets in its text; they are deleted too.
+      refs = [
+        ...new Set([
+          ...metadataSecretRefs(parsed, distributionId),
+          ...metadataFileSecretRefs(
+            path,
+            distributionId,
+            item.path.startsWith("identity/")
+              ? "identity"
+              : item.path.endsWith("/sandbox.json")
+                ? "sandbox"
+                : "inference",
+          ),
+        ]),
+      ].sort();
+    }
     if (!refs.length) continue;
-    if (options.secretStore)
-      failed.push(...(await deleteSecretsVerified(options.secretStore, refs)));
+    // The store the file records holds them, not necessarily the configured
+    // one: looking them up there would find nothing, and the deletion would
+    // count as confirmed while the secret stays.
+    const configured = options.secretStore;
+    const recorded = metadataFileSecretStore(path);
+    const store = configured
+      ? storeForRecorded(
+          configured,
+          secretStoreProvider(configured),
+          recorded,
+          options.secretStoreFor,
+        )
+      : null;
+    if (store) failed.push(...(await deleteSecretsVerified(store, refs)));
     else
       failed.push(
         ...refs.map((ref) => ({
           ref,
-          problem: "no secret store is available to delete it",
+          problem: configured
+            ? `the ${recorded} secret store that holds it is not available`
+            : "no secret store is available to delete it",
         })),
       );
   }
@@ -200,12 +434,12 @@ export async function clearCredentials(
       force: true,
     });
     notices.push(
-      `${item.name} was cleared because the target cannot read it; sign in again`,
+      item.storageTransition
+        ? storageTransitionNotice(item.name, item.storageTransition)
+        : `${item.name} was cleared because the target cannot read it; sign in again`,
     );
   }
-  if (notices.length)
-    rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
-  return notices;
+  rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
 }
 
 export function checkPayload(

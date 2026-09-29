@@ -263,7 +263,9 @@ describe("AuditLog file sink retention", () => {
     // leaves through retention however the two writers interleave. A writer
     // that loses the rotation lock appends anyway, so how many events each
     // file holds depends on timing; only the properties below do not.
-    const rotation = { maxBytes: 400, files: 9 };
+    // Taken over once seen unchanged for the stale interval (monotonic),
+    // however old its mtime looks.
+    const rotation = { maxBytes: 400, files: 9, lockStaleMs: 100 };
     const open = () =>
       AuditLog.open({
         config: config([...sink], 1000),
@@ -301,7 +303,9 @@ describe("AuditLog file sink retention", () => {
     writeFileSync(lock, "crashed\n");
     const old = new Date(Date.now() - 60_000);
     utimesSync(lock, old, old);
-    const rotation = { maxBytes: 400, files: 9 };
+    // Taken over once seen unchanged for the stale interval (monotonic),
+    // however old its mtime looks.
+    const rotation = { maxBytes: 400, files: 9, lockStaleMs: 100 };
     const open = () =>
       AuditLog.open({
         config: config([...sink], 1000),
@@ -314,6 +318,7 @@ describe("AuditLog file sink retention", () => {
       for (const [index, log] of writers.entries())
         log.emit({ event: "resource.load", resource: `w${index}-${round}` });
       await Promise.all(writers.map((log) => log.flush()));
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
     await Promise.all(writers.map((log) => log.close()));
     // Rotated despite the abandoned lock; no lock or takeover file is left.
@@ -332,7 +337,7 @@ describe("AuditLog file sink retention", () => {
   it("appends without rotating while a live rotation lock is held", async () => {
     mkdirSync(join(temp, "logs"), { recursive: true });
     const base = join(temp, "logs", "audit.jsonl");
-    writeFileSync(`${base}.rotate.lock`, "1\n");
+    writeFileSync(`${base}.rotate.lock`, `${process.pid}-live-rotator\n`);
     const log = await AuditLog.open({
       config: config([...sink], 1000),
       distribution: "acmecode",

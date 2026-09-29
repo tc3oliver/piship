@@ -8,6 +8,7 @@ import type {
   ActiveCredential,
   CredentialEvent,
   CredentialPhase,
+  SecretStoreResolver,
 } from "@piship/credentials";
 import type {
   AccessManifest,
@@ -65,6 +66,13 @@ export interface AccessOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Tests may inject a store; production selects from the manifest. */
   readonly secretStore?: SecretStore;
+  /**
+   * The store of the other storage provider, for deleting what state
+   * recorded for it after `credential.storage.provider` changed. Production
+   * creates it; with an injected `secretStore` and no resolver, it is
+   * unavailable (tests never reach a real platform store by accident).
+   */
+  readonly secretStoreFor?: SecretStoreResolver;
   readonly now?: () => number;
   /** Declared capabilities; model requirements of enabled ones are checked at launch. */
   readonly capabilities?: readonly CapabilityConfig[];
