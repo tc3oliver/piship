@@ -14,6 +14,7 @@ import {
   type ManagedFetch,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
+import { Finding } from "./shared.js";
 
 /** What `testAuditSink` checks, in report order. */
 export const AUDIT_SINK_BEHAVIORS = [
@@ -286,11 +287,9 @@ function batchProblem(batch: unknown): string | undefined {
 
 // ---------------------------------------------------------------- harness
 
-class CheckFailure extends Error {}
-
 /** Fail the check with `reason`. */
 function fail(reason: string): never {
-  throw new CheckFailure(reason);
+  throw new Finding(reason);
 }
 
 interface Outcome {
@@ -983,7 +982,7 @@ async function runCheck(
     timer = setTimeout(
       () =>
         reject(
-          new CheckFailure(
+          new Finding(
             `The sink did not settle within ${timeoutMs} ms (a write, flush, or close never answered)`,
           ),
         ),
@@ -999,7 +998,7 @@ async function runCheck(
         : { behavior, status: "skipped", reason: skipped };
   } catch (error) {
     const reason =
-      error instanceof CheckFailure
+      error instanceof Finding
         ? error.message
         : `The check stopped on an unexpected error: ${message(error)}`;
     result = { behavior, status: "failed", reason: scrub(reason, harnesses) };

@@ -25,10 +25,8 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspect } from "node:util";
 import {
   type CustomBackendContext,
-  formatError,
   HOST_FILESYSTEM_ISOLATION,
   isPiShipError,
   type ManagedFetch,
@@ -43,6 +41,7 @@ import {
   type SandboxProfile,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
+import { check, Finding, type Outcome, renderings, settle } from "./shared.js";
 
 /**
  * What the sandbox kit checks, in report order, each with the contract
@@ -231,77 +230,10 @@ const ENV = {
 
 // ------------------------------------------------------------ utilities
 
-/** A failed sub-check: a short reason without any secret. */
-class Finding extends Error {}
-
-function check(condition: unknown, reason: string): asserts condition {
-  if (!condition) throw new Finding(reason);
-}
-
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
-
-type Bounded<T> =
-  | { readonly kind: "resolved"; readonly value: T }
-  | { readonly kind: "rejected"; readonly error: unknown }
-  | { readonly kind: "hung" };
-
-/** Settle a call, or report it hung after `ms`; never rejects. */
-async function bounded<T>(
-  call: () => T | Promise<T>,
-  ms: number,
-): Promise<Bounded<T>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const hung = new Promise<"hung">((resolve) => {
-    timer = setTimeout(() => resolve("hung"), ms);
-  });
-  const running = Promise.resolve()
-    .then(call)
-    .then(
-      (value): Bounded<T> => ({ kind: "resolved", value }),
-      (error: unknown): Bounded<T> => ({ kind: "rejected", error }),
-    );
-  const first = await Promise.race([running, hung]);
-  clearTimeout(timer);
-  return first === "hung" ? { kind: "hung" } : first;
-}
-
-/** Every way a value can be shown: strings, JSON, inspection, and each cause. */
-function renderings(value: unknown): string {
-  const parts: string[] = [];
-  const safe = (render: () => unknown) => {
-    try {
-      parts.push(String(render()));
-    } catch {
-      // A rendering that throws shows nothing.
-    }
-  };
-  let current: unknown = value;
-  for (
-    let depth = 0;
-    depth < 6 && current !== undefined && current !== null;
-    depth++
-  ) {
-    const item = current;
-    safe(() => item);
-    safe(() => JSON.stringify(item));
-    safe(() => inspect(item, { depth: 10, showHidden: true }));
-    if (item instanceof Error) {
-      safe(() => item.message);
-      safe(() => item.stack);
-      safe(() => formatError(item));
-    }
-    if (isPiShipError(item)) {
-      safe(() => item.userAction);
-      safe(() => JSON.stringify(item.sanitizedDetail));
-      safe(() => JSON.stringify(item.toJSON()));
-    }
-    current = (item as { cause?: unknown } | null)?.cause;
-  }
-  return parts.join("\n");
-}
 
 function sha256(path: string): string | undefined {
   try {
@@ -897,13 +829,13 @@ class Harness {
     backend?: SandboxBackend,
   ): Promise<SandboxInstance> {
     const source = backend ?? (await this.backend());
-    const availability = await bounded(() => source.available(), this.boundMs);
+    const availability = await settle(() => source.available(), this.boundMs);
     check(
       availability.kind === "resolved" &&
         availability.value?.available === true,
       "the backend is not available in the kit's context, so this check could not run",
     );
-    const prepared = await bounded(
+    const prepared = await settle(
       () => source.prepare({ profile: this.profile(network) }),
       this.boundMs,
     );
@@ -925,10 +857,10 @@ class Harness {
   }
 
   /** Dispose an instance once; returns how dispose ended. */
-  async dispose(instance: SandboxInstance): Promise<Bounded<void>> {
+  async dispose(instance: SandboxInstance): Promise<Outcome<void>> {
     this.#live.delete(instance);
     this.#disposed.add(instance);
-    return bounded(() => instance.dispose(), this.boundMs);
+    return settle(() => instance.dispose(), this.boundMs);
   }
 
   disposed(instance: SandboxInstance): boolean {
@@ -942,7 +874,7 @@ class Harness {
     await Promise.all(
       left.map(async (instance) => {
         this.#disposed.add(instance);
-        await bounded(() => instance.dispose(), this.boundMs);
+        await settle(() => instance.dispose(), this.boundMs);
       }),
     );
   }
@@ -1032,7 +964,7 @@ class Harness {
     } = {},
   ): Promise<Ran> {
     const execution = this.start(instance, command, options);
-    const outcome = await bounded(
+    const outcome = await settle(
       () => execution.settled,
       this.boundMs + (options.extraMs ?? 0),
     );
@@ -1210,7 +1142,7 @@ type Check = (h: Harness) => Promise<string | undefined>;
 const checks: Record<SandboxBehavior, Check> = {
   async availability(h) {
     const backend = await h.backend();
-    const normal = await bounded(() => backend.available(), h.boundMs);
+    const normal = await settle(() => backend.available(), h.boundMs);
     check(
       normal.kind !== "hung",
       "available() did not end within the kit's bound",
@@ -1229,7 +1161,7 @@ const checks: Record<SandboxBehavior, Check> = {
         `the backend reported itself unavailable in the kit's context (${h.scrub(redact(String(result.reason)).slice(0, 160))})`,
       );
     const down = await h.backend("down");
-    const outage = await bounded(() => down.available(), h.boundMs);
+    const outage = await settle(() => down.available(), h.boundMs);
     check(
       outage.kind !== "hung",
       "with its service unreachable, available() did not end within the kit's bound",
@@ -1463,7 +1395,7 @@ const checks: Record<SandboxBehavior, Check> = {
         ["unauthorized", "a 401 whose body and header echo the credential"],
       ] as const) {
         const failing = await h.backend(mode);
-        const available = await bounded(() => failing.available(), h.boundMs);
+        const available = await settle(() => failing.available(), h.boundMs);
         if (available.kind !== "hung")
           check(
             !h.leaks(
@@ -1471,7 +1403,7 @@ const checks: Record<SandboxBehavior, Check> = {
             ),
             `after ${what}: the credential appeared in available()'s result or error`,
           );
-        const prepared = await bounded(
+        const prepared = await settle(
           () => failing.prepare({ profile: h.profile(h.network) }),
           h.boundMs,
         );
@@ -1657,7 +1589,7 @@ const checks: Record<SandboxBehavior, Check> = {
       "the command ended before its timeout, so the kit could not time it out while it ran",
     );
     execution.controller.abort();
-    const settled = await bounded(() => execution.settled, h.settleMs);
+    const settled = await settle(() => execution.settled, h.settleMs);
     check(
       settled.kind === "resolved",
       `exec() did not settle within ${h.settleMs} ms after io.signal aborted for a timeout, so PiShip would retire the instance and end the session`,
@@ -1703,7 +1635,7 @@ const checks: Record<SandboxBehavior, Check> = {
       // that is streaming output; the timeout check covers that).
       if (when === "while it ran") await sleep(RUNNING_MS);
       execution.controller.abort();
-      const settled = await bounded(() => execution.settled, h.settleMs);
+      const settled = await settle(() => execution.settled, h.settleMs);
       if (settled.kind !== "resolved") {
         // PiShip retires a backend that did not stop the command.
         retired = true;
@@ -1712,7 +1644,7 @@ const checks: Record<SandboxBehavior, Check> = {
           disposed.kind === "resolved",
           `a command cancelled ${when} did not stop, and dispose() did not resolve either`,
         );
-        const after = await bounded(() => execution.settled, h.settleMs);
+        const after = await settle(() => execution.settled, h.settleMs);
         check(
           after.kind === "resolved",
           `a command cancelled ${when} did not stop, and exec() did not settle even after dispose()`,
@@ -1764,7 +1696,7 @@ const checks: Record<SandboxBehavior, Check> = {
     if (!count)
       return "skipped: pass sandboxes(), a count of the sandboxes the backend's service holds, to let the kit see what prepare() created and dispose() removed";
     const measure = async (when: string) => {
-      const value = await bounded(() => count(), h.boundMs);
+      const value = await settle(() => count(), h.boundMs);
       check(
         value.kind === "resolved" && Number.isInteger(value.value),
         `sandboxes() did not return a count ${when}`,
@@ -1812,18 +1744,18 @@ const checks: Record<SandboxBehavior, Check> = {
       first.kind === "resolved",
       `dispose() threw (${first.kind === "rejected" ? h.describe(first.error) : ""}); it must never throw`,
     );
-    const settled = await bounded(() => execution.settled, h.settleMs);
+    const settled = await settle(() => execution.settled, h.settleMs);
     check(
       settled.kind === "resolved",
       `a command still running did not end within ${h.settleMs} ms after dispose()`,
     );
-    const second = await bounded(() => instance.dispose(), h.boundMs);
+    const second = await settle(() => instance.dispose(), h.boundMs);
     check(
       second.kind === "resolved",
       "a second dispose() did not resolve; dispose() must be safe to call again",
     );
     const after = h.start(instance, `printf ran > ${quote(ranAfter)}`);
-    const late = await bounded(() => after.settled, h.boundMs);
+    const late = await settle(() => after.settled, h.boundMs);
     check(
       !(
         late.kind === "resolved" &&
@@ -2024,7 +1956,7 @@ const checks: Record<SandboxBehavior, Check> = {
         "the environment can be replaced, but the instance has no epoch(), so PiShip would never check the new environment",
       );
       const old = readEpoch();
-      const replaced = await bounded(() => replace(instance), h.boundMs);
+      const replaced = await settle(() => replace(instance), h.boundMs);
       check(
         replaced.kind === "resolved",
         "replaceEnvironment() did not complete, so the epoch check could not run",

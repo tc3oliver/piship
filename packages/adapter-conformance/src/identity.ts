@@ -6,14 +6,11 @@
 // run only when the adapter author supplies a harness that mints such tokens;
 // without one they are skipped, never passed.
 import { randomBytes } from "node:crypto";
-import { inspect } from "node:util";
 import {
   type AdapterContext,
   type AdapterFactory,
-  formatError,
   type IdentityProvider,
   type IdentitySession,
-  isPiShipError,
   type LoginContext,
   type ManagedFetch,
   PiShipError,
@@ -21,6 +18,22 @@ import {
   type ResolvedEndpoints,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
+import {
+  answer,
+  check,
+  codeOf,
+  type Expected,
+  expectError,
+  expiryOf,
+  Finding,
+  type Outcome,
+  RETRY_AFTER_SECONDS,
+  rejection,
+  requestText,
+  revealed,
+  secretsIn,
+  settle,
+} from "./shared.js";
 
 /**
  * What the identity kit checks, in report order, each with the contract
@@ -476,22 +489,8 @@ function referenceAnswer(
 
 // ------------------------------------------------------------ the harness
 
-type Outcome<T> =
-  | { readonly kind: "resolved"; readonly value: T }
-  | { readonly kind: "rejected"; readonly error: unknown }
-  | { readonly kind: "hung" };
-
-/** A failed sub-check: a short reason without any secret. */
-class Finding extends Error {}
-
 /** A behavior the kit cannot exercise: reported as skipped. */
 class Skip extends Error {}
-
-function check(condition: unknown, reason: string): asserts condition {
-  if (!condition) throw new Finding(reason);
-}
-
-const RETRY_AFTER_SECONDS = 7;
 
 /** A provider with its declarations read once. */
 interface Adapter {
@@ -572,22 +571,8 @@ class Harness {
   }
 
   /** Settle a call, or report it hung after the bound and release it. */
-  async settle<T>(call: () => Promise<T>): Promise<Outcome<T>> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const hung = new Promise<"hung">((resolve) => {
-      timer = setTimeout(() => resolve("hung"), this.boundMs);
-    });
-    const running = (async () => call())().then(
-      (value): Outcome<T> => ({ kind: "resolved", value }),
-      (error: unknown): Outcome<T> => ({ kind: "rejected", error }),
-    );
-    const first = await Promise.race([running, hung]);
-    clearTimeout(timer);
-    if (first !== "hung") return first;
-    // Let the adapter's call end, so nothing keeps running after the check.
-    this.service.release();
-    await Promise.race([running, new Promise((r) => setTimeout(r, 1_000))]);
-    return { kind: "hung" };
+  settle<T>(call: () => Promise<T>): Promise<Outcome<T>> {
+    return settle(call, this.boundMs, () => this.service.release());
   }
 
   login(adapter: Adapter, plan: Plan = { kind: "session" }) {
@@ -637,112 +622,6 @@ class Harness {
 
 // ---------------------------------------------------------------- helpers
 
-/** The failure a call must end in, or a finding. */
-function rejection(outcome: Outcome<unknown>, what: string): unknown {
-  check(
-    outcome.kind !== "hung",
-    `${what}: the call did not end within the kit's bound`,
-  );
-  check(
-    outcome.kind === "rejected",
-    `${what}: the call succeeded instead of failing`,
-  );
-  return outcome.error;
-}
-
-interface Expected {
-  readonly codes: readonly PiShipErrorCode[];
-  readonly retryable?: boolean;
-  readonly retryAfterMs?: number;
-}
-
-/** Check a failure against the error contract. Reasons carry codes and numbers only. */
-function expectError(error: unknown, what: string, expected: Expected): void {
-  check(
-    isPiShipError(error),
-    `${what}: the failure is not a PiShipError from @piship/adapter-sdk`,
-  );
-  check(
-    expected.codes.includes(error.code),
-    `${what}: expected ${expected.codes.join(" or ")}, got ${error.code}`,
-  );
-  if (expected.retryable !== undefined)
-    check(
-      error.retryable === expected.retryable,
-      `${what}: expected retryable ${expected.retryable}, got ${error.retryable}`,
-    );
-  if (expected.retryAfterMs !== undefined)
-    check(
-      error.retryAfterMs === expected.retryAfterMs,
-      `${what}: expected retryAfterMs ${expected.retryAfterMs}, got ${error.retryAfterMs ?? "none"}`,
-    );
-}
-
-/** Every way a value can be shown: strings, JSON, inspection, and each cause. */
-function renderings(value: unknown): string {
-  const parts: string[] = [];
-  const safe = (render: () => unknown) => {
-    try {
-      parts.push(String(render()));
-    } catch {
-      // A rendering that throws shows nothing.
-    }
-  };
-  let current: unknown = value;
-  for (
-    let depth = 0;
-    depth < 6 && current !== undefined && current !== null;
-    depth++
-  ) {
-    const item = current;
-    safe(() => item);
-    safe(() => JSON.stringify(item));
-    safe(() => inspect(item, { depth: 10, showHidden: true }));
-    if (item instanceof Error) {
-      safe(() => item.message);
-      safe(() => item.stack);
-      safe(() => formatError(item));
-    }
-    if (isPiShipError(item)) {
-      safe(() => item.userAction);
-      safe(() => JSON.stringify(item.sanitizedDetail));
-      safe(() => JSON.stringify(item.toJSON()));
-    }
-    current = (item as { cause?: unknown } | null)?.cause;
-  }
-  return parts.join("\n");
-}
-
-function secretsIn(value: unknown, secrets: readonly string[]): boolean {
-  const text = renderings(value);
-  return secrets.some((secret) => text.includes(secret));
-}
-
-function revealed(secret: unknown): string | undefined {
-  try {
-    const value = (secret as { reveal?: () => unknown } | null)?.reveal?.();
-    return typeof value === "string" ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function expiryOf(session: IdentitySession): number | undefined {
-  const value: unknown = session.expiresAt;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "string") return Date.parse(value);
-  return undefined;
-}
-
-/** A failure's code for a reason; never its message, which may hold a secret. */
-function codeOf(error: unknown): string {
-  return isPiShipError(error)
-    ? error.code
-    : error instanceof Error
-      ? `a ${error.name} that is not a PiShipError`
-      : "a value that is not an error";
-}
-
 /** A claim name safe to quote in a reason. */
 function claimName(name: string, secrets: readonly string[]): string {
   return /^[A-Za-z0-9_.:-]{1,64}$/.test(name) &&
@@ -770,14 +649,6 @@ const REFUSED: readonly PiShipErrorCode[] = [
 /** Whether the adapter refreshes; a workload identity never does. */
 function refreshes(adapter: Adapter): boolean {
   return !adapter.workload && typeof adapter.provider.refresh === "function";
-}
-
-function status(
-  code: number,
-  headers: Record<string, string> = {},
-  body = "",
-): Response {
-  return new Response(body, { status: code, headers });
 }
 
 // ---------------------------------------------------------------- checks
@@ -1031,7 +902,7 @@ const checks: Record<IdentityBehavior, Check> = {
       .filter((token): token is string => !!token);
     check(
       sent.some((request) => {
-        const text = `${decodeURIComponent(request.url)}\n${[...request.headers].map(([k, v]) => `${k}: ${v}`).join("\n")}\n${request.body}`;
+        const text = requestText(request);
         return names.some((token) => text.includes(token));
       }),
       "the logout request names neither the refresh token nor the access token",
@@ -1110,7 +981,7 @@ const checks: Record<IdentityBehavior, Check> = {
         {
           kind: "raw",
           handler: () =>
-            status(
+            answer(
               401,
               { "content-type": "application/json" },
               '{"error":"invalid_token"}',
@@ -1175,16 +1046,16 @@ const checks: Record<IdentityBehavior, Check> = {
     const answers: [string, Handler][] = [
       [
         "a 400 whose body holds a sentinel and the refresh token",
-        () => status(400, { "content-type": "application/json" }, body),
+        () => answer(400, { "content-type": "application/json" }, body),
       ],
       [
         "a 401 whose body holds a sentinel",
-        () => status(401, { "content-type": "application/json" }, body),
+        () => answer(401, { "content-type": "application/json" }, body),
       ],
       [
         "a 502 whose HTML body holds a sentinel",
         () =>
-          status(
+          answer(
             502,
             { "content-type": "text/html" },
             `<html><body>${h.bodySentinel}</body></html>`,
@@ -1193,7 +1064,7 @@ const checks: Record<IdentityBehavior, Check> = {
       [
         "a 200 whose body is not the expected answer",
         () =>
-          status(
+          answer(
             200,
             { "content-type": "application/json" },
             `<html>${h.bodySentinel}</html>`,
@@ -1256,7 +1127,7 @@ const checks: Record<IdentityBehavior, Check> = {
     const unavailable: [string, Handler, Expected][] = [
       [
         "a 503 with Retry-After",
-        () => status(503, { "retry-after": "5" }),
+        () => answer(503, { "retry-after": "5" }),
         {
           codes: ["GATEWAY_UNREACHABLE"],
           retryable: true,
@@ -1266,7 +1137,7 @@ const checks: Record<IdentityBehavior, Check> = {
       [
         "a 502 HTML error page",
         () =>
-          status(
+          answer(
             502,
             { "content-type": "text/html" },
             "<html>bad gateway</html>",
@@ -1275,7 +1146,7 @@ const checks: Record<IdentityBehavior, Check> = {
       ],
       [
         "a 429 with Retry-After",
-        () => status(429, { "retry-after": String(RETRY_AFTER_SECONDS) }),
+        () => answer(429, { "retry-after": String(RETRY_AFTER_SECONDS) }),
         {
           codes: ["GATEWAY_RATE_LIMITED"],
           retryable: true,

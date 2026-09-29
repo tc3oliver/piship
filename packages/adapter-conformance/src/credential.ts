@@ -4,15 +4,12 @@
 // Every check is a contract statement an adapter author can read; the kit
 // judges only what the adapter returns, throws, and sends.
 import { randomBytes } from "node:crypto";
-import { inspect } from "node:util";
 import {
   type AdapterContext,
   type AdapterFactory,
   type CredentialContext,
   type CredentialProvider,
-  formatError,
   type IdentitySession,
-  isPiShipError,
   type ManagedFetch,
   PiShipError,
   type PiShipErrorCode,
@@ -21,6 +18,21 @@ import {
   SecretValue,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
+import {
+  answer,
+  check,
+  codeOf,
+  expectError,
+  expiryOf,
+  Finding,
+  type Outcome,
+  RETRY_AFTER_SECONDS,
+  rejection,
+  requestText,
+  revealed,
+  secretsIn,
+  settle,
+} from "./shared.js";
 
 /**
  * What the credential kit checks, in report order, each with the contract
@@ -241,7 +253,7 @@ class FakeBroker {
     headers: Record<string, string> = {},
     body = "",
   ): Response {
-    return new Response(body, { status, headers });
+    return answer(status, headers, body);
   }
 
   /** An answer whose body never arrives; it ends only with the request. */
@@ -303,20 +315,6 @@ function httpBrokerAnswer(credential: IssuedCredential): Response {
 
 // ------------------------------------------------------------ the harness
 
-type Outcome<T> =
-  | { readonly kind: "resolved"; readonly value: T }
-  | { readonly kind: "rejected"; readonly error: unknown }
-  | { readonly kind: "hung" };
-
-/** A failed sub-check: a short reason without any secret. */
-class Finding extends Error {}
-
-function check(condition: unknown, reason: string): asserts condition {
-  if (!condition) throw new Finding(reason);
-}
-
-const RETRY_AFTER_SECONDS = 7;
-
 class Harness {
   readonly run = randomBytes(8).toString("hex");
   readonly token = `conformance-identity-token-${this.run}`;
@@ -376,30 +374,12 @@ class Harness {
   }
 
   /** Settle a call, or report it hung after the bound and release it. */
-  async settle<T>(call: () => Promise<T>): Promise<Outcome<T>> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const hung = new Promise<"hung">((resolve) => {
-      timer = setTimeout(() => resolve("hung"), this.boundMs);
-    });
-    const running = (async () => call())().then(
-      (value): Outcome<T> => ({ kind: "resolved", value }),
-      (error: unknown): Outcome<T> => ({ kind: "rejected", error }),
-    );
-    const first = await Promise.race([running, hung]);
-    clearTimeout(timer);
-    if (first !== "hung") return first;
-    // Let the adapter's call end, so nothing keeps running after the check.
-    this.broker.release();
-    await Promise.race([running, new Promise((r) => setTimeout(r, 1_000))]);
-    return { kind: "hung" };
-  }
-
   async call<T>(
     operation: Operation,
     call: () => Promise<T>,
   ): Promise<Outcome<T>> {
     this.broker.operation = operation;
-    return this.settle(call);
+    return settle(call, this.boundMs, () => this.broker.release());
   }
 
   /** A credential acquired through the adapter with the broker's success answer. */
@@ -439,101 +419,6 @@ class Harness {
   }
 }
 
-/** The failure a call must end in, or a finding. */
-function rejection(outcome: Outcome<unknown>, what: string): unknown {
-  check(
-    outcome.kind !== "hung",
-    `${what}: the call did not end within the kit's bound`,
-  );
-  check(
-    outcome.kind === "rejected",
-    `${what}: the call succeeded instead of failing`,
-  );
-  return outcome.error;
-}
-
-interface Expected {
-  readonly codes: readonly PiShipErrorCode[];
-  readonly retryable?: boolean;
-  /** An exact wait, or an inclusive range for an HTTP-date. */
-  readonly retryAfterMs?: number | readonly [number, number];
-}
-
-/** Check a failure against the error contract. Reasons carry codes and numbers only. */
-function expectError(
-  error: unknown,
-  what: string,
-  expected: Expected,
-): PiShipError {
-  check(
-    isPiShipError(error),
-    `${what}: the failure is not a PiShipError from @piship/adapter-sdk`,
-  );
-  check(
-    expected.codes.includes(error.code),
-    `${what}: expected ${expected.codes.join(" or ")}, got ${error.code}`,
-  );
-  if (expected.retryable !== undefined)
-    check(
-      error.retryable === expected.retryable,
-      `${what}: expected retryable ${expected.retryable}, got ${error.retryable}`,
-    );
-  const wait = expected.retryAfterMs;
-  if (typeof wait === "number")
-    check(
-      error.retryAfterMs === wait,
-      `${what}: expected retryAfterMs ${wait}, got ${error.retryAfterMs ?? "none"}`,
-    );
-  else if (wait)
-    check(
-      error.retryAfterMs !== undefined &&
-        error.retryAfterMs >= wait[0] &&
-        error.retryAfterMs <= wait[1],
-      `${what}: expected retryAfterMs between ${wait[0]} and ${wait[1]}, got ${error.retryAfterMs ?? "none"}`,
-    );
-  return error;
-}
-
-/** Every way a value can be shown: strings, JSON, inspection, and each cause. */
-function renderings(value: unknown): string {
-  const parts: string[] = [];
-  const safe = (render: () => unknown) => {
-    try {
-      parts.push(String(render()));
-    } catch {
-      // A rendering that throws shows nothing.
-    }
-  };
-  let current: unknown = value;
-  for (
-    let depth = 0;
-    depth < 6 && current !== undefined && current !== null;
-    depth++
-  ) {
-    const item = current;
-    safe(() => item);
-    safe(() => JSON.stringify(item));
-    safe(() => inspect(item, { depth: 10, showHidden: true }));
-    if (item instanceof Error) {
-      safe(() => item.message);
-      safe(() => item.stack);
-      safe(() => formatError(item));
-    }
-    if (isPiShipError(item)) {
-      safe(() => item.userAction);
-      safe(() => JSON.stringify(item.sanitizedDetail));
-      safe(() => JSON.stringify(item.toJSON()));
-    }
-    current = (item as { cause?: unknown } | null)?.cause;
-  }
-  return parts.join("\n");
-}
-
-function secretsIn(value: unknown, secrets: readonly string[]): boolean {
-  const text = renderings(value);
-  return secrets.some((secret) => text.includes(secret));
-}
-
 /** A credential's fields must all come from `issued`. */
 function matchesIssue(
   credential: RuntimeCredential | null | undefined,
@@ -544,31 +429,6 @@ function matchesIssue(
     revealed(credential.secret) === issued.secret &&
     credential.credentialId === issued.credentialId
   );
-}
-
-function revealed(secret: unknown): string | undefined {
-  try {
-    const value = (secret as { reveal?: () => unknown } | null)?.reveal?.();
-    return typeof value === "string" ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function expiryOf(credential: RuntimeCredential): number | undefined {
-  const value: unknown = credential.expiresAt;
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "string") return Date.parse(value);
-  return undefined;
-}
-
-/** A failure's code for a reason; never its message, which may hold a secret. */
-function codeOf(error: unknown): string {
-  return isPiShipError(error)
-    ? error.code
-    : error instanceof Error
-      ? `a ${error.name} that is not a PiShipError`
-      : "a value that is not an error";
 }
 
 const ACQUIRE_FAILED: readonly PiShipErrorCode[] = [
@@ -726,7 +586,7 @@ const checks: Record<CredentialBehavior, Check> = {
     const id = credential.credentialId ?? "";
     check(
       sent.some((request) => {
-        const text = `${decodeURIComponent(request.url)}\n${[...request.headers].map(([k, v]) => `${k}: ${v}`).join("\n")}\n${request.body}`;
+        const text = requestText(request);
         return (id && text.includes(id)) || (secret && text.includes(secret));
       }),
       "the revoke request names neither the credential ID nor the credential",
