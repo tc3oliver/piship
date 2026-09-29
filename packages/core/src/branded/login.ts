@@ -16,6 +16,7 @@ import {
   createSecretStore,
   deleteSecretsVerified,
   metadataSecretRefs,
+  withFileLock,
 } from "@piship/credentials";
 import { type IdentityMetadata, parseIdentityMetadata } from "@piship/identity";
 import type { AccessManifest } from "@piship/schema";
@@ -200,38 +201,47 @@ async function logoutLocally(
     beforeExpirySeconds: 0,
     onEvent,
   });
-  const problems = (await manager.logout({ distributionId: id })).map(
-    (problem) => redact(problem),
-  );
-  if (existsSync(paths.identity)) {
-    let raw: unknown = null;
-    try {
-      raw = JSON.parse(readFileSync(paths.identity, "utf8"));
-    } catch {
-      // Unreadable metadata names no secret; the file is still removed.
-    }
-    const failed = await deleteSecretsVerified(
-      store,
-      metadataSecretRefs(raw, id),
+  // Both locks, credential then identity, as every other writer takes them:
+  // a refresh in another process that holds the identity lock finishes
+  // first, and cannot store the session again after this deleted it.
+  return manager.exclusive(async () => {
+    const problems = (await manager.logout({ distributionId: id })).map(
+      (problem) => redact(problem),
     );
-    const tokens = manifest.identity.mode !== "none";
-    if (tokens) problems.push(`identity revocation: not attempted: ${reason}`);
-    for (const item of failed)
-      problems.push(`identity secret ${item.ref}: ${item.problem}`);
-    onEvent({
-      event: "identity.logout",
-      detail: { revocation: tokens ? "failed" : "unsupported" },
-    });
-    // What could not be deleted stays tracked in a discarded marker, which
-    // is never restored as a session, instead of as usable metadata.
-    if (!failed.length) rmSync(paths.identity, { force: true });
-    else
-      writeIdentityDiscardedMarker(
-        paths.identity,
-        failed.map((item) => item.ref),
-      );
-  }
-  return problems;
+    if (existsSync(paths.identity))
+      await withFileLock(paths.identity, async () => {
+        if (!existsSync(paths.identity)) return;
+        let raw: unknown = null;
+        try {
+          raw = JSON.parse(readFileSync(paths.identity, "utf8"));
+        } catch {
+          // Unreadable metadata names no secret; the file is still removed.
+        }
+        const failed = await deleteSecretsVerified(
+          store,
+          metadataSecretRefs(raw, id),
+        );
+        const tokens = manifest.identity.mode !== "none";
+        if (tokens)
+          problems.push(`identity revocation: not attempted: ${reason}`);
+        for (const item of failed)
+          problems.push(`identity secret ${item.ref}: ${item.problem}`);
+        onEvent({
+          event: "identity.logout",
+          detail: { revocation: tokens ? "failed" : "unsupported" },
+        });
+        // What could not be deleted stays tracked in a discarded marker,
+        // which is never restored as a session, instead of as usable
+        // metadata.
+        if (!failed.length) rmSync(paths.identity, { force: true });
+        else
+          writeIdentityDiscardedMarker(
+            paths.identity,
+            failed.map((item) => item.ref),
+          );
+      });
+    return problems;
+  });
 }
 
 export async function runLogout(ctx: BrandedContext): Promise<void> {

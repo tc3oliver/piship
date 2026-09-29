@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AuditEvent, principalId } from "@piship/contracts";
+import { withFileLock } from "@piship/credentials";
 import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
@@ -275,6 +276,33 @@ describe("branded logout", () => {
     expect(readdirSync(path("secrets"))).toEqual([]);
     const text = stateText(ctx);
     for (const secret of secrets) expect(text).not.toContain(secret);
+  });
+
+  it("waits for a holder of the identity lock before it signs out locally", async () => {
+    const { ctx, path } = context();
+    await signIn(ctx);
+    for (const name of Object.keys(services.env())) delete process.env[name];
+    const session = path("identity", "session.json");
+    let release = () => {};
+    const holding = withFileLock(
+      session,
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    let finished = false;
+    const logout = runLogout(ctx).finally(() => {
+      finished = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    // A refresh in another process is still using the session: the sign-out
+    // has not deleted it from under that refresh.
+    expect(finished).toBe(false);
+    expect(existsSync(session)).toBe(true);
+    release();
+    await holding;
+    await logout;
+    expect(existsSync(session)).toBe(false);
+    expect(readdirSync(path("secrets"))).toEqual([]);
   });
 
   it.runIf(POSIX_USER)(

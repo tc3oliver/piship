@@ -715,7 +715,10 @@ export class DistributionAccess {
    * Only a session of the stored principal replaces it, under the identity
    * lock, so two writers never interleave.
    */
-  async #storeIdentity(session: IdentitySession): Promise<void> {
+  async #storeIdentity(
+    session: IdentitySession,
+    options: { replace?: boolean } = {},
+  ): Promise<void> {
     const store = this.store;
     if (!store)
       throw new PiShipError(
@@ -725,6 +728,13 @@ export class DistributionAccess {
       );
     await withFileLock(this.paths.identity, async () => {
       const previous = this.readIdentityMetadata();
+      // A refresh only replaces a session that is still stored: one signed
+      // out in the meantime is not brought back.
+      if (options.replace && !previous)
+        throw new PiShipError("IDENTITY_REQUIRED", "You are not signed in", {
+          component: "identity",
+          userAction: `Run ${this.options.app.command} login`,
+        });
       // Another principal's session, or an unusable file, is cleared
       // (verified) before a new one is stored; this never replaces it.
       if (
@@ -1049,7 +1059,7 @@ export class DistributionAccess {
       if (!stored.accessToken?.equals(observed.accessToken)) return stored;
       // A refresh never switches the principal, whatever the provider does.
       const refreshed = assertSamePrincipal(await refresh(stored), observed);
-      await this.#storeIdentity(refreshed);
+      await this.#storeIdentity(refreshed, { replace: true });
       this.#emit("identity.refresh", {
         reason,
         expiresAt: refreshed.expiresAt?.toISOString() ?? null,

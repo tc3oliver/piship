@@ -653,6 +653,29 @@ describe("user switching when the secret store fails (fixtures)", () => {
     ).rejects.toMatchObject({ code: "IDENTITY_INVALID" });
     expect(distribution.readIdentityMetadata()?.subject).toBe(ALICE.subject);
   });
+
+  it("does not bring a signed-out identity back when a refresh that started earlier returns", async () => {
+    const store = new MemorySecretStore();
+    const distribution = DistributionAccess.open(options(store));
+    services.knobs.accessTokenTtl = 30;
+    await login(distribution, ALICE);
+    services.knobs.tokenDelayMs = 400;
+    const refreshing = DistributionAccess.open(options(store)).currentIdentity({
+      required: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    // A sign-out that did not wait for the refresh: the metadata and the
+    // token bundles are gone while the provider call is still in flight.
+    for (const ref of store.refs()) await store.delete(ref);
+    rmSync(distribution.paths.identity);
+    await expect(refreshing).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+    });
+    expect(existsSync(distribution.paths.identity)).toBe(false);
+    expect(store.refs().filter((ref) => ref.includes(":identity#"))).toEqual(
+      [],
+    );
+  });
 });
 
 /** A promise the test resolves by hand: `wait` blocks until `open()`. */
