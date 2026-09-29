@@ -33,7 +33,7 @@ A distribution cannot declare its own audit sink type: the manifest accepts `fil
 
 Everything else is re-exported unchanged from `@piship/contracts` or `@piship/sandbox`:
 
-- Context: `AdapterContext` (`distributionId`, the managed `fetch`, resolved `endpoints`), `ResolvedEndpoints`, and `CustomBackendContext` for sandbox adapters (`distributionId`, `fetch`, `endpoint`, and `credential` only under `sandbox.credential: runtime`).
+- Context: `AdapterContext` (`distributionId`, the managed `fetch`, resolved `endpoints`), `ResolvedEndpoints`, and `CustomBackendContext` for sandbox adapters (`distributionId`, `fetch`, `endpoint`, and, when there is a credential to send, `credential`, `credentialOrigins`, and `credentialRejected`; see [the sandbox credential](#the-sandbox-credential)).
 - Identity and credentials: `IdentityProvider`, `WorkloadIdentityProvider` (an identity adapter that declares `interactive: false`), `IdentitySession`, `LoginContext`, `RETAINED_CLAIMS` (the claims PiShip keeps from a session), `CredentialProvider`, `CredentialContext`, `CredentialMode`, `RuntimeCredential`, `RuntimeCredentialKind`.
 - The principal: `PrincipalKey`, `principalKey(session)` (the `(issuer, subject)` of a session, or `IDENTITY_INVALID` when either is missing), and `samePrincipal(a, b)`, the comparison PiShip applies to a refreshed session.
 - Secrets and redaction: `SecretValue`, `isSecretValue`, `redact`, `redactValue`, `REDACTED_TEXT`.
@@ -52,6 +52,23 @@ A unit test pins this list, checks that every value is the public package's own 
 - Never build a message from a transport error. Its text can quote a request header, and with it a token.
 - Pass `withTimeout(ms, ctx.signal)` to every request. The caller's signal cancels; the timeout never replaces it. After an abort, `ctx.signal?.aborted` tells a cancellation (final) from a timeout or outage (retryable).
 - A sandbox backend claims only what it enforces. A remote service that keeps host files out of reach claims `host-filesystem-isolation`, never the `filesystem-*` planes. It passes `io.signal` on to the service, since PiShip owns every command's timeout and cancellation, and its `dispose()` never throws ([sandbox backends](sandbox.md#custom-adapters)).
+
+### The sandbox credential
+
+A custom sandbox backend gets its credential through `CustomBackendContext`, from one of three sources:
+
+| Source | Where it comes from | `credentialOrigins` | After a 401 or 403 |
+| --- | --- | --- | --- |
+| `sandbox.credential: runtime` | The runtime (inference) credential, when `sandbox.endpoint` is on the gateway's origin | The gateway's origin | No `credentialRejected`: the backend reports the failure |
+| `sandbox.credential: stored` | The API key or token a person stored with `<command> sandbox login` | The origins it was stored for | It is marked rejected and the next launch asks for `sandbox login`; `credentialRejected()` resolves false |
+| The module's `sandboxCredential` export (no `sandbox.credential`) | The adapter's own `CredentialProvider`, acquired per launch and held in memory only | The declared endpoint's origin | It is renewed once; `credentialRejected()` resolves true, and the backend may repeat the one request that created nothing |
+
+- `credential()` returns the value for one request. Call it for each request instead of keeping the value: rotation, rejection, and a user switch take effect at once. For a stored or adapter credential it rejects with `SANDBOX_UNAVAILABLE` when the credential may no longer be used.
+- Send it only to an origin in `credentialOrigins`. PiShip has already checked that the declared endpoint (and, for a stored credential, every URL it was stored for) is one of them; anything else the backend contacts gets no credential.
+- On a 401 or 403 from one of those origins, call `credentialRejected()` when the context has it. Repeat a request only when it resolved true and the request created nothing (never a sandbox, a claim, or a command).
+- `sandboxCredential` is a `CredentialProvider` (`acquire`, optional `refresh` and `revoke`) exported next to the default factory. It receives the signed-in identity (`null` without identity) and returns an `api_key` or `bearer` credential, with `expiresAt` when it expires; an `opaque` credential is refused. Exporting it while the manifest also declares `sandbox.credential` fails closed.
+
+`SandboxCredentialAccess` in `@piship/contracts` is how PiShip holds the stored or adapter credential behind `credential()`; a backend never sees it, so the SDK does not export it. See [sandbox credentials](sandbox.md#credentials) for storage, binding, and clearing.
 
 ## Examples
 
@@ -284,7 +301,7 @@ it("meets the PiShip sandbox contract", async () => {
 }, 300_000);
 ```
 
-The first argument is what the adapter module default-exports, the factory `defineSandboxAdapter` returns. A backend object also works, but then the kit cannot give it a context of its own, and the checks that simulate an unreachable service reach the real one. The kit calls the factory once per check with a context it controls: `endpoint` and `distributionId` from the options, a `fetch` that wraps the one in the options (default: the global `fetch`), and a `credential()` that returns a fake sentinel value, so the kit can see where the credential goes. Every command the kit sends is POSIX `sh` and needs `cat`, `mkdir`, `mv`, `printf`, `sleep`, and `env` in the sandbox; the network check also needs `nc` or `bash`. A call that does not end within `callTimeoutMs` fails its check instead of hanging it.
+The first argument is what the adapter module default-exports, the factory `defineSandboxAdapter` returns. A backend object also works, but then the kit cannot give it a context of its own, and the checks that simulate an unreachable service reach the real one. The kit calls the factory once per check with a context it controls: `endpoint` and `distributionId` from the options, a `fetch` that wraps the one in the options (default: the global `fetch`), and a `credential()` that returns a fake sentinel value, so the kit can see where the credential goes. That context has no `credentialOrigins` or `credentialRejected`, and the kit does not load a `sandboxCredential` export, so a backend's rejection handling and a module's own credential are tested in the adapter's own tests. Every command the kit sends is POSIX `sh` and needs `cat`, `mkdir`, `mv`, `printf`, `sleep`, and `env` in the sandbox; the network check also needs `nc` or `bash`. A call that does not end within `callTimeoutMs` fails its check instead of hanging it.
 
 A backend runs for real, so the kit runs against a test instance of the company's sandbox service, in a test file inside a checkout of this repository (the package is private and unpublished). A shared-workspace backend must see the directory the kit uses as its workspace: pass `workspace`, an empty directory the service mounts, or let the kit create a temporary one.
 

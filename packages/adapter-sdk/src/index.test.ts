@@ -193,6 +193,50 @@ describe("the define helpers", () => {
     });
   });
 
+  it("hands a sandbox factory the credential, its origins, and the rejection report", async () => {
+    // Typed through the SDK: an adapter needs nothing else to use them.
+    const credentialed: sdk.CustomBackendContext = {
+      ...context,
+      endpoint: "https://sandbox.acme.example",
+      credential: async () => "fake-sandbox-credential",
+      credentialOrigins: ["https://sandbox.acme.example"],
+      credentialRejected: async () => false,
+    };
+    let received: sdk.CustomBackendContext | undefined;
+    await sdk.defineSandboxAdapter((value) => {
+      received = value;
+      return {
+        id: "acme-sandbox",
+        available: async () => ({ available: true as const }),
+        capabilities: () => ({
+          isolation: "remote" as const,
+          planes: [sdk.HOST_FILESYSTEM_ISOLATION],
+          network: [],
+          localProcesses: false,
+        }),
+        prepare: async () => ({}) as never,
+      };
+    })(credentialed);
+    expect(received).toBe(credentialed);
+    expect(received?.credentialOrigins).toEqual([
+      "https://sandbox.acme.example",
+    ]);
+    expect(await received?.credentialRejected?.()).toBe(false);
+    // A module's own credential is a plain CredentialProvider: no
+    // sandbox-specific type is needed, and PiShip's accessor stays internal.
+    const sandboxCredential: sdk.CredentialProvider = {
+      mode: "adapter",
+      requiresIdentity: false,
+      acquire: async () => ({
+        kind: "bearer",
+        secret: new sdk.SecretValue("fake-sandbox-token"),
+      }),
+    };
+    expect(
+      (await sandboxCredential.acquire(null, { distributionId: "acme" }))?.kind,
+    ).toBe("bearer");
+  });
+
   it("rejects a malformed sandbox backend", async () => {
     const valid = {
       id: "acme-sandbox",
