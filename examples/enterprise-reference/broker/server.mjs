@@ -33,6 +33,35 @@ export function loadConfig(env) {
       throw new Error(`${name} must not embed credentials`);
     return value;
   };
+  const allowInsecureBackchannel = (() => {
+    const value = env.BROKER_ALLOW_INSECURE_BACKCHANNEL;
+    if (value === undefined || value === "" || value === "false") return false;
+    if (value === "true") return true;
+    throw new Error("BROKER_ALLOW_INSECURE_BACKCHANNEL must be true or false");
+  })();
+  /**
+   * A URL the broker fetches and trusts: the JWKS decides which tokens are
+   * genuine, and LiteLLM admin calls carry the master key. It must be https,
+   * except on a loopback host, or on a single-label host name (a container
+   * network name such as `keycloak`) when BROKER_ALLOW_INSECURE_BACKCHANNEL
+   * is true.
+   */
+  const backchannelUrl = (name) => {
+    const value = url(name);
+    const { protocol, hostname } = new URL(value);
+    if (protocol === "https:") return value;
+    const loopback =
+      hostname === "localhost" ||
+      hostname === "[::1]" ||
+      (isIP(hostname) === 4 && hostname.startsWith("127."));
+    const containerName =
+      isIP(hostname) === 0 &&
+      /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname);
+    if (loopback || (allowInsecureBackchannel && containerName)) return value;
+    throw new Error(
+      `${name} must be an https URL (http only for a loopback host, or for a container network name with BROKER_ALLOW_INSECURE_BACKCHANNEL=true)`,
+    );
+  };
   const number = (name, fallback, { min, max, integer = true }) => {
     const value = env[name];
     if (value === undefined || value === "") return fallback;
@@ -65,11 +94,11 @@ export function loadConfig(env) {
     listenHost: env.BROKER_LISTEN_HOST || "127.0.0.1",
     listenPort: number("BROKER_LISTEN_PORT", 8080, { min: 1, max: 65535 }),
     issuer: url("BROKER_ISSUER"),
-    jwksUrl: url("BROKER_JWKS_URL"),
+    jwksUrl: backchannelUrl("BROKER_JWKS_URL"),
     audience: env.BROKER_AUDIENCE || "piship-reference-broker",
     authorizedParty: env.BROKER_AUTHORIZED_PARTY || "acmecode",
     distribution: env.BROKER_DISTRIBUTION || "acmecode",
-    litellmUrl: url("BROKER_LITELLM_URL"),
+    litellmUrl: backchannelUrl("BROKER_LITELLM_URL"),
     masterKey,
     gatewayBaseUrl: url("BROKER_GATEWAY_BASE_URL"),
     // Lifetime of an issued key; capped at 24 hours.

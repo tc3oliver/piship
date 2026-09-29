@@ -11,6 +11,7 @@ import {
   GROUP_MODELS,
   principalUserId,
 } from "../src/broker.mjs";
+import { loadConfig } from "../server.mjs";
 import { ISSUER, MASTER_KEY, UPSTREAM_BODY_MARK } from "./fakes.mjs";
 import { GATEWAY_BASE_URL, startHarness } from "./harness.mjs";
 
@@ -880,6 +881,62 @@ describe("revoke: limits", () => {
     assert.equal(limiter.take("c"), 50, "waits for the oldest window");
     now = 60_000;
     assert.equal(limiter.take("c"), 0, "a's window ended");
+  });
+});
+
+describe("configuration: back-channel URLs", () => {
+  const base = {
+    BROKER_ISSUER: ISSUER,
+    BROKER_JWKS_URL: "https://idp.example.com/certs",
+    BROKER_LITELLM_URL: "https://litellm.example.com",
+    LITELLM_MASTER_KEY: MASTER_KEY,
+    BROKER_GATEWAY_BASE_URL: GATEWAY_BASE_URL,
+  };
+  const load = (overrides) => loadConfig({ ...base, ...overrides });
+
+  it("accepts https, and http on a loopback host", () => {
+    for (const name of ["BROKER_JWKS_URL", "BROKER_LITELLM_URL"])
+      for (const value of [
+        "https://idp.example.com/certs",
+        "http://127.0.0.1:8080/certs",
+        "http://127.8.9.10/certs",
+        "http://localhost:4000",
+        "http://[::1]:4000",
+      ])
+        assert.doesNotThrow(() => load({ [name]: value }), `${name} ${value}`);
+  });
+
+  it("refuses http to any other host, naming the variable and not the value", () => {
+    for (const name of ["BROKER_JWKS_URL", "BROKER_LITELLM_URL"])
+      for (const value of [
+        "http://keycloak:8080/certs",
+        "http://idp.example.com/certs",
+        "http://10.0.0.5:4000",
+        "http://127.example.com",
+      ])
+        assert.throws(
+          () => load({ [name]: value }),
+          (error) =>
+            error.message.startsWith(`${name} must be an https URL`) &&
+            !error.message.includes(value),
+          `${name} ${value}`,
+        );
+  });
+
+  it("with BROKER_ALLOW_INSECURE_BACKCHANNEL=true, accepts http to a container name only", () => {
+    const insecure = { BROKER_ALLOW_INSECURE_BACKCHANNEL: "true" };
+    const config = load({
+      ...insecure,
+      BROKER_JWKS_URL: "http://keycloak:8080/certs",
+      BROKER_LITELLM_URL: "http://litellm:4000",
+    });
+    assert.equal(config.litellmUrl, "http://litellm:4000");
+    for (const value of ["http://idp.example.com/certs", "http://10.0.0.5"])
+      assert.throws(() => load({ ...insecure, BROKER_JWKS_URL: value }));
+    assert.throws(
+      () => load({ BROKER_ALLOW_INSECURE_BACKCHANNEL: "yes" }),
+      /BROKER_ALLOW_INSECURE_BACKCHANNEL must be true or false/,
+    );
   });
 });
 

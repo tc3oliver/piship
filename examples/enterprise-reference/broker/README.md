@@ -51,7 +51,7 @@ The access token is checked in this order, and nothing from its payload is used 
 4. `iss` equals `BROKER_ISSUER` exactly; `aud` contains `piship-reference-broker`; `exp` is present and not past; `nbf` and `iat`, when present, are not in the future; `azp` is `acmecode`; `typ`, when present, is `Bearer` (Keycloak's ID tokens say `ID`); `sub` is a non-empty string. `exp`, `nbf` and `iat` allow 30 s of clock skew (`BROKER_CLOCK_TOLERANCE_SECONDS`).
 5. `groups` must be a string array with at least one group in the entitlement table; otherwise 403.
 
-The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...`, while the issuer stays the loopback URL) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. With a stale cache, known keys keep working while Keycloak is down; with no cache, acquires answer 503.
+The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...` on the compose network, while the issuer stays the loopback URL; outside a loopback host or a container network it must be `https`) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. With a stale cache, known keys keep working while Keycloak is down; with no cache, acquires answer 503.
 
 The broker does not introspect tokens: an access token of a session signed out at Keycloak stays usable here until it expires (5 minutes in the reference realm).
 
@@ -110,8 +110,9 @@ Revoke is authenticated only by the key it revokes, so it is limited by where it
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BROKER_ISSUER` | required | Exact `iss` |
-| `BROKER_JWKS_URL` | required | Realm certs endpoint |
-| `BROKER_LITELLM_URL` | required | LiteLLM admin origin |
+| `BROKER_JWKS_URL` | required | Realm certs endpoint. Must be `https`, except on a loopback host or with `BROKER_ALLOW_INSECURE_BACKCHANNEL` |
+| `BROKER_LITELLM_URL` | required | LiteLLM admin origin. Must be `https`, except on a loopback host or with `BROKER_ALLOW_INSECURE_BACKCHANNEL` |
+| `BROKER_ALLOW_INSECURE_BACKCHANNEL` | `false` | `true` also allows plain `http` for those two URLs on a single-label host name, a container network name such as `keycloak`; any other host still needs `https`. Compose sets it, since its back channel never leaves the compose network. Never set it where the path to the host crosses a network someone else can read: a JWKS read in clear lets a forged token with any `sub` through, and the admin calls carry the master key |
 | `LITELLM_MASTER_KEY` | required | LiteLLM admin key (`sk-…`) |
 | `BROKER_GATEWAY_BASE_URL` | required | Returned as `base_url`; must equal PiShip's `inference.baseUrl` |
 | `BROKER_AUDIENCE` | `piship-reference-broker` | Required `aud` member |

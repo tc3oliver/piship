@@ -139,6 +139,10 @@ services:
       BROKER_ISSUER: http://127.0.0.1:${KEYCLOAK_PORT:-18080}/realms/piship-reference
       BROKER_JWKS_URL: http://keycloak:8080/realms/piship-reference/protocol/openid-connect/certs
       BROKER_LITELLM_URL: http://litellm:4000
+      # Both back-channel URLs are plain http on the compose network. The
+      # broker refuses http for them unless this is set, and then only for a
+      # container name: a copied broker must use https.
+      BROKER_ALLOW_INSECURE_BACKCHANNEL: "true"
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run scripts/generate-env.mjs}
       # What PiShip declares as inference.baseUrl; returned as base_url.
       BROKER_GATEWAY_BASE_URL: http://127.0.0.1:${LITELLM_PORT:-14000}/v1
