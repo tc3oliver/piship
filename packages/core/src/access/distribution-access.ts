@@ -1317,6 +1317,11 @@ export class DistributionAccess {
             this.#workloadAt = this.#now();
           } else await this.#storeIdentity(identity);
         });
+        // A `sandbox login` of the previous user that checked the signed-in
+        // user before the identity was replaced stored its credential after
+        // the first clear: clear it again now that the identity is stored,
+        // after which the guard refuses any later one.
+        await this.sandboxCredential().clearUnlessBoundTo(principal);
         this.#emit("identity.login", {
           expiresAt: identity.expiresAt?.toISOString() ?? null,
           ...(binding.known ? { principalChange: true } : {}),

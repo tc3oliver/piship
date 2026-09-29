@@ -818,6 +818,26 @@ describe("sandbox credential across user switches (fixtures)", () => {
     expect(store.sandboxRefs()).toEqual([]);
   });
 
+  it("a sandbox login of the previous user that lands during another user's login is cleared once that identity is stored", async () => {
+    const alice = await login("alice-0001");
+    const issuer = alice.readIdentityMetadata()?.issuer ?? "";
+    const aliceKey = { issuer, subject: "alice-0001" };
+    const pending = slot(aliceKey, {
+      signedIn: await alice.signedInGuard(aliceKey),
+    });
+    // Between Bob's clear of the sandbox credential and his identity write,
+    // Alice's `sandbox login` finishes: she is still the stored user.
+    await login("bob-0002", {
+      onPhase: async (phase: AccessPhase) => {
+        if (phase === "sandbox-credential-cleared")
+          await pending.save(enter(SECRET));
+      },
+    });
+    expect(identitySubject()).toBe("bob-0002");
+    expect(store.sandboxRefs()).toEqual([]);
+    expect(existsSync(metadataFile())).toBe(false);
+  });
+
   it("logout deletes the sandbox credential after the identity, so a login that checked first is cleared too", async () => {
     const alice = await login("alice-0001");
     const issuer = alice.readIdentityMetadata()?.issuer ?? "";
