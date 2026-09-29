@@ -337,7 +337,7 @@ describe("AuditLog file sink retention", () => {
   it("appends without rotating while a live rotation lock is held", async () => {
     mkdirSync(join(temp, "logs"), { recursive: true });
     const base = join(temp, "logs", "audit.jsonl");
-    writeFileSync(`${base}.rotate.lock`, "1\n");
+    writeFileSync(`${base}.rotate.lock`, `${process.pid}-live-rotator\n`);
     const log = await AuditLog.open({
       config: config([...sink], 1000),
       distribution: "acmecode",

@@ -1,8 +1,9 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import {
   chmod,
   link,
+  lstat,
   mkdir,
   open,
   readFile,
@@ -10,6 +11,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   AUDIT_BATCH_SCHEMA,
@@ -121,20 +123,120 @@ export const AUDIT_LOG_FILE = join("logs", "audit.jsonl");
  */
 const ROTATION_LOCK_STALE_MS = 30_000;
 /**
+ * A rotation takes milliseconds, so a lock whose mtime is more than an hour
+ * old by the wall clock was left by a rotator that died, and its process ID
+ * belongs to an unrelated process now (or to another host). A short-lived
+ * command cannot watch a lock for the stale interval, so this is how such a
+ * lock is recovered when its holder's process cannot be shown to be gone. No
+ * live rotator holds a lock that long; a clock that jumps forward makes one
+ * look this old only inside those milliseconds.
+ */
+const ROTATION_LOCK_LEASE_MS = 60 * 60_000;
+/**
  * Rotation locks this process found held: what it saw (token and mtime) and
  * since when, on the monotonic clock. Ownership never depends on how old an
- * mtime looks against the wall clock, which can jump.
+ * mtime looks against the wall clock alone, which can jump.
  */
 const rotationLocksSeen = new Map<string, { state: string; since: number }>();
+/** Names this host in a lock token: a process ID means something only here. */
+const HOST_ID = createHash("sha256")
+  .update(hostname())
+  .digest("hex")
+  .slice(0, 12);
 
-/** The holder token and mtime of a rotation lock; undefined when it is gone. */
-async function rotationLockState(lock: string): Promise<string | undefined> {
+/** Whether a process with this ID exists (EPERM: it exists, not ours). */
+function processAlive(pid: number): boolean {
   try {
-    const { mtimeMs } = await statOpen(lock);
-    return `${await readFile(lock, "utf8")}\n${mtimeMs}`;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * The process a rotation lock token names, and whether it is on this host:
+ * `<pid>-<host id>-<random>`, or `<pid>-<random>` from an earlier PiShip
+ * (whose state directory was this host's too).
+ */
+function tokenOwner(
+  token: string,
+): { pid: number; sameHost: boolean } | undefined {
+  const match = /^(\d+)-(?:([0-9a-f]{12})-)?/.exec(token);
+  const pid = Number(match?.[1]);
+  if (!match || !Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  return { pid, sameHost: match[2] === undefined || match[2] === HOST_ID };
+}
+
+/** What one look at a rotation lock showed. */
+interface RotationLock {
+  /** The holder's token; undefined when the content cannot be read. */
+  readonly token: string | undefined;
+  readonly mtimeMs: number;
+  /** False for a directory or symlink at the lock's path. */
+  readonly regular: boolean;
+  /**
+   * Token and mtime together, compared only for equality with an earlier
+   * look; a lock that cannot be read is described by its mtime alone.
+   */
+  readonly state: string;
+}
+
+/** Look at a rotation lock; undefined when it is gone. */
+async function observeRotationLock(
+  lock: string,
+): Promise<RotationLock | undefined> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(lock, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    // Present but not openable (a root-owned file, or a directory on
+    // Windows): describe it by what its entry says.
+    try {
+      const entry = await lstat(lock);
+      return {
+        token: undefined,
+        mtimeMs: entry.mtimeMs,
+        regular: entry.isFile(),
+        state: `?\n${entry.mtimeMs}`,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    const stat = await handle.stat();
+    const token = await handle.readFile("utf8").catch(() => undefined);
+    return {
+      token,
+      mtimeMs: stat.mtimeMs,
+      regular: stat.isFile(),
+      state: `${token ?? "?"}\n${stat.mtimeMs}`,
+    };
   } catch {
     return undefined;
+  } finally {
+    await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * Whether the rotator that made `held` is gone: its process no longer exists
+ * on this host (at once), its mtime is over an hour old (a reused process
+ * ID), or this process has watched it unchanged for `staleMs` on the
+ * monotonic clock (`unchangedMs`).
+ */
+function rotationAbandoned(
+  held: RotationLock,
+  unchangedMs: number,
+  staleMs: number,
+): boolean {
+  const owner = held.token === undefined ? undefined : tokenOwner(held.token);
+  if (owner?.sameHost && owner.pid !== process.pid && !processAlive(owner.pid))
+    return true;
+  if (Date.now() - held.mtimeMs > ROTATION_LOCK_LEASE_MS) return true;
+  return unchangedMs > staleMs;
 }
 
 /**
@@ -229,7 +331,7 @@ class FileSinkWriter implements AuditSink {
    */
   private async rotate(measured: string, bytes: number): Promise<void> {
     const lock = `${this.path}.rotate.lock`;
-    const token = `${process.pid}-${randomBytes(8).toString("hex")}\n`;
+    const token = `${process.pid}-${HOST_ID}-${randomBytes(8).toString("hex")}\n`;
     if (!(await this.acquireRotationLock(lock, token))) return;
     try {
       // Another process may have taken over a lock this one held too long.
@@ -295,13 +397,18 @@ class FileSinkWriter implements AuditSink {
   }
 
   /**
-   * Create the rotation lock holding `token`. A held lock is taken over only
-   * after this process has seen it unchanged (the same holder's token and
-   * mtime) for the stale interval, measured on the monotonic clock across
-   * its later appends: a wall clock that jumps forward never makes a live
+   * Create the rotation lock holding `token`. A held lock is taken over when
+   * its holder is gone: its process no longer exists on this host (a crashed
+   * rotator, recovered by the very next writer, however short-lived), its
+   * mtime is over an hour old by the wall clock (a reused process ID), or
+   * this process has seen it unchanged (the same holder's token and mtime)
+   * for the stale interval, measured on the monotonic clock across its later
+   * appends. A live holder is never judged by how old its mtime looks
+   * within the hour, so a wall clock that jumps forward does not make a live
    * rotation look abandoned. The takeover renames the lock to a unique name
    * first, so only one process's rename of that file succeeds; a lock that
-   * changed in between is put back and given up, not reused.
+   * changed in between is put back and given up, not reused. A directory or
+   * symlink at the lock's path is never touched.
    */
   private async acquireRotationLock(
     lock: string,
@@ -318,24 +425,26 @@ class FileSinkWriter implements AuditSink {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
     }
     try {
-      const state = await rotationLockState(lock);
-      if (state === undefined) return false;
+      const held = await observeRotationLock(lock);
+      if (held === undefined || !held.regular) return false;
       const now = performance.now();
       const seen = rotationLocksSeen.get(lock);
-      if (seen?.state !== state) {
-        rotationLocksSeen.set(lock, { state, since: now });
-        return false;
-      }
+      const unchanged = seen?.state === held.state;
+      if (!unchanged)
+        rotationLocksSeen.set(lock, { state: held.state, since: now });
       if (
-        now - seen.since <=
-        (this.rotation.lockStaleMs ?? ROTATION_LOCK_STALE_MS)
+        !rotationAbandoned(
+          held,
+          unchanged && seen ? now - seen.since : 0,
+          this.rotation.lockStaleMs ?? ROTATION_LOCK_STALE_MS,
+        )
       )
         return false;
       rotationLocksSeen.delete(lock);
       const taken = `${lock}.${randomBytes(6).toString("hex")}.stale`;
       await rename(lock, taken);
-      const moved = await rotationLockState(taken);
-      if (moved !== state) {
+      const moved = await observeRotationLock(taken);
+      if (moved?.state !== held.state) {
         await link(taken, lock).catch(() => undefined);
         await rm(taken, { force: true });
         return false;
