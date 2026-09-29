@@ -44,6 +44,7 @@ import {
   createSecretStore,
   metadataSecretRefs,
   toSecretValue,
+  isLockTimeout,
   withFileLock,
 } from "./index.js";
 import { touchHeldLocks } from "./lock-heartbeat.js";
@@ -1531,6 +1532,11 @@ describe("credential lifecycle", () => {
       expect((error as Error).message).toMatch(
         /Another process is still updating held\.json/,
       );
+      // Callers can tell a lock wait from any other failure.
+      expect(isLockTimeout(error)).toBe(true);
+      expect(
+        isLockTimeout(new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "x")),
+      ).toBe(false);
     } finally {
       clearInterval(holder);
     }
@@ -2088,10 +2094,17 @@ describe("secret normalization", () => {
       } catch (error) {
         expect((error as Error).message).not.toContain(value);
       }
+      // A secret already wrapped in SecretValue (a local key, an adapter that
+      // imports the same contracts package) is held to the same rule.
+      expect(() => toSecretValue(new SecretValue(value))).toThrow(
+        expect.objectContaining({ code: "CREDENTIAL_ACQUIRE_FAILED" }),
+      );
     }
     expect(toSecretValue("sk-~!visible_ASCII.only:0").reveal()).toBe(
       "sk-~!visible_ASCII.only:0",
     );
+    const wrapped = new SecretValue("sk-wrapped-visible");
+    expect(toSecretValue(wrapped)).toBe(wrapped);
   });
 });
 

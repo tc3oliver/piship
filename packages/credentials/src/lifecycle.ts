@@ -95,6 +95,18 @@ export interface ActiveCredential {
   /** Request-time accessor; the secret is never exposed as plain data. */
   readonly secret: SecretValue | null;
   readonly notices: readonly string[];
+  /**
+   * When this credential was acquired: with `ref` it names one issuance,
+   * since generations restart from 1 after a logout.
+   */
+  readonly acquiredAt?: string;
+}
+
+/** The credential a failed request used, and who it was issued to. */
+export interface RejectedCredential {
+  readonly ref: string;
+  readonly acquiredAt?: string | undefined;
+  readonly principal: PrincipalKey | null;
 }
 
 /**
@@ -339,7 +351,7 @@ const CREDENTIAL_KINDS: readonly RuntimeCredentialKind[] = [
  * redaction relies on `instanceof`, so every secret is re-wrapped here.
  */
 export function toSecretValue(value: unknown): SecretValue {
-  if (value instanceof SecretValue) return value;
+  const own = value instanceof SecretValue;
   let text: unknown = value;
   if (
     value &&
@@ -367,7 +379,7 @@ export function toSecretValue(value: unknown): SecretValue {
       "The credential provider returned a secret a request header cannot carry: only visible ASCII characters are allowed, without spaces",
       { component: "credential" },
     );
-  return new SecretValue(text);
+  return own ? (value as SecretValue) : new SecretValue(text);
 }
 
 /** Validate a provider-returned credential and normalize its secret and expiry. */
@@ -547,6 +559,16 @@ function breakStaleLock(lock: string, staleMs: number): void {
   rmSync(aside, { force: true });
 }
 
+const LOCK_TIMEOUT = "lock-timeout";
+
+/** Whether `error` is a wait for a cross-process lock that ran out. */
+export function isLockTimeout(error: unknown): boolean {
+  return (
+    error instanceof PiShipError &&
+    error.sanitizedDetail?.reason === LOCK_TIMEOUT
+  );
+}
+
 /**
  * Cross-process lock beside the metadata file. The holder refreshes the
  * lock's mtime while its task runs (on an interval, and before each blocking
@@ -595,6 +617,7 @@ export async function withFileLock<T>(
             retryable: true,
             userAction:
               "Try again when the other session finishes signing in or refreshing",
+            sanitizedDetail: { reason: LOCK_TIMEOUT },
           },
         );
       await sleep(50);
@@ -1094,7 +1117,12 @@ export class CredentialManager {
       const acquired = normalizeCredential(returned);
       metadata = await this.#commit(acquired, principal, notices);
       this.#emit("credential.acquire", this.#eventDetail(metadata));
-      return { ref: this.#toRef(metadata), secret: acquired.secret, notices };
+      return {
+        ref: this.#toRef(metadata),
+        secret: acquired.secret,
+        notices,
+        acquiredAt: metadata.acquired_at,
+      };
     }
     const status = this.status();
     const rejected =
@@ -1136,7 +1164,12 @@ export class CredentialManager {
               ? "rejected"
               : status.state,
         });
-        return { ref: this.#toRef(metadata), secret: next.secret, notices };
+        return {
+          ref: this.#toRef(metadata),
+          secret: next.secret,
+          notices,
+          acquiredAt: metadata.acquired_at,
+        };
       } catch (error) {
         // A denial is the organization's answer, not an outage: an early
         // renewal it refuses does not leave the user on the credential that
@@ -1185,7 +1218,12 @@ export class CredentialManager {
         );
       }
     }
-    return { ref: this.#toRef(metadata), secret, notices };
+    return {
+      ref: this.#toRef(metadata),
+      secret,
+      notices,
+      acquiredAt: metadata.acquired_at,
+    };
   }
 
   /**
@@ -1198,17 +1236,24 @@ export class CredentialManager {
 
   /**
    * Record a gateway rejection so this and later processes renew before reuse.
-   * Only the generation that was rejected is marked, never a newer one.
+   * `used` names the credential the failed request carried and the principal
+   * it was issued to: only that issuance is marked, never a newer one, and
+   * never one issued to someone else, whatever is stored by now. Without
+   * `used`, the credential stored when the call is made is the one marked.
    */
-  async markRejected(): Promise<void> {
+  async markRejected(used?: RejectedCredential): Promise<void> {
     if (!this.renewable) return;
-    const observed = this.readMetadata()?.credential_ref;
+    const observed = used?.ref ?? this.readMetadata()?.credential_ref;
     await this.#exclusive(async () => {
       const metadata = this.readMetadata();
       if (
         !metadata ||
         metadata.rejected_at ||
-        metadata.credential_ref !== observed
+        metadata.credential_ref !== observed ||
+        (used &&
+          ((used.acquiredAt !== undefined &&
+            metadata.acquired_at !== used.acquiredAt) ||
+            !samePrincipal(metadata.principal ?? null, used.principal)))
       )
         return;
       writeAtomic(

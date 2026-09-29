@@ -15,6 +15,7 @@ import {
   CredentialManager,
   createSecretStore,
   deleteSecretsVerified,
+  isLockTimeout,
   metadataSecretRefs,
   withFileLock,
 } from "@piship/credentials";
@@ -279,6 +280,10 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     try {
       problems = await access.logout();
     } catch (error) {
+      // Another process still holds a lock: nothing is wrong with the
+      // configuration, and deleting around that process is what the locks
+      // prevent. Say so instead of signing out locally.
+      if (isLockTimeout(error)) throw error;
       unavailable = error;
     }
   if (unavailable !== undefined) {

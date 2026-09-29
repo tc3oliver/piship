@@ -7,6 +7,7 @@ import {
   type EnterpriseContext,
   type IdentityProvider,
   type IdentitySession,
+  formatError,
   type InferenceProvider,
   type LoginContext,
   type ManagedFetch,
@@ -172,6 +173,7 @@ export class DistributionAccess {
   #secret: SecretValue | null = null;
   /** The credential generation `#secret` belongs to. */
   #secretRef: string | undefined;
+  #secretAcquiredAt: string | undefined;
   /**
    * The principal this instance serves, pinned by its first `activate()` or
    * `login()` (null without identity). A running session never switches
@@ -406,11 +408,13 @@ export class DistributionAccess {
   #forgetSecret(): void {
     this.#secret = null;
     this.#secretRef = undefined;
+    this.#secretAcquiredAt = undefined;
   }
 
   #hold(active: ActiveCredential): void {
     this.#secret = active.secret;
     this.#secretRef = active.ref?.ref;
+    this.#secretAcquiredAt = active.acquiredAt;
   }
 
   /**
@@ -1223,7 +1227,11 @@ export class DistributionAccess {
   async logout(): Promise<string[]> {
     const problems: string[] = [];
     const manager = await this.credentialManager();
-    const provider = await this.identityProvider().catch(() => null);
+    let providerError: unknown;
+    const provider = await this.identityProvider().catch((error: unknown) => {
+      providerError = error;
+      return null;
+    });
     const signOut = async (): Promise<void> => {
       problems.push(
         ...(await manager.logout(this.#credentialContext())).map((problem) =>
@@ -1240,6 +1248,14 @@ export class DistributionAccess {
           !!provider?.logout && !isWorkloadIdentityProvider(provider);
         let revocation: "completed" | "failed" | "unsupported" | "skipped" =
           revocable ? "skipped" : "unsupported";
+        // An adapter that could not be loaded may have had tokens to
+        // revoke: that is a failure to revoke, not an unsupported one.
+        if (metadata && providerError !== undefined) {
+          revocation = "failed";
+          problems.push(
+            `identity revocation: not attempted: ${redact(formatError(providerError))}`,
+          );
+        }
         if (metadata && revocable && this.store) {
           const secret = await this.store
             .get(metadata.secretRef)
@@ -1345,7 +1361,15 @@ export class DistributionAccess {
       // place (the rejection may be transient) and ask for a new one.
       if (!manager.renewable)
         throw rejectedUserSecret(this.options.app.command);
-      await manager.markRejected();
+      await manager.markRejected(
+        credential.ref && this.#principal !== undefined
+          ? {
+              ref: credential.ref.ref,
+              acquiredAt: credential.acquiredAt,
+              principal: this.#principal,
+            }
+          : undefined,
+      );
       await this.options.onPhase?.("credential-rejected");
       // The renewal is checked against the pinned principal like any other,
       // and its entitlement is what it returned under the lock.
@@ -1512,6 +1536,7 @@ export class DistributionAccess {
       state === "valid" &&
       !!metadata &&
       metadata.credential_ref === this.#secretRef &&
+      metadata.acquired_at === this.#secretAcquiredAt &&
       samePrincipal(metadata.principal ?? null, this.#principal)
     );
   }
@@ -1581,7 +1606,15 @@ export class DistributionAccess {
 
   /** Persist a gateway rejection of the current runtime credential. */
   async markCredentialRejected(): Promise<void> {
-    await (await this.credentialManager()).markRejected();
+    // Only what this session used, issued to the principal it is pinned to:
+    // a request that was in flight while another user signed in must not
+    // mark that user's credential.
+    if (this.#secretRef === undefined || this.#principal === undefined) return;
+    await (await this.credentialManager()).markRejected({
+      ref: this.#secretRef,
+      acquiredAt: this.#secretAcquiredAt,
+      principal: this.#principal,
+    });
   }
 
   /**

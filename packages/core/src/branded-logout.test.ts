@@ -16,10 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type AuditEvent, principalId } from "@piship/contracts";
+import { type AuditEvent, PiShipError, principalId } from "@piship/contracts";
 import { withFileLock } from "@piship/credentials";
 import type { AccessManifest } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { DistributionAccess } from "./access/index.js";
@@ -276,6 +276,66 @@ describe("branded logout", () => {
     expect(readdirSync(path("secrets"))).toEqual([]);
     const text = stateText(ctx);
     for (const secret of secrets) expect(text).not.toContain(secret);
+  });
+
+  it("fails instead of signing out around a process that still holds a lock", async () => {
+    const { ctx, err, path } = context();
+    await signIn(ctx);
+    const refs = readdirSync(path("secrets")).length;
+    const spy = vi
+      .spyOn(DistributionAccess.prototype, "logout")
+      .mockRejectedValueOnce(
+        new PiShipError(
+          "CREDENTIAL_ACQUIRE_FAILED",
+          "Another process is still updating session.json; gave up after 90 s",
+          {
+            retryable: true,
+            sanitizedDetail: { reason: "lock-timeout" },
+          },
+        ),
+      );
+    try {
+      await expect(runLogout(ctx)).rejects.toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    // Nothing was deleted around the holder, and no local fallback ran.
+    expect(existsSync(path("identity", "session.json"))).toBe(true);
+    expect(readdirSync(path("secrets"))).toHaveLength(refs);
+    expect(err.join("\n")).not.toContain("signing out locally");
+  });
+
+  it("reports an identity provider that cannot be loaded as a failed revocation, not an unsupported one", async () => {
+    const { ctx, err, out, path } = context();
+    await signIn(ctx);
+    const spy = vi
+      .spyOn(DistributionAccess.prototype, "identityProvider")
+      .mockRejectedValue(
+        new PiShipError(
+          "CONFIG_INVALID",
+          "The identity adapter failed to load",
+        ),
+      );
+    try {
+      await runLogout(ctx);
+    } finally {
+      spy.mockRestore();
+    }
+    // The tokens are cleared locally, and the warning says nothing was sent.
+    expect(err).toEqual([
+      expect.stringMatching(
+        /^Warning: identity revocation: not attempted: .*failed to load/,
+      ),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(existsSync(path("identity", "session.json"))).toBe(false);
+    expect(
+      auditEvents(ctx)
+        .filter((event) => event.event === "identity.logout")
+        .map((event) => event.detail),
+    ).toEqual([expect.objectContaining({ revocation: "failed" })]);
   });
 
   it("waits for a holder of the identity lock before it signs out locally", async () => {

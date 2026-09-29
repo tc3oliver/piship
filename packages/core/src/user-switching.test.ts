@@ -717,6 +717,36 @@ describe("a running session while another sign-in happens (fixtures)", () => {
     expect(open().readIdentityMetadata()?.subject).toBe(BOB.subject);
   }
 
+  it("does not mark Bob's credential as rejected when a request of Alice's session fails after Bob signed in", async () => {
+    await login(open(), ALICE);
+    const running = open();
+    await running.activate();
+    services.knobs.revokeStatus = 503;
+    await login(open(), BOB);
+    services.knobs.revokeStatus = undefined;
+    const before = readFileSync(credentialFile(), "utf8");
+    // A request Alice's session sent before Bob signed in is rejected.
+    await running.markCredentialRejected();
+    expect(readFileSync(credentialFile(), "utf8")).toBe(before);
+    expect(JSON.parse(before)).not.toHaveProperty("rejected_at");
+    expectBobsCredentialIntact();
+  });
+
+  it("does not mark a credential re-issued to the same user under the same reference as rejected", async () => {
+    await login(open(), ALICE);
+    const running = open();
+    await running.activate();
+    // Alice signs in again elsewhere: generations restart, so the new
+    // credential reuses the reference the running session holds.
+    await login(open(), ALICE);
+    const stored = JSON.parse(readFileSync(credentialFile(), "utf8"));
+    await running.markCredentialRejected();
+    expect(JSON.parse(readFileSync(credentialFile(), "utf8"))).toEqual(stored);
+    // The session does not go on serving the revoked secret from its cache.
+    const [current] = credentialOf(ALICE).slice(-1);
+    expect((await running.requestSecret())?.reveal()).toBe(current?.secret);
+  });
+
   it("never serves Alice's cached secret, or a credential issued to Bob, after Bob signs in elsewhere", async () => {
     await login(open(), ALICE);
     const running = open();
