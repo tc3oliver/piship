@@ -346,13 +346,16 @@ export function normalizeCredential(value: unknown): RuntimeCredential {
       "The credential provider returned an invalid expiry",
       { component: "credential" },
     );
+  // The ID reaches notices, audit events, the retry record, and doctor: keep
+  // it to the characters an identifier needs, whichever provider issued it.
   if (
     credential.credentialId !== undefined &&
-    typeof credential.credentialId !== "string"
+    (typeof credential.credentialId !== "string" ||
+      !/^[A-Za-z0-9._:-]{1,256}$/.test(credential.credentialId))
   )
     throw new PiShipError(
       "CREDENTIAL_ACQUIRE_FAILED",
-      "The credential provider returned a non-string credential ID",
+      "The credential provider returned an invalid credential ID",
       { component: "credential" },
     );
   return {
