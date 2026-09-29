@@ -55,6 +55,7 @@ export {
   STDERR_TRUNCATION_MARKER,
   sanitizeStderr,
   stripCredentials,
+  withApprovedNetwork,
 } from "./environment.js";
 export { NativeBackend } from "./native.js";
 export {

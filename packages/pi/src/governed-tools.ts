@@ -26,6 +26,7 @@ import {
 import {
   type ApprovalChannel,
   type PolicyAction,
+  processNetworkEnvironment,
   redact,
 } from "@piship/contracts";
 import type { GovernedMcpTool } from "@piship/mcp";
@@ -36,7 +37,12 @@ import {
   projectGitControlFiles,
   toPosixPath,
 } from "@piship/policy";
-import { enforcesPathPolicy, isWithin, realpathNearest } from "@piship/sandbox";
+import {
+  enforcesPathPolicy,
+  isWithin,
+  realpathNearest,
+  withApprovedNetwork,
+} from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
 
 /** True when `path` is `root` or below it. */
@@ -366,7 +372,22 @@ export function governedBashOperations(
             : {}),
           ...(options.env ? { env: options.env } : {}),
         });
-      return local.exec(command, cwd, options);
+      // Uncontained, the command still gets only the approved network
+      // settings. A `!` command carries no environment from Pi, so it keeps
+      // the process environment.
+      return local.exec(
+        command,
+        cwd,
+        options.env
+          ? {
+              ...options,
+              env: withApprovedNetwork(
+                options.env,
+                processNetworkEnvironment(),
+              ),
+            }
+          : options,
+      );
     },
   };
 }

@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
-import { PiShipError, redact } from "@piship/contracts";
+import {
+  PiShipError,
+  processNetworkEnvironment,
+  redact,
+} from "@piship/contracts";
 import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
 import {
   capabilityMismatch,
@@ -28,7 +32,11 @@ import {
   type SandboxInstance,
   type SandboxProvider,
 } from "./backend.js";
-import { filterEnvironment, stripCredentials } from "./environment.js";
+import {
+  filterEnvironment,
+  stripCredentials,
+  withApprovedNetwork,
+} from "./environment.js";
 import { NativeBackend } from "./native.js";
 import { type ProbeTarget, probeSandbox } from "./probe.js";
 import { spawnProcess } from "./process.js";
@@ -345,8 +353,16 @@ function commandEnvironment(
     {},
     session.platform,
   );
+  // A local command in a sandbox that allows the network gets the approved
+  // proxy and CA settings. A remote backend never does: they name this host's
+  // proxy and files. With the network denied there is nothing to configure.
   if (session.capabilities?.isolation !== "remote")
-    return sessionEnvironment(session.profile, filtered);
+    return sessionEnvironment(
+      session.profile,
+      session.profile.network === "allow"
+        ? withApprovedNetwork(filtered, processNetworkEnvironment())
+        : filtered,
+    );
   const hostBound = new Set<string>(HOST_BOUND_VARIABLES);
   const output: Record<string, string> = {};
   for (const [name, value] of Object.entries(filtered))
