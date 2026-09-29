@@ -122,11 +122,64 @@ function statusFailure(
   );
 }
 
+/** Largest broker answer body read; the http-broker answer is a few hundred bytes. */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/** CR, LF and NUL: never valid in a token that becomes a header value. */
+const HEADER_BREAKING = /[\r\n\0]/;
+
+/**
+ * A short, fixed description of a transport failure. Never an error message:
+ * undici puts an invalid header value, such as a bearer token, into its
+ * message. Only a PiShip error code or a system error code is used.
+ */
+function transportCode(error: unknown): string {
+  if (error instanceof PiShipError) return error.code;
+  const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : "network error";
+}
+
+/** Read at most `MAX_BODY_BYTES` of a body; a larger one breaks the contract. */
+async function readBounded(
+  response: Response,
+  operation: BrokerOperation,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw brokerFailure(
+        operation,
+        "contract",
+        "The credential broker answer is too large",
+        { status: response.status },
+      );
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Release an answer whose body is not needed; never fails. */
+function discardBody(response: Response): void {
+  response.body?.cancel().catch(() => {});
+}
+
 /**
  * One broker call under a deadline that a caller's signal can shorten but
- * never remove. The body is read under the same deadline. Transport failures
- * are credential failures, not gateway ones; other PiShip errors from the
- * managed fetch (network or TLS policy) keep their own codes.
+ * never remove. The status decides the classification; `body()` reads a
+ * bounded body under the same deadline and is called only for a success, so
+ * a stalled or huge error body never turns a 403 into a timeout. Transport
+ * failures are credential failures, not gateway ones; other PiShip errors
+ * from the managed fetch (network or TLS policy) keep their own codes.
  */
 async function brokerRequest(
   fetch: ManagedFetch,
@@ -134,7 +187,10 @@ async function brokerRequest(
   init: RequestInit,
   operation: BrokerOperation,
   options: { readonly signal?: AbortSignal; readonly timeoutMs?: number },
-): Promise<{ readonly response: Response; readonly text: string }> {
+): Promise<{
+  readonly response: Response;
+  readonly body: () => Promise<string>;
+}> {
   const deadline = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const signal = options.signal
     ? AbortSignal.any([options.signal, deadline])
@@ -143,36 +199,49 @@ async function brokerRequest(
     operation === "acquire"
       ? "The credential broker"
       : "The credential revocation endpoint";
-  try {
-    const response = await fetch(url, { ...init, signal });
-    return { response, text: await response.text() };
-  } catch (error) {
+  const failure = (error: unknown): unknown => {
     if (options.signal?.aborted)
-      throw brokerFailure(
+      return brokerFailure(
         operation,
         "cancelled",
         `The credential ${operation === "acquire" ? "request" : "revocation"} was cancelled`,
       );
     if (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE")
-      throw error;
+      return error;
     if (
       deadline.aborted ||
       (error as Error)?.name === "AbortError" ||
       (error as Error)?.name === "TimeoutError"
     )
-      throw brokerFailure(
+      return brokerFailure(
         operation,
         "timeout",
         `${subject} did not respond in time`,
         { retryable: true },
       );
-    throw brokerFailure(
+    return brokerFailure(
       operation,
       "unreachable",
-      `${subject} is unreachable${error instanceof Error ? `: ${error.message}` : ""}`,
+      `${subject} is unreachable (${transportCode(error)})`,
       { retryable: true },
     );
+  };
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal });
+  } catch (error) {
+    throw failure(error);
   }
+  return {
+    response,
+    body: async () => {
+      try {
+        return await readBounded(response, operation);
+      } catch (error) {
+        throw failure(error);
+      }
+    },
+  };
 }
 
 function normalizeUrl(value: string): string {
@@ -211,13 +280,20 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           userAction: "Run login",
         },
       );
-    const { response, text } = await brokerRequest(
+    const token = identity.accessToken.reveal();
+    if (HEADER_BREAKING.test(token))
+      throw new PiShipError(
+        "IDENTITY_INVALID",
+        "The identity session holds a malformed access token",
+        { component: "credential", userAction: "Run login again" },
+      );
+    const { response, body: readBody } = await brokerRequest(
       this.options.fetch,
       this.options.endpoint,
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${identity.accessToken.reveal()}`,
+          authorization: `Bearer ${token}`,
           "content-type": "application/json",
           accept: "application/json",
         },
@@ -234,6 +310,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           : {}),
       },
     );
+    if (response.status >= 300) discardBody(response);
     if (response.status === 401)
       throw new PiShipError(
         "IDENTITY_EXPIRED",
@@ -249,6 +326,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         },
       );
     if (response.status >= 300) throw statusFailure("acquire", response);
+    const text = await readBody();
     let body: Record<string, unknown>;
     try {
       const parsed: unknown = JSON.parse(text);
@@ -269,6 +347,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       (type !== "api_key" && type !== "bearer" && type !== "opaque") ||
       typeof secret !== "string" ||
       secret.length < 8 ||
+      HEADER_BREAKING.test(secret) ||
       (body.credential_id !== undefined &&
         typeof body.credential_id !== "string") ||
       (body.expires_at !== undefined &&
@@ -347,6 +426,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
     ctx: CredentialContext,
   ): Promise<void> {
     if (!this.options.revokeEndpoint) return;
+    if (HEADER_BREAKING.test(credential.secret.reveal()))
+      throw brokerFailure(
+        "revoke",
+        "contract",
+        "The stored credential is malformed and cannot be revoked",
+      );
     const { response } = await brokerRequest(
       this.options.fetch,
       this.options.revokeEndpoint,
@@ -369,6 +454,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           : {}),
       },
     );
+    discardBody(response);
     // 401 and 404: the credential is no longer valid there, so it is revoked.
     if (
       response.status >= 300 &&

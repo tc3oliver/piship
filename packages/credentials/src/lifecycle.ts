@@ -183,7 +183,9 @@ export function toSecretValue(value: unknown): SecretValue {
     } catch {
       text = undefined;
     }
-  if (typeof text !== "string" || text.length === 0)
+  // CR, LF or NUL would break the header the secret is sent in, and a
+  // transport error could then echo it.
+  if (typeof text !== "string" || text.length === 0 || /[\r\n\0]/.test(text))
     throw new PiShipError(
       "CREDENTIAL_ACQUIRE_FAILED",
       "The credential provider returned a credential without a usable secret",
@@ -727,6 +729,11 @@ export class CredentialManager {
         });
         return { ref: this.#toRef(metadata), secret: next.secret, notices };
       } catch (error) {
+        // A denial is the organization's answer, not an outage: an early
+        // renewal it refuses does not leave the user on the credential that
+        // is still valid.
+        if (error instanceof PiShipError && error.code === "CREDENTIAL_DENIED")
+          throw error;
         if (status.state === "expired" || force) {
           if (
             error instanceof PiShipError &&

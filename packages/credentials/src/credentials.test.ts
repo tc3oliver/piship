@@ -401,6 +401,127 @@ describe("http-broker failure and retry contract", () => {
   } as const;
   const inThirtySeconds = () => new Date(Date.now() + 30_000);
 
+  describe("header values and answer bodies", () => {
+    const real = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    /** The fixture's real answer, to replay with one field changed. */
+    async function realAnswer(): Promise<Record<string, unknown>> {
+      let captured = "";
+      await broker({
+        fetch: async (url: string | URL, init?: RequestInit) => {
+          const response = await real(url, init);
+          captured = await response.clone().text();
+          return response;
+        },
+      }).acquire(identity, ctx);
+      return JSON.parse(captured) as Record<string, unknown>;
+    }
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    it("reports a transport failure by code, never by the error's own message", async () => {
+      const token = identity.accessToken?.reveal() ?? "";
+      const error = await failure(
+        call.acquire(
+          broker({
+            fetch: async () => {
+              throw new TypeError(
+                `Invalid value "${token}" for header "authorization"`,
+              );
+            },
+          }),
+        ),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+      });
+      expectNoSecret(error);
+      // The message stays out even for a value the redaction does not know.
+      expect(String(error)).not.toContain("Invalid value");
+    });
+
+    it("refuses an access token or stored credential that would break a header", async () => {
+      const never = async (): Promise<Response> => {
+        throw new Error("no request may be sent");
+      };
+      for (const control of ["\r", "\n", "\0"]) {
+        const bad = {
+          ...identity,
+          accessToken: new SecretValue(`demo-at${control}injected`),
+        };
+        await expect(
+          broker({ fetch: never }).acquire(bad, ctx),
+        ).rejects.toMatchObject({ code: "IDENTITY_INVALID" });
+        await expect(
+          broker({ fetch: never }).revoke(
+            { ...issued, secret: new SecretValue(`sk-issued${control}xx`) },
+            ctx,
+          ),
+        ).rejects.toMatchObject({
+          code: "CREDENTIAL_REVOKED",
+          sanitizedDetail: { reason: "contract" },
+        });
+      }
+    });
+
+    it("refuses a credential from the broker that would break a header", async () => {
+      const answer = await realAnswer();
+      await expect(
+        broker({ fetch: async () => json(answer) }).acquire(identity, ctx),
+      ).resolves.toBeDefined();
+      for (const control of ["\r", "\n", "\0"]) {
+        const error = await failure(
+          call.acquire(
+            broker({
+              fetch: async () =>
+                json({ ...answer, credential: `sk-live${control}injected` }),
+            }),
+          ),
+        );
+        expect(error).toMatchObject({
+          code: "CREDENTIAL_ACQUIRE_FAILED",
+          sanitizedDetail: { reason: "contract" },
+        });
+      }
+    });
+
+    it("refuses an answer body larger than the broker contract allows", async () => {
+      const answer = await realAnswer();
+      const error = await failure(
+        call.acquire(
+          broker({
+            fetch: async () =>
+              json({ ...answer, padding: "x".repeat(200 * 1024) }),
+          }),
+        ),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        sanitizedDetail: { reason: "contract" },
+      });
+    });
+
+    it("decides a 403 from the status without reading its body", async () => {
+      // A body that never ends: reading it would turn the 403 into a timeout.
+      const stalled = new ReadableStream<Uint8Array>({ start() {} });
+      const error = await failure(
+        call.acquire(
+          broker({
+            timeoutMs: 200,
+            fetch: async () => new Response(stalled, { status: 403 }),
+          }),
+        ),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_DENIED",
+        sanitizedDetail: { reason: "denied" },
+      });
+    });
+  });
+
   // One row per §7.1 status class, for acquire (knob prefix `broker`) and
   // revoke (knob prefix `revoke`). A 401 and 404 on revoke mean the
   // credential is already invalid there, so they count as revoked.
@@ -665,6 +786,7 @@ function fakeProvider(
   options: {
     expiresInSeconds?: number;
     failRefresh?: boolean;
+    refreshError?: Error;
     revoked?: string[];
   } = {},
 ) {
@@ -688,6 +810,7 @@ function fakeProvider(
       };
     },
     async refresh(): Promise<RuntimeCredential> {
+      if (options.refreshError) throw options.refreshError;
       if (options.failRefresh) throw new Error("broker unavailable");
       return this.acquire();
     },
@@ -795,6 +918,24 @@ describe("credential lifecycle", () => {
       .catch((caught: Error) => caught);
     expect(error).toMatchObject({ code: "CREDENTIAL_EXPIRED" });
     expect(String(error)).not.toContain("sk-generation");
+  });
+  it("does not keep using a credential whose early renewal the broker denied", async () => {
+    const denied = new PiShipError(
+      "CREDENTIAL_DENIED",
+      "The credential broker denied the request",
+      { component: "credential" },
+    );
+    const provider = fakeProvider({
+      expiresInSeconds: 1,
+      refreshError: denied,
+    });
+    const { manager: credentials } = manager(provider);
+    await credentials.ensure(null, ctx, { allowAcquire: true });
+    // Still valid, inside the renewal window: an outage would continue.
+    expect(credentials.status().state).toBe("expiring");
+    await expect(
+      credentials.ensure(null, ctx, { allowAcquire: false }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_DENIED", retryable: false });
   });
   it("forces re-acquisition after a gateway rejection", async () => {
     const provider = fakeProvider({ expiresInSeconds: 3600 });

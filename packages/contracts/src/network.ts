@@ -196,9 +196,11 @@ export function createManagedFetch(
         throw error;
       const cause = (error as { cause?: { code?: string; message?: string } })
         ?.cause;
+      // Only a system error code, never a message: undici puts an invalid
+      // header value, such as a bearer token, into its message.
       throw new PiShipError(
         "GATEWAY_UNREACHABLE",
-        `${component} request to ${target.host} failed: ${cause?.code ?? cause?.message ?? (error as Error)?.message ?? "network error"}`,
+        `${component} request to ${target.host} failed: ${typeof cause?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(cause.code) ? cause.code : "network error"}`,
         { retryable: true, component },
       );
     }
