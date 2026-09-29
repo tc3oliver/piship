@@ -733,12 +733,24 @@ export class CredentialManager {
             error.code !== "CREDENTIAL_ACQUIRE_FAILED"
           )
             throw error;
+          // Keep the retry contract of the failed renewal: a broker outage
+          // or rate limit stays retryable, with the server's wait.
+          const failure = error instanceof PiShipError ? error : undefined;
           throw new PiShipError(
             force ? "CREDENTIAL_REVOKED" : "CREDENTIAL_EXPIRED",
             `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed${error instanceof Error ? `: ${error.message}` : ""}`,
             {
               component: "credential",
-              userAction: "Run the branded login command",
+              userAction: failure?.retryable
+                ? "Try again later; if it keeps failing, run the branded login command"
+                : "Run the branded login command",
+              retryable: failure?.retryable ?? false,
+              ...(failure?.retryAfterMs === undefined
+                ? {}
+                : { retryAfterMs: failure.retryAfterMs }),
+              ...(failure?.sanitizedDetail
+                ? { sanitizedDetail: failure.sanitizedDetail }
+                : {}),
             },
           );
         }

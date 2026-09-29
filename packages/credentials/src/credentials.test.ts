@@ -279,7 +279,7 @@ describe("http-broker credential provider", () => {
     expect(services.state.revokedCredentials).toEqual(["vk_demo_1"]);
   });
   it.each([
-    [{ brokerStatus: 403 }, "CREDENTIAL_ACQUIRE_FAILED", false],
+    [{ brokerStatus: 403 }, "CREDENTIAL_DENIED", false],
     [{ brokerStatus: 429 }, "CREDENTIAL_ACQUIRE_FAILED", true],
     [{ brokerStatus: 503 }, "CREDENTIAL_ACQUIRE_FAILED", true],
     [
@@ -335,6 +335,325 @@ describe("http-broker credential provider", () => {
       "sk-leaked-secret-123",
     );
   });
+});
+
+describe("http-broker failure and retry contract", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  let identity: IdentitySession;
+  let issued: RuntimeCredential;
+  // Planted in every failure answer, so an echoed body is caught.
+  const BODY_SENTINEL = "sk-body-sentinel-0123456789";
+  beforeEach(async () => {
+    services = await startLocalServices();
+    const token = `demo-at-contract-${Date.now()}`;
+    services.state.accessTokens.set(token, {
+      subject: "demo-user-1",
+      expires: Math.floor(Date.now() / 1000) + 600,
+    });
+    identity = {
+      subject: "demo-user-1",
+      issuer: services.issuer,
+      accessToken: new SecretValue(token),
+    };
+    issued = await broker().acquire(identity, ctx);
+  });
+  afterEach(() => services.close());
+  const broker = (extra: Record<string, unknown> = {}) =>
+    new HttpBrokerCredentialProvider({
+      endpoint: services.brokerUrl,
+      revokeEndpoint: services.revokeUrl,
+      expectedBaseUrl: services.gatewayUrl,
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+      ...extra,
+    });
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => {
+        throw new Error("expected a failure");
+      },
+      (error: unknown) => error as PiShipError,
+    );
+  /** No secret in the message, action, detail, cause, or any rendering. */
+  function expectNoSecret(error: unknown): void {
+    const renderings = [
+      String(error),
+      JSON.stringify(error),
+      inspect(error, { depth: 10, showHidden: true }),
+      String((error as { cause?: unknown }).cause ?? ""),
+    ].join("\n");
+    for (const secret of [
+      identity.accessToken?.reveal() ?? "missing",
+      issued.secret.reveal(),
+      BODY_SENTINEL,
+    ])
+      expect(renderings).not.toContain(secret);
+  }
+  const call = {
+    acquire: (provider: HttpBrokerCredentialProvider, context = ctx) =>
+      provider.acquire(identity, context),
+    revoke: (provider: HttpBrokerCredentialProvider, context = ctx) =>
+      provider.revoke(issued, context),
+  } as const;
+  const inThirtySeconds = () => new Date(Date.now() + 30_000);
+
+  // One row per §7.1 status class, for acquire (knob prefix `broker`) and
+  // revoke (knob prefix `revoke`). A 401 and 404 on revoke mean the
+  // credential is already invalid there, so they count as revoked.
+  const statusRows = [
+    // [operation, fault, code, retryable, reason, retryAfterMs]
+    ["acquire", { status: 401 }, "IDENTITY_EXPIRED", false, "authentication"],
+    ["acquire", { status: 403 }, "CREDENTIAL_DENIED", false, "denied"],
+    [
+      "acquire",
+      { status: 429, retryAfter: 7 },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      true,
+      "rate-limited",
+      7_000,
+    ],
+    [
+      "acquire",
+      { status: 429, retryAfter: "date" },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      true,
+      "rate-limited",
+      "date",
+    ],
+    [
+      "acquire",
+      { status: 503, retryAfter: 5 },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      true,
+      "unavailable",
+      5_000,
+    ],
+    [
+      "acquire",
+      { status: 502, body: `<html><body>${BODY_SENTINEL}</body></html>` },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      true,
+      "unavailable",
+    ],
+    [
+      "acquire",
+      { status: 400, retryAfter: 9 },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      false,
+      "rejected",
+    ],
+    [
+      "acquire",
+      { status: 200, body: `<html>${BODY_SENTINEL}</html>` },
+      "CREDENTIAL_ACQUIRE_FAILED",
+      false,
+      "contract",
+    ],
+    ["revoke", { status: 403 }, "CREDENTIAL_DENIED", false, "denied"],
+    [
+      "revoke",
+      { status: 429, retryAfter: 7 },
+      "CREDENTIAL_REVOKED",
+      true,
+      "rate-limited",
+      7_000,
+    ],
+    [
+      "revoke",
+      { status: 429, retryAfter: "date" },
+      "CREDENTIAL_REVOKED",
+      true,
+      "rate-limited",
+      "date",
+    ],
+    [
+      "revoke",
+      { status: 503, retryAfter: 5 },
+      "CREDENTIAL_REVOKED",
+      true,
+      "unavailable",
+      5_000,
+    ],
+    [
+      "revoke",
+      { status: 502, body: `<html><body>${BODY_SENTINEL}</body></html>` },
+      "CREDENTIAL_REVOKED",
+      true,
+      "unavailable",
+    ],
+    ["revoke", { status: 400 }, "CREDENTIAL_REVOKED", false, "rejected"],
+  ] as const;
+  it.each(statusRows)(
+    "%s: maps %j to %s (retryable %s, %s)",
+    async (operation, fault, code, retryable, reason, wait?: unknown) => {
+      const knobs = services.knobs as Record<string, unknown[]>;
+      knobs[`${operation === "acquire" ? "broker" : "revoke"}Faults`]?.push({
+        body: { error: "failure", credential: BODY_SENTINEL },
+        ...fault,
+        ...(fault.retryAfter === "date"
+          ? { retryAfter: inThirtySeconds() }
+          : {}),
+      });
+      const error = await failure(call[operation](broker()));
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({
+        code,
+        retryable,
+        component: "credential",
+        sanitizedDetail: { operation, reason, status: fault.status },
+      });
+      if (wait === "date") {
+        // An HTTP-date is whole seconds, so allow for rounding and elapsed time.
+        expect(error.retryAfterMs).toBeGreaterThan(20_000);
+        expect(error.retryAfterMs).toBeLessThanOrEqual(30_000);
+      } else expect(error.retryAfterMs).toBe(wait);
+      expectNoSecret(error);
+    },
+  );
+
+  it.each([401, 404])(
+    "revoke: treats %i as already revoked",
+    async (status) => {
+      services.knobs.revokeFaults.push({ status });
+      await expect(broker().revoke(issued, ctx)).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["acquire", "revoke"] as const)(
+    "%s: times out retryably, bounded by timeoutMs",
+    async (operation) => {
+      Object.assign(services.knobs, {
+        [`${operation === "acquire" ? "broker" : "revoke"}TimeoutMs`]: 5_000,
+      });
+      const started = Date.now();
+      const error = await failure(call[operation](broker({ timeoutMs: 100 })));
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(error).toMatchObject({
+        code:
+          operation === "acquire"
+            ? "CREDENTIAL_ACQUIRE_FAILED"
+            : "CREDENTIAL_REVOKED",
+        retryable: true,
+        sanitizedDetail: { operation, reason: "timeout" },
+        message: expect.stringContaining("did not respond in time"),
+      });
+      expectNoSecret(error);
+    },
+  );
+
+  // Regression: a caller signal used to replace the timeout, so a request
+  // with a signal that never fired could hang forever.
+  it.each(["acquire", "revoke"] as const)(
+    "%s: keeps the timeout when the caller also passes a signal",
+    async (operation) => {
+      Object.assign(services.knobs, {
+        [`${operation === "acquire" ? "broker" : "revoke"}TimeoutMs`]: 5_000,
+      });
+      const quiet = new AbortController();
+      const started = Date.now();
+      const error = await failure(
+        call[operation](broker({ timeoutMs: 100 }), {
+          ...ctx,
+          signal: quiet.signal,
+        }),
+      );
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(quiet.signal.aborted).toBe(false);
+      expect(error).toMatchObject({
+        retryable: true,
+        sanitizedDetail: { operation, reason: "timeout" },
+      });
+      expectNoSecret(error);
+    },
+  );
+
+  it.each(["acquire", "revoke"] as const)(
+    "%s: reports a caller cancellation as cancelled, not retryable",
+    async (operation) => {
+      Object.assign(services.knobs, {
+        [`${operation === "acquire" ? "broker" : "revoke"}TimeoutMs`]: 5_000,
+      });
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 50);
+      const error = await failure(
+        call[operation](broker(), { ...ctx, signal: controller.signal }),
+      );
+      expect(error).toMatchObject({
+        code:
+          operation === "acquire"
+            ? "CREDENTIAL_ACQUIRE_FAILED"
+            : "CREDENTIAL_REVOKED",
+        retryable: false,
+        sanitizedDetail: { operation, reason: "cancelled" },
+        message: expect.stringContaining("cancelled"),
+      });
+      expectNoSecret(error);
+      // A signal that is already aborted never reaches the broker.
+      const before = services.state.requests.length;
+      const early = await failure(
+        call[operation](broker(), { ...ctx, signal: AbortSignal.abort() }),
+      );
+      expect(early).toMatchObject({
+        retryable: false,
+        sanitizedDetail: { reason: "cancelled" },
+      });
+      expect(services.state.requests.length).toBe(before);
+    },
+  );
+
+  it.each(["acquire", "revoke"] as const)(
+    "%s: reports an unreachable broker as a retryable transport failure",
+    async (operation) => {
+      const provider = broker();
+      await services.close();
+      const error = await failure(call[operation](provider));
+      expect(error).toMatchObject({
+        retryable: true,
+        sanitizedDetail: { operation, reason: "unreachable" },
+      });
+      expectNoSecret(error);
+      services = await startLocalServices();
+    },
+  );
+
+  // Regression: revoke used to call fetch directly, so a transport failure
+  // escaped as an uncoded error.
+  it("routes revoke through the broker transport", async () => {
+    const error = await failure(
+      broker({
+        fetch: async () => {
+          throw new TypeError("fetch failed");
+        },
+      }).revoke(issued, ctx),
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error).toMatchObject({
+      code: "CREDENTIAL_REVOKED",
+      retryable: true,
+      sanitizedDetail: { operation: "revoke", reason: "unreachable" },
+    });
+    expectNoSecret(error);
+  });
+
+  // Invalid configuration is not a transient failure: a network or TLS
+  // policy refusal keeps its own code and is never marked retryable.
+  it.each(["acquire", "revoke"] as const)(
+    "%s: keeps network and TLS policy refusals",
+    async (operation) => {
+      for (const code of ["NETWORK_DENIED", "TLS_POLICY_VIOLATION"] as const) {
+        const error = await failure(
+          call[operation](
+            broker({
+              fetch: async () => {
+                throw new PiShipError(code, "refused by policy");
+              },
+            }),
+          ),
+        );
+        expect(error).toMatchObject({ code, retryable: false });
+        expectNoSecret(error);
+      }
+    },
+  );
 });
 
 function fakeProvider(
@@ -934,6 +1253,142 @@ describe("credential lifecycle events", () => {
         forceRefresh: true,
       }),
     ).rejects.toMatchObject({ code: "CREDENTIAL_REVOKED" });
+    // An authorization denial is not a lost credential: it passes through.
+    failure = new PiShipError("CREDENTIAL_DENIED", "denied");
+    await expect(
+      credentials.ensure(null, ctx, {
+        allowAcquire: false,
+        forceRefresh: true,
+      }),
+    ).rejects.toMatchObject({ code: "CREDENTIAL_DENIED", retryable: false });
+  });
+
+  // Regression: a failed renewal used to drop retryable and retryAfterMs, so
+  // a broker outage or rate limit read as "sign in again".
+  it("keeps the retry contract when a renewal fails", async () => {
+    let failure: unknown = new Error("unused");
+    const provider = {
+      ...fakeProvider({ expiresInSeconds: 60 }),
+      async refresh(): Promise<RuntimeCredential> {
+        throw failure;
+      },
+    };
+    let now = Date.now();
+    const credentials = new CredentialManager({
+      distributionId: "acmecode",
+      provider,
+      store: new MemorySecretStore(),
+      metadataPath: join(temp, "credentials-metadata", "inference.json"),
+      beforeExpirySeconds: 300,
+      now: () => now,
+    });
+    const first = await credentials.ensure(null, ctx, { allowAcquire: true });
+    const secret = first.secret?.reveal() ?? "missing";
+    const renew = (forceRefresh: boolean) =>
+      credentials.ensure(null, ctx, { allowAcquire: false, forceRefresh }).then(
+        () => {
+          throw new Error("expected a failure");
+        },
+        (error: unknown) => error as PiShipError,
+      );
+    const limited = new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      "The credential broker is rate limiting requests",
+      {
+        retryable: true,
+        retryAfterMs: 7_000,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "rate-limited",
+          status: 429,
+        },
+      },
+    );
+    failure = limited;
+    const rejected = await renew(true);
+    expect(rejected).toMatchObject({
+      code: "CREDENTIAL_REVOKED",
+      retryable: true,
+      retryAfterMs: 7_000,
+      sanitizedDetail: { reason: "rate-limited", status: 429 },
+      userAction: expect.stringContaining("Try again later"),
+    });
+    now += 120_000;
+    expect(credentials.status().state).toBe("expired");
+    const expired = await renew(false);
+    expect(expired).toMatchObject({
+      code: "CREDENTIAL_EXPIRED",
+      retryable: true,
+      retryAfterMs: 7_000,
+    });
+    // Without a retry signal the renewal failure stays fail-closed.
+    failure = new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "contract");
+    expect(await renew(false)).toMatchObject({
+      code: "CREDENTIAL_EXPIRED",
+      retryable: false,
+      retryAfterMs: undefined,
+      userAction: "Run the branded login command",
+    });
+    failure = new Error("adapter crashed");
+    expect(await renew(true)).toMatchObject({
+      code: "CREDENTIAL_REVOKED",
+      retryable: false,
+    });
+    for (const error of [rejected, expired]) {
+      expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(
+        secret,
+      );
+      expect(JSON.stringify(error)).not.toContain(secret);
+    }
+  });
+
+  it("keeps the broker's retry contract through a real renewal", async () => {
+    const services = await startLocalServices();
+    try {
+      const token = `demo-at-renewal-${Date.now()}`;
+      services.state.accessTokens.set(token, {
+        subject: "demo-user-1",
+        expires: Math.floor(Date.now() / 1000) + 600,
+      });
+      const identity: IdentitySession = {
+        subject: "demo-user-1",
+        issuer: services.issuer,
+        accessToken: new SecretValue(token),
+      };
+      const credentials = new CredentialManager({
+        distributionId: "acmecode",
+        provider: new HttpBrokerCredentialProvider({
+          endpoint: services.brokerUrl,
+          revokeEndpoint: services.revokeUrl,
+          fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+        }),
+        store: new MemorySecretStore(),
+        metadataPath: join(temp, "renewal", "inference.json"),
+        beforeExpirySeconds: 300,
+      });
+      const active = await credentials.ensure(identity, ctx, {
+        allowAcquire: true,
+      });
+      services.knobs.brokerFaults.push({ status: 503, retryAfter: 11 });
+      const error = await credentials
+        .ensure(identity, ctx, { allowAcquire: false, forceRefresh: true })
+        .catch((caught: unknown) => caught as PiShipError);
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_REVOKED",
+        retryable: true,
+        retryAfterMs: 11_000,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "unavailable",
+          status: 503,
+        },
+      });
+      const rendered = inspect(error, { depth: 10, showHidden: true });
+      expect(rendered).not.toContain(token);
+      expect(rendered).not.toContain(active.secret?.reveal() ?? "missing");
+    } finally {
+      await services.close();
+    }
   });
 });
 

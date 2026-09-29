@@ -69,13 +69,23 @@ Content-Type: application/json
 
 A 401 or 404 from the revoke endpoint counts as already revoked. Broker responses are never logged or echoed in errors.
 
-| Broker response | Result |
-| --- | --- |
-| 401 | `IDENTITY_EXPIRED`; PiShip refreshes the identity once and retries |
-| 403 | `CREDENTIAL_ACQUIRE_FAILED`: user or distribution denied |
-| 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
-| Other 3xx, 4xx, or 5xx | `CREDENTIAL_ACQUIRE_FAILED`; retryable for 5xx |
-| Malformed body, undeclared `base_url` | `CREDENTIAL_ACQUIRE_FAILED` |
+Acquire and revoke share one transport. Each call has a 30 s timeout (`timeoutMs`) that covers the response body; a caller's `CredentialContext.signal` can cancel it sooner but never removes the timeout. Nothing is retried automatically.
+
+| Broker outcome | Acquire and refresh | Revoke | `retryable` | `detail.reason` |
+| --- | --- | --- | --- | --- |
+| 401 | `IDENTITY_EXPIRED`; PiShip refreshes the identity once and retries | Counts as revoked | no | `authentication` |
+| 403 | `CREDENTIAL_DENIED`: user or distribution denied | `CREDENTIAL_DENIED` | no | `denied` |
+| 404 | `CREDENTIAL_ACQUIRE_FAILED` | Counts as revoked | no | `rejected` |
+| 429 | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes, with `Retry-After` | `rate-limited` |
+| 5xx, including a proxy's HTML error page | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes, with `Retry-After` when sent | `unavailable` |
+| Other 3xx or 4xx | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | no | `rejected` |
+| 2xx with a malformed body, contract violation, undeclared `base_url` | `CREDENTIAL_ACQUIRE_FAILED` | (body not read) | no | `contract` |
+| No answer within the timeout | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes | `timeout` |
+| Unreachable (connection failure) | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | yes | `unreachable` |
+| Cancelled by the caller's signal | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | no | `cancelled` |
+| Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION` | same | no | none |
+
+`Retry-After` (seconds or HTTP date) becomes `retryAfterMs` and is shown as `Retry after: <n> s`. The error's `detail` holds only non-secret fields: `operation` (`acquire` or `revoke`), `reason`, and `status` when the broker answered. Error messages, actions, and details never contain the identity token, the runtime credential, or the broker's response body. A revoke failure is reported as a warning and never keeps the local secret.
 
 ## Secret stores
 
@@ -97,7 +107,7 @@ The macOS and Windows stores limit the size of one item, so values larger than o
 - Metadata in `credentials-metadata/inference.json` (`piship-credential-metadata/v1`) holds a generation reference such as `piship:<id>:inference#3`, the kind, credential ID, expiry, acquisition time, entitled models, and base URL. It never holds the secret.
 - Replacement is crash-safe: the new secret is written under the next generation before metadata switches to it, then older generations are deleted. A crash leaves metadata pointing at the previous or the new complete credential; references that could not be deleted are retried later.
 - A credential is refreshed when it is within `refresh.beforeExpiry` of expiry. If refresh fails while the credential is still valid, PiShip continues with a notice. An expired credential that cannot be renewed fails closed with `CREDENTIAL_EXPIRED`.
-- A gateway rejection of a broker or adapter credential marks the metadata `rejected_at`, so this and later processes renew before reuse. If renewal fails, the result is `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED` or `NETWORK_DENIED` are kept. A rejected `local-secret` cannot be renewed automatically, so it is left in place and the launch fails with `CREDENTIAL_REVOKED` and guidance to replace it with `login`.
+- A gateway rejection of a broker or adapter credential marks the metadata `rejected_at`, so this and later processes renew before reuse. If renewal fails, the result is `CREDENTIAL_REVOKED`, except that specific codes such as `IDENTITY_EXPIRED`, `CREDENTIAL_DENIED`, or `NETWORK_DENIED` are kept. A failed renewal, forced or on expiry, keeps the failure's `retryable`, `retryAfterMs`, and `detail`, so a broker outage or rate limit stays retryable. A rejected `local-secret` cannot be renewed automatically, so it is left in place and the launch fails with `CREDENTIAL_REVOKED` and guidance to replace it with `login`.
 - Refreshes are serialized within a process and across processes by a lock file beside the metadata, so concurrent launches share one renewal instead of racing. The holder refreshes the lock as a heartbeat and before each blocking secret-store command, so a live holder's lock is never broken; only a lock left unrefreshed for 75 s is taken over (moved aside atomically after a re-check). A holder releases only its own lock, and a waiter that runs out of time fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 - Metadata from an incompatible version, or metadata whose secret is missing, is cleared rather than reused, together with every secret it references, and the user must sign in again.
 - `logout` revokes when supported, then deletes the current, orphaned, and possibly pending next-generation secrets and the metadata. The revocation outcome is audited as `credential.revoke` (`revoked`, `failed`, `unsupported`, or `skipped`), and `login` revokes the credential it replaces. `credential.acquire` is recorded only for a new acquisition, and renewals as `credential.refresh`.

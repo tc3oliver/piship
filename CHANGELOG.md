@@ -10,6 +10,11 @@ Preview milestone; not published to npm.
 
 ### Changed
 
+- **Contract change:** a new error code, `CREDENTIAL_DENIED`, reports an authorization denial (HTTP 403) from the credential broker, for acquire, refresh, and revoke. A 403 used to share `CREDENTIAL_ACQUIRE_FAILED` with transport failures. Broker errors also carry a non-secret `detail` with `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, or `contract`), and the HTTP `status` when the broker answered, so callers can tell the retry classes apart where they share a code.
+- **Behavior change:** a failed credential renewal keeps the failure's `retryable`, `retryAfterMs`, and `detail`. It used to be rewrapped as `CREDENTIAL_EXPIRED` or `CREDENTIAL_REVOKED` that were never retryable, so a broker outage or rate limit during renewal read as "sign in again".
+- **Behavior change:** a caller's `CredentialContext.signal` now composes with the broker's 30 s timeout instead of replacing it, so a signal that never fires can no longer leave a broker request waiting forever. A cancelled request is reported as a non-retryable cancellation instead of a retryable timeout, and the timeout now also covers reading the response body.
+- **Behavior change:** broker revocation goes through the same transport as acquisition: it has the same timeout and cancellation, a transport failure is a retryable `CREDENTIAL_REVOKED` instead of an uncoded error, a 403 is `CREDENTIAL_DENIED`, and a 429 or 5xx carries `Retry-After`. A broker 5xx on acquire also carries `Retry-After` now. A network or TLS policy refusal from the managed fetch keeps its own code (`NETWORK_DENIED`, `TLS_POLICY_VIOLATION`) instead of becoming a retryable `CREDENTIAL_ACQUIRE_FAILED`.
+
 ## v0.6
 
 Preview milestone; not published to npm. Frozen at commit `ab3e7f2` on `main`, the last commit before a v0.7 pull request merges; the qualification runs recorded for it are on [docs/status.md](docs/status.md#recorded-evidence). Schema unchanged: `piship/v1alpha4` and `piship-lock/v1alpha4`.

@@ -120,13 +120,15 @@ Accept: application/json
 | Broker status | PiShip behavior |
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
-| 403 | `CREDENTIAL_ACQUIRE_FAILED`: user or distribution denied |
+| 403 | `CREDENTIAL_DENIED`: user or distribution denied. Not retryable |
 | 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. No automatic retry |
-| 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable. No automatic retry |
+| 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` when sent. No automatic retry |
 | 3xx, other 4xx, malformed JSON, contract violation | `CREDENTIAL_ACQUIRE_FAILED`. Redirects are never followed |
 | Timeout (30 s) or unreachable | `CREDENTIAL_ACQUIRE_FAILED`, retryable |
+| Cancelled by the caller | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
+| Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION`, unchanged |
 
-Broker responses are never logged or echoed in errors.
+The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, or `contract`), and the HTTP `status` when there was one. Broker responses are never logged or echoed in errors.
 
 ### Revoke
 
@@ -140,14 +142,15 @@ Content-Type: application/json
 {"credential_id": "vk_1234", "distribution": "acmecode"}
 ```
 
-The bearer is the **runtime credential**, not the identity token; `credential_id` is `null` if the broker did not return one. Any 2xx, 401, or 404 counts as revoked. Other statuses and transport failures are reported as a warning, and local secrets are deleted anyway. Timeout: 30 s. Without a revoke endpoint, a credential stays valid at the gateway until it expires.
+The bearer is the **runtime credential**, not the identity token; `credential_id` is `null` if the broker did not return one. Any 2xx, 401, or 404 counts as revoked. Other statuses and transport failures are reported as a warning, and local secrets are deleted anyway. Revocation uses the same transport, timeout (30 s), cancellation, and `detail` as acquisition: a 403 is `CREDENTIAL_DENIED`; a 429, 5xx, timeout, or unreachable endpoint is a retryable `CREDENTIAL_REVOKED` with any `Retry-After`; other statuses and a cancellation are a non-retryable `CREDENTIAL_REVOKED`. Without a revoke endpoint, a credential stays valid at the gateway until it expires.
 
 ### Caching and renewal
 
 - The credential is stored in the platform secret store (Keychain, Secret Service, Credential Manager); non-secret metadata (`credential_id`, `expires_at`, `models`) is kept in distribution state.
 - It is reused until it is within `credential.refresh.beforeExpiry` (default `5m`) of `expires_at`, then renewed with the acquire call. Choose a lifetime well above that window, or every request renews.
 - If renewal fails while the credential is still valid, PiShip keeps using it with a notice. An expired credential that cannot be renewed fails with `CREDENTIAL_EXPIRED`, or with the identity error when sign-in is needed.
-- A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`.
+- A gateway 401 marks the credential rejected; the next request renews it once. If that fails: `CREDENTIAL_REVOKED`. A 403 during renewal stays `CREDENTIAL_DENIED`.
+- A failed renewal keeps the broker failure's `retryable`, `Retry-After`, and `detail`, so a broker outage or rate limit on renewal is still retryable rather than a request to sign in again.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
 - Concurrent launches share one renewal through a lock file. A live holder refreshes the lock, so it is never broken while held; only a lock left unrefreshed for 75 s is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 

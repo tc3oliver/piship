@@ -56,6 +56,10 @@ export interface RuntimeCredential {
 
 export interface CredentialContext {
   readonly distributionId: string;
+  /**
+   * Cancels the operation. It composes with the provider's own request
+   * timeout and never replaces it.
+   */
   readonly signal?: AbortSignal;
   /** Interactive input for user-owned secrets; absent in headless flows. */
   readonly readSecret?: (prompt: string) => Promise<string>;
