@@ -23,7 +23,7 @@ Keep it minimal and legible in dark and light GitHub themes and at thumbnail siz
 
 - Set the description, topics, and social preview.
 - Enable Discussions and Private Vulnerability Reporting.
-- Protect `main`: require a pull request, the `CI` check jobs on all three targets and `CodeQL`, and resolved conversations; block force pushes and branch deletion. Do not mark `Pi compatibility` or `Secret store` as required checks: they are path-scoped, so a pull request that does not touch their paths never reports them and would wait forever. Review their results on every pull request that does run them. Portable E2E and Release candidate are not pull request checks ([CI evidence tiers](../../AGENTS.md#ci-evidence-tiers)).
+- Protect `main`: require a pull request, the `CI` check jobs on all three targets and `CodeQL`, and resolved conversations; block force pushes and branch deletion. Pi compatibility and the live secret store run inside the `CI` check jobs, so they report on every pull request. Do not require a path-scoped workflow: a pull request that does not touch its paths never reports it and waits forever. Portable E2E, Release candidate, and Release qualification are not pull request checks ([CI evidence tiers](../../AGENTS.md#ci-evidence-tiers)).
 - Enable Dependabot alerts and secret scanning where available.
 - Review Actions permissions and confirm CodeQL and Scorecard results after their first runs.
 - Verify the repository-specific Discussions, documentation, and security links in the Issue chooser.

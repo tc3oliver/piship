@@ -4,10 +4,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Called from Release qualification, github.workflow names the caller; the
+  # literal prefix keeps this group apart from its sibling reusable workflows.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
@@ -60,3 +63,11 @@ jobs:
       - run: npm test
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
+      - run: npm run test:compatibility
+      # Real platform secret stores (Keychain, Credential Manager). Linux
+      # runners have no unlocked Secret Service session; its backend is
+      # covered by the command-runner tests above.
+      - if: runner.os != 'Linux'
+        run: npx vitest run packages/credentials/src/platform-store.test.ts
+        env:
+          PISHIP_LIVE_SECRET_STORE: "1"

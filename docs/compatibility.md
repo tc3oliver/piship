@@ -17,7 +17,7 @@ Still pending:
 - A live OIDC login against a real identity provider.
 - Live inference through a real gateway, and a real authenticated personal model request.
 - Current-head three-target installed E2E for the managed surface. The managed demo E2E runs on all three targets in the nightly and manual Portable E2E; see [status](status.md#recorded-evidence).
-- Broader platform secret-store evidence. Unit tests use a command-runner double. An opt-in live Keychain and Credential Manager test runs in the `Secret store` workflow on macOS and Windows runners when credential or contract code changes; Linux Secret Service has no live coverage.
+- Broader platform secret-store evidence. Unit tests use a command-runner double. An opt-in live Keychain and Credential Manager test runs in the `CI` check jobs on macOS and Windows runners on every pull request; Linux Secret Service has no live coverage.
 
 ## Governance surface
 
