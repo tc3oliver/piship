@@ -27,6 +27,7 @@ const PORTS = {
   LITELLM_PORT: 14000,
   MOCK_UPSTREAM_PORT: 18090,
   POSTGRES_PORT: 15432,
+  BROKER_PORT: 18070,
 };
 
 function port(name) {

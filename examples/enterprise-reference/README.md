@@ -2,7 +2,7 @@
 
 A local, runnable version of the company services a managed PiShip distribution talks to: an OIDC identity provider, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
 
-This is reference infrastructure for tests and local exploration, not a production deployment. It has no credential broker or distribution yet: those are later v0.7 work. Nothing here needs an Internet model provider or a paid API key.
+This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md) but no distribution yet: that is later v0.7 work. Nothing here needs an Internet model provider or a paid API key.
 
 | Service | Image (pinned by index digest) | Host port (default) | Role |
 | --- | --- | --- | --- |
@@ -10,6 +10,7 @@ This is reference infrastructure for tests and local exploration, not a producti
 | `postgres` | `postgres:17.11-alpine3.24` | `127.0.0.1:15432` | LiteLLM's database |
 | `litellm` | `ghcr.io/berriai/litellm:v1.103.0` | `127.0.0.1:14000` | OpenAI-compatible gateway: virtual keys, model access, spend |
 | `mock-upstream` | `node:22.23.3-alpine3.24` running [`mock-upstream/server.mjs`](mock-upstream/server.mjs) | `127.0.0.1:18090` | Deterministic OpenAI-compatible model provider behind LiteLLM |
+| `broker` | `node:22.23.3-alpine3.24` running [`broker/server.mjs`](broker/server.mjs) | `127.0.0.1:18070` | Credential broker: Keycloak access token in, scoped LiteLLM virtual key out ([broker](broker/README.md)) |
 
 Every port is published on `127.0.0.1` only. No service uses a named volume: PostgreSQL keeps its data on tmpfs and Keycloak in its container, so `docker compose down` discards every user, key, and spend record.
 
@@ -23,7 +24,7 @@ docker compose up --wait          # returns when every service is healthy
 docker compose down               # stops and removes everything
 ```
 
-`docker compose up --wait` returns only after all four healthchecks pass (Keycloak serves the imported realm's discovery document, PostgreSQL accepts connections, LiteLLM's `/health/readiness` reports the database connected, and the mock answers `/health`); there are no sleeps. It exits non-zero if a service becomes unhealthy. Add `--wait-timeout 300` in automation.
+`docker compose up --wait` returns only after all five healthchecks pass (Keycloak serves the imported realm's discovery document, PostgreSQL accepts connections, LiteLLM's `/health/readiness` reports the database connected, and the mock and the broker answer `/health`); there are no sleeps. It exits non-zero if a service becomes unhealthy. Add `--wait-timeout 300` in automation.
 
 Use a project name (`docker compose -p <name> ...`) to run a copy beside another one, with different ports in its `.env`.
 
@@ -33,7 +34,7 @@ Use a project name (`docker compose -p <name> ...`) to run a copy beside another
 
 | Variable | Contents |
 | --- | --- |
-| `KEYCLOAK_PORT`, `LITELLM_PORT`, `MOCK_UPSTREAM_PORT`, `POSTGRES_PORT` | Host ports on `127.0.0.1`. Defaults 18080, 14000, 18090, 15432; set any of them in the environment before generating to choose others |
+| `KEYCLOAK_PORT`, `LITELLM_PORT`, `MOCK_UPSTREAM_PORT`, `POSTGRES_PORT`, `BROKER_PORT` | Host ports on `127.0.0.1`. Defaults 18080, 14000, 18090, 15432, 18070 (an older `.env` without `BROKER_PORT` gets 18070); set any of them in the environment before generating to choose others |
 | `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap `admin` password |
 | `POSTGRES_PASSWORD` | Password of the `litellm` database user |
 | `LITELLM_MASTER_KEY` | LiteLLM admin key (`sk-` prefix). Only a broker should hold it |
@@ -75,7 +76,7 @@ LiteLLM runs [`../enterprise-litellm/litellm-config.yaml`](../enterprise-litellm
 
 Only LiteLLM open-source features are used. Key regeneration and auto-rotation and per-model budgets are Enterprise-only in LiteLLM and appear nowhere here. Rotation is "generate a new key for the same `user_id`, then delete the old one".
 
-Until the broker exists, issue a key by hand with the master key, as the broker will:
+The [broker](broker/README.md) issues keys. To issue one by hand with the master key, as the broker does:
 
 ```sh
 set -a; . ./.env; set +a
@@ -91,6 +92,10 @@ Observed LiteLLM behavior tests should expect (v1.103.0, this config):
 - An upstream 401, 403, 429, 500, or 503 reaches the client with the same status and an OpenAI-style error of type `authentication_error`, `permission_error`, `throttling_error`, or `internal_server_error`. The upstream's `retry-after` on a 429 is not passed on.
 - LiteLLM calls the upstream three times for a 403, 429, or 5xx (two retries) and once for a 401. A single queued failure (`count: 1`) is therefore absorbed and the client gets 200; queue at least three, or use the message marker, to see the error.
 - After an upstream failure the model's only deployment is in a cooldown for 5 seconds. Requests for that model during it fail with 429 `No deployments available for selected model` and `retry-after: 5`, whatever the upstream would answer. Wait out the cooldown between error cases, or alternate models.
+
+## Credential broker
+
+[`broker/`](broker/README.md) implements PiShip's `http-broker` contract: `POST /v1/credential` with the user's Keycloak access token returns a LiteLLM virtual key limited to the models of the user's groups (`engineering`: `acme/coder` and `acme/general`; `support`: `acme/coder`), on one LiteLLM user per `(iss, sub)` with a per-user budget and no team; `POST /v1/revoke` with that key deletes it. It holds the master key and no other secret. `node broker/live-check.mjs` runs the happy path against the stack; `node --test broker/test/*.test.mjs` is its contract test, which needs no Docker.
 
 ## Mock upstream
 

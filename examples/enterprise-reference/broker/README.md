@@ -1,0 +1,156 @@
+# Reference credential broker
+
+The credential broker of the [enterprise reference stack](../README.md): it implements PiShip's [`http-broker` contract](../../../docs/enterprise-integration.md#credential-broker-http-broker) in front of LiteLLM. It takes the user's Keycloak access token, decides which models the user may use, and returns a LiteLLM virtual key scoped to them. LiteLLM cannot accept an OIDC token itself, so a company runs something like this; PiShip ships no broker.
+
+It is example code for tests and local exploration, not a package and not a production service. It uses Node 22 built-ins only (`node:http`, `node:crypto`, `fetch`) and has no dependencies to install.
+
+| File | Contents |
+| --- | --- |
+| [`server.mjs`](server.mjs) | Entry point: configuration from the environment, HTTP server |
+| [`src/broker.mjs`](src/broker.mjs) | Routes, entitlement table, principal mapping, idempotency, rate limit, rotation, revoke |
+| [`src/token.mjs`](src/token.mjs) | Access token validation and the JWKS cache |
+| [`src/litellm.mjs`](src/litellm.mjs) | The LiteLLM admin calls |
+| [`src/log.mjs`](src/log.mjs) | The allowlisting, scrubbing logger |
+| [`test/`](test) | Contract test with a fake Keycloak and a fake LiteLLM, and the same broker driven by PiShip's own client |
+| [`live-check.mjs`](live-check.mjs) | Happy path against the running stack |
+
+## Endpoints
+
+| Request | Answer |
+| --- | --- |
+| `POST /v1/credential`, `Authorization: Bearer <Keycloak access token>`, body `{"distribution": "acmecode", "purpose": "inference"}`, optional `Idempotency-Key` | A new LiteLLM virtual key: `{"credential_type": "api_key", "credential", "credential_id", "expires_at", "models", "base_url", "subject"}` |
+| `POST /v1/revoke`, `Authorization: Bearer <that virtual key>`, body `{"credential_id": <id or null>, "distribution": "acmecode"}` | The key is deleted from LiteLLM: `{"revoked": true, "credential_id"}` |
+| `GET /health` | `{"status": "ok"}` |
+
+In `piship.yaml` these are `credential.broker.endpoint: http://127.0.0.1:<BROKER_PORT>/v1/credential` and `revokeEndpoint: http://127.0.0.1:<BROKER_PORT>/v1/revoke`, with `inference.baseUrl: http://127.0.0.1:<LITELLM_PORT>/v1`.
+
+Every answer is JSON with `cache-control: no-store`. An error body is only `{"error": "<code>"}`: never an upstream message, a token, or a key.
+
+### Status codes
+
+| Status | When | PiShip reads it as |
+| --- | --- | --- |
+| 200 | Issued, or an idempotent replay; revoke done | Success |
+| 400 | Body not a JSON object, `purpose` not `inference`, `Idempotency-Key` not 1 to 255 visible ASCII characters | `CREDENTIAL_ACQUIRE_FAILED`, `rejected` |
+| 401 | No bearer, or the access token fails any check below. Revoke: no bearer | `IDENTITY_EXPIRED` (PiShip refreshes the identity once and retries); on revoke, "revoked" |
+| 403 | Valid token but not entitled: no `groups` claim, or no group in the table below; another `distribution`. Revoke: a key this broker did not issue, or another distribution | `CREDENTIAL_DENIED` |
+| 404 | Revoke of a key LiteLLM no longer accepts (deleted, expired, never issued) | Revoked |
+| 413, 415 | Body over 4 KiB; not `application/json` | `rejected` |
+| 422 | `Idempotency-Key` already used with other input | `idempotency-conflict` |
+| 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute | Retryable, `rate-limited` |
+| 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; retry with the same key |
+| 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress (`Retry-After: 1`) | Retryable, `unavailable` |
+
+## Token validation
+
+The access token is checked in this order, and nothing from its payload is used before the signature is verified:
+
+1. Three base64url segments, at most 8 KiB. The header's `alg` must be exactly `RS256`: `none`, `HS256` (the RSA-public-key-as-HMAC-secret confusion), `RS512`, `PS256` and every other value are refused before a key is looked up. A `crit` header is refused.
+2. The key is the realm JWKS entry with the header's `kid`, `kty: RSA`, 2048 bits or more, `use` and `alg` absent or `sig` and `RS256`. Only its public members are imported, as a public key object.
+3. The RSA-SHA256 signature over the first two segments.
+4. `iss` equals `BROKER_ISSUER` exactly; `aud` contains `piship-reference-broker`; `exp` is present and not past; `nbf` and `iat`, when present, are not in the future; `azp` is `acmecode`; `typ`, when present, is `Bearer` (Keycloak's ID tokens say `ID`); `sub` is a non-empty string. `exp`, `nbf` and `iat` allow 30 s of clock skew (`BROKER_CLOCK_TOLERANCE_SECONDS`).
+5. `groups` must be a string array with at least one group in the entitlement table; otherwise 403.
+
+The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...`, while the issuer stays the loopback URL) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. With a stale cache, known keys keep working while Keycloak is down; with no cache, acquires answer 503.
+
+The broker does not introspect tokens: an access token of a session signed out at Keycloak stays usable here until it expires (5 minutes in the reference realm).
+
+## Entitlement: groups to models
+
+| Keycloak group | Models | Reference user |
+| --- | --- | --- |
+| `engineering` | `acme/coder`, `acme/general` | alice |
+| `support` | `acme/coder` | bob |
+
+A user gets the union over their groups; other groups grant nothing. The table is `GROUP_MODELS` in [`src/broker.mjs`](src/broker.mjs). The models are written into the key, so LiteLLM itself refuses any other model (`key_model_access_denied`, 403); PiShip then narrows its catalog to the same list. The entitlement is read at every acquire: a group change applies to the next key, and keys already issued keep their models until they expire or are rotated out.
+
+## Principal, budget and keys (D-01)
+
+- **One LiteLLM user per principal.** `user_id` is `oidc-` plus the first 40 hex characters of SHA-256 over `[iss, sub]` (`principalUserId`). It depends on the issuer and subject only, never on the token, the username, or the email, so every key one employee is issued, and every rotation, belongs to the same user. The user's LiteLLM `metadata` records `iss` and `sub` for an operator.
+- **The budget is on the user, not the key, and keys have no `team_id`.** The first acquire creates the user with `/user/new`: `max_budget` `BROKER_USER_MAX_BUDGET` (default 10), `budget_duration` `BROKER_USER_BUDGET_DURATION` (default `30d`), optional `tpm_limit` and `rpm_limit`, role `internal_user_viewer`, and `auto_create_key: false`. A LiteLLM key with a `team_id` is governed by team budgets only and ignores the user's personal budget, so the broker never sets one. An existing user keeps its budget and spend; the broker refuses to issue for an existing user whose role is not `internal_user_viewer` (503).
+- **The role limits what a key can do.** A key of an `internal_user_viewer` user cannot call `/key/generate`, `/key/delete`, or `/user/new` (LiteLLM answers 401), so a user cannot mint a key with more models than the broker gave. It can still list the user's own keys (hashed, never the key values).
+- **The key.** `/key/generate` with `user_id`, `models`, `duration` (`BROKER_KEY_TTL_SECONDS`, default 8 hours, at most 24), `key_alias`, `metadata` (`issued_by: piship-reference-broker`, `distribution`), and optionally `max_parallel_requests`. No `team_id`, no per-key or per-model budget. LiteLLM must report an expiry with an explicit zone no later than the requested lifetime; otherwise the key is deleted and the acquire fails.
+- **`credential_id` is the key alias:** `pb-` and 24 random hex characters. PiShip requires `[A-Za-z0-9._:-]{1,256}`; LiteLLM accepts more (`:` included), so the broker, not LiteLLM, keeps the alias inside PiShip's alphabet. It reveals nothing about the key.
+- **Only open-source LiteLLM features.** `/key/{key}/regenerate`, key auto-rotation, and per-model budgets are Enterprise-only and are not used.
+- **Rotation is "generate new, then delete old".** After each new key, the broker keeps the newest `BROKER_MAX_KEYS_PER_USER` (default 3) keys it issued to that user for this distribution and deletes the rest by alias, before it answers. More than one live key allows a user on two machines, and PiShip's renewal does not revoke the key it replaces. Deletion failures are only logged; every key also expires. A key the broker did not issue is never deleted.
+- **PostgreSQL.** The broker keeps no database of its own. The mapping is a pure function of `(iss, sub)`, and users, keys, budgets and spend live in LiteLLM (whose PostgreSQL the stack runs).
+
+## Idempotency
+
+As [docs/enterprise-integration.md](../../../docs/enterprise-integration.md#idempotency-and-retries) specifies:
+
+| Request | Broker answer |
+| --- | --- |
+| New `Idempotency-Key` | Issues; the answer is stored under the key only once issuing started, never for a 401, 403, 429 or 503 |
+| Same key, same input, first finished | The stored answer: same credential, same `credential_id`; nothing is issued |
+| Same key, different input | 422; nothing issued, the stored credential never returned |
+| Same key while the first is still running | 503, `Retry-After: 1` |
+| No key | Issues every time |
+
+"Input" is the verified `iss` and `sub` plus the request body with its keys sorted, never the token, so a retry after an identity refresh still matches, and a key sent by another principal is a conflict that never returns someone else's credential. A replay is not counted against the rate limit. A stored answer is kept until its credential expires; the record of a request in progress for 2 minutes. A replay returns the stored credential as issued, even if rotation has deleted it since; the gateway then refuses it with 401 and PiShip renews.
+
+The store is **in memory**: a broker restart forgets every key, so a retry after a restart issues a new credential (the old one expires, or rotation deletes it). A production broker with several instances needs a shared store; so does the per-principal rate limit, which is also in memory.
+
+When LiteLLM fails after `/key/generate` may have created a key (the connection dropped before its answer), the broker deletes that key by its alias. If the deletion is confirmed, nothing was issued and the answer is 503; if not, 502.
+
+## Revoke
+
+The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **with that key as the bearer**: only its holder can, and the answer describes that key. A key LiteLLM does not accept (deleted, expired, never issued) is already revoked: 404. A key without the broker's `issued_by` mark or for another distribution is refused with 403. Otherwise the broker deletes it with `POST /key/delete` `{"keys": [<key>]}` under the master key (a key of an `internal_user_viewer` cannot delete itself); a 404 from LiteLLM there also means revoked. The `credential_id` in the body is informational: the key presented is what is revoked, and a mismatch is logged. LiteLLM rejects a deleted key at once with 401.
+
+## Secrets and logs
+
+- The broker holds one secret, `LITELLM_MASTER_KEY`, used only as the bearer of LiteLLM admin calls. It never needs `LITELLM_SALT_KEY` or any other value from `.env`, and compose gives it none. It never returns either.
+- Logs are one JSON line per request with a fixed set of fields: event, route, status, reason, `user_id` (the hash), `credential_id`, models, idempotency outcome, upstream status, duration. Any other field passed to the logger is dropped, and every string is scrubbed of the master key, `sk-…` key shapes and JWT shapes. No token, key, request body or upstream response is logged; LiteLLM's own error messages quote key fragments, so they are never read into a log or an answer.
+- Configuration errors name the variable, never its value.
+
+## Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BROKER_ISSUER` | required | Exact `iss` |
+| `BROKER_JWKS_URL` | required | Realm certs endpoint |
+| `BROKER_LITELLM_URL` | required | LiteLLM admin origin |
+| `LITELLM_MASTER_KEY` | required | LiteLLM admin key (`sk-…`) |
+| `BROKER_GATEWAY_BASE_URL` | required | Returned as `base_url`; must equal PiShip's `inference.baseUrl` |
+| `BROKER_AUDIENCE` | `piship-reference-broker` | Required `aud` member |
+| `BROKER_AUTHORIZED_PARTY` | `acmecode` | Required `azp` |
+| `BROKER_DISTRIBUTION` | `acmecode` | The only `distribution` served |
+| `BROKER_LISTEN_HOST`, `BROKER_LISTEN_PORT` | `127.0.0.1`, `8080` | Compose sets `0.0.0.0` inside the container and publishes the port on `127.0.0.1` only |
+| `BROKER_KEY_TTL_SECONDS` | `28800` | Key lifetime, 600 to 86400. Choose it well above PiShip's `refresh.beforeExpiry` |
+| `BROKER_USER_MAX_BUDGET`, `BROKER_USER_BUDGET_DURATION` | `10`, `30d` | Set on a user when it is created |
+| `BROKER_USER_TPM_LIMIT`, `BROKER_USER_RPM_LIMIT`, `BROKER_KEY_MAX_PARALLEL_REQUESTS` | unset | Optional LiteLLM user and key limits |
+| `BROKER_MAX_KEYS_PER_USER` | `3` | Live broker keys kept per user by rotation |
+| `BROKER_ACQUIRE_LIMIT_PER_MINUTE` | `20` | New acquires per principal per minute |
+| `BROKER_CLOCK_TOLERANCE_SECONDS` | `30` | Skew allowed on `exp`, `nbf`, `iat` |
+
+## Run and test
+
+With the stack (see [the stack README](../README.md)), the broker starts as the `broker` service on `127.0.0.1:${BROKER_PORT:-18070}`:
+
+```sh
+docker compose up --wait
+node broker/live-check.mjs            # alice and bob sign in, get keys, use them; revoke; deleted key refused
+```
+
+The contract test needs no Docker (Node 22.19 or later):
+
+```sh
+cd broker
+node --test test/*.test.mjs
+```
+
+[`test/contract.test.mjs`](test/contract.test.mjs) runs the broker between a fake Keycloak (RS256 keys, JWKS, token minting, including forged tokens) and a fake LiteLLM (users, keys, faults, and error bodies that quote keys like the real one) and checks each row above: the response fields and headers, `credential_id` format, the `subject` echo, each token check (by the reason it logs), the JWKS cache bounds, entitlement, each idempotency row, 429, the upstream failures including a lost `/key/generate` answer, rotation, revoke, no Enterprise call, and a scan of every log line for the master key, every issued key, every token, and planted sentinels.
+
+[`test/piship-client.test.mjs`](test/piship-client.test.mjs) drives the same broker with PiShip's `HttpBrokerCredentialProvider` from `packages/credentials`, so it needs the repository built first (`npm ci && npm run build` at the root; `PISHIP_REPO_ROOT` points it at another checkout). It checks that PiShip reads every answer as documented: the credential and its metadata, a same-key retry, `IDENTITY_EXPIRED`, `CREDENTIAL_DENIED`, the idempotency conflict, retryable 503 and 429 with their `Retry-After`, and revoke.
+
+## Observed LiteLLM behavior (v1.103.0)
+
+From the D-01 check against the pinned image, which the broker relies on:
+
+- Two keys without `team_id` for one `user_id` accrue one user spend: the user's spend equals the sum of the keys' spends. A user over `max_budget` is refused on every key, including a key that never spent (429, `budget_exceeded`).
+- Spend is written in batches: key and user spend appeared 2 to 5 s after the requests, so a test must poll.
+- `/user/new` issues a key unless `auto_create_key: false`; a second `/user/new` for the same `user_id` answers 409. `/user/info` for an unknown user answers 404.
+- `key_alias` must be unique (400 otherwise) and may contain `:`.
+- `/key/generate` reports `expires` with `Z`; `/key/info` reports it with `+00:00`.
+- A key of an `internal_user_viewer` user gets 401 from `/key/generate`, `/key/delete` and `/user/new`, and can read `/key/info` about itself.
+- `/key/delete` accepts `keys` or `key_aliases` and answers 404 when none is found. A deleted key is refused with 401 on `/v1/models` and completions.
