@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 // Filters container logs (stdin to stdout) so they can be kept as CI
-// evidence: every secret of the stack's env file and of the named environment
-// variables is replaced by its name, and anything shaped like a LiteLLM key, a
-// JWT, or a bearer credential is replaced too. Ports are kept.
+// evidence. Replaced: every value of 8 characters or more in the stack's env
+// file (except the ports) and in the named environment variables, by its
+// name; anything shaped like a LiteLLM key (`sk-...`), a JWT, or an
+// `Authorization: Bearer` or `Basic` value; and the value of an OAuth `code`,
+// `state`, or `session_state` parameter. Other secret shapes pass through, so
+// this is a filter for the reference stack's own logs, not a general one. The
+// generated secrets are all 36 characters or longer.
 //
 //   docker compose -p <project> --env-file <path> logs --no-color \
 //     | node scripts/scrub-logs.mjs --env-file <path> [--redact-env NAME ...]
@@ -43,7 +47,11 @@ function scrub(text) {
       /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
       "<redacted-jwt>",
     )
-    .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>");
+    .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 <redacted>")
+    .replace(
+      /(?<![\w-])(code|state|session_state)=[\w.~%-]+/g,
+      "$1=<redacted>",
+    );
 }
 
 const chunks = [];

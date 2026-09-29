@@ -107,6 +107,10 @@ jobs:
         timeout-minutes: 5
         working-directory: examples/enterprise-reference/broker
         run: node --test test/*.test.mjs
+      - name: Log scrubber tests
+        timeout-minutes: 5
+        working-directory: examples/enterprise-reference
+        run: node --test scripts/test/*.test.mjs
 
       # Each test file starts its own stack under its own Compose project and
       # removes it (npm run test:reference, examples/enterprise-reference
