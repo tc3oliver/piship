@@ -44,22 +44,93 @@ jobs:
           cache: npm
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       # The OS sandbox tests need bubblewrap and unprivileged user
-      # namespaces, which Ubuntu restricts through AppArmor by default.
+      # namespaces, which Ubuntu restricts through AppArmor by default. The
+      # live secret-store scenarios need GNOME Keyring, a D-Bus session, and
+      # secret-tool; without recommended packages this stays clear of the
+      # desktop stack.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap
+          sudo apt-get install -y -qq --no-install-recommends gnome-keyring dbus dbus-x11 libsecret-tools
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code
-      # Every target runs the installed lifecycle. Ubuntu also qualifies the
-      # repeated clean build, relocated builder, and second distribution.
-      - run: npm run test:e2e
+      # The live secret-store scenarios use a keychain of their own on macOS:
+      # created with a throwaway password that is generated here and never
+      # printed, unlocked without an idle timeout, and made the job user's
+      # only search-list entry and default keychain. It is deleted, and the
+      # runner's list restored, after the E2E step, whatever its result.
+      - name: Temporary keychain
+        if: runner.os == 'macOS'
+        timeout-minutes: 2
+        run: |
+          keychain="$RUNNER_TEMP/piship-e2e.keychain-db"
+          security list-keychains -d user > "$RUNNER_TEMP/keychains-before"
+          security default-keychain -d user > "$RUNNER_TEMP/default-keychain-before"
+          password="$(head -c 32 /dev/urandom | base64)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security list-keychains -d user
+      # Every target runs the installed lifecycle, and the managed secret
+      # store scenarios on the live platform store (PISHIP_LIVE_SECRET_STORE).
+      # Ubuntu also qualifies the repeated clean build, relocated builder,
+      # and second distribution.
+      - if: runner.os != 'Linux'
+        timeout-minutes: 40
+        run: npm run test:e2e
         env:
-          PISHIP_E2E_QUALIFICATION: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          PISHIP_E2E_QUALIFICATION: "0"
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
+          PISHIP_LIVE_SECRET_STORE: "1"
+      # A Linux runner has no desktop session, so the E2E run gets a private
+      # D-Bus session with GNOME Keyring on a fresh data directory, unlocked
+      # with a throwaway password that only travels through a pipe, exactly
+      # as the CI live-store step does. Only the daemon sees that directory.
+      - if: runner.os == 'Linux'
+        timeout-minutes: 40
+        run: |
+          dbus-run-session -- bash -euo pipefail -c '
+            keyring="$(mktemp -d)"
+            head -c 32 /dev/urandom | base64 | XDG_DATA_HOME="$keyring" gnome-keyring-daemon --unlock --foreground --components=secrets > /dev/null &
+            ready() {
+              dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2> /dev/null | grep true > /dev/null &&
+                dbus-send --session --print-reply --dest=org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.DBus.Properties.Get string:org.freedesktop.Secret.Collection string:Locked 2> /dev/null | grep false > /dev/null
+            }
+            for _ in $(seq 100); do ready && break; sleep 0.1; done
+            ready || { echo "GNOME Keyring did not unlock its login collection" >&2; exit 1; }
+            npm run test:e2e
+          '
+        env:
+          PISHIP_E2E_QUALIFICATION: "1"
+          PISHIP_REQUIRE_SANDBOX: "1"
+          PISHIP_LIVE_SECRET_STORE: "1"
+      - name: Delete the temporary keychain
+        if: always() && runner.os == 'macOS'
+        timeout-minutes: 2
+        run: |
+          keychain="$RUNNER_TEMP/piship-e2e.keychain-db"
+          if [ -s "$RUNNER_TEMP/keychains-before" ]; then
+            xargs security list-keychains -d user -s < "$RUNNER_TEMP/keychains-before"
+            xargs security default-keychain -d user -s < "$RUNNER_TEMP/default-keychain-before"
+          fi
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+          security list-keychains -d user
+      # The scenarios delete their Credential Manager entries themselves;
+      # this removes any that a failed or cancelled run left behind.
+      - name: Remove leftover test credentials
+        if: always() && runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $targets = cmdkey /list | Select-String -Pattern 'Target: (\S*piship:piship:acmelive-\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          foreach ($target in $targets) { cmdkey "/delete:$target" | Out-Null }
+          "Removed $(@($targets).Count) leftover test credential(s)"
 
   # A scheduled failure opens (or comments on) one tracking issue, so a
   # nightly regression becomes a visible follow-up without blocking pull
