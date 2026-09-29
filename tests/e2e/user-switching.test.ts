@@ -67,6 +67,8 @@ describe("user switching (local fixtures)", () => {
       selectedModel: "acmecode/acme/general",
       allowedModels: ALICE.models,
     });
+    const aliceSessions = JSON.parse(aliceRun.stdout).sessionDir;
+    expect(JSON.parse(aliceRun.stdout).resumed).toBe(false);
     // An update writes a rollback snapshot while Alice is signed in.
     s.publish(1);
     const updated = await s.run(["update"]);
@@ -91,6 +93,10 @@ describe("user switching (local fixtures)", () => {
       selectedModel: "acmecode/acme/coder",
       allowedModels: BOB.models,
     });
+    // Bob does not resume Alice's session history: it is kept per principal.
+    const bobSessions = JSON.parse(bobRun.stdout).sessionDir;
+    expect(JSON.parse(bobRun.stdout).resumed).toBe(false);
+    expect(bobSessions).not.toBe(aliceSessions);
     expect(scan(s.state, aliceSecrets)).toEqual([]);
     expect(scan(s.install, aliceSecrets)).toEqual([]);
 
@@ -104,6 +110,11 @@ describe("user switching (local fixtures)", () => {
       credential: { credentialId: bobCredential },
       allowedModels: BOB.models,
     });
+    // The same user resumes across a rollback.
+    expect(JSON.parse(afterRollback.stdout)).toMatchObject({
+      resumed: true,
+      sessionDir: bobSessions,
+    });
     expect(scan(s.state, aliceSecrets)).toEqual([]);
     expect(scan(s.install, aliceSecrets)).toEqual([]);
 
@@ -112,6 +123,11 @@ describe("user switching (local fixtures)", () => {
     expect((await s.run(["login"])).status).toBe(0);
     const again = await s.run(["--smoke"]);
     expect(again.status, again.stderr).toBe(0);
+    // Alice gets her own history back, never Bob's.
+    expect(JSON.parse(again.stdout)).toMatchObject({
+      resumed: true,
+      sessionDir: aliceSessions,
+    });
     const credential = JSON.parse(again.stdout).access.credential.credentialId;
     expect([aliceCredential, bobCredential]).not.toContain(credential);
     const logout = await s.run(["logout"]);

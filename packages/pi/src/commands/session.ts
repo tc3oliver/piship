@@ -6,7 +6,13 @@ import {
   InteractiveMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { formatError, PiShipError, redact } from "@piship/contracts";
+import {
+  formatError,
+  PiShipError,
+  principalDigest,
+  principalKey,
+  redact,
+} from "@piship/contracts";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import {
@@ -16,6 +22,27 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
+
+/**
+ * Pi keeps its session history in a directory PiShip chooses. With an identity
+ * session the directory is per principal, so a different user on the same OS
+ * account does not resume the previous user's sessions; the same user resumes
+ * across logout and login. Without an identity (a personal distribution) it is
+ * the shared directory, as before.
+ */
+function sessionDirectory(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  kind: "user" | "acceptance",
+): string {
+  const identity = prepared.activated?.identity;
+  const base = join(ctx.stateDir, "sessions", kind);
+  const dir = identity
+    ? join(base, principalDigest(principalKey(identity)))
+    : base;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
 
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";
 
@@ -105,10 +132,10 @@ export async function runSmoke(
   const cacheDir = join(ctx.stateDir, "cache");
   const logsDir = join(ctx.stateDir, "logs");
   const dataDir = join(ctx.stateDir, "data");
-  const sessionDir = join(ctx.stateDir, "sessions", "acceptance");
-  for (const path of [cacheDir, logsDir, dataDir, sessionDir])
+  for (const path of [cacheDir, logsDir, dataDir])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
   const gov = await openGovernance(ctx, prepared, false);
   const { runtime } = await startGoverned(ctx, prepared, sessionDir, gov);
   let sessionFailed = false;
@@ -263,11 +290,10 @@ export async function runInteractive(
   ctx: LaunchContext,
   requestedModel: string | undefined,
 ): Promise<void> {
-  const sessionDir = join(ctx.stateDir, "sessions", "user");
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
-  mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  const sessionDir = sessionDirectory(ctx, prepared, "user");
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
   const gov = await openGovernance(

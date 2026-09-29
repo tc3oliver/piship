@@ -3,6 +3,8 @@ import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
+  principalId,
+  principalKey,
 } from "@piship/contracts";
 import { configuredModel, type GovernedLock, governedLock } from "@piship/core";
 import type { ModelEvidence } from "@piship/policy";
@@ -45,7 +47,9 @@ export function governanceOptions(
         ctx.metadata.access?.variables ?? [],
         process.env,
       ),
-    user: activated?.identity?.subject ?? null,
+    user: activated?.identity
+      ? principalId(principalKey(activated.identity))
+      : null,
     model: selectedModelEvidence(ctx, prepared),
     ...(access && activated?.runtime.requiresCredential
       ? {

@@ -180,7 +180,7 @@ The user is the principal `(iss, sub)` ([identity](identity.md#principal)). User
 
 Limits:
 
-- Pi session history is project data owned by Pi. In this release it is not partitioned by principal: `sessions/user/` and `sessions/acceptance/` are shared, so another user signing in on the same OS account resumes the previous user's sessions. Separate OS accounts separate them.
+- Pi session history is project data owned by Pi. With an identity session it is kept per principal: `sessions/user/<principal digest>/` and `sessions/acceptance/<principal digest>/`, where the digest is 32 hex characters of a SHA-256 over the issuer and subject, so another user signing in on the same OS account does not resume the previous user's sessions, and the same user resumes across logout, login, update, and rollback. A distribution with no identity provider (a personal one) keeps the shared `sessions/user/`. Sessions written directly under `sessions/user/` by an earlier release are not resumed by a signed-in user; purge removes them.
 - Audit events attribute events to the identity subject; the issuer is not part of the attribution yet.
 - The principal binding and pending revocations are ordinary files under the state directory: anyone who can modify the state directory can defeat them, as with the rest of the state.
 
