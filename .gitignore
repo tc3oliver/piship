@@ -43,5 +43,8 @@ temp/
 .piship/
 .mypi/
 
-# Product source specification is maintained outside the public repository
-docs/spec/product-v1.0.md
+# oh-my-claudecode runtime state
+.omc/
+
+# Maintainer-local product specifications and milestone plans
+docs/spec/

@@ -6,6 +6,7 @@
       "**",
       "!**/dist",
       "!**/node_modules",
+      "!**/.omc",
       "!**/package-lock.json",
       "!docs/spec/product-v1.0.md"
     ]

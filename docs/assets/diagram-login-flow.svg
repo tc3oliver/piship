@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="120" viewBox="0 0 1000 120" role="img" aria-label="OIDC login, company identity, credential broker, short-lived gateway credential, Pi runtime, company LLM gateway">
+  <rect x="0.5" y="0.5" width="999" height="119" rx="12" fill="#ffffff" stroke="#d1d9e0"/>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+    .m{fill:#59636e}
+    .ln{stroke:#8c959f;fill:none}
+    .ah{fill:#8c959f}
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>
+  <g stroke-width="1.5" fill-opacity=".12">
+    <rect x="12" y="30" width="136" height="64" rx="10" fill="#8250df" stroke="#8250df"/>
+    <rect x="180" y="30" width="136" height="64" rx="10" fill="#8250df" stroke="#8250df"/>
+    <rect x="348" y="30" width="136" height="64" rx="10" fill="#9a6700" stroke="#9a6700"/>
+    <rect x="516" y="30" width="136" height="64" rx="10" fill="#9a6700" stroke="#9a6700"/>
+    <rect x="684" y="30" width="136" height="64" rx="10" fill="#0969da" stroke="#0969da"/>
+    <rect x="852" y="30" width="136" height="64" rx="10" fill="#1a7f37" stroke="#1a7f37"/>
+  </g>
+  <g font-size="14" font-weight="600" text-anchor="middle">
+    <text x="80" y="67">OIDC login</text>
+    <text x="248" y="58">Company</text><text x="248" y="77">identity</text>
+    <text x="416" y="58">Credential</text><text x="416" y="77">broker</text>
+    <text x="584" y="58">Short-lived</text><text x="584" y="77" font-size="13">gateway credential</text>
+    <text x="752" y="67">Pi runtime</text>
+    <text x="920" y="58">Company</text><text x="920" y="77">LLM gateway</text>
+  </g>
+  <g class="ln" stroke-width="2">
+    <path d="M150 62H177" marker-end="url(#a)"/>
+    <path d="M318 62H345" marker-end="url(#a)"/>
+    <path d="M486 62H513" marker-end="url(#a)"/>
+    <path d="M654 62H681" marker-end="url(#a)"/>
+    <path d="M822 62H849" marker-end="url(#a)"/>
+  </g>
+  <text x="248" y="18" text-anchor="middle" font-size="12" class="m">identity token</text>
+  <text x="584" y="18" text-anchor="middle" font-size="12" class="m">scoped, short-lived</text>
+  <text x="584" y="112" text-anchor="middle" font-size="12" class="m">no upstream provider keys on developer machines</text>
+</svg>
