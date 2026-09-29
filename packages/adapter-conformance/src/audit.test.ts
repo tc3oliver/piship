@@ -298,6 +298,39 @@ const PLAIN_BAD: readonly BadSink[] = [
     fails: ["event id stability", "duplicate handling"],
   },
   {
+    defect: "assigns a new ID to a denied tool event on every write",
+    create: (env) =>
+      forwardingSink(
+        env,
+        mapEvents((event) =>
+          event.event === "tool.denied" ? { ...event, id: freshId() } : event,
+        ),
+      ),
+    fails: ["event id stability"],
+  },
+  {
+    defect: "counts a redirect as delivered",
+    create: (env) =>
+      defineAuditSink({
+        async write(batch, signal) {
+          const response = await env.fetch(env.url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${env.credential}`,
+            },
+            body: JSON.stringify(batch),
+            redirect: "manual",
+            signal,
+          });
+          await response.body?.cancel().catch(() => undefined);
+          if (response.status >= 400)
+            throw new Error(`collector answered HTTP ${response.status}`);
+        },
+      }),
+    fails: ["delivery failure"],
+  },
+  {
     defect: "swallows a failed delivery",
     create: (env) => {
       const inner = forwardingSink(env);
@@ -464,6 +497,13 @@ describe("testAuditSink", () => {
       for (const credential of probe.credentials)
         expect(text).not.toContain(credential);
     });
+  });
+
+  it("fails every behavior alone with at least one seeded defect", () => {
+    const alone = [...PLAIN_BAD, ...BUFFERED_BAD]
+      .filter((bad) => bad.fails.length === 1)
+      .map((bad) => bad.fails[0]);
+    expect(new Set(alone)).toEqual(new Set(AUDIT_SINK_BEHAVIORS));
   });
 
   it("gives every sink a fake credential that names itself as fake", async () => {

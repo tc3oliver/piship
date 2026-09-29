@@ -2,7 +2,7 @@
 
 `@piship/adapter-sdk` is the supported surface for writing a company adapter: an identity adapter (`identity.mode: adapter`), a credential adapter (`credential.provider: adapter`), a custom sandbox backend (`sandbox.provider: custom`), or the audit collector behind the built-in `http` audit sink. An adapter imports nothing else from PiShip.
 
-Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are described below (audit sink, credential, identity); the sandbox kit arrives with its contract.
+Status: preview. The package is built to a publishable shape but is `private: true` and not published to npm; publishing needs a separate maintainer decision ([decision 21](decisions.md)). Conformance kits that test an adapter through the SDK only, `@piship/adapter-conformance`, are described below (audit sink, credential, identity, sandbox).
 
 The SDK is thin on purpose. It re-exports public contracts, and its helpers either return their argument unchanged or wrap one public function. It is not a framework: an adapter is still a plain module whose default export PiShip's loader calls.
 
@@ -34,7 +34,8 @@ A distribution cannot declare its own audit sink type: the manifest accepts `fil
 Everything else is re-exported unchanged from `@piship/contracts` or `@piship/sandbox`:
 
 - Context: `AdapterContext` (`distributionId`, the managed `fetch`, resolved `endpoints`), `ResolvedEndpoints`, and `CustomBackendContext` for sandbox adapters (`distributionId`, `fetch`, `endpoint`, and `credential` only under `sandbox.credential: runtime`).
-- Identity and credentials: `IdentityProvider`, `IdentitySession`, `LoginContext`, `CredentialProvider`, `CredentialContext`, `CredentialMode`, `RuntimeCredential`, `RuntimeCredentialKind`.
+- Identity and credentials: `IdentityProvider`, `WorkloadIdentityProvider` (an identity adapter that declares `interactive: false`), `IdentitySession`, `LoginContext`, `RETAINED_CLAIMS` (the claims PiShip keeps from a session), `CredentialProvider`, `CredentialContext`, `CredentialMode`, `RuntimeCredential`, `RuntimeCredentialKind`.
+- The principal: `PrincipalKey`, `principalKey(session)` (the `(issuer, subject)` of a session, or `IDENTITY_INVALID` when either is missing), and `samePrincipal(a, b)`, the comparison PiShip applies to a refreshed session.
 - Secrets and redaction: `SecretValue`, `isSecretValue`, `redact`, `redactValue`, `REDACTED_TEXT`.
 - Managed HTTP: the `ManagedFetch` type. Use the `fetch` in the context: it applies the distribution's proxy, CA, and private-only policy. An adapter never builds its own client.
 - Errors: `PiShipError`, `isPiShipError`, `PISHIP_ERROR_CODES`, `PiShipErrorCode`, `PiShipErrorOptions`, `formatError`, and `parseRetryAfter` for a `Retry-After` header.
@@ -331,3 +332,29 @@ What a result means:
 - `skipped`: the kit could not exercise the behavior, and `reason` says why and, where a hook would help, which one. A skipped behavior is never counted as passed.
 
 While `environment filtering` runs, the kit sets `PISHIP_CONFORMANCE_HOST_TOKEN`, `PISHIP_CONFORMANCE_HOST_ONLY`, and `PISHIP_CONFORMANCE_APPROVED` in `process.env`; while `secret leakage` runs, it watches `console` and `process.stdout` and `stderr` and passes each line on with the fake credential removed. Both are restored afterwards, also when several kit runs share a process. The kit's own tests (`packages/adapter-conformance/src/sandbox.test.ts`) run it against reference backends that really run each command under Seatbelt (macOS) or bubblewrap (Linux): a local one, a remote snapshot, a remote shared workspace, a remote synchronized one with a timer-driven copier, and one that returns output only when a command ends. They pass, and a reference seeded with one defect per behavior fails that behavior and no other. Those tests are skipped on Windows and wherever neither mechanism can run.
+
+## Kit self-tests
+
+Each kit's own tests (`packages/adapter-conformance/src/*.test.ts`) pass reference adapters and, for every behavior, fail an adapter seeded with a defect that breaks that behavior and no other. A test in each file fails when a behavior has no such seed. The kits share their helpers (how a check fails, how a call is bounded, how an error is searched for a secret) through a module the package does not export, and the package may import only `@piship/adapter-sdk`, which `npm run check:boundaries` enforces.
+
+`tests/adapter-kits/` runs the kits against the SDK examples (see [Examples](#examples)) and against PiShip's own implementations, reached through their packages' public exports:
+
+| Implementation | Kit | Result |
+| --- | --- | --- |
+| `http-broker` (`HttpBrokerCredentialProvider`) | credential | Every behavior passes |
+| The `http` audit sink's delivery (`HttpSinkWriter`) | audit | Passes; `buffer behavior` and `shutdown flush` are skipped, because the queue belongs to PiShip's audit log, not to the sink |
+| The native backend (`NativeBackend`, Seatbelt or bubblewrap) | sandbox | Passes; `cleanup` is skipped (no service holds its sandboxes) and the workspace checks are skipped (a local backend) |
+| A custom backend passed through `customBackend()`, as PiShip's loader passes it (the SDK example against a fake execution service) | sandbox | Passes; `network claims` is skipped (it enforces only `deny`) and the workspace checks are skipped (`snapshot`) |
+| The `e2b-compatible` backend, against a fake E2B service that runs each command under Seatbelt or bubblewrap | sandbox | Fails `secret leakage`, and fails `timeout` against a service whose `SendSignal` stops only the command's own process; both are points where the kit is stricter than PiShip (below) |
+
+The built-in OIDC provider is not run: its login waits for the browser to reach a loopback redirect, and the identity kit's `openUrl` only records the URL. The `kubernetes-agent-sandbox` backend is not run either: there is no fake of its runtime API that runs commands. Setting `PISHIP_KIT_REPORT` to a file path writes every report the tests produce to that file as JSON.
+
+### Where a kit is stricter than PiShip
+
+A kit holds an adapter to the contract as a company should write it; in a few places that is more than PiShip itself enforces. A failure on one of these points means the adapter relies on PiShip's leniency:
+
+- **A `shared` workspace with a delayed direction.** The kit fails `workspace consistency`: a delay is `synchronized`, not `shared`. PiShip verifies the workspace as `synchronized`, reports the lower effective mode with a notice, and still counts it complete ([workspace](sandbox.md#workspace)).
+- **A local backend that claims `host-filesystem-isolation` or `workspace-confinement`.** The kit fails `capabilities`. PiShip drops the claim, which cannot apply to commands that run on this host, and never shows it.
+- **`network-deny` claimed without listing `deny` in `network`.** The kit fails `capabilities` whatever the policy. PiShip refuses the backend only when the policy denies the network.
+- **A transport error from `prepare()` passed on unchanged.** The kit fails `secret leakage` when the error object quotes the credential, as the `e2b-compatible` backend's does. PiShip reports a failed preparation only through `redact()`, which removes the runtime credential (a revealed `SecretValue`) and bearer tokens; a company adapter's own credential is not known to it, so an adapter must not rely on that.
+- **Background processes after a timeout.** The kit's `timeout` requires every process the command started to stop. The `e2b-compatible` backend stops a timed-out command with envd's `SendSignal`, which reaches the command's own process; a background process it started runs until the sandbox is deleted ([what PiShip controls](sandbox.md#what-piship-controls)). Against a service that signals the whole process group the backend passes.

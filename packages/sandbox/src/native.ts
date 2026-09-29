@@ -65,19 +65,24 @@ export class NativeBackend implements SandboxBackend {
     const shell = shellFor(this.#platform);
     const wrap: NonNullable<SandboxInstance["wrap"]> = (command) =>
       adapter.wrap(profile, command);
+    // Aborted at dispose: a command still running is stopped like a
+    // cancelled one, and no command runs afterwards.
+    const disposed = new AbortController();
     return {
       wrap,
       exec: async (
         request: SandboxExecRequest,
         io: SandboxExecIO,
       ): Promise<SandboxExecResult> => {
+        if (disposed.signal.aborted)
+          throw new Error("the sandbox instance was disposed");
         const exit = await spawnManaged({
           file: shell.file,
           args: [...shell.flag, request.command],
           cwd: request.cwd,
           env: request.env,
           graceMs: EXEC_GRACE_MS,
-          signal: io.signal,
+          signal: AbortSignal.any([io.signal, disposed.signal]),
           onStdout: io.onStdout,
           onStderr: io.onStderr,
           sandbox: {
@@ -89,7 +94,9 @@ export class NativeBackend implements SandboxBackend {
         return { exitCode: exit.code, signal: exit.signal };
       },
       // The session temp directory is owned and removed by the activation.
-      dispose: async () => {},
+      dispose: async () => {
+        disposed.abort();
+      },
     };
   }
 }
