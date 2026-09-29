@@ -18,6 +18,7 @@ Preview milestone; not published to npm.
 
 ### Changed
 
+- **Behavior change:** release archives are compressed at zlib level 6 instead of 9. `piship release` of the personal example dropped from about 24.7 s to 13.6 s on an M4 Max, for an archive 0.44% larger (145.6 MB instead of 145.0 MB). Archives stay byte-reproducible for the same inputs, but their SHA-256 digests differ from archives built at level 9; the extracted contents are unchanged.
 - Project consolidation in progress; see [docs/roadmap.md](docs/roadmap.md).
 - Documentation: a single [status page](docs/status.md) for what current `main` supports and the evidence behind it; stale CI tier, schema, and revocation claims corrected; the manifest guide lists its differences from the product specification.
 - Documentation: the release guide is split into [owner workflow](docs/release/owner-workflow.md), [artifact contract](docs/release/artifact-contract.md), and [update lifecycle](docs/release/update-lifecycle.md) pages; `docs/release.md` is an index that maps every former section to its new location.
