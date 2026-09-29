@@ -86,6 +86,7 @@ beforeEach(async () => {
     if (path === "/token" || path === "/refresh")
       return json({
         subject: "user-1",
+        issuer: url,
         name: "Ada",
         accessToken: "identity-access-token-1",
         refreshToken: "identity-refresh-token-1",

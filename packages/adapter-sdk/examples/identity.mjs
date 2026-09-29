@@ -17,29 +17,36 @@ const SERVICE = "https://sign-in.example.com";
 const TIMEOUT_MS = 30_000;
 
 export default defineIdentityAdapter((context) => {
+  const failure = (code, message, extra = {}) =>
+    new PiShipError(code, message, { component: "identity", ...extra });
+
   async function call(path, body, signal) {
+    const deadline = withTimeout(TIMEOUT_MS, signal);
+    // Reading a body can fail as the request can; `what` names the step.
+    const unreachable = (what) =>
+      failure(
+        "GATEWAY_UNREACHABLE",
+        signal?.aborted
+          ? "Sign-in was cancelled"
+          : `The sign-in service ${what}`,
+        { retryable: !signal?.aborted },
+      );
     let response;
     try {
       response = await context.fetch(new URL(path, SERVICE), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: withTimeout(TIMEOUT_MS, signal),
+        signal: deadline,
       });
     } catch (error) {
       // Network and TLS policy refusals keep their own code. Never build a
       // message from a transport error: it can quote a header value.
       if (error instanceof PiShipError) throw error;
-      throw new PiShipError(
-        "GATEWAY_UNREACHABLE",
-        signal?.aborted
-          ? "Sign-in was cancelled"
-          : "The sign-in service is unreachable",
-        { retryable: !signal?.aborted, component: "identity" },
-      );
+      throw unreachable("is unreachable");
     }
     if (response.status === 429 || response.status >= 500)
-      throw new PiShipError(
+      throw failure(
         response.status === 429
           ? "GATEWAY_RATE_LIMITED"
           : "GATEWAY_UNREACHABLE",
@@ -47,23 +54,57 @@ export default defineIdentityAdapter((context) => {
         {
           retryable: true,
           retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
-          component: "identity",
         },
       );
-    if (!response.ok)
-      throw new PiShipError(
-        response.status === 401 ? "IDENTITY_EXPIRED" : "IDENTITY_INVALID",
+    // A 204 (a revocation, for example) has no body to read.
+    if (response.status === 204) return undefined;
+    // Read the body once; a body that is not JSON must not escape as a
+    // SyntaxError, whose message can quote it.
+    let answer;
+    try {
+      answer = await response.json();
+    } catch (error) {
+      if (!(error instanceof SyntaxError))
+        throw unreachable("answer did not arrive");
+      answer = undefined;
+    }
+    if (!response.ok) {
+      // 401, or an OAuth `invalid_grant`: the session or the grant has
+      // expired or was revoked, so the person signs in again.
+      const expired =
+        response.status === 401 || answer?.error === "invalid_grant";
+      throw failure(
+        expired ? "IDENTITY_EXPIRED" : "IDENTITY_INVALID",
         `The sign-in service refused the request (HTTP ${response.status})`,
-        { component: "identity", userAction: "Run login again" },
+        { userAction: "Run login again" },
       );
-    return response.json();
+    }
+    if (!answer || typeof answer !== "object")
+      throw failure(
+        "IDENTITY_INVALID",
+        "The sign-in service answered with a malformed body",
+      );
+    return answer;
   }
 
-  // Wrap every token at once: a SecretValue redacts itself everywhere.
+  // Wrap every token at once: a SecretValue redacts itself everywhere. The
+  // principal is the subject and the issuer the service asserts.
   function session(answer) {
+    if (
+      typeof answer.subject !== "string" ||
+      !answer.subject ||
+      typeof answer.issuer !== "string" ||
+      !answer.issuer ||
+      typeof answer.accessToken !== "string" ||
+      !Number.isFinite(answer.expiresIn)
+    )
+      throw failure(
+        "IDENTITY_INVALID",
+        "The sign-in service answered without a complete session",
+      );
     return {
       subject: answer.subject,
-      issuer: SERVICE,
+      issuer: answer.issuer,
       ...(answer.name ? { displayName: answer.name } : {}),
       accessToken: new SecretValue(answer.accessToken),
       ...(answer.refreshToken
@@ -85,8 +126,7 @@ export default defineIdentityAdapter((context) => {
     },
     async refresh(current) {
       if (!current.refreshToken)
-        throw new PiShipError("IDENTITY_EXPIRED", "The session has ended", {
-          component: "identity",
+        throw failure("IDENTITY_EXPIRED", "The session has ended", {
           userAction: "Run login again",
         });
       return session(
@@ -96,8 +136,14 @@ export default defineIdentityAdapter((context) => {
       );
     },
     async logout(current) {
-      if (current.refreshToken)
+      if (!current.refreshToken) return;
+      try {
         await call("/revoke", { refreshToken: current.refreshToken.reveal() });
+      } catch (error) {
+        // A session the service already revoked or no longer knows is
+        // logged out.
+        if (error?.code !== "IDENTITY_EXPIRED") throw error;
+      }
     },
   };
 });

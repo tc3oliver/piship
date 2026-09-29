@@ -14,15 +14,24 @@ export default defineSandboxAdapter((context) => {
   const endpoint = context.endpoint;
   async function call(method, path, body, signal) {
     const token = await context.credential?.();
-    const response = await context.fetch(new URL(path, `${endpoint}/`), {
-      method,
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      ...(signal ? { signal } : {}),
-    });
+    let response;
+    try {
+      response = await context.fetch(new URL(path, `${endpoint}/`), {
+        method,
+        headers: {
+          "content-type": "application/json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {}),
+      });
+    } catch {
+      // PiShip's cancellation passes through as it came. Never build a
+      // message from a transport error: it can quote the Authorization
+      // header, which holds the credential.
+      if (signal?.aborted) throw signal.reason;
+      throw new Error("the execution service is unreachable");
+    }
     if (!response.ok)
       throw new Error(`the execution service answered HTTP ${response.status}`);
     return response.status === 204 ? undefined : response.json();
@@ -36,8 +45,12 @@ export default defineSandboxAdapter((context) => {
       try {
         await call("GET", "health");
         return { available: true };
-      } catch (error) {
-        return { available: false, reason: error.message };
+      } catch {
+        // A fixed reason: an error's message can quote the credential.
+        return {
+          available: false,
+          reason: "the execution service is unreachable or refused the check",
+        };
       }
     },
     // Claim only what the service enforces. A remote service that keeps the
