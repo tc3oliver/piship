@@ -79,7 +79,7 @@ describe.skipIf(!live || process.platform === "win32")(
         request.status,
         "--smoke-model failed; its output is not shown because it can name the provider",
       ).toBe(0);
-      expect(modelRequest?.model).toBe(`acmecode/${MODEL}`);
+      expect(modelRequest?.model).toBe(`acmecode-reference/${MODEL}`);
       expect(modelRequest?.text.trim()).not.toBe("");
       expect(modelRequest?.stopReason).toBe("stop");
 

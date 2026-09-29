@@ -249,6 +249,8 @@ node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 ( cd examples/enterprise-reference && docker compose down )
 ```
 
+The launcher is named `acmecode`, like the one the demo company example installs at `~/.local/bin/acmecode`: installing this distribution replaces that launcher, and uninstalling it removes it. Its state and secret-store entries are kept apart by the distribution ID (`acmecode-reference`), so only the launcher path is shared; uninstall the demo first if you have installed it.
+
 `login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
 
 ### Tests
