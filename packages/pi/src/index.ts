@@ -95,8 +95,17 @@ export async function launchPiDistribution(
     const governanceHelp = metadata.governance
       ? "\n  policy explain <action> <resource> [--json] | capabilities [--json]"
       : "";
+    // Pi-native access signs in inside the Pi session; branded login and
+    // logout refuse it, so they are not advertised.
+    const piNative = metadata.access?.credential.provider === "pi-native";
+    const accessCommands = piNative
+      ? "doctor | models | version"
+      : "login | logout | doctor | models | version";
+    const piNativeHelp = piNative
+      ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
+      : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  login | logout | doctor | models | version\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--smoke | --smoke-model]`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--smoke | --smoke-model]${piNativeHelp}`
       : metadata.governance
         ? `\n\nCommands:\n  doctor | version | update [--check] | rollback${governanceHelp}\n  [--smoke]`
         : "\n\nCommands:\n  doctor | version";
