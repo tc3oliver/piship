@@ -386,14 +386,38 @@ describe("entitlement freshness (F25)", () => {
     const distribution = DistributionAccess.open(options());
     await login(distribution);
     services.knobs.brokerFaults.push({ status: 503 });
-    await expect(distribution.refreshEntitlement()).rejects.toMatchObject({
+    // The broker's own error, not a rejected credential: the credential is
+    // fine and stays in use.
+    const failed = await distribution
+      .refreshEntitlement()
+      .catch((error: unknown) => error);
+    expect(failed).toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    expect((failed as Error).message).not.toContain("rejected");
     await expect(
       DistributionAccess.open(options()).activate(),
     ).resolves.toMatchObject({ config: { allowedModels: [CODER] } });
     issueWithoutExpiry([CODER, GENERAL]);
     await expect(distribution.refreshEntitlement()).resolves.toBe(true);
+  });
+
+  it("re-reads once for one denial seen by two sessions", async () => {
+    issueWithoutExpiry([CODER]);
+    await login(DistributionAccess.open(options()));
+    const first = DistributionAccess.open(options());
+    const second = DistributionAccess.open(options());
+    await first.activate();
+    await second.activate();
+    const before = brokerRequests();
+    issueWithoutExpiry([CODER, GENERAL]);
+    await Promise.all([
+      first.refreshEntitlement(),
+      second.refreshEntitlement(),
+    ]);
+    // Both saw the same generation denied; the second finds it replaced.
+    expect(brokerRequests()).toBe(before + 1);
   });
 
   it("has no entitlement to re-read without an organization-issued credential", async () => {

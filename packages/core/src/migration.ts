@@ -78,13 +78,17 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     schema: "state",
   },
   {
+    // Also the identity discarded marker (piship-identity-discarded/v1) left
+    // when a signed-out or replaced session's tokens could not be deleted:
+    // only the references still to delete, no claim. No release restores it
+    // as a session, and every command retries the deletion first.
     name: "identity session",
     path: "identity/session.json",
     kind: "file",
     scope: "user",
     sensitivity: "secret-reference",
     retention:
-      "until logout; kept while its tokens cannot be deleted, so they stay tracked",
+      "until logout; a session whose tokens cannot be deleted is replaced by a discarded marker that keeps them tracked and is never used",
     clear: "logout (also without the runtime variables), purge",
     migration:
       "never copied; when the target cannot read it, its secrets are deleted and the deletion confirmed before the switch, and login reacquires it. A secret that cannot be deleted stops the switch",
@@ -118,7 +122,7 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
       "kept by logout; replaced when another principal (issuer and subject) signs in",
     clear: "purge",
     migration:
-      "kept in place; no secret. A missing or unreadable record counts as a change of principal",
+      "kept in place; no secret. An unreadable record counts as a change of principal, and so does a missing one unless the stored session is the signing-in principal's (a signed-in user upgrading from a release without it keeps the model selection, and the record is created)",
   },
   {
     name: "pending revocations",
@@ -127,7 +131,7 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     scope: "user",
     sensitivity: "metadata",
     retention:
-      "until the credential expires; written when a revocation fails or cannot be sent (logout without the runtime variables); checked at every login and reported by doctor",
+      "until the credential expires; written when a revocation fails or cannot be sent (logout without the runtime variables); at most 20 entries, older ones dropped and counted; checked at every login and reported by doctor",
     clear: "login once the credential expired, purge",
     migration:
       "kept in place; credential IDs and times only, never a secret, so nothing can be revoked or restored from it",

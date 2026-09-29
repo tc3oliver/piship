@@ -286,16 +286,30 @@ describe("branded logout", () => {
       for (const name of readdirSync(path("secrets")))
         chmodSync(path("secrets", name), 0o644);
       chmodSync(path("secrets"), 0o500);
-      const identity = readFileSync(path("identity", "session.json"), "utf8");
       const error = await rejection(runLogout(ctx));
       expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
       expect(error.message).toBe(
         "Signed out of AcmeCode only in part: the identity session and the runtime credential could not be deleted from the secret store. They are never used and stay tracked, so the next login or logout deletes them; sessions were preserved",
       );
       expect(out).toEqual([]);
-      expect(readFileSync(path("identity", "session.json"), "utf8")).toBe(
-        identity,
-      );
+      // The identity session is signed out all the same: a discarded marker
+      // tracks its tokens, and nothing restores it as a session.
+      expect(
+        JSON.parse(readFileSync(path("identity", "session.json"), "utf8")),
+      ).toMatchObject({
+        schema: "piship-identity-discarded/v1",
+        orphans: expect.arrayContaining([`piship:${ID}:identity#1`]),
+      });
+      await expect(
+        DistributionAccess.open({
+          app: ctx.metadata.app,
+          mode: ctx.mode,
+          access: ctx.metadata.access,
+          stateDir: ctx.stateDir,
+          distributionDir: ctx.distributionDir,
+          env: services.env(),
+        }).activate(),
+      ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
       expect(
         JSON.parse(
           readFileSync(path("credentials-metadata", "inference.json"), "utf8"),

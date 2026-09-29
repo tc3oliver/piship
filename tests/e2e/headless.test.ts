@@ -249,6 +249,8 @@ describe("headless workload distribution (local fixtures)", () => {
           issuer: WORKLOAD_ISSUER,
           subject,
           token,
+          // A workload session must say when it expires.
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
           ...extra,
         }),
       );
@@ -272,7 +274,14 @@ describe("headless workload distribution (local fixtures)", () => {
     //    falls back to the personal credentials around it.
     const missing = await run(["--smoke"]);
     expect(missing.status).toBe(1);
-    expect(missing.stderr).toMatch(/ENOENT|no such file/);
+    // A coded error; the adapter's own message (here a file error naming
+    // the token path) is never passed on, since it may quote the token.
+    expect(missing.stderr).toContain("IDENTITY_INVALID");
+    expect(missing.stderr).toContain(
+      "The workload identity adapter could not obtain a session",
+    );
+    expect(missing.stderr).not.toMatch(/ENOENT|no such file/);
+    expect(missing.stderr).not.toContain(identityPath);
     expect(gatewayCalls()).toEqual([]);
     expect(brokerCalls()).toEqual([]);
 

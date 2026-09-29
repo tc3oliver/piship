@@ -14,6 +14,7 @@ import {
   CREDENTIAL_METADATA_SCHEMA,
   MemorySecretStore,
   RestrictedFileSecretStore,
+  withFileLock,
 } from "@piship/credentials";
 import { identityMetadata, identitySecret } from "@piship/identity";
 import {
@@ -211,6 +212,7 @@ const gatewayKeysSince = (index: number): string[] =>
 
 const credentialFile = () =>
   join(stateDir(), "credentials-metadata", "inference.json");
+const identityFile = () => join(stateDir(), "identity", "session.json");
 const preferencesFile = () => join(stateDir(), "config", "preferences.json");
 
 function selectModel(model: string) {
@@ -539,7 +541,16 @@ describe("user switching when the secret store fails (fixtures)", () => {
     await expect(login(distribution, BOB)).rejects.toMatchObject({
       code: "SECRET_STORE_UNAVAILABLE",
     });
-    expect(distribution.readIdentityMetadata()?.subject).toBe(ALICE.subject);
+    // Bob's identity was never stored. Alice's session (already revoked at
+    // the identity provider) is a discarded marker that still tracks her
+    // token bundle and is never restored as a session.
+    expect(distribution.readIdentityMetadata()).toBeNull();
+    const marker = JSON.parse(readFileSync(identityFile(), "utf8"));
+    expect(marker).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+      orphans: expect.arrayContaining(["piship:acmecode:identity#1"]),
+    });
+    expect(JSON.stringify(marker)).not.toContain(ALICE.subject);
     // Alice's runtime credential was already gone before her tokens.
     expect(existsSync(credentialFile())).toBe(false);
     store.failDeletes = null;
@@ -561,8 +572,12 @@ describe("user switching when the secret store fails (fixtures)", () => {
     );
     for (const problem of problems)
       expect(problem).not.toContain("demo-at-not-a-real-one");
-    // The identity metadata stays, so its tokens stay tracked.
-    expect(distribution.readIdentityMetadata()?.subject).toBe(ALICE.subject);
+    // The session is signed out all the same: a discarded marker keeps its
+    // tokens tracked and no release restores it as a session.
+    expect(distribution.readIdentityMetadata()).toBeNull();
+    expect(JSON.parse(readFileSync(identityFile(), "utf8"))).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+    });
     store.failDeletes = null;
     expect(await distribution.logout()).toEqual([]);
     expect(store.refs()).toEqual([]);
@@ -637,5 +652,491 @@ describe("user switching when the secret store fails (fixtures)", () => {
       }),
     ).rejects.toMatchObject({ code: "IDENTITY_INVALID" });
     expect(distribution.readIdentityMetadata()?.subject).toBe(ALICE.subject);
+  });
+});
+
+/** A promise the test resolves by hand: `wait` blocks until `open()`. */
+function gate(): { open: () => void; wait: Promise<void> } {
+  let open: () => void = () => undefined;
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, wait };
+}
+
+const settle = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const PIN_ERROR = {
+  code: "IDENTITY_REQUIRED",
+  message: "The signed-in user changed; restart the session",
+};
+
+describe("a running session while another sign-in happens (fixtures)", () => {
+  let store: FlakyStore;
+  const open = (
+    extra: Partial<Parameters<typeof DistributionAccess.open>[0]> = {},
+  ) => DistributionAccess.open(options(store, extra));
+  beforeEach(() => {
+    store = new FlakyStore();
+  });
+
+  /** Bob's credential is untouched and the only one bound in the state. */
+  function expectBobsCredentialIntact(): void {
+    const [bobCredential] = credentialOf(BOB);
+    expect(bobCredential).toBeDefined();
+    expect(services.state.credentials.get(bobCredential?.secret)?.revoked).toBe(
+      false,
+    );
+    expect(JSON.parse(readFileSync(credentialFile(), "utf8"))).toMatchObject({
+      credential_id: bobCredential?.id,
+      principal: { subject: BOB.subject },
+    });
+    expect(open().readIdentityMetadata()?.subject).toBe(BOB.subject);
+  }
+
+  it("never serves Alice's cached secret, or a credential issued to Bob, after Bob signs in elsewhere", async () => {
+    await login(open(), ALICE);
+    const running = open();
+    const alice = await running.activate();
+    const aliceSecret = alice.credential.secret?.reveal();
+    expect((await running.requestSecret())?.reveal()).toBe(aliceSecret);
+    // Alice's credential cannot be revoked at the broker, so it would still
+    // work at the gateway if the running session kept using it.
+    services.knobs.revokeStatus = 503;
+    await login(open(), BOB);
+    services.knobs.revokeStatus = undefined;
+    const requests = services.state.requests.length;
+    // Fast path: the cached secret is Alice's, the stored credential Bob's.
+    await expect(running.requestSecret()).rejects.toMatchObject(PIN_ERROR);
+    // Slow path: a forced renewal must not hand Alice's session Bob's.
+    await expect(running.requestSecret({ force: true })).rejects.toMatchObject(
+      PIN_ERROR,
+    );
+    await expect(running.requestSecret()).rejects.toMatchObject(PIN_ERROR);
+    expect(gatewayKeysSince(requests)).toEqual([]);
+    expectBobsCredentialIntact();
+    expect(credentialOf(ALICE)).toHaveLength(1);
+  });
+
+  it("never renews into Bob's credential after the gateway rejects Alice's during activation", async () => {
+    await login(open(), ALICE);
+    const [aliceCredential] = credentialOf(ALICE);
+    // The gateway now rejects Alice's credential (HTTP 401).
+    services.state.credentials.get(aliceCredential?.secret).revoked = true;
+    const running = open({
+      onPhase: async (phase: string) => {
+        if (phase === "credential-rejected") await login(open(), BOB);
+      },
+    });
+    await expect(running.activate()).rejects.toMatchObject(PIN_ERROR);
+    expectBobsCredentialIntact();
+    expect(credentialOf(ALICE)).toHaveLength(1);
+  });
+
+  it("scenario A: a launch that resolved Alice before Bob signed in never discards his credential or acquires hers", async () => {
+    await login(open(), ALICE);
+    selectModel("acme/general");
+    const running = open({
+      onPhase: async (phase: string) => {
+        if (phase === "identity-resolved") await login(open(), BOB);
+      },
+    });
+    await expect(running.activate()).rejects.toMatchObject(PIN_ERROR);
+    expectBobsCredentialIntact();
+    // No credential was acquired for Alice with her still-valid token, and
+    // the state is still bound to Bob.
+    expect(credentialOf(ALICE)).toHaveLength(1);
+    expect(open().readPrincipalBinding()).toMatchObject({
+      subject: BOB.subject,
+    });
+    const bob = await open().activate();
+    expect(bob.identity?.subject).toBe(BOB.subject);
+    expect(bob.credential.ref?.credentialId).toBe(credentialOf(BOB)[0]?.id);
+  });
+
+  it("a launch waits while a sign-in holds the credential lock, then stops for the new user (real locks)", async () => {
+    await login(open(), ALICE);
+    const held = gate();
+    const locked = gate();
+    const signingIn = login(
+      open({
+        onPhase: async (phase: string) => {
+          if (phase === "login-locked") {
+            locked.open();
+            await held.wait;
+          }
+        },
+      }),
+      BOB,
+    );
+    await locked.wait;
+    const resolved = gate();
+    let finished = false;
+    const launching = open({
+      onPhase: (phase: string) => {
+        if (phase === "identity-resolved") resolved.open();
+      },
+    })
+      .activate()
+      .finally(() => {
+        finished = true;
+      });
+    // The launch read Alice's identity (the sign-in has changed nothing yet)
+    // and now waits for the credential lock.
+    await resolved.wait;
+    await settle();
+    expect(finished).toBe(false);
+    held.open();
+    await signingIn;
+    await expect(launching).rejects.toMatchObject(PIN_ERROR);
+    expectBobsCredentialIntact();
+    expect(credentialOf(ALICE)).toHaveLength(1);
+  });
+
+  it("two sign-ins run one after the other (real locks)", async () => {
+    await login(open(), ALICE);
+    const held = gate();
+    const cleared = gate();
+    const first = login(
+      open({
+        onPhase: async (phase: string) => {
+          if (phase === "credential-cleared") {
+            cleared.open();
+            await held.wait;
+          }
+        },
+      }),
+      BOB,
+    );
+    await cleared.wait;
+    // Alice signs in again from another terminal while Bob's sign-in is
+    // halfway: hers waits for his to finish, then replaces it.
+    let secondDone = false;
+    const second = login(open(), ALICE).finally(() => {
+      secondDone = true;
+    });
+    await settle(300);
+    expect(secondDone).toBe(false);
+    held.open();
+    await first;
+    await second;
+    expect(open().readIdentityMetadata()?.subject).toBe(ALICE.subject);
+    const metadata = JSON.parse(readFileSync(credentialFile(), "utf8"));
+    expect(metadata.principal).toMatchObject({ subject: ALICE.subject });
+    expect(metadata.credential_id).toBe(credentialOf(ALICE).at(-1)?.id);
+    // Bob's credential and tokens were cleared by the second sign-in.
+    expect(await residue(store, secretsOf(BOB))).toEqual([]);
+    const alice = await open().activate();
+    expect(alice.identity?.subject).toBe(ALICE.subject);
+  });
+
+  it("scenario B: a sign-in waits for an identity refresh in progress, then replaces the refreshed session (real locks)", async () => {
+    services.knobs.accessTokenTtl = 30;
+    await login(open(), ALICE);
+    const running = open();
+    const provider = await running.identityProvider();
+    if (!provider?.refresh) throw new Error("no refresh");
+    const refresh = provider.refresh.bind(provider);
+    const refreshing = gate();
+    const release = gate();
+    provider.refresh = async (session) => {
+      refreshing.open();
+      await release.wait;
+      return refresh(session);
+    };
+    const launching = running.activate();
+    await refreshing.wait;
+    // Alice's refresh holds the identity lock: Bob's sign-in clears the
+    // credential and then waits for it, and never stores beside it.
+    let signedIn = false;
+    const signingIn = login(open(), BOB).finally(() => {
+      signedIn = true;
+    });
+    await settle(300);
+    expect(signedIn).toBe(false);
+    expect(open().readIdentityMetadata()?.subject).toBe(ALICE.subject);
+    release.open();
+    await signingIn;
+    await expect(launching).rejects.toMatchObject(PIN_ERROR);
+    // The session file is Bob's; nothing of Alice's, her refreshed tokens
+    // included, is left anywhere.
+    expect(open().readIdentityMetadata()?.subject).toBe(BOB.subject);
+    expect(await residue(store, secretsOf(ALICE))).toEqual([]);
+    const bob = await open().activate();
+    expect(bob.identity?.subject).toBe(BOB.subject);
+  });
+
+  it("a refresh never spends another principal's refresh token", async () => {
+    services.knobs.accessTokenTtl = 30;
+    await login(open(), ALICE);
+    const running = open();
+    // Hold the identity lock, as a concurrent sign-in would, while the
+    // running session has read Alice's expiring session.
+    const read = gate();
+    const inner = store.inner;
+    const originalGet = inner.get.bind(inner);
+    inner.get = async (ref: string) => {
+      const value = await originalGet(ref);
+      if (ref.includes(":identity#")) read.open();
+      return value;
+    };
+    const locked = gate();
+    const unlock = gate();
+    const holding = withFileLock(running.paths.identity, async () => {
+      locked.open();
+      await unlock.wait;
+      // Meanwhile Bob's session replaces Alice's on disk.
+      as(BOB);
+      const bobSession = await (await running.identityProvider())?.login({
+        openUrl: (url) => void services.approve(url),
+      });
+      if (!bobSession) throw new Error("no session");
+      await store.put("piship:acmecode:identity#9", identitySecret(bobSession));
+      writeFileSync(
+        identityFile(),
+        JSON.stringify(
+          identityMetadata(bobSession, "piship:acmecode:identity#9"),
+        ),
+      );
+    });
+    await locked.wait;
+    // Started outside the held lock: the refresh waits for it.
+    const refreshing = running
+      .currentIdentity({ required: true })
+      .catch((error: unknown) => error);
+    await read.wait;
+    inner.get = originalGet;
+    unlock.open();
+    await holding;
+    const bobRefreshTokens = [...services.state.refreshTokens]
+      .filter(([, entry]) => entry.subject === BOB.subject)
+      .map(([token]) => token);
+    expect(bobRefreshTokens.length).toBeGreaterThan(0);
+    expect(await refreshing).toMatchObject({
+      code: "IDENTITY_INVALID",
+      message: "Another identity signed in; run login again",
+    });
+    // Bob's refresh token was not used (the fixture rotates on use).
+    for (const token of bobRefreshTokens)
+      expect(services.state.refreshTokens.has(token)).toBe(true);
+    expect(open().readIdentityMetadata()?.subject).toBe(BOB.subject);
+  });
+
+  it("stops a login at every crash point without leaving Alice's credential usable by Bob", async () => {
+    for (const phase of [
+      "revoked",
+      "secret-deleted",
+      "credential-cleared",
+      "principal-bound",
+      "identity-cleared",
+      "identity-stored",
+    ]) {
+      rmSync(stateDir(), { recursive: true, force: true });
+      store = new FlakyStore();
+      await login(open(), ALICE);
+      selectModel("acme/general");
+      const aliceSecrets = secretsOf(ALICE);
+      const [aliceCredential] = credentialOf(ALICE);
+      const crashing = open({
+        onPhase: (reached: string) => {
+          if (reached === phase) throw new Error(`simulated crash ${phase}`);
+        },
+      });
+      await expect(login(crashing, BOB)).rejects.toThrow(
+        `simulated crash ${phase}`,
+      );
+      // Whoever the stored identity is, no launch pairs Bob with Alice's
+      // credential. (A crash before Bob's identity is stored leaves Alice
+      // signed in, and her launch may use her own credential.)
+      const requests = services.state.requests.length;
+      const onDisk = open().readIdentityMetadata()?.subject;
+      // The broker's entitlement follows the person the fixture serves.
+      if (onDisk === ALICE.subject) as(ALICE);
+      const launched = await open()
+        .activate()
+        .catch((error: unknown) => error);
+      if (onDisk === BOB.subject)
+        expect(launched, phase).toMatchObject({
+          identity: { subject: BOB.subject },
+        });
+      if (onDisk === undefined)
+        expect(launched, phase).toMatchObject({ code: "IDENTITY_REQUIRED" });
+      if (onDisk !== ALICE.subject)
+        expect(gatewayKeysSince(requests), phase).not.toContain(
+          aliceCredential?.secret,
+        );
+      else
+        expect(launched, phase).toMatchObject({
+          identity: { subject: ALICE.subject },
+        });
+      // Bob signs in again: nothing of Alice's is left, her model
+      // selection included.
+      await login(open(), BOB);
+      const bob = await open().activate();
+      expect(bob.identity?.subject, phase).toBe(BOB.subject);
+      expect(bob.config.allowedModels).toEqual(BOB.models);
+      expect(
+        readPreferences(preferencesFile()).values.model,
+        phase,
+      ).toBeUndefined();
+      expect(await residue(store, aliceSecrets), phase).toEqual([]);
+    }
+  });
+});
+
+describe("sign-out and unusable identity state (fixtures)", () => {
+  it("a failed identity deletion at logout leaves no usable session, and the next command finishes it once the store works", async () => {
+    const store = new FlakyStore();
+    const open = () => DistributionAccess.open(options(store));
+    await login(open(), ALICE);
+    const aliceSecrets = secretsOf(ALICE);
+    store.failDeletes = /:identity#/;
+    const problems = await open().logout();
+    // The current generation and the next one (a crash may have left it).
+    expect(problems).toEqual([
+      expect.stringMatching(
+        /^identity secret piship:acmecode:identity#1: .*the session is signed out and never used/,
+      ),
+      expect.stringMatching(/^identity secret piship:acmecode:identity#2: /),
+    ]);
+    for (const problem of problems)
+      expect(problem).not.toContain("demo-at-not-a-real-one");
+    const marker = JSON.parse(readFileSync(identityFile(), "utf8"));
+    expect(marker).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+      orphans: expect.arrayContaining(["piship:acmecode:identity#1"]),
+    });
+    for (const value of [ALICE.subject, ALICE.email, services.issuer])
+      expect(JSON.stringify(marker)).not.toContain(value);
+    // A launch does not work on it, and neither does a request.
+    const requests = services.state.requests.length;
+    await expect(open().activate()).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    await expect(open().requestSecret()).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    expect(services.state.requests.length).toBe(requests);
+    expect((await open().status()).identity).toBeNull();
+    // The store works again: the next command deletes the tokens and the
+    // user is signed out.
+    store.failDeletes = null;
+    await expect(open().activate()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: "You are not signed in",
+    });
+    expect(existsSync(identityFile())).toBe(false);
+    expect(store.refs()).toEqual([]);
+    expect(await residue(store, aliceSecrets)).toEqual([]);
+  });
+
+  it("an unreadable session of Alice whose tokens cannot be deleted fails closed, stays tracked, and is cleared before Bob signs in", async () => {
+    const store = new FlakyStore();
+    const open = () => DistributionAccess.open(options(store));
+    await login(open(), ALICE);
+    const aliceSecrets = secretsOf(ALICE);
+    // An incompatible (say, newer) version of Alice's session metadata.
+    const metadata = JSON.parse(readFileSync(identityFile(), "utf8"));
+    writeFileSync(
+      identityFile(),
+      JSON.stringify({ ...metadata, schema: "piship-identity-metadata/v9" }),
+    );
+    store.failDeletes = /:identity#/;
+    await expect(open().activate()).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    expect(JSON.parse(readFileSync(identityFile(), "utf8"))).toMatchObject({
+      schema: "piship-identity-discarded/v1",
+      orphans: expect.arrayContaining(["piship:acmecode:identity#1"]),
+    });
+    // Bob cannot sign in over it while the store fails...
+    await expect(login(open(), BOB)).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    // ...and once it works, Alice's token bundle is deleted first.
+    store.failDeletes = null;
+    await login(open(), BOB);
+    expect(open().readIdentityMetadata()?.subject).toBe(BOB.subject);
+    expect(await residue(store, aliceSecrets)).toEqual([]);
+  });
+
+  it("keeps a replaced identity token bundle that cannot be deleted tracked, reports it, and deletes it at logout", async () => {
+    const store = new FlakyStore();
+    const open = () => DistributionAccess.open(options(store));
+    services.knobs.accessTokenTtl = 30;
+    await login(open(), ALICE);
+    store.failDeletes = /:identity#1$/;
+    services.knobs.accessTokenTtl = 3600;
+    const activated = await open().activate();
+    expect(activated.notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "A replaced identity token bundle could not be deleted from the secret store (piship:acmecode:identity#1",
+        ),
+      ]),
+    );
+    const metadata = JSON.parse(readFileSync(identityFile(), "utf8"));
+    expect(metadata).toMatchObject({
+      secretRef: "piship:acmecode:identity#2",
+      orphans: ["piship:acmecode:identity#1"],
+    });
+    store.failDeletes = null;
+    expect(await open().logout()).toEqual([]);
+    expect(store.refs()).toEqual([]);
+  });
+
+  it("clears Alice's model selection when Bob signs in on state she left under a release without a principal binding", async () => {
+    const store = new MemorySecretStore();
+    const open = () => DistributionAccess.open(options(store));
+    await login(open(), ALICE);
+    selectModel("acme/general");
+    // Alice signs out under v0.6, which kept no principal binding.
+    expect(await open().logout()).toEqual([]);
+    rmSync(join(stateDir(), "identity", "principal.json"));
+    events.length = 0;
+    await login(open(), BOB);
+    expect(readPreferences(preferencesFile()).values.model).toBeUndefined();
+    expect(open().readPrincipalBinding()).toMatchObject({
+      subject: BOB.subject,
+    });
+    expect((await open().activate()).selectedModel).toBe("acme/coder");
+    // Nobody is known to have been replaced, so no principal change is
+    // reported, but the selection of an unknown user is not kept.
+    expect(
+      events.find((event) => event.event === "identity.login")?.detail,
+    ).not.toHaveProperty("principalChange");
+  });
+
+  it("keeps the model selection of a user still signed in when an older release left no principal binding", async () => {
+    const store = new MemorySecretStore();
+    const open = () => DistributionAccess.open(options(store));
+    await login(open(), ALICE);
+    selectModel("acme/general");
+    rmSync(join(stateDir(), "identity", "principal.json"));
+    expect((await open().activate()).selectedModel).toBe("acme/general");
+    expect(open().readPrincipalBinding()).toMatchObject({
+      subject: ALICE.subject,
+    });
+  });
+
+  it("status never shows another principal's credential as usable", async () => {
+    const store = new MemorySecretStore();
+    const open = () => DistributionAccess.open(options(store));
+    await login(open(), ALICE);
+    const aliceMetadata = readFileSync(credentialFile(), "utf8");
+    const [aliceCredential] = credentialOf(ALICE);
+    await login(open(), BOB);
+    expect((await open().status()).credential.state).toBe("valid");
+    // Alice's metadata put back under Bob's identity.
+    writeFileSync(credentialFile(), aliceMetadata);
+    const status = await open().status();
+    expect(status.identity?.subject).toBe(BOB.subject);
+    expect(status.credential).toMatchObject({
+      state: "absent",
+      metadata: null,
+      notice: expect.stringContaining("not issued to the signed-in identity"),
+    });
+    expect(status.refs).toBeNull();
+    expect(JSON.stringify(status)).not.toContain(aliceCredential?.id);
   });
 });

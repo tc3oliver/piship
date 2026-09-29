@@ -83,20 +83,58 @@ function rejectedUserSecret(command: string): PiShipError {
   );
 }
 
+/** What activation and renewal ask of `CredentialManager.ensure`. */
+type CredentialEnsureOptions = Omit<
+  Parameters<CredentialManager["ensure"]>[2],
+  "guard"
+>;
+
 const PRINCIPAL_BINDING_SCHEMA = "piship-principal-binding/v1";
+/**
+ * What `identity/session.json` becomes when the token bundles of a signed-out
+ * or replaced identity session could not all be deleted: only the references
+ * still to delete, with no token, subject, or claim. No release restores it
+ * as a session (older ones see an incompatible schema), and every command
+ * that reads the identity retries the deletion first and fails closed while
+ * it cannot.
+ */
+const IDENTITY_DISCARDED_SCHEMA = "piship-identity-discarded/v1";
+/** How long a workload identity adapter's `login()` may take. */
+const WORKLOAD_LOGIN_TIMEOUT_MS = 30_000;
+/**
+ * A workload session is obtained again after this long even when it is
+ * valid for longer, so a token the platform rotated is picked up.
+ */
+const WORKLOAD_SESSION_MAX_AGE_MS = 5 * 60_000;
 
 /**
- * The `openUrl` a workload identity adapter receives. A workload never has a
- * person to send to a browser, so asking for one fails the sign-in.
+ * The refusal a workload identity adapter gets for `openUrl`. A workload
+ * never has a person to send to a browser, so asking for one fails the run.
  */
-function refuseBrowser(): never {
-  throw new PiShipError(
+function browserRefused(): PiShipError {
+  return new PiShipError(
     "IDENTITY_INVALID",
     "A non-interactive identity adapter tried to open a browser",
     {
       component: "identity",
       userAction:
         "A workload identity adapter must obtain its session without a person; fix the adapter or declare it interactive",
+    },
+  );
+}
+
+/** A running session whose signed-in user is no longer the one it started with. */
+function principalChanged(command: string, signedOut = false): PiShipError {
+  return new PiShipError(
+    "IDENTITY_REQUIRED",
+    signedOut
+      ? "You signed out in another session; restart the session"
+      : "The signed-in user changed; restart the session",
+    {
+      component: "identity",
+      userAction: signedOut
+        ? `Run ${command} login, then start ${command} again`
+        : `Start ${command} again to continue as the signed-in user`,
     },
   );
 }
@@ -115,8 +153,23 @@ export class DistributionAccess {
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
   #secret: SecretValue | null = null;
+  /** The credential generation `#secret` belongs to. */
+  #secretRef: string | undefined;
+  /**
+   * The principal this instance serves, pinned by its first `activate()` or
+   * `login()` (null without identity). A running session never switches
+   * users: once pinned, another principal is refused, and only `login()`,
+   * which is the switch, pins again.
+   */
+  #principal: PrincipalKey | null | undefined;
   /** A workload identity session, held for this process only and never stored. */
   #workload: IdentitySession | null = null;
+  /** When `#workload` was obtained (the injected clock). */
+  #workloadAt = 0;
+  /** The workload `login()` in flight, shared by concurrent callers. */
+  #workloadPending: Promise<IdentitySession> | null = null;
+  /** The credential (reference and acquisition time) a model denial re-read. */
+  #entitlementReread: string | undefined;
   /** Notices from obtaining a workload identity, reported by the next activation. */
   #identityNotices: string[] = [];
   /** The last acquire or refresh the credential manager reported. */
@@ -227,11 +280,18 @@ export class DistributionAccess {
     manager: CredentialManager,
     identity: IdentitySession | null,
     ctx: CredentialContext,
-    options: { allowAcquire: boolean; forceRefresh?: boolean },
+    options: CredentialEnsureOptions,
+    underLock?: () => void,
   ): Promise<ActiveCredential> {
     const started = this.#now();
     this.#credentialChange = undefined;
-    const active = await manager.ensure(identity, ctx, options);
+    const active = await manager.ensure(identity, ctx, {
+      ...options,
+      guard: () => {
+        this.#assertSignedIn(identity);
+        underLock?.();
+      },
+    });
     const change = this.#credentialChange;
     this.#credentialChange = undefined;
     if (
@@ -308,6 +368,57 @@ export class DistributionAccess {
     };
   }
 
+  // ------------------------------------------------------------ principal pin
+
+  /**
+   * Pin this instance to `identity`'s principal, or confirm it is the pinned
+   * one. Another principal means the user changed under a running session:
+   * the cached secret is dropped and the call fails.
+   */
+  #pin(identity: IdentitySession | null): void {
+    const principal = identity ? principalKey(identity) : null;
+    if (this.#principal === undefined) {
+      this.#principal = principal;
+      return;
+    }
+    if (samePrincipal(this.#principal, principal)) return;
+    this.#forgetSecret();
+    throw principalChanged(this.options.app.command);
+  }
+
+  #forgetSecret(): void {
+    this.#secret = null;
+    this.#secretRef = undefined;
+  }
+
+  #hold(active: ActiveCredential): void {
+    this.#secret = active.secret;
+    this.#secretRef = active.ref?.ref;
+  }
+
+  /**
+   * Under the credential lock, before a credential is read, used, or
+   * acquired for `identity`: a person's session must still be the stored
+   * one. Another process may have signed another user in (or signed out)
+   * after `identity` was read; acting on it then would discard the new
+   * user's credential and store one issued to the previous user. A workload
+   * session is never stored; it is pinned to its process instead.
+   */
+  #assertSignedIn(identity: IdentitySession | null): void {
+    const provider = this.#identity;
+    if (!identity || !provider || isWorkloadIdentityProvider(provider)) return;
+    const stored = this.readIdentityMetadata();
+    if (stored && samePrincipal(stored, principalKey(identity))) return;
+    this.#forgetSecret();
+    throw principalChanged(this.options.app.command, !stored);
+  }
+
+  /** Whether the identity provider is a workload identity adapter. */
+  async usesWorkloadIdentity(): Promise<boolean> {
+    const provider = await this.identityProvider();
+    return !!provider && isWorkloadIdentityProvider(provider);
+  }
+
   async identityProvider(): Promise<IdentityProvider | null> {
     if (this.#identity !== undefined) return this.#identity;
     const identity = this.options.access?.identity;
@@ -371,6 +482,7 @@ export class DistributionAccess {
       store: this.store,
       metadataPath: this.paths.credential,
       revocationRetryPath: this.paths.revocationRetry,
+      ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
       beforeExpirySeconds:
         access?.credential.refresh.beforeExpirySeconds ?? 300,
       now: this.#now,
@@ -471,33 +583,91 @@ export class DistributionAccess {
   /**
    * Bind the state to `principal`. When another principal owned it, the model
    * selection is invalidated first; the credential is bound and checked on
-   * its own. Returns whether the principal changed and whether a model
-   * selection was cleared.
+   * its own. A missing or unreadable binding may have been anyone's (state
+   * from before bindings existed, where the previous user signed out), so it
+   * counts as a change unless the stored session is this principal's.
+   * Returns whether the principal changed, whether a previous principal was
+   * known to differ, and whether a model selection was cleared.
    */
   #bindPrincipal(principal: PrincipalKey): {
     changed: boolean;
+    known: boolean;
     cleared: boolean;
   } {
     const bound = this.readPrincipalBinding();
     const stored = this.readIdentityMetadata();
-    // An unreadable record may have named anyone: treat it as a change.
-    const changed =
+    const known =
       bound === undefined ||
       [bound, stored].some(
         (previous) => !!previous && !samePrincipal(previous, principal),
       );
+    const changed =
+      known ||
+      (bound === null && !(stored && samePrincipal(stored, principal)));
     const cleared = changed && this.#clearModelSelection();
     if (!bound || !samePrincipal(bound, principal))
       this.#writePrincipalBinding(principal);
-    return { changed, cleared };
+    return { changed, known, cleared };
+  }
+
+  /** The stored identity file as JSON, whatever its schema; null when unreadable. */
+  #readIdentityRaw(): unknown {
+    try {
+      return JSON.parse(readFileSync(this.paths.identity, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Delete every token bundle `raw` (identity metadata or a discarded
+   * marker) references, confirming each deletion, then the file. What cannot
+   * be deleted is kept in a discarded marker in its place, so it stays
+   * tracked and is never restored as a session; the failures are returned.
+   * The caller holds the identity lock.
+   */
+  async #discardIdentity(
+    raw: unknown,
+  ): Promise<{ ref: string; problem: string }[]> {
+    const refs = metadataSecretRefs(raw, this.options.app.id);
+    const store = this.store;
+    const failed = store
+      ? await deleteSecretsVerified(store, refs)
+      : refs.map((ref) => ({ ref, problem: "no secret store is configured" }));
+    if (!failed.length) rmSync(this.paths.identity, { force: true });
+    else
+      writeJsonAtomic(this.paths.identity, {
+        schema: IDENTITY_DISCARDED_SCHEMA,
+        orphans: failed.map((item) => item.ref).sort(),
+        discarded_at: new Date(this.#now()).toISOString(),
+      });
+    return failed;
+  }
+
+  /**
+   * Clear an identity file no session can be restored from (a discarded
+   * marker, metadata of an incompatible version, or a damaged file), deleting
+   * the token bundles it names first. Fails closed while one cannot be
+   * deleted; the marker keeps it tracked for the next command.
+   */
+  async #clearUnusableIdentity(): Promise<void> {
+    if (!existsSync(this.paths.identity) || this.readIdentityMetadata()) return;
+    await withFileLock(this.paths.identity, async () => {
+      if (!existsSync(this.paths.identity) || this.readIdentityMetadata())
+        return;
+      const failed = await this.#discardIdentity(this.#readIdentityRaw());
+      if (failed.length) throw deletionFailure(failed);
+    });
   }
 
   /**
    * Clear another principal's identity session before a new one is stored:
-   * revoke its tokens at the provider (best effort, a failure is a notice),
-   * delete every token generation and confirm it, then the metadata. A
-   * deletion that cannot be confirmed fails closed and keeps the metadata, so
-   * the tokens stay tracked.
+   * revoke its tokens at the provider (best effort, a failure is a notice;
+   * never through a workload adapter, which has no person's tokens to
+   * revoke), delete every token generation and confirm it, then the
+   * metadata. A deletion that cannot be confirmed fails closed and leaves a
+   * discarded marker, so the tokens stay tracked and are never used. The
+   * caller holds the identity lock.
    */
   async #clearPreviousIdentity(
     metadata: IdentityMetadata,
@@ -506,47 +676,84 @@ export class DistributionAccess {
   ): Promise<void> {
     const store = this.store;
     if (!store) return;
-    const secret = await store.get(metadata.secretRef).catch(() => null);
-    if (provider.logout && secret)
-      try {
-        await provider.logout(restoreIdentitySession(metadata, secret));
-      } catch (error) {
-        notices.push(
-          `The previous identity session could not be revoked at the identity provider: ${redact((error as Error).message)}`,
-        );
-      }
-    const failed = await deleteSecretsVerified(
-      store,
-      metadataSecretRefs(metadata, this.options.app.id),
-    );
+    if (provider.logout && !isWorkloadIdentityProvider(provider)) {
+      const secret = await store.get(metadata.secretRef).catch(() => null);
+      if (secret)
+        try {
+          await provider.logout(restoreIdentitySession(metadata, secret));
+        } catch (error) {
+          notices.push(
+            `The previous identity session could not be revoked at the identity provider: ${redact((error as Error).message)}`,
+          );
+        }
+    }
+    const failed = await this.#discardIdentity(metadata);
     if (failed.length) throw deletionFailure(failed);
-    rmSync(this.paths.identity, { force: true });
   }
 
+  /**
+   * Store `session` as the next generation. Replaced generations are deleted
+   * and the deletion confirmed; one that fails stays listed in the metadata's
+   * `orphans`, so the next store or the logout retries it, and is reported.
+   * Only a session of the stored principal replaces it, under the identity
+   * lock, so two writers never interleave.
+   */
   async #storeIdentity(session: IdentitySession): Promise<void> {
-    if (!this.store)
+    const store = this.store;
+    if (!store)
       throw new PiShipError(
         "SECRET_STORE_UNAVAILABLE",
         "No secret store is configured",
         { component: "identity" },
       );
-    const previous = this.readIdentityMetadata();
-    // Another principal's session is cleared (verified) before a new one is
-    // stored; this never replaces it in place.
-    if (previous && !samePrincipal(previous, principalKey(session)))
-      throw new PiShipError(
-        "IDENTITY_INVALID",
-        "Another identity is still stored; it must be cleared first",
-        { component: "identity" },
+    await withFileLock(this.paths.identity, async () => {
+      const previous = this.readIdentityMetadata();
+      // Another principal's session, or an unusable file, is cleared
+      // (verified) before a new one is stored; this never replaces it.
+      if (
+        (!previous && existsSync(this.paths.identity)) ||
+        (previous && !samePrincipal(previous, principalKey(session)))
+      )
+        throw new PiShipError(
+          "IDENTITY_INVALID",
+          "Another identity is still stored; it must be cleared first",
+          { component: "identity" },
+        );
+      const generation = previous
+        ? Number(previous.secretRef.split("#")[1] ?? 0) + 1
+        : 1;
+      const ref = `piship:${this.options.app.id}:identity#${generation}`;
+      await store.put(ref, identitySecret(session));
+      const metadata = identityMetadata(session, ref);
+      const stale = previous
+        ? [
+            previous.secretRef,
+            ...metadataSecretRefs(
+              { orphans: (previous as { orphans?: unknown }).orphans },
+              this.options.app.id,
+            ),
+          ].filter(
+            (item, index, all) => item !== ref && all.indexOf(item) === index,
+          )
+        : [];
+      // Listed before they are deleted, so a crash leaves them tracked.
+      writeJsonAtomic(
+        this.paths.identity,
+        stale.length ? { ...metadata, orphans: stale } : metadata,
       );
-    const generation = previous
-      ? Number(previous.secretRef.split("#")[1] ?? 0) + 1
-      : 1;
-    const ref = `piship:${this.options.app.id}:identity#${generation}`;
-    await this.store.put(ref, identitySecret(session));
-    writeJsonAtomic(this.paths.identity, identityMetadata(session, ref));
-    if (previous && previous.secretRef !== ref)
-      await this.store.delete(previous.secretRef).catch(() => {});
+      if (!stale.length) return;
+      const failed = await deleteSecretsVerified(store, stale);
+      writeJsonAtomic(
+        this.paths.identity,
+        failed.length
+          ? { ...metadata, orphans: failed.map((item) => item.ref) }
+          : metadata,
+      );
+      for (const item of failed)
+        this.#identityNotices.push(
+          `A replaced identity token bundle could not be deleted from the secret store (${item.ref}: ${item.problem}); it is not used, and the deletion is retried`,
+        );
+    });
   }
 
   /** Load the identity session, refreshing it when it is expiring. */
@@ -568,18 +775,79 @@ export class DistributionAccess {
 
   /**
    * Obtain a session from a workload identity adapter. It receives an
-   * `openUrl` that fails, so no browser is ever involved, and a session that
-   * is already expired is refused.
+   * `openUrl` that fails, so no browser is ever involved; an adapter that
+   * asked for one fails even if it caught the refusal. The call has 30 s
+   * (and the caller's signal), and whatever the adapter throws becomes a
+   * coded error without its message, which may quote the token source. Only
+   * a session with an expiry that has not passed is accepted.
    */
   async #obtainWorkload(
     provider: IdentityProvider,
     signal?: AbortSignal,
   ): Promise<IdentitySession> {
-    const session = await provider.login({
-      openUrl: refuseBrowser,
-      ...(signal ? { signal } : {}),
-    });
-    if (session.expiresAt && session.expiresAt.getTime() <= this.#now())
+    let asked = false;
+    const openUrl = (): never => {
+      asked = true;
+      throw browserRefused();
+    };
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), WORKLOAD_LOGIN_TIMEOUT_MS);
+    const combined = signal
+      ? AbortSignal.any([signal, deadline.signal])
+      : deadline.signal;
+    const stopped = (): PiShipError =>
+      signal?.aborted
+        ? new PiShipError("IDENTITY_REQUIRED", "Sign-in was cancelled", {
+            component: "identity",
+          })
+        : new PiShipError(
+            "GATEWAY_UNREACHABLE",
+            "The workload identity adapter did not answer",
+            {
+              component: "identity",
+              retryable: true,
+              userAction: `Check the workload's identity source; the adapter's login() has ${WORKLOAD_LOGIN_TIMEOUT_MS / 1000} s`,
+            },
+          );
+    let session: IdentitySession;
+    let onAbort: (() => void) | undefined;
+    try {
+      session = await new Promise<IdentitySession>((resolve, reject) => {
+        onAbort = () => reject(stopped());
+        if (combined.aborted) return onAbort();
+        combined.addEventListener("abort", onAbort, { once: true });
+        provider.login({ openUrl, signal: combined }).then(resolve, reject);
+      });
+    } catch (error) {
+      if (asked) throw browserRefused();
+      // PiShip's own errors (the managed fetch's network codes, a session
+      // that fails normalization) are coded and carry no adapter text.
+      if (error instanceof PiShipError) throw error;
+      throw new PiShipError(
+        "IDENTITY_INVALID",
+        "The workload identity adapter could not obtain a session",
+        {
+          component: "identity",
+          userAction:
+            "Check that the workload's identity source (a token file or platform endpoint) is present and current",
+        },
+      );
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) combined.removeEventListener("abort", onAbort);
+    }
+    if (asked) throw browserRefused();
+    if (!session.expiresAt)
+      throw new PiShipError(
+        "IDENTITY_INVALID",
+        "The workload identity adapter returned a session without an expiry",
+        {
+          component: "identity",
+          userAction:
+            "Return expiresAt from the adapter's login(): the time the workload token expires",
+        },
+      );
+    if (session.expiresAt.getTime() <= this.#now())
       throw new PiShipError(
         "IDENTITY_EXPIRED",
         "The workload identity adapter returned an expired session",
@@ -595,36 +863,72 @@ export class DistributionAccess {
   /**
    * The workload identity session: obtained from the adapter without a
    * person or a stored login, held in memory for this process, and never
-   * stored. It is obtained again when it expires within 60 s or after the
-   * broker rejected it (`renew: "rejected"`), and must then name the same
-   * principal: a process never switches principals. The first session of a
-   * process may name another principal than the previous run; a stored
-   * identity session of that other principal is cleared (verified) before
-   * anything else, and activation then clears its model selection and the
-   * credential manager discards its credential.
+   * stored. It is obtained again when it expires within 60 s, when it is
+   * five minutes old, or after the broker rejected it (`renew: "rejected"`),
+   * and must then name the same principal: a process never switches
+   * principals. Concurrent callers share one adapter call. The first session
+   * of a process may name another principal than the previous run; a stored
+   * identity session of that other principal (or one that cannot be read) is
+   * cleared (verified) before anything else, and activation then clears its
+   * model selection and the credential manager discards its credential.
    */
   async #workloadIdentity(
     provider: IdentityProvider,
     renew: "rejected" | null,
   ): Promise<IdentitySession> {
     const current = this.#workload;
-    if (current && !renew && !this.#expiring(current)) return current;
+    if (
+      current &&
+      !renew &&
+      !this.#expiring(current) &&
+      this.#now() - this.#workloadAt < WORKLOAD_SESSION_MAX_AGE_MS
+    )
+      return current;
+    let pending = this.#workloadPending;
+    if (!pending) {
+      const started = this.#renewWorkload(provider, renew);
+      pending = started;
+      this.#workloadPending = started;
+      void started
+        .finally(() => {
+          if (this.#workloadPending === started) this.#workloadPending = null;
+        })
+        .catch(() => {});
+    }
+    return pending;
+  }
+
+  async #renewWorkload(
+    provider: IdentityProvider,
+    renew: "rejected" | null,
+  ): Promise<IdentitySession> {
+    const current = this.#workload;
     const session = await this.#obtainWorkload(provider);
-    if (current) assertSamePrincipal(session, current);
+    if (current)
+      assertSamePrincipal(session, current, {
+        message:
+          "The workload identity adapter returned another principal than this run started with",
+        userAction:
+          "A run never switches workload principals; start a new run for the other principal",
+      });
     else {
-      const stored = this.readIdentityMetadata();
-      if (stored && !samePrincipal(stored, principalKey(session)))
-        await this.#clearPreviousIdentity(
-          stored,
-          provider,
-          this.#identityNotices,
-        );
+      await this.#clearUnusableIdentity();
+      await withFileLock(this.paths.identity, async () => {
+        const stored = this.readIdentityMetadata();
+        if (stored && !samePrincipal(stored, principalKey(session)))
+          await this.#clearPreviousIdentity(
+            stored,
+            provider,
+            this.#identityNotices,
+          );
+      });
     }
     this.#workload = session;
+    this.#workloadAt = this.#now();
     const expiresAt = session.expiresAt?.toISOString() ?? null;
     if (current)
       this.#emit("identity.refresh", {
-        reason: renew ?? "expiring",
+        reason: renew ?? (this.#expiring(current) ? "expiring" : "age"),
         expiresAt,
         workload: true,
       });
@@ -638,22 +942,9 @@ export class DistributionAccess {
   ): Promise<IdentitySession | null> {
     const metadata = this.readIdentityMetadata();
     if (!metadata) {
-      if (existsSync(this.paths.identity)) {
-        // Delete the token bundle unusable metadata may still reference.
-        let stale: unknown;
-        try {
-          stale = JSON.parse(readFileSync(this.paths.identity, "utf8"));
-        } catch {
-          stale = null;
-        }
-        const ref = (stale as { secretRef?: unknown } | null)?.secretRef;
-        if (
-          typeof ref === "string" &&
-          ref.startsWith(`piship:${this.options.app.id}:identity#`)
-        )
-          await this.store?.delete(ref).catch(() => {});
-        rmSync(this.paths.identity, { force: true });
-      }
+      // Delete the token bundles unusable metadata or a discarded marker
+      // still references; fails closed while that is not possible.
+      await this.#clearUnusableIdentity();
       if (!options.required) return null;
       throw new PiShipError("IDENTITY_REQUIRED", "You are not signed in", {
         component: "identity",
@@ -703,7 +994,9 @@ export class DistributionAccess {
    * Refresh the identity session once across processes. Refresh tokens may
    * rotate on use, so concurrent launches share a lock beside the session
    * metadata; a caller that finds a session another process already
-   * refreshed uses it instead of spending the old refresh token.
+   * refreshed uses it instead of spending the old refresh token. A stored
+   * session of another principal (someone else signed in meanwhile) is never
+   * refreshed or returned, and neither is a session that was signed out.
    */
   async #refreshShared(
     provider: IdentityProvider,
@@ -722,15 +1015,23 @@ export class DistributionAccess {
       );
     return withFileLock(this.paths.identity, async () => {
       const stored = await this.#storedIdentity();
-      if (
-        stored &&
-        samePrincipal(principalKey(stored), principalKey(observed)) &&
-        !stored.accessToken?.equals(observed.accessToken)
-      )
-        return stored;
-      const previous = stored ?? observed;
+      if (!stored)
+        throw new PiShipError("IDENTITY_REQUIRED", "You are not signed in", {
+          component: "identity",
+          userAction: `Run ${this.options.app.command} login`,
+        });
+      if (!samePrincipal(principalKey(stored), principalKey(observed)))
+        throw new PiShipError(
+          "IDENTITY_INVALID",
+          "Another identity signed in; run login again",
+          {
+            component: "identity",
+            userAction: `Run ${this.options.app.command} login, then start ${this.options.app.command} again`,
+          },
+        );
+      if (!stored.accessToken?.equals(observed.accessToken)) return stored;
       // A refresh never switches the principal, whatever the provider does.
-      const refreshed = assertSamePrincipal(await refresh(previous), previous);
+      const refreshed = assertSamePrincipal(await refresh(stored), observed);
       await this.#storeIdentity(refreshed);
       this.#emit("identity.refresh", {
         reason,
@@ -799,108 +1100,148 @@ export class DistributionAccess {
     const principal = identity ? principalKey(identity) : null;
     const manager = await this.credentialManager();
     const notices: string[] = [];
-    this.#secret = null;
-    if (manager.storesSecrets) {
-      // Earlier revocation failures stay visible at every login.
-      try {
-        notices.push(...manager.checkPendingRevocations());
-      } catch (error) {
-        notices.push(
-          `Pending revocations could not be checked: ${redact((error as Error).message)}`,
-        );
+    this.#forgetSecret();
+    // Everything from clearing the previous credential to acquiring the new
+    // one runs under the credential lock: no launch, refresh, or other login
+    // interleaves with it (they wait), so none can act on an identity this
+    // login is replacing. The browser part above runs before the lock.
+    const signIn = async (): Promise<void> => {
+      await this.options.onPhase?.("login-locked");
+      if (manager.storesSecrets) {
+        // Earlier revocation failures stay visible at every login.
+        try {
+          notices.push(...manager.checkPendingRevocations());
+        } catch (error) {
+          notices.push(
+            `Pending revocations could not be checked: ${redact((error as Error).message)}`,
+          );
+        }
+        // A fresh login always replaces the runtime credential, revoking the
+        // previous one where supported (audited as credential.revoke).
+        const problems = (
+          await manager.logout(this.#credentialContext(), {
+            reason: "replace",
+          })
+        ).map((problem) => redact(problem));
+        if (manager.hasStoredCredential())
+          throw new PiShipError(
+            "SECRET_STORE_UNAVAILABLE",
+            `The previous credential could not be deleted from the secret store, so sign-in stopped before ${provider ? "storing the new identity" : "acquiring a new credential"}: ${problems.join("; ")}`,
+            {
+              component: "credential",
+              userAction:
+                "Unlock or repair the secret store, then run login again",
+            },
+          );
+        for (const problem of problems)
+          notices.push(
+            `The previous credential was deleted locally but not revoked: ${problem}`,
+          );
       }
-      // A fresh login always replaces the runtime credential, revoking the
-      // previous one where supported (audited as credential.revoke).
-      const problems = (
-        await manager.logout(this.#credentialContext(), { reason: "replace" })
-      ).map((problem) => redact(problem));
-      if (manager.hasStoredCredential())
-        throw new PiShipError(
-          "SECRET_STORE_UNAVAILABLE",
-          `The previous credential could not be deleted from the secret store, so sign-in stopped before storing the new identity: ${problems.join("; ")}`,
-          {
-            component: "credential",
-            userAction:
-              "Unlock or repair the secret store, then run login again",
-          },
+      await this.options.onPhase?.("credential-cleared");
+      if (provider && identity && principal) {
+        const binding = this.#bindPrincipal(principal);
+        await this.options.onPhase?.("principal-bound");
+        await withFileLock(this.paths.identity, async () => {
+          // A discarded marker or unreadable metadata may name token bundles
+          // of anyone: they are deleted before anything is stored.
+          await this.#clearUnusableIdentity();
+          const stored = this.readIdentityMetadata();
+          if (stored && !samePrincipal(stored, principal))
+            await this.#clearPreviousIdentity(stored, provider, notices);
+          await this.options.onPhase?.("identity-cleared");
+          if (workload) {
+            this.#workload = identity;
+            this.#workloadAt = this.#now();
+          } else await this.#storeIdentity(identity);
+        });
+        this.#emit("identity.login", {
+          expiresAt: identity.expiresAt?.toISOString() ?? null,
+          ...(binding.known ? { principalChange: true } : {}),
+          ...(workload ? { workload: true } : {}),
+        });
+      }
+      // Signing in is the one way an instance changes users.
+      this.#principal = principal;
+      await this.options.onPhase?.("identity-stored");
+      if (manager.storesSecrets) {
+        const active = await this.#ensureCredential(
+          manager,
+          identity,
+          this.#credentialContext(ctx.readSecret),
+          { allowAcquire: true },
         );
-      for (const problem of problems)
-        notices.push(
-          `The previous credential was deleted locally but not revoked: ${problem}`,
-        );
-    }
-    this.options.onPhase?.("credential-cleared");
-    let principalChange = false;
-    if (provider && identity && principal) {
-      principalChange = this.#bindPrincipal(principal).changed;
-      const stored = this.readIdentityMetadata();
-      if (stored && !samePrincipal(stored, principal))
-        await this.#clearPreviousIdentity(stored, provider, notices);
-      if (workload) this.#workload = identity;
-      else await this.#storeIdentity(identity);
-      this.#emit("identity.login", {
-        expiresAt: identity.expiresAt?.toISOString() ?? null,
-        ...(principalChange ? { principalChange: true } : {}),
-        ...(workload ? { workload: true } : {}),
-      });
-    }
-    this.options.onPhase?.("identity-stored");
-    if (manager.storesSecrets) {
-      const active = await this.#ensureCredential(
-        manager,
-        identity,
-        this.#credentialContext(ctx.readSecret),
-        { allowAcquire: true },
-      );
-      this.#secret = active.secret;
-      notices.push(...active.notices);
-    }
+        this.#hold(active);
+        notices.push(...active.notices);
+      }
+      notices.push(...this.#identityNotices.splice(0));
+    };
+    if (manager.storesSecrets) await manager.exclusive(signIn);
+    else await signIn();
     return { identity, credential: manager.status(), notices };
   }
 
   /**
    * Revoke and clear runtime and identity credentials; sessions, preferences,
-   * and the principal binding are kept. A secret that cannot be deleted is a
-   * problem, and its metadata stays so the next login or logout retries.
+   * and the principal binding are kept. Runs under the credential lock, then
+   * the identity lock, like a login. Every problem is returned: a failed
+   * revocation, and a secret that cannot be deleted. Credential secrets that
+   * could not be deleted stay tracked by the credential's discarded marker.
+   * Identity token bundles that could not be deleted leave an identity
+   * discarded marker in place of the session, so the session is signed out
+   * all the same: nothing restores it, every later command retries the
+   * deletion first and fails closed while it cannot, and no launch runs on
+   * it.
    */
   async logout(): Promise<string[]> {
     const problems: string[] = [];
     const manager = await this.credentialManager();
-    problems.push(
-      ...(await manager.logout(this.#credentialContext())).map((problem) =>
-        redact(problem),
-      ),
-    );
-    this.#secret = null;
-    this.#workload = null;
     const provider = await this.identityProvider().catch(() => null);
-    const metadata = this.readIdentityMetadata();
-    if (metadata && this.store) {
-      const secret = await this.store.get(metadata.secretRef).catch(() => null);
-      let revocation: "completed" | "failed" | "unsupported" | "skipped" =
-        provider?.logout ? "skipped" : "unsupported";
-      if (provider?.logout && secret)
-        try {
-          await provider.logout(restoreIdentitySession(metadata, secret));
-          revocation = "completed";
-        } catch (error) {
-          revocation = "failed";
-          problems.push(
-            `identity revocation: ${redact((error as Error).message)}`,
-          );
-        }
-      const failed = await deleteSecretsVerified(
-        this.store,
-        metadataSecretRefs(metadata, this.options.app.id),
+    const signOut = async (): Promise<void> => {
+      problems.push(
+        ...(await manager.logout(this.#credentialContext())).map((problem) =>
+          redact(problem),
+        ),
       );
-      for (const item of failed)
-        problems.push(`identity secret ${item.ref}: ${item.problem}`);
-      this.#emit("identity.logout", { revocation });
-      // Keep the metadata of tokens that are still stored, so they stay
-      // tracked and the next login or logout deletes them.
-      if (failed.length) return problems;
-    }
-    rmSync(this.paths.identity, { force: true });
+      this.#forgetSecret();
+      this.#workload = null;
+      if (!existsSync(this.paths.identity)) return;
+      await withFileLock(this.paths.identity, async () => {
+        const metadata = this.readIdentityMetadata();
+        // A workload adapter never receives a person's tokens.
+        const revocable =
+          !!provider?.logout && !isWorkloadIdentityProvider(provider);
+        let revocation: "completed" | "failed" | "unsupported" | "skipped" =
+          revocable ? "skipped" : "unsupported";
+        if (metadata && revocable && this.store) {
+          const secret = await this.store
+            .get(metadata.secretRef)
+            .catch(() => null);
+          if (secret)
+            try {
+              await provider?.logout?.(
+                restoreIdentitySession(metadata, secret),
+              );
+              revocation = "completed";
+            } catch (error) {
+              revocation = "failed";
+              problems.push(
+                `identity revocation: ${redact((error as Error).message)}`,
+              );
+            }
+        }
+        const failed = await this.#discardIdentity(
+          metadata ?? this.#readIdentityRaw(),
+        );
+        for (const item of failed)
+          problems.push(
+            `identity secret ${item.ref}: ${item.problem}; the session is signed out and never used, and the deletion is retried by the next command`,
+          );
+        if (metadata) this.#emit("identity.logout", { revocation });
+      });
+    };
+    if (manager.storesSecrets) await manager.exclusive(signOut);
+    else await signOut();
     return problems;
   }
 
@@ -924,43 +1265,36 @@ export class DistributionAccess {
     const identity = await this.currentIdentity({
       required: this.#identityRequired(manager),
     });
+    this.#pin(identity);
     notices.push(...this.#identityNotices.splice(0));
+    await this.options.onPhase?.("identity-resolved");
     // State another principal left behind (from an interrupted switch or an
-    // older release) loses its model selection before anything uses it.
-    if (identity && this.#bindPrincipal(principalKey(identity)).cleared) {
+    // older release) loses its model selection before anything uses it. With
+    // a stored credential this runs under the credential lock, after the
+    // identity was confirmed there, so it never rebinds the state to a user
+    // another process just replaced.
+    let cleared = false;
+    const bind = () => {
+      if (identity && this.#bindPrincipal(principalKey(identity)).cleared)
+        cleared = true;
+    };
+    if (!manager.storesSecrets) bind();
+    let credential = await this.#activeCredential(
+      manager,
+      identity,
+      {
+        allowAcquire:
+          this.credentialMode === "http-broker" ||
+          this.credentialMode === "adapter",
+      },
+      manager.storesSecrets ? bind : undefined,
+    );
+    if (cleared) {
       preferences = readPreferences(this.paths.preferences);
       notices.push(
         "The model selection of a previously signed-in identity was cleared",
       );
     }
-    let credential: ActiveCredential;
-    try {
-      credential = await this.#ensureCredential(
-        manager,
-        identity,
-        this.#credentialContext(),
-        {
-          allowAcquire:
-            this.credentialMode === "http-broker" ||
-            this.credentialMode === "adapter",
-        },
-      );
-    } catch (error) {
-      if (
-        error instanceof PiShipError &&
-        error.code === "IDENTITY_EXPIRED" &&
-        identity
-      ) {
-        const refreshed = await this.#refreshIdentity(identity);
-        credential = await this.#ensureCredential(
-          manager,
-          refreshed,
-          this.#credentialContext(),
-          { allowAcquire: true },
-        );
-      } else throw error;
-    }
-    this.#secret = credential.secret;
     notices.push(...credential.notices);
     let config = resolveEffectiveConfig(
       access,
@@ -985,29 +1319,14 @@ export class DistributionAccess {
       if (!manager.renewable)
         throw rejectedUserSecret(this.options.app.command);
       await manager.markRejected();
-      await this.requestSecret({ force: true });
+      await this.options.onPhase?.("credential-rejected");
+      // The renewal is checked against the pinned principal like any other,
+      // and its entitlement is what it returned under the lock.
+      credential = await this.#renewCredential(manager, true);
       notices.push(
         "The gateway rejected the stored credential; a new credential was acquired",
+        ...credential.notices,
       );
-      const renewed = manager.readMetadata();
-      credential = {
-        ...credential,
-        secret: this.#secret,
-        ref: renewed
-          ? {
-              ref: renewed.credential_ref,
-              mode: renewed.mode,
-              kind: renewed.kind,
-              ...(renewed.credential_id
-                ? { credentialId: renewed.credential_id }
-                : {}),
-              ...(renewed.expires_at
-                ? { expiresAt: new Date(renewed.expires_at) }
-                : {}),
-              ...(renewed.models ? { models: renewed.models } : {}),
-            }
-          : credential.ref,
-      };
       models = await this.#listModels(inference, identity, credential.ref);
     }
     config = resolveEffectiveConfig(
@@ -1142,7 +1461,11 @@ export class DistributionAccess {
 
   /**
    * Request-time secret for the managed provider. Refreshes before expiry and,
-   * after a gateway rejection, re-acquires once (force) before failing.
+   * after a gateway rejection, re-acquires once (force) before failing. The
+   * cached secret is served only while the stored credential is still the
+   * generation it belongs to and bound to this instance's pinned principal;
+   * otherwise the credential is resolved again for that principal, and a
+   * different signed-in user fails the call.
    */
   async requestSecret(
     options: { force?: boolean } = {},
@@ -1151,54 +1474,88 @@ export class DistributionAccess {
     if (!manager.storesSecrets) return null;
     if (options.force && !manager.renewable)
       throw rejectedUserSecret(this.options.app.command);
-    const status = manager.status();
-    if (!options.force && status.state === "valid" && this.#secret)
-      return this.#secret;
+    if (!options.force && this.#cachedSecretValid(manager)) return this.#secret;
+    return (await this.#renewCredential(manager, !!options.force)).secret;
+  }
+
+  #cachedSecretValid(manager: CredentialManager): boolean {
+    if (!this.#secret || this.#principal === undefined) return false;
+    const { state, metadata } = manager.status();
+    return (
+      state === "valid" &&
+      !!metadata &&
+      metadata.credential_ref === this.#secretRef &&
+      samePrincipal(metadata.principal ?? null, this.#principal)
+    );
+  }
+
+  /**
+   * Resolve the credential again for the current identity, which must be the
+   * pinned principal (`force`: renew it even when it looks valid).
+   */
+  async #renewCredential(
+    manager: CredentialManager,
+    force: boolean | "entitlement",
+    observed?: string,
+  ): Promise<ActiveCredential> {
     const identity = await this.currentIdentity({
       required: this.#identityRequired(manager),
     });
+    this.#pin(identity);
+    return this.#activeCredential(manager, identity, {
+      allowAcquire:
+        this.credentialMode === "http-broker" ||
+        this.credentialMode === "adapter",
+      ...(force ? { forceRefresh: force } : {}),
+      ...(observed ? { observed } : {}),
+    });
+  }
+
+  /**
+   * Ensure the credential for `identity` and cache its secret. When the
+   * broker rejects the identity token, the identity is refreshed once (it
+   * must stay the pinned principal) and the credential ensured again.
+   */
+  async #activeCredential(
+    manager: CredentialManager,
+    identity: IdentitySession | null,
+    options: CredentialEnsureOptions,
+    underLock?: () => void,
+  ): Promise<ActiveCredential> {
+    let active: ActiveCredential;
     try {
-      const active = await this.#ensureCredential(
+      active = await this.#ensureCredential(
         manager,
         identity,
         this.#credentialContext(),
-        {
-          allowAcquire:
-            this.credentialMode === "http-broker" ||
-            this.credentialMode === "adapter",
-          ...(options.force ? { forceRefresh: true } : {}),
-        },
+        options,
+        underLock,
       );
-      this.#secret = active.secret;
     } catch (error) {
       if (
-        error instanceof PiShipError &&
-        error.code === "IDENTITY_EXPIRED" &&
-        identity
-      ) {
-        const refreshed = await this.#refreshIdentity(identity);
-        const active = await this.#ensureCredential(
-          manager,
-          refreshed,
-          this.#credentialContext(),
-          {
-            allowAcquire: true,
-            ...(options.force ? { forceRefresh: true } : {}),
-          },
-        );
-        this.#secret = active.secret;
-      } else throw error;
+        !(error instanceof PiShipError) ||
+        error.code !== "IDENTITY_EXPIRED" ||
+        !identity
+      )
+        throw error;
+      const refreshed = await this.#refreshIdentity(identity);
+      this.#pin(refreshed);
+      active = await this.#ensureCredential(
+        manager,
+        refreshed,
+        this.#credentialContext(),
+        { ...options, allowAcquire: true },
+        underLock,
+      );
     }
-    return this.#secret;
+    this.#hold(active);
+    return active;
   }
 
   /** Persist a gateway rejection of the current runtime credential. */
   async markCredentialRejected(): Promise<void> {
     await (await this.credentialManager()).markRejected();
   }
-
-  /** The credential generation a model denial already re-read. */
-  #entitlementReread: string | undefined;
 
   /**
    * Re-read the credential entitlement after the gateway denied a model (403
@@ -1213,12 +1570,14 @@ export class DistributionAccess {
    */
   async refreshEntitlement(): Promise<boolean> {
     const manager = await this.credentialManager();
-    const current = manager.renewable
-      ? manager.readMetadata()?.credential_ref
-      : undefined;
-    if (!current || current === this.#entitlementReread) return false;
-    await this.requestSecret({ force: true });
-    this.#entitlementReread = manager.readMetadata()?.credential_ref;
+    const current = manager.renewable ? manager.readMetadata() : null;
+    // Generations restart after a logout, so the reference alone does not
+    // identify a credential; its acquisition time does.
+    const key = (metadata: typeof current) =>
+      metadata ? `${metadata.credential_ref}@${metadata.acquired_at}` : "";
+    if (!current || key(current) === this.#entitlementReread) return false;
+    await this.#renewCredential(manager, "entitlement", current.credential_ref);
+    this.#entitlementReread = key(manager.readMetadata());
     return true;
   }
 
@@ -1288,7 +1647,12 @@ export class DistributionAccess {
     } satisfies EnterpriseContext);
   }
 
-  /** Non-secret status used by doctor and config explain. */
+  /**
+   * Non-secret status used by doctor and config explain. A stored credential
+   * bound to another principal than the current one is shown as absent,
+   * never as usable, and without its ID: it belongs to someone else and the
+   * next launch or login discards it.
+   */
   async status(): Promise<{
     identity: IdentityMetadata | null;
     credential: CredentialStatus;
@@ -1296,9 +1660,23 @@ export class DistributionAccess {
     refs: CredentialRef | null;
   }> {
     const manager = await this.credentialManager();
-    const credential = manager.status();
+    let credential = manager.status();
+    const identity = this.readIdentityMetadata();
+    if (
+      credential.metadata &&
+      !samePrincipal(
+        credential.metadata.principal ?? null,
+        await this.#statusPrincipal(identity),
+      )
+    )
+      credential = {
+        state: "absent",
+        metadata: null,
+        notice:
+          "The stored credential was not issued to the signed-in identity; it is never used, and the next launch or login discards it",
+      };
     return {
-      identity: this.readIdentityMetadata(),
+      identity,
       credential,
       store: this.store
         ? `${this.store.kind} (${this.store.description})`
@@ -1314,6 +1692,27 @@ export class DistributionAccess {
           }
         : null,
     };
+  }
+
+  /**
+   * Whom a stored credential must belong to for `status()`: the pinned
+   * principal once this instance activated or signed in; otherwise the
+   * stored session's, or for a workload identity (never stored) the
+   * principal binding the last run recorded; nobody without identity.
+   */
+  async #statusPrincipal(
+    identity: IdentityMetadata | null,
+  ): Promise<PrincipalKey | null> {
+    if (this.#principal !== undefined) return this.#principal;
+    if (this.identityMode === "none") return null;
+    const provider = await this.identityProvider().catch(() => null);
+    if (provider && isWorkloadIdentityProvider(provider))
+      return this.readPrincipalBinding() ?? null;
+    try {
+      return identity ? principalKey(identity) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Validate the requested model against the activated catalog (later selection). */
