@@ -841,4 +841,13 @@ describe("Pi ends an interactive session by awaiting dispose, then exiting", () 
       expect(order).toEqual(["dispose", "exit:0:true"]);
     });
   }
+
+  // PiShip replaces `dispose` on the runtime object it hands to
+  // InteractiveMode. That only works while Pi disposes that same object, not a
+  // wrapper or a copy of it.
+  it("keeps the runtime it is given as the one it disposes", () => {
+    const source = String(upstreamPi.InteractiveMode);
+    expect(source).toMatch(/constructor\(\s*runtimeHost\b/);
+    expect(source).toMatch(/this\.runtimeHost\s*=\s*runtimeHost\s*;/);
+  });
 });

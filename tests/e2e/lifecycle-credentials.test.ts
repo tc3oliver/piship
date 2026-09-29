@@ -92,7 +92,8 @@ describe("production lifecycle: credential classes (local fixtures)", () => {
     if (lockable) {
       // Logout while the store is locked: nothing can be read or deleted, so
       // logout fails, says so, and keeps every secret tracked: the
-      // credential as a discarded record, the identity session as it is.
+      // credential and the identity session as discarded records, which
+      // name only the references, and are never restored as a session.
       const secrets = path("secrets");
       for (const name of readdirSync(secrets))
         chmodSync(join(secrets, name), 0o644);
@@ -116,7 +117,12 @@ describe("production lifecycle: credential classes (local fixtures)", () => {
           readFileSync(path("credentials-metadata", "inference.json"), "utf8"),
         ).schema,
       ).toBe("piship-credential-discarded/v1");
-      expect(existsSync(path("identity", "session.json"))).toBe(true);
+      const marker = JSON.parse(
+        readFileSync(path("identity", "session.json"), "utf8"),
+      );
+      expect(marker.schema).toBe("piship-identity-discarded/v1");
+      expect(marker).not.toHaveProperty("subject");
+      expect(marker.orphans.length).toBeGreaterThan(0);
     } else await run(["logout"]);
 
     // Roll back to 1.0.0. A discarded record is a credential class no
