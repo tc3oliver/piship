@@ -36,7 +36,7 @@ afterEach(async () => {
     await session.close().catch(() => undefined);
   for (const root of roots.splice(0)) {
     // Undo the read-only modes that keep the git control files protected.
-    for (const path of ["hooks", "info"])
+    for (const path of ["", "hooks", "info"])
       if (existsSync(join(root, "workspace", ".git", path)))
         chmodSync(join(root, "workspace", ".git", path), 0o755);
     rmSync(root, { recursive: true, force: true });
@@ -119,10 +119,14 @@ async function open(options: {
   writeFileSync(join(git, "hooks", "pre-commit"), "#!/bin/sh\necho hook\n");
   writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
   // The backend must keep the git control files read-only from inside the
-  // sandbox; this shared fake does it with file modes.
+  // sandbox, and keep files git follows (`commondir`, `config.worktree`) from
+  // appearing; this shared fake does it with file modes. The sentinel
+  // location is made up front, since nothing can be created in `.git` now.
+  mkdirSync(join(git, "piship-workspace"), { mode: 0o700 });
   chmodSync(join(git, "config"), 0o444);
   chmodSync(join(git, "hooks"), 0o555);
   chmodSync(join(git, "info"), 0o555);
+  chmodSync(git, 0o555);
   const source = adapter(options.declaration);
   for (const path of ["sandbox/acme.mjs", "resources/sandbox/acme.mjs"]) {
     mkdirSync(dirname(join(distribution, path)), { recursive: true });
@@ -386,13 +390,14 @@ describe.skipIf(!posix || asRoot)(
         exitCode: 126,
         output: expect.stringContaining("Plan mode does not run commands"),
       });
-      expect(existsSync(location)).toBe(false);
+      // No sentinel; the location itself was made up front.
+      expect(readdirSync(location)).toEqual([]);
       expect(checks()).toEqual([]);
       expect(session.sandbox.workspace()?.verification).toBe("pending");
 
       await hooks.commands.get("build")?.handler("", ctx);
       expect(session.workflowMode).toBe("build");
-      expect(existsSync(location)).toBe(false);
+      expect(readdirSync(location)).toEqual([]);
       expect((await userBash(hooks, workspace, "echo built", ctx)).output).toBe(
         "built\n",
       );
