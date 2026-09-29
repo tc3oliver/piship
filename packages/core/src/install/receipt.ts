@@ -11,7 +11,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
@@ -24,6 +23,7 @@ import {
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
 import { syncDirectory, writeFileAtomic } from "./atomic.js";
+import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
@@ -223,39 +223,28 @@ export function releaseInfo(
   };
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** One lifecycle operation per distribution at a time. */
+/**
+ * One lifecycle operation per distribution at a time. The lock is a lease
+ * (see lifecycle-lock.ts), so the lock of a crashed holder is recovered even
+ * after an unrelated process reused its process ID.
+ */
 export function acquireLock(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
 ): () => void {
-  const path = join(appDirectory(id), ".lifecycle.lock");
-  for (let attempt = 0; attempt < 2; attempt += 1)
-    try {
-      writeFileSync(path, String(process.pid), { flag: "wx" });
-      return () => rmSync(path, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number(readFileSync(path, "utf8"));
-      if (Number.isSafeInteger(owner) && owner > 0 && processAlive(owner))
-        throw new PiShipError(
-          code,
-          `Another update, rollback, or uninstall of ${id} is running (process ${owner})`,
-          { retryable: true },
-        );
-      rmSync(path, { force: true });
-    }
-  throw new PiShipError(
-    code,
-    `Could not lock ${id} for ${code === "UPDATE_FAILED" ? "update" : "rollback"}`,
+  return acquireLifecycleLock(
+    join(appDirectory(id), ".lifecycle.lock"),
+    (pid) =>
+      new PiShipError(
+        code,
+        `Another update, rollback, or uninstall of ${id} is running${pid === null ? "" : ` (process ${pid})`}`,
+        { retryable: true },
+      ),
+    () =>
+      new PiShipError(
+        code,
+        `Could not lock ${id} for ${code === "UPDATE_FAILED" ? "update" : "rollback"}`,
+      ),
   );
 }
 

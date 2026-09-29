@@ -90,9 +90,11 @@ Credentials are never snapshotted, copied into a release, or restored. Rollback 
   apps/<id>/launch.mjs                    reads the receipt and starts the active release
   apps/<id>/<version>/                    immutable payloads: the active one and at most one retained
   apps/<id>/.staging-*                    in-progress downloads; removed by the next operation
-  apps/<id>/.lifecycle.lock               one update, rollback, or uninstall at a time (holder's process ID)
+  apps/<id>/.lifecycle.lock               one update, rollback, or uninstall at a time (piship-lifecycle-lock/v1)
 <bin-home>/<command>                      shim that runs launch.mjs; <command>.cmd on Windows
 ```
+
+The lifecycle lock records its holder's process ID and a random instance ID, and the holder refreshes the lock's modification time every 15 seconds while it runs. A lock is stale, and the next operation takes it over, when its process no longer exists or when it has not been refreshed for ten minutes: then its process ID belongs to an unrelated process that reused it after the holder crashed. Ten minutes is longer than any step that blocks the refresh (a launch check may run for five). A lock written by an earlier PiShip holds only a process ID and is handled the same way. A holder removes only its own lock.
 
 `piship install <payload|release-dir|archive>` accepts a payload directory as before, or a release, which it verifies for this target first. `install.sh` and `install.ps1` inside an extracted release run `verify-release` and then `install` on it. The receipt records each retained release (version, payload path, install time, and for releases the target, channel, Pi and PiShip versions, lock digest, and archive digest), the active and retained versions, the selected channel (an install starts on `updates.channel`, whatever channel the archive was built for), the highest accepted channel sequences, and the last check. Receipt paths must be the owned ones or the receipt is rejected.
 
