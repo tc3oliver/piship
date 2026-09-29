@@ -5,7 +5,7 @@
 // mocks node:fs with tests/helpers/fs-faults.ts and arms faults only around
 // the operation under test; the releases and the install are built through
 // @piship/core before that.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -34,6 +34,7 @@ import {
   signChannel,
 } from "@piship/core";
 import { clearFaults } from "./fs-faults.js";
+import { deadPid, livePid, stopLiveProcesses } from "./processes.js";
 
 const BUILD_INPUT = process.env.PISHIP_BUILD_INPUT as string;
 const KEY = generateSigningKey("test-release");
@@ -44,7 +45,6 @@ export const RECEIPT = /[/\\]receipts[/\\]acmepi\.json/;
 export const MARKER = /[/\\]acmepi[/\\]state\.json/;
 
 const roots: string[] = [];
-const children: ChildProcess[] = [];
 const ENV_KEYS = [
   "PISHIP_INSTALL_HOME",
   "PISHIP_BIN_HOME",
@@ -68,7 +68,7 @@ export function useLifecycleHomes(): void {
   });
   afterEach(() => {
     clearFaults();
-    for (const child of children.splice(0)) child.kill();
+    stopLiveProcesses();
     for (const [key, value] of Object.entries(savedEnv))
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -280,19 +280,8 @@ export async function rejection(promise: Promise<unknown>) {
   throw new Error("expected a rejection");
 }
 
-/** A process ID that no running process has. */
-export function deadPid(): number {
-  return spawnSync(process.execPath, ["-e", ""]).pid as number;
-}
-
-/** A live process that is not this one; stopped after the test. */
-export function livePid(): number {
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
-  children.push(child);
-  return child.pid as number;
-}
+/** A process ID no process has, and a live one (stopped after each test). */
+export { deadPid, livePid };
 
 /** Set a file's modification time `ms` into the past. */
 export function age(path: string, ms: number): void {
