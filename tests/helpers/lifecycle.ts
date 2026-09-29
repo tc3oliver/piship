@@ -770,6 +770,9 @@ export async function lifecycleScenario(
     await runAll([() => services?.close(), release]).catch(() => {});
     throw error;
   }
+  // The teardown clears the store only once `storeEnv` is set. That leaves
+  // nothing behind only because no command of the scenario reaches the
+  // store before this point; set it before any later step that writes.
   shareKeychainSearchList(scenario.home);
   storeEnv = scenario.env;
   const storeRefs = () => platformStoreRefs(prefix, scenario.env);
