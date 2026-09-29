@@ -10,13 +10,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { makePolicy } from "./fixtures.test-helpers.js";
 import { toPosixPath } from "./glob.js";
 import {
   discoverProjectResources,
   identifyProject,
   normalizeRemote,
+  parseConfigIncludes,
   parseHooksPaths,
   parseInstructionImports,
   parseOriginUrl,
@@ -31,7 +32,28 @@ import { defaultProjectTrust } from "./trust.js";
 const base = realpathSync(
   mkdtempSync(join(tmpdir(), "piship-policy-project-")),
 );
-afterAll(() => rmSync(base, { recursive: true, force: true }));
+// The git control paths read the user's global git config through the home
+// directory: every test gets an empty home of its own, so what a developer's
+// real config sets never reaches an expectation.
+const fakeHome = join(base, "home-of-the-test");
+const savedEnv = {
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+};
+beforeEach(() => {
+  rmSync(fakeHome, { recursive: true, force: true });
+  mkdirSync(fakeHome, { recursive: true });
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
+  delete process.env.XDG_CONFIG_HOME;
+});
+afterAll(() => {
+  for (const [name, value] of Object.entries(savedEnv))
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  rmSync(base, { recursive: true, force: true });
+});
 let counter = 0;
 function dir(name: string): string {
   counter += 1;
@@ -397,6 +419,188 @@ describe("core.hooksPath", () => {
       // The four .git trees are still there.
       expect(directories).toHaveLength(4);
     }
+  });
+});
+
+describe("parseConfigIncludes", () => {
+  it("reads include.path and includeIf.*.path, whatever the condition", () => {
+    const config = [
+      "[include]",
+      "\tpath = ../.gitconfig",
+      '[includeIf "gitdir:~/work/"]',
+      '  PATH = "~/work.gitconfig" # work',
+      '[includeIf "onbranch:main"] path = branch.cfg',
+      '[include "sub"]',
+      "\tpath = not-this",
+      "[includeIf]",
+      "\tpath = nor-this",
+      "[core]",
+      "\tpath = nor-this-either",
+      "[include]",
+      "\tpath =",
+      "\tother = x",
+    ].join("\n");
+    expect(parseConfigIncludes(config)).toEqual([
+      "../.gitconfig",
+      "~/work.gitconfig",
+      "branch.cfg",
+    ]);
+    expect(parseConfigIncludes("")).toEqual([]);
+  });
+});
+
+describe("the global git config and included files", () => {
+  const cfg = (text: string) => `${text}\n`;
+  const hooks = (value: string) => cfg(`[core]\n\thooksPath = ${value}`);
+  const dirs = (root: string) => projectGitControlDirectories(root);
+  const files = (root: string) => projectGitControlFiles(root);
+  const at = (root: string, ...parts: string[]) => posix(join(root, ...parts));
+
+  it("protects a relative core.hooksPath set in ~/.gitconfig, which lands in every working tree", () => {
+    write(join(fakeHome, ".gitconfig"), hooks(".githooks"));
+    const root = dir("global-hooks");
+    gitRepo(root);
+    expect(dirs(root)).toContain(at(root, ".githooks"));
+    // A relative value is taken from each project's root.
+    const other = dir("global-hooks-other");
+    gitRepo(other);
+    expect(dirs(other)).toContain(at(other, ".githooks"));
+  });
+
+  it("reads $XDG_CONFIG_HOME/git/config, or ~/.config/git/config without it", () => {
+    write(join(fakeHome, ".config", "git", "config"), hooks(".default-hooks"));
+    const root = dir("xdg-hooks");
+    gitRepo(root);
+    expect(dirs(root)).toContain(at(root, ".default-hooks"));
+    const xdg = dir("xdg");
+    write(join(xdg, "git", "config"), hooks(".xdg-hooks"));
+    process.env.XDG_CONFIG_HOME = xdg;
+    expect(dirs(root)).toContain(at(root, ".xdg-hooks"));
+    // Git reads the XDG file instead of the default one when it is set.
+    expect(dirs(root)).not.toContain(at(root, ".default-hooks"));
+  });
+
+  it("reads no other file: not a decoy in the home directory, not GIT_CONFIG_GLOBAL, not the system config", () => {
+    write(join(fakeHome, ".gitconfig-decoy"), hooks(".decoy"));
+    write(join(fakeHome, ".config", "git", "other"), hooks(".other"));
+    const elsewhere = dir("elsewhere");
+    write(join(elsewhere, "global"), hooks(".from-env"));
+    const root = dir("no-other-config");
+    gitRepo(root);
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = join(elsewhere, "global");
+    try {
+      const directories = dirs(root);
+      for (const name of [".decoy", ".other", ".from-env"])
+        expect(directories).not.toContain(at(root, name));
+      expect(directories).toHaveLength(4);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = saved;
+    }
+  });
+
+  it("follows include and includeIf, from the including file's directory, and protects the files", () => {
+    const root = dir("includes");
+    write(
+      join(root, ".git", "config"),
+      cfg(
+        [
+          "[include]",
+          "\tpath = ../.gitconfig-team",
+          '[includeIf "gitdir:~/x/"]',
+          "\tpath = extra/cfg",
+        ].join("\n"),
+      ),
+    );
+    write(
+      join(root, ".gitconfig-team"),
+      cfg("[include]\n\tpath = nested\n[core]\n\thooksPath = team-hooks"),
+    );
+    write(
+      join(root, "nested"),
+      cfg(
+        "[core]\n\thooksPath = nested-hooks\n[include]\n\tpath = ~/from-home",
+      ),
+    );
+    write(join(fakeHome, "from-home"), hooks("home-hooks"));
+    const controlled = files(root);
+    // The include in the working tree, the one it includes (relative to it),
+    // one relative to .git/config that does not exist yet, one under ~/.
+    expect(controlled).toEqual(
+      expect.arrayContaining([
+        at(root, ".gitconfig-team"),
+        at(root, "nested"),
+        at(root, ".git", "extra", "cfg"),
+        at(fakeHome, "from-home"),
+      ]),
+    );
+    expect(dirs(root)).toEqual(
+      expect.arrayContaining([
+        at(root, "team-hooks"),
+        at(root, "nested-hooks"),
+        at(root, "home-hooks"),
+      ]),
+    );
+  });
+
+  it("ends at an include cycle, and at the depth git itself allows", () => {
+    const cycle = dir("include-cycle");
+    write(join(cycle, ".git", "config"), cfg("[include]\n\tpath = ../a"));
+    write(join(cycle, "a"), cfg("[include]\n\tpath = b"));
+    write(
+      join(cycle, "b"),
+      `${cfg("[include]\n\tpath = a")}${hooks("b-hooks")}`,
+    );
+    expect(dirs(cycle)).toContain(at(cycle, "b-hooks"));
+    expect(files(cycle)).toEqual(
+      expect.arrayContaining([at(cycle, "a"), at(cycle, "b")]),
+    );
+
+    const chain = dir("include-chain");
+    write(join(chain, ".git", "config"), cfg("[include]\n\tpath = ../c0"));
+    for (let index = 0; index < 14; index++)
+      write(
+        join(chain, `c${index}`),
+        `${cfg(`[include]\n\tpath = c${index + 1}`)}${hooks(`h${index}`)}`,
+      );
+    const directories = dirs(chain);
+    // The config is the first level, c0 the second, and c9 the tenth.
+    expect(directories).toContain(at(chain, "h9"));
+    expect(directories).not.toContain(at(chain, "h10"));
+  });
+
+  it("protects a global config file, and what it includes, only where it lies inside the project", () => {
+    const outside = dir("global-outside");
+    write(
+      join(fakeHome, ".gitconfig"),
+      cfg(`[include]\n\tpath = ${posix(join(outside, "extra"))}`),
+    );
+    write(join(outside, "extra"), hooks("outside-hooks"));
+    const root = dir("global-project");
+    gitRepo(root);
+    // Read for its hooksPath, but a file outside the project is not one the
+    // project's sandbox writes, so it is not listed.
+    expect(dirs(root)).toContain(at(root, "outside-hooks"));
+    const listed = files(root);
+    expect(listed).not.toContain(at(fakeHome, ".gitconfig"));
+    expect(listed).not.toContain(at(outside, "extra"));
+
+    // A project that holds the home directory holds the global config too.
+    const home = dir("home-project");
+    gitRepo(home);
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    write(
+      join(home, ".gitconfig"),
+      cfg("[include]\n\tpath = .gitconfig.local"),
+    );
+    expect(files(home)).toEqual(
+      expect.arrayContaining([
+        at(home, ".gitconfig"),
+        at(home, ".gitconfig.local"),
+      ]),
+    );
   });
 });
 

@@ -58,6 +58,7 @@ import {
   hooksInWorkingTree,
   initialWorkspaceReport,
   localWorkspaceReport,
+  missingControlFileInWorkingTree,
   verifyWorkspace,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -1002,7 +1003,14 @@ export async function activateSandbox(
             ? localWorkspaceReport(
                 live &&
                   planes.includes(GIT_CONTROL_PROTECTION) &&
-                  !hooksInWorkingTree(profile.workspace, profile.writeProtect),
+                  !hooksInWorkingTree(
+                    profile.workspace,
+                    profile.writeProtect,
+                  ) &&
+                  !missingControlFileInWorkingTree(
+                    profile.workspace,
+                    profile.writeProtect,
+                  ),
               )
             : initialWorkspaceReport(declaration),
       },

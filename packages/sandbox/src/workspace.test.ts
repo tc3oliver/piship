@@ -48,6 +48,7 @@ import {
 import {
   describeWorkspace,
   hooksInWorkingTree,
+  missingControlFileInWorkingTree,
   removeSentinelDirectory,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -1383,6 +1384,31 @@ describe("hooksInWorkingTree", () => {
   });
 });
 
+describe("missingControlFileInWorkingTree", () => {
+  const paths = (...files: string[]): ProtectedPaths => ({
+    files,
+    directories: [],
+  });
+  it("is true only for a protected file that does not exist, in the working tree", () => {
+    writeFileSync(join(workspace, ".gitconfig"), "[core]\n");
+    const missing = (...files: string[]) =>
+      missingControlFileInWorkingTree(workspace, paths(...files));
+    // An include the sandbox could create, and one that is there already.
+    expect(missing(join(workspace, ".gitconfig.local"))).toBe(true);
+    expect(missing(join(workspace, ".gitconfig"))).toBe(false);
+    expect(
+      missing(join(workspace, ".gitconfig"), join(workspace, "sub", "cfg")),
+    ).toBe(true);
+    // Files git follows in the git directory are the guarded set's own
+    // business, and a file outside the workspace is not the sandbox's.
+    expect(missing(join(git, "commondir"), join(git, "config.worktree"))).toBe(
+      false,
+    );
+    expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
+    expect(missing()).toBe(false);
+  });
+});
+
 describe("the workspace sentence", () => {
   const base = {
     windowMs: 10_000,
@@ -1517,6 +1543,31 @@ describe.skipIf(!nativeReady && !requireSandbox)(
         gitControlProtection: "verified",
       });
       await inGit.dispose();
+    });
+
+    it("does not report it as verified while a config file git includes from the working tree does not exist", async () => {
+      const include = join(workspace, ".gitconfig.local");
+      const activateWith = () =>
+        activateSandbox(policy(), {
+          workspace,
+          homeDir: join(root, "home"),
+          backend: fakeWrappingBackend(native, true),
+          protectedPaths: { files: [include], directories: [] },
+        });
+      // Nothing can guard a file that is not there, and git follows it if it
+      // appears, so the plane is proven for the paths that exist and no more.
+      const missing = await activateWith();
+      expect(missing.report.planes).toContain("git-control-protection");
+      expect(missing.report.workspace).toMatchObject({
+        gitControlProtection: "not-verified",
+      });
+      await missing.dispose();
+      writeFileSync(include, "[core]\n");
+      const present = await activateWith();
+      expect(present.report.workspace).toMatchObject({
+        gitControlProtection: "verified",
+      });
+      await present.dispose();
     });
 
     it("warns, and does not claim it, for a backend that ignores writeProtect", async () => {

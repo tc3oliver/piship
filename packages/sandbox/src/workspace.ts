@@ -144,8 +144,32 @@ export function hooksInWorkingTree(
 }
 
 /**
+ * Whether a protected file that does not exist yet lies in the working tree
+ * instead of in the workspace's own `.git`: a config file the git config
+ * includes and nobody has created. The live probe of a local backend covers
+ * only files it makes itself, bubblewrap cannot guard a missing file (its
+ * mount point would be an empty file left on the host), and git follows such
+ * a file if it appears, so git control cannot be reported as protected. A
+ * remote backend is not asked: its check tries to create the file.
+ */
+export function missingControlFileInWorkingTree(
+  workspace: string,
+  protectedPaths: ProtectedPaths,
+): boolean {
+  const dotGit = join(workspace, ".git");
+  return protectedPaths.files.some(
+    (file) =>
+      file !== workspace &&
+      isWithin(file, workspace) &&
+      !isWithin(file, dotGit) &&
+      lstatOrUndefined(file) === undefined,
+  );
+}
+
+/**
  * A local backend: commands run against this host's files. `gitControlProven`
- * is the live probe's result, and false when the hooks are in the working tree.
+ * is the live probe's result, and false when the hooks, or a config file that
+ * does not exist yet, are in the working tree.
  */
 export function localWorkspaceReport(
   gitControlProven: boolean,

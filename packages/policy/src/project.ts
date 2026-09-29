@@ -183,10 +183,13 @@ function gitConfigPath(gitDir: string): string {
 /**
  * The git files that decide how `root` is classified or what git runs: the
  * `.git` entry itself (a `gitdir:` pointer when it is a file), the git
- * directory's `config`, `config.worktree`, and `commondir`, and the shared
- * `config` a worktree points to. Rewriting any of them could change the
- * origin remote a later launch reads or the commands git runs. Paths are
- * normalized (symlink-resolved, POSIX separators).
+ * directory's `config`, `config.worktree`, and `commondir`, the shared
+ * `config` a worktree points to, and the files those configs include
+ * (`include.path`, `includeIf.*.path`), whether or not they exist yet. Also
+ * the user's global config files, and what they include, when they lie
+ * inside the project. Rewriting any of them could change the origin remote a
+ * later launch reads or the commands git runs. Paths are normalized
+ * (symlink-resolved, POSIX separators).
  */
 export function projectGitControlFiles(root: string): string[] {
   const dotGit = join(root, ".git");
@@ -200,7 +203,62 @@ export function projectGitControlFiles(root: string): string[] {
       real(gitConfigPath(gitDir)),
     );
   }
+  files.push(...scanGitConfigs(repositoryConfigs(root, gitDir)).included);
+  // The global config is the user's, not the project's: only a file inside
+  // the project (the home directory holding a repository, an include into
+  // the working tree) is one the sandbox could write.
+  const project = real(root);
+  const globals = globalConfigs();
+  files.push(
+    ...[...globals.map(real), ...scanGitConfigs(globals).included].filter(
+      (path) => isWithin(project, path),
+    ),
+  );
   return [...new Set(files)];
+}
+
+/** A git config file larger than this is not read; real ones are a few lines. */
+const MAX_CONFIG_BYTES = 1024 * 1024;
+/** How deep git follows includes: it refuses a deeper chain itself. */
+const MAX_INCLUDE_DEPTH = 10;
+
+interface ConfigEntry {
+  readonly section: string;
+  readonly subsection: string | undefined;
+  readonly key: string;
+  readonly value: string;
+}
+
+/** The `key = value` entries of git config text, with their section names lowercased. */
+function configEntries(config: string): ConfigEntry[] {
+  const entries: ConfigEntry[] = [];
+  let section: string | undefined;
+  let subsection: string | undefined;
+  for (const raw of config.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    const header =
+      /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
+    if (header) {
+      section = header[1]?.toLowerCase();
+      subsection = header[2];
+      // `[core] hooksPath = x` on one line.
+      line = line.slice(header[0].length).trim();
+      if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    }
+    if (section === undefined) continue;
+    const equals = line.indexOf("=");
+    if (equals < 0) continue;
+    const key = line.slice(0, equals).trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]*$/.test(key)) continue;
+    entries.push({
+      section,
+      subsection,
+      key,
+      value: unquote(line.slice(equals + 1)),
+    });
+  }
+  return entries;
 }
 
 /**
@@ -209,41 +267,36 @@ export function projectGitControlFiles(root: string): string[] {
  * the protected set.
  */
 export function parseHooksPaths(config: string): string[] {
-  const values: string[] = [];
-  let inCore = false;
-  for (const raw of config.split(/\r?\n/)) {
-    let line = raw.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
-    const section =
-      /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/.exec(line);
-    if (section) {
-      inCore = section[1]?.toLowerCase() === "core" && section[2] === undefined;
-      // `[core] hooksPath = x` on one line.
-      line = line.slice(section[0].length).trim();
-      if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
-    }
-    if (!inCore) continue;
-    const equals = line.indexOf("=");
-    if (equals < 0) continue;
-    const key = line.slice(0, equals).trim();
-    if (key.toLowerCase() !== "hookspath") continue;
-    const value = unquote(line.slice(equals + 1));
-    if (value !== "") values.push(value);
-  }
-  return values;
+  return configEntries(config)
+    .filter(
+      (entry) =>
+        entry.section === "core" &&
+        entry.subsection === undefined &&
+        entry.key === "hookspath" &&
+        entry.value !== "",
+    )
+    .map((entry) => entry.value);
 }
 
 /**
- * The directories `core.hooksPath` names in the git config files that apply
- * to `root`: the same files whose rewrite is already denied. A relative path
- * is taken from the project root, where git runs hooks; `~/` is the home
- * directory. A path that holds the project root itself cannot be a read-only
- * tree without making the whole project read-only, so it is left out.
+ * The paths of `[include] path` and `[includeIf "<condition>"] path` entries
+ * in git config text, every one whatever its condition, so that a condition
+ * that is false today cannot hide a file.
  */
-function hooksPathDirectories(
-  root: string,
-  gitDir: string | undefined,
-): string[] {
+export function parseConfigIncludes(config: string): string[] {
+  return configEntries(config)
+    .filter(
+      (entry) =>
+        entry.key === "path" &&
+        entry.value !== "" &&
+        ((entry.section === "include" && entry.subsection === undefined) ||
+          (entry.section === "includeif" && entry.subsection !== undefined)),
+    )
+    .map((entry) => entry.value);
+}
+
+/** The repository's own config files: `.git/config`, the git directory's, and the shared one's. */
+function repositoryConfigs(root: string, gitDir: string | undefined): string[] {
   const configs = [join(root, ".git", "config")];
   if (gitDir) {
     const common = commonDirectory(gitDir);
@@ -254,18 +307,93 @@ function hooksPathDirectories(
       join(common, "config.worktree"),
     );
   }
+  return [...new Set(configs)];
+}
+
+/**
+ * The user's global git config files, the only two places outside the
+ * repository git reads for a user: `~/.gitconfig` and
+ * `$XDG_CONFIG_HOME/git/config` (`~/.config/git/config` by default).
+ */
+function globalConfigs(): string[] {
+  const home = homedir();
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && isAbsolute(xdg) ? xdg : join(home, ".config");
+  return [join(home, ".gitconfig"), join(base, "git", "config")];
+}
+
+function readConfig(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size > MAX_CONFIG_BYTES) return undefined;
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read git config files and follow their includes: a path is taken from the
+ * including file's directory, `~/` is the home directory. Only the files
+ * named by the given configs and, transitively, by their includes are read,
+ * each once (a cycle ends there) and no deeper than git itself follows.
+ * Returns every `core.hooksPath` value seen, raw, and the include targets
+ * as normalized paths, whether or not they exist.
+ */
+function scanGitConfigs(configs: readonly string[]): {
+  readonly hooksPaths: string[];
+  readonly included: string[];
+} {
+  const seen = new Set<string>();
+  const hooksPaths: string[] = [];
+  const included: string[] = [];
+  const visit = (file: string, depth: number): void => {
+    const key = real(file);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const text = readConfig(file);
+    if (text === undefined) return;
+    hooksPaths.push(...parseHooksPaths(text));
+    if (depth >= MAX_INCLUDE_DEPTH) return;
+    for (const value of parseConfigIncludes(text)) {
+      const target = value.startsWith("~/")
+        ? join(homedir(), value.slice(2))
+        : resolve(dirname(file), value);
+      included.push(real(target));
+      visit(target, depth + 1);
+    }
+  };
+  for (const config of configs) visit(config, 0);
+  return { hooksPaths, included };
+}
+
+/**
+ * The directories `core.hooksPath` names in the repository's git config, the
+ * user's global config, and what they include. A relative path is taken from
+ * the project root, where git runs hooks, whichever file sets it (a global
+ * `.githooks` lands in every working tree); `~/` is the home directory. A
+ * path that holds the project root itself cannot be a read-only tree without
+ * making the whole project read-only, so it is left out.
+ */
+function hooksPathDirectories(
+  root: string,
+  gitDir: string | undefined,
+): string[] {
   const project = real(root);
   const directories: string[] = [];
-  for (const config of new Set(configs))
-    for (const value of parseHooksPaths(readText(config) ?? "")) {
-      const path = value.startsWith("~/")
-        ? join(homedir(), value.slice(2))
-        : isAbsolute(value)
-          ? value
-          : resolve(root, value);
-      const directory = real(path);
-      if (!isWithin(directory, project)) directories.push(directory);
-    }
+  const values = [
+    ...scanGitConfigs(repositoryConfigs(root, gitDir)).hooksPaths,
+    ...scanGitConfigs(globalConfigs()).hooksPaths,
+  ];
+  for (const value of values) {
+    const path = value.startsWith("~/")
+      ? join(homedir(), value.slice(2))
+      : isAbsolute(value)
+        ? value
+        : resolve(root, value);
+    const directory = real(path);
+    if (!isWithin(directory, project)) directories.push(directory);
+  }
   return directories;
 }
 
