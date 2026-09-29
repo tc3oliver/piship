@@ -24,6 +24,7 @@ import type { LaunchContext } from "./launch/context.js";
 export {
   governModelRuntime,
   isCredentialRejection,
+  isModelDenial,
   type ModelGovernance,
   type ModelPolicy,
   type GovernedRuntime,

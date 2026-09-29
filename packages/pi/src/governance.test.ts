@@ -12,7 +12,11 @@ import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
-import { governModelRuntime, isCredentialRejection } from "./governance.js";
+import {
+  governModelRuntime,
+  isCredentialRejection,
+  isModelDenial,
+} from "./governance.js";
 
 const model = (id: string) => ({
   id,
@@ -370,5 +374,27 @@ describe("personal Pi-native governance", () => {
     expect(() =>
       runtime.streamSimple(coder, { messages: [] } as never),
     ).not.toThrow(/Audit is unavailable/);
+  });
+  it("recognizes a gateway model denial, and not a credential rejection or an ordinary failure", () => {
+    const failed = (errorMessage: string) => ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage,
+    });
+    expect(isModelDenial(failed('403 {"error":{"message":"denied"}}'))).toBe(
+      true,
+    );
+    expect(isModelDenial(failed("Forbidden"))).toBe(true);
+    expect(isModelDenial(failed("401 Unauthorized"))).toBe(false);
+    expect(isModelDenial(failed("429 rate limited"))).toBe(false);
+    expect(isModelDenial(failed("connection reset (code 4030)"))).toBe(false);
+    expect(
+      isModelDenial({
+        role: "assistant",
+        stopReason: "stop",
+        errorMessage: "403",
+      }),
+    ).toBe(false);
+    expect(isModelDenial(undefined)).toBe(false);
   });
 });

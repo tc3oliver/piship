@@ -239,3 +239,19 @@ export function isCredentialRejection(message: unknown): boolean {
     )
   );
 }
+
+/**
+ * Whether an assistant message ended because the gateway denied the model
+ * (HTTP 403): the credential may be fine while what it is entitled to has
+ * changed, so the entitlement is re-read once (`refreshEntitlement`).
+ */
+export function isModelDenial(message: unknown): boolean {
+  const value = message as
+    | { role?: string; stopReason?: string; errorMessage?: string }
+    | undefined;
+  return (
+    value?.role === "assistant" &&
+    value.stopReason === "error" &&
+    /(^|\D)403(\D|$)|forbidden/i.test(value.errorMessage ?? "")
+  );
+}
