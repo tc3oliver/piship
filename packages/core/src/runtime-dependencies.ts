@@ -23,10 +23,14 @@ export const workspacePackages = [
   "core",
   "pi",
   "cli",
+  "adapter-sdk",
 ] as const;
+// Workspace packages for adapter authors' tests, never part of a payload. The
+// lock still links them, so they are left out of the runtime packages too.
+const developmentPackages = ["adapter-conformance"] as const;
 /** A package-lock link from `node_modules/@piship/<name>` to `packages/<name>`. */
 function isWorkspaceLink(path: string, resolved: string | undefined): boolean {
-  return workspacePackages.some(
+  return [...workspacePackages, ...developmentPackages].some(
     (name) =>
       path === `node_modules/@piship/${name}` &&
       resolved === `packages/${name}`,

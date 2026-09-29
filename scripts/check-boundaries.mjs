@@ -48,6 +48,11 @@ const allowedLocal = {
     "@piship/audit",
   ],
   cli: ["@piship/core", "@piship/schema", "@piship/contracts"],
+  // The adapter SDK re-exports public contracts and wraps customBackend();
+  // it never reaches into core or Pi. The conformance kits test an adapter
+  // the way a company would, through the SDK only.
+  "adapter-sdk": ["@piship/contracts", "@piship/sandbox"],
+  "adapter-conformance": ["@piship/adapter-sdk"],
   tests: [
     "@piship/core",
     "@piship/pi",

@@ -1,14 +1,10 @@
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type ManagedFetch, PiShipError } from "@piship/contracts";
-import type { ResolvedEndpoints } from "./network.js";
+import { type AdapterContext, PiShipError } from "@piship/contracts";
 
-export interface AdapterContext {
-  readonly distributionId: string;
-  readonly fetch: ManagedFetch;
-  readonly endpoints: ResolvedEndpoints;
-}
+// Defined in @piship/contracts so the adapter SDK can name it without core.
+export type { AdapterContext };
 
 export async function loadAdapter<T>(
   distributionDir: string,

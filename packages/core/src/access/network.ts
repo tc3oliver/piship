@@ -2,6 +2,7 @@ import {
   DEFAULT_NETWORK_POLICY,
   type NetworkPolicy,
   PiShipError,
+  type ResolvedEndpoints,
 } from "@piship/contracts";
 import {
   type AccessManifest,
@@ -10,15 +11,8 @@ import {
   resolveTemplate,
 } from "@piship/schema";
 
-export interface ResolvedEndpoints {
-  readonly issuer?: string;
-  readonly clientId?: string;
-  readonly audience?: string;
-  readonly brokerEndpoint?: string;
-  readonly brokerRevokeEndpoint?: string;
-  readonly baseUrl?: string;
-  readonly additionalCA: readonly string[];
-}
+// Defined in @piship/contracts so the adapter SDK can name it without core.
+export type { ResolvedEndpoints };
 
 /** Resolve allowlisted `${NAME}` references from the launch environment. */
 export function resolveRuntimeReferences(

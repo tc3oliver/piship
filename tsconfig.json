@@ -36,6 +36,12 @@
     },
     {
       "path": "./packages/cli"
+    },
+    {
+      "path": "./packages/adapter-sdk"
+    },
+    {
+      "path": "./packages/adapter-conformance"
     }
   ]
 }
