@@ -6,6 +6,7 @@ import {
   EnvHttpProxyAgent,
   type Dispatcher,
   fetch as undiciFetch,
+  Pool,
   setGlobalDispatcher,
 } from "undici";
 import { PiShipError } from "./errors.js";
@@ -157,14 +158,37 @@ function trustRoots(extra: readonly string[]): string[] | undefined {
   return [...defaults, ...extra];
 }
 
-export function createDispatcher(policy: NetworkPolicy): Dispatcher {
+export interface DispatcherOptions {
+  /**
+   * Reuse connections between requests (the default). Without keep-alive
+   * every request opens its own connection and closes it after the
+   * response, including the connection to a plain-HTTP proxy.
+   */
+  readonly keepAlive?: boolean;
+}
+
+export function createDispatcher(
+  policy: NetworkPolicy,
+  options: DispatcherOptions = {},
+): Dispatcher {
   const ca = trustRoots(loadCertificates(policy.additionalCA));
   const connect = ca
     ? { ca, rejectUnauthorized: true }
     : { rejectUnauthorized: true };
+  // `pipelining: 0` disables keep-alive. The factory carries it to every
+  // pool the agents create, including a proxy agent's pool to the proxy,
+  // which does not receive the agent's own options.
+  const pooling =
+    options.keepAlive === false
+      ? {
+          pipelining: 0,
+          factory: (origin: string | URL, opts: object) =>
+            new Pool(origin, { ...opts, pipelining: 0 }),
+        }
+      : {};
   const base = policy.inheritProxyEnvironment
-    ? new EnvHttpProxyAgent({ connect })
-    : new Agent({ connect });
+    ? new EnvHttpProxyAgent({ connect, ...pooling })
+    : new Agent({ connect, ...pooling });
   if (!policy.privateOnly) return base;
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
@@ -224,18 +248,18 @@ export function createManagedFetch(
   policy: NetworkPolicy,
   component = "network",
 ): ManagedFetch {
-  const dispatcher = createDispatcher(policy);
+  // Platform secret store calls block the process (PowerShell on Windows
+  // for seconds), and a pooled connection the server closed meanwhile still
+  // looks usable until the close is read, which depends on where in the
+  // event loop the next request is made. A request sent on it fails with
+  // ECONNRESET, and a broker call that fails that way has an unknown outcome
+  // and is never retried. Managed requests are few, so each opens its own
+  // connection.
+  const dispatcher = createDispatcher(policy, { keepAlive: false });
   return async (url, init = {}) => {
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());
     checkDestination(target, policy, component);
-    // Platform secret store calls block the event loop (PowerShell on
-    // Windows for seconds), and a keep-alive connection the server closed
-    // meanwhile still looks idle and usable until its close is read. One
-    // turn of the event loop reads it, so the request never goes out on a
-    // dead connection, which fails with ECONNRESET and, for a broker call,
-    // an unknown outcome that is never retried.
-    await new Promise((resolve) => setImmediate(resolve));
     try {
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),
