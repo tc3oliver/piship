@@ -6,7 +6,7 @@ import {
   InteractiveMode,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { PiShipError, redact } from "@piship/contracts";
+import { formatError, PiShipError, redact } from "@piship/contracts";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import {
@@ -18,6 +18,44 @@ import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
 
 const SMOKE_PROMPT = "PiShip acceptance request: reply with a short greeting.";
+
+/**
+ * Ends a session: dispose the runtime, close the governance session (which
+ * throws `AUDIT_UNAVAILABLE` when a required sink lost events), then save the
+ * metrics and drop the published context. Every step runs even when an earlier
+ * one failed. A failure of the session itself stays the command's error, and
+ * teardown failures are then only reported; otherwise the first one is thrown.
+ */
+async function endSession(
+  ctx: LaunchContext,
+  prepared: PreparedAccess,
+  runtime: { dispose(): Promise<void> },
+  gov: GovernanceSession | null,
+  sessionFailed: boolean,
+): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await runtime.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await gov?.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  // Credential refreshes during the session land in the same metrics.
+  saveMetrics(prepared.metrics);
+  publishContext(null);
+  const [first, ...rest] = failures;
+  if (first === undefined) return;
+  if (sessionFailed) {
+    for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
+    return;
+  }
+  for (const error of rest) ctx.err(`Error: ${formatError(error)}`);
+  throw first;
+}
 
 function accessSummary(
   prepared: PreparedAccess,
@@ -68,6 +106,7 @@ export async function runSmoke(
   const prepared = await prepareAccess(ctx, requestedModel);
   const gov = await openGovernance(ctx, prepared, false);
   const { runtime } = await startGoverned(ctx, prepared, sessionDir, gov);
+  let sessionFailed = false;
   try {
     const { resourceLoader } = runtime.services;
     const sessionManager = runtime.session.sessionManager;
@@ -171,12 +210,11 @@ export async function runSmoke(
         "GATEWAY_PROTOCOL_ERROR",
         `The acceptance model request failed: ${String(modelRequest.error ?? modelRequest.stopReason)}`,
       );
+  } catch (error) {
+    sessionFailed = true;
+    throw error;
   } finally {
-    await runtime.dispose();
-    await gov?.close();
-    // Credential refreshes during the session land in the same metrics.
-    saveMetrics(prepared.metrics);
-    publishContext(null);
+    await endSession(ctx, prepared, runtime, gov, sessionFailed);
   }
 }
 
@@ -238,16 +276,16 @@ export async function runInteractive(
     sessionDir,
     gov,
   );
+  let sessionFailed = false;
   try {
     await new InteractiveMode(
       runtime,
       theme ? { initialThemeSetting: theme } : {},
     ).run();
+  } catch (error) {
+    sessionFailed = true;
+    throw error;
   } finally {
-    await runtime.dispose();
-    await gov?.close();
-    // Credential refreshes during the session land in the same metrics.
-    saveMetrics(prepared.metrics);
-    publishContext(null);
+    await endSession(ctx, prepared, runtime, gov, sessionFailed);
   }
 }

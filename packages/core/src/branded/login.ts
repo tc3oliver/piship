@@ -5,6 +5,7 @@ import {
   PiShipError,
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
+  formatError,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import type { AccessEvent } from "../index.js";
@@ -74,15 +75,28 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
       ctx.metadata.access.variables,
     );
   applyProcessNetworkPolicy(access.network);
-  const result = await access
-    .login({
-      openUrl: (url) => {
-        ctx.err(`Open this URL in your browser to sign in:\n${url}`);
-        openBrowser(url);
-      },
-      readSecret: readSecretInput,
-    })
-    .finally(() => saveMetrics(metrics));
+  let result: Awaited<ReturnType<typeof access.login>>;
+  try {
+    result = await access
+      .login({
+        openUrl: (url) => {
+          ctx.err(`Open this URL in your browser to sign in:\n${url}`);
+          openBrowser(url);
+        },
+        readSecret: readSecretInput,
+      })
+      .finally(() => saveMetrics(metrics));
+  } catch (error) {
+    // A login can fail after it stored the new identity or revoked the
+    // previous credential (a broker refusal, say): what happened is still
+    // recorded, and the login error stays the command's error.
+    const subject =
+      (await access.status().catch(() => undefined))?.identity?.subject ?? null;
+    await auditAccess(ctx, access, subject, events).catch((auditError) =>
+      ctx.err(`Error: ${formatError(auditError)}`),
+    );
+    throw error;
+  }
   await auditAccess(ctx, access, result.identity?.subject ?? null, events);
   const identity = result.identity
     ? `Signed in as ${result.identity.displayName ?? result.identity.subject} (${result.identity.issuer}).`
@@ -120,6 +134,8 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   applyProcessNetworkPolicy(access.network);
   const signedIn = (await access.status().catch(() => undefined))?.identity;
   const problems = await access.logout();
+  // Revocation problems are shown before auditing, which can fail the command.
+  for (const problem of problems) ctx.err(`Warning: ${problem}`);
   // Only what happened is recorded: credential.revoke with its remote
   // revocation outcome when a credential existed, identity.logout when
   // there was an identity session.
@@ -127,5 +143,4 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   ctx.out(
     `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; sessions were preserved.`,
   );
-  for (const problem of problems) ctx.err(`Warning: ${problem}`);
 }

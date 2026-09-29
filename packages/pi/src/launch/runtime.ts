@@ -14,6 +14,7 @@ import {
 import {
   ENTERPRISE_CONTEXT_SYMBOL,
   type EnterpriseContext,
+  formatError,
   PiShipError,
 } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
@@ -248,7 +249,13 @@ export async function startGoverned(
   try {
     return await startRuntime(ctx, prepared, sessionDir, gov);
   } catch (error) {
-    await gov?.close();
+    // The start error stays the command's error; a close that lost audit
+    // events is reported next to it instead of replacing it.
+    try {
+      await gov?.close();
+    } catch (closeError) {
+      ctx.err(`Error: ${formatError(closeError)}`);
+    }
     saveMetrics(prepared.metrics);
     throw error;
   }
