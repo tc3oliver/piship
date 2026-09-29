@@ -325,6 +325,11 @@ export function sentinelLocation(
  * directory is removed if that left it empty. `plainDirectory` runs again
  * before every step. With `onlyOwn`, a directory that holds any other name
  * is left untouched. Returns whether the directory is gone.
+ *
+ * Any other name the sandbox adds to a nonce directory therefore stays, with
+ * the directory: a run leaves it, and the sweep skips it, for good. That is
+ * clutter the sandbox controls, not a safety issue, and it is the price of
+ * never deleting anything PiShip did not make.
  */
 export function removeSentinelDirectory(
   workspace: string,
