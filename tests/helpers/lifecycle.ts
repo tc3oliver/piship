@@ -24,12 +24,14 @@ import { startLocalServices } from "../../examples/demo-company/fixtures/local-s
 import { branded, type Result } from "./distribution.js";
 import {
   clearPlatformStore,
+  expectOwnParts,
   LIVE_SECRET_STORE,
   platformStoreRefs,
   primaryRefs,
   type Storage,
   shareKeychainSearchList,
 } from "./secret-store.js";
+import { acquireLease, runAll, storeScenarioTeardown } from "./teardown.js";
 
 // Shared, immutable release fixtures for the production lifecycle scenarios.
 // For each example distribution (the managed demo company and the personal
@@ -513,7 +515,8 @@ export interface Scenario extends BaseScenario<ReleaseFixtures> {
   /**
    * Assert that the secret store holds exactly `refs` (by default the ones
    * the metadata names). With system storage the platform store lists them,
-   * each with only its own parts, and the file fallback does not exist, so
+   * each with only its own parts (`+0` to `+n-1`, as many as at the previous
+   * check for a reference seen there), and the file fallback does not exist, so
    * nothing silently degraded to it; with file storage the fallback holds
    * one file per reference. Returns the platform store listing (empty for
    * file storage).
@@ -540,6 +543,7 @@ function expectSecretStore(
   storage: Storage,
   state: string,
   storeRefs: () => string[],
+  counts: Map<string, number>,
   refs: readonly string[] = metadataRefs(state),
 ): string[] {
   const expected = [...refs].sort();
@@ -565,6 +569,7 @@ function expectSecretStore(
     ),
     "parts without their primary",
   ).toEqual([]);
+  expectOwnParts(listed, expected, counts);
   return listed;
 }
 
@@ -590,11 +595,15 @@ async function createScenario<Releases extends ReleaseFixtures>(
   const channelDir = join(temp, "channel");
   mkdirSync(channelDir);
   const host = await serve(channelDir);
-  onTestFinished(async () => {
-    await host.close();
-    await options.close?.();
-    rmSync(temp, { recursive: true, force: true });
-  });
+  // Each step runs even when an earlier one fails, so a failing update host
+  // never skips the store cleanup or the lease release in `options.close`.
+  onTestFinished(() =>
+    runAll([
+      () => host.close(),
+      () => options.close?.(),
+      () => rmSync(temp, { recursive: true, force: true }),
+    ]),
+  );
   const home = join(temp, "home");
   mkdirSync(home, { recursive: true });
   // On POSIX the install home is reached through a symlink, as macOS
@@ -684,25 +693,6 @@ async function createScenario<Releases extends ReleaseFixtures>(
 }
 
 /**
- * Hold the platform store for one system-store scenario at a time. Every
- * such scenario of a run shares one app ID, so its references, and the
- * teardown that clears them, would otherwise meet those of a scenario
- * running in parallel in another file.
- */
-async function leasePlatformStore(fixtures: string): Promise<() => void> {
-  const lease = join(fixtures, "platform-store.lease");
-  for (;;) {
-    try {
-      mkdirSync(lease);
-      return () => rmSync(lease, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-}
-
-/**
  * A fresh, isolated demo lifecycle environment over the shared releases: its
  * own fixture services, update host, home, state, install home, and bin home.
  * Everything is torn down when the calling test finishes.
@@ -733,6 +723,7 @@ export async function lifecycleScenario(
     const storeRefs = (): string[] => {
       throw new Error("A file-storage scenario has no platform store");
     };
+    const partCounts = new Map<string, number>();
     return {
       ...scenario,
       services,
@@ -741,7 +732,7 @@ export async function lifecycleScenario(
       storeRefs,
       metadataRefs: () => metadataRefs(state),
       expectSecretStore: (refs) =>
-        expectSecretStore(storage, state, storeRefs, refs),
+        expectSecretStore(storage, state, storeRefs, partCounts, refs),
     };
   }
   if (!LIVE_SECRET_STORE)
@@ -752,7 +743,10 @@ export async function lifecycleScenario(
   const distribution = demo("system", fixtures);
   const releases = await sharedReleases(distribution, fixtures);
   const prefix = `piship:${distribution.id}:`;
-  const release = await leasePlatformStore(fixtures);
+  // One system-store scenario at a time: every such scenario of a run
+  // shares one app ID, so its references, and the teardown that clears
+  // them, would otherwise meet those of a scenario in another file.
+  const release = await acquireLease(join(fixtures, "platform-store.lease"));
   let services: Services | undefined;
   let scenario: BaseScenario<ReleaseFixtures>;
   // Set once the scenario's environment reaches the store; the teardown
@@ -764,18 +758,16 @@ export async function lifecycleScenario(
     scenario = await createScenario(distribution, releases, name, {
       env: started.env(),
       approve: (url) => started.approve(url),
-      close: async () => {
-        try {
-          await started.close();
+      close: storeScenarioTeardown({
+        clearStore: () => {
           if (storeEnv) clearPlatformStore(prefix, storeEnv);
-        } finally {
-          release();
-        }
-      },
+        },
+        closeServices: () => started.close(),
+        release,
+      }),
     });
   } catch (error) {
-    await services?.close();
-    release();
+    await runAll([() => services?.close(), release]).catch(() => {});
     throw error;
   }
   shareKeychainSearchList(scenario.home);
@@ -783,6 +775,7 @@ export async function lifecycleScenario(
   const storeRefs = () => platformStoreRefs(prefix, scenario.env);
   expect(storeRefs(), "entries left by an earlier scenario").toEqual([]);
   const state = join(scenario.state, distribution.id);
+  const partCounts = new Map<string, number>();
   return {
     ...scenario,
     services,
@@ -791,7 +784,7 @@ export async function lifecycleScenario(
     storeRefs,
     metadataRefs: () => metadataRefs(state),
     expectSecretStore: (refs) =>
-      expectSecretStore(storage, state, storeRefs, refs),
+      expectSecretStore(storage, state, storeRefs, partCounts, refs),
   };
 }
 
