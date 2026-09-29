@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
 import { keepLogs, logDirectory } from "./logs.js";
 
 // The enterprise reference stack (Keycloak, PostgreSQL, LiteLLM, the broker and
@@ -16,6 +18,11 @@ import { keepLogs, logDirectory } from "./logs.js";
 // has its own compose project and loopback ports, and its secrets live in a
 // generated env file in a temporary directory: nothing is written into the
 // repository, and `stop()` leaves no container, network, or file behind.
+//
+// The project and the directory are named `piship-reftest-<pid>-...` like
+// those of tests/enterprise-reference/stack.ts: a run never touches another
+// run's stack, the process's exit and Ctrl-C stop its own, and the suite's
+// global setup removes what a killed run left.
 
 export const referenceDirectory = fileURLToPath(
   new URL("../../", import.meta.url),
@@ -103,15 +110,16 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     composeFile,
     ...(options.overrides ?? []).map((file) => join(referenceDirectory, file)),
   ];
-  const project =
-    process.env.PISHIP_REFERENCE_PROJECT ?? "piship-reference-distribution";
+  const project = `${PROJECT_PREFIX}${process.pid}-distribution-${randomBytes(3).toString("hex")}`;
   const ports = Object.fromEntries(
     Object.entries(DEFAULT_PORTS).map(([name, fallback]) => [
       name,
       Number(process.env[name] ?? fallback),
     ]),
   ) as Stack["ports"];
-  const directory = mkdtempSync(join(tmpdir(), "piship-reference-stack-"));
+  const directory = mkdtempSync(
+    join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`),
+  );
   const envFile = join(directory, ".env");
   const generated = spawnSync(
     process.execPath,
@@ -138,9 +146,19 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   const compose = (args: readonly string[]) =>
     docker(project, envFile, environment, args, files);
   let stopped = false;
+  const onSignal = (signal: NodeJS.Signals) => {
+    try {
+      stop();
+    } finally {
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    }
+  };
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    process.off("exit", stop);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     if (logDirectory()) {
       const logs = compose(["logs", "--no-color", "--timestamps"]);
       keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
@@ -150,8 +168,11 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     rmSync(directory, { recursive: true, force: true });
   };
 
-  // A crashed earlier run of this project may have left containers behind.
-  compose(["down", "--timeout", "10"]);
+  // A worker that exits, or is interrupted or terminated, between start and
+  // afterAll still removes the stack.
+  process.once("exit", stop);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
   const up = compose(["up", "--wait", "--wait-timeout", "300"]);
   if (up.status !== 0) {
     const status = compose(["ps", "--all"]);

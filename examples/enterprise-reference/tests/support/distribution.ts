@@ -19,6 +19,7 @@ import {
   authorizationRequest,
   signInAtKeycloak,
 } from "./keycloak.js";
+import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
 import { type ReferenceUser, referenceDirectory, type Stack } from "./stack.js";
 
 // The AcmeCode reference distribution as a user has it: built from the
@@ -28,7 +29,9 @@ import { type ReferenceUser, referenceDirectory, type Stack } from "./stack.js";
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 /** The built PiShip CLI, for a test that runs it directly. */
 export const cliPath = join(root, "packages/cli/dist/bin.js");
-const RUN_TIMEOUT_MS = 180_000;
+// Below vitest's testTimeout (120 s in vitest.reference.config.ts), so a hung
+// command is killed and fails with its own output rather than a bare timeout.
+const RUN_TIMEOUT_MS = 100_000;
 
 export type StoreMode = "system" | "file";
 
@@ -42,7 +45,14 @@ export type StoreMode = "system" | "file";
  * managed E2E does.
  */
 export function storeMode(): StoreMode {
-  return process.env.PISHIP_LIVE_SECRET_STORE === "1" ? "system" : "file";
+  if (process.env.PISHIP_LIVE_SECRET_STORE !== "1") return "file";
+  // On macOS the platform store is the login keychain of the real HOME: a
+  // run on a developer's Mac would write to and delete from it.
+  if (process.platform === "darwin" && !process.env.CI)
+    throw new Error(
+      "PISHIP_LIVE_SECRET_STORE=1 on macOS uses the login keychain; the reference tests refuse it outside CI",
+    );
+  return "system";
 }
 
 /** The `Secret Store` line of `doctor` for a mode on this host. */
@@ -215,7 +225,11 @@ export async function installDistribution(
   stack: Stack,
   options: InstallOptions,
 ): Promise<Installed> {
-  const temp = mkdtempSync(join(tmpdir(), `piship-reference-${options.name}-`));
+  // Named like the stack's directory, so global setup removes it after a
+  // killed run.
+  const temp = mkdtempSync(
+    join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-${options.name}-`),
+  );
   try {
     return await assemble(stack, options, temp);
   } catch (error) {
