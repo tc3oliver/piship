@@ -46,6 +46,12 @@ export interface ProfileContext {
 export interface ProtectedPaths {
   readonly files: readonly string[];
   readonly directories: readonly string[];
+  /**
+   * Why this list is known to be incomplete (the git config named more
+   * paths than are listed), when it is. Git control is then reported not
+   * verified, for every backend, and the reason is a warning.
+   */
+  readonly unverified?: string;
 }
 
 export interface SandboxProfile {
@@ -174,10 +180,16 @@ export function resolveProfile(
     writeProtect: {
       files: resolveAll(protect?.files ?? [], full),
       directories: resolveAll(protect?.directories ?? [], full),
+      ...(protect?.unverified ? { unverified: protect.unverified } : {}),
     },
     network: config.network.mode,
     environmentAllow: [...new Set(config.environment.allow)],
-    warnings: conflicts(readDeny, writeAllow, base.workspace),
+    warnings: [
+      ...conflicts(readDeny, writeAllow, base.workspace),
+      ...(protect?.unverified
+        ? [`git control is not verified: ${protect.unverified}`]
+        : []),
+    ],
   };
 }
 

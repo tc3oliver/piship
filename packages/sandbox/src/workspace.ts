@@ -167,6 +167,25 @@ export function missingControlFileInWorkingTree(
 }
 
 /**
+ * Whether git control cannot be reported as protected whatever a probe finds:
+ * the protected list is known to be incomplete (`unverified`, with its reason
+ * a warning), a hooks directory lies in the working tree, or, for a local
+ * backend, a config file git includes from the working tree does not exist.
+ */
+export function gitControlUnproven(
+  workspace: string,
+  protectedPaths: ProtectedPaths,
+  backend: "local" | "remote",
+): boolean {
+  return (
+    protectedPaths.unverified !== undefined ||
+    hooksInWorkingTree(workspace, protectedPaths) ||
+    (backend === "local" &&
+      missingControlFileInWorkingTree(workspace, protectedPaths))
+  );
+}
+
+/**
  * A local backend: commands run against this host's files. `gitControlProven`
  * is the live probe's result, and false when the hooks, or a config file that
  * does not exist yet, are in the working tree.
@@ -800,7 +819,7 @@ export async function verifyWorkspace(
     // can write.
     const gitControl: GitControlProtectionState =
       lines.some((line) => line.startsWith(`${WORKSPACE_MARKER} movable `)) ||
-      hooksInWorkingTree(workspace, ctx.protectedPaths)
+      gitControlUnproven(workspace, ctx.protectedPaths, "remote")
         ? "not-verified"
         : "attested-renames";
     const verifiedAt = rfc3339(now());

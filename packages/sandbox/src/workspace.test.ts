@@ -47,6 +47,7 @@ import {
 } from "./testing/workspace-fakes.js";
 import {
   describeWorkspace,
+  gitControlUnproven,
   hooksInWorkingTree,
   missingControlFileInWorkingTree,
   removeSentinelDirectory,
@@ -877,6 +878,32 @@ describe.skipIf(!posix)(
     );
 
     it.skipIf(root_)(
+      "is not verified when the protected list is known to be incomplete, though everything listed is out of reach",
+      async () => {
+        outOfReach();
+        const fake = sharedBackend();
+        const sandbox = await activate(fake, {
+          protectedPaths: {
+            ...gitProtection(),
+            unverified: "the git config lists too much",
+          },
+          now: () => TIME,
+        });
+        expect((await run(sandbox, "echo agent")).output).toBe("agent\n");
+        expect(sandbox.workspace()).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+          gitControlProtection: "not-verified",
+          complete: true,
+        });
+        expect(sandbox.report.warnings).toContain(
+          "git control is not verified: the git config lists too much",
+        );
+        await sandbox.dispose();
+      },
+    );
+
+    it.skipIf(root_)(
       "is not verified when core.hooksPath names a directory in the working tree, though that too is out of reach",
       async () => {
         outOfReach(true);
@@ -1473,6 +1500,34 @@ describe("missingControlFileInWorkingTree", () => {
   });
 });
 
+describe("gitControlUnproven", () => {
+  it("is true for an incomplete list, for either backend, and for what each one cannot show", () => {
+    const paths = (extra: Partial<ProtectedPaths> = {}): ProtectedPaths => ({
+      files: [],
+      directories: [],
+      ...extra,
+    });
+    for (const backend of ["local", "remote"] as const) {
+      expect(gitControlUnproven(workspace, paths(), backend)).toBe(false);
+      expect(
+        gitControlUnproven(workspace, paths({ unverified: "why" }), backend),
+      ).toBe(true);
+      expect(
+        gitControlUnproven(
+          workspace,
+          paths({ directories: [join(workspace, ".githooks")] }),
+          backend,
+        ),
+      ).toBe(true);
+    }
+    // A missing config file in the working tree: only a local backend cannot
+    // show it, since a remote check tries to create it.
+    const missing = paths({ files: [join(workspace, ".gitconfig.local")] });
+    expect(gitControlUnproven(workspace, missing, "local")).toBe(true);
+    expect(gitControlUnproven(workspace, missing, "remote")).toBe(false);
+  });
+});
+
 describe("the workspace sentence", () => {
   const base = {
     windowMs: 10_000,
@@ -1632,6 +1687,27 @@ describe.skipIf(!nativeReady && !requireSandbox)(
         gitControlProtection: "verified",
       });
       await present.dispose();
+    });
+
+    it("does not report it as verified when the protected list is known to be incomplete, and says why", async () => {
+      const sandbox = await activateSandbox(policy(), {
+        workspace,
+        homeDir: join(root, "home"),
+        backend: fakeWrappingBackend(native, true),
+        protectedPaths: {
+          files: [],
+          directories: [],
+          unverified: "the git config lists too much",
+        },
+      });
+      expect(sandbox.report.planes).toContain("git-control-protection");
+      expect(sandbox.report.workspace).toMatchObject({
+        gitControlProtection: "not-verified",
+      });
+      expect(sandbox.report.warnings).toContain(
+        "git control is not verified: the git config lists too much",
+      );
+      await sandbox.dispose();
     });
 
     it("warns, and does not claim it, for a backend that ignores writeProtect", async () => {

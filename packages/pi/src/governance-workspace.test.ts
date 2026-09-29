@@ -102,6 +102,8 @@ const checks = () => requests().filter((command) => command.includes(CHECK));
 async function open(options: {
   readonly declaration: Record<string, unknown>;
   readonly company: boolean;
+  /** Text added to the repository's git config. */
+  readonly config?: string;
 }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-ws-")));
   roots.push(root);
@@ -114,7 +116,7 @@ async function open(options: {
   writeFileSync(join(git, "HEAD"), "ref: refs/heads/main\n");
   writeFileSync(
     join(git, "config"),
-    '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://git.acme.example/acme/app.git\n',
+    `[core]\n\tbare = false\n[remote "origin"]\n\turl = https://git.acme.example/acme/app.git\n${options.config ?? ""}`,
   );
   writeFileSync(join(git, "hooks", "pre-commit"), "#!/bin/sh\necho hook\n");
   writeFileSync(join(workspace, "notes.txt"), "workspace notes\n");
@@ -371,6 +373,32 @@ describe.skipIf(!posix || asRoot)(
       expect(notices).toEqual([
         expect.stringContaining("The sandbox workspace is weaker"),
       ]);
+    });
+
+    it("follows only the first 64 includes of a large git config, so the check still runs, and reports git control not verified", async () => {
+      // One config file can list tens of thousands of includes; each would be
+      // a protected path in the check command.
+      const includes = Array.from(
+        { length: 5000 },
+        (_, index) => `[include]\n\tpath = extra-${index}`,
+      ).join("\n");
+      const { session, workspace } = await open({
+        declaration: { mode: "shared" },
+        company: false,
+        config: `${includes}\n`,
+      });
+      const hooks = load(session, false);
+      expect((await userBash(hooks, workspace, "echo hi")).output).toBe("hi\n");
+      expect(session.sandbox.workspace()).toMatchObject({
+        effective: "shared",
+        verification: "verified",
+        gitControlProtection: "not-verified",
+      });
+      expect(session.sandbox.report.warnings.join("\n")).toContain(
+        "more than 64 included files, hooks paths, or environment settings",
+      );
+      expect(checks()).toHaveLength(1);
+      expect(checks()[0]?.length).toBeLessThan(40_000);
     });
 
     it("writes no sentinel in Plan mode, then checks once before the first command in Build mode (T10)", async () => {

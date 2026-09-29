@@ -128,6 +128,30 @@ describe("resolveProfile", () => {
     expect(protectedAncestors(profile, entries)).toEqual([join(ws, ".git")]);
   });
 
+  it("carries the reason a protected list is incomplete into the profile and its warnings", () => {
+    const ctx = { workspace: join(root, "ws"), homeDir: root, tmpDir: root };
+    const complete = resolveProfile(policy(), {
+      ...ctx,
+      protectedPaths: { files: [], directories: [] },
+    });
+    expect(complete.writeProtect).toEqual({ files: [], directories: [] });
+    expect(complete.warnings).toEqual([]);
+    const incomplete = resolveProfile(policy(), {
+      ...ctx,
+      protectedPaths: {
+        files: [],
+        directories: [],
+        unverified: "the git config lists too much",
+      },
+    });
+    expect(incomplete.writeProtect.unverified).toBe(
+      "the git config lists too much",
+    );
+    expect(incomplete.warnings).toEqual([
+      "git control is not verified: the git config lists too much",
+    ]);
+  });
+
   it("warns when a deny hides a writable path", () => {
     const profile = resolveProfile(
       policy({

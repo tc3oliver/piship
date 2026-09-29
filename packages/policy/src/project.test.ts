@@ -2,15 +2,18 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makePolicy } from "./fixtures.test-helpers.js";
 import { toPosixPath } from "./glob.js";
 import {
@@ -24,6 +27,7 @@ import {
   projectDimensionEffect,
   projectGitControlDirectories,
   projectGitControlFiles,
+  projectGitControlUnverified,
   readProjectRestrictions,
   type ProjectResourceCandidate,
 } from "./project.js";
@@ -36,17 +40,29 @@ const base = realpathSync(
 // directory: every test gets an empty home of its own, so what a developer's
 // real config sets never reaches an expectation.
 const fakeHome = join(base, "home-of-the-test");
-const savedEnv = {
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-};
+// The variables git reads its config from, which the tests set and clear.
+const CONFIG_VARIABLES = [
+  "HOME",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_CONFIG_COUNT",
+  ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_KEY_${index}`),
+  ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_VALUE_${index}`),
+];
+const savedEnv = Object.fromEntries(
+  CONFIG_VARIABLES.map((name) => [name, process.env[name]]),
+);
 beforeEach(() => {
   rmSync(fakeHome, { recursive: true, force: true });
   mkdirSync(fakeHome, { recursive: true });
+  for (const name of CONFIG_VARIABLES) delete process.env[name];
   process.env.HOME = fakeHome;
   process.env.USERPROFILE = fakeHome;
-  delete process.env.XDG_CONFIG_HOME;
+  // Not the machine's /etc/gitconfig.
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
 });
 afterAll(() => {
   for (const [name, value] of Object.entries(savedEnv))
@@ -480,23 +496,22 @@ describe("the global git config and included files", () => {
     expect(dirs(root)).not.toContain(at(root, ".default-hooks"));
   });
 
-  it("reads no other file: not a decoy in the home directory, not GIT_CONFIG_GLOBAL, not the system config", () => {
+  it("reads no other file than the known ones: not a decoy beside them, not a variable git does not read", () => {
     write(join(fakeHome, ".gitconfig-decoy"), hooks(".decoy"));
     write(join(fakeHome, ".config", "git", "other"), hooks(".other"));
     const elsewhere = dir("elsewhere");
-    write(join(elsewhere, "global"), hooks(".from-env"));
+    write(join(elsewhere, "config"), hooks(".from-env"));
     const root = dir("no-other-config");
     gitRepo(root);
-    const saved = process.env.GIT_CONFIG_GLOBAL;
-    process.env.GIT_CONFIG_GLOBAL = join(elsewhere, "global");
+    // GIT_CONFIG is the old variable only `git config` itself reads.
+    process.env.GIT_CONFIG = join(elsewhere, "config");
     try {
       const directories = dirs(root);
       for (const name of [".decoy", ".other", ".from-env"])
         expect(directories).not.toContain(at(root, name));
       expect(directories).toHaveLength(4);
     } finally {
-      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-      else process.env.GIT_CONFIG_GLOBAL = saved;
+      delete process.env.GIT_CONFIG;
     }
   });
 
@@ -601,6 +616,276 @@ describe("the global git config and included files", () => {
         at(home, ".gitconfig.local"),
       ]),
     );
+  });
+});
+
+describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
+  const cfg = (text: string) => `${text}\n`;
+  const hooks = (value: string) => cfg(`[core]\n\thooksPath = ${value}`);
+  const dirs = (root: string) => projectGitControlDirectories(root);
+  const files = (root: string) => projectGitControlFiles(root);
+  const at = (root: string, ...parts: string[]) => posix(join(root, ...parts));
+  const repo = (name: string) => {
+    const root = dir(name);
+    gitRepo(root);
+    return root;
+  };
+  const setting = (index: number, key: string, value: string) => {
+    process.env[`GIT_CONFIG_KEY_${index}`] = key;
+    process.env[`GIT_CONFIG_VALUE_${index}`] = value;
+  };
+
+  it("reads GIT_CONFIG_GLOBAL in place of ~/.gitconfig and the XDG file", () => {
+    write(join(fakeHome, ".gitconfig"), hooks(".home-hooks"));
+    write(join(fakeHome, ".config", "git", "config"), hooks(".xdg-hooks"));
+    const elsewhere = dir("global-env");
+    write(join(elsewhere, "gitconfig"), hooks(".env-hooks"));
+    const root = repo("global-env-repo");
+    expect(dirs(root)).toContain(at(root, ".home-hooks"));
+    process.env.GIT_CONFIG_GLOBAL = join(elsewhere, "gitconfig");
+    const directories = dirs(root);
+    expect(directories).toContain(at(root, ".env-hooks"));
+    expect(directories).not.toContain(at(root, ".home-hooks"));
+    expect(directories).not.toContain(at(root, ".xdg-hooks"));
+    // Set and empty, git reads no global file at all.
+    process.env.GIT_CONFIG_GLOBAL = "";
+    expect(dirs(root)).toHaveLength(4);
+  });
+
+  it("reads the system config from GIT_CONFIG_SYSTEM unless GIT_CONFIG_NOSYSTEM is true", () => {
+    const elsewhere = dir("system");
+    write(join(elsewhere, "gitconfig"), hooks(".system-hooks"));
+    process.env.GIT_CONFIG_SYSTEM = join(elsewhere, "gitconfig");
+    const root = repo("system-repo");
+    const system = at(root, ".system-hooks");
+    // The tests start with GIT_CONFIG_NOSYSTEM=1.
+    expect(dirs(root)).not.toContain(system);
+    // Only a clear "true" turns it off; an odd value never hides the file.
+    for (const value of ["0", "false", "no", "off", "", "nonsense"]) {
+      process.env.GIT_CONFIG_NOSYSTEM = value;
+      expect(dirs(root), `NOSYSTEM=${value}`).toContain(system);
+    }
+    for (const value of ["1", "true", "yes", "on", "2", "TRUE"]) {
+      process.env.GIT_CONFIG_NOSYSTEM = value;
+      expect(dirs(root), `NOSYSTEM=${value}`).not.toContain(system);
+    }
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    expect(dirs(root)).toContain(system);
+  });
+
+  it("takes core.hooksPath and include.path from GIT_CONFIG_COUNT settings", () => {
+    const outside = dir("env-include");
+    write(join(outside, "extra"), hooks("extra-hooks"));
+    write(join(fakeHome, "from-env-home"), hooks("home-env-hooks"));
+    const root = repo("env-repo");
+    setting(0, "core.hooksPath", ".env-set-hooks");
+    setting(1, "include.path", posix(join(outside, "extra")));
+    setting(2, "includeIf.gitdir:~/x/.path", "~/from-env-home");
+    // Git refuses a relative include from the environment.
+    setting(3, "include.path", "relative-is-refused");
+    setting(4, "core.editor", "vi");
+    setting(5, "include.path", posix(join(root, ".gitconfig.env")));
+    // No key or value at index 6: skipped.
+    process.env.GIT_CONFIG_COUNT = "7";
+    const directories = dirs(root);
+    expect(directories).toEqual(
+      expect.arrayContaining([
+        at(root, ".env-set-hooks"),
+        at(root, "extra-hooks"),
+        at(root, "home-env-hooks"),
+      ]),
+    );
+    const listed = files(root);
+    // A file the environment includes is listed only inside the project.
+    expect(listed).toContain(at(root, ".gitconfig.env"));
+    expect(listed).not.toContain(at(outside, "extra"));
+    expect(listed).not.toContain(at(root, "relative-is-refused"));
+    expect(listed).not.toContain(at(process.cwd(), "relative-is-refused"));
+    // A count that is not a number reads nothing.
+    process.env.GIT_CONFIG_COUNT = "many";
+    expect(dirs(root)).toHaveLength(4);
+  });
+
+  it("protects a GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM file only where it lies inside the project", () => {
+    const root = repo("known-inside");
+    const elsewhere = dir("known-outside");
+    write(join(root, ".gitconfig-global"), hooks("global-hooks"));
+    write(join(elsewhere, "system"), hooks("system-hooks"));
+    process.env.GIT_CONFIG_GLOBAL = join(root, ".gitconfig-global");
+    process.env.GIT_CONFIG_SYSTEM = join(elsewhere, "system");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    const listed = files(root);
+    expect(listed).toContain(at(root, ".gitconfig-global"));
+    expect(listed).not.toContain(at(elsewhere, "system"));
+    // Both are read for their hooks path all the same.
+    expect(dirs(root)).toEqual(
+      expect.arrayContaining([
+        at(root, "global-hooks"),
+        at(root, "system-hooks"),
+      ]),
+    );
+  });
+});
+
+describe("the limit on what the git config lists, and the scan cache", () => {
+  const cfg = (text: string) => `${text}\n`;
+  const hooks = (value: string) => cfg(`[core]\n\thooksPath = ${value}`);
+  const dirs = (root: string) => projectGitControlDirectories(root);
+  const files = (root: string) => projectGitControlFiles(root);
+  const at = (root: string, ...parts: string[]) => posix(join(root, ...parts));
+  const repo = (name: string) => {
+    const root = dir(name);
+    gitRepo(root);
+    return root;
+  };
+  const lines = (count: number, make: (index: number) => string) =>
+    Array.from({ length: count }, (_, index) => make(index)).join("\n");
+
+  it("follows the first 64 includes of a config that lists thousands, and reports git control unverified", () => {
+    const root = repo("many-includes");
+    write(
+      join(root, ".git", "config"),
+      cfg(lines(5000, (index) => `[include]\n\tpath = extra-${index}`)),
+    );
+    const listed = files(root);
+    // The base set and 64 includes, not 5000.
+    expect(listed.length).toBeLessThan(80);
+    expect(listed).toContain(at(root, ".git", "extra-0"));
+    expect(listed).toContain(at(root, ".git", "extra-63"));
+    expect(listed).not.toContain(at(root, ".git", "extra-64"));
+    expect(projectGitControlUnverified(root)).toMatch(
+      /more than 64 included files, hooks paths, or environment settings/,
+    );
+  });
+
+  it("counts every include entry, however many of them name one file", () => {
+    const root = repo("same-include");
+    write(
+      join(root, ".git", "config"),
+      cfg(lines(5000, () => "[include]\n\tpath = same")),
+    );
+    expect(files(root).length).toBeLessThan(80);
+    expect(projectGitControlUnverified(root)).toBeDefined();
+  });
+
+  it("follows the first 64 hooks paths, and 64 settings, and reports git control unverified", () => {
+    const root = repo("many-hooks");
+    write(
+      join(root, ".git", "config"),
+      cfg(`[core]\n${lines(5000, (index) => `\thooksPath = h${index}`)}`),
+    );
+    const directories = dirs(root);
+    expect(directories.length).toBeLessThan(80);
+    expect(directories).toContain(at(root, "h63"));
+    expect(directories).not.toContain(at(root, "h64"));
+    expect(projectGitControlUnverified(root)).toBeDefined();
+
+    const settings = repo("many-settings");
+    process.env.GIT_CONFIG_COUNT = "100000";
+    expect(projectGitControlUnverified(settings)).toBeDefined();
+  });
+
+  it("reports a config file over 1 MiB, which is not read, as unverified", () => {
+    const root = repo("huge-config");
+    write(
+      join(root, ".git", "config"),
+      cfg(lines(60_000, (index) => `[include]\n\tpath = extra-${index}`)),
+    );
+    expect(statSync(join(root, ".git", "config")).size).toBeGreaterThan(
+      1024 * 1024,
+    );
+    expect(files(root).length).toBeLessThan(80);
+    expect(projectGitControlUnverified(root)).toMatch(/larger than 1 MiB/);
+  });
+
+  it("does not report an ordinary config, includes and all, as unverified", () => {
+    const root = repo("ordinary");
+    write(
+      join(root, ".git", "config"),
+      cfg("[include]\n\tpath = ../.gitconfig"),
+    );
+    write(join(root, ".gitconfig"), hooks(".githooks"));
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+  });
+
+  describe("cache", () => {
+    // A whole second in the past, so the time reads back exactly and a
+    // rewrite can put it back.
+    const T = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+    const stamp = (path: string, time = T) => utimesSync(path, time, time);
+
+    it("reuses a scan while nothing it read changed, and sees a change at the next access", () => {
+      const root = repo("cache");
+      const config = join(root, ".git", "config");
+      write(config, hooks("aaaa"));
+      stamp(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      // Same size, time, and inode: the scan is not repeated, so this is not seen.
+      writeFileSync(config, hooks("bbbb"));
+      stamp(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      expect(dirs(root)).not.toContain(at(root, "bbbb"));
+      // A new modification time is a change.
+      stamp(config, new Date(T.getTime() + 5000));
+      expect(dirs(root)).toContain(at(root, "bbbb"));
+      expect(dirs(root)).not.toContain(at(root, "aaaa"));
+    });
+
+    it("sees a replaced file and a size change, though the time is kept", () => {
+      const root = repo("cache-replaced");
+      const config = join(root, ".git", "config");
+      write(config, hooks("aaaa"));
+      stamp(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      // A new file under the old name and time: another inode.
+      write(`${config}.new`, hooks("cccc"));
+      stamp(`${config}.new`);
+      renameSync(`${config}.new`, config);
+      expect(dirs(root)).toContain(at(root, "cccc"));
+      // The same file, longer.
+      writeFileSync(config, hooks("dddddd"));
+      stamp(config);
+      expect(dirs(root)).toContain(at(root, "dddddd"));
+    });
+
+    it("sees an include created after the scan that found it missing", () => {
+      const root = repo("cache-include");
+      write(join(root, ".git", "config"), cfg("[include]\n\tpath = later"));
+      expect(dirs(root)).toHaveLength(4);
+      write(join(root, ".git", "later"), hooks("created-hooks"));
+      expect(dirs(root)).toContain(at(root, "created-hooks"));
+    });
+
+    it("scans again after ten seconds, even when no file looks changed", () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        const root = repo("cache-age");
+        const config = join(root, ".git", "config");
+        write(config, hooks("aaaa"));
+        stamp(config);
+        expect(dirs(root)).toContain(at(root, "aaaa"));
+        writeFileSync(config, hooks("bbbb"));
+        stamp(config);
+        vi.setSystemTime(new Date("2026-01-01T00:00:09Z"));
+        expect(dirs(root)).toContain(at(root, "aaaa"));
+        vi.setSystemTime(new Date("2026-01-01T00:00:11Z"));
+        expect(dirs(root)).toContain(at(root, "bbbb"));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("scans again when the environment changes", () => {
+      const root = repo("cache-env");
+      write(join(fakeHome, ".gitconfig"), hooks(".home-hooks"));
+      expect(dirs(root)).toContain(at(root, ".home-hooks"));
+      const elsewhere = dir("cache-env-global");
+      write(join(elsewhere, "gitconfig"), hooks(".env-hooks"));
+      process.env.GIT_CONFIG_GLOBAL = join(elsewhere, "gitconfig");
+      expect(dirs(root)).toContain(at(root, ".env-hooks"));
+      expect(dirs(root)).not.toContain(at(root, ".home-hooks"));
+    });
   });
 });
 
