@@ -79,11 +79,29 @@ function readSnapshot(root: string, name: string): CompletedSnapshot | null {
 }
 
 /**
+ * Whether `snapshot.json` names another schema than this release reads: the
+ * snapshot of a newer release, seen when the CLI is downgraded. It is not
+ * this release's to count or to delete.
+ */
+function foreignSnapshot(root: string, name: string): boolean {
+  try {
+    const { schema } = JSON.parse(
+      readFileSync(join(root, name, "snapshot.json"), "utf8"),
+    ) as { schema?: unknown };
+    return typeof schema === "string" && schema !== SNAPSHOT_SCHEMA;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Completed snapshots in creation order, oldest first. The order is the
  * snapshot's sequence, never the wall clock, so a clock set back or forward
  * cannot make a new snapshot look older than the ones before it. Snapshots
  * written before sequences come first, in their recorded time order.
- * Directories without a valid `snapshot.json` are returned as incomplete.
+ * Directories without a valid `snapshot.json` are returned as incomplete,
+ * except those whose manifest names another schema (see `foreignSnapshot`),
+ * which are neither.
  */
 function listSnapshots(root: string): {
   completed: CompletedSnapshot[];
@@ -95,7 +113,7 @@ function listSnapshots(root: string): {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const snapshot = readSnapshot(root, entry.name);
     if (snapshot) completed.push(snapshot);
-    else incomplete.push(entry.name);
+    else if (!foreignSnapshot(root, entry.name)) incomplete.push(entry.name);
   }
   completed.sort(
     (a, b) =>
@@ -109,7 +127,9 @@ function listSnapshots(root: string): {
 /**
  * Remove what interrupted snapshots left behind: staging directories whose
  * process is gone (or that are too old to belong to a live one), and
- * snapshot directories without a valid `snapshot.json`.
+ * snapshot directories without a valid `snapshot.json`. A snapshot whose
+ * manifest names another schema is kept: a newer release wrote it, and a
+ * downgraded CLI must not delete what it cannot read.
  */
 function reclaimSnapshots(root: string): void {
   for (const entry of readdirSync(root, { withFileTypes: true })) {

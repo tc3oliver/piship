@@ -140,6 +140,50 @@ describe("snapshotState", () => {
     expect(retained()).toEqual(["A", "B"]);
   });
 
+  it("keeps a snapshot of a newer schema, which a downgraded CLI cannot read, and reclaims only incomplete ones", () => {
+    snapshot("A", "2026-09-30T00:00:00.000Z");
+    // Written by a release with a newer snapshot format.
+    const newer = join(root(), "00000009-1.0.0-to-2.0.0");
+    mkdirSync(join(newer, "config"), { recursive: true });
+    writeFileSync(join(newer, "config", "preferences.json"), '{"theme":"x"}');
+    writeFileSync(
+      join(newer, "snapshot.json"),
+      JSON.stringify({
+        schema: "piship-snapshot/v2",
+        sequence: 9,
+        to: "V2",
+        files: ["config/preferences.json"],
+      }),
+    );
+    // What a snapshot of this release leaves when it is damaged or was
+    // never finished: no manifest, a manifest cut short, or an unusable
+    // sequence.
+    const noManifest = join(root(), "no-manifest");
+    mkdirSync(noManifest);
+    const cutShort = join(root(), "cut-short");
+    mkdirSync(cutShort);
+    writeFileSync(
+      join(cutShort, "snapshot.json"),
+      '{"schema":"piship-snapshot/v1","seq',
+    );
+    const unusable = join(root(), "unusable");
+    mkdirSync(unusable);
+    writeFileSync(
+      join(unusable, "snapshot.json"),
+      JSON.stringify({ schema: "piship-snapshot/v1", sequence: -1 }),
+    );
+    snapshot("B", "2026-09-30T01:00:00.000Z");
+    for (const path of [noManifest, cutShort, unusable])
+      expect(existsSync(path)).toBe(false);
+    expect(
+      readFileSync(join(newer, "config", "preferences.json"), "utf8"),
+    ).toBe('{"theme":"x"}');
+    // It is not counted toward the retention of this release's snapshots
+    // either, and never removed by it.
+    for (const to of ["C", "D", "E"]) snapshot(to, "2026-09-30T02:00:00.000Z");
+    expect(retained()).toEqual(["C", "D", "E", "V2"]);
+  });
+
   it("orders snapshots written before sequences first, by their recorded time", () => {
     mkdirSync(root(), { recursive: true });
     for (const [name, time] of [
