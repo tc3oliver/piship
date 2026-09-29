@@ -44,11 +44,15 @@ export type Propagation = "immediate" | "delayed" | "missing";
 /**
  * `verified`: the live probe proved it (local backends). `attested-renames`:
  * writing a protected file and creating a file in a protected directory
- * failed from inside the sandbox; renaming them is not tried (it would be
- * destructive) and stays attested by the backend. `pending`: checked before
- * the first sandboxed command. `not-verified`: the local live probe could
- * not prove it (reported, not yet required). `not-applicable`: the sandbox
- * cannot reach this host's files.
+ * failed from inside the sandbox, and no protected path (nor a directory
+ * above it) could be renamed by its structure: each is a mount point or lies
+ * in a directory the sandbox cannot write. Renaming is not tried (it would
+ * be destructive), so that last part is the backend's word. `pending`:
+ * checked before the first sandboxed command. `not-verified`: not proven. A
+ * local live probe that could not prove it (reported, not yet required); a
+ * remote check that found a protected path it could rename; or a hooks
+ * directory in the working tree, where the scripts git runs stay writable.
+ * `not-applicable`: the sandbox cannot reach this host's files.
  */
 export type GitControlProtectionState =
   | "verified"
@@ -384,6 +388,37 @@ function insideWorkspace(
   return targets;
 }
 
+/**
+ * A path the sandbox could move aside: a protected path, or a directory
+ * above it. Renaming any of them lets a replacement take the protected
+ * path's place.
+ */
+interface RenameCandidate {
+  /** Workspace-relative POSIX path. */
+  readonly path: string;
+  /** Its parent; `.` is the workspace root. */
+  readonly parent: string;
+  readonly name: string;
+}
+
+function renameCandidates(
+  targets: readonly ProtectedTarget[],
+): RenameCandidate[] {
+  const candidates = new Map<string, RenameCandidate>();
+  for (const target of targets)
+    for (let depth = 1; depth <= target.segments.length; depth++) {
+      const parts = target.segments.slice(0, depth);
+      const path = parts.join("/");
+      if (!candidates.has(path))
+        candidates.set(path, {
+          path,
+          parent: parts.slice(0, -1).join("/") || ".",
+          name: parts[depth - 1] ?? "",
+        });
+    }
+  return [...candidates.values()];
+}
+
 interface ScriptInput {
   readonly sentinel?: {
     readonly dir: string;
@@ -393,8 +428,32 @@ interface ScriptInput {
   };
   readonly files: readonly ProtectedFile[];
   readonly directories: readonly ProtectedTarget[];
+  readonly renames: readonly RenameCandidate[];
   readonly nonce: string;
 }
+
+// A rename needs a parent the sandbox can write, and it fails on a mount
+// point. The device is read with GNU `stat -c` or BSD `stat -f`. A mount of
+// the same filesystem (a bind mount) has its parent's device, so Linux's
+// mount table is read too. A path that is neither is reported as movable,
+// which is the safe answer when the check cannot tell.
+const RENAME_FUNCTIONS = [
+  'piship_dev() { stat -c %d "$1" 2>/dev/null || stat -f %d "$1" 2>/dev/null; }',
+  "piship_mount() {",
+  '  [ "$(piship_dev "$1")" != "$(piship_dev "$2")" ] && return 0',
+  "  [ -r /proc/self/mountinfo ] || return 1",
+  '  piship_full="$(cd "$2" 2>/dev/null && pwd -P)/$3"',
+  "  while read -r _ _ _ _ piship_mp _; do",
+  '    [ "$piship_mp" = "$piship_full" ] && return 0',
+  "  done < /proc/self/mountinfo",
+  "  return 1",
+  "}",
+  "piship_movable() {",
+  '  { [ -e "$1" ] || [ -L "$1" ]; } || return 1',
+  '  piship_mount "$1" "$2" "$3" && return 1',
+  '  [ -w "$2" ]',
+  "}",
+];
 
 /** POSIX sh; every path is workspace-relative and quoted; output is tokens only. */
 function checkScript(input: ScriptInput): string {
@@ -427,6 +486,14 @@ function checkScript(input: ScriptInput): string {
       `if ( mkdir -p ${quote(dir.relative)} && : > ${quote(probe)} ) 2>/dev/null; then echo "${WORKSPACE_MARKER} writable dir ${index}"; fi`,
     );
   });
+  if (input.renames.length) {
+    lines.push(...RENAME_FUNCTIONS);
+    input.renames.forEach((candidate, index) => {
+      lines.push(
+        `if piship_movable ${quote(candidate.path)} ${quote(candidate.parent)} ${quote(candidate.name)}; then echo "${WORKSPACE_MARKER} movable ${index}"; fi`,
+      );
+    });
+  }
   lines.push(`echo ${WORKSPACE_MARKER} done`);
   return lines.join("\n");
 }
@@ -545,17 +612,17 @@ export async function verifyWorkspace(
   // A protected file that exists as a regular file is appended to; one that
   // does not exist yet is tried for creation. Anything else that exists (a
   // directory, a link) is not a file to probe.
-  const files = insideWorkspace(workspace, ctx.protectedPaths.files).flatMap(
-    (file): ProtectedFile[] => {
-      const stat = lstatOrUndefined(join(workspace, ...file.segments));
-      if (!stat) return [{ ...file, missing: true }];
-      return stat.isFile() ? [{ ...file, missing: false }] : [];
-    },
-  );
+  const protectedFiles = insideWorkspace(workspace, ctx.protectedPaths.files);
+  const files = protectedFiles.flatMap((file): ProtectedFile[] => {
+    const stat = lstatOrUndefined(join(workspace, ...file.segments));
+    if (!stat) return [{ ...file, missing: true }];
+    return stat.isFile() ? [{ ...file, missing: false }] : [];
+  });
   const directories = insideWorkspace(
     workspace,
     ctx.protectedPaths.directories,
   );
+  const renames = renameCandidates([...protectedFiles, ...directories]);
   let location = sentinelLocation(ctx);
   let sentinelDir: string | undefined;
   let locationSegments: readonly string[] = [];
@@ -606,6 +673,7 @@ export async function verifyWorkspace(
             : {}),
           files,
           directories,
+          renames,
           nonce,
         }),
         (chunk) => {
@@ -658,6 +726,15 @@ export async function verifyWorkspace(
         }
       }
     }
+    // Renaming is not tried (a successful rename is destructive). The check
+    // looked for a way to rename instead: a protected path, or a directory
+    // above it, that is not a mount point and sits in a directory the sandbox
+    // can write.
+    const gitControl: GitControlProtectionState = lines.some((line) =>
+      line.startsWith(`${WORKSPACE_MARKER} movable `),
+    )
+      ? "not-verified"
+      : "attested-renames";
     const verifiedAt = rfc3339(now());
     const base = { declared, windowMs, verifiedAt, complete: false } as const;
     if (unsafe)
@@ -677,7 +754,7 @@ export async function verifyWorkspace(
           ...base,
           effective: "snapshot",
           verification: "unverifiable",
-          gitControlProtection: "attested-renames",
+          gitControlProtection: gitControl,
           reason: "reason" in location ? location.reason : "no location",
         },
       };
@@ -689,7 +766,7 @@ export async function verifyWorkspace(
           verification: "failed",
           hostToSandbox: h2s,
           sandboxToHost: s2h,
-          gitControlProtection: "attested-renames",
+          gitControlProtection: gitControl,
           reason: lowered(h2s, s2h),
         },
       };
@@ -704,7 +781,7 @@ export async function verifyWorkspace(
         verification: "verified",
         hostToSandbox: h2s,
         sandboxToHost: s2h,
-        gitControlProtection: "attested-renames",
+        gitControlProtection: gitControl,
         complete: true,
         ...(effective !== declared
           ? { reason: "a direction was delayed, which a mount would not be" }

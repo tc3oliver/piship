@@ -700,8 +700,124 @@ describe.skipIf(!posix)(
       },
     );
 
+    describe.skipIf(root_)("renames of protected paths", () => {
+      // Protection by path alone: the files and trees that exist are
+      // read-only, the git directory and the workspace root are not.
+      beforeEach(() => {
+        mkdirSync(join(git, "info"));
+        chmodSync(join(git, "config"), 0o444);
+        chmodSync(join(git, "hooks"), 0o555);
+        chmodSync(join(git, "info"), 0o555);
+      });
+
+      /** A shared backend whose check runs after `prefix`, with `swap` applied to the script. */
+      const shimmed = (
+        prefix: string,
+        swap?: readonly [string, string],
+      ): WorkspaceFake =>
+        sharedBackend({
+          check: (request, io) =>
+            runShell(
+              workspace,
+              {
+                ...request,
+                command: `${prefix}\n${swap ? request.command.replaceAll(swap[0], swap[1]) : request.command}`,
+              },
+              io,
+            ),
+        });
+
+      // A device number per path depth: every path differs from its parent,
+      // as a mount point does.
+      const MOUNTS = `stat() { if [ "$3" = . ]; then echo 0; else n=$(printf '%s' "$3" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
+      // The same, except that .git shares the device of the workspace root.
+      const UNPINNED_GIT = `stat() { if [ "$3" = . ] || [ "$3" = .git ]; then echo 0; else n=$(printf '%s' "$3" | tr -cd / | wc -c); echo $((n + 1)); fi; }`;
+      const SAME_DEVICE = "stat() { echo 1; }";
+
+      const checked = async (fake: WorkspaceFake) => {
+        const sandbox = await activate(fake, {
+          protectedPaths: existingProtection(),
+          now: () => TIME,
+        });
+        expect((await run(sandbox, "echo agent")).output).toBe("agent\n");
+        const report = sandbox.workspace();
+        await sandbox.dispose();
+        return report;
+      };
+
+      it("is not verified when a protected path could be renamed", async () => {
+        const report = await checked(sharedBackend());
+        expect(report).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+          gitControlProtection: "not-verified",
+        });
+        // Nothing was renamed to find out.
+        expect(readdirSync(git).sort()).toEqual([
+          "config",
+          "hooks",
+          "info",
+          "piship-workspace",
+        ]);
+        expect(readdirSync(workspace).sort()).toEqual([
+          ".git",
+          "README.md",
+          "sub",
+        ]);
+      });
+
+      it("passes when every protected path is a mount point", async () => {
+        expect(await checked(shimmed(MOUNTS))).toMatchObject({
+          gitControlProtection: "attested-renames",
+        });
+      });
+
+      it("is not verified when the git directory above them could be renamed", async () => {
+        expect(await checked(shimmed(UNPINNED_GIT))).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      });
+
+      it("finds mount points of the same filesystem in the mount table", async () => {
+        const table = join(root, "mountinfo");
+        const line = (path: string) =>
+          `36 35 8:1 / ${join(workspace, path)} rw,relatime - ext4 /dev/sda1 rw\n`;
+        writeFileSync(
+          table,
+          [".git", ".git/config", ".git/hooks", ".git/info"].map(line).join(""),
+        );
+        const fake = (path: string) =>
+          shimmed(SAME_DEVICE, ["/proc/self/mountinfo", path]);
+        expect(await checked(fake(table))).toMatchObject({
+          gitControlProtection: "attested-renames",
+        });
+        // Without the git directory itself in the table it could be moved.
+        writeFileSync(
+          table,
+          [".git/config", ".git/hooks", ".git/info"].map(line).join(""),
+        );
+        expect(await checked(fake(table))).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+        // A table that does not exist proves nothing.
+        expect(await checked(fake(join(root, "no-such-table")))).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      });
+
+      it("is not verified when the workspace root is writable, though nothing in the git directory is", async () => {
+        // The sentinel directory is made up front so the host can still use
+        // it; .git itself hangs from a writable root and could be moved.
+        mkdirSync(join(git, "piship-workspace"), { mode: 0o700 });
+        chmodSync(git, 0o555);
+        expect(await checked(sharedBackend())).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      });
+    });
+
     it.skipIf(root_)(
-      "passes when the backend keeps them read-only, and records that renames stay attested",
+      "passes when the backend keeps them read-only, and finds nothing it could rename",
       async () => {
         // A backend that also keeps missing files from appearing: nothing in
         // .git can be created, and the sentinel directory is made up front.
