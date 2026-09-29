@@ -137,6 +137,10 @@ export async function startFakeLiteLLM() {
     dropAfterGenerate: false,
     /** Answer /key/generate with this `expires` instead of a real one. */
     expiresOverride: undefined,
+    /** Answer a holder's /key/info for a live key with this status. */
+    holderKeyInfoStatus: undefined,
+    /** Answer a master-key /key/info with this status. */
+    adminKeyInfoStatus: undefined,
   };
   const hash = (key) => createHash("sha256").update(key).digest("hex");
   const denied = (res, key) =>
@@ -182,18 +186,46 @@ export async function startFakeLiteLLM() {
       });
     }
     if (path === "/key/info" && req.method === "GET") {
+      const describe = (key) =>
+        reply(res, 200, {
+          key: key.token,
+          info: {
+            key_alias: key.key_alias,
+            user_id: key.user_id,
+            metadata: key.metadata,
+            models: key.models,
+            expires: key.expires,
+          },
+        });
+      if (auth === "master") {
+        if (state.adminKeyInfoStatus !== undefined)
+          return reply(res, state.adminKeyInfoStatus, {
+            error: { message: `boom ${UPSTREAM_BODY_MARK}` },
+          });
+        // Like LiteLLM: `key` is a key, hashed here, or already its hash.
+        const asked = parsed.searchParams.get("key") ?? "";
+        const token = asked.startsWith("sk-") ? hash(asked) : asked;
+        const key = [...keys.values()].find((entry) => entry.token === token);
+        if (!key)
+          return reply(res, 404, {
+            error: {
+              message: `Key not found in database ${UPSTREAM_BODY_MARK}`,
+              code: "404",
+            },
+          });
+        return describe(key);
+      }
       const key = keys.get(bearer);
       if (!key) return denied(res, bearer);
-      return reply(res, 200, {
-        key: key.token,
-        info: {
-          key_alias: key.key_alias,
-          user_id: key.user_id,
-          metadata: key.metadata,
-          models: key.models,
-          expires: key.expires,
-        },
-      });
+      // A live key LiteLLM still refuses here: expired (400), over budget
+      // or route not allowed (401), blocked (403).
+      if (state.holderKeyInfoStatus !== undefined)
+        return reply(res, state.holderKeyInfoStatus, {
+          error: {
+            message: `refused sk-...${bearer.slice(-4)} ${UPSTREAM_BODY_MARK}`,
+          },
+        });
+      return describe(key);
     }
     if (auth !== "master") return denied(res, bearer);
 

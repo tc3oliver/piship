@@ -34,12 +34,12 @@ Every answer is JSON with `cache-control: no-store`. An error body is only `{"er
 | 400 | Body not a JSON object, `purpose` not `inference`, `Idempotency-Key` not 1 to 255 visible ASCII characters | `CREDENTIAL_ACQUIRE_FAILED`, `rejected` |
 | 401 | No bearer, or the access token fails any check below. Revoke: no bearer | `IDENTITY_EXPIRED` (PiShip refreshes the identity once and retries); on revoke, "revoked" |
 | 403 | Valid token but not entitled: no `groups` claim, or no group in the table below; another `distribution`. Revoke: a key this broker did not issue, or another distribution | `CREDENTIAL_DENIED` |
-| 404 | Revoke of a key LiteLLM no longer accepts (deleted, expired, never issued) | Revoked |
+| 404 | Revoke of a key LiteLLM does not have (deleted, or never issued), confirmed under the master key | Revoked |
 | 413, 415 | Body over 4 KiB; not `application/json` | `rejected` |
 | 422 | `Idempotency-Key` already used with other input | `idempotency-conflict` |
 | 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute | Retryable, `rate-limited` |
 | 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; retry with the same key |
-| 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress (`Retry-After: 1`) | Retryable, `unavailable` |
+| 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted; on revoke, the key may still exist); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress (`Retry-After: 1`) | Retryable, `unavailable` |
 
 ## Token validation
 
@@ -95,7 +95,7 @@ When LiteLLM fails after `/key/generate` may have created a key (the connection 
 
 ## Revoke
 
-The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **with that key as the bearer**: only its holder can, and the answer describes that key. A key LiteLLM does not accept (deleted, expired, never issued) is already revoked: 404. A key without the broker's `issued_by` mark or for another distribution is refused with 403. Otherwise the broker deletes it with `POST /key/delete` `{"keys": [<key>]}` under the master key (a key of an `internal_user_viewer` cannot delete itself); a 404 from LiteLLM there also means revoked. The `credential_id` in the body is informational: the key presented is what is revoked, and a mismatch is logged. LiteLLM rejects a deleted key at once with 401.
+The bearer is the virtual key itself. The broker asks LiteLLM `GET /key/info` **with that key as the bearer**: only its holder can, and the answer describes that key. LiteLLM refusing that lookup does not mean the key is gone: it also refuses a key that still exists but is expired, over budget, blocked, or not allowed the route. So after any 4xx there the broker asks again under the master key, `GET /key/info?key=<SHA-256 hex of the key>` (LiteLLM stores keys hashed and accepts the hash, so the key never appears in a URL or an access log). Only if that lookup also answers 404 is the key already revoked: 404. If it fails, the answer is 503, never a 404 for a key that may still work. A key without the broker's `issued_by` mark or for another distribution is refused with 403. Otherwise the broker deletes it with `POST /key/delete` `{"keys": [<key>]}` under the master key (a key of an `internal_user_viewer` cannot delete itself); a 404 from LiteLLM there also means revoked. The `credential_id` in the body is informational: the key presented is what is revoked, and a mismatch is logged. LiteLLM rejects a deleted key at once with 401.
 
 ## Secrets and logs
 

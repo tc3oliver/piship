@@ -4,6 +4,7 @@
 //
 //   node --test test/
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import {
   CREDENTIAL_ID_PATTERN,
@@ -736,6 +737,52 @@ describe("revoke", () => {
     assert.equal(res.status, 503);
     assert.equal(res.headers.get("retry-after"), "5");
     assert.ok(!res.text.includes(UPSTREAM_BODY_MARK));
+  });
+
+  it("a live key whose holder lookup LiteLLM refuses is confirmed by its hash under the master key and deleted", async () => {
+    for (const status of [400, 401, 403]) {
+      const issued = (await h.acquire(mint(h, ALICE))).json;
+      h.litellm.state.holderKeyInfoStatus = status;
+      const res = await h.revoke(issued.credential, issued.credential_id);
+      h.litellm.state.holderKeyInfoStatus = undefined;
+      assert.equal(res.status, 200, `holder lookup ${status}`);
+      assert.ok(!h.litellm.keys.has(issued.credential), `${status}: deleted`);
+      const lookup = h.litellm.calls
+        .filter((call) => call.path === "/key/info")
+        .at(-1);
+      assert.equal(lookup.auth, "master");
+      assert.equal(
+        lookup.query.key,
+        createHash("sha256").update(issued.credential).digest("hex"),
+        "looked up by the key's SHA-256",
+      );
+    }
+    for (const call of h.litellm.calls)
+      for (const value of Object.values(call.query))
+        assert.ok(!value.startsWith("sk-"), "no key in a query string");
+  });
+
+  it("answers 404 only when the master-key lookup also finds no such key", async () => {
+    h.litellm.state.holderKeyInfoStatus = 401;
+    const res = await h.revoke("sk-never-issued-SENTINEL-001", null);
+    h.litellm.state.holderKeyInfoStatus = undefined;
+    assert.equal(res.status, 404);
+    const lookup = h.litellm.calls
+      .filter((call) => call.path === "/key/info")
+      .at(-1);
+    assert.equal(lookup.auth, "master", "confirmed before answering 404");
+  });
+
+  it("503 and the key stays when the holder lookup is refused and the master-key lookup fails", async () => {
+    const issued = (await h.acquire(mint(h, ALICE))).json;
+    h.litellm.state.holderKeyInfoStatus = 401;
+    h.litellm.state.adminKeyInfoStatus = 500;
+    const res = await h.revoke(issued.credential, issued.credential_id);
+    h.litellm.state.holderKeyInfoStatus = undefined;
+    h.litellm.state.adminKeyInfoStatus = undefined;
+    assert.equal(res.status, 503);
+    assert.equal(res.headers.get("retry-after"), "5");
+    assert.ok(h.litellm.keys.has(issued.credential));
   });
 });
 

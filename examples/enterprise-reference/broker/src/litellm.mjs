@@ -6,6 +6,7 @@
 // The master key is sent only as the bearer of admin calls. Response bodies
 // are parsed for the fields named here and are never logged or passed on:
 // LiteLLM's own error messages quote parts of keys.
+import { createHash } from "node:crypto";
 
 /** A LiteLLM call that failed. `unknownOutcome` means the request may have been acted on. */
 export class UpstreamError extends Error {
@@ -162,20 +163,38 @@ export function createLiteLLMAdmin({
      * Look a key up with the key itself as the bearer: only its holder can
      * do that, and the answer describes that key.
      * @returns {Promise<null | { key_alias?: string, user_id?: string, metadata?: Record<string, unknown> }>}
-     *   null when LiteLLM does not accept the key (unknown, deleted, expired)
+     *   null when LiteLLM refuses the lookup (any 4xx). That does not prove
+     *   the key is gone: LiteLLM also refuses a live key that is expired
+     *   (400), over budget, blocked, or denied the route (401, 403). The
+     *   caller confirms with keyInfoByHash.
      */
     async keyInfoAsHolder(key) {
       const result = await call("key-info", "GET", "/key/info", {
         bearer: key,
       });
-      if (
-        result.status === 401 ||
-        result.status === 403 ||
-        result.status === 404
-      )
-        return null;
+      if (result.status >= 400 && result.status < 500) return null;
       if (result.status !== 200 || !result.body?.info)
         throw new UpstreamError("key-info", { status: result.status });
+      return result.body.info;
+    },
+
+    /**
+     * Look a key up under the master key by its SHA-256, which is how
+     * LiteLLM stores it and which `/key/info?key=` accepts, so the key itself
+     * never goes into a URL or an access log.
+     * @returns {Promise<null | { key_alias?: string, user_id?: string, metadata?: Record<string, unknown> }>}
+     *   null only when LiteLLM answers 404: no such key in its database
+     */
+    async keyInfoByHash(key) {
+      const hashed = createHash("sha256").update(key).digest("hex");
+      const result = await call(
+        "key-info-admin",
+        "GET",
+        `/key/info?key=${hashed}`,
+      );
+      if (result.status === 404) return null;
+      if (result.status !== 200 || !result.body?.info)
+        throw new UpstreamError("key-info-admin", { status: result.status });
       return result.body.info;
     },
 

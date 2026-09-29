@@ -493,8 +493,13 @@ export function createBroker(
 
     try {
       // Holding the key is the proof: LiteLLM describes the key only to its
-      // holder. An unknown, deleted or expired key is already revoked.
-      const info = await litellm.keyInfoAsHolder(credential);
+      // holder. A refusal there does not mean the key is gone (LiteLLM also
+      // refuses an expired, over-budget or blocked key that still exists),
+      // so it is confirmed under the master key by the key's hash; only a
+      // key LiteLLM does not have at all is answered 404 without a delete.
+      const info =
+        (await litellm.keyInfoAsHolder(credential)) ??
+        (await litellm.keyInfoByHash(credential));
       if (!info)
         return { ...failure(404, "not_found"), reason: "unknown-credential" };
       const credentialId =
