@@ -157,3 +157,105 @@ What a result means:
 - `skipped`: the kit could not exercise the behavior, and `reason` says why: the adapter has no `revoke()`, or the options declared its service ignores idempotency keys. A skipped behavior is never counted as passed.
 
 The kit judges failures with `isPiShipError`, which is the check PiShip applies when it reads an adapter's error. An adapter that bundles its own copy of the SDK throws errors of another `PiShipError` class, which fail every error check; import the SDK instead of bundling it.
+
+## Identity conformance kit
+
+`testIdentityAdapter` from `@piship/adapter-conformance` runs an identity adapter (`identity.mode: adapter`) against a fake identity service that the kit owns, and reports each behavior of the [identity contract](identity.md) as `passed`, `failed`, or `skipped`. It covers interactive adapters and workload adapters that declare `interactive: false` ([workload identity](identity.md#workload-identity-headless-runs)). The fake service answers through the managed `fetch` in the adapter's context, so a run needs no network, no identity provider, and nothing from PiShip but the SDK. The kit imports only `@piship/adapter-sdk` and `node:` built-ins. Like the other kits, it is private and unpublished: run it from a checkout of this repository, in a test file inside the workspace.
+
+```ts
+import { testIdentityAdapter } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+import { createAdapter } from "./identity-adapter.js";
+
+it("meets the PiShip identity contract", async () => {
+  // Build the adapter with a short request timeout for the kit.
+  const report = await testIdentityAdapter(createAdapter({ timeoutMs: 200 }), {
+    requestTimeoutMs: 200,
+    issuer: "https://sign-in.example.com", // the issuer the adapter reports
+    respond: myServiceAnswer, // how the service says each answer; see below
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+```
+
+The first argument is what the adapter module default-exports, the factory `defineIdentityAdapter` returns. The kit calls it once per behavior with a fresh context and a fresh service, so no state carries over between behaviors. The context holds placeholder endpoints under `*.conformance.invalid`; every request reaches the fake service whatever its URL. The kit tells an interactive adapter from a workload adapter by `interactive: false` on the provider.
+
+The kit can only see what goes through the context's `fetch`. An adapter that opens its own connections (its own HTTP client, a socket, a child process) or reads its token from a file or the environment without a request is not testable this way: its `login` sends nothing, and `login` fails with `login sent no request through the context's managed fetch`. PiShip requires the managed `fetch` anyway, so it applies the distribution's TLS, proxy, CA, and private-only rules. A workload adapter that reads a platform token and exchanges it through `context.fetch` is testable: build it in the test with a fake platform token.
+
+### The fake service and the `respond` hook
+
+The kit decides what the service says to each request; `respond(request, answer)` encodes it in the adapter's protocol and returns a `Response`. `request` has the `operation` being called (`login`, `refresh`, or `logout`), its `step` within that call (from 0), `url`, `method`, `headers`, and `body`. `answer` is one of:
+
+| `answer.kind` | Meaning |
+| --- | --- |
+| `session` | A successful login or refresh, or an intermediate step of one (a device authorization, a poll). `answer.identity` is what the service issues: `subject`, `issuer`, `name`, `email`, `accessToken`, `idToken`, `refreshToken`, `expiresAt` and `expiresIn`, `claims` (allowlisted claims plus some that are not, which the adapter must drop), and `verificationUrl` and `deviceCode` for a device-style login. One call reuses one identity across its steps |
+| `logged-out` | The service accepted a logout |
+| `already-revoked` | A logout of a session the service had already revoked or no longer knows |
+| `invalid-grant` | The service refuses the grant (a refresh token, or a workload's token) because it expired or was revoked |
+
+Without `respond`, the service answers every login and refresh request with one JSON body holding all the `session` fields above (`deviceCode`, `verificationUrl`, `subject`, `issuer`, `name`, `email`, `accessToken`, `idToken`, `refreshToken`, `expiresIn`, `expiresAt`, `claims`), a logout with 204, an already revoked session's logout with 401 `{"error":"invalid_token"}`, and an invalid grant with 400 `{"error":"invalid_grant"}`. That fits a device-style service like the SDK example, which reads the start and poll answers from the same fields. Outages, 401s, and answers with sentinel bodies are protocol-independent; the kit sends those itself.
+
+All values are fake and carry a per-run marker; none is a real token.
+
+### Token validation and the harness
+
+PiShip does no JWT cryptography ([decision 15](decisions.md)): an adapter that accepts tokens from its service validates them itself, and a generic kit cannot mint a token with a wrong issuer, a wrong audience, or a bad signature for an arbitrary adapter. The behaviors `invalid issuer`, `invalid audience`, `invalid signature`, `token validity window`, and `revoked token` therefore run only with `options.harness`, token-minting hooks the adapter author writes against the keys and issuer the adapter trusts in the test. Without a harness each is `skipped` with a reason that starts `needs harness`, never `passed`.
+
+```ts
+interface IdentityTokenHarness {
+  mint(request: {
+    kind: "valid" | "wrong-issuer" | "wrong-audience" | "bad-signature"
+        | "expired" | "not-yet-valid" | "revoked";
+    issuer: string;      // the issuer the session names
+    subject: string;     // the subject the session names
+    expiresAt: Date;     // when the service says the session ends
+    operation: "login" | "refresh" | "logout";
+    request: IdentityServiceRequest; // the request being answered, e.g. for its nonce
+  }): { idToken?: string; accessToken?: string } | undefined;
+  respond?(request: IdentityServiceRequest): Response | undefined;
+}
+```
+
+- `mint` returns the tokens that replace the kit's fake ones in the session the service issues (either or both), or `undefined` for a kind it cannot mint, which skips that behavior with the reason `the harness cannot mint a token ...`. It may be async. `valid` is a token the adapter must accept for exactly that principal and expiry; each other kind differs from `valid` in that one respect: another issuer, another audience, a signature the trusted keys do not verify, an `exp` in the past, an `nbf` in the future, or a token the issuer has revoked.
+- With a harness, every session the service issues carries `mint({kind: "valid"})` tokens, so an adapter that validates tokens accepts the kit's sessions in every other behavior. A harness that cannot mint `valid` fails the token behaviors.
+- `respond` answers the requests the harness serves itself, such as discovery, the issuer's keys (JWKS), or token introspection for `revoked`, before the kit's service sees them; `undefined` passes the request on.
+
+Each token behavior first checks that a session with a `valid` token is accepted. An adapter, or a harness setup, that refuses every token fails with `a session with a valid minted token was refused`, because its refusals would prove nothing. The kit's own tests (`packages/adapter-conformance/src/identity.test.ts`) show a harness that signs Ed25519 ID tokens with `node:crypto` and answers introspection.
+
+### Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `requestTimeoutMs` | `30000` | The adapter's own request timeout. The kit waits three times this plus 2 s for a stalled request to end before it reports a hang. With the default, the stalled-service checks take minutes, so build the adapter under test with a short timeout and pass the same value |
+| `issuer` | `endpoints.issuer`, `https://issuer.conformance.invalid` | The issuer the service asserts and the adapter must report |
+| `respond(request, answer)` | the JSON body above | The service's answer in the adapter's protocol |
+| `harness` | none | Token-minting hooks; without them the token behaviors are skipped |
+| `endpoints`, `distributionId` | placeholders | Merged into the adapter's context |
+
+### Behaviors
+
+The report is `{kind: "identity", results}`, one result per behavior in this order. `IDENTITY_CONTRACT` exports the same statements, `IDENTITY_BEHAVIORS` the names, and `IDENTITY_ALLOWED_CLAIMS` the claim allowlist.
+
+| Behavior | The adapter passes when |
+| --- | --- |
+| `login` | It declares a `kind` and `interactive` is absent, `true`, or `false`. `login()` sends its requests through the context's `fetch` and returns a session whose `subject` and `issuer` are the principal the service asserted. An interactive adapter passes a URL to `openUrl`; a workload adapter never calls it (PiShip hands a workload an `openUrl` that fails the run). The kit's `openUrl` only records the call |
+| `refresh` | `refresh()` asks the service again and returns a session for the same principal `(iss, sub)`, with the access token and the rotated refresh token the service issued, never the current ones. A refreshed session that names another subject or issuer fails here: PiShip refuses it with `IDENTITY_INVALID`. `skipped` for an adapter without `refresh()` and for a workload adapter, which PiShip logs in again instead |
+| `expiry` | `expiresAt` is the service's expiry, within 5 s, on login and on refresh. A session the service issued already expired is returned with that past expiry or refused with `IDENTITY_EXPIRED`, never given a later one |
+| `logout` | `logout()` sends a request that names the session's refresh or access token and resolves once the service accepted it, and resolves, without throwing, for a session the service had already revoked. `skipped` for an adapter without `logout()` and for a workload adapter, whose session PiShip holds in memory only |
+| `claim normalization` | `claims`, on login and on refresh, hold only the [allowlisted claims](identity.md#oidc) (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) with scalar or string-array values, and no token appears in `claims`, `subject`, `issuer`, `displayName`, or `email`. PiShip filters claims again; the kit holds the adapter to the allowlist so a token never reaches a claim in the first place |
+| `revoked session` | A refresh the service refuses as `invalid_grant` or with HTTP 401, and a refresh of a session without a refresh token, fail with `IDENTITY_EXPIRED` (the user signs in again), never `IDENTITY_INVALID` or an uncoded error. For a workload adapter, a login refused the same way fails with `IDENTITY_EXPIRED`. `skipped` for an interactive adapter without `refresh()` |
+| `secret redaction` | The session's `accessToken`, `idToken`, and `refreshToken` are `SecretValue`s (a plain string fails, even though PiShip's loader wraps one) that never render their value. No token or service answer body appears in any error's message, stack, `sanitizedDetail`, `userAction`, `toJSON()`, `formatError` rendering, inspection, or cause chain, after a 400 whose body quotes the refresh token, a 401 and a 502 with a sentinel body, a success body that is not the expected answer, and a transport error whose message quotes the access token, on login, refresh, and logout; with a harness, also after refusing a token with a bad signature |
+| `service outage` | On login and on refresh: a 503 with `Retry-After`, a 502 HTML page, a refused connection, and a service that never answers fail with a retryable `GATEWAY_UNREACHABLE`; a 429 with a retryable `GATEWAY_RATE_LIMITED`; `Retry-After` becomes `retryAfterMs`. Never `IDENTITY_INVALID`, which tells the user to contact an administrator ([errors](identity.md#errors)). A `NETWORK_DENIED` refusal from the managed fetch keeps its code and is not retryable |
+| `invalid issuer` | With a harness: a login, and a refresh, whose token names another issuer fails with `IDENTITY_INVALID` |
+| `invalid audience` | With a harness: the same for a token issued for another audience |
+| `invalid signature` | With a harness: the same for a token whose signature the trusted keys do not verify |
+| `token validity window` | With a harness: a login and a refresh whose token has expired, or is not yet valid, fail with `IDENTITY_EXPIRED` or `IDENTITY_INVALID`. Either kind the harness can mint is enough |
+| `revoked token` | With a harness: a login and a refresh whose token the issuer has revoked fail with `IDENTITY_EXPIRED` or `IDENTITY_INVALID` |
+
+What a result means:
+
+- `passed`: the kit exercised the behavior and the adapter met every statement in its row.
+- `failed`: `reason` names the first statement the adapter broke, such as `refresh after a 503 with Retry-After: expected GATEWAY_UNREACHABLE, got IDENTITY_INVALID` or `the refreshed session names another subject; PiShip refuses a refresh that changes the principal (iss, sub)`. A call that did not end within the kit's bound reads `the call did not end within the kit's bound`. A reason names codes, statuses, and claim names only, never an error message, a token, or an answer body.
+- `skipped`: the kit could not exercise the behavior, and `reason` says why: the adapter has no `refresh()` or `logout()`, a workload adapter does not use it, there is no harness (`needs harness: ...`), or the harness cannot mint that kind of token. A skipped behavior is never counted as passed, and a skipped token behavior means token validation is untested, not that it is safe.
+
+The kit's own tests run it against a reference device-style adapter and a reference workload adapter, which pass, with and without a harness, and against variants seeded with one defect each, which fail exactly one behavior: a subject swapped on refresh, a refresh token returned in `claims`, a token leaked in an error's cause, an outage reported as `IDENTITY_INVALID`, `invalid_grant` reported as an uncoded error, a browser opened by a workload adapter, an ignored expiry, a logout that throws for a revoked session, and, with a harness, an adapter that accepts a wrong issuer, a wrong audience, a bad signature, an expired token, or a revoked one.
