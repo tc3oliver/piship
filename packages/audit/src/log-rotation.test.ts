@@ -12,10 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * rotation must not depend on it, and can pause one writer's stat so two
  * writers interleave deterministically.
  */
+type Pause = { reached: () => void; release: Promise<void> };
 const hooks = vi.hoisted(() => ({
-  pauseNextHandleStat: undefined as
-    | { reached: () => void; release: Promise<void> }
-    | undefined,
+  pauseNextHandleStat: undefined as Pause | undefined,
+  pauseRenameTo: undefined as (Pause & { target: string }) | undefined,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -40,8 +40,41 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
   const stat = async (...args: Parameters<typeof actual.stat>) =>
     sameInode(await actual.stat(...args));
-  return { ...actual, default: { ...actual, open, stat }, open, stat };
+  const rename = async (...args: Parameters<typeof actual.rename>) => {
+    const pause = hooks.pauseRenameTo;
+    if (pause && String(args[1]) === pause.target) {
+      hooks.pauseRenameTo = undefined;
+      pause.reached();
+      await pause.release;
+    }
+    return actual.rename(...args);
+  };
+  return {
+    ...actual,
+    default: { ...actual, open, stat, rename },
+    open,
+    stat,
+    rename,
+  };
 });
+
+const pause = () => {
+  let reached!: () => void;
+  let release!: () => void;
+  const hook = {
+    reached: new Promise<void>((resolve) => {
+      reached = resolve;
+    }),
+    release: () => release(),
+    pause: {
+      reached: () => reached(),
+      release: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    },
+  };
+  return hook;
+};
 
 const { AuditLog, auditLogFiles } = await import("./index.js");
 
@@ -51,6 +84,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   hooks.pauseNextHandleStat = undefined;
+  hooks.pauseRenameTo = undefined;
   rmSync(temp, { recursive: true, force: true });
 });
 
@@ -119,6 +153,48 @@ describe("audit rotation without reliable file identity", () => {
     expect(resources(`${base}.1`)).toEqual(["x0", "x1"]);
     expect(resources(base)).toEqual(["a", "b"]);
     expect(existsSync(`${base}.2`)).toBe(false);
+    expect(existsSync(`${base}.rotate.lock`)).toBe(false);
+  });
+
+  it("rotates once when a second writer reads the new generation before the old file moves", async () => {
+    const [first, second] = await Promise.all([open(), open()]);
+    for (const resource of ["x0", "x1"]) {
+      first.emit({ event: "resource.load", resource });
+      await first.flush();
+    }
+    const base = join(temp, "logs", "audit.jsonl");
+
+    // The first writer advances the generation, then stops before moving
+    // the full file to .1.
+    const moving = pause();
+    hooks.pauseRenameTo = { ...moving.pause, target: `${base}.1` };
+    first.emit({ event: "resource.load", resource: "a" });
+    const firstPending = first.flush();
+    await moving.reached;
+
+    // The second writer reads the new generation but opens and measures the
+    // old, full file, then waits.
+    const measuring = pause();
+    hooks.pauseNextHandleStat = measuring.pause;
+    second.emit({ event: "resource.load", resource: "b" });
+    const secondPending = second.flush();
+    await measuring.reached;
+
+    // The first writer finishes its rotation, releases the lock, and appends.
+    moving.release();
+    await firstPending;
+    expect(resources(`${base}.1`)).toEqual(["x0", "x1"]);
+    expect(resources(base)).toEqual(["a"]);
+
+    // The second writer resumes with a measurement of the file that already
+    // moved; the generation it read is current, so only the file shows it.
+    measuring.release();
+    await secondPending;
+    await Promise.all([first.close(), second.close()]);
+
+    expect(auditLogFiles(temp, rotation)).toEqual([base, `${base}.1`]);
+    expect(resources(`${base}.1`)).toEqual(["x0", "x1"]);
+    expect(resources(base)).toEqual(["a", "b"]);
     expect(existsSync(`${base}.rotate.lock`)).toBe(false);
   });
 });

@@ -176,7 +176,7 @@ class FileSinkWriter implements SinkWriter {
       const { size } = await handle.stat();
       if (bytes > 0 && size > 0 && size + bytes > this.rotation.maxBytes) {
         await handle.close();
-        await this.rotate(generation);
+        await this.rotate(generation, bytes);
         handle = await this.open();
       }
       if (process.platform !== "win32") await handle.chmod(0o600);
@@ -203,7 +203,7 @@ class FileSinkWriter implements SinkWriter {
    * rotates at a time; the others append to the current file and retry on a
    * later write. Best effort: a failed rotation never fails the append.
    */
-  private async rotate(measured: string): Promise<void> {
+  private async rotate(measured: string, bytes: number): Promise<void> {
     const lock = `${this.path}.rotate.lock`;
     const token = `${process.pid}-${randomBytes(8).toString("hex")}\n`;
     if (!(await this.acquireRotationLock(lock, token))) return;
@@ -213,7 +213,16 @@ class FileSinkWriter implements SinkWriter {
       // Another writer may have rotated since this one read the generation.
       // File identity (inode) is not used: it is not reliable on Windows.
       if ((await this.generation()) !== measured) return;
-      if (!(await statOpen(this.path).catch(() => undefined))) return;
+      // The generation advances before the file moves, so a writer can read
+      // the new generation yet have measured the old file. Under the lock,
+      // re-measure the current file and rotate only if it is still full.
+      const current = await statOpen(this.path).catch(() => undefined);
+      if (
+        !current ||
+        current.size === 0 ||
+        current.size + bytes <= this.rotation.maxBytes
+      )
+        return;
       // Advance the generation before moving any file: a crash in between
       // can only make another writer skip one rotation, never repeat one.
       await this.writeGeneration(String(Number(measured) + 1));
