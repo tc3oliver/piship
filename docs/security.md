@@ -34,11 +34,31 @@ PiShip-managed requests (OIDC, broker, gateway probes, Streamable HTTP MCP serve
 
 - TLS verification is always on. A launch with `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION`, and the manifest cannot disable verification.
 - Plain HTTP is accepted only for loopback hosts, intended for local fixtures. Endpoint URLs may not embed credentials, query strings, or fragments.
-- `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are honored when inherited. `network.tls.additionalCA` bundles are added to, never replace, the default roots.
-- With `network.privateOnly`, only the declared issuer, broker, and gateway hosts, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; anything else fails with `NETWORK_DENIED`. OIDC endpoints that discovery returns on other hosts, and Streamable HTTP MCP servers or HTTP audit sinks on other hosts, must be listed in `allowHosts`. Managed mode requires `network.publicFallback: deny`, which turns private-only on for every managed launch; `doctor` shows the effective outbound state and warns about HTTP MCP servers and audit sinks whose hosts are not declared. Such hosts are never allowed implicitly.
+- `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are honored when inherited (either case; a lowercase name wins, and a host in `NO_PROXY` is contacted directly). `network.tls.additionalCA` bundles are added to, never replace, the default roots. A bundle that lacks the server's certificate fails the request; nothing relaxes verification to make it pass, and an `https` endpoint is never retried or redirected over plain HTTP.
+- With `network.privateOnly`, only the declared issuer, broker, and gateway hosts, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; anything else fails with `NETWORK_DENIED`. OIDC endpoints that discovery returns on other hosts, and Streamable HTTP MCP servers or HTTP audit sinks on other hosts, must be listed in `allowHosts`. Managed mode requires `network.publicFallback: deny`, which turns private-only on for every managed launch; `doctor` shows the effective outbound state and warns about HTTP MCP servers and audit sinks whose hosts are not declared. A sink or server host is never allowed just for being one. The comparison is on the hostname only: the port and scheme are ignored, so a host declared for one endpoint admits every port on it (an audit sink on another port of the gateway's host is allowed), and PiShip does not check that a host is a private address (a public address listed in `allowHosts` is honored). `privateOnly` is a hostname allowlist, not a network boundary.
 - Redirects are not followed.
 
-The proxy, CA, and `privateOnly` policy is also applied to the Pi process's default HTTP dispatcher, so Pi's provider requests and extensions' in-process `fetch` calls to undeclared hosts fail too. It does not cover raw sockets, other HTTP clients, or child processes; it is not an egress firewall. Child processes are covered only by the OS sandbox's `deny` or `allow` network mode.
+The proxy, CA, and `privateOnly` policy is also applied to the Pi process's default HTTP dispatcher, so Pi's provider requests and extensions' in-process `fetch` calls to undeclared hosts fail too. It does not cover raw sockets or other HTTP clients; it is not an egress firewall. Child processes are not bound by it either: they get the approved network environment below, and only the OS sandbox's `deny` or `allow` network mode limits what they can reach.
+
+### Child process network environment
+
+A command the agent runs through the `bash` tool receives the network environment the policy approves and no other. PiShip derives it from `network` and the launch environment:
+
+| Variable | A child receives it when |
+| --- | --- |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and their lowercase forms | `network.proxy.inheritEnvironment` is true, with the value PiShip's own clients use. A proxy URL that embeds credentials, is not an `http` or `https` URL, or looks like a credential is withheld, so a child never receives a proxy credential; a child that needs the proxy needs one that takes no credential in its URL |
+| `NODE_EXTRA_CA_CERTS` | exactly one `network.tls.additionalCA` bundle is declared. It adds to the default roots; several bundles cannot be expressed as one file and are withheld |
+| any other proxy, CA, or TLS-verification variable (`ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`, `GIT_SSL_NO_VERIFY`, `NODE_TLS_REJECT_UNAUTHORIZED`) | never: it is dropped, so a child cannot be told to skip verification or to use a different set of trust roots than the policy declares |
+
+How each kind of child gets it:
+
+- **No enforced sandbox.** The command keeps its environment as before (with credential-looking names already removed in managed mode); only the network variables above are replaced by the approved ones. A user's own `!` command carries no environment from Pi and keeps the process environment.
+- **Enforced local sandbox that allows the network** (`sandbox.network.mode: allow`). The approved variables are added to the allowlisted ones. With `deny` there is no network to configure and none are added.
+- **Remote sandbox backend** (`isolation: remote`, such as E2B and Kubernetes). Never: the proxy address and the CA file name this host, and are meaningless in another one.
+- **MCP stdio servers** keep receiving only their declared environment, as before; a variable a server lists in `env.allow` is passed as it is.
+- A distribution with no network policy (`piship/v1alpha1`) is unchanged.
+
+This is environment hygiene, not enforcement: a child can ignore or unset the variables. The launcher's own process keeps a proxy URL that embeds credentials, because PiShip's clients need it, so any process that inherits the whole environment, such as a user's `!` command, can read it.
 
 ## Governance
 

@@ -32,10 +32,10 @@ Required fields are `schema`, `app.id`, `app.name`, `app.command`, `app.version`
 | `models.catalog.<id>` | `name`, `contextWindow`, `maxOutputTokens`, optional `input` (`text`, `image`), `reasoning`, `tools`, `streaming`, `structuredOutput`, and `policyTags` |
 | `config.enforced`, `config.defaults` | Values for `model`, `theme`, and `thinkingLevel` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `models.default` rather than `config.defaults.model` |
 | `config.userOverridable` | Keys users may set; defaults to every key not enforced |
-| `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`) |
-| `network.tls.additionalCA` | PEM bundle paths added to the default trust roots |
+| `network.proxy.inheritEnvironment` | Honor `HTTP(S)_PROXY` and `NO_PROXY` (default `true`). Commands the agent runs receive these variables only when this is `true`, and never a proxy URL that embeds credentials ([security](security.md#child-process-network-environment)) |
+| `network.tls.additionalCA` | PEM bundle paths added to the default trust roots. A single bundle is also passed to commands the agent runs as `NODE_EXTRA_CA_CERTS` |
 | `network.publicFallback` | `deny` or `allow`; managed requires `deny`, which makes managed launches private-only whatever `network.privateOnly` says |
-| `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts` |
+| `network.privateOnly`, `network.allowHosts` | Restrict PiShip-managed and in-process `fetch` requests to declared endpoint hosts plus `allowHosts`. The match is on the hostname only: ports and schemes are ignored, so a declared host admits every port on it, and PiShip does not check that a host is a private address. It is a hostname allowlist, not a network boundary |
 
 The IdP, broker, and gateway these fields point to must implement the [enterprise integration contract](enterprise-integration.md).
 
