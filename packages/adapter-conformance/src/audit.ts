@@ -14,7 +14,7 @@ import {
   type ManagedFetch,
 } from "@piship/adapter-sdk";
 import type { ConformanceReport, ConformanceResult } from "./index.js";
-import { Finding } from "./shared.js";
+import { answer, check, Finding, secretsIn } from "./shared.js";
 
 /** What `testAuditSink` checks, in report order. */
 export const AUDIT_SINK_BEHAVIORS = [
@@ -160,7 +160,7 @@ class Collector {
     // Synchronous up to the answer, so a request is visible as soon as the
     // sink has made it.
     try {
-      return this.#receive(String(url), init);
+      return Promise.resolve(this.#receive(String(url), init));
     } catch (error) {
       return Promise.reject(error);
     }
@@ -181,7 +181,10 @@ class Collector {
     return this.requests.filter((request) => request.events.length > 0);
   }
 
-  #receive(url: string, init: RequestInit | undefined): Promise<Response> {
+  #receive(
+    url: string,
+    init: RequestInit | undefined,
+  ): Response | Promise<Response> {
     const signal = init?.signal ?? undefined;
     signal?.throwIfAborted();
     if (url !== COLLECTOR_URL) return answer(404);
@@ -204,7 +207,7 @@ class Collector {
       const settle = (next: Answer) => {
         this.#held.delete(settle);
         signal?.removeEventListener("abort", onAbort);
-        this.#answer(next, events).then(resolve, reject);
+        Promise.resolve(this.#answer(next, events)).then(resolve, reject);
       };
       const onAbort = () => {
         this.#held.delete(settle);
@@ -215,7 +218,7 @@ class Collector {
     });
   }
 
-  #refuse(reason: string): Promise<Response> {
+  #refuse(reason: string): Response {
     this.invalid.push(reason);
     return answer(400);
   }
@@ -223,11 +226,12 @@ class Collector {
   #answer(
     mode: Answer,
     events: readonly Record<string, unknown>[],
-  ): Promise<Response> {
+  ): Response | Promise<Response> {
     if (mode === "network")
       return Promise.reject(new TypeError("fetch failed"));
     if (mode === "unavailable") return answer(503);
-    if (mode === "redirect") return answer(302, `${COLLECTOR_URL}/moved`);
+    if (mode === "redirect")
+      return answer(302, { location: `${COLLECTOR_URL}/moved` });
     for (const event of events) this.#store(event);
     return answer(mode === "store-fail" ? 503 : 200);
   }
@@ -247,15 +251,6 @@ class Collector {
   storedAt(time: string): Record<string, unknown>[] {
     return this.stored.filter((event) => event.time === time);
   }
-}
-
-function answer(status: number, location?: string): Promise<Response> {
-  return Promise.resolve(
-    new Response(null, {
-      status,
-      ...(location ? { headers: { location } } : {}),
-    }),
-  );
 }
 
 /** Why a request body is not a `piship-audit-batch/v1` batch, if it is not. */
@@ -287,11 +282,6 @@ function batchProblem(batch: unknown): string | undefined {
 
 // ---------------------------------------------------------------- harness
 
-/** Fail the check with `reason`. */
-function fail(reason: string): never {
-  throw new Finding(reason);
-}
-
 interface Outcome {
   readonly ok: boolean;
   readonly error?: unknown;
@@ -319,17 +309,6 @@ function partialLifecycle(sink: AuditSink): string | undefined {
 function message(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-/** Everything about an error the sink reported that a reader could see. */
-function errorText(error: unknown): string {
-  let text = error instanceof Error ? `${error.name}: ${error.message}` : "";
-  try {
-    text += ` ${JSON.stringify(error)}`;
-  } catch {
-    text += ` ${String(error)}`;
-  }
-  return text;
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -388,10 +367,12 @@ class Harness {
         this.create(this.environment),
       );
     } catch (error) {
-      fail(`Creating the sink failed: ${message(error)}`);
+      throw new Finding(`Creating the sink failed: ${message(error)}`);
     }
-    if (!this.sink || typeof this.sink.write !== "function")
-      fail("The factory did not return an object with a write function");
+    check(
+      this.sink && typeof this.sink.write === "function",
+      "The factory did not return an object with a write function",
+    );
     return this.sink;
   }
 
@@ -487,10 +468,10 @@ function describeFailure(outcome: Outcome): string {
 /** Deliver to a healthy collector, or fail with what the sink said. */
 async function mustDeliver(harness: Harness, batch: AuditBatch, what: string) {
   const outcome = await harness.deliver(batch);
-  if (!outcome.ok)
-    fail(
-      `The sink did not deliver ${what} to a healthy collector: ${describeFailure(outcome)}${invalidNote(harness)}`,
-    );
+  check(
+    outcome.ok,
+    `The sink did not deliver ${what} to a healthy collector: ${describeFailure(outcome)}${invalidNote(harness)}`,
+  );
 }
 
 function invalidNote(harness: Harness): string {
@@ -501,7 +482,7 @@ function invalidNote(harness: Harness): string {
 /** The single stored event for the fixture sent as `sent`, or a failure. */
 function storedOnce(harness: Harness, sent: AuditEvent) {
   const [stored] = harness.collector.storedAt(sent.time);
-  if (!stored) fail(`The event sent at ${sent.time} was not stored`);
+  check(stored, `The event sent at ${sent.time} was not stored`);
   return stored;
 }
 
@@ -517,24 +498,26 @@ const metadataOnly: Check = async (open) => {
   await mustDeliver(harness, batchOf([plain, withContent, another]), "a batch");
   for (const sent of [plain, another]) {
     const stored = storedOnce(harness, sent);
-    if ("content" in stored)
-      fail(
-        `The event sent at ${sent.time} carried no content but was stored with a content property`,
-      );
+    check(
+      !("content" in stored),
+      `The event sent at ${sent.time} carried no content but was stored with a content property`,
+    );
     const text = canonical(stored);
-    if (text.includes(PROMPT_TEXT) || text.includes(COMMAND_TEXT))
-      fail(
-        `The event sent at ${sent.time} carried no content but was stored with another event's prompt or command text`,
-      );
+    check(
+      !text.includes(PROMPT_TEXT) && !text.includes(COMMAND_TEXT),
+      `The event sent at ${sent.time} carried no content but was stored with another event's prompt or command text`,
+    );
   }
   const stored = storedOnce(harness, withContent);
-  if (canonical(stored.content) !== canonical(withContent.content))
-    fail(
-      "An event's opted-in content was not stored exactly as it arrived under content",
-    );
+  check(
+    canonical(stored.content) === canonical(withContent.content),
+    "An event's opted-in content was not stored exactly as it arrived under content",
+  );
   const outside = canonical({ ...stored, content: undefined });
-  if (outside.includes(PROMPT_TEXT) || outside.includes(COMMAND_TEXT))
-    fail("Opted-in content was copied outside the event's content property");
+  check(
+    !outside.includes(PROMPT_TEXT) && !outside.includes(COMMAND_TEXT),
+    "Opted-in content was copied outside the event's content property",
+  );
   return undefined;
 };
 
@@ -546,29 +529,29 @@ const secretRedaction: Check = async (open) => {
     fixture(2, { event: "credential.acquire", resource: "gateway" }),
   ]);
   await mustDeliver(healthy, batch, "a batch");
-  if (
-    healthy.collector.stored.some((event) =>
+  check(
+    !healthy.collector.stored.some((event) =>
       canonical(event).includes(credential),
-    )
-  )
-    fail("A stored event holds the sink's downstream credential");
-  if (
-    healthy.collector.requests.some((request) =>
+    ),
+    "A stored event holds the sink's downstream credential",
+  );
+  check(
+    !healthy.collector.requests.some((request) =>
       request.body.includes(credential),
-    )
-  )
-    fail("A request body holds the sink's downstream credential");
+    ),
+    "A request body holds the sink's downstream credential",
+  );
   const failing = await open();
   failing.collector.mode = "unavailable";
   const outcome = await failing.deliver(batch);
-  const reported = [
-    outcome.error === undefined ? "" : errorText(outcome.error),
-    failing.buffered ? JSON.stringify(failing.buffered.status()) : "",
-  ].join(" ");
-  if (reported.includes(failing.environment.credential))
-    fail(
-      "The error the sink reported for a failed delivery holds its downstream credential",
-    );
+  // The error in every way a reader can see it (message, cause chain, stack,
+  // inspection), and the counts a buffering sink reports.
+  const held = [failing.environment.credential];
+  check(
+    !secretsIn(outcome.error, held) &&
+      !secretsIn(failing.buffered?.status(), held),
+    "The error or status the sink reported for a failed delivery holds its downstream credential",
+  );
   return undefined;
 };
 
@@ -587,10 +570,10 @@ const identityAttribution: Check = async (open) => {
   await mustDeliver(harness, batchOf(sent), "a batch");
   for (const event of sent) {
     const stored = storedOnce(harness, event);
-    if (stored.user !== event.user)
-      fail(
-        `The event sent at ${event.time} with user ${JSON.stringify(event.user)} was stored with user ${JSON.stringify(stored.user)}: user is the identity subject as sent, or null`,
-      );
+    check(
+      stored.user === event.user,
+      `The event sent at ${event.time} with user ${JSON.stringify(event.user)} was stored with user ${JSON.stringify(stored.user)}: user is the identity subject as sent, or null`,
+    );
   }
   return undefined;
 };
@@ -610,10 +593,10 @@ const sessionCorrelation: Check = async (open) => {
   await mustDeliver(harness, batchOf(second), "a second batch");
   for (const event of [...first, ...second]) {
     const stored = storedOnce(harness, event);
-    if (stored.session !== event.session)
-      fail(
-        `The event sent at ${event.time} in session ${JSON.stringify(event.session)} was stored with session ${JSON.stringify(stored.session)}: a session's events must keep one session value across batches`,
-      );
+    check(
+      stored.session === event.session,
+      `The event sent at ${event.time} in session ${JSON.stringify(event.session)} was stored with session ${JSON.stringify(stored.session)}: a session's events must keep one session value across batches`,
+    );
   }
   return undefined;
 };
@@ -625,10 +608,10 @@ function checkIds(harness: Harness, sent: readonly AuditEvent[]): void {
     for (const event of request.events) {
       const original = byTime.get(event.time as string);
       if (!original) continue;
-      if (event.id !== original.id)
-        fail(
-          `The event sent at ${original.time} reached the collector${index > 0 ? " on a retry" : ""} with id ${String(event.id)} instead of ${original.id}`,
-        );
+      check(
+        event.id === original.id,
+        `The event sent at ${original.time} reached the collector${index > 0 ? " on a retry" : ""} with id ${String(event.id)} instead of ${original.id}`,
+      );
     }
   });
 }
@@ -640,10 +623,10 @@ const eventIdStability: Check = async (open) => {
   harness.collector.next.push("unavailable");
   await harness.deliver(batch);
   const retried = await harness.retry(batch);
-  if (!retried.ok)
-    fail(
-      `The sink did not deliver the batch once the collector recovered: ${describeFailure(retried)}`,
-    );
+  check(
+    retried.ok,
+    `The sink did not deliver the batch once the collector recovered: ${describeFailure(retried)}`,
+  );
   checkIds(harness, sent);
   for (const event of sent) storedOnce(harness, event);
   return undefined;
@@ -662,21 +645,23 @@ const deliveryFailure: Check = async (open) => {
     const buffered = harness.buffered;
     if (!buffered) {
       const outcome = await harness.deliver(batch);
-      if (outcome.ok)
-        fail(`The sink resolved a write the collector answered with ${what}`);
+      check(
+        !outcome.ok,
+        `The sink resolved a write the collector answered with ${what}`,
+      );
       continue;
     }
     await harness.write(batch).catch(() => undefined);
     await buffered.flush().catch(() => undefined);
     const counts = buffered.status();
-    if (counts.delivered > 0)
-      fail(
-        `The sink counted ${counts.delivered} event(s) as delivered although the collector answered with ${what}`,
-      );
-    if (counts.pending + counts.dropped < batch.events.length)
-      fail(
-        `The collector answered with ${what} and the sink lost ${batch.events.length - counts.pending - counts.dropped} event(s) without counting them as pending or dropped`,
-      );
+    check(
+      counts.delivered <= 0,
+      `The sink counted ${counts.delivered} event(s) as delivered although the collector answered with ${what}`,
+    );
+    check(
+      counts.pending + counts.dropped >= batch.events.length,
+      `The collector answered with ${what} and the sink lost ${batch.events.length - counts.pending - counts.dropped} event(s) without counting them as pending or dropped`,
+    );
   }
   await answersOnlyAfterCollector(await open(), batch);
   const aborting = await open();
@@ -690,21 +675,25 @@ async function answersOnlyAfterCollector(harness: Harness, batch: AuditBatch) {
   const buffered = harness.buffered;
   if (buffered) await harness.write(batch);
   const pending = track(buffered ? buffered.flush() : harness.write(batch));
-  if (!(await until(() => harness.collector.held > 0, 2_000)))
-    fail("The sink never sent the batch to the collector");
+  check(
+    await until(() => harness.collector.held > 0, 2_000),
+    "The sink never sent the batch to the collector",
+  );
   for (let index = 0; index < 10; index += 1) await tick();
-  if (pending.state.settled)
-    fail(
-      `The sink ${buffered ? "finished a flush" : "settled a write"} before the collector answered`,
-    );
+  check(
+    !pending.state.settled,
+    `The sink ${buffered ? "finished a flush" : "settled a write"} before the collector answered`,
+  );
   harness.collector.release("store");
   await pending.done;
-  if (!buffered && pending.state.rejected)
-    fail(
-      `The sink rejected a write the collector accepted: ${message(pending.state.error)}`,
-    );
-  if (buffered && buffered.status().delivered < batch.events.length)
-    fail("The sink did not count a batch the collector accepted as delivered");
+  check(
+    buffered || !pending.state.rejected,
+    `The sink rejected a write the collector accepted: ${message(pending.state.error)}`,
+  );
+  check(
+    !buffered || buffered.status().delivered >= batch.events.length,
+    "The sink did not count a batch the collector accepted as delivered",
+  );
 }
 
 /** An aborted write rejects instead of resolving or hanging. */
@@ -712,26 +701,28 @@ async function rejectsOnAbort(harness: Harness, batch: AuditBatch) {
   harness.collector.mode = "hold";
   const controller = new AbortController();
   const pending = track(harness.write(batch, controller.signal));
-  if (
-    !(await until(
+  check(
+    await until(
       () => harness.collector.held > 0 || pending.state.settled,
       2_000,
-    ))
-  )
-    fail("The sink never sent the batch to the collector");
+    ),
+    "The sink never sent the batch to the collector",
+  );
   controller.abort();
-  if (!(await until(() => pending.state.settled, 2_000)))
-    fail("The sink did not settle a write after its signal aborted");
-  if (!pending.state.rejected)
-    fail(
-      "The sink resolved a write whose signal aborted before the collector answered",
-    );
+  check(
+    await until(() => pending.state.settled, 2_000),
+    "The sink did not settle a write after its signal aborted",
+  );
+  check(
+    pending.state.rejected,
+    "The sink resolved a write whose signal aborted before the collector answered",
+  );
 }
 
 const bufferBehavior: Check = async (open) => {
   const probe = await open();
   const partial = partialLifecycle(probe.sink as AuditSink);
-  if (partial) fail(partial);
+  if (partial) throw new Finding(partial);
   if (!probe.buffered) return PLAIN_SKIP;
   const limit = 4;
   const sent = Array.from({ length: limit + 2 }, (_, index) =>
@@ -747,13 +738,15 @@ const bufferBehavior: Check = async (open) => {
         () => undefined,
         (error: unknown) => error,
       );
-      if (outcome !== undefined && !required)
-        fail(
-          `An optional sink refused a write when its buffer was full (${message(outcome)}); it must drop and count instead`,
-        );
+      check(
+        outcome === undefined || required,
+        `An optional sink refused a write when its buffer was full (${message(outcome)}); it must drop and count instead`,
+      );
       const { pending } = sink.status();
-      if (pending > limit)
-        fail(`${kind} held ${pending} events with maxEvents ${limit}`);
+      check(
+        pending <= limit,
+        `${kind} held ${pending} events with maxEvents ${limit}`,
+      );
     }
     const full = sink.status();
     const overflow = sent.length - limit;
@@ -762,20 +755,20 @@ const bufferBehavior: Check = async (open) => {
       await sink.flush().catch(() => undefined);
     const end = sink.status();
     const accounted = end.delivered + end.pending + end.dropped;
-    if (accounted !== sent.length)
-      fail(
-        `${kind} took ${sent.length} events with maxEvents ${limit} and accounts for ${accounted} of them as delivered, pending, or dropped; every event must be in exactly one of those counts`,
-      );
-    if (full.dropped < overflow)
-      fail(
-        `${kind} counted ${full.dropped} dropped event(s) after ${overflow} did not fit its buffer`,
-      );
+    check(
+      accounted === sent.length,
+      `${kind} took ${sent.length} events with maxEvents ${limit} and accounts for ${accounted} of them as delivered, pending, or dropped; every event must be in exactly one of those counts`,
+    );
+    check(
+      full.dropped >= overflow,
+      `${kind} counted ${full.dropped} dropped event(s) after ${overflow} did not fit its buffer`,
+    );
     const kept = sent.slice(0, limit).map((event) => event.time);
     const times = harness.collector.stored.map((event) => event.time);
-    if (canonical(times) !== canonical(kept))
-      fail(
-        `${kind} with a full buffer must keep the oldest ${limit} events, deliver them oldest first, and drop the newer ones; the collector stored a different sequence of ${times.length} event(s)`,
-      );
+    check(
+      canonical(times) === canonical(kept),
+      `${kind} with a full buffer must keep the oldest ${limit} events, deliver them oldest first, and drop the newer ones; the collector stored a different sequence of ${times.length} event(s)`,
+    );
   }
   return undefined;
 };
@@ -786,25 +779,23 @@ const failClosed: Check = async (open) => {
   try {
     await harness.write(PROBE);
   } catch (error) {
-    fail(
+    throw new Finding(
       `The sink refused the readiness probe while the collector was healthy: ${message(error)}`,
     );
   }
-  if (
-    !harness.collector.requests.some((request) => request.events.length === 0)
-  )
-    fail(
-      "The sink answered the readiness probe (an empty batch) without asking the collector",
-    );
+  check(
+    harness.collector.requests.some((request) => request.events.length === 0),
+    "The sink answered the readiness probe (an empty batch) without asking the collector",
+  );
   harness.collector.mode = "unavailable";
   const probed = await harness.write(PROBE).then(
     () => true,
     () => false,
   );
-  if (probed)
-    fail(
-      "The sink resolved the readiness probe while the collector answered HTTP 503, so a required sink could not fail launch with AUDIT_UNAVAILABLE",
-    );
+  check(
+    !probed,
+    "The sink resolved the readiness probe while the collector answered HTTP 503, so a required sink could not fail launch with AUDIT_UNAVAILABLE",
+  );
   const partial = partialLifecycle(harness.sink as AuditSink);
   if (partial || !harness.buffered) return undefined;
   const limit = 4;
@@ -818,14 +809,14 @@ const failClosed: Check = async (open) => {
     () => undefined,
     (error: unknown) => error ?? new Error("rejected"),
   );
-  if (refusal === undefined)
-    fail(
-      "A required sink accepted a write while its buffer was full and the collector was down; it must refuse with AUDIT_UNAVAILABLE",
-    );
-  if (!isPiShipError(refusal) || refusal.code !== "AUDIT_UNAVAILABLE")
-    fail(
-      `A required sink with a full buffer refused a write with ${isPiShipError(refusal) ? refusal.code : message(refusal)} instead of a PiShipError with code AUDIT_UNAVAILABLE`,
-    );
+  check(
+    refusal !== undefined,
+    "A required sink accepted a write while its buffer was full and the collector was down; it must refuse with AUDIT_UNAVAILABLE",
+  );
+  check(
+    isPiShipError(refusal) && refusal.code === "AUDIT_UNAVAILABLE",
+    `A required sink with a full buffer refused a write with ${isPiShipError(refusal) ? refusal.code : message(refusal)} instead of a PiShipError with code AUDIT_UNAVAILABLE`,
+  );
   full.collector.mode = "store";
   for (let round = 0; round < 3 && sink.status().pending > 0; round += 1)
     await sink.flush().catch(() => undefined);
@@ -833,17 +824,17 @@ const failClosed: Check = async (open) => {
     () => undefined,
     (error: unknown) => error ?? new Error("rejected"),
   );
-  if (recovered !== undefined)
-    fail(
-      `A required sink kept refusing writes after its buffer drained: ${message(recovered)}`,
-    );
+  check(
+    recovered === undefined,
+    `A required sink kept refusing writes after its buffer drained: ${message(recovered)}`,
+  );
   return undefined;
 };
 
 const shutdownFlush: Check = async (open) => {
   const probe = await open();
   const partial = partialLifecycle(probe.sink as AuditSink);
-  if (partial) fail(partial);
+  if (partial) throw new Finding(partial);
   if (!probe.buffered) return PLAIN_SKIP;
   const deadline = probe.closeDeadlineMs;
   const sent = [fixture(1), fixture(2), fixture(3)];
@@ -855,40 +846,42 @@ const shutdownFlush: Check = async (open) => {
   const missing = sent.filter(
     (event) => healthy.collector.storedAt(event.time).length === 0,
   );
-  if (missing.length)
-    fail(
-      `close() returned with ${missing.length} of ${sent.length} queued event(s) never sent to a healthy collector`,
-    );
-  if (closed.pending !== 0 || closed.dropped !== 0)
-    fail(
-      `close() delivered every event but reported ${closed.pending} pending and ${closed.dropped} dropped`,
-    );
+  check(
+    !missing.length,
+    `close() returned with ${missing.length} of ${sent.length} queued event(s) never sent to a healthy collector`,
+  );
+  check(
+    closed.pending === 0 && closed.dropped === 0,
+    `close() delivered every event but reported ${closed.pending} pending and ${closed.dropped} dropped`,
+  );
   const late = fixture(4);
   const lateRefused = await healthy.write(batchOf([late])).then(
     () => false,
     () => true,
   );
   await sink.flush().catch(() => undefined);
-  if (healthy.collector.storedAt(late.time).length)
-    fail("The sink delivered an event written after close()");
-  if (!lateRefused && sink.status().dropped <= closed.dropped)
-    fail(
-      "An event written after close() was neither refused nor counted as dropped",
-    );
+  check(
+    !healthy.collector.storedAt(late.time).length,
+    "The sink delivered an event written after close()",
+  );
+  check(
+    lateRefused || sink.status().dropped > closed.dropped,
+    "An event written after close() was neither refused nor counted as dropped",
+  );
 
   const down = await open({ required: true });
   const downSink = down.buffered as BufferedAuditSink;
   down.collector.mode = "unavailable";
   await down.write(batchOf(sent)).catch(() => undefined);
   const report = await downSink.close(deadline);
-  if (report.pending + report.dropped < sent.length)
-    fail(
-      `close() reported ${report.pending} pending and ${report.dropped} dropped while the collector took none of ${sent.length} events: what was not taken must be reported`,
-    );
-  if (report.delivered > 0)
-    fail(
-      `close() reported ${report.delivered} delivered while the collector took none`,
-    );
+  check(
+    report.pending + report.dropped >= sent.length,
+    `close() reported ${report.pending} pending and ${report.dropped} dropped while the collector took none of ${sent.length} events: what was not taken must be reported`,
+  );
+  check(
+    report.delivered <= 0,
+    `close() reported ${report.delivered} delivered while the collector took none`,
+  );
   return undefined;
 };
 
@@ -905,34 +898,34 @@ const duplicateHandling: Check = async (open) => {
   await harness.deliver(batch);
   const retried = await harness.retry(batch);
   const [first, second] = harness.collector.deliveries;
-  if (!first || !second)
-    fail(
-      "The sink did not resend the batch after the collector's answer was lost",
-    );
+  check(
+    first && second,
+    "The sink did not resend the batch after the collector's answer was lost",
+  );
   const expected = sent.map((event) => event.id);
   const ids = (request: CollectorRequest) =>
     request.events.map((event) => event.id);
-  if (canonical(ids(first)) !== canonical(expected))
-    fail(
-      "The first delivery did not carry the events' ids in the order they were sent",
-    );
-  if (canonical(ids(second)) !== canonical(ids(first)))
-    fail(
-      "The resent batch did not carry the same ids in the same order as the first delivery",
-    );
+  check(
+    canonical(ids(first)) === canonical(expected),
+    "The first delivery did not carry the events' ids in the order they were sent",
+  );
+  check(
+    canonical(ids(second)) === canonical(ids(first)),
+    "The resent batch did not carry the same ids in the same order as the first delivery",
+  );
   const [conflict] = harness.collector.conflicts;
-  if (conflict)
-    fail(
-      `The sink resent event ${conflict} with content different from its first delivery, so a collector cannot tell it is a retry`,
-    );
-  if (harness.collector.stored.length !== sent.length)
-    fail(
-      `A collector that stores each id once stored ${harness.collector.stored.length} events for ${sent.length} sent`,
-    );
-  if (!retried.ok)
-    fail(
-      `The sink did not accept the collector's 2xx for a batch it had already stored: ${describeFailure(retried)}`,
-    );
+  check(
+    !conflict,
+    `The sink resent event ${conflict} with content different from its first delivery, so a collector cannot tell it is a retry`,
+  );
+  check(
+    harness.collector.stored.length === sent.length,
+    `A collector that stores each id once stored ${harness.collector.stored.length} events for ${sent.length} sent`,
+  );
+  check(
+    retried.ok,
+    `The sink did not accept the collector's 2xx for a batch it had already stored: ${describeFailure(retried)}`,
+  );
   return undefined;
 };
 

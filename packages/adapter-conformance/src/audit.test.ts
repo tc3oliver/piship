@@ -52,9 +52,31 @@ function forwardingSink(
   });
 }
 
+/**
+ * Forwards each batch to the collector and, when the delivery fails, rejects
+ * with the error `report` builds instead of the collector's answer.
+ */
+function reportingSink(
+  env: AuditSinkEnvironment,
+  report: (env: AuditSinkEnvironment) => Error,
+): AuditSink {
+  const inner = forwardingSink(env);
+  return defineAuditSink({
+    async write(batch, signal) {
+      try {
+        await inner.write(batch, signal);
+      } catch {
+        throw report(env);
+      }
+    },
+  });
+}
+
 interface BufferedOptions {
   /** Keep events past `maxEvents` instead of dropping them. */
   readonly unbounded?: boolean;
+  /** Quote the downstream credential in `lastError`. */
+  readonly quoteInLastError?: boolean;
   /** Drop overflow without counting it. */
   readonly uncounted?: boolean;
   /** A required sink drops overflow but never refuses the write. */
@@ -102,6 +124,8 @@ function bufferedSink(
         await inner.write({ schema: AUDIT_BATCH_SCHEMA, events }, abort.signal);
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+        if (options.quoteInLastError)
+          lastError += ` (authorization Bearer ${env.credential})`;
         if (env.required) return;
         queue.splice(0, remaining);
         dropped += remaining;
@@ -236,20 +260,40 @@ const PLAIN_BAD: readonly BadSink[] = [
   },
   {
     defect: "quotes its downstream credential in a delivery error",
-    create: (env) => {
-      const inner = forwardingSink(env);
-      return defineAuditSink({
-        async write(batch, signal) {
-          try {
-            await inner.write(batch, signal);
-          } catch {
-            throw new Error(
-              `delivery failed for authorization Bearer ${env.credential}`,
-            );
-          }
-        },
-      });
-    },
+    create: (env) =>
+      reportingSink(
+        env,
+        () =>
+          new Error(
+            `delivery failed for authorization Bearer ${env.credential}`,
+          ),
+      ),
+    fails: ["secret redaction"],
+  },
+  {
+    // The message is clean; only the cause carries the collector URL with the
+    // ingest token.
+    defect: "quotes its downstream credential in the cause of a delivery error",
+    create: (env) =>
+      reportingSink(
+        env,
+        () =>
+          new Error("delivery failed", {
+            cause: new TypeError(`POST ${env.url}?token=${env.credential}`),
+          }),
+      ),
+    fails: ["secret redaction"],
+  },
+  {
+    // Neither the message nor the enumerable properties hold it: only the
+    // stack, which a log or a crash report prints.
+    defect: "quotes its downstream credential in the stack of a delivery error",
+    create: (env) =>
+      reportingSink(env, () =>
+        Object.assign(new Error("delivery failed"), {
+          stack: `Error: delivery failed\n    at ingest (${env.url}?token=${env.credential})`,
+        }),
+      ),
     fails: ["secret redaction"],
   },
   {
@@ -421,6 +465,11 @@ const BUFFERED_BAD: readonly BadSink[] = [
     defect: "skips the flush on close",
     create: (env) => bufferedSink(env, { skipCloseFlush: true }),
     fails: ["shutdown flush"],
+  },
+  {
+    defect: "quotes its downstream credential in the status's last error",
+    create: (env) => bufferedSink(env, { quoteInLastError: true }),
+    fails: ["secret redaction"],
   },
 ];
 
