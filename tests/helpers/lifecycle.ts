@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   createReadStream,
@@ -21,6 +22,14 @@ import { expect, inject, onTestFinished } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, type Result } from "./distribution.js";
+import {
+  clearPlatformStore,
+  LIVE_SECRET_STORE,
+  platformStoreRefs,
+  primaryRefs,
+  type Storage,
+  shareKeychainSearchList,
+} from "./secret-store.js";
 
 // Shared, immutable release fixtures for the production lifecycle scenarios.
 // For each example distribution (the managed demo company and the personal
@@ -58,8 +67,10 @@ export interface LifecycleReleases extends ReleaseFixtures {
 
 /** An example distribution the lifecycle fixtures are built from. */
 interface Distribution {
-  /** Directory under `examples/`, also the fixture subdirectory. */
+  /** Directory under `examples/`. */
   readonly example: string;
+  /** Subdirectory of the run's fixture directory. */
+  readonly fixture: string;
   /** App ID, which is also the branded command. */
   readonly id: string;
   readonly name: string;
@@ -80,36 +91,55 @@ function pinKey(source: string, publicKey: string, version: string): string {
     .replace(/^ {2}version: \d+\.\d+\.\d+$/m, `  version: ${version}`);
 }
 
-const DEMO: Distribution = {
-  example: "demo-company",
-  id: "acmecode",
-  name: "AcmeCode",
-  updateVariable: "ACMECODE_UPDATE_SOURCE",
-  plainBuild: true,
-  patch(source, publicKey, version) {
-    const patched = pinKey(
-      source
-        .replace(
-          "provider: system",
-          "provider: file\n    acknowledgePlaintext: true",
-        )
-        .replace("127.0.0.1:8765", "127.0.0.1"),
-      publicKey,
-      version,
-    );
-    return windows
-      ? patched.replace(
-          "  required: true\n  filesystem:",
-          "  required: false\n  filesystem:",
-        )
-      : patched;
-  },
-};
+/**
+ * The demo company, storing its secrets in the file fallback or, as the
+ * example ships, in the system store. Platform store references are named
+ * after the app ID alone (`piship:<id>:...`), so the system variant has an ID
+ * of its own for each test run: it never meets an entry of a real install
+ * or of an earlier run.
+ */
+function demo(storage: Storage, fixtures: string): Distribution {
+  const id =
+    storage === "file"
+      ? "acmecode"
+      : `acmelive-${createHash("sha256").update(fixtures).digest("hex").slice(0, 8)}`;
+  return {
+    example: "demo-company",
+    fixture: storage === "file" ? "demo-company" : "demo-company-system",
+    id,
+    name: "AcmeCode",
+    updateVariable: "ACMECODE_UPDATE_SOURCE",
+    plainBuild: storage === "file",
+    patch(source, publicKey, version) {
+      const stored =
+        storage === "file"
+          ? source.replace(
+              "provider: system",
+              "provider: file\n    acknowledgePlaintext: true",
+            )
+          : source
+              .replace(/^( {2}(?:id|command)): acmecode$/gm, `$1: ${id}`)
+              .replace('resource: "acmecode/**"', `resource: "${id}/**"`);
+      const patched = pinKey(
+        stored.replace("127.0.0.1:8765", "127.0.0.1"),
+        publicKey,
+        version,
+      );
+      return windows
+        ? patched.replace(
+            "  required: true\n  filesystem:",
+            "  required: false\n  filesystem:",
+          )
+        : patched;
+    },
+  };
+}
 
 // The personal example needs no edit beyond the key and the version: it has
 // no enterprise endpoint, no system secret store, and no required sandbox.
 const PERSONAL: Distribution = {
   example: "personal",
+  fixture: "personal",
   id: "mypi",
   name: "MyPi",
   updateVariable: "MYPI_UPDATE_SOURCE",
@@ -316,7 +346,7 @@ async function sharedReleases(
   distribution: Distribution,
   fixtures: string = inject("lifecycleFixtures"),
 ): Promise<ReleaseFixtures & { buildInventory?: string }> {
-  const directory = join(fixtures, distribution.example);
+  const directory = join(fixtures, distribution.fixture);
   mkdirSync(directory, { recursive: true });
   const ready = join(directory, "ready.json");
   const failed = join(directory, "failed.txt");
@@ -354,7 +384,9 @@ async function sharedReleases(
 
 /** The demo company's shared release fixtures, built on first use. */
 export async function lifecycleReleases(): Promise<LifecycleReleases> {
-  const { buildInventory, ...releases } = await sharedReleases(DEMO);
+  const { buildInventory, ...releases } = await sharedReleases(
+    demo("file", inject("lifecycleFixtures")),
+  );
   if (!buildInventory)
     throw new Error("demo lifecycle fixtures have no build inventory");
   return { ...releases, buildInventory };
@@ -366,16 +398,20 @@ export function personalReleases(): Promise<ReleaseFixtures> {
 }
 
 /**
- * Build both distributions' fixtures into `fixtures` before any scenario
+ * Build the distributions' fixtures into `fixtures` before any scenario
  * starts, through the same election the scenarios use, so they find them
- * ready instead of building while other E2E files compete for the CPU.
+ * ready instead of building while other E2E files compete for the CPU. The
+ * system-store demo is built only when the platform store is live.
  */
 export async function prebuildLifecycleFixtures(
   fixtures: string,
 ): Promise<void> {
   await Promise.all([
-    sharedReleases(DEMO, fixtures),
+    sharedReleases(demo("file", fixtures), fixtures),
     sharedReleases(PERSONAL, fixtures),
+    ...(LIVE_SECRET_STORE
+      ? [sharedReleases(demo("system", fixtures), fixtures)]
+      : []),
   ]);
 }
 
@@ -459,10 +495,77 @@ export interface BaseScenario<Releases extends ReleaseFixtures> {
   publish(sequence: 1 | 2): void;
 }
 
-export interface Scenario extends BaseScenario<LifecycleReleases> {
+export interface Scenario extends BaseScenario<ReleaseFixtures> {
   readonly services: Services;
   /** Run the installed branded command; acts as the browser for sign-in. */
   run(args: string[]): Promise<Result>;
+  /** The app ID, which is also the branded command. */
+  readonly id: string;
+  /** Where the distribution stores its secrets. */
+  readonly storage: Storage;
+  /**
+   * The platform store entries of this distribution, parts of split values
+   * included; only names are read. For `system` storage only.
+   */
+  storeRefs(): string[];
+  /** The secret references the identity and credential metadata name. */
+  metadataRefs(): string[];
+  /**
+   * Assert that the secret store holds exactly `refs` (by default the ones
+   * the metadata names). With system storage the platform store lists them,
+   * each with only its own parts, and the file fallback does not exist, so
+   * nothing silently degraded to it; with file storage the fallback holds
+   * one file per reference. Returns the platform store listing (empty for
+   * file storage).
+   */
+  expectSecretStore(refs?: readonly string[]): string[];
+}
+
+function metadataRefs(state: string): string[] {
+  const read = (path: string, field: string): string[] => {
+    if (!existsSync(path)) return [];
+    const value = JSON.parse(readFileSync(path, "utf8"))[field];
+    return typeof value === "string" ? [value] : [];
+  };
+  return [
+    ...read(join(state, "identity", "session.json"), "secretRef"),
+    ...read(
+      join(state, "credentials-metadata", "inference.json"),
+      "credential_ref",
+    ),
+  ].sort();
+}
+
+function expectSecretStore(
+  storage: Storage,
+  state: string,
+  storeRefs: () => string[],
+  refs: readonly string[] = metadataRefs(state),
+): string[] {
+  const expected = [...refs].sort();
+  const fallback = join(state, "secrets");
+  if (storage === "file") {
+    expect(existsSync(fallback) ? readdirSync(fallback).sort() : []).toEqual(
+      expected
+        .map(
+          (ref) => `${createHash("sha256").update(ref).digest("hex")}.secret`,
+        )
+        .sort(),
+    );
+    return [];
+  }
+  expect(existsSync(fallback), "the file fallback in managed mode").toBe(false);
+  const listed = storeRefs();
+  expect(primaryRefs(listed)).toEqual(expected);
+  expect(
+    listed.filter(
+      (ref) =>
+        ref.includes("+") &&
+        !expected.some((primary) => ref.startsWith(`${primary}+`)),
+    ),
+    "parts without their primary",
+  ).toEqual([]);
+  return listed;
 }
 
 export type PersonalScenario = BaseScenario<ReleaseFixtures>;
@@ -581,19 +684,115 @@ async function createScenario<Releases extends ReleaseFixtures>(
 }
 
 /**
+ * Hold the platform store for one system-store scenario at a time. Every
+ * such scenario of a run shares one app ID, so its references, and the
+ * teardown that clears them, would otherwise meet those of a scenario
+ * running in parallel in another file.
+ */
+async function leasePlatformStore(fixtures: string): Promise<() => void> {
+  const lease = join(fixtures, "platform-store.lease");
+  for (;;) {
+    try {
+      mkdirSync(lease);
+      return () => rmSync(lease, { recursive: true, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+/**
  * A fresh, isolated demo lifecycle environment over the shared releases: its
  * own fixture services, update host, home, state, install home, and bin home.
  * Everything is torn down when the calling test finishes.
+ *
+ * With `storage: "system"` the distribution keeps the example's platform
+ * secret store, which needs PISHIP_LIVE_SECRET_STORE=1; it starts with no
+ * entry of its app ID in the store and deletes whatever it left on teardown.
  */
-export async function lifecycleScenario(name: string): Promise<Scenario> {
-  const releases = await lifecycleReleases();
-  const services: Services = await startLocalServices();
-  const scenario = await createScenario(DEMO, releases, name, {
-    env: services.env(),
-    approve: (url) => services.approve(url),
-    close: () => services.close(),
-  });
-  return { ...scenario, services };
+export async function lifecycleScenario(
+  name: string,
+  options: { readonly storage?: Storage } = {},
+): Promise<Scenario> {
+  const storage = options.storage ?? "file";
+  if (storage === "file") {
+    const releases = await lifecycleReleases();
+    const services: Services = await startLocalServices();
+    const scenario = await createScenario(
+      demo("file", inject("lifecycleFixtures")),
+      releases,
+      name,
+      {
+        env: services.env(),
+        approve: (url) => services.approve(url),
+        close: () => services.close(),
+      },
+    );
+    const state = join(scenario.state, "acmecode");
+    const storeRefs = (): string[] => {
+      throw new Error("A file-storage scenario has no platform store");
+    };
+    return {
+      ...scenario,
+      services,
+      id: "acmecode",
+      storage,
+      storeRefs,
+      metadataRefs: () => metadataRefs(state),
+      expectSecretStore: (refs) =>
+        expectSecretStore(storage, state, storeRefs, refs),
+    };
+  }
+  if (!LIVE_SECRET_STORE)
+    throw new Error(
+      "A system-storage scenario writes to the platform secret store; set PISHIP_LIVE_SECRET_STORE=1",
+    );
+  const fixtures = inject("lifecycleFixtures");
+  const distribution = demo("system", fixtures);
+  const releases = await sharedReleases(distribution, fixtures);
+  const prefix = `piship:${distribution.id}:`;
+  const release = await leasePlatformStore(fixtures);
+  let services: Services | undefined;
+  let scenario: BaseScenario<ReleaseFixtures>;
+  // Set once the scenario's environment reaches the store; the teardown
+  // clears the store through it.
+  let storeEnv: NodeJS.ProcessEnv | undefined;
+  try {
+    services = (await startLocalServices()) as Services;
+    const started = services;
+    scenario = await createScenario(distribution, releases, name, {
+      env: started.env(),
+      approve: (url) => started.approve(url),
+      close: async () => {
+        try {
+          await started.close();
+          if (storeEnv) clearPlatformStore(prefix, storeEnv);
+        } finally {
+          release();
+        }
+      },
+    });
+  } catch (error) {
+    await services?.close();
+    release();
+    throw error;
+  }
+  shareKeychainSearchList(scenario.home);
+  storeEnv = scenario.env;
+  const storeRefs = () => platformStoreRefs(prefix, scenario.env);
+  expect(storeRefs(), "entries left by an earlier scenario").toEqual([]);
+  const state = join(scenario.state, distribution.id);
+  return {
+    ...scenario,
+    services,
+    id: distribution.id,
+    storage,
+    storeRefs,
+    metadataRefs: () => metadataRefs(state),
+    expectSecretStore: (refs) =>
+      expectSecretStore(storage, state, storeRefs, refs),
+  };
 }
 
 /**
