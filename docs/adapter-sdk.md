@@ -260,3 +260,74 @@ What a result means:
 - `skipped`: the kit could not exercise the behavior, and `reason` says why: the adapter has no `refresh()` or `logout()`, a workload adapter does not use it, there is no harness (`needs harness: ...`), or the harness cannot mint that kind of token. A skipped behavior is never counted as passed, and a skipped token behavior means token validation is untested, not that it is safe.
 
 The kit's own tests run it against a reference device-style adapter and a reference workload adapter, which pass, with and without a harness, and against variants seeded with one defect each, which fail exactly one behavior: a subject swapped on refresh, a refresh token returned in `claims`, a token leaked in an error's cause, an outage reported as `IDENTITY_INVALID`, `invalid_grant` reported as an uncoded error, a browser opened by a workload adapter, an ignored expiry, a logout that throws for a revoked session, and, with a harness, an adapter that accepts a wrong issuer, a wrong audience, a bad signature, an expired token, or a revoked one.
+
+## Sandbox conformance kit
+
+`testSandboxAdapter` from `@piship/adapter-conformance` runs a sandbox backend the way PiShip does, through `available`, `capabilities`, `prepare`, `exec`, and `dispose`, and reports each behavior of the [sandbox contract](sandbox.md#the-contract) as `passed`, `failed`, or `skipped`. It checks claims by running commands inside the backend, not by reading the declaration: a file the kit plants on this host must stay unreadable, a loopback listener the kit runs must stay unreachable with the network denied, a variable the kit plants in the launcher's environment must not arrive, and a timed-out or cancelled command must not write the marker it would write a second later. For a backend that declares a `shared` or `synchronized` workspace it runs PiShip's [workspace check](sandbox.md#the-workspace-check) and git control probe. The kit imports only `@piship/adapter-sdk` and `node:` built-ins.
+
+```ts
+import { testSandboxAdapter } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+import acmeSandbox from "./acme-sandbox.mjs";
+import { countSessions, replacePod } from "./acme-test-service.js";
+
+it("meets the PiShip sandbox contract", async () => {
+  const report = await testSandboxAdapter(acmeSandbox, {
+    // A test instance of the company's sandbox service.
+    context: { endpoint: "http://127.0.0.1:8080" },
+    // Hooks the kit cannot provide: they enable cleanup and the epoch check.
+    sandboxes: () => countSessions(),
+    replaceEnvironment: (instance) => replacePod(instance.epoch?.()),
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+}, 300_000);
+```
+
+The first argument is what the adapter module default-exports, the factory `defineSandboxAdapter` returns. A backend object also works, but then the kit cannot give it a context of its own, and the checks that simulate an unreachable service reach the real one. The kit calls the factory once per check with a context it controls: `endpoint` and `distributionId` from the options, a `fetch` that wraps the one in the options (default: the global `fetch`), and a `credential()` that returns a fake sentinel value, so the kit can see where the credential goes. Every command the kit sends is POSIX `sh` and needs `cat`, `mkdir`, `mv`, `printf`, `sleep`, and `env` in the sandbox; the network check also needs `nc` or `bash`. A call that does not end within `callTimeoutMs` fails its check instead of hanging it.
+
+A backend runs for real, so the kit runs against a test instance of the company's sandbox service, in a test file inside a checkout of this repository (the package is private and unpublished). A shared-workspace backend must see the directory the kit uses as its workspace: pass `workspace`, an empty directory the service mounts, or let the kit create a temporary one.
+
+Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `context` | none | `endpoint`, `fetch`, and `distributionId` for the adapter's context |
+| `workspace` | a new temporary directory | An empty directory the sandbox sees as its workspace. The kit writes a `.git` directory and its own scratch directory there and removes both afterwards; a directory that is not empty is refused |
+| `sandboxes()` | none | Hook: how many sandboxes (sessions, pods, VMs) the service holds now. Enables `cleanup` |
+| `replaceEnvironment(instance)` | none | Hook: move the instance to a new environment behind its back, as a service does when it replaces an expired pod. Enables the epoch part of `workspace re-check` |
+| `networkTarget` | a loopback listener the kit runs | `{host, port}` of a TCP listener the sandbox would reach if its network were allowed. A remote sandbox cannot reach this host's loopback, so a remote backend passes one to get a network result |
+| `settleMs` | `5000`, PiShip's | How long the backend has to settle after `io.signal` aborted |
+| `callTimeoutMs` | `30000` | The longest one backend call may take |
+| `sharedWindowMs` | `10000`, PiShip's | The window a declared `shared` workspace gets per direction; a `synchronized` one gets its `propagationMs` |
+| `only` | all | Run only these behaviors while iterating on one; the others are `skipped` as not selected |
+
+The report is `{kind: "sandbox", results}`, one result per behavior in this order. `SANDBOX_CONTRACT` exports the same statements, and `SANDBOX_BEHAVIORS` the names.
+
+| Behavior | The backend passes when |
+| --- | --- |
+| `availability` | `available()` resolves `{available: true}` in the kit's context, and with its service unreachable (the context's `fetch` refuses the connection) it resolves `{available: false, reason}` with a non-empty reason, or still `true` when it needs no service. It never throws |
+| `capabilities` | `capabilities()` is well formed and the same on a second call: `local` or `remote`, known guarantees named once, network modes `deny` and `allow` only, `network-deny` claimed exactly when `deny` is listed, `environment-filter`, `localProcesses` only for a local backend, and a valid workspace declaration (a known mode, `propagationMs` from 1 to 60000 on `synchronized` only, a workspace-relative `sentinelDir` without `..` or `\` and never on `snapshot`). A local backend claims both `filesystem-*` planes and never `host-filesystem-isolation` or `workspace-confinement`; a remote `snapshot` backend claims `host-filesystem-isolation`; a remote `shared` or `synchronized` one claims `workspace-confinement` and `git-control-protection` and never `host-filesystem-isolation` |
+| `prepare` | `prepare(profile)` resolves an instance with `exec()` and `dispose()` (and `wrap()` when it declares `localProcesses`), and every call creates its own sandbox: after one instance is disposed, another still runs commands |
+| `execute` | A command runs at the workspace path it was given, sees an environment value exactly as given (spaces, quotes, `$`, a backslash, and non-ASCII kept), its stdout arrives on `onStdout` and its stderr on `onStderr`, and exit 7 and exit 0 are reported as such |
+| `environment filtering` | A command receives exactly the request's environment: two variables the kit plants in the launcher's own environment (one named like a credential) never arrive, and an allowlisted variable the launcher also has arrives with the approved value, not the launcher's |
+| `secret leakage` | The context's credential never appears in `available()`, `capabilities()`, `epoch()`, a command's environment or output, an error from `exec()`, `dispose()`, `available()`, or `prepare()` (also after a transport error that quotes the credential and a 401 whose body and header echo it; causes are checked too), or a line the backend logs. With `endpoint` set, it is sent to that origin only |
+| `filesystem claims` | Each claimed filesystem guarantee holds for a command inside the sandbox: `host-filesystem-isolation` and `workspace-confinement` keep a file planted on this host outside the workspace unreadable and unwritable; `filesystem-read-deny` keeps a `readDeny` path unreadable; `filesystem-write-allowlist` allows a write in the workspace and refuses one outside `writeAllow`; a local backend's `git-control-protection` keeps `.git/config` and `.git/hooks` read-only. `skipped` for a backend that claims none |
+| `network claims` | With the profile's network denied, a command cannot connect to the kit's listener (or `networkTarget`); with it allowed, the same command connects, which shows the attempt would have noticed a connection. `skipped` when the backend does not claim `network-deny`, enforces only `deny`, has neither `nc` nor `bash`, or cannot reach the listener even with the network allowed; a refused connection alone never passes |
+| `timeout` | When the kit aborts `io.signal` for a command that is running (after its first output, or after a fixed time for a backend that returns output only at the end), `exec()` settles within `settleMs`, the command and the processes it started stop, so the marker a background child would write a second later never appears, and the instance runs the next command |
+| `cancellation` | An abort that arrives while the backend is still setting the command up, and one that arrives before the command printed anything, both stop the command. A backend that does not settle within `settleMs` is retired as PiShip would retire it: the kit disposes the instance, and `dispose()` must then stop the command. `skipped` when the command had to be retired and the kit cannot see inside the disposed sandbox (a remote workspace that is not shared) |
+| `cleanup` | `dispose()` removes what `prepare()` created: `sandboxes()` reports no more sandboxes after `dispose()` than before `prepare()`. `skipped` without the `sandboxes` hook |
+| `dispose` | `dispose()` of an instance with a command still running resolves without throwing, the command ends within `settleMs` (and, where the kit can see the workspace, never writes its marker), a second `dispose()` resolves, and `exec()` afterwards never reports a command as run |
+| `fail-closed behavior` | The backend never reports a result it did not observe: a command that cannot run in the sandbox is not reported with exit 0, and PiShip's own sandbox check is run like any other command, never answered by the backend itself (the kit sends it with the marker variable set, and the answer must show the value). A backend that answered the check without running it would let PiShip report guarantees nobody verified as enforced |
+| `workspace consistency` | A declared `shared` or `synchronized` workspace passes PiShip's two-way sentinel on a fresh instance: the sandbox sees a file the host wrote, and the host sees a file the sandbox wrote, both at once for `shared` (a delay means `synchronized`, not `shared`) and within `propagationMs` for `synchronized`. The check command must complete |
+| `git control protection` | With a `shared` or `synchronized` workspace, appending zero bytes to `.git/config` and creating a file in `.git/hooks` and `.git/info` all fail from inside the sandbox, the check command completes (a check that cannot run fails, as PiShip fails closed), and nothing on the host changed. Renames are not tried: they would be destructive, and PiShip leaves them attested |
+| `workspace re-check` | The workspace stays consistent across a session. On the kit's own clock, a command inside PiShip's 30-minute validity window is not checked again, and one after it is checked and passes. `epoch()`, when present, returns a non-empty, non-secret string or `undefined` and stays the same while the environment does. With `replaceEnvironment`, `epoch()` must change after the replacement (an instance without `epoch()` fails, since PiShip would never check the new environment) and the sentinel must pass in the new environment |
+
+The three workspace behaviors are `skipped` for a local backend, whose workspace is `shared` by construction, and for a backend that declares `snapshot`, with a reason that begins `declares snapshot`: a snapshot is never a complete coding-agent workspace, so there is nothing to verify and nothing to pass. `workspace re-check` is also `skipped` when the first sentinel did not pass; `workspace consistency` carries that failure.
+
+What a result means:
+
+- `passed`: the kit exercised the behavior and the backend met every statement in its row.
+- `failed`: `reason` names the first statement the backend broke, such as `a command in the sandbox read a file on this host outside the workspace` or `the host did not see a file the sandbox wrote within 10000 ms`. A reason carries no credential, planted value, or command output; an error is named by its code or class and a short redacted message.
+- `skipped`: the kit could not exercise the behavior, and `reason` says why and, where a hook would help, which one. A skipped behavior is never counted as passed.
+
+While `environment filtering` runs, the kit sets `PISHIP_CONFORMANCE_HOST_TOKEN`, `PISHIP_CONFORMANCE_HOST_ONLY`, and `PISHIP_CONFORMANCE_APPROVED` in `process.env`; while `secret leakage` runs, it watches `console` and `process.stdout` and `stderr` and passes each line on with the fake credential removed. Both are restored afterwards, also when several kit runs share a process. The kit's own tests (`packages/adapter-conformance/src/sandbox.test.ts`) run it against reference backends that really run each command under Seatbelt (macOS) or bubblewrap (Linux): a local one, a remote snapshot, a remote shared workspace, a remote synchronized one with a timer-driven copier, and one that returns output only when a command ends. They pass, and a reference seeded with one defect per behavior fails that behavior and no other. Those tests are skipped on Windows and wherever neither mechanism can run.
