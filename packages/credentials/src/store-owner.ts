@@ -26,16 +26,28 @@ export function secretStoreProvider(store: {
 
 /**
  * The secret store a metadata file or discarded marker records as holding
- * its references (`secret_store`), read from its text so that a damaged
- * file still answers. Undefined when none is recorded: such a file was
+ * its references (`secret_store`). A file that parses answers with its
+ * top-level field alone, so a nested key of the same name (a claim, say)
+ * never picks the store; only a damaged file, which no longer parses, is
+ * searched in its text. Undefined when none is recorded: such a file was
  * written, before the store was recorded, through the store of the release
  * that wrote it.
  */
 export function recordedSecretStore(
   text: string,
 ): SecretStoreProvider | undefined {
-  const match = /"secret_store"\s*:\s*"(file|system)"/.exec(text);
-  return match?.[1] as SecretStoreProvider | undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const match = /"secret_store"\s*:\s*"(file|system)"/.exec(text);
+    return match?.[1] as SecretStoreProvider | undefined;
+  }
+  const recorded =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { secret_store?: unknown }).secret_store
+      : undefined;
+  return recorded === "file" || recorded === "system" ? recorded : undefined;
 }
 
 /** `recordedSecretStore` of the file at `path`; undefined when there is none. */
