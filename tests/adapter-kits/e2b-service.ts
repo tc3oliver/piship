@@ -118,7 +118,13 @@ export class E2bService {
         const data = (key: "stdout" | "stderr") => (chunk: Buffer) =>
           send({ event: { data: { [key]: chunk.toString("base64") } } });
         const run = runIsolated(
-          { root: sandbox.root, network: sandbox.network },
+          {
+            root: sandbox.root,
+            network: sandbox.network,
+            // SendSignal to the process alone must leave what it started
+            // running, on Linux as on macOS.
+            hostProcesses: this.signalScope === "process",
+          },
           cwd,
           // The command is `/bin/bash -l -c <command>`.
           start.process.args.at(-1) ?? "",

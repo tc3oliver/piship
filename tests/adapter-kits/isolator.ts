@@ -18,6 +18,15 @@ export interface Isolation {
   /** The one directory the command may read and write. */
   readonly root: string;
   readonly network: "deny" | "allow";
+  /**
+   * Keep the command's processes in this host's process space, as Seatbelt
+   * does, so that a signal to the process the service started reaches only
+   * it: what it started in the background runs on. Bubblewrap's own process
+   * space ends every process of the sandbox when its first one dies, so
+   * without this a service that signals only that process would stop the
+   * whole command on Linux and let it run on on macOS.
+   */
+  readonly hostProcesses?: boolean;
 }
 
 const sbpl = (path: string) => `"${path.replace(/[\\"]/g, "\\$&")}"`;
@@ -36,8 +45,19 @@ function seatbelt(spec: Isolation): string {
 }
 
 function bubblewrap(spec: Isolation, cwd: string): string[] {
-  const args = ["--die-with-parent", "--unshare-all"];
-  if (spec.network === "allow") args.push("--share-net");
+  const args = ["--die-with-parent"];
+  if (spec.hostProcesses)
+    args.push(
+      "--unshare-user",
+      "--unshare-ipc",
+      "--unshare-uts",
+      "--unshare-cgroup-try",
+      ...(spec.network === "deny" ? ["--unshare-net"] : []),
+    );
+  else {
+    args.push("--unshare-all");
+    if (spec.network === "allow") args.push("--share-net");
+  }
   args.push("--ro-bind", "/usr", "/usr");
   for (const dir of ["/bin", "/sbin", "/lib", "/lib64", "/lib32", "/libx32"]) {
     let stat: ReturnType<typeof lstatSync> | undefined;
@@ -49,12 +69,10 @@ function bubblewrap(spec: Isolation, cwd: string): string[] {
     if (stat.isSymbolicLink()) args.push("--symlink", readlinkSync(dir), dir);
     else args.push("--ro-bind", dir, dir);
   }
+  args.push("--ro-bind-try", "/etc/ld.so.cache", "/etc/ld.so.cache");
+  // A fresh /proc needs a process space of the sandbox's own.
+  if (!spec.hostProcesses) args.push("--proc", "/proc");
   args.push(
-    "--ro-bind-try",
-    "/etc/ld.so.cache",
-    "/etc/ld.so.cache",
-    "--proc",
-    "/proc",
     "--dev",
     "/dev",
     "--tmpfs",
