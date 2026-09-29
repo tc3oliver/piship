@@ -157,9 +157,16 @@ function parseBackend(
   const credential = oneOf(
     sandbox.credential,
     "sandbox.credential",
-    ["none", "runtime"] as const,
+    ["none", "runtime", "stored"] as const,
     "none",
   );
+  // A stored credential is bound to the endpoint's origin; without an
+  // endpoint there is nothing to bind it to.
+  if (credential === "stored" && sandbox.endpoint === undefined)
+    fail(
+      "sandbox.endpoint",
+      "sandbox.credential: stored needs the endpoint the credential is sent to",
+    );
   return {
     provider,
     ...(sandbox.adapter === undefined
@@ -211,7 +218,7 @@ function parseBackend(
             "Use a POSIX user name such as user or root",
           ),
         }),
-    ...(credential === "runtime" ? { credential } : {}),
+    ...(credential === "none" ? {} : { credential }),
   };
 }
 

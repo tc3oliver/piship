@@ -1700,6 +1700,83 @@ describe("sandbox backends", () => {
       network: { mode: "deny" },
     });
   });
+  it("accepts credential: stored for every remote provider, and keeps none out of the parsed (and locked) section", () => {
+    const e2b = {
+      required: true,
+      provider: "e2b-compatible",
+      endpoint: `\${ACME_SANDBOX_URL}`,
+    };
+    expect(
+      governance(withSandbox({ ...e2b, credential: "stored" })).sandbox
+        .credential,
+    ).toBe("stored");
+    expect(
+      governance(
+        withSandbox({
+          required: true,
+          provider: "kubernetes-agent-sandbox",
+          endpoint: "https://k8s.example.com",
+          router: `\${ACME_ROUTER_URL}`,
+          template: "python-pool",
+          credential: "stored",
+        }),
+      ).sandbox.credential,
+    ).toBe("stored");
+    expect(
+      governance(
+        withSandbox({
+          required: true,
+          provider: "custom",
+          adapter: "./sandbox/acme-sandbox.mjs",
+          endpoint: "https://sandbox.acme.example",
+          credential: "stored",
+        }),
+      ).sandbox.credential,
+    ).toBe("stored");
+    // `none` parses to the same section as an omitted field, so the lock's
+    // sandbox digest changes only for a manifest that uses a credential.
+    expect(
+      governance(withSandbox({ ...e2b, credential: "none" })).sandbox,
+    ).toEqual(governance(withSandbox(e2b)).sandbox);
+    expect(
+      governance(withSandbox({ ...e2b, credential: "stored" })).sandbox,
+    ).not.toEqual(governance(withSandbox(e2b)).sandbox);
+  });
+  it.each([
+    [{ required: true, credential: "stored" }, "sandbox.credential"],
+    [
+      {
+        required: true,
+        provider: "custom",
+        adapter: "./sandbox/acme-sandbox.mjs",
+        credential: "stored",
+      },
+      "sandbox.endpoint",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        credential: "Stored",
+      },
+      "sandbox.credential",
+    ],
+    [
+      {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "https://s.example.com",
+        credential: { stored: "fake-secret-value-0001" },
+      },
+      "sandbox.credential",
+    ],
+  ])(
+    "rejects a stored credential where it cannot be used %#",
+    (value, field) => {
+      rejects(withSandbox(value), field);
+    },
+  );
   it("accepts an e2b-compatible user, such as root for CubeSandbox, and keeps the E2B default otherwise", () => {
     const cube = governance(
       withSandbox({
