@@ -97,6 +97,14 @@ function observe(lock: string): string | undefined {
  * still the lock observed without progress, and only then delete it. A lock
  * that changed meanwhile (a heartbeat, or a new holder) is put back unless a
  * new lock already took its place.
+ *
+ * Limit: a holder that heartbeats just after the waiter last looked is moved
+ * aside and put back; if a third process creates the lock in between, the put
+ * back fails, the aside copy is deleted, and that holder resumes without its
+ * lock and is not told. Two holders then run until the first releases (each
+ * removes only a lock carrying its own token). The window is microseconds and
+ * only opens for a holder that made no progress for the whole stale interval;
+ * a lock file has no compare-and-delete to close it.
  */
 function breakStaleLock(lock: string, observed: string): void {
   // Only a regular file is a lock: never move or delete a directory or a
@@ -137,6 +145,11 @@ function breakStaleLock(lock: string, observed: string): void {
  * an abandoned lock forever. The caller's wait is monotonic as well; after
  * it, the caller fails with a retryable error. The lock is reentrant within
  * one call chain (see `holdsFileLock`).
+ *
+ * A lease has a limit: a holder that makes no progress for the whole stale
+ * interval (a stopped process, a suspended VM, a very long blocking call)
+ * loses its lock to a waiter and is not told; its task runs on beside the
+ * new holder's.
  */
 export async function withFileLock<T>(
   path: string,

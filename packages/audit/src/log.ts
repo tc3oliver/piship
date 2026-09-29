@@ -409,6 +409,13 @@ class FileSinkWriter implements AuditSink {
    * first, so only one process's rename of that file succeeds; a lock that
    * changed in between is put back and given up, not reused. A directory or
    * symlink at the lock's path is never touched.
+   *
+   * Limit: if a third process creates the lock between that rename and the
+   * put-back, the put-back fails and the rotator that was moved aside carries
+   * on without its lock. Two rotations can then overlap; the worst outcome is
+   * one rotated file dropped before its retention is up, never a torn or
+   * duplicated line (every step is a rename, and a rotator re-reads its
+   * token and the generation before it starts).
    */
   private async acquireRotationLock(
     lock: string,
