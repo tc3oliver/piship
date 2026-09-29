@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
+import type { SecretStoreResolver } from "@piship/credentials";
 import {
   binHome,
   installHome,
@@ -93,6 +94,14 @@ export interface LifecycleOptions {
    * from, stops the switch.
    */
   readonly secretStore?: SecretStore;
+  /**
+   * The store of the other storage provider, for deleting what a credential
+   * file records as held by it (`credential.storage.provider` changed since
+   * it was written). Production creates it; without a resolver, such
+   * references stay tracked and stop the switch, so a test with an injected
+   * `secretStore` never reaches a real platform store by accident.
+   */
+  readonly secretStoreFor?: SecretStoreResolver;
   /**
    * Best-effort remote revocation of the runtime credential by the release
    * that can still read it, before it is cleared. A failure is a warning;

@@ -18,8 +18,13 @@ import { PiShipError, redact } from "@piship/contracts";
 import {
   deleteSecretsVerified,
   metadataFileSecretRefs,
+  metadataFileSecretStore,
   metadataSecretRefs,
+  secretStoreProvider,
+  storeForRecorded,
+  withFileLock,
 } from "@piship/credentials";
+import { accessStatePaths } from "../access/state.js";
 import { runtimeStateDirectory, type DistributionLock } from "../index.js";
 import {
   syncDirectory,
@@ -269,17 +274,27 @@ export function repairStateMarker(id: string, lock: DistributionLock): void {
  * current release can read it and the distribution supports revocation. The
  * target signs in or reacquires; an old credential is never restored.
  *
- * Every deletion is confirmed. When a secret cannot be deleted, or there is
- * no secret store to delete it from, no metadata is removed, so every secret
+ * Every deletion is confirmed, from the store each file records as holding
+ * its references (`options.secretStoreFor` resolves the one that is not the
+ * configured store). When a secret cannot be deleted, or there is no secret
+ * store to delete it from, no metadata is removed, so every secret
  * stays tracked, and this throws SECRET_STORE_UNAVAILABLE before anything is
  * activated: a release that cannot read the metadata must never be left with
  * secrets that nothing references.
+ *
+ * The deletion and the removal of the metadata run under the credential lock
+ * and then the identity lock, the order a sign-in takes them: a live session
+ * of the active release cannot commit a new generation between the two and
+ * leave its secret with no metadata naming it.
  */
 export async function clearCredentials(
   stateDir: string,
   distributionId: string,
   report: MigrationReport,
-  options: Pick<LifecycleOptions, "secretStore" | "revokeCredential">,
+  options: Pick<
+    LifecycleOptions,
+    "secretStore" | "secretStoreFor" | "revokeCredential"
+  >,
 ): Promise<string[]> {
   const notices: string[] = [];
   const items = report.items.filter(
@@ -308,6 +323,28 @@ export async function clearCredentials(
         `The runtime credential could not be revoked remotely (${redact(error instanceof Error ? error.message : String(error))}); it was cleared locally`,
       );
     }
+  if (items.length) {
+    const paths = accessStatePaths(stateDir);
+    // A lock needs its directory; where it is missing, nothing was written.
+    const locked = (path: string, task: () => Promise<void>) =>
+      existsSync(dirname(path)) ? withFileLock(path, task) : task();
+    await locked(paths.credential, () =>
+      locked(paths.identity, () =>
+        clearItems(stateDir, distributionId, items, notices, options),
+      ),
+    );
+  }
+  return notices;
+}
+
+/** Delete the secrets of `items` and confirm it, then remove their metadata. */
+async function clearItems(
+  stateDir: string,
+  distributionId: string,
+  items: MigrationReport["items"],
+  notices: string[],
+  options: Pick<LifecycleOptions, "secretStore" | "secretStoreFor">,
+): Promise<void> {
   const failed: { ref: string; problem: string }[] = [];
   for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
@@ -332,13 +369,27 @@ export async function clearCredentials(
       ].sort();
     }
     if (!refs.length) continue;
-    if (options.secretStore)
-      failed.push(...(await deleteSecretsVerified(options.secretStore, refs)));
+    // The store the file records holds them, not necessarily the configured
+    // one: looking them up there would find nothing, and the deletion would
+    // count as confirmed while the secret stays.
+    const configured = options.secretStore;
+    const recorded = metadataFileSecretStore(path);
+    const store = configured
+      ? storeForRecorded(
+          configured,
+          secretStoreProvider(configured),
+          recorded,
+          options.secretStoreFor,
+        )
+      : null;
+    if (store) failed.push(...(await deleteSecretsVerified(store, refs)));
     else
       failed.push(
         ...refs.map((ref) => ({
           ref,
-          problem: "no secret store is available to delete it",
+          problem: configured
+            ? `the ${recorded} secret store that holds it is not available`
+            : "no secret store is available to delete it",
         })),
       );
   }
@@ -364,9 +415,7 @@ export async function clearCredentials(
         : `${item.name} was cleared because the target cannot read it; sign in again`,
     );
   }
-  if (notices.length)
-    rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
-  return notices;
+  rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
 }
 
 export function checkPayload(

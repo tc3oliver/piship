@@ -8,13 +8,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type SecretStore, SecretValue } from "@piship/contracts";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
   type SecretStoreProvider,
+  withFileLock,
 } from "@piship/credentials";
 import {
   type AccessManifest,
@@ -367,6 +368,156 @@ describe("purge after a storage provider change", () => {
     expect(result.deletedSecrets).toEqual([]);
     expect(platform.deleted).toEqual([]);
     expect(existsSync(stateDir())).toBe(false);
+  });
+});
+
+/** A file store whose deletions wait until the test lets them go. */
+class GatedFileStore extends RestrictedFileSecretStore {
+  constructor(
+    directory: string,
+    private readonly entered: () => void,
+    private readonly gate: Promise<void>,
+  ) {
+    super(directory);
+  }
+  override async delete(ref: string): Promise<void> {
+    this.entered();
+    await this.gate;
+    return super.delete(ref);
+  }
+}
+
+describe("clearing what the target cannot read", () => {
+  const switching = (from: SecretStoreProvider, to: SecretStoreProvider) =>
+    checkStateMigration(
+      stateDir(),
+      { version: "1.1.0", pi: "0.87.1", schemas: STATE_SCHEMAS, storage: to },
+      { version: "1.0.0", pi: "0.87.1", storage: from },
+    );
+
+  /**
+   * Signed in with the file store, then the identity's tokens are in the
+   * platform store and its session says so: what a Pi session of the old
+   * release leaves when it refreshes the identity after the switch cleared
+   * it.
+   */
+  async function identityInPlatformStore(): Promise<string> {
+    await login(open("file"));
+    const identity = JSON.parse(readFileSync(identityFile(), "utf8"));
+    await platform.put(
+      identity.secretRef,
+      (await fileStore().get(identity.secretRef)) as SecretValue,
+    );
+    await fileStore().delete(identity.secretRef);
+    writeFileSync(
+      identityFile(),
+      JSON.stringify({ ...identity, secret_store: "system" }),
+    );
+    return identity.secretRef;
+  }
+
+  it("deletes the secrets of each file from the store that file records", async () => {
+    const identityRef = await identityInPlatformStore();
+    const [, credentialRef] = stateRefs();
+    expect(platform.refs()).toContain(identityRef);
+    const notices = await clearCredentials(
+      stateDir(),
+      ID,
+      switching("file", "system"),
+      { secretStore: fileStore(), secretStoreFor: storeOf },
+    );
+    expect(notices).toHaveLength(2);
+    // Not looked up in the configured file store, where nothing was found
+    // and the deletion would have counted as confirmed.
+    expect(platform.refs()).toEqual([]);
+    expect(await fileStore().get(credentialRef as string)).toBeNull();
+    expect(existsSync(identityFile())).toBe(false);
+    expect(existsSync(credentialFile())).toBe(false);
+  });
+
+  it("stops the switch, and keeps the metadata, while the store a file records is not available", async () => {
+    const identityRef = await identityInPlatformStore();
+    await expect(
+      clearCredentials(stateDir(), ID, switching("file", "system"), {
+        secretStore: fileStore(),
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+      message: expect.stringContaining(
+        `${identityRef}: the system secret store that holds it is not available`,
+      ),
+      sanitizedDetail: { refs: expect.arrayContaining([identityRef]) },
+    });
+    expect(platform.refs()).toContain(identityRef);
+    expect(JSON.parse(readFileSync(identityFile(), "utf8"))).toMatchObject({
+      secretRef: identityRef,
+      secret_store: "system",
+    });
+    expect(existsSync(credentialFile())).toBe(true);
+    // Once it is reachable, the switch deletes them.
+    await clearCredentials(stateDir(), ID, switching("file", "system"), {
+      secretStore: fileStore(),
+      secretStoreFor: storeOf,
+    });
+    expect(platform.refs()).toEqual([]);
+    expect(existsSync(identityFile())).toBe(false);
+  });
+
+  it("holds the credential and identity locks from the deletion to the removal of the metadata", async () => {
+    await login(open("file"));
+    let entered = () => {};
+    let release = () => {};
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const clearing = clearCredentials(
+      stateDir(),
+      ID,
+      switching("file", "system"),
+      { secretStore: new GatedFileStore(secretsDir(), entered, gate) },
+    );
+    await inside;
+    // A live session of the active release cannot commit a generation now:
+    // its secret would have no metadata to name it once the files are gone.
+    for (const file of [credentialFile(), identityFile()])
+      await expect(
+        withFileLock(file, async () => {}, { waitMs: 200 }),
+      ).rejects.toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        sanitizedDetail: { reason: "lock-timeout" },
+      });
+    expect(existsSync(credentialFile())).toBe(true);
+    release();
+    await clearing;
+    expect(existsSync(credentialFile())).toBe(false);
+    for (const file of [credentialFile(), identityFile()])
+      await withFileLock(file, async () => {}, { waitMs: 200 });
+  });
+
+  it("takes no lock, and creates no directory, for state that is not there", async () => {
+    const ref = `piship:${ID}:inference#1`;
+    mkdirSync(dirname(credentialFile()), { recursive: true });
+    writeFileSync(
+      credentialFile(),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        mode: "local-secret",
+        credential_ref: ref,
+        generation: 1,
+        kind: "api_key",
+        acquired_at: "2026-01-01T00:00:00.000Z",
+        secret_store: "file",
+      }),
+    );
+    await fileStore().put(ref, new SecretValue("fake-secret-for-the-test"));
+    const notices = await clearCredentials(
+      stateDir(),
+      ID,
+      switching("file", "system"),
+      { secretStore: fileStore() },
+    );
+    expect(notices).toHaveLength(1);
+    expect(existsSync(credentialFile())).toBe(false);
+    expect(existsSync(dirname(identityFile()))).toBe(false);
   });
 });
 
