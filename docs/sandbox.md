@@ -125,6 +125,8 @@ The e2b-compatible backend sends it to the control endpoint only, never to envd 
 
 **Clearing it.** `login` as another principal deletes it, confirming the deletion, before the new identity is stored; a failed deletion fails the login. `logout`, `sandbox logout`, and `purge` delete it. An update or rollback to a release that cannot read it (every release before it) deletes it first; run `sandbox login` again after rolling forward. It is never copied into a rollback snapshot. See [security](security.md#user-switching).
 
+**Checking it.** The Sandbox group of `doctor` shows `sandbox credential <state> (<source>, <kind>) in <store>`, where the state is `absent`, `valid`, `rejected`, `principal-mismatch`, or `origin-mismatch`, and two binding lines: whether it is bound to the current principal, and whether its recorded origin matches the configured endpoint. A rejected credential is a warning that asks for `sandbox login`; an absent one, another user's, or one stored for another endpoint fails a required sandbox. Without a signed-in user, the principal binding is shown as not checked. Doctor reads the non-secret metadata only: it never shows the secret, its reference or ID, or the recorded origins, and it deletes nothing (the next launch does).
+
 A stored key is typed by a person and is often a shared organization key. For managed distributions, prefer credentials the company issues per user: `runtime` behind the gateway, or an adapter credential.
 
 #### Adapter credentials

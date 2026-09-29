@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, type AuditStatus } from "@piship/audit";
@@ -8,14 +8,19 @@ import {
   formatError,
   NO_CONTENT_CAPTURE,
   PiShipError,
+  principalKey,
+  type SecretStore,
   SecretValue,
 } from "@piship/contracts";
+import { type ActivatedAccess, SandboxCredential } from "@piship/core";
+import type { GovernanceManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderDoctor } from "../commands/doctor.js";
 import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import type { AccessData, DoctorData, GovernanceData } from "./data.js";
 import { sandboxIsolation } from "./data.js";
+import { sandboxCredentialData } from "./sandbox.js";
 import { workspaceData } from "./workspace.js";
 import { DOCTOR_GROUPS, DoctorReport, sanitizeDoctorText } from "./report.js";
 
@@ -823,6 +828,264 @@ describe("Sandbox and Workspace groups", () => {
     ).toEqual([
       `  - ${"consistency".padEnd(20)} none: no sandbox is enforced; commands run on this host's files`,
     ]);
+  });
+});
+
+describe("Sandbox credential lines", () => {
+  // An obvious fake: never a real key.
+  const SENTINEL = "sandbox-sentinel-secret-7741";
+  const ENDPOINT =
+    "https://sandbox.acme.example:8443/api/v1?tenant=origin-path-5512";
+  const ALICE = { issuer: "https://idp.acme.example", subject: "alice" };
+  const BOB = { issuer: "https://idp.acme.example", subject: "bob" };
+
+  function memoryStore(): SecretStore & { values: Map<string, string> } {
+    const values = new Map<string, string>();
+    return {
+      kind: "memory",
+      description: "process memory (not persisted)",
+      values,
+      put: async (ref, value) => {
+        values.set(ref, value.reveal());
+      },
+      get: async (ref) => {
+        const value = values.get(ref);
+        return value === undefined ? null : new SecretValue(value);
+      },
+      delete: async (ref) => {
+        values.delete(ref);
+      },
+    };
+  }
+
+  function sandboxManifest(endpoint = ENDPOINT): GovernanceManifest["sandbox"] {
+    return {
+      required: true,
+      provider: "e2b-compatible",
+      endpoint,
+      credential: "stored",
+    } as unknown as GovernanceManifest["sandbox"];
+  }
+
+  async function store(
+    ctx: LaunchContext,
+    secretStore: SecretStore,
+    principal: typeof ALICE | null,
+  ): Promise<SandboxCredential> {
+    const slot = new SandboxCredential({
+      distributionId: ctx.metadata.app.id,
+      command: ctx.metadata.app.command,
+      stateDir: ctx.stateDir,
+      provider: "e2b-compatible",
+      secretStore,
+      principal: principal ? principalKey(principal) : null,
+      targets: [ENDPOINT],
+    });
+    await slot.save(async () => SENTINEL);
+    return slot;
+  }
+
+  function lines(
+    ctx: LaunchContext,
+    options: {
+      secretStore: SecretStore;
+      identity?: typeof ALICE;
+      endpoint?: string;
+    },
+  ): { output: string; sandbox: string[]; failed: boolean } {
+    const data = {
+      ...doctorData("managed", {
+        governance: governanceData({
+          sandboxCredential: sandboxCredentialData({
+            ctx,
+            sandbox: sandboxManifest(options.endpoint),
+            secretStore: options.secretStore,
+            ...(options.identity
+              ? {
+                  activated: {
+                    identity: options.identity,
+                  } as unknown as ActivatedAccess,
+                }
+              : {}),
+          }),
+        }),
+      }),
+      ctx,
+    };
+    const report = renderDoctor(data);
+    const output = report.render();
+    return { output, sandbox: group(output, "Sandbox"), failed: report.failed };
+  }
+
+  const line = (mark: string, label: string, value: string) =>
+    `  ${mark} ${label.padEnd(20)} ${value}`;
+  const STORE = "memory (process memory (not persisted))";
+
+  it("is not reported unless the manifest declares a stored credential", () => {
+    expect(
+      sandboxCredentialData({
+        ctx: context("managed"),
+        sandbox: {
+          ...sandboxManifest(),
+          credential: "runtime",
+        } as GovernanceManifest["sandbox"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("fails a required sandbox without a stored credential and says how to store one", () => {
+    const { sandbox, failed } = lines(context("managed"), {
+      secretStore: memoryStore(),
+    });
+    expect(sandbox).toContain(
+      line(
+        "✗",
+        "sandbox credential",
+        `absent (stored) in ${STORE}; run acmecode sandbox login`,
+      ),
+    );
+    expect(sandbox.some((text) => text.includes("credential principal"))).toBe(
+      false,
+    );
+    expect(failed).toBe(true);
+  });
+
+  it("shows a valid credential with its source, kind, store, and both bindings", async () => {
+    const ctx = context("managed");
+    const secretStore = memoryStore();
+    await store(ctx, secretStore, ALICE);
+    const { sandbox, failed } = lines(ctx, { secretStore, identity: ALICE });
+    expect(sandbox.slice(-3)).toEqual([
+      line("✓", "sandbox credential", `valid (stored, api_key) in ${STORE}`),
+      line("✓", "credential principal", "bound to the current principal: yes"),
+      line(
+        "✓",
+        "credential endpoint",
+        "bound origin matches the configured endpoint: yes",
+      ),
+    ]);
+    expect(failed).toBe(false);
+  });
+
+  it("says a credential of a distribution without identity is bound to no user", async () => {
+    const ctx = context("managed");
+    const secretStore = memoryStore();
+    await store(ctx, secretStore, null);
+    expect(lines(ctx, { secretStore }).sandbox).toContain(
+      line(
+        "✓",
+        "credential principal",
+        "bound to the current principal: yes (no identity configured)",
+      ),
+    );
+  });
+
+  it("warns about a credential the sandbox service rejected (C-T12)", async () => {
+    const ctx = context("managed");
+    const secretStore = memoryStore();
+    const slot = await store(ctx, secretStore, ALICE);
+    const access = await slot.access();
+    await access.secret();
+    // The backend got 401 for it.
+    await access.rejected();
+    const { sandbox, failed } = lines(ctx, { secretStore, identity: ALICE });
+    expect(sandbox).toContain(
+      line(
+        "!",
+        "sandbox credential",
+        `rejected (stored, api_key) in ${STORE}: the sandbox service rejected it; run acmecode sandbox login to store a new one`,
+      ),
+    );
+    expect(failed).toBe(false);
+  });
+
+  it("fails on another user's credential and on another endpoint, without deleting anything", async () => {
+    const ctx = context("managed");
+    const secretStore = memoryStore();
+    await store(ctx, secretStore, ALICE);
+    const other = lines(ctx, { secretStore, identity: BOB });
+    expect(other.sandbox).toContain(
+      line("✗", "credential principal", "bound to the current principal: no"),
+    );
+    expect(
+      other.sandbox.find((text) => text.includes("sandbox credential")),
+    ).toMatch(
+      /^ {2}✗ sandbox credential +principal-mismatch \(stored, api_key\)/,
+    );
+    expect(other.failed).toBe(true);
+    // Doctor deletes nothing: the next launch does.
+    expect(secretStore.values.size).toBe(1);
+    const moved = lines(ctx, {
+      secretStore,
+      identity: ALICE,
+      endpoint: "https://elsewhere.acme.example",
+    });
+    expect(moved.sandbox).toContain(
+      line(
+        "✗",
+        "credential endpoint",
+        "bound origin matches the configured endpoint: no",
+      ),
+    );
+    expect(moved.failed).toBe(true);
+  });
+
+  it("does not guess the state without a signed-in user", async () => {
+    const ctx = context("managed");
+    (ctx.metadata as { access?: unknown }).access = {
+      credential: { storage: { provider: "system" } },
+      variables: [],
+    };
+    const secretStore = memoryStore();
+    await store(ctx, secretStore, ALICE);
+    const { sandbox } = lines(ctx, { secretStore });
+    expect(sandbox).toContain(
+      line(
+        "!",
+        "sandbox credential",
+        `stored (stored, api_key) in ${STORE}; state not checked`,
+      ),
+    );
+    expect(sandbox).toContain(
+      line(
+        "!",
+        "credential principal",
+        "not checked: no signed-in user to check it against",
+      ),
+    );
+  });
+
+  it("never prints the secret, its reference or ID, or the bound origins (C-T12)", async () => {
+    const ctx = context("managed");
+    const secretStore = memoryStore();
+    const slot = await store(ctx, secretStore, ALICE);
+    const refs = [...secretStore.values.keys()];
+    const metadata = JSON.parse(
+      readFileSync(
+        join(ctx.stateDir, "credentials-metadata", "sandbox.json"),
+        "utf8",
+      ),
+    ) as { credential_id: string; credential_ref: string };
+    expect(metadata.credential_id).toBeTruthy();
+    const outputs = [lines(ctx, { secretStore, identity: ALICE }).output];
+    const access = await slot.access();
+    await access.secret();
+    await access.rejected();
+    outputs.push(lines(ctx, { secretStore, identity: ALICE }).output);
+    outputs.push(lines(ctx, { secretStore, identity: BOB }).output);
+    for (const output of outputs)
+      for (const planted of [
+        SENTINEL,
+        ...refs,
+        metadata.credential_ref,
+        metadata.credential_id,
+        "piship:",
+        "sandbox.acme.example",
+        "8443",
+        "/api/v1",
+        "origin-path-5512",
+      ])
+        expect(output, planted).not.toContain(planted);
   });
 });
 

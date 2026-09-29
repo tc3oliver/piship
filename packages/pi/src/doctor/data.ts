@@ -36,6 +36,10 @@ import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
 import { type AuditSinkTarget, auditSinkTargets } from "./audit.js";
+import {
+  type SandboxCredentialData,
+  sandboxCredentialData,
+} from "./sandbox.js";
 import { type WorkspaceData, workspaceData } from "./workspace.js";
 
 type AccessStatus = Awaited<ReturnType<DistributionAccess["status"]>>;
@@ -123,6 +127,8 @@ export interface GovernanceData {
   /** The containment report's isolation kind; `none` when nothing is enforced. */
   readonly isolation?: SandboxIsolation;
   readonly workspace: WorkspaceData;
+  /** The stored sandbox credential, when the manifest declares one. */
+  readonly sandboxCredential?: SandboxCredentialData;
   /** Undefined when the governed session did not open. */
   readonly mcp?: GovernanceSession["mcpReports"];
   /** Why the governed session did not open, when it is not an audit failure. */
@@ -454,6 +460,14 @@ export async function collectDoctorData(
     const session = inspection
       ? await collectSession(ctx, prepared)
       : { audit: {} };
+    // After the session, so a rejection it met is shown.
+    const sandboxCredential = sandboxCredentialData({
+      ctx,
+      sandbox: manifest.sandbox,
+      ...(opened ? { access: opened } : {}),
+      ...(activated ? { activated } : {}),
+      ...(access?.workload ? { workload: true } : {}),
+    });
     governance = {
       manifest,
       ...(inspection ? { inspection } : {}),
@@ -462,6 +476,7 @@ export async function collectDoctorData(
         ? { isolation: sandboxIsolation(inspection.sandbox) }
         : {}),
       workspace: workspaceData(inspection),
+      ...(sandboxCredential ? { sandboxCredential } : {}),
       ...session,
       audit: { ...session.audit, targets: auditSinkTargets(ctx, manifest) },
     };
