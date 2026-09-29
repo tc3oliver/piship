@@ -128,6 +128,8 @@ export async function startFakeLiteLLM() {
   const keys = new Map();
   const calls = [];
   const issued = [];
+  // LiteLLM v1.103.0 still describes a deleted key to a master-key lookup.
+  const deletedKeys = [];
   let clock = Date.parse("2026-01-01T00:00:00Z");
   const state = {
     /** path -> { status, count } answered instead of the real handler */
@@ -214,7 +216,9 @@ export async function startFakeLiteLLM() {
         // Like LiteLLM: `key` is a key, hashed here, or already its hash.
         const asked = parsed.searchParams.get("key") ?? "";
         const token = asked.startsWith("sk-") ? hash(asked) : asked;
-        const key = [...keys.values()].find((entry) => entry.token === token);
+        const key = [...keys.values(), ...deletedKeys].find(
+          (entry) => entry.token === token,
+        );
         if (!key)
           return reply(res, 404, {
             error: {
@@ -226,8 +230,8 @@ export async function startFakeLiteLLM() {
       }
       const key = keys.get(bearer);
       if (!key) return denied(res, bearer);
-      // A live key LiteLLM still refuses here: expired (400), over budget
-      // or route not allowed (401), blocked (403).
+      // A key that exists but that LiteLLM refuses here: expired or
+      // blocked (401 on v1.103.0), 400 or 403 on other releases.
       if (state.holderKeyInfoStatus !== undefined)
         return reply(res, state.holderKeyInfoStatus, {
           error: {
@@ -314,6 +318,7 @@ export async function startFakeLiteLLM() {
           body.key_aliases?.includes(record.key_alias)
         ) {
           keys.delete(key);
+          deletedKeys.push(record);
           deleted.push(record.key_alias);
         }
       }

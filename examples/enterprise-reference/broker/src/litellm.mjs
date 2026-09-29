@@ -168,9 +168,10 @@ export function createLiteLLMAdmin({
      * do that, and the answer describes that key.
      * @returns {Promise<null | { key_alias?: string, user_id?: string, metadata?: Record<string, unknown> }>}
      *   null when LiteLLM refuses the lookup (any 4xx). That does not prove
-     *   the key is gone: LiteLLM also refuses a live key that is expired
-     *   (400), over budget, blocked, or denied the route (401, 403). The
-     *   caller confirms with keyInfoByHash.
+     *   the key is gone: LiteLLM also refuses a key that still exists but is
+     *   expired or blocked (401 on v1.103.0; other releases answer 400 or
+     *   403, or 401 for a route the key may not use). The caller confirms
+     *   with keyInfoByHash.
      */
     async keyInfoAsHolder(key) {
       const result = await call("key-info", "GET", "/key/info", {
@@ -187,7 +188,9 @@ export function createLiteLLMAdmin({
      * LiteLLM stores it and which `/key/info?key=` accepts, so the key itself
      * never goes into a URL or an access log.
      * @returns {Promise<null | { key_alias?: string, user_id?: string, metadata?: Record<string, unknown> }>}
-     *   null only when LiteLLM answers 404: no such key in its database
+     *   null only when LiteLLM answers 404: it never had such a key. It
+     *   still describes a key after /key/delete (v1.103.0), so a deleted
+     *   key is recognized by the delete's own 404.
      */
     async keyInfoByHash(key) {
       const hashed = createHash("sha256").update(key).digest("hex");
