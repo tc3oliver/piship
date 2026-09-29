@@ -46,5 +46,8 @@ temp/
 # oh-my-claudecode runtime state
 .omc/
 
+# Claude Code local state and agent worktrees
+.claude/
+
 # Maintainer-local product specifications and milestone plans
 docs/spec/
