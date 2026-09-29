@@ -748,4 +748,23 @@ describe("branded logout", () => {
       ),
     ]);
   });
+
+  it("drops what a logout that failed for another reason had found, since the local sign-out redoes it", async () => {
+    const { ctx, err, out } = context();
+    await signIn(ctx);
+    const spy = vi
+      .spyOn(DistributionAccess.prototype, "logout")
+      .mockImplementationOnce(async (problems: string[] = []) => {
+        problems.push("revocation: found by the attempt that then failed");
+        throw new PiShipError("CONFIG_UNAVAILABLE", "a variable is not set");
+      });
+    try {
+      await runLogout(ctx);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err.join("\n")).toContain("signing out locally");
+    expect(err.join("\n")).not.toContain("found by the attempt");
+    expect(out).toHaveLength(1);
+  });
 });

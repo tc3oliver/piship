@@ -318,9 +318,12 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
       })),
     );
   const problems: string[] = [];
-  if (access)
+  if (access) {
+    // What logout found before a lock wait ran out; when the local sign-out
+    // redoes the work instead, it is dropped.
+    const found: string[] = [];
     try {
-      await access.logout(problems);
+      problems.push(...(await access.logout(found)));
     } catch (error) {
       // Another process still holds a lock: nothing is wrong with the
       // configuration, and deleting around that process is what the locks
@@ -331,7 +334,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
         // timeout stays the command's error, which a required audit sink
         // that is down must not replace: it is retryable, the audit failure
         // is reported beside it.
-        for (const problem of problems) ctx.err(`Warning: ${problem}`);
+        for (const problem of found) ctx.err(`Warning: ${problem}`);
         await auditEvents().catch((auditError) =>
           ctx.err(`Error: ${formatError(auditError)}`),
         );
@@ -339,6 +342,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
       }
       unavailable = error;
     }
+  }
   if (unavailable !== undefined) {
     const reason = redact(formatError(unavailable));
     ctx.err(
