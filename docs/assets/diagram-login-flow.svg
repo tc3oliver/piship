@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="120" viewBox="0 0 1000 120" role="img" aria-label="OIDC login, company identity, credential broker, short-lived gateway credential, Pi runtime, company LLM gateway">
+  <rect x="0.5" y="0.5" width="999" height="119" rx="12" fill="#ffffff" stroke="#d1d9e0"/>
   <style>
     text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
     .m{fill:#59636e}
     .ln{stroke:#8c959f;fill:none}
     .ah{fill:#8c959f}
-    @media (prefers-color-scheme:dark){text{fill:#f0f6fc}.m{fill:#9198a1}.ln{stroke:#656c76}.ah{fill:#656c76}}
   </style>
   <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>
   <g stroke-width="1.5" fill-opacity=".12">
