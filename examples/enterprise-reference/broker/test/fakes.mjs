@@ -76,7 +76,7 @@ export async function startFakeKeycloak() {
       iat: nowSeconds,
       nbf: nowSeconds,
       exp: nowSeconds + 300,
-      groups: ["engineering"],
+      groups: ["/engineering"],
       preferred_username: "alice",
       ...claims,
     };

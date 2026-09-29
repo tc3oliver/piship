@@ -13,13 +13,16 @@ import { JwksUnavailableError, TokenError } from "./token.mjs";
 import { ISSUER_MARK, UpstreamError } from "./litellm.mjs";
 
 /**
- * Model entitlement by Keycloak group. A user gets the union over their
- * groups; a group not listed here grants nothing. The README shows this
- * table; keep the two in step.
+ * Model entitlement by Keycloak group, keyed by the group's full path. A
+ * group name is unique only among its siblings (`/engineering` and
+ * `/contractors/engineering` are both `engineering`), so the key must be
+ * something unique in the realm: the realm's groups mapper sends full paths.
+ * A user gets the union over their groups; a group not listed here grants
+ * nothing. The README shows this table; keep the two in step.
  */
 export const GROUP_MODELS = Object.freeze({
-  engineering: Object.freeze(["acme/coder", "acme/general"]),
-  support: Object.freeze(["acme/coder"]),
+  "/engineering": Object.freeze(["acme/coder", "acme/general"]),
+  "/support": Object.freeze(["acme/coder"]),
 });
 
 /** Models for a verified `groups` claim, in a stable order; empty when none. */

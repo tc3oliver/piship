@@ -49,7 +49,7 @@ The access token is checked in this order, and nothing from its payload is used 
 2. The key is the realm JWKS entry with the header's `kid`, `kty: RSA`, 2048 bits or more, `use` and `alg` absent or `sig` and `RS256`. Only its public members are imported, as a public key object.
 3. The RSA-SHA256 signature over the first two segments.
 4. `iss` equals `BROKER_ISSUER` exactly; `aud` contains `piship-reference-broker`; `exp` is present and not past; `nbf` and `iat`, when present, are not in the future; `azp` is `acmecode`; `typ`, when present, is `Bearer` (Keycloak's ID tokens say `ID`); `sub` is a non-empty string. `exp`, `nbf` and `iat` allow 30 s of clock skew (`BROKER_CLOCK_TOLERANCE_SECONDS`).
-5. `groups` must be a string array with at least one group in the entitlement table; otherwise 403.
+5. `groups` must be a string array with at least one group path in the entitlement table; otherwise 403.
 
 The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...` on the compose network, while the issuer stays the loopback URL; outside a loopback host or a container network it must be `https`) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. With a stale cache, known keys keep working while Keycloak is down; with no cache, acquires answer 503.
 
@@ -57,12 +57,12 @@ The broker does not introspect tokens: an access token of a session signed out a
 
 ## Entitlement: groups to models
 
-| Keycloak group | Models | Reference user |
+| Keycloak group (full path) | Models | Reference user |
 | --- | --- | --- |
-| `engineering` | `acme/coder`, `acme/general` | alice |
-| `support` | `acme/coder` | bob |
+| `/engineering` | `acme/coder`, `acme/general` | alice |
+| `/support` | `acme/coder` | bob |
 
-A user gets the union over their groups; other groups grant nothing. The table is `GROUP_MODELS` in [`src/broker.mjs`](src/broker.mjs). The models are written into the key, so LiteLLM itself refuses any other model (`key_model_access_denied`, 403); PiShip then narrows its catalog to the same list. The entitlement is read at every acquire: a group change applies to the next key, and keys already issued keep their models until they expire or are rotated out.
+The key is the group's full path, because it must be unique in the realm and a Keycloak group name is not: `/contractors/engineering` is also named `engineering`, and keyed by name it would inherit `/engineering`'s models. The realm's `groups` mapper therefore sends full paths (`full.path: true`), and a bare name matches nothing. Whatever an adaptation keys entitlement by (a group path, a client role), it must be unique in the realm. A user gets the union over their groups; other groups grant nothing. The table is `GROUP_MODELS` in [`src/broker.mjs`](src/broker.mjs). The models are written into the key, so LiteLLM itself refuses any other model (`key_model_access_denied`, 403); PiShip then narrows its catalog to the same list. The entitlement is read at every acquire: a group change applies to the next key, and keys already issued keep their models until they expire or are rotated out.
 
 ## Principal, budget and keys (D-01)
 

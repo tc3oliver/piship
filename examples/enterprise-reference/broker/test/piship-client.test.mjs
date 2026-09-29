@@ -27,8 +27,8 @@ const { HttpBrokerCredentialProvider } = await import(
 );
 const { SecretValue } = await import(pathToFileURL(contractsDist).href);
 
-const ALICE = { sub: "0f1e2d3c-alice", groups: ["engineering"] };
-const BOB = { sub: "9a8b7c6d-bob", groups: ["support"] };
+const ALICE = { sub: "0f1e2d3c-alice", groups: ["/engineering"] };
+const BOB = { sub: "9a8b7c6d-bob", groups: ["/support"] };
 const ctx = (extra = {}) => ({ distributionId: "acmecode", ...extra });
 
 describe("PiShip HttpBrokerCredentialProvider against the reference broker", () => {

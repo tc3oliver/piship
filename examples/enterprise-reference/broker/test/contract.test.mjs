@@ -15,10 +15,10 @@ import { loadConfig } from "../server.mjs";
 import { ISSUER, MASTER_KEY, UPSTREAM_BODY_MARK } from "./fakes.mjs";
 import { GATEWAY_BASE_URL, startHarness } from "./harness.mjs";
 
-const ALICE = { sub: "0f1e2d3c-alice", groups: ["engineering"] };
+const ALICE = { sub: "0f1e2d3c-alice", groups: ["/engineering"] };
 const BOB = {
   sub: "9a8b7c6d-bob",
-  groups: ["support"],
+  groups: ["/support"],
   preferred_username: "bob",
 };
 const uuid = () => crypto.randomUUID();
@@ -149,8 +149,8 @@ describe("acquire: success response", () => {
 
   it("the group table is the one the README documents", () => {
     assert.deepEqual(GROUP_MODELS, {
-      engineering: ["acme/coder", "acme/general"],
-      support: ["acme/coder"],
+      "/engineering": ["acme/coder", "acme/general"],
+      "/support": ["acme/coder"],
     });
   });
 });
@@ -202,7 +202,7 @@ describe("acquire: token validation (401, nothing issued)", () => {
     const forged = Buffer.from(
       JSON.stringify({
         ...JSON.parse(Buffer.from(token.split(".")[1], "base64url")),
-        groups: ["engineering", "support"],
+        groups: ["/engineering", "/support"],
         sub: "someone-else",
       }),
     ).toString("base64url");
@@ -342,14 +342,22 @@ describe("acquire: request and entitlement", () => {
   it("403 when groups is empty", () =>
     denied("empty groups", mint(h, { ...ALICE, groups: [] })));
   it("403 when no group is entitled", () =>
-    denied("unknown group", mint(h, { ...ALICE, groups: ["sales"] })));
+    denied("unknown group", mint(h, { ...ALICE, groups: ["/sales"] })));
+  it("403 for a nested group that shares an entitled group's name, and for a bare name", () =>
+    denied(
+      "same name, other path",
+      mint(h, {
+        ...ALICE,
+        groups: ["/contractors/engineering", "engineering", "support"],
+      }),
+    ));
   it("403 for group names that are Object prototype members", () =>
     denied(
       "prototype groups",
       mint(h, { ...ALICE, groups: ["constructor", "__proto__", "toString"] }),
     ));
   it("403 when groups is not a string array", () =>
-    denied("bad groups", mint(h, { ...ALICE, groups: "engineering" })));
+    denied("bad groups", mint(h, { ...ALICE, groups: "/engineering" })));
   it("403 for another distribution", () =>
     denied("distribution", mint(h, ALICE), {
       body: { distribution: "othercode", purpose: "inference" },
