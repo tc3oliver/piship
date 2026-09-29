@@ -61,6 +61,9 @@ The migration check compares each local data class with the state schemas the ta
 | State marker | `state.json` (`piship-state/v1`) | Rewritten at each update and rollback activation with the distribution, version, Pi, and PiShip versions |
 | Identity session | `identity/session.json` | Credential class: kept when the target reads its schema and uses the same secret store, otherwise cleared with its secret-store entry and reacquired by `login` |
 | Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable and the secret store stays the same, otherwise cleared with its secret-store entry and reacquired |
+| State marker | `state.json` (`piship-state/v1`) | Rewritten after each update and rollback activation with the distribution, version, Pi, and PiShip versions. One that cannot be written then keeps its previous content, is reported as a notice, and is repaired by the next update or rollback |
+| Identity session | `identity/session.json` | Credential class: kept when the target reads its schema, otherwise cleared with its secret-store entry and reacquired by `login` |
+| Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable, otherwise cleared with its secret-store entry and reacquired |
 | File secret fallback | `secrets/` | Never copied, snapshotted, or restored; removed when any credential class is cleared |
 | Preferences | `config/preferences.json` | Kept in place; `unsupported` when the target cannot read its schema; included in the snapshot |
 | User policy rules | `config/policy.json` | Kept in place; included in the snapshot |
@@ -99,7 +102,7 @@ A receipt written by an earlier PiShip (without `schema`) is still read, launche
 
 ## Failure policy
 
-Every failure happens before activation and leaves the active release and state unchanged, apart from the highest accepted channel sequence and the last check result, and, where noted, cleared credentials.
+Every failure happens before activation and leaves the active release and state unchanged, apart from the highest accepted channel sequence and the last check result, and, where noted, cleared credentials. Once the receipt has switched, the update or rollback reports success, is audited as allowed, and is counted as `ok`, whatever happens next: a state marker that cannot be written then is a notice, and the next update or rollback repairs it.
 
 | Condition | Result |
 | --- | --- |

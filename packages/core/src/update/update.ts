@@ -40,9 +40,9 @@ import {
 import {
   checkPayload,
   clearCredentials,
+  markActivated,
   repairStateMarker,
   snapshotState,
-  writeStateMarker,
 } from "./state.js";
 
 export interface ChannelSelection {
@@ -202,7 +202,7 @@ export async function updateDistribution(
       // Finishes an update interrupted between its commit and the marker.
       const stateDir = runtimeStateDirectory({ value: id });
       if (!options.check && existsSync(stateDir))
-        writeStateMarker(stateDir, lock);
+        notices.push(...markActivated(stateDir, lock));
       return {
         status: "up-to-date",
         id,
@@ -359,9 +359,14 @@ export async function updateDistribution(
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
       writeReceipt(next);
+      // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
-      writeStateMarker(stateDir, verified.lock);
-      verified.cleanup();
+      notices.push(...markActivated(stateDir, verified.lock));
+      try {
+        verified.cleanup();
+      } catch {
+        // The staging directory is removed below or by the next recovery.
+      }
       return {
         status: "updated",
         id,
@@ -374,8 +379,8 @@ export async function updateDistribution(
         notices,
       };
     } finally {
-      rmSync(staging, { recursive: true, force: true });
       try {
+        rmSync(staging, { recursive: true, force: true });
         recoverInstallation(id);
         options.faults?.("cleaned");
       } catch {

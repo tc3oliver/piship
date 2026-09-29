@@ -102,8 +102,31 @@ export function writeStateMarker(
 }
 
 /**
+ * Write the state marker once an activation has committed. The receipt is
+ * the commit point, so the release it names is active whatever happens
+ * here: a marker that cannot be written (a full, read-only, or failing state
+ * filesystem) keeps its previous content and is reported as a notice, never
+ * as a failed activation. The next update or rollback repairs it before it
+ * compares state (see `repairStateMarker`).
+ */
+export function markActivated(
+  stateDir: string,
+  lock: DistributionLock,
+): string[] {
+  try {
+    writeStateMarker(stateDir, lock);
+    return [];
+  } catch (error) {
+    return [
+      `${lock.app.version} is active, but its state marker could not be written (${redact(error instanceof Error ? error.message : String(error))}); the next update or rollback repairs it`,
+    ];
+  }
+}
+
+/**
  * Repair a state marker that names another release than the active one. An
- * operation interrupted after its receipt commit leaves it behind; the next
+ * operation interrupted after its receipt commit, or one whose marker could
+ * not be written (see `markActivated`), leaves it behind; the next
  * update or rollback fixes it before comparing state against a target. A
  * missing marker is left alone: the migration check then uses the active
  * release.

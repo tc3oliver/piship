@@ -24,8 +24,8 @@ import { storageOf } from "../storage-transition.js";
 import {
   checkPayload,
   clearCredentials,
+  markActivated,
   repairStateMarker,
-  writeStateMarker,
 } from "./state.js";
 
 export interface RollbackResult {
@@ -131,8 +131,9 @@ export async function rollbackDistribution(
         result: `rolled back ${receipt.active} -> ${receipt.previous}`,
       },
     });
+    // Committed: from here on nothing reports the rollback as failed.
     options.faults?.("committed");
-    writeStateMarker(stateDir, target);
+    notices.push(...markActivated(stateDir, target));
     return {
       id,
       from: receipt.active,
