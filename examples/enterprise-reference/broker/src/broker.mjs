@@ -66,21 +66,49 @@ const MAX_BODY_BYTES = 4096;
 /**
  * Idempotency records, in memory: a restart forgets them (the reference
  * accepts that; a production broker keeps them in a shared store). A record
- * is keyed by the Idempotency-Key and holds a fingerprint of the input (the
- * principal and the request body, never the token), so a key sent with other
- * input or by another principal never returns the stored credential.
+ * is scoped to the principal: it is keyed by the principal's user id and the
+ * Idempotency-Key together, so another principal's use of the same key is a
+ * different record and can neither read nor block this one. It holds a
+ * fingerprint of the input (the principal and the request body, never the
+ * token), so the same key sent by the same principal with another body
+ * never returns the stored credential.
+ *
+ * A principal keeps at most `maxPerPrincipal` records: a new one first
+ * drops that principal's oldest finished record, so one busy user never
+ * evicts anyone else's. Only past `maxEntries` in all are other principals'
+ * oldest finished records dropped.
  */
 export function createIdempotencyStore({
   now = Date.now,
   pendingTtlMs = 120_000,
   maxEntries = 10_000,
+  maxPerPrincipal = 6,
 } = {}) {
-  /** @type {Map<string, { fingerprint: string, state: "pending" | "done", response?: object, expiresAt: number }>} */
+  /** @type {Map<string, { principal: string, fingerprint: string, state: "pending" | "done", response?: object, expiresAt: number }>} */
   const entries = new Map();
+  /** Each principal's record ids, oldest first. @type {Map<string, Set<string>>} */
+  const byPrincipal = new Map();
+  const recordId = (principal, key) => `${principal}\n${key}`;
+  const remove = (id) => {
+    const entry = entries.get(id);
+    if (!entry) return;
+    entries.delete(id);
+    const own = byPrincipal.get(entry.principal);
+    own?.delete(id);
+    if (own?.size === 0) byPrincipal.delete(entry.principal);
+  };
+  /** Drop the oldest finished record among `ids`; false when all are pending. */
+  const evictOldestDone = (ids) => {
+    for (const id of ids)
+      if (entries.get(id)?.state === "done") {
+        remove(id);
+        return true;
+      }
+    return false;
+  };
   const sweep = () => {
     const at = now();
-    for (const [key, entry] of entries)
-      if (entry.expiresAt <= at) entries.delete(key);
+    for (const [id, entry] of entries) if (entry.expiresAt <= at) remove(id);
   };
   return {
     /**
@@ -88,9 +116,10 @@ export function createIdempotencyStore({
      * `admit` decides whether new work may start (the rate limit); when it
      * returns a refusal the key is not reserved.
      */
-    begin(key, fingerprint, admit) {
+    begin(principal, key, fingerprint, admit) {
       sweep();
-      const entry = entries.get(key);
+      const id = recordId(principal, key);
+      const entry = entries.get(id);
       if (entry) {
         if (entry.fingerprint !== fingerprint) return { kind: "conflict" };
         if (entry.state === "pending") return { kind: "in-flight" };
@@ -98,32 +127,38 @@ export function createIdempotencyStore({
       }
       const refusal = admit();
       if (refusal) return refusal;
-      if (entries.size >= maxEntries) {
-        // Evict the oldest finished records; pending ones stay.
-        for (const [oldKey, old] of entries) {
-          if (entries.size < maxEntries) break;
-          if (old.state === "done") entries.delete(oldKey);
-        }
-        if (entries.size >= maxEntries) return { kind: "full" };
-      }
-      entries.set(key, {
+      const own = byPrincipal.get(principal) ?? new Set();
+      if (own.size >= maxPerPrincipal && !evictOldestDone(own))
+        return { kind: "full" };
+      if (entries.size >= maxEntries && !evictOldestDone(entries.keys()))
+        return { kind: "full" };
+      entries.set(id, {
+        principal,
         fingerprint,
         state: "pending",
         expiresAt: now() + pendingTtlMs,
       });
+      own.add(id);
+      byPrincipal.set(principal, own);
       return { kind: "new" };
     },
     /** Keep the answer until the credential it carries expires. */
-    complete(key, response, expiresAtMs) {
-      const entry = entries.get(key);
+    complete(principal, key, response, expiresAtMs) {
+      const entry = entries.get(recordId(principal, key));
       if (!entry) return;
       entry.state = "done";
       entry.response = response;
       entry.expiresAt = expiresAtMs;
     },
     /** Forget a key whose issuing failed, so it can be sent again. */
-    abandon(key) {
-      entries.delete(key);
+    abandon(principal, key) {
+      remove(recordId(principal, key));
+    },
+    /** How many records are kept, in all or for one principal. */
+    size(principal) {
+      return principal === undefined
+        ? entries.size
+        : (byPrincipal.get(principal)?.size ?? 0);
     },
   };
 }
@@ -267,7 +302,10 @@ export function createBroker(
   config,
   { verifier, litellm, log, now = Date.now },
 ) {
-  const idempotency = createIdempotencyStore({ now });
+  const idempotency = createIdempotencyStore({
+    now,
+    maxPerPrincipal: 2 * config.maxKeysPerUser,
+  });
   const limiter = createRateLimiter({
     limitPerMinute: config.acquireLimitPerMinute,
     now,
@@ -351,7 +389,7 @@ export function createBroker(
       const fingerprint = createHash("sha256")
         .update(canonical([claims.iss, claims.sub, body]))
         .digest("hex");
-      const outcome = idempotency.begin(key, fingerprint, admit);
+      const outcome = idempotency.begin(userId, key, fingerprint, admit);
       if (outcome.kind === "replay")
         return {
           status: 200,
@@ -396,7 +434,8 @@ export function createBroker(
     const credentialId = newCredentialId();
     try {
       const result = await issue({ claims, userId, models, credentialId });
-      if (reserved) idempotency.complete(key, result.body, result.expiresAtMs);
+      if (reserved)
+        idempotency.complete(userId, key, result.body, result.expiresAtMs);
       await retireOldKeys(userId, credentialId);
       return {
         status: 200,
@@ -407,7 +446,7 @@ export function createBroker(
         idempotency: reserved ? "new" : "none",
       };
     } catch (error) {
-      if (reserved) idempotency.abandon(key);
+      if (reserved) idempotency.abandon(userId, key);
       if (!(error instanceof UpstreamError)) throw error;
       if (error.unknownOutcome) {
         // A key may exist that is not being returned: /key/generate's answer

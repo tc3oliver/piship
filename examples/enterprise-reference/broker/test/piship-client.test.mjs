@@ -132,10 +132,16 @@ describe("PiShip HttpBrokerCredentialProvider against the reference broker", () 
   });
 
   it("a reused key with other input is an idempotency conflict", async () => {
+    // The same principal, first with a body PiShip would not send: records
+    // are per principal, so another user's key is never a conflict.
     const key = crypto.randomUUID();
-    await provider.acquire(identity(ALICE), ctx({ idempotencyKey: key }));
+    const first = await h.acquire(h.keycloak.mint(ALICE), {
+      key,
+      body: { distribution: "acmecode", purpose: "inference", extra: 1 },
+    });
+    assert.equal(first.status, 200);
     const error = await code(
-      provider.acquire(identity(BOB), ctx({ idempotencyKey: key })),
+      provider.acquire(identity(ALICE), ctx({ idempotencyKey: key })),
     );
     assert.equal(error.code, "CREDENTIAL_ACQUIRE_FAILED");
     assert.equal(error.sanitizedDetail.reason, "idempotency-conflict");

@@ -483,12 +483,56 @@ describe("acquire: idempotency (docs: Idempotency and retries)", () => {
     assert.ok(!res.text.includes(first.json.credential_id));
   });
 
-  it("same key, another principal: 422, and one user's key never returns another's credential", async () => {
+  it("same key, another principal: a separate record, so one user's key never returns or blocks another's credential", async () => {
     const key = uuid();
     const alice = await h.acquire(mint(h, ALICE), { key });
     const res = await h.acquire(mint(h, BOB), { key });
-    assert.equal(res.status, 422);
+    assert.equal(res.status, 200, "bob's acquire issues his own");
+    assert.equal(res.json.subject, BOB.sub);
+    assert.notEqual(res.json.credential_id, alice.json.credential_id);
     assert.ok(!res.text.includes(alice.json.credential));
+    const replay = await h.acquire(mint(h, ALICE), { key });
+    assert.deepEqual(replay.json, alice.json, "alice's record is untouched");
+    const bobReplay = await h.acquire(mint(h, BOB), { key });
+    assert.deepEqual(bobReplay.json, res.json);
+  });
+
+  it("records are capped per principal: one user's records never evict another's", async () => {
+    const { createIdempotencyStore } = await import("../src/broker.mjs");
+    const store = createIdempotencyStore({ maxEntries: 4, maxPerPrincipal: 2 });
+    const admit = () => null;
+    const far = Date.now() + 3_600_000;
+    assert.equal(store.begin("bob", "b1", "fb", admit).kind, "new");
+    store.complete("bob", "b1", { id: "bob-1" }, far);
+    for (let i = 1; i <= 5; i++) {
+      assert.equal(store.begin("alice", `a${i}`, "fa", admit).kind, "new");
+      store.complete("alice", `a${i}`, { id: `alice-${i}` }, far);
+      assert.ok(store.size("alice") <= 2);
+    }
+    assert.deepEqual(store.begin("bob", "b1", "fb", admit), {
+      kind: "replay",
+      response: { id: "bob-1" },
+    });
+    assert.equal(
+      store.begin("alice", "a5", "fa", admit).kind,
+      "replay",
+      "the newest stays",
+    );
+    assert.equal(
+      store.begin("alice", "a1", "fa", admit).kind,
+      "new",
+      "alice's oldest was dropped",
+    );
+  });
+
+  it("a principal whose records are all in progress gets 'full', and others are unaffected", async () => {
+    const { createIdempotencyStore } = await import("../src/broker.mjs");
+    const store = createIdempotencyStore({ maxPerPrincipal: 2 });
+    const admit = () => null;
+    assert.equal(store.begin("alice", "a1", "f", admit).kind, "new");
+    assert.equal(store.begin("alice", "a2", "f", admit).kind, "new");
+    assert.equal(store.begin("alice", "a3", "f", admit).kind, "full");
+    assert.equal(store.begin("bob", "a3", "f", admit).kind, "new");
   });
 
   it("same key while the first is still running: 503 with Retry-After, then the stored answer", async () => {

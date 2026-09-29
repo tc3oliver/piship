@@ -36,7 +36,7 @@ Every answer is JSON with `cache-control: no-store`. An error body is only `{"er
 | 403 | Valid token but not entitled: no `groups` claim, or no group in the table below; another `distribution`. Revoke: another `distribution` in the body | `CREDENTIAL_DENIED` |
 | 404 | Revoke of a key LiteLLM does not have (deleted, or never issued), confirmed under the master key; or of a key this broker did not issue, answered the same way | Revoked |
 | 413, 415 | Body over 4 KiB; not `application/json` | `rejected` |
-| 422 | `Idempotency-Key` already used with other input | `idempotency-conflict` |
+| 422 | `Idempotency-Key` already used by this principal with another body | `idempotency-conflict` |
 | 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute; more than `BROKER_REVOKE_LIMIT_PER_MINUTE` revokes from this client address | Retryable, `rate-limited` |
 | 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; retry with the same key |
 | 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted; on revoke, the key may still exist); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress, or `BROKER_REVOKE_MAX_CONCURRENT` revokes are already waiting on LiteLLM (`Retry-After: 1`) | Retryable, `unavailable` |
@@ -83,11 +83,11 @@ As [docs/enterprise-integration.md](../../../docs/enterprise-integration.md#idem
 | --- | --- |
 | New `Idempotency-Key` | Issues; the answer is stored under the key only once issuing started, never for a 401, 403, 429 or 503 |
 | Same key, same input, first finished | The stored answer: same credential, same `credential_id`; nothing is issued |
-| Same key, different input | 422; nothing issued, the stored credential never returned |
+| Same key, same principal, different body | 422; nothing issued, the stored credential never returned |
 | Same key while the first is still running | 503, `Retry-After: 1` |
 | No key | Issues every time |
 
-"Input" is the verified `iss` and `sub` plus the request body with its keys sorted, never the token, so a retry after an identity refresh still matches, and a key sent by another principal is a conflict that never returns someone else's credential. A replay is not counted against the rate limit. A stored answer is kept until its credential expires; the record of a request in progress for 2 minutes. A replay returns the stored credential as issued, even if rotation has deleted it since; the gateway then refuses it with 401 and PiShip renews.
+"Input" is the verified `iss` and `sub` plus the request body with its keys sorted, never the token, so a retry after an identity refresh still matches. Records are scoped to the principal: they are kept per `user_id` and key, so the same key sent by another principal is a separate request that issues that principal's own credential; it can neither read nor block someone else's. A replay is not counted against the rate limit. A stored answer is kept until its credential expires; the record of a request in progress for 2 minutes. A principal keeps at most twice `BROKER_MAX_KEYS_PER_USER` records: a new one drops that principal's oldest finished record, so a retry of that old key issues a new credential, and a principal whose records are all still in progress gets 503. Only past 10 000 records in all are other principals' oldest finished records dropped. A replay returns the stored credential as issued, even if rotation has deleted it since; the gateway then refuses it with 401 and PiShip renews.
 
 The store is **in memory**: a broker restart forgets every key, so a retry after a restart issues a new credential (the old one expires, or rotation deletes it). A production broker with several instances needs a shared store; so does the per-principal rate limit, which is also in memory.
 
