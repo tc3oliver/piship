@@ -65,6 +65,7 @@ const allowedLocal = {
     "@piship/audit",
     "@piship/sandbox",
     "@piship/mcp",
+    "@piship/adapter-sdk",
   ],
 };
 // Workspace imports that appear only inside source text a package generates,
