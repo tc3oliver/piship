@@ -193,6 +193,8 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
     });
 
     it("reports enforced containment with every plane after the live probe", () => {
+      // git-control-protection is live-probed here; this test is the CI gate
+      // before local backends are required to provide it.
       expect(sandbox.report).toMatchObject({
         level: "enforced",
         adapter: adapter.id,
@@ -201,9 +203,22 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
           "filesystem-write-allowlist",
           "network-deny",
           "environment-filter",
+          "git-control-protection",
         ],
+        isolation: "local",
+        workspace: {
+          declared: "shared",
+          effective: "shared",
+          verification: "not-required",
+          gitControlProtection: "verified",
+          complete: true,
+        },
       });
+      expect(sandbox.report.warnings.join("\n")).not.toContain(
+        "git-control-protection",
+      );
       expect(open.report.planes).not.toContain("network-deny");
+      expect(open.report.planes).toContain("git-control-protection");
     });
 
     it("allows writes inside the workspace and the session temp directory", async () => {

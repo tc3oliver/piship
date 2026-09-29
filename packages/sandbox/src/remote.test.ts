@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
-import type { SandboxPolicy } from "./profile.js";
+import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import {
   connectEnvelope,
   E2bCompatibleBackend,
@@ -127,6 +127,9 @@ describe("remote capability reporting", () => {
       expect(capabilities.planes).not.toContain("filesystem-read-deny");
       expect(capabilities.planes).not.toContain("filesystem-write-allowlist");
       expect(capabilities.localProcesses).toBe(false);
+      // Neither backend knows the developer's workspace: a template or a
+      // warm-pool pod holds a copy of the code at best.
+      expect(capabilities.workspace).toEqual({ mode: "snapshot" });
     }
   });
 
@@ -140,8 +143,23 @@ describe("remote capability reporting", () => {
     ]);
     const line = describeContainment(sandbox.report);
     expect(line).toBe(
-      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools.",
+      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
     );
+    expect(sandbox.report).toMatchObject({
+      isolation: "remote",
+      workspace: {
+        declared: "snapshot",
+        effective: "snapshot",
+        verification: "not-required",
+        gitControlProtection: "not-applicable",
+        complete: false,
+      },
+    });
+    // A snapshot is never checked: no sentinel reaches the service.
+    expect((await run(sandbox, "true")).exitCode).toBe(0);
+    expect(sandbox.workspace()?.verification).toBe("not-required");
+    const wire = mock.requests.map((request) => request.body.toString());
+    expect(wire.join("\n")).not.toMatch(/piship-ws|\.git\/piship-workspace/);
     expect(line).not.toMatch(/filesystem-read-deny|filesystem-write-allowlist/);
     await sandbox.dispose();
   });
@@ -714,6 +732,37 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
       ),
     ).toBe(true);
     await sandbox.dispose();
+  });
+
+  it("reports a new epoch once an expired claim is replaced", async () => {
+    let now = Date.parse("2026-09-28T18:00:00Z");
+    const mock = await kubernetesServer();
+    const instance = await kubernetes(mock.url, {
+      lifetimeSeconds: 60,
+      now: () => now,
+    }).prepare({ profile: {} as SandboxProfile });
+    const io = {
+      signal: new AbortController().signal,
+      onStdout: () => {},
+      onStderr: () => {},
+    };
+    const request = {
+      command: "true",
+      cwd: workspace,
+      workspacePath: ".",
+      env: {},
+    };
+    expect(instance.epoch?.()).toBeUndefined();
+    await instance.exec(request, io);
+    const first = instance.epoch?.();
+    expect(first).toBe(claimNames(mock.requests)[0]);
+    await instance.exec(request, io);
+    expect(instance.epoch?.()).toBe(first);
+    now += 61_000;
+    await instance.exec(request, io);
+    expect(instance.epoch?.()).toBe(claimNames(mock.requests)[1]);
+    expect(instance.epoch?.()).not.toBe(first);
+    await instance.dispose();
   });
 
   it("creates no claim after dispose, even mid-renewal", async () => {

@@ -26,7 +26,6 @@ import {
   openAccess,
   undeclaredGovernanceHosts,
 } from "@piship/core";
-import { HOST_FILESYSTEM_ISOLATION } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import {
   type GovernanceInspection,
@@ -121,7 +120,7 @@ export interface GovernanceData {
   readonly manifest: GovernanceManifest;
   readonly inspection?: GovernanceInspection;
   readonly inspectionError?: string;
-  /** Derived from the containment report until the report carries it. */
+  /** The containment report's isolation kind; `none` when nothing is enforced. */
   readonly isolation?: SandboxIsolation;
   readonly workspace: WorkspaceData;
   /** Undefined when the governed session did not open. */
@@ -155,15 +154,15 @@ export interface DoctorData {
 }
 
 /**
- * How commands of the sandbox are isolated. The containment report does not
- * name the backend's isolation kind; a remote backend is the only one that
- * can report `host-filesystem-isolation`, so that plane identifies it.
+ * How commands of the sandbox are isolated: the isolation kind an enforced
+ * containment report names, or `none`. A remote backend with a shared
+ * workspace claims no `host-filesystem-isolation`, so the planes cannot tell.
  */
 export function sandboxIsolation(
   report: GovernanceInspection["sandbox"],
 ): SandboxIsolation {
-  if (report.level !== "enforced") return "none";
-  return report.planes.includes(HOST_FILESYSTEM_ISOLATION) ? "remote" : "local";
+  if (report.level !== "enforced" || !report.isolation) return "none";
+  return report.isolation;
 }
 
 function origin(url: string | undefined): string | undefined {

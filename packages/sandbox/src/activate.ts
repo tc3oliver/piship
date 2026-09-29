@@ -22,6 +22,7 @@ import {
   capabilityMismatch,
   claimedGuarantees,
   enforcesPathPolicy,
+  GIT_CONTROL_PROTECTION,
   HOST_FILESYSTEM_ISOLATION,
   PATH_POLICY_PLANES,
   type SandboxGuarantee,
@@ -31,6 +32,9 @@ import {
   type SandboxExecResult,
   type SandboxInstance,
   type SandboxProvider,
+  type SandboxWorkspaceDeclaration,
+  WORKSPACE_CONFINEMENT,
+  workspaceDeclaration,
 } from "./backend.js";
 import {
   filterEnvironment,
@@ -49,6 +53,15 @@ import {
   type SandboxProfile,
 } from "./profile.js";
 import { selectAdapter } from "./select.js";
+import {
+  describeWorkspace,
+  initialWorkspaceReport,
+  localWorkspaceReport,
+  verifyWorkspace,
+  WORKSPACE_VALIDITY_MS,
+  type WorkspaceReport,
+  workspaceWindowMs,
+} from "./workspace.js";
 
 export type ContainmentLevel = "enforced" | "unavailable" | "not-required";
 
@@ -81,6 +94,14 @@ export interface ContainmentReport {
   readonly localProcesses: boolean;
   readonly reason?: string;
   readonly warnings: readonly string[];
+  /** Where commands run: on this host, or on another machine. Set when enforced. */
+  readonly isolation?: "local" | "remote";
+  /**
+   * How the sandbox sees the workspace, at activation. Set when enforced. A
+   * shared or synchronized remote workspace is `pending` here: it is
+   * verified before the first sandboxed command (`ActiveSandbox.workspace()`).
+   */
+  readonly workspace?: WorkspaceReport;
 }
 
 export interface ActivationContext {
@@ -108,6 +129,13 @@ export interface ActivationContext {
    * cancelled a command before it stops waiting and retires the instance.
    */
   readonly settleMs?: number;
+  /**
+   * The project's origin. A backend's working-tree `sentinelDir` is used for
+   * the workspace check only in a `company` project. Default `unknown`.
+   */
+  readonly projectOrigin?: "company" | "external" | "unknown";
+  /** Wall clock for the workspace check's validity window (tests). */
+  readonly now?: () => number;
 }
 
 /** Structurally compatible with Pi's `BashOperations.exec` options. */
@@ -134,11 +162,20 @@ export interface ActiveSandbox {
     cwd: string,
     env?: Readonly<Record<string, string>>,
   ): WrappedCommand;
+  /**
+   * Run one command. For a remote backend with a shared or synchronized
+   * workspace, the workspace is verified first when no verification is valid
+   * (the first command, 30 minutes later, or a new backend environment).
+   */
   exec(
     command: string,
     cwd: string,
     options: SandboxExecOptions,
   ): Promise<{ exitCode: number | null }>;
+  /** The live workspace report, updated after each verification. */
+  workspace(): WorkspaceReport | undefined;
+  /** Called with each new workspace report a verification produces. */
+  onWorkspaceReport(listener: (report: WorkspaceReport) => void): void;
   /** Release the backend instance and remove the owned session temp directory. */
   dispose(): Promise<void>;
 }
@@ -332,6 +369,29 @@ interface Session {
   readonly platform: NodeJS.Platform;
   readonly ownedTmp: string | undefined;
   readonly settleMs: number;
+  /** The validated workspace declaration; set when enforced. */
+  readonly declaration?: SandboxWorkspaceDeclaration;
+  readonly projectOrigin: "company" | "external" | "unknown";
+  readonly now: () => number;
+  /** Added to the workspace window to bound the workspace check command. */
+  readonly checkTimeoutMs: number;
+}
+
+function unsafeWorkspaceError(
+  report: ContainmentReport,
+  mode: string,
+  reason: string,
+): PiShipError {
+  return new PiShipError(
+    "SANDBOX_UNAVAILABLE",
+    `The ${report.adapter} sandbox backend declares a ${mode} workspace, but ${reason}; PiShip retired it and runs no command in it`,
+    {
+      component: "sandbox",
+      userAction:
+        "Make the sandbox backend keep the project's git control files and hooks read-only from inside the sandbox, then start a new session",
+      sanitizedDetail: { adapter: report.adapter, provider: report.provider },
+    },
+  );
 }
 
 function retiredError(report: ContainmentReport): PiShipError {
@@ -416,6 +476,106 @@ function createActiveSandbox(session: Session): ActiveSandbox {
       );
     return instance.wrap({ file, args, cwd, env: approvedEnv(env) });
   };
+  // Workspace verification (remote shared or synchronized only): lazily,
+  // before the first command that reaches the sandbox, then again once the
+  // result expires or the backend reports a new environment.
+  const declaration = session.declaration;
+  const verifies =
+    enforced &&
+    session.capabilities?.isolation === "remote" &&
+    declaration !== undefined &&
+    declaration.mode !== "snapshot";
+  let workspace = report.workspace;
+  const listeners: ((report: WorkspaceReport) => void)[] = [];
+  let checkedAt: number | undefined;
+  let checkedEpoch: string | undefined;
+  let unsafe: PiShipError | undefined;
+  let verifying: Promise<boolean> | undefined;
+  const epoch = () => {
+    try {
+      const value = instance?.epoch?.();
+      return typeof value === "string" ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const due = () =>
+    verifies &&
+    (checkedAt === undefined ||
+      session.now() - checkedAt >= WORKSPACE_VALIDITY_MS ||
+      epoch() !== checkedEpoch);
+  /** One verification; false when the caller's signal cancelled it. */
+  const verifyOnce = async (signal?: AbortSignal): Promise<boolean> => {
+    if (!instance || !declaration) return true;
+    const outcome = await verifyWorkspace(
+      async (command, onData) => {
+        const result = await runGoverned(
+          instance,
+          {
+            command,
+            cwd: profile.workspace,
+            workspacePath: ".",
+            env: commandEnvironment(session, sourceEnv),
+          },
+          {
+            // Bounded by the window plus the command itself, and never
+            // charged to the user's command timeout.
+            timeoutMs: workspaceWindowMs(declaration) + session.checkTimeoutMs,
+            ...(signal ? { signal } : {}),
+            settleMs: session.settleMs,
+            onData,
+            retire,
+          },
+        );
+        if (result.kind === "exit") return result.exitCode;
+        throw new Error(`the workspace check ${result.kind}`);
+      },
+      {
+        workspace: profile.workspace,
+        origin: session.projectOrigin,
+        declaration,
+        protectedPaths: profile.writeProtect,
+        now: session.now,
+      },
+    ).catch(() => ({
+      // Anything unexpected on the host side proves nothing: fail closed.
+      report: {
+        ...(workspace ?? initialWorkspaceReport(declaration)),
+        verification: "failed" as const,
+        effective: "snapshot" as const,
+        complete: false,
+      },
+      unsafe: "the workspace check could not run",
+    }));
+    if (signal?.aborted) return false;
+    if (outcome.unsafe) {
+      unsafe = unsafeWorkspaceError(report, declaration.mode, outcome.unsafe);
+      retire();
+    }
+    workspace = outcome.report;
+    checkedAt = session.now();
+    checkedEpoch = epoch();
+    for (const listener of listeners)
+      try {
+        listener(workspace);
+      } catch {
+        // a listener never decides the command
+      }
+    return true;
+  };
+  const ensureVerified = async (signal?: AbortSignal) => {
+    while (due()) {
+      if (unsafe) throw unsafe;
+      if (retired || disposed) throw retiredError(report);
+      verifying ??= verifyOnce(signal).finally(() => {
+        verifying = undefined;
+      });
+      // Another command's cancelled check does not count; run our own.
+      if (await verifying) break;
+      if (signal?.aborted) throw new Error("aborted");
+    }
+    if (unsafe) throw unsafe;
+  };
   const exec: ActiveSandbox["exec"] = async (command, cwd, options) => {
     if (options.signal?.aborted) throw new Error("aborted");
     const remote = session.capabilities?.isolation === "remote";
@@ -440,12 +600,15 @@ function createActiveSandbox(session: Session): ActiveSandbox {
       if (exit.timedOut) throw new Error(`timeout:${options.timeout}`);
       return { exitCode: exitCodeOf(exit.code, exit.signal) };
     }
+    if (unsafe) throw unsafe;
     if (retired || disposed) throw retiredError(report);
     const relativeCwd = workspacePath(profile.workspace, cwd);
     if (remote && relativeCwd === undefined)
       throw new Error(
         `Working directory is outside the workspace, where the ${report.adapter} sandbox backend cannot run commands: ${cwd}`,
       );
+    await ensureVerified(options.signal);
+    if (retired || disposed) throw retiredError(report);
     const outcome = await runGoverned(
       instance,
       {
@@ -472,6 +635,10 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     profile,
     wrap,
     exec,
+    workspace: () => workspace,
+    onWorkspaceReport: (listener) => {
+      listeners.push(listener);
+    },
     dispose: async () => {
       if (disposed) return;
       disposed = true;
@@ -689,6 +856,9 @@ export async function activateSandbox(
       platform,
       ownedTmp,
       settleMs,
+      projectOrigin: ctx.projectOrigin ?? ("unknown" as const),
+      now: ctx.now ?? Date.now,
+      checkTimeoutMs: ctx.probeTimeoutMs ?? 30_000,
     };
     const fail = async (reason: string) => {
       await instance?.dispose().catch(() => undefined);
@@ -745,6 +915,12 @@ export async function activateSandbox(
       return await fail(
         `the ${backend.id} sandbox backend cannot enforce this policy: ${mismatch}`,
       );
+    // Valid here: capabilityMismatch rejects a malformed declaration.
+    const declared = workspaceDeclaration(capabilities);
+    const declaration =
+      "declaration" in declared
+        ? declared.declaration
+        : ({ mode: "snapshot" } as const);
     try {
       instance = await backend.prepare({ profile });
     } catch (error) {
@@ -752,7 +928,7 @@ export async function activateSandbox(
         `the ${backend.id} sandbox backend could not prepare a sandbox: ${message(error)}`,
       );
     }
-    const session = { ...base, capabilities };
+    const session = { ...base, capabilities, declaration };
     const live =
       capabilities.isolation === "local" && typeof instance.wrap === "function";
     let verification: ContainmentVerification;
@@ -788,6 +964,7 @@ export async function activateSandbox(
       if (!probe.ok) return await fail(probe.reason);
       verification = "live-probe";
       planes = probe.planes;
+      warnings.push(...(probe.warnings ?? []));
     } else {
       const check = await checkAttested(instance, session, sourceEnv, {
         timeoutMs: ctx.probeTimeoutMs ?? 60_000,
@@ -818,6 +995,13 @@ export async function activateSandbox(
           capabilities.isolation === "local" &&
           typeof instance.wrap === "function",
         warnings,
+        isolation: capabilities.isolation,
+        workspace:
+          capabilities.isolation === "local"
+            ? localWorkspaceReport(
+                live && planes.includes(GIT_CONTROL_PROTECTION),
+              )
+            : initialWorkspaceReport(declaration),
       },
     });
   } catch (error) {
@@ -826,8 +1010,15 @@ export async function activateSandbox(
   }
 }
 
-/** One doctor line: the effective containment level and its planes. */
-export function describeContainment(report: ContainmentReport): string {
+/**
+ * One doctor line: the effective containment level and its planes, and for
+ * an enforced remote backend how it sees the workspace (`workspace`, the live
+ * report, defaults to the one at activation).
+ */
+export function describeContainment(
+  report: ContainmentReport,
+  workspace: WorkspaceReport | undefined = report.workspace,
+): string {
   const requirement = report.required ? "required" : "optional";
   switch (report.level) {
     case "enforced": {
@@ -847,8 +1038,12 @@ export function describeContainment(report: ContainmentReport): string {
           ? ` sandbox.filesystem path rules are only partly enforced by the backend (${partial.join(", ")} only); PiShip's local file tools still apply them in full.`
           : report.planes.includes(HOST_FILESYSTEM_ISOLATION)
             ? " The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools."
-            : " sandbox.filesystem path rules are not enforced by the backend.";
-      return `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
+            : report.planes.includes(WORKSPACE_CONFINEMENT)
+              ? " The sandbox reaches this host's files only through the workspace, where it does not enforce sandbox.filesystem path rules: a read-denied path inside the workspace is readable by sandboxed commands."
+              : " sandbox.filesystem path rules are not enforced by the backend.";
+      const line = `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
+      if (report.isolation !== "remote" || !workspace) return line;
+      return `${line}${line.endsWith(".") ? "" : "."} ${describeWorkspace(workspace)}`;
     }
     case "unavailable":
       return `unavailable on ${report.adapter} (${requirement}): ${redact(report.reason ?? "unknown reason")}. Tool subprocesses run with the user's privileges`;

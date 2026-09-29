@@ -41,18 +41,28 @@ function checkInstance(value: unknown): SandboxInstance {
     typeof instance !== "object" ||
     typeof instance.exec !== "function" ||
     typeof instance.dispose !== "function" ||
-    (instance.wrap !== undefined && typeof instance.wrap !== "function")
+    (instance.wrap !== undefined && typeof instance.wrap !== "function") ||
+    (instance.epoch !== undefined && typeof instance.epoch !== "function")
   )
     throw invalid("prepare() must return an object with exec() and dispose()");
   const exec = instance.exec.bind(instance);
   const dispose = instance.dispose.bind(instance);
   const wrap = instance.wrap?.bind(instance);
+  const epoch = instance.epoch?.bind(instance);
   return {
     exec: (request, io) => exec(request, io),
     dispose: async () => {
       await dispose();
     },
     ...(wrap ? { wrap: (command) => wrap(command) } : {}),
+    ...(epoch
+      ? {
+          epoch: () => {
+            const value: unknown = epoch();
+            return typeof value === "string" ? value : undefined;
+          },
+        }
+      : {}),
   };
 }
 

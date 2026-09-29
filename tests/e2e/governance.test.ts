@@ -392,7 +392,9 @@ describe("governed distribution (local fixtures)", () => {
       windows ? /isolation\s+none/ : /isolation\s+local/,
     );
     expect(doctor.stdout).toMatch(
-      /Workspace\n {2}- consistency\s+not reported/,
+      windows
+        ? /Workspace\n {2}- consistency\s+none: no sandbox is enforced/
+        : /Workspace\n {2}✓ consistency\s+shared \(commands run on this host's files\)/,
     );
     expect(doctor.stdout).toMatch(/Audit\n {2}. state\s+/);
 

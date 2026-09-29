@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, type AuditStatus } from "@piship/audit";
+import type { WorkspaceReport } from "@piship/sandbox";
 import {
   approvedNetworkEnvironment,
   formatError,
@@ -15,6 +16,7 @@ import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import type { AccessData, DoctorData, GovernanceData } from "./data.js";
 import { sandboxIsolation } from "./data.js";
+import { workspaceData } from "./workspace.js";
 import { DOCTOR_GROUPS, DoctorReport, sanitizeDoctorText } from "./report.js";
 
 let temp: string;
@@ -118,6 +120,14 @@ function inspection(
     verification: "live-probe",
     localProcesses: true,
     warnings: [],
+    isolation: "local",
+    workspace: {
+      declared: "shared",
+      effective: "shared",
+      verification: "not-required",
+      gitControlProtection: "verified",
+      complete: true,
+    },
     ...sandbox,
   };
   return {
@@ -300,7 +310,7 @@ describe("renderDoctor", () => {
       `  ✓ ${"isolation".padEnd(20)} local (commands run on this host inside the sandbox)`,
     );
     expect(group(output, "Workspace")).toEqual([
-      `  - ${"consistency".padEnd(20)} not reported; the sandbox backend does not report workspace consistency yet`,
+      `  - ${"consistency".padEnd(20)} not reported by the sandbox backend`,
     ]);
     expect(group(output, "Audit")).toEqual([
       `  ✓ ${"state".padEnd(20)} healthy`,
@@ -574,18 +584,39 @@ describe("Network group", () => {
 });
 
 describe("Sandbox and Workspace groups", () => {
-  it("derives the isolation kind from the containment report", () => {
+  const remote = (workspace: WorkspaceReport) =>
+    inspection({
+      adapter: "custom",
+      provider: "custom",
+      planes: ["host-filesystem-isolation", "environment-filter"],
+      localProcesses: false,
+      isolation: "remote",
+      workspace,
+    });
+  const snapshot: WorkspaceReport = {
+    declared: "snapshot",
+    effective: "snapshot",
+    verification: "not-required",
+    gitControlProtection: "not-applicable",
+    complete: false,
+  };
+  const workspaceLines = (inspected: GovernanceInspection) =>
+    group(
+      renderDoctor(
+        doctorData("managed", {
+          governance: governanceData({
+            inspection: inspected,
+            isolation: sandboxIsolation(inspected.sandbox),
+            workspace: workspaceData(inspected),
+          }),
+        }),
+      ).render(),
+      "Workspace",
+    );
+
+  it("takes the isolation kind from the containment report", () => {
     expect(sandboxIsolation(inspection().sandbox)).toBe("local");
-    expect(
-      sandboxIsolation(
-        inspection({
-          adapter: "custom",
-          provider: "custom",
-          planes: ["host-filesystem-isolation", "environment-filter"],
-          localProcesses: false,
-        }).sandbox,
-      ),
-    ).toBe("remote");
+    expect(sandboxIsolation(remote(snapshot).sandbox)).toBe("remote");
     expect(
       sandboxIsolation(
         inspection({ level: "not-required", planes: [] }).sandbox,
@@ -593,18 +624,14 @@ describe("Sandbox and Workspace groups", () => {
     ).toBe("none");
   });
 
-  it("shows the remote isolation, the containment summary, and a workspace mode once reported", () => {
-    const inspected = inspection({
-      adapter: "custom",
-      provider: "custom",
-      planes: ["host-filesystem-isolation", "environment-filter"],
-    });
+  it("shows the remote isolation and the containment summary", () => {
+    const inspected = remote(snapshot);
     const output = renderDoctor(
       doctorData("managed", {
         governance: governanceData({
           inspection: inspected,
           isolation: sandboxIsolation(inspected.sandbox),
-          workspace: { consistency: "shared" },
+          workspace: workspaceData(inspected),
         }),
       }),
     ).render();
@@ -616,8 +643,100 @@ describe("Sandbox and Workspace groups", () => {
     expect(sandbox).toContain(
       `  - ${"summary".padEnd(20)} enforced by macos-seatbelt (required)`,
     );
-    expect(group(output, "Workspace")).toEqual([
+  });
+
+  it("reports a local backend's workspace as shared by construction", () => {
+    expect(workspaceLines(inspection())).toEqual([
+      `  ✓ ${"consistency".padEnd(20)} shared (commands run on this host's files)`,
+      `  - ${"verification".padEnd(20)} not required`,
+      `  ✓ ${"complete".padEnd(20)} yes: a complete coding-agent workspace`,
+      `  - ${"git control files".padEnd(20)} verified by the live probe`,
+    ]);
+    expect(
+      workspaceLines(
+        inspection({
+          workspace: {
+            declared: "shared",
+            effective: "shared",
+            verification: "not-required",
+            gitControlProtection: "not-verified",
+            complete: true,
+          },
+        }),
+      ).at(-1),
+    ).toBe(
+      `  ! ${"git control files".padEnd(20)} not verified; sandboxed commands may be able to change them`,
+    );
+  });
+
+  it("never reports a snapshot as a complete workspace", () => {
+    expect(workspaceLines(remote(snapshot))).toEqual([
+      `  - ${"consistency".padEnd(20)} snapshot`,
+      `  - ${"declared".padEnd(20)} snapshot`,
+      `  - ${"verification".padEnd(20)} not required`,
+      `  - ${"complete".padEnd(20)} no: remote commands do not see the files the agent edits`,
+      `  - ${"git control files".padEnd(20)} n/a (the sandbox cannot reach this host's files)`,
+    ]);
+  });
+
+  it("shows a shared workspace as pending, because doctor never runs the check", () => {
+    expect(
+      workspaceLines(
+        remote({
+          declared: "shared",
+          effective: "snapshot",
+          verification: "pending",
+          gitControlProtection: "pending",
+          complete: false,
+        }),
+      ),
+    ).toEqual([
+      `  - ${"consistency".padEnd(20)} pending (shared declared)`,
+      `  - ${"declared".padEnd(20)} shared`,
+      `  - ${"verification".padEnd(20)} pending: verified before the first sandboxed command; not run by doctor`,
+      `  - ${"complete".padEnd(20)} not until verified`,
+      `  - ${"git control files".padEnd(20)} pending: checked before the first sandboxed command`,
+    ]);
+  });
+
+  it("shows a verified workspace, and warns about a lower one", () => {
+    expect(
+      workspaceLines(
+        remote({
+          declared: "shared",
+          effective: "shared",
+          verification: "verified",
+          verifiedAt: "2026-09-29T12:00:00Z",
+          gitControlProtection: "attested-renames",
+          complete: true,
+        }),
+      ).slice(0, 3),
+    ).toEqual([
       `  ✓ ${"consistency".padEnd(20)} shared`,
+      `  - ${"declared".padEnd(20)} shared`,
+      `  - ${"verification".padEnd(20)} verified at 2026-09-29T12:00:00Z`,
+    ]);
+    expect(
+      workspaceLines(
+        remote({
+          declared: "synchronized",
+          effective: "snapshot",
+          verification: "failed",
+          reason: "the sandbox did not see host changes",
+          gitControlProtection: "attested-renames",
+          complete: false,
+        }),
+      )[0],
+    ).toBe(
+      `  ! ${"consistency".padEnd(20)} snapshot, lower than the declared synchronized: the sandbox did not see host changes`,
+    );
+  });
+
+  it("says when no sandbox is enforced", () => {
+    expect(
+      workspaceLines(inspection({ level: "not-required", planes: [] })),
+    ).toEqual([
+      `  - ${"consistency".padEnd(20)} none: no sandbox is enforced; commands run on this host's files`,
     ]);
   });
 });
