@@ -51,7 +51,7 @@ The access token is checked in this order, and nothing from its payload is used 
 4. `iss` equals `BROKER_ISSUER` exactly; `aud` contains `piship-reference-broker`; `exp` is present and not past; `nbf` and `iat`, when present, are not in the future; `azp` is `acmecode`; `typ`, when present, is `Bearer` (Keycloak's ID tokens say `ID`); `sub` is a non-empty string. `exp`, `nbf` and `iat` allow 30 s of clock skew (`BROKER_CLOCK_TOLERANCE_SECONDS`).
 5. `groups` must be a string array with at least one group path in the entitlement table; otherwise 403.
 
-The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...` on the compose network, while the issuer stays the loopback URL; outside a loopback host or a container network it must be `https`) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. With a stale cache, known keys keep working while Keycloak is down; with no cache, acquires answer 503.
+The JWKS is fetched from `BROKER_JWKS_URL` (Keycloak's back channel, `http://keycloak:8080/...` on the compose network, while the issuer stays the loopback URL; outside a loopback host or a container network it must be `https`) and cached. It is fetched again when the cache is older than 10 minutes, or for a `kid` the cache does not have (a rotated key); either way at most once per 30 s, including while Keycloak is failing, so tokens with random `kid`s never turn into one JWKS request each. While Keycloak is down, known keys keep working from the cache for at most `BROKER_JWKS_MAX_STALE_SECONDS` (default 1 hour) after the last successful fetch, so a signing key the realm withdrew cannot stay trusted indefinitely; past that, or with no cache at all, the cache is dropped and acquires answer 503 `identity_provider_unavailable` until a fetch succeeds.
 
 The broker does not introspect tokens: an access token of a session signed out at Keycloak stays usable here until it expires (5 minutes in the reference realm).
 
@@ -125,6 +125,7 @@ Revoke is authenticated only by the key it revokes, so it is limited by where it
 | `BROKER_MAX_KEYS_PER_USER` | `3` | Live broker keys kept per user by rotation |
 | `BROKER_ACQUIRE_LIMIT_PER_MINUTE` | `20` | New acquires per principal per minute |
 | `BROKER_CLOCK_TOLERANCE_SECONDS` | `30` | Skew allowed on `exp`, `nbf`, `iat` |
+| `BROKER_JWKS_MAX_STALE_SECONDS` | `3600` | How long after the last successful JWKS fetch its keys are still trusted while refetches fail, 600 to 86400 |
 | `BROKER_REVOKE_LIMIT_PER_MINUTE` | `60` | Revokes per client address per minute |
 | `BROKER_REVOKE_MAX_CONCURRENT` | `16` | Revokes waiting on LiteLLM at once, across all callers |
 | `BROKER_TRUSTED_PROXIES` | unset | Comma-separated IP addresses of reverse proxies whose `X-Forwarded-For` is believed; unset, the header is ignored |

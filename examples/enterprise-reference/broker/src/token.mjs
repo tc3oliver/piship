@@ -57,6 +57,7 @@ function decodeJson(segment, reason) {
  * @param {number} [options.clockToleranceSeconds] for exp, nbf and iat
  * @param {number} [options.jwksMaxAgeMs] refetch the JWKS after this age
  * @param {number} [options.jwksMinRefreshMs] at most one refetch for an unknown `kid` per interval
+ * @param {number} [options.jwksMaxStaleMs] while refetches fail, trust the cached keys at most this long after the last successful fetch
  * @param {number} [options.timeoutMs] JWKS request timeout
  */
 export function createTokenVerifier({
@@ -69,6 +70,7 @@ export function createTokenVerifier({
   clockToleranceSeconds = 30,
   jwksMaxAgeMs = 10 * 60_000,
   jwksMinRefreshMs = 30_000,
+  jwksMaxStaleMs = 60 * 60_000,
   timeoutMs = 5_000,
 }) {
   /** @type {Map<string, import("node:crypto").KeyObject>} */
@@ -129,11 +131,14 @@ export function createTokenVerifier({
       try {
         await refresh();
       } catch {
-        // A stale cache still verifies known keys; with no cache at all
-        // the provider is unavailable.
-        if (keys.size === 0) throw new JwksUnavailableError();
+        // A stale cache still verifies known keys, for a while; with no
+        // cache the provider is unavailable.
       }
     }
+    // A key the realm withdrew (rotated out after a compromise) must stop
+    // verifying even while the realm cannot be reached: past
+    // jwksMaxStaleMs since the last successful fetch, the cache is dropped.
+    if (now() - fetchedAt > jwksMaxStaleMs) keys = new Map();
     if (keys.size === 0) throw new JwksUnavailableError();
     let key = keys.get(kid);
     // An unknown kid may be a rotated signing key: refetch, but at most

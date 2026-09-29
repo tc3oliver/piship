@@ -133,6 +133,10 @@ export function loadConfig(env) {
       min: 0,
       max: 300,
     }),
+    jwksMaxStaleSeconds: number("BROKER_JWKS_MAX_STALE_SECONDS", 3600, {
+      min: 600,
+      max: 86_400,
+    }),
     revokeLimitPerMinute: number("BROKER_REVOKE_LIMIT_PER_MINUTE", 60, {
       min: 1,
       max: 10_000,
@@ -157,6 +161,7 @@ export function createBrokerServer(
     authorizedParty: config.authorizedParty,
     jwksUrl: config.jwksUrl,
     clockToleranceSeconds: config.clockToleranceSeconds,
+    jwksMaxStaleMs: config.jwksMaxStaleSeconds * 1000,
     fetch,
   });
   const litellm = createLiteLLMAdmin({

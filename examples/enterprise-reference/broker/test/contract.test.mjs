@@ -314,6 +314,58 @@ describe("acquire: JWKS cache", () => {
     assert.equal(h.keycloak.state.jwksFetches, fetches + 1, "one refetch");
   });
 
+  it("trusts a stale JWKS while the realm fails only up to jwksMaxStaleMs after the last good fetch", async () => {
+    const h = await harness();
+    const { createTokenVerifier, JwksUnavailableError } = await import(
+      "../src/token.mjs"
+    );
+    let now = Date.now();
+    const verifier = createTokenVerifier({
+      issuer: ISSUER,
+      audience: "piship-reference-broker",
+      authorizedParty: "acmecode",
+      jwksUrl: h.keycloak.jwksUrl,
+      now: () => now,
+    });
+    const start = now;
+    // The verifier's clock moves past an hour, so the token lives three.
+    const token = () =>
+      mint(h, { ...ALICE, exp: Math.floor(start / 1000) + 3 * 3600 });
+    await verifier.verify(token());
+    h.keycloak.state.jwksStatus = 500;
+    now = start + 11 * 60_000;
+    assert.equal(
+      (await verifier.verify(token())).sub,
+      ALICE.sub,
+      "stale but within an hour",
+    );
+    now = start + 61 * 60_000;
+    await assert.rejects(verifier.verify(token()), JwksUnavailableError);
+    h.keycloak.state.jwksStatus = 200;
+    now += 31_000;
+    assert.equal((await verifier.verify(token())).sub, ALICE.sub, "recovers");
+  });
+
+  it("BROKER_JWKS_MAX_STALE_SECONDS is 600 to 86400, default 3600", () => {
+    const base = {
+      BROKER_ISSUER: ISSUER,
+      BROKER_JWKS_URL: "https://idp.example.com/certs",
+      BROKER_LITELLM_URL: "https://litellm.example.com",
+      LITELLM_MASTER_KEY: MASTER_KEY,
+      BROKER_GATEWAY_BASE_URL: GATEWAY_BASE_URL,
+    };
+    assert.equal(loadConfig(base).jwksMaxStaleSeconds, 3600);
+    assert.equal(
+      loadConfig({ ...base, BROKER_JWKS_MAX_STALE_SECONDS: "86400" })
+        .jwksMaxStaleSeconds,
+      86_400,
+    );
+    for (const value of ["599", "86401"])
+      assert.throws(() =>
+        loadConfig({ ...base, BROKER_JWKS_MAX_STALE_SECONDS: value }),
+      );
+  });
+
   it("answers 503 with Retry-After when the JWKS cannot be fetched and nothing is cached", async () => {
     const h = await harness();
     h.keycloak.state.jwksStatus = 500;
