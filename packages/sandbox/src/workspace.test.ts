@@ -47,6 +47,7 @@ import {
 } from "./testing/workspace-fakes.js";
 import {
   describeWorkspace,
+  removeSentinelDirectory,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
 } from "./workspace.js";
@@ -914,6 +915,175 @@ describe.skipIf(!posix)("the sentinel location", () => {
     await run(sandbox, "true");
     expect(sentinels().sort()).toEqual([fresh, linked, "not-a-nonce"].sort());
     expect(readdirSync(target)).toEqual(["keep"]);
+    await sandbox.dispose();
+  });
+
+  it("never deletes recursively: a stale directory that holds other names stays", async () => {
+    const location = join(git, "piship-workspace");
+    mkdirSync(location, { recursive: true });
+    const own = "a".repeat(32);
+    const foreign = "b".repeat(32);
+    const nested = "c".repeat(32);
+    mkdirSync(join(location, own));
+    for (const name of ["h2s", "s2h", "s2h.tmp"])
+      writeFileSync(join(location, own, name), "token");
+    mkdirSync(join(location, foreign));
+    writeFileSync(join(location, foreign, "h2s"), "token");
+    writeFileSync(join(location, foreign, "notes.txt"), "keep");
+    // A directory where an own name is expected to be a file.
+    mkdirSync(join(location, nested, "h2s"), { recursive: true });
+    writeFileSync(join(location, nested, "h2s", "keep"), "keep");
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3600_000);
+    for (const name of [own, foreign, nested])
+      utimesSync(join(location, name), twoDaysAgo, twoDaysAgo);
+    const fake = sharedBackend();
+    const sandbox = await activate(fake);
+    await run(sandbox, "true");
+    // The directory of own files goes; the others are left as they were.
+    expect(sentinels().sort()).toEqual([foreign, nested].sort());
+    expect(readdirSync(join(location, foreign)).sort()).toEqual([
+      "h2s",
+      "notes.txt",
+    ]);
+    expect(readFileSync(join(location, nested, "h2s", "keep"), "utf8")).toBe(
+      "keep",
+    );
+    await sandbox.dispose();
+  });
+
+  it("removes only its own files from its own directory when the sandbox left others", async () => {
+    let extra: string | undefined;
+    const fake = sharedBackend({
+      check: async (request, io) => {
+        const result = await runShell(workspace, request, io);
+        const [nonce] = readdirSync(join(git, "piship-workspace"));
+        extra = join(git, "piship-workspace", nonce ?? "", "dropped");
+        writeFileSync(extra, "kept");
+        return result;
+      },
+    });
+    const sandbox = await activate(fake);
+    await run(sandbox, "true");
+    expect(sandbox.workspace()?.verification).toBe("verified");
+    expect(extra && readFileSync(extra, "utf8")).toBe("kept");
+    expect(readdirSync(join(extra ?? "", ".."))).toEqual(["dropped"]);
+    await sandbox.dispose();
+  });
+
+  describe("removeSentinelDirectory", () => {
+    const base = [".git", "piship-workspace"];
+    const nonce = "d".repeat(32);
+    const location = () => join(git, "piship-workspace");
+    let victim: string;
+    beforeEach(() => {
+      victim = join(root, "victim");
+      mkdirSync(join(victim, nonce), { recursive: true });
+      writeFileSync(join(victim, nonce, "h2s"), "host file");
+      writeFileSync(join(victim, nonce, "data"), "host file");
+    });
+    const intact = () => {
+      expect(readdirSync(join(victim, nonce)).sort()).toEqual(["data", "h2s"]);
+      expect(readFileSync(join(victim, nonce, "data"), "utf8")).toBe(
+        "host file",
+      );
+    };
+
+    it("removes the files a run makes and the directory", () => {
+      mkdirSync(join(location(), nonce), { recursive: true });
+      for (const name of ["h2s", "s2h", "s2h.tmp"])
+        writeFileSync(join(location(), nonce, name), "token");
+      expect(removeSentinelDirectory(workspace, base, nonce)).toBe(true);
+      expect(readdirSync(location())).toEqual([]);
+    });
+
+    it("deletes nothing through a link that replaced the location", () => {
+      symlinkSync(victim, location());
+      expect(removeSentinelDirectory(workspace, base, nonce)).toBe(false);
+      expect(
+        removeSentinelDirectory(workspace, base, nonce, { onlyOwn: true }),
+      ).toBe(false);
+      intact();
+    });
+
+    it("deletes nothing through a link that replaced the git directory", () => {
+      renameSync(git, join(root, "moved-git"));
+      symlinkSync(victim, git);
+      // The victim also holds the location, so the whole path resolves.
+      mkdirSync(join(victim, "piship-workspace"));
+      renameSync(join(victim, nonce), join(victim, "piship-workspace", nonce));
+      expect(removeSentinelDirectory(workspace, base, nonce)).toBe(false);
+      expect(
+        readdirSync(join(victim, "piship-workspace", nonce)).sort(),
+      ).toEqual(["data", "h2s"]);
+    });
+
+    it("deletes nothing through a link that replaced the nonce directory", () => {
+      mkdirSync(location(), { recursive: true });
+      symlinkSync(join(victim, nonce), join(location(), nonce));
+      expect(removeSentinelDirectory(workspace, base, nonce)).toBe(false);
+      intact();
+    });
+
+    it("unlinks regular files only, never a link or a directory of an own name", () => {
+      mkdirSync(join(location(), nonce), { recursive: true });
+      const outside = join(victim, "outside-file");
+      writeFileSync(outside, "host file");
+      symlinkSync(outside, join(location(), nonce, "s2h"));
+      mkdirSync(join(location(), nonce, "h2s"));
+      writeFileSync(join(location(), nonce, "h2s", "keep"), "keep");
+      writeFileSync(join(location(), nonce, "s2h.tmp"), "token");
+      expect(removeSentinelDirectory(workspace, base, nonce)).toBe(false);
+      expect(readFileSync(outside, "utf8")).toBe("host file");
+      expect(readdirSync(join(location(), nonce)).sort()).toEqual([
+        "h2s",
+        "s2h",
+      ]);
+      expect(readFileSync(join(location(), nonce, "h2s", "keep"), "utf8")).toBe(
+        "keep",
+      );
+    });
+
+    it("leaves a directory that holds another name alone when asked to", () => {
+      mkdirSync(join(location(), nonce), { recursive: true });
+      writeFileSync(join(location(), nonce, "h2s"), "token");
+      writeFileSync(join(location(), nonce, "notes"), "keep");
+      expect(
+        removeSentinelDirectory(workspace, base, nonce, { onlyOwn: true }),
+      ).toBe(false);
+      expect(readdirSync(join(location(), nonce)).sort()).toEqual([
+        "h2s",
+        "notes",
+      ]);
+    });
+  });
+
+  it("does not follow a link that replaces the location during a check", async () => {
+    const victim = join(root, "victim");
+    const fake = sharedBackend({
+      // A short window: the host cannot read the sandbox's token back through
+      // the link, and waits the window out.
+      declaration: { mode: "synchronized", propagationMs: 300 },
+      check: async (request, io) => {
+        const result = await runShell(workspace, request, io);
+        const location = join(git, "piship-workspace");
+        const [nonce] = readdirSync(location);
+        // A leftover sandbox process swaps the location for a link to a host
+        // directory that holds a directory of the same name.
+        mkdirSync(join(victim, nonce ?? ""), { recursive: true });
+        writeFileSync(join(victim, nonce ?? "", "h2s"), "host file");
+        writeFileSync(join(victim, nonce ?? "", "data"), "host file");
+        renameSync(location, join(root, "moved-location"));
+        symlinkSync(victim, location);
+        return result;
+      },
+    });
+    const sandbox = await activate(fake);
+    await run(sandbox, "true");
+    const [nonce] = readdirSync(victim);
+    expect(readdirSync(join(victim, nonce ?? "")).sort()).toEqual([
+      "data",
+      "h2s",
+    ]);
     await sandbox.dispose();
   });
 

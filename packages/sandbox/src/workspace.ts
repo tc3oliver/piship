@@ -16,7 +16,6 @@ import {
   readSync,
   realpathSync,
   rmdirSync,
-  rmSync,
   type Stats,
   unlinkSync,
   writeSync,
@@ -107,6 +106,8 @@ const POLL_MS = 200;
 const STALE_MS = 24 * 3600_000;
 const NONCE = /^[0-9a-f]{32}$/;
 const LOCATION = "piship-workspace";
+/** The only names a run puts in its nonce directory. */
+const SENTINEL_NAMES = ["h2s", "s2h", "s2h.tmp"] as const;
 const OUTPUT_LIMIT = 4096;
 
 /** The window a declaration gives each direction. */
@@ -264,44 +265,93 @@ export function sentinelLocation(
   return { segments: [".git", LOCATION] };
 }
 
+/**
+ * Remove a nonce directory, never recursively. The sandbox can write here,
+ * so a recursive delete would follow whatever it swaps in for a component
+ * (a link from the location to a host directory holding a directory of the
+ * same name) and delete host files. A run makes only the names in
+ * `SENTINEL_NAMES`: each that is a regular file is unlinked, then the
+ * directory is removed if that left it empty. `plainDirectory` runs again
+ * before every step. With `onlyOwn`, a directory that holds any other name
+ * is left untouched. Returns whether the directory is gone.
+ */
+export function removeSentinelDirectory(
+  workspace: string,
+  base: readonly string[],
+  nonce: string,
+  options: { readonly onlyOwn?: boolean } = {},
+): boolean {
+  const segments = [...base, nonce];
+  const directory = () => plainDirectory(workspace, segments, false);
+  try {
+    if (options.onlyOwn)
+      for (const name of readdirSync(directory()))
+        if (!(SENTINEL_NAMES as readonly string[]).includes(name)) return false;
+    for (const name of SENTINEL_NAMES)
+      if (lstatOrUndefined(join(directory(), name))?.isFile())
+        unlinkSync(join(directory(), name));
+    rmdirSync(directory());
+    return true;
+  } catch {
+    // gone already, not empty, or no longer safe to follow
+    return false;
+  }
+}
+
 /** Remove nonce directories an earlier run left behind for more than a day. */
-function sweepStale(location: string, now: number): void {
+function sweepStale(
+  workspace: string,
+  base: readonly string[],
+  now: number,
+): void {
   let names: string[];
   try {
-    names = readdirSync(location);
+    names = readdirSync(plainDirectory(workspace, base, false));
   } catch {
     return;
   }
   for (const name of names) {
     if (!NONCE.test(name)) continue;
-    const path = join(location, name);
-    const stat = lstatOrUndefined(path);
-    if (!stat || stat.isSymbolicLink() || !stat.isDirectory()) continue;
-    if (now - stat.mtimeMs <= STALE_MS) continue;
     try {
-      rmSync(path, { recursive: true, force: true });
+      const stat = lstatSync(
+        join(plainDirectory(workspace, base, false), name),
+      );
+      if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+      if (now - stat.mtimeMs <= STALE_MS) continue;
     } catch {
-      // best effort
+      continue;
     }
+    removeSentinelDirectory(workspace, base, name, { onlyOwn: true });
   }
 }
 
 // Sentinel directories of runs in progress, removed if the process exits
 // before the run's own cleanup.
-const liveSentinels = new Set<string>();
+const liveSentinels = new Map<
+  string,
+  {
+    readonly workspace: string;
+    readonly base: readonly string[];
+    readonly nonce: string;
+  }
+>();
 let exitHookInstalled = false;
 
-function trackSentinel(path: string): void {
-  liveSentinels.add(path);
+function trackSentinel(
+  workspace: string,
+  base: readonly string[],
+  nonce: string,
+): void {
+  liveSentinels.set(join(workspace, ...base, nonce), {
+    workspace,
+    base,
+    nonce,
+  });
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const dir of liveSentinels)
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best effort
-      }
+    for (const live of liveSentinels.values())
+      removeSentinelDirectory(live.workspace, live.base, live.nonce);
   });
 }
 
@@ -508,6 +558,7 @@ export async function verifyWorkspace(
   );
   let location = sentinelLocation(ctx);
   let sentinelDir: string | undefined;
+  let locationSegments: readonly string[] = [];
   let segments: readonly string[] = [];
   const hostToken = randomBytes(16).toString("hex");
   const sandboxToken = randomBytes(16).toString("hex");
@@ -515,20 +566,18 @@ export async function verifyWorkspace(
   try {
     if ("segments" in location) {
       try {
-        const base = plainDirectory(workspace, location.segments, true);
-        sweepStale(base, now());
-        segments = [...location.segments, nonce];
+        plainDirectory(workspace, location.segments, true);
+        locationSegments = location.segments;
+        sweepStale(workspace, locationSegments, now());
+        segments = [...locationSegments, nonce];
         sentinelDir = plainDirectory(workspace, segments, true);
-        trackSentinel(sentinelDir);
+        trackSentinel(workspace, locationSegments, nonce);
         writeNew(join(sentinelDir, "h2s"), hostToken);
       } catch (error) {
         if (sentinelDir) {
           liveSentinels.delete(sentinelDir);
-          try {
-            rmSync(sentinelDir, { recursive: true, force: true });
-          } catch {
-            // best effort; the stale sweep removes it later
-          }
+          // Best effort; the stale sweep removes what is left later.
+          removeSentinelDirectory(workspace, locationSegments, nonce);
           sentinelDir = undefined;
         }
         location = {
@@ -665,14 +714,9 @@ export async function verifyWorkspace(
   } finally {
     if (sentinelDir) {
       liveSentinels.delete(sentinelDir);
-      try {
-        // Only through plain directories: the sandbox may have replaced a
-        // component with a link while the check ran.
-        plainDirectory(workspace, segments, false);
-        rmSync(sentinelDir, { recursive: true, force: true });
-      } catch {
-        // gone already, or no longer safe to follow
-      }
+      // The sandbox may have replaced a component with a link while the
+      // check ran: nothing is followed, and nothing is deleted recursively.
+      removeSentinelDirectory(workspace, locationSegments, nonce);
     }
     cleanProtected(workspace, directories, missing, nonce);
     cleanCreatedFiles(workspace, files);
