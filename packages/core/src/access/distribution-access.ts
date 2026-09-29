@@ -34,10 +34,14 @@ import {
   metadataFileSecretRefs,
   metadataSecretRefs,
   NoCredentialProvider,
+  metadataFileSecretStore,
   type PendingRevocations,
   PiNativeCredentialProvider,
   readPendingRevocations,
   type RevocationOutcome,
+  type SecretStoreProvider,
+  type SecretStoreResolver,
+  storeForRecorded,
   withFileLock,
 } from "@piship/credentials";
 import {
@@ -111,10 +115,13 @@ export function writeIdentityDiscardedMarker(
   path: string,
   orphans: string[],
   now: Date = new Date(),
+  /** The secret store that holds the orphans, when it is known. */
+  store?: SecretStoreProvider,
 ): void {
   writeJsonAtomic(path, {
     schema: IDENTITY_DISCARDED_SCHEMA,
     orphans: [...orphans].sort(),
+    ...(store ? { secret_store: store } : {}),
     discarded_at: now.toISOString(),
   });
 }
@@ -168,6 +175,8 @@ export class DistributionAccess {
   readonly network: NetworkPolicy;
   readonly paths: AccessStatePaths;
   readonly store: SecretStore | null;
+  /** The configured `credential.storage.provider`, recorded in metadata. */
+  readonly storeProvider: SecretStoreProvider;
   readonly #fetch: ManagedFetch;
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
@@ -215,14 +224,27 @@ export class DistributionAccess {
       !!options.access &&
       (options.access.identity.mode !== "none" ||
         !["pi-native", "none"].includes(options.access.credential.provider));
+    this.storeProvider =
+      options.access?.credential.storage.provider ?? "system";
     this.store = needsStore
       ? (options.secretStore ??
         createSecretStore({
-          provider: options.access?.credential.storage.provider ?? "system",
+          provider: this.storeProvider,
           fileDirectory: this.paths.secrets,
         }))
       : null;
   }
+
+  /**
+   * The store of another provider than the configured one, holding what
+   * state recorded for it before `credential.storage.provider` changed.
+   */
+  readonly #storeFor: SecretStoreResolver = (provider) =>
+    this.options.secretStoreFor
+      ? this.options.secretStoreFor(provider)
+      : this.options.secretStore
+        ? null
+        : createSecretStore({ provider, fileDirectory: this.paths.secrets });
 
   static open(options: AccessOptions): DistributionAccess {
     return new DistributionAccess(options);
@@ -504,6 +526,8 @@ export class DistributionAccess {
       store: this.store,
       metadataPath: this.paths.credential,
       revocationRetryPath: this.paths.revocationRetry,
+      storeProvider: this.storeProvider,
+      storeFor: this.#storeFor,
       ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
       beforeExpirySeconds:
         access?.credential.refresh.beforeExpirySeconds ?? 300,
@@ -536,12 +560,25 @@ export class DistributionAccess {
 
   // ------------------------------------------------------------- identity state
 
+  /**
+   * The stored identity session's metadata, or null when there is none it
+   * can be restored from: a discarded marker, an incompatible or damaged
+   * file, or a session whose tokens another secret store holds than the
+   * configured one (the storage provider changed), which is never looked up
+   * in this store.
+   */
   readIdentityMetadata(): IdentityMetadata | null {
     if (!existsSync(this.paths.identity)) return null;
     try {
-      return parseIdentityMetadata(
-        JSON.parse(readFileSync(this.paths.identity, "utf8")),
-      );
+      const raw = JSON.parse(readFileSync(this.paths.identity, "utf8")) as {
+        secret_store?: unknown;
+      };
+      if (
+        raw?.secret_store !== undefined &&
+        raw.secret_store !== this.storeProvider
+      )
+        return null;
+      return parseIdentityMetadata(raw);
     } catch {
       return null;
     }
@@ -663,16 +700,32 @@ export class DistributionAccess {
         ),
       ]),
     ].sort();
-    const store = this.store;
+    // Deleted from the store that holds them: after a storage provider
+    // change, the one the file records, never looked up in this one.
+    const recorded =
+      metadataFileSecretStore(this.paths.identity) ?? this.storeProvider;
+    const store = storeForRecorded(
+      this.store,
+      this.storeProvider,
+      recorded,
+      this.#storeFor,
+    );
     const failed = store
       ? await deleteSecretsVerified(store, refs)
-      : refs.map((ref) => ({ ref, problem: "no secret store is configured" }));
+      : refs.map((ref) => ({
+          ref,
+          problem:
+            recorded === this.storeProvider
+              ? "no secret store is configured"
+              : `the ${recorded} secret store that holds it is not available`,
+        }));
     if (!failed.length) rmSync(this.paths.identity, { force: true });
     else
       writeIdentityDiscardedMarker(
         this.paths.identity,
         failed.map((item) => item.ref),
         new Date(this.#now()),
+        recorded,
       );
     return failed;
   }
@@ -774,9 +827,13 @@ export class DistributionAccess {
           this.paths.identity,
           [ref],
           new Date(this.#now()),
+          this.storeProvider,
         );
       await store.put(ref, identitySecret(session));
-      const metadata = identityMetadata(session, ref);
+      const metadata = {
+        ...identityMetadata(session, ref),
+        secret_store: this.storeProvider,
+      };
       const stale = previous
         ? [
             previous.secretRef,

@@ -16,7 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { type SecretStore, SecretValue } from "@piship/contracts";
-import { MemorySecretStore } from "@piship/credentials";
+import {
+  MemorySecretStore,
+  RestrictedFileSecretStore,
+} from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiShipError } from "@piship/contracts";
 import {
@@ -94,7 +97,33 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function manifestSource(version: string, rollback: boolean): string {
+function manifestSource(
+  version: string,
+  rollback: boolean,
+  storage?: "file" | "system",
+): string {
+  // With a storage provider, a personal access section whose runtime
+  // credential (a local secret) lives in that store.
+  const accessSection = storage
+    ? `identity:
+  mode: none
+credential:
+  provider: local-secret
+  storage:
+    provider: ${storage}
+inference:
+  provider: openai-compatible
+  baseUrl: https://llm.acmepi.example/v1
+models:
+  allowed: [acme/coder]
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+`
+    : "";
   return `schema: piship/v1alpha4
 app:
   id: ${ID}
@@ -107,7 +136,7 @@ deployment:
   mode: personal
 variables:
   - ACMEPI_UPDATE_SOURCE
-resources:
+${accessSection}resources:
   instructions:
     user: [./resources/AGENTS.md]
 updates:
@@ -122,11 +151,15 @@ updates:
 `;
 }
 
-function project(version: string, rollback = true): string {
+function project(
+  version: string,
+  rollback = true,
+  storage?: "file" | "system",
+): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version, rollback));
+  writeFileSync(path, manifestSource(version, rollback, storage));
   lockManifest(path);
   return path;
 }
@@ -195,8 +228,12 @@ function fakeRun(
   return { status: 2, stdout: "", stderr: `unexpected ${args.join(" ")}` };
 }
 
-async function release(version: string, rollback = true) {
-  const path = project(version, rollback);
+async function release(
+  version: string,
+  rollback = true,
+  storage?: "file" | "system",
+) {
+  const path = project(version, rollback, storage);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -216,9 +253,15 @@ function sign(directory: string, archives: string[], channel = "stable") {
 }
 
 /** Releases A (1.0.0) and B (1.1.0); the channel offered A at sequence 1 and now offers B at sequence 2. */
-async function fixture(options: { rollbackB?: boolean } = {}) {
-  const a = await release("1.0.0");
-  const b = await release("1.1.0", options.rollbackB ?? true);
+async function fixture(
+  options: {
+    rollbackB?: boolean;
+    storageA?: "file" | "system";
+    storageB?: "file" | "system";
+  } = {},
+) {
+  const a = await release("1.0.0", true, options.storageA);
+  const b = await release("1.1.0", options.rollbackB ?? true, options.storageB);
   const channelDir = temp("piship-channel-");
   await sign(channelDir, [a.archive]);
   const old = temp("piship-old-channel-");
@@ -785,6 +828,79 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     );
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
     expect(treeHash(stateDir())).toEqual(state);
+  });
+
+  it("treats a change of secret store as a credential transition in update and rollback", async () => {
+    const { a, opts } = await fixture({ storageA: "file", storageB: "system" });
+    // Signed in under 1.0.0, whose file store holds the local secret.
+    const state = stateDir();
+    const metadata = {
+      schema: "piship-credential-metadata/v1",
+      mode: "local-secret",
+      credential_ref: `piship:${ID}:inference#1`,
+      generation: 1,
+      kind: "api_key",
+      acquired_at: "2026-01-01T00:00:00.000Z",
+      secret_store: "file",
+    };
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify(metadata),
+    );
+    const fileStore = new RestrictedFileSecretStore(join(state, "secrets"));
+    await fileStore.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    await installDistribution(a.archive, true);
+    // file -> system: the switching release (1.0.0) deletes it from the
+    // file store; 1.1.0 never looks it up in the platform store.
+    const check = await updateDistribution(ID, { ...opts, check: true });
+    expect(
+      check.migration?.items.find(
+        (item) => item.name === "runtime credential metadata",
+      ),
+    ).toMatchObject({
+      action: "clear-and-reacquire",
+      storageTransition: { from: "file", to: "system" },
+    });
+    const platform = testStore();
+    const updated = await updateDistribution(ID, {
+      ...opts,
+      secretStore: fileStore,
+    });
+    expect(updated.status).toBe("updated");
+    expect(updated.notices).toEqual([
+      "runtime credential metadata was cleared because the secret store changes from file to system: its secrets were deleted from the file store; sign in again",
+    ]);
+    expect(
+      existsSync(join(state, "credentials-metadata", "inference.json")),
+    ).toBe(false);
+    expect(existsSync(join(state, "secrets"))).toBe(false);
+    expect(platform.deleted).toEqual([]);
+    // Signed in again under 1.1.0, whose platform store holds it now.
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({ ...metadata, secret_store: "system" }),
+    );
+    await platform.memory.put(
+      `piship:${ID}:inference#1`,
+      new SecretValue(SENTINEL_V2),
+    );
+    // system -> file: the switching release (1.1.0) deletes it from the
+    // platform store before 1.0.0 is active again.
+    const rolled = await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      secretStore: platform.store,
+    });
+    expect(rolled.notices).toEqual([
+      "runtime credential metadata was cleared because the secret store changes from system to file: its secrets were deleted from the system store; sign in again",
+    ]);
+    expect(platform.deleted).toEqual([
+      `piship:${ID}:inference#1`,
+      `piship:${ID}:inference#2`,
+    ]);
+    expect(platform.memory.refs()).toEqual([]);
+    expect(
+      existsSync(join(state, "credentials-metadata", "inference.json")),
+    ).toBe(false);
   });
 
   it("stops before activation when a credential the target cannot read cannot be deleted", async () => {

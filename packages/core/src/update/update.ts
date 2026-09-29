@@ -28,6 +28,7 @@ import {
   compareVersions,
   type MigrationReport,
 } from "../migration.js";
+import { storageOf } from "../storage-transition.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -260,8 +261,13 @@ export async function updateDistribution(
           version: entry.version,
           pi: target.pi.version,
           schemas: target.stateSchemas,
+          ...storageOf(verified.lock),
         },
-        { version: receipt.active, pi: lock.runtime.version },
+        {
+          version: receipt.active,
+          pi: lock.runtime.version,
+          ...storageOf(lock),
+        },
       );
       if (migration.verdict === "unsupported")
         throw new PiShipError(

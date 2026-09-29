@@ -29,6 +29,7 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import type { ReleaseTestRunner } from "../release/index.js";
+import { storageTransitionNotice } from "../storage-transition.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";
 const SNAPSHOT_RETENTION = 3;
@@ -214,7 +215,9 @@ export async function clearCredentials(
       force: true,
     });
     notices.push(
-      `${item.name} was cleared because the target cannot read it; sign in again`,
+      item.storageTransition
+        ? storageTransitionNotice(item.name, item.storageTransition)
+        : `${item.name} was cleared because the target cannot read it; sign in again`,
     );
   }
   if (notices.length)

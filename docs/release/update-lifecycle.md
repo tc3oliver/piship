@@ -59,8 +59,8 @@ The migration check compares each local data class with the state schemas the ta
 | Class | Path under the state directory | Update and rollback |
 | --- | --- | --- |
 | State marker | `state.json` (`piship-state/v1`) | Rewritten at each update and rollback activation with the distribution, version, Pi, and PiShip versions |
-| Identity session | `identity/session.json` | Credential class: kept when the target reads its schema, otherwise cleared with its secret-store entry and reacquired by `login` |
-| Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable, otherwise cleared with its secret-store entry and reacquired |
+| Identity session | `identity/session.json` | Credential class: kept when the target reads its schema and uses the same secret store, otherwise cleared with its secret-store entry and reacquired by `login` |
+| Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable and the secret store stays the same, otherwise cleared with its secret-store entry and reacquired |
 | File secret fallback | `secrets/` | Never copied, snapshotted, or restored; removed when any credential class is cleared |
 | Preferences | `config/preferences.json` | Kept in place; `unsupported` when the target cannot read its schema; included in the snapshot |
 | User policy rules | `config/policy.json` | Kept in place; included in the snapshot |
@@ -74,6 +74,8 @@ The migration check compares each local data class with the state schemas the ta
 Verdicts are `safe`, `requires-review`, or `unsupported`; the report shows each class with its action (`keep`, `clear-and-reacquire`, `review`, or `refuse`) and reason. An unreadable file of a schema-versioned non-credential class is `unsupported`: PiShip never reinterprets data under another schema.
 
 Before activating an update, PiShip copies `config/preferences.json` and `config/policy.json` into `<state>/migration/snapshots/<time>-<from>-to-<to>/` with a `piship-snapshot/v1` record that lists the credential paths it excluded. No command restores a snapshot; it is a manual recovery copy.
+
+A change of `credential.storage.provider` between the active and the target release (`file` to `system`, or `system` to `file`) is a credential transition: the other store cannot read a reference the old one holds, so a present identity session and runtime credential are `clear-and-reacquire` with the reason `The secret store changes from <old> to <new>; …`, and the switch prints `<class> was cleared because the secret store changes from <old> to <new>: its secrets were deleted from the <old> store; sign in again`. The switching release, which reads the old store, does the clearing, so the target never looks an old reference up in its own store. `update --check` and `piship migrate-check` report it the same way.
 
 Credentials are never snapshotted, copied into a release, or restored. Rollback switches only the immutable payload, so it cannot bring back a credential that was revoked or cleared: after `logout`, a rolled-back release requires `login` again. When a credential class is cleared because the target cannot read it, the switching release first revokes the runtime credential at the broker's revoke endpoint, best effort, when the distribution declares one (a failure is a notice, and local clearing still happens). It then deletes the local secret-store entries each cleared class references and the metadata file. Identity tokens are cleared only locally: the identity provider's revocation endpoint is not called. Run `logout` first when identity tokens must also be revoked remotely.
 

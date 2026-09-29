@@ -20,6 +20,7 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import { payloadStateSchemas, runPayloadCommand } from "../release/index.js";
+import { storageOf } from "../storage-transition.js";
 import {
   checkPayload,
   clearCredentials,
@@ -98,8 +99,13 @@ export async function rollbackDistribution(
         version: target.app.version,
         pi: target.runtime.version,
         schemas: payloadStateSchemas(target),
+        ...storageOf(target),
       },
-      { version: receipt.active, pi: current.runtime.version },
+      {
+        version: receipt.active,
+        pi: current.runtime.version,
+        ...storageOf(current),
+      },
     );
     if (migration.verdict === "unsupported")
       throw new PiShipError(
