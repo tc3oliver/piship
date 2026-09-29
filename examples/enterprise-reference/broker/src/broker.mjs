@@ -433,10 +433,15 @@ export function createBroker(
 
     const credentialId = newCredentialId();
     try {
-      const result = await issue({ claims, userId, models, credentialId });
-      if (reserved)
-        idempotency.complete(userId, key, result.body, result.expiresAtMs);
-      await retireOldKeys(userId, credentialId);
+      // Issue and retire run one at a time per user, so two acquires of one
+      // user cannot each count the keys before the other's new key exists.
+      const result = await perUser(userId, async () => {
+        const issued = await issue({ claims, userId, models, credentialId });
+        if (reserved)
+          idempotency.complete(userId, key, issued.body, issued.expiresAtMs);
+        await retireOldKeys(userId, credentialId);
+        return issued;
+      });
       return {
         status: 200,
         body: result.body,
@@ -524,10 +529,29 @@ export function createBroker(
   }
 
   /**
+   * Run `task` after every earlier task of the same user has settled. In
+   * process only: several broker instances need a shared lock.
+   */
+  const userQueues = new Map();
+  function perUser(userId, task) {
+    const run = (userQueues.get(userId) ?? Promise.resolve()).then(task);
+    const settled = run.then(
+      () => {},
+      () => {},
+    );
+    userQueues.set(userId, settled);
+    settled.then(() => {
+      if (userQueues.get(userId) === settled) userQueues.delete(userId);
+    });
+    return run;
+  }
+
+  /**
    * Rotation is "generate new, then delete old" (LiteLLM's regenerate is
-   * Enterprise-only). After issuing, keep the newest `maxKeysPerUser` keys
-   * this broker issued for the user and delete the rest; a failure here only
-   * logs, since every key also expires.
+   * Enterprise-only). After issuing, keep the new key and the newest
+   * `maxKeysPerUser - 1` other keys this broker issued for the user, and
+   * delete the rest; a failure here only logs, since every key also
+   * expires.
    */
   async function retireOldKeys(userId, keepId) {
     try {
@@ -538,9 +562,9 @@ export function createBroker(
           typeof entry.key_alias === "string",
       );
       const retire = mine
-        .slice(config.maxKeysPerUser)
-        .map((entry) => entry.key_alias)
-        .filter((alias) => alias !== keepId);
+        .filter((entry) => entry.key_alias !== keepId)
+        .slice(config.maxKeysPerUser - 1)
+        .map((entry) => entry.key_alias);
       if (retire.length === 0) return;
       await litellm.deleteKeys({ aliases: retire });
       log("credential.retired", { user_id: userId, deleted: retire.length });

@@ -72,7 +72,7 @@ The key is the group's full path, because it must be unique in the realm and a K
 - **The key.** `/key/generate` with `user_id`, `models`, `duration` (`BROKER_KEY_TTL_SECONDS`, default 8 hours, at most 24), `key_alias`, `metadata` (`issued_by: piship-reference-broker`, `distribution`), and optionally `max_parallel_requests`. No `team_id`, no per-key or per-model budget. LiteLLM must report an expiry with an explicit zone no later than the requested lifetime; otherwise the key is deleted and the acquire fails.
 - **`credential_id` is the key alias:** `pb-` and 24 random hex characters. PiShip requires `[A-Za-z0-9._:-]{1,256}`; LiteLLM accepts more (`:` included), so the broker, not LiteLLM, keeps the alias inside PiShip's alphabet. It reveals nothing about the key.
 - **Only open-source LiteLLM features.** `/key/{key}/regenerate`, key auto-rotation, and per-model budgets are Enterprise-only and are not used.
-- **Rotation is "generate new, then delete old".** After each new key, the broker keeps the newest `BROKER_MAX_KEYS_PER_USER` (default 3) keys it issued to that user for this distribution and deletes the rest by alias, before it answers. More than one live key allows a user on two machines, and PiShip's renewal does not revoke the key it replaces. Deletion failures are only logged; every key also expires. A key the broker did not issue is never deleted.
+- **Rotation is "generate new, then delete old".** After each new key, the broker keeps that key and the newest `BROKER_MAX_KEYS_PER_USER` (default 3) minus one other keys it issued to that user for this distribution, and deletes the rest by alias, before it answers. It reads every page of `/key/list`; a key without a readable `created_at` counts as the oldest. Issuing and retiring run one at a time per user, so two acquires of one user cannot both count the keys before the other's new key exists. More than one live key allows a user on two machines, and PiShip's renewal does not revoke the key it replaces. Deletion failures are only logged; every key also expires. A key the broker did not issue is never deleted.
 - **PostgreSQL.** The broker keeps no database of its own. The mapping is a pure function of `(iss, sub)`, and users, keys, budgets and spend live in LiteLLM (whose PostgreSQL the stack runs).
 
 ## Idempotency
@@ -134,7 +134,7 @@ Revoke is authenticated only by the key it revokes, so it is limited by where it
 
 What this reference deliberately leaves to a production broker:
 
-- **One instance.** The idempotency records and every rate limit are in memory: a restart forgets them, and two instances would each keep their own. A production broker keeps them in a shared store.
+- **One instance.** The idempotency records, every rate limit, and the per-user serialization of issue and rotation are in memory: a restart forgets them, and two instances would each keep their own, so two instances could together leave a user above `BROKER_MAX_KEYS_PER_USER` until the next acquire or expiry. A production broker keeps them in a shared store and lock.
 - **Revoke is limited per client address, not per user.** Behind Docker's port publishing every client on the host reaches the broker from the same address and shares one revoke window; behind a reverse proxy, set `BROKER_TRUSTED_PROXIES` so the forwarded address counts.
 
 ## Run and test

@@ -142,6 +142,8 @@ export async function startFakeLiteLLM() {
     holderKeyInfoStatus: undefined,
     /** Answer a master-key /key/info with this status. */
     adminKeyInfoStatus: undefined,
+    /** /key/list returns at most this many keys per page. */
+    maxPageSize: 100,
     /** Delay /key/info by this many milliseconds. */
     keyInfoDelayMs: 0,
   };
@@ -291,9 +293,17 @@ export async function startFakeLiteLLM() {
     }
     if (path === "/key/list" && req.method === "GET") {
       const userId = parsed.searchParams.get("user_id");
+      const all = [...keys.values()].filter((key) => key.user_id === userId);
+      const size = Math.min(
+        Number(parsed.searchParams.get("size") ?? 10),
+        state.maxPageSize,
+      );
+      const page = Number(parsed.searchParams.get("page") ?? 1);
       return reply(res, 200, {
-        keys: [...keys.values()].filter((key) => key.user_id === userId),
-        total_count: 0,
+        keys: all.slice((page - 1) * size, page * size),
+        total_count: all.length,
+        current_page: page,
+        total_pages: Math.ceil(all.length / size),
       });
     }
     if (path === "/key/delete" && req.method === "POST") {
@@ -355,7 +365,8 @@ export async function startFakeLiteLLM() {
         models: ["acme/coder"],
         metadata: { distribution: "acmecode", issued_by: ISSUER_MARK },
         expires: null,
-        created_at: new Date(Date.now() - 3_600_000).toISOString(),
+        // Older than every key the fake issues.
+        created_at: "2025-01-01T00:00:00.000Z",
         ...fields,
       });
       issued.push(key);

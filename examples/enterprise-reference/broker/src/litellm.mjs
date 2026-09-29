@@ -31,6 +31,10 @@ export const ISSUER_MARK = "piship-reference-broker";
 /** Role of the LiteLLM users the broker creates: can use its keys, cannot create, change or delete keys or users. */
 export const USER_ROLE = "internal_user_viewer";
 
+/** /key/list page size (LiteLLM's maximum) and the most pages read for one user. */
+const LIST_PAGE_SIZE = 100;
+const MAX_LIST_PAGES = 100;
+
 /**
  * @param {object} options
  * @param {string} options.baseUrl LiteLLM admin origin, e.g. http://litellm:4000
@@ -212,20 +216,44 @@ export function createLiteLLMAdmin({
     },
 
     /**
-     * The user's keys, newest first, as LiteLLM lists them (hashed token,
-     * alias, creation time, metadata; never the key itself).
+     * All of the user's keys, newest first, as LiteLLM lists them (hashed
+     * token, alias, creation time, metadata; never the key itself). Every
+     * page is read. A key without a readable `created_at` sorts as the
+     * oldest, so rotation retires it first.
      */
     async listUserKeys(userId) {
-      const result = await call(
-        "key-list",
-        "GET",
-        `/key/list?user_id=${encodeURIComponent(userId)}&return_full_object=true&include_team_keys=false&size=100`,
-      );
-      if (result.status !== 200 || !Array.isArray(result.body?.keys))
-        throw new UpstreamError("key-list", { status: result.status });
-      return result.body.keys
-        .filter((entry) => entry && typeof entry === "object")
-        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      const keys = [];
+      for (let page = 1; ; page++) {
+        if (page > MAX_LIST_PAGES)
+          throw new UpstreamError("key-list", { status: 200 });
+        const result = await call(
+          "key-list",
+          "GET",
+          `/key/list?user_id=${encodeURIComponent(userId)}&return_full_object=true&include_team_keys=false&page=${page}&size=${LIST_PAGE_SIZE}`,
+        );
+        if (result.status !== 200 || !Array.isArray(result.body?.keys))
+          throw new UpstreamError("key-list", { status: result.status });
+        const entries = result.body.keys.filter(
+          (entry) => entry && typeof entry === "object",
+        );
+        keys.push(...entries);
+        const totalPages = result.body.total_pages;
+        if (
+          result.body.keys.length === 0 ||
+          (Number.isInteger(totalPages)
+            ? page >= totalPages
+            : result.body.keys.length < LIST_PAGE_SIZE)
+        )
+          break;
+      }
+      const created = (entry) => {
+        const at = Date.parse(entry.created_at);
+        return Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
+      };
+      return keys.sort((a, b) => {
+        const [x, y] = [created(a), created(b)];
+        return x === y ? 0 : x < y ? 1 : -1;
+      });
     },
   };
 }

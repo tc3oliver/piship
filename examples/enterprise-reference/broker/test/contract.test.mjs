@@ -736,6 +736,76 @@ describe("rotation: generate new, then delete old", () => {
     );
   });
 
+  it("serializes issue-then-retire per user: concurrent acquires never count keys at the same time", async () => {
+    const h = await harness({ BROKER_MAX_KEYS_PER_USER: "1" });
+    h.litellm.state.generateDelayMs = 150;
+    const [a, b] = await Promise.all([
+      h.acquire(mint(h, ALICE)),
+      h.acquire(mint(h, ALICE)),
+    ]);
+    h.litellm.state.generateDelayMs = 0;
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    const order = h.litellm.calls
+      .filter((call) => ["/key/generate", "/key/list"].includes(call.path))
+      .map((call) => call.path);
+    assert.deepEqual(order, [
+      "/key/generate",
+      "/key/list",
+      "/key/generate",
+      "/key/list",
+    ]);
+    const aliceUser = principalUserId(ISSUER, ALICE.sub);
+    const left = [...h.litellm.keys.values()].filter(
+      (key) => key.user_id === aliceUser,
+    );
+    assert.equal(left.length, 1, "the cap holds");
+    assert.ok(
+      [a.json.credential_id, b.json.credential_id].includes(left[0].key_alias),
+    );
+  });
+
+  it("reads every /key/list page", async () => {
+    const h = await harness({ BROKER_MAX_KEYS_PER_USER: "2" });
+    h.litellm.state.maxPageSize = 2;
+    const aliceUser = principalUserId(ISSUER, ALICE.sub);
+    for (let i = 0; i < 5; i++) h.litellm.addBrokerKey(aliceUser);
+    const issued = (await h.acquire(mint(h, ALICE))).json;
+    const left = [...h.litellm.keys.values()].filter(
+      (key) => key.user_id === aliceUser,
+    );
+    assert.equal(left.length, 2);
+    assert.ok(left.some((key) => key.key_alias === issued.credential_id));
+    assert.ok(
+      h.litellm.calls.filter((call) => call.path === "/key/list").length >= 3,
+    );
+  });
+
+  it("retires a key without a readable created_at first, and never the new key", async () => {
+    const h = await harness({ BROKER_MAX_KEYS_PER_USER: "2" });
+    const aliceUser = principalUserId(ISSUER, ALICE.sub);
+    for (const created_at of [undefined, "not a date"]) {
+      // An old key with a date, then one without: the one without goes.
+      const dated = h.litellm.addBrokerKey(aliceUser);
+      const undated = h.litellm.addBrokerKey(aliceUser, { created_at });
+      const issued = (await h.acquire(mint(h, ALICE))).json;
+      assert.ok(!h.litellm.keys.has(undated), String(created_at));
+      assert.ok(h.litellm.keys.has(dated), String(created_at));
+      assert.ok(h.litellm.keys.has(issued.credential));
+      h.litellm.keys.delete(dated);
+      h.litellm.keys.delete(issued.credential);
+    }
+    // A key dated after the new one (clock skew) does not push the new key
+    // out or keep the user over the cap.
+    const h1 = await harness({ BROKER_MAX_KEYS_PER_USER: "1" });
+    const future = h1.litellm.addBrokerKey(aliceUser, {
+      created_at: "2099-01-01T00:00:00.000Z",
+    });
+    const issued = (await h1.acquire(mint(h1, ALICE))).json;
+    assert.ok(h1.litellm.keys.has(issued.credential));
+    assert.ok(!h1.litellm.keys.has(future));
+  });
+
   it("never deletes a key it did not issue", async () => {
     const h = await harness({ BROKER_MAX_KEYS_PER_USER: "1" });
     const foreign = h.litellm.addForeignKey(principalUserId(ISSUER, ALICE.sub));
