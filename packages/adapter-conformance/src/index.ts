@@ -19,3 +19,4 @@ export interface ConformanceReport {
   readonly kind: AdapterKind;
   readonly results: readonly ConformanceResult[];
 }
+export * from "./audit.js";

@@ -55,3 +55,49 @@ A unit test pins this list, checks that every value is the public package's own 
 ## Examples
 
 `packages/adapter-sdk/examples/` holds one example of each kind, written against placeholder `*.example.com` services: `identity.mjs` (a device-style sign-in), `credential.mjs` (exchanges the identity for a runtime credential and revokes it with itself), `sandbox.mjs` (a remote execution service), and `audit-sink.mjs` (a collector that stores each event once). Each is a single file that imports only the SDK and `node:` built-ins, which a unit test checks. The examples are loaded through PiShip's real loaders against a local fake of those services (`tests/adapter-sdk-examples.test.ts`); that is loader evidence, not a live integration. Replace the placeholder service, declare its host in `network.allowHosts` when the distribution is private-only, and copy the file into the distribution.
+
+## Audit sink conformance kit
+
+`testAuditSink` in `@piship/adapter-conformance` checks an `AuditSink` against the [`piship-audit-batch/v1` contract](enterprise-integration.md#audit-collector-piship-audit-batchv1). It is for a sink that delivers batches onward to a collector, in the position of PiShip's own `http` sink: a relay, a forwarder into a SIEM, or a test double. The kit imports only `@piship/adapter-sdk`, so it tests a sink the way a company would. The package is private and unpublished: run it from a checkout of this repository, in a test file inside the workspace.
+
+The kit builds a new sink for each check through a factory, and connects it to a fake collector the kit controls. The collector checks the batch shape, stores an event only if its `id` is new, compares a resent `id` with its first delivery in canonical form (the de-duplication guidance of the contract), and answers, fails, holds, or stores and then fails as each check needs. The factory receives:
+
+| Field | Meaning |
+| --- | --- |
+| `url` | The collector. POST batches here |
+| `fetch` | Reaches the collector. Use it where the real sink uses the managed `fetch` from its context |
+| `credential` | A fake downstream credential, such as an ingest token. It may go in a request header, never in an event or an error |
+| `required` | Whether the sink is required: losing an event is then an error |
+| `maxEvents` | The most events a buffering sink may hold |
+
+```ts
+import { testAuditSink } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+import { createSink } from "./my-sink.js";
+
+it("conforms to piship-audit-batch/v1", async () => {
+  const report = await testAuditSink((env) =>
+    createSink({ url: env.url, fetch: env.fetch, token: env.credential }),
+  );
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+```
+
+A plain sink has only `write(batch, signal)`: each write settles with the collector's answer, and PiShip's audit log holds events while the collector is down. A buffering sink also has `flush()`, `status()` (`delivered`, `pending`, `dropped`, and a redacted `lastError`), and `close(deadlineMs)`, which returns the same counts. Its `write` queues events, except the empty batch, which is the readiness probe and goes to the collector at once. A sink that has some of `flush`, `status`, and `close` but not all three fails the checks that need them.
+
+Each result is `passed`, `failed` with a reason, or `skipped` with a reason. A reason names the event by its `time` and never repeats the fake credential. A check that does not settle within `timeoutMs` (default 10 s) fails instead of hanging; raise it on a slow machine. `closeDeadlineMs` (default 250 ms) is the deadline passed to `close()`.
+
+| Behavior | Contract statement |
+| --- | --- |
+| metadata-only defaults | An event arrives already metadata-only, with `content` only for the classes the distribution opted in to. The sink stores an event without `content` without one, never copies prompt or command text from one event into another or outside `content` (a raw request body kept with each event does), and keeps opted-in `content` exactly as it arrived |
+| secret redaction | The sink's own credential never appears in a stored event, a request body, or an error or `lastError` it reports |
+| identity attribution | `user` is stored as sent: the identity subject, or `null`. The sink never fills it with its own principal or a token |
+| session correlation | `session` is stored as sent, so every event of one session has the same value across batches, and `null` stays `null`. The sink never replaces it with a per-request correlation ID |
+| event id stability | Every event reaches the collector with the `id` it was written with, on the first delivery and on a retry after the collector failed |
+| delivery failure | A plain sink's write resolves only after the collector answered `2xx`; HTTP 503, a redirect (never followed), a network error, or an aborted signal makes it reject. A buffering sink's flush finishes only after the collector answered, and the sink counts a failed batch as pending (required) or dropped (optional), never as delivered, and never loses it uncounted |
+| buffer behavior | Buffering sinks only; plain sinks are skipped. The queue never holds more than `maxEvents`. An event that does not fit is dropped and counted, so the oldest events are kept and delivered oldest first, and an optional sink never refuses a write for it. Every event ends up delivered, pending, or dropped, exactly once |
+| fail-closed policy | The readiness probe (an empty batch) is sent to the collector and rejects while the collector is down, so a required sink fails launch with `AUDIT_UNAVAILABLE`. A required buffering sink whose buffer is full refuses the next write with a `PiShipError` whose code is `AUDIT_UNAVAILABLE`, and accepts writes again once a flush has drained it |
+| shutdown flush | Buffering sinks only; plain sinks are skipped. `close()` delivers what is queued to a healthy collector and reports nothing lost. When the collector is down it reports every event it did not deliver as pending or dropped, never zero. An event written after `close()` is refused or counted as dropped, and never delivered |
+| duplicate handling | After the collector stored a batch but its answer was lost, the resent batch carries the same IDs in the same order and the same content, so a collector that stores each `id` once stores every event once. The sink accepts the collector's `2xx` for a batch it had already stored |
+
+`failed` means the sink breaks that statement; fix the sink, not the kit. Some defects fail two behaviors because one implies the other: a sink that swallows errors cannot fail closed, and a new `id` or `session` on each write makes a resent event differ from its first delivery. `skipped` means the check does not apply to this kind of sink, not that it passed. The kit's own tests (`packages/adapter-conformance/src/audit.test.ts`) run it against a reference plain sink and a reference buffering sink, which pass, and against sinks seeded with one defect each, which fail.
