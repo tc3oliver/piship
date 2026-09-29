@@ -68,37 +68,56 @@ describe.runIf(live)("platform secret store (live)", () => {
 });
 
 describe("Linux Secret Service store", () => {
-  // A stateful `secret-tool` double with the limit seen on libsecret 0.21.4:
-  // `store` keeps at most 8192 bytes of stdin, warns, and still exits 0.
-  // `lookup` and `clear` match on the given attributes, and `account` and
-  // `parent` are the ones PiShip uses. Knobs inject the failures under test.
+  // A stateful `secret-tool` double with what was seen on libsecret 0.21.4:
+  // `store` keeps at most 8192 bytes of stdin, warns, and still exits 0; on a
+  // locked keyring `lookup` and `clear` exit 1 with no message (a miss looks
+  // like that too), `store` says the collection is locked, and `search` still
+  // lists the attributes of an existing item. `lookup`, `clear` and `search`
+  // match every attribute given. Knobs inject the failures under test.
   function fakeSecretTool() {
-    const items = new Map<string, string>();
-    const parents = new Map<string, string>();
+    interface Item {
+      attrs: Record<string, string>;
+      text: string;
+    }
+    const stored = new Map<string, Item>();
+    const keyOf = (attrs: Record<string, string>) =>
+      JSON.stringify(Object.entries(attrs).sort());
     const knobs = {
       /** Fail the nth `store` call (1-based) with a keyring error. */
       failStoreAt: 0,
-      /** `clear` by `parent` removes one item per call, as on an old libsecret. */
-      clearOne: false,
       /** `clear` by `parent` reports success and removes nothing. */
       clearNothing: false,
+      /** The keyring is locked. */
+      locked: false,
+      /** Runs before the nth `store` call (1-based); may call the store again. */
+      beforeStoreAt: 0,
+      beforeStore: () => {},
     };
     let stores = 0;
-    const attribute = (args: string[], name: string) => {
-      const at = args.indexOf(name);
-      return at < 0 ? undefined : args[at + 1];
+    const attributesOf = (args: string[]): Record<string, string> => {
+      const words = args.slice(1).filter((word) => !word.startsWith("--"));
+      const attrs: Record<string, string> = {};
+      for (let index = 0; index + 1 < words.length; index += 2)
+        attrs[words[index] as string] = words[index + 1] as string;
+      return attrs;
     };
-    const matching = (args: string[]) => {
-      const parent = attribute(args, "parent");
-      const account = attribute(args, "account");
-      return [...items.keys()].filter((key) =>
-        parent === undefined ? key === account : parents.get(key) === parent,
+    const matching = (query: Record<string, string>) =>
+      [...stored.entries()].filter(([, item]) =>
+        Object.entries(query).every(
+          ([name, value]) => item.attrs[name] === value,
+        ),
       );
-    };
     const run: CommandRunner = (_command, args, stdin) => {
-      const account = attribute(args, "account") ?? "";
+      const attrs = attributesOf(args);
       if (args[0] === "store") {
         stores += 1;
+        if (stores === knobs.beforeStoreAt) knobs.beforeStore();
+        if (knobs.locked)
+          return {
+            status: 1,
+            stdout: "",
+            stderr: "secret-tool: Cannot create an item in a locked collection",
+          };
         if (stores === knobs.failStoreAt)
           return {
             status: 1,
@@ -106,30 +125,65 @@ describe("Linux Secret Service store", () => {
             stderr: "secret-tool: keyring error",
           };
         const text = stdin ?? "";
-        items.set(account, text.slice(0, 8192));
-        const parent = attribute(args, "parent");
-        if (parent) parents.set(account, parent);
-        else parents.delete(account);
+        stored.set(keyOf(attrs), { attrs, text: text.slice(0, 8192) });
         const stderr =
           text.length > 8191 ? "secret-tool: password is too long" : "";
         return { status: 0, stdout: "", stderr };
       }
       if (args[0] === "lookup") {
-        const [first] = matching(args);
-        return first === undefined
+        const [first] = matching(attrs);
+        return first === undefined || knobs.locked
           ? { status: 1, stdout: "", stderr: "" }
-          : { status: 0, stdout: items.get(first) ?? "", stderr: "" };
+          : { status: 0, stdout: first[1].text, stderr: "" };
       }
-      if (attribute(args, "parent") !== undefined && knobs.clearNothing)
+      if (args[0] === "search") {
+        const found = matching(attrs);
+        const listing = found
+          .map(([, item]) => `attribute.account = ${item.attrs.account}`)
+          .join("\n");
+        return knobs.locked
+          ? {
+              status: 0,
+              stdout: listing,
+              stderr: found.length
+                ? "secret-tool: Cannot get secret of a locked object"
+                : "",
+            }
+          : {
+              status: 0,
+              stdout: found
+                .map(([, item]) => `secret = ${item.text}`)
+                .join("\n"),
+              stderr: "",
+            };
+      }
+      // clear
+      if (knobs.locked) return { status: 1, stdout: "", stderr: "" };
+      if (attrs.parent !== undefined && knobs.clearNothing)
         return { status: 0, stdout: "", stderr: "" };
-      const found = matching(args);
-      for (const key of knobs.clearOne ? found.slice(0, 1) : found) {
-        items.delete(key);
-        parents.delete(key);
-      }
+      const found = matching(attrs);
+      for (const [key] of found) stored.delete(key);
       return { status: 0, stdout: "", stderr: "" };
     };
-    return { items, parents, knobs, run };
+    const items = {
+      get size() {
+        return stored.size;
+      },
+      accounts: () =>
+        [...stored.values()].map((item) => item.attrs.account as string),
+      texts: () => [...stored.values()].map((item) => item.text),
+      /** Remove the item with this account, whatever else it carries. */
+      drop: (account: string) => {
+        for (const [key, item] of stored)
+          if (item.attrs.account === account) stored.delete(key);
+      },
+      plant: (attrs: Record<string, string>, text: string) =>
+        stored.set(keyOf({ service: "piship", ...attrs }), {
+          attrs: { service: "piship", ...attrs },
+          text,
+        }),
+    };
+    return { items, knobs, run };
   }
 
   it("splits a value larger than secret-tool stores and removes stale parts", async () => {
@@ -142,18 +196,18 @@ describe("Linux Secret Service store", () => {
     await store.put(ref, large);
     expect((await store.get(ref))?.reveal()).toBe(large.reveal());
     expect(items.size).toBeGreaterThan(1);
-    for (const value of items.values()) expect(value.length).toBeLessThan(8192);
+    for (const value of items.texts()) expect(value.length).toBeLessThan(8192);
     const small = new SecretValue("sk-small");
     await store.put(ref, small);
-    expect([...items.keys()]).toEqual([ref]);
+    expect(items.accounts()).toEqual([ref]);
     expect((await store.get(ref))?.reveal()).toBe(small.reveal());
     // 6000 bytes encode to exactly 8000 characters, which is still one item.
     await store.put(ref, new SecretValue("a".repeat(6000)));
-    expect([...items.keys()]).toEqual([ref]);
+    expect(items.accounts()).toEqual([ref]);
     await store.put(ref, new SecretValue("a".repeat(6001)));
     expect(items.size).toBe(3);
     await store.put(ref, large);
-    items.delete(`${ref}+1`);
+    items.drop(`${ref}+1`);
     await expect(store.get(ref)).rejects.toMatchObject({
       code: "SECRET_STORE_UNAVAILABLE",
     });
@@ -199,17 +253,17 @@ describe("Linux Secret Service store", () => {
       await expect(store.put(ref, large)).rejects.toMatchObject({
         code: "SECRET_STORE_UNAVAILABLE",
       });
-      expect([...items.keys()]).toEqual([ref]);
+      expect(items.accounts()).toEqual([ref]);
       expect((await store.get(ref))?.reveal()).toBe("sk-old");
     });
 
     it("fails closed on an extra part", async () => {
-      const { items, parents, run } = fakeSecretTool();
+      const { items, run } = fakeSecretTool();
       const store = new SecretServiceSecretStore(run);
       await store.put(ref, large);
       const count = items.size - 1;
-      items.set(`${ref}+${count}`, "stray");
-      parents.set(`${ref}+${count}`, ref);
+      const write = [...(await primaryWrite(items))][0] as string;
+      items.plant({ account: `${ref}+${count}`, parent: ref, write }, "stray");
       await expect(store.get(ref)).rejects.toMatchObject({
         code: "SECRET_STORE_UNAVAILABLE",
       });
@@ -217,13 +271,57 @@ describe("Linux Secret Service store", () => {
       expect(items.size).toBe(0);
     });
 
-    it("deletes every part even when one clear call removes one item", async () => {
-      const { items, knobs, run } = fakeSecretTool();
+    /** The write id of the primary, read back from the double's own state. */
+    async function primaryWrite(items: {
+      texts(): string[];
+    }): Promise<Set<string>> {
+      const ids = new Set<string>();
+      for (const text of items.texts()) {
+        const match = /^chunks:\d+:([0-9a-f]{16})$/.exec(text);
+        if (match?.[1]) ids.add(match[1]);
+      }
+      return ids;
+    }
+
+    it("never joins parts of another write", async () => {
+      const { items, run } = fakeSecretTool();
       const store = new SecretServiceSecretStore(run);
       await store.put(ref, large);
-      knobs.clearOne = true;
-      await store.delete(ref);
-      expect(items.size).toBe(0);
+      // Part 0 replaced by a part of a different write, as after two
+      // interleaved writers of one reference.
+      items.drop(`${ref}+0`);
+      items.plant(
+        { account: `${ref}+0`, parent: ref, write: "f".repeat(16) },
+        "another-write",
+      );
+      await expect(store.get(ref)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+    });
+
+    it("never serves a value made of two interleaved writers", async () => {
+      const { knobs, run } = fakeSecretTool();
+      const first = new SecretServiceSecretStore(run);
+      const second = new SecretServiceSecretStore(run);
+      const other = new SecretValue(
+        JSON.stringify({ idToken: "y".repeat(20_000) }),
+      );
+      // The second writer runs to completion between the first one's parts.
+      knobs.beforeStoreAt = 2;
+      knobs.beforeStore = () => {
+        knobs.beforeStoreAt = 0;
+        void second.put(ref, other);
+      };
+      await first.put(ref, large);
+      const outcome = await first.get(ref).then(
+        (value) => value?.reveal(),
+        (error: { code?: string }) => error.code,
+      );
+      expect([
+        large.reveal(),
+        other.reveal(),
+        "SECRET_STORE_UNAVAILABLE",
+      ]).toContain(outcome);
     });
 
     it("reports a delete that removed nothing instead of claiming success", async () => {
@@ -235,6 +333,53 @@ describe("Linux Secret Service store", () => {
         code: "SECRET_STORE_UNAVAILABLE",
       });
     });
+  });
+
+  describe("a locked keyring", () => {
+    const ref = "piship:acmecode:inference#1";
+
+    it("reads as an error, never as an absent secret", async () => {
+      const { knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, new SecretValue("sk-locked-away"));
+      knobs.locked = true;
+      await expect(store.get(ref)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+        message: expect.stringContaining("locked"),
+      });
+    });
+
+    it("cannot be deleted from, and says so instead of reporting success", async () => {
+      const { items, knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      await store.put(ref, new SecretValue("sk-locked-away"));
+      knobs.locked = true;
+      await expect(store.delete(ref)).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+      });
+      expect(items.size).toBe(1);
+    });
+
+    it("refuses a write", async () => {
+      const { knobs, run } = fakeSecretTool();
+      const store = new SecretServiceSecretStore(run);
+      knobs.locked = true;
+      await expect(
+        store.put(ref, new SecretValue("sk-x")),
+      ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    });
+
+    it("still reads a truly absent secret as absent", async () => {
+      const { run } = fakeSecretTool();
+      expect(await new SecretServiceSecretStore(run).get(ref)).toBeNull();
+    });
+  });
+
+  it("refuses a reference that could be read as an option", async () => {
+    const { run } = fakeSecretTool();
+    await expect(
+      new SecretServiceSecretStore(run).get("--label=x"),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
   });
 
   it("reports a truncated store instead of keeping a cut-off secret", async () => {

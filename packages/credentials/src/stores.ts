@@ -45,7 +45,7 @@ export const runCommand: CommandRunner = (command, args, stdin) => {
 
 const SERVICE = "piship";
 function checkRef(ref: string): void {
-  if (!/^[A-Za-z0-9:._#-]{1,200}$/.test(ref))
+  if (!/^[A-Za-z0-9][A-Za-z0-9:._#-]{0,199}$/.test(ref))
     throw new PiShipError(
       "CONFIG_INVALID",
       `Invalid secret reference ${JSON.stringify(ref)}`,
@@ -99,6 +99,8 @@ export class MemorySecretStore implements SecretStore {
 // confused with a stored value: base64url has no ":", references have no "+".
 const CHUNK_MARKER = "chunks:";
 const MAX_CHUNKS = 1000;
+// `secret-tool clear` removes every match in one call.
+const MAX_CLEAR_ATTEMPTS = 3;
 const MAC_CHUNK = 1024;
 const partRef = (ref: string, index: number) => `${ref}+${index}`;
 function chunkCount(raw: string | null): number {
@@ -203,19 +205,43 @@ export class SecretServiceSecretStore implements SecretStore {
   readonly kind = "secret-service";
   readonly description = "Linux Secret Service";
   constructor(private readonly run: CommandRunner = runCommand) {}
-  #read(account: string): string | null {
+  /**
+   * A lookup that finds nothing exits 1 with no message, and so does one on a
+   * locked keyring (libsecret 0.21.4): a locked keyring would read as an
+   * absent secret. `secret-tool search` lists the attributes of an existing
+   * item even when the keyring is locked, so a miss is confirmed with it.
+   */
+  #confirmAbsent(attributes: readonly string[]): void {
+    const result = this.run("secret-tool", [
+      "search",
+      "service",
+      SERVICE,
+      ...attributes,
+    ]);
+    if (result.status !== 0 && result.stderr.trim())
+      throw unavailable(this.description, result.stderr);
+    if (result.stdout.trim())
+      throw unavailable(
+        this.description,
+        "the keyring is locked; unlock it and try again",
+      );
+  }
+  #read(account: string, extra: readonly string[] = []): string | null {
+    const attributes = ["account", account, ...extra];
     const result = this.run("secret-tool", [
       "lookup",
       "service",
       SERVICE,
-      "account",
-      account,
+      ...attributes,
     ]);
-    if (result.status === 1 && !result.stderr.trim()) return null;
+    if (result.status === 1 && !result.stderr.trim()) {
+      this.#confirmAbsent(attributes);
+      return null;
+    }
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
     return result.stdout.trim() || null;
   }
-  #write(account: string, text: string, parent?: string): void {
+  #write(account: string, text: string, extra: readonly string[] = []): void {
     const result = this.run(
       "secret-tool",
       [
@@ -225,7 +251,7 @@ export class SecretServiceSecretStore implements SecretStore {
         SERVICE,
         "account",
         account,
-        ...(parent ? ["parent", parent] : []),
+        ...extra,
       ],
       text,
     );
@@ -244,25 +270,32 @@ export class SecretServiceSecretStore implements SecretStore {
     if (result.status !== 0 && result.stderr.trim())
       throw unavailable(this.description, result.stderr);
   }
-  // Every part carries its primary's reference as a `parent` attribute, so the
-  // parts are found and cleared without knowing how many a failed or older
-  // write left behind. The primary has no `parent` attribute.
+  // Every part carries its primary's reference as a `parent` attribute and a
+  // random `write` id, which the primary also records. Parts are found and
+  // cleared by `parent` without knowing how many a failed or older write left
+  // behind, and `get` reads only the parts of the write its primary names, so
+  // two writers of one reference can never leave a value made of both. The
+  // primary has neither attribute.
   #hasParts(parent: string): boolean {
+    const attributes = ["parent", parent];
     const result = this.run("secret-tool", [
       "lookup",
       "service",
       SERVICE,
-      "parent",
-      parent,
+      ...attributes,
     ]);
-    if (result.status === 1 && !result.stderr.trim()) return false;
+    if (result.status === 1 && !result.stderr.trim()) {
+      this.#confirmAbsent(attributes);
+      return false;
+    }
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
     return true;
   }
   #clearParts(parent: string): void {
-    // Repeat until none is left, so the result does not depend on how many
-    // items one `clear` call removes.
-    for (let attempt = 0; attempt <= MAX_CHUNKS; attempt += 1) {
+    // One `clear` removes every match (checked on libsecret 0.21.4 with five
+    // parts of one parent, and with parts of two writes). The repeat is only a
+    // guard: a store that keeps answering with parts is broken, not slow.
+    for (let attempt = 0; attempt < MAX_CLEAR_ATTEMPTS; attempt += 1) {
       const result = this.run("secret-tool", [
         "clear",
         "service",
@@ -283,15 +316,16 @@ export class SecretServiceSecretStore implements SecretStore {
       encoded.length > SECRET_SERVICE_CHUNK
         ? splitChunks(encoded, SECRET_SERVICE_CHUNK)
         : [];
+    const write = randomBytes(8).toString("hex");
     try {
       // Parts of an earlier write go first, so none can pair with the new
       // primary, and the primary is written last.
       this.#clearParts(ref);
       for (const [index, part] of parts.entries())
-        this.#write(partRef(ref, index), part, ref);
+        this.#write(partRef(ref, index), part, ["parent", ref, "write", write]);
       this.#write(
         ref,
-        parts.length ? `${CHUNK_MARKER}${parts.length}` : encoded,
+        parts.length ? `${CHUNK_MARKER}${parts.length}:${write}` : encoded,
       );
     } catch (error) {
       // A failed write leaves no part behind. An earlier chunked primary
@@ -299,7 +333,7 @@ export class SecretServiceSecretStore implements SecretStore {
       // value is untouched and stays valid.
       try {
         this.#clearParts(ref);
-        if (chunkCount(this.#read(ref))) this.#remove(ref);
+        if (this.#read(ref)?.startsWith(CHUNK_MARKER)) this.#remove(ref);
       } catch {
         // The store is down; the write error is the one to report, and
         // delete() clears every part by attribute later.
@@ -311,16 +345,21 @@ export class SecretServiceSecretStore implements SecretStore {
     checkRef(ref);
     const raw = this.#read(ref);
     if (raw === null) return null;
-    const count = chunkCount(raw);
-    if (!count) return decode(raw);
+    if (!raw.startsWith(CHUNK_MARKER)) return decode(raw);
+    const marker = /^chunks:([1-9]\d{0,3}):([0-9a-f]{16})$/.exec(raw);
+    const count = Number(marker?.[1]);
+    const write = marker?.[2];
+    if (!write || count > MAX_CHUNKS)
+      throw unavailable(this.description, "a stored secret part is missing");
+    const scope = ["parent", ref, "write", write];
     let joined = "";
     for (let index = 0; index < count; index += 1) {
-      const part = this.#read(partRef(ref, index));
+      const part = this.#read(partRef(ref, index), scope);
       if (part === null)
         throw unavailable(this.description, "a stored secret part is missing");
       joined += part;
     }
-    if (this.#read(partRef(ref, count)) !== null)
+    if (this.#read(partRef(ref, count), scope) !== null)
       throw unavailable(this.description, "a stored secret has an extra part");
     return decode(joined);
   }

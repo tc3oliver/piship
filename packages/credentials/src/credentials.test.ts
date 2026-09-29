@@ -929,7 +929,9 @@ describe("credential lifecycle", () => {
       expiresInSeconds: 1,
       refreshError: denied,
     });
-    const { manager: credentials } = manager(provider);
+    // A fixed clock: a slow machine must not run the credential out.
+    const now = Date.now();
+    const { manager: credentials } = manager(provider, { now: () => now });
     await credentials.ensure(null, ctx, { allowAcquire: true });
     // Still valid, inside the renewal window: an outage would continue.
     expect(credentials.status().state).toBe("expiring");
