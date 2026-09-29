@@ -11,7 +11,7 @@
 // The output is a live credential for the local reference realm: capture it,
 // do not print or log it. Reads `.env` beside compose.yaml; variables already
 // set in the environment take precedence.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,7 +54,7 @@ const clientId = "acmecode";
 // The client registers the port-less http://127.0.0.1/callback, which
 // Keycloak matches for any loopback port (RFC 8252 section 7.3). A random
 // port proves that.
-const redirectUri = `http://127.0.0.1:${49152 + (randomBytes(2).readUInt16BE(0) % 16000)}/callback`;
+const redirectUri = `http://127.0.0.1:${randomInt(49152, 65152)}/callback`;
 const random = () => randomBytes(32).toString("base64url");
 const verifier = random();
 const challenge = createHash("sha256").update(verifier).digest("base64url");
