@@ -14,5 +14,8 @@ export default defineConfig({
     fileParallelism: true,
     maxWorkers: availableParallelism(),
     globalSetup: ["tests/helpers/e2e-global-setup.ts"],
+    // Teardown stops fixture servers and deletes install homes of several
+    // hundred MB; on a slow runner that alone can pass the 10 s default.
+    hookTimeout: 60_000,
   },
 });
