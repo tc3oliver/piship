@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
-import { metadataSecretRefs } from "@piship/credentials";
+import { deleteSecretsVerified, metadataSecretRefs } from "@piship/credentials";
 import { runtimeStateDirectory, type DistributionLock } from "../index.js";
 import { writeFileAtomic, type LifecycleOptions } from "../install/receipt.js";
 import {
@@ -119,12 +119,18 @@ export function repairStateMarker(id: string, lock: DistributionLock): void {
  * generations). The runtime credential is first revoked remotely when the
  * current release can read it and the distribution supports revocation. The
  * target signs in or reacquires; an old credential is never restored.
+ *
+ * Every deletion is confirmed. When a secret cannot be deleted, or there is
+ * no secret store to delete it from, no metadata is removed, so every secret
+ * stays tracked, and this throws SECRET_STORE_UNAVAILABLE before anything is
+ * activated: a release that cannot read the metadata must never be left with
+ * secrets that nothing references.
  */
 export async function clearCredentials(
   stateDir: string,
   distributionId: string,
   report: MigrationReport,
-  options: Pick<LifecycleOptions, "deleteSecret" | "revokeCredential">,
+  options: Pick<LifecycleOptions, "secretStore" | "revokeCredential">,
 ): Promise<string[]> {
   const notices: string[] = [];
   const items = report.items.filter(
@@ -153,28 +159,46 @@ export async function clearCredentials(
         `The runtime credential could not be revoked remotely (${redact(error instanceof Error ? error.message : String(error))}); it was cleared locally`,
       );
     }
+  const failed: { ref: string; problem: string }[] = [];
   for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
-    if (existsSync(path) && statSync(path).isFile()) {
-      let refs: string[] = [];
+    let refs: string[] = [];
+    if (existsSync(path) && statSync(path).isFile())
       try {
         refs = metadataSecretRefs(
           JSON.parse(readFileSync(path, "utf8")),
           distributionId,
         );
       } catch {
-        // Unreadable metadata still gets removed below.
+        // Unreadable metadata names no secret; it is removed below.
       }
-      for (const ref of refs)
-        await options
-          .deleteSecret?.(ref)
-          .catch((error: Error) =>
-            notices.push(
-              `Could not delete a stored secret: ${redact(error.message)}`,
-            ),
-          );
-    }
-    rmSync(path, { recursive: true, force: true });
+    if (!refs.length) continue;
+    if (options.secretStore)
+      failed.push(...(await deleteSecretsVerified(options.secretStore, refs)));
+    else
+      failed.push(
+        ...refs.map((ref) => ({
+          ref,
+          problem: "no secret store is available to delete it",
+        })),
+      );
+  }
+  if (failed.length)
+    throw new PiShipError(
+      "SECRET_STORE_UNAVAILABLE",
+      `A stored credential the target release cannot read could not be deleted from the secret store (${failed.map((item) => `${item.ref}: ${item.problem}`).join("; ")}), so the switch stopped before activation; its metadata is kept, so the secret stays tracked and the deletion is retried`,
+      {
+        component: "credential",
+        userAction:
+          "Unlock or repair the secret store, then run the update or rollback again",
+        sanitizedDetail: { refs: failed.map((item) => item.ref) },
+      },
+    );
+  for (const item of items) {
+    rmSync(join(stateDir, ...item.path.split("/")), {
+      recursive: true,
+      force: true,
+    });
     notices.push(
       `${item.name} was cleared because the target cannot read it; sign in again`,
     );

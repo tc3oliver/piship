@@ -18,7 +18,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   binHome,
   installHome,
@@ -82,8 +82,14 @@ export interface LifecycleOptions {
   readonly faults?: (phase: LifecyclePhase) => void;
   /** Runs a candidate payload's launcher check; defaults to Node. */
   readonly runCheck?: ReleaseTestRunner;
-  /** Deletes a secret-store reference when credentials must be cleared. */
-  readonly deleteSecret?: (ref: string) => Promise<void>;
+  /**
+   * The secret store of this distribution's credentials, used when a
+   * credential class the target cannot read must be cleared. Every deletion
+   * is confirmed by reading the reference back; a secret that cannot be
+   * deleted, or credential metadata without a store to delete its secrets
+   * from, stops the switch.
+   */
+  readonly secretStore?: SecretStore;
   /**
    * Best-effort remote revocation of the runtime credential by the release
    * that can still read it, before it is cleared. A failure is a warning;

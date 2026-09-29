@@ -83,23 +83,28 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     kind: "file",
     scope: "user",
     sensitivity: "secret-reference",
-    retention: "until logout",
-    clear: "logout, purge",
+    retention:
+      "until logout; kept while its tokens cannot be deleted, so they stay tracked",
+    clear: "logout (also without the runtime variables), purge",
     migration:
-      "never copied; cleared and reacquired by login when the target cannot read it",
+      "never copied; when the target cannot read it, its secrets are deleted and the deletion confirmed before the switch, and login reacquires it. A secret that cannot be deleted stops the switch",
     schema: "identity",
     credential: true,
   },
   {
+    // Also the discarded marker (piship-credential-discarded/v1) left when a
+    // secret could not be deleted: no release reads it, so every switch
+    // clears it.
     name: "runtime credential metadata",
     path: "credentials-metadata/inference.json",
     kind: "file",
     scope: "user",
     sensitivity: "secret-reference",
     retention: "until logout or expiry",
-    clear: "logout, purge",
+    clear:
+      "logout (also without the runtime variables), change of principal, purge",
     migration:
-      "never copied; cleared and reacquired when the target cannot read it",
+      "never copied; when the target cannot read it (always for a discarded marker), its secrets are deleted and the deletion confirmed before the switch, and it is reacquired. A secret that cannot be deleted stops the switch",
     schema: "credential",
     credential: true,
   },
@@ -122,7 +127,7 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     scope: "user",
     sensitivity: "metadata",
     retention:
-      "until the credential expires; checked at every login and reported by doctor",
+      "until the credential expires; written when a revocation fails or cannot be sent (logout without the runtime variables); checked at every login and reported by doctor",
     clear: "login once the credential expired, purge",
     migration:
       "kept in place; credential IDs and times only, never a secret, so nothing can be revoked or restored from it",

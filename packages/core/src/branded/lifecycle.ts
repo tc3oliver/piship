@@ -4,9 +4,12 @@ import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
+  type SecretStore,
   formatError,
 } from "@piship/contracts";
+import { createSecretStore } from "@piship/credentials";
 import { resolveTemplate } from "@piship/schema";
+import { accessStatePaths } from "../access/index.js";
 import {
   type AccessEvent,
   formatMigrationReport,
@@ -66,15 +69,17 @@ function credentialRevoker(ctx: BrandedContext) {
   };
 }
 
-/** Deletes secret-store entries for credentials a target release cannot read. */
-function secretDeleter(ctx: BrandedContext) {
-  if (!ctx.metadata.access) return undefined;
-  try {
-    const store = openAccess(ctx).store;
-    return store ? (ref: string) => store.delete(ref) : undefined;
-  } catch {
-    return undefined;
-  }
+/**
+ * The secret store of this distribution's credentials, for deleting those a
+ * target release cannot read. It is selected from the lock alone, like the
+ * store sign-in wrote to, so it needs no runtime variable; a store that
+ * cannot delete fails the switch instead of leaving secrets behind.
+ */
+function secretStore(ctx: BrandedContext): SecretStore {
+  return createSecretStore({
+    provider: ctx.metadata.access?.credential.storage.provider ?? "system",
+    fileDirectory: accessStatePaths(ctx.stateDir).secrets,
+  });
 }
 
 /**
@@ -172,7 +177,6 @@ export async function runUpdate(
   }
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");
-  const deleteSecret = secretDeleter(ctx);
   const revokeCredential = credentialRevoker(ctx);
   let network = DEFAULT_NETWORK_POLICY;
   try {
@@ -199,7 +203,7 @@ export async function runUpdate(
       check,
       acceptReview: flags.has("--accept-review"),
       fetcher,
-      ...(deleteSecret ? { deleteSecret } : {}),
+      secretStore: secretStore(ctx),
       ...(revokeCredential && !check ? { revokeCredential } : {}),
     });
   } catch (error) {
@@ -238,12 +242,11 @@ export async function runUpdate(
 export async function runRollback(ctx: BrandedContext): Promise<void> {
   const { app } = ctx.metadata;
   requireInstalled(ctx, `${app.command} rollback`);
-  const deleteSecret = secretDeleter(ctx);
   const revokeCredential = credentialRevoker(ctx);
   let result: Awaited<ReturnType<typeof rollbackDistribution>>;
   try {
     result = await rollbackDistribution(app.id, {
-      ...(deleteSecret ? { deleteSecret } : {}),
+      secretStore: secretStore(ctx),
       ...(revokeCredential ? { revokeCredential } : {}),
     });
   } catch (error) {

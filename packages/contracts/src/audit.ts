@@ -44,7 +44,10 @@ export interface AuditEvent {
   readonly event: AuditEventType;
   /** RFC 3339 UTC time. */
   readonly time: string;
-  /** Identity subject, or null without identity. Never a token. */
+  /**
+   * The principal as `principalId` gives it (issuer, `#`, subject), or null
+   * without identity. Never a token, an email, or a display name.
+   */
   readonly user: string | null;
   readonly session: string | null;
   readonly distribution: string;
