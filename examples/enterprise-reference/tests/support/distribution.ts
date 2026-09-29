@@ -155,6 +155,9 @@ function baseEnvironment(): NodeJS.ProcessEnv {
     ...PROXY_VARIABLES,
   ])
     delete env[name];
+  // The live provider's key and settings are for the gateway only.
+  for (const name of Object.keys(env))
+    if (name.startsWith("LIVE_PROVIDER_")) delete env[name];
   return env;
 }
 

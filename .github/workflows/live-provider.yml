@@ -1,0 +1,132 @@
+name: Live provider
+# Live provider qualification: the reference LiteLLM routed to a real upstream
+# model provider, and one model request sent through the AcmeCode reference
+# distribution (examples/enterprise-reference, README "Live provider
+# qualification"). Manual only: it depends on an external provider and a paid
+# key, so it is never part of the merge gate or of Release qualification, and
+# its result is recorded only in the run's job summary.
+#
+# Repository secrets: LIVE_PROVIDER_API_KEY (required), LIVE_PROVIDER_BASE_URL
+# (default https://api.openai.com/v1), LIVE_PROVIDER_MODEL (a LiteLLM model
+# string, default openai/gpt-4.1-mini). Only the request step reads them.
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider name for the job summary
+        type: string
+        default: ""
+      redact-provider:
+        description: Show the provider name as "redacted" in the job summary
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: live-provider-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      npm_config_prefer_offline: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      # AcmeCode requires the OS sandbox: bubblewrap and unprivileged user
+      # namespaces, which Ubuntu restricts through AppArmor by default.
+      - timeout-minutes: 5
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - timeout-minutes: 10
+        run: npm ci
+      - timeout-minutes: 10
+        run: npm run build
+      - name: Pull the stack images
+        timeout-minutes: 15
+        working-directory: examples/enterprise-reference
+        run: |
+          node scripts/generate-env.mjs --out "$RUNNER_TEMP/pull.env"
+          docker compose --env-file "$RUNNER_TEMP/pull.env" pull --quiet
+          rm -f "$RUNNER_TEMP/pull.env"
+
+      # The test starts the reference stack with compose.live-provider.yaml,
+      # signs Alice in on Keycloak, acquires her key at the broker, and sends
+      # one `--smoke-model` request through AcmeCode and LiteLLM to the
+      # provider. The provider variables reach the test and `docker compose`
+      # only: the test removes them from AcmeCode's environment, and nothing
+      # prints them.
+      - name: Request through AcmeCode on the live provider
+        timeout-minutes: 15
+        env:
+          PISHIP_LIVE_PROVIDER: "1"
+          PISHIP_LIVE_PROVIDER_RESULT: ${{ runner.temp }}/live-provider.json
+          PISHIP_REFERENCE_LOG_DIR: ${{ runner.temp }}/live-provider-logs
+          LIVE_PROVIDER_API_KEY: ${{ secrets.LIVE_PROVIDER_API_KEY }}
+          LIVE_PROVIDER_BASE_URL: ${{ secrets.LIVE_PROVIDER_BASE_URL }}
+          LIVE_PROVIDER_MODEL: ${{ secrets.LIVE_PROVIDER_MODEL }}
+        run: |
+          if [ -z "$LIVE_PROVIDER_API_KEY" ]; then
+            echo "::error::The LIVE_PROVIDER_API_KEY repository secret is not set"
+            exit 1
+          fi
+          npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts
+
+      # Printed, not uploaded: the logs are scrubbed of the stack's secrets and
+      # of every LIVE_PROVIDER_* value before they are written, and the job log
+      # masks the repository secrets as well.
+      - name: Print the scrubbed container logs
+        if: failure()
+        env:
+          LOG_DIR: ${{ runner.temp }}/live-provider-logs
+        run: |
+          [ -d "$LOG_DIR" ] || exit 0
+          for file in "$LOG_DIR"/*.log; do
+            echo "::group::$(basename "$file")"
+            grep -E '^(litellm|broker)-' "$file" | tail -n 300 || true
+            echo "::endgroup::"
+          done
+
+      - name: Record the result
+        if: always()
+        env:
+          PROVIDER: ${{ inputs.redact-provider && 'redacted' || inputs.provider || 'not named' }}
+          RESULT: ${{ runner.temp }}/live-provider.json
+          OUTCOME: ${{ job.status }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          node -e '
+            const { existsSync, readFileSync } = require("node:fs");
+            const result = existsSync(process.env.RESULT)
+              ? JSON.parse(readFileSync(process.env.RESULT, "utf8"))
+              : undefined;
+            const rows = [
+              ["Provider", process.env.PROVIDER],
+              ["Commit", process.env.COMMIT],
+              ["Job status before this step", process.env.OUTCOME],
+              ["Gateway", "LiteLLM (examples/enterprise-reference)"],
+              ...(result
+                ? [
+                    ["Gateway model", result.model],
+                    ["Request", result.status === 0 ? "passed" : `failed (exit ${result.status})`],
+                    ["Stop reason", result.stopReason ?? "none"],
+                    ["Reply length (characters)", String(result.replyLength ?? 0)],
+                    ["Request time (s)", String(result.seconds)],
+                  ]
+                : [["Request", "no result recorded"]]),
+            ];
+            const cell = (text) => String(text).replace(/[|\n\r]/g, " ");
+            const table = ["| | |", "| --- | --- |", ...rows.map(([k, v]) => `| ${k} | ${cell(v)} |`)];
+            require("node:fs").appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              ["### Live provider qualification", "", ...table, ""].join("\n"),
+            );
+          '

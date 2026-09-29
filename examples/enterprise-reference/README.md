@@ -258,3 +258,34 @@ Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images alrea
 Every step that can hang has a `timeout-minutes`. When a step fails, the run uploads `reference-e2e-logs` (kept 14 days): the container logs of the step-2 stack and of every stack a test file started. The workflow's stack and the test stacks write their logs only through [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs), which replaces every value of the stack's `.env` except the ports, and anything shaped like a LiteLLM key, a JWT, or a bearer or basic credential; no `.env` or token is uploaded. The tests keep logs only when `PISHIP_REFERENCE_LOG_DIR` names a directory, one file per stack, `<project>-<time>.log`; the workflow sets it. A failed nightly run opens or updates the `Nightly Reference E2E is failing` issue.
 
 What the job does not cover: the reference tests send no request that makes the agent run a command, so the sandbox runs no command against this stack, and `update` and `rollback` of AcmeCode are not exercised here. The installed lifecycle and sandboxed commands are covered against local fixtures by Portable E2E.
+
+## Live provider qualification
+
+Everything above runs against the mock upstream. [`.github/workflows/live-provider.yml`](../../.github/workflows/live-provider.yml) (`Live provider`) routes the reference LiteLLM to a real model provider instead and sends one request through AcmeCode, to show that the gateway path works with a live provider. It depends on the provider's availability and a paid key, so it runs only when a maintainer dispatches it: it is not part of the pull request gate, of Reference E2E, or of Release qualification, and its result is evidence only in that run's job summary.
+
+The live routing is two files beside `compose.yaml`, which stays unchanged:
+
+| File | Role |
+| --- | --- |
+| [`compose.live-provider.yaml`](compose.live-provider.yaml) | Compose override: mounts the config below in place of `../enterprise-litellm/litellm-config.yaml` and passes the `LIVE_PROVIDER_*` variables to LiteLLM. Selected with `COMPOSE_FILE=compose.yaml:compose.live-provider.yaml` or a second `-f` |
+| [`litellm-live-provider.yaml`](litellm-live-provider.yaml) | The enterprise-litellm config with `acme/coder` and `acme/general` both routed to `LIVE_PROVIDER_MODEL` at `LIVE_PROVIDER_BASE_URL` with `LIVE_PROVIDER_API_KEY` |
+
+| Variable | Contents |
+| --- | --- |
+| `LIVE_PROVIDER_API_KEY` | The provider's API key. Required; read from the environment of the command that starts the stack, never from a file |
+| `LIVE_PROVIDER_BASE_URL` | The provider's API base URL. Default `https://api.openai.com/v1`; set it for any other provider |
+| `LIVE_PROVIDER_MODEL` | A LiteLLM model string, whose prefix picks the protocol: `openai/<model>` for OpenAI or any OpenAI-compatible API, `anthropic/<model>` for Anthropic. Default `openai/gpt-4.1-mini` |
+
+The workflow reads the three from repository secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
+
+Dispatch inputs:
+
+| Input | Effect |
+| --- | --- |
+| `provider` | The provider name shown in the job summary. Free text; nothing else uses it |
+| `redact-provider` | Default `true`: the summary shows `redacted` instead of the name. The workflow's inputs are visible on the run page whatever this says, so leave `provider` empty when the name must not appear at all |
+
+When the request fails, the job prints the last 300 lines of LiteLLM's and the broker's container logs, scrubbed of the stack's secrets and of every `LIVE_PROVIDER_*` value, and the job log masks the repository secrets too. Nothing is uploaded.
+
+To run it locally, with Docker and after `npm run build`, set the variables and `PISHIP_LIVE_PROVIDER=1` for `npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts` at the repository root, without printing the key or leaving it in your shell history. It uses the same ports and project as the other tests in `tests/`.
+

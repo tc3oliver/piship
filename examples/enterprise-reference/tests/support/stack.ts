@@ -65,7 +65,7 @@ function docker(
   envFile: string,
   environment: Record<string, string>,
   args: readonly string[],
-  timeout?: number,
+  files: readonly string[] = [composeFile],
 ) {
   // Compose prefers the shell over the env file, so a variable of the same
   // name in the developer's shell must not replace a generated value.
@@ -79,19 +79,30 @@ function docker(
       project,
       "--env-file",
       envFile,
-      "-f",
-      composeFile,
+      ...files.flatMap((file) => ["-f", file]),
       ...args,
     ],
-    { env, encoding: "utf8", ...(timeout ? { timeout } : {}) },
+    { env, encoding: "utf8" },
   );
+}
+
+export interface StackOptions {
+  /**
+   * Compose files applied on top of compose.yaml, relative to the reference
+   * directory, such as compose.live-provider.yaml.
+   */
+  readonly overrides?: readonly string[];
 }
 
 /**
  * Generate the env file, start the stack, and return once every service is
  * healthy (`docker compose up --wait`, no sleeps).
  */
-export async function startStack(): Promise<Stack> {
+export async function startStack(options: StackOptions = {}): Promise<Stack> {
+  const files = [
+    composeFile,
+    ...(options.overrides ?? []).map((file) => join(referenceDirectory, file)),
+  ];
   const project =
     process.env.PISHIP_REFERENCE_PROJECT ?? "piship-reference-distribution";
   const ports = Object.fromEntries(
@@ -124,33 +135,26 @@ export async function startStack(): Promise<Stack> {
     throw new Error("the generated env file is not owner-only");
   const environment = parseEnv(readFileSync(envFile, "utf8"));
 
+  const compose = (args: readonly string[]) =>
+    docker(project, envFile, environment, args, files);
   let stopped = false;
   const stop = () => {
     if (stopped) return;
     stopped = true;
     if (logDirectory()) {
-      const logs = docker(project, envFile, environment, [
-        "logs",
-        "--no-color",
-        "--timestamps",
-      ]);
+      const logs = compose(["logs", "--no-color", "--timestamps"]);
       keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
     }
     // No `-v`: the stack keeps no volume, and a volume is never pruned here.
-    docker(project, envFile, environment, ["down", "--timeout", "10"]);
+    compose(["down", "--timeout", "10"]);
     rmSync(directory, { recursive: true, force: true });
   };
 
   // A crashed earlier run of this project may have left containers behind.
-  docker(project, envFile, environment, ["down", "--timeout", "10"]);
-  const up = docker(project, envFile, environment, [
-    "up",
-    "--wait",
-    "--wait-timeout",
-    "300",
-  ]);
+  compose(["down", "--timeout", "10"]);
+  const up = compose(["up", "--wait", "--wait-timeout", "300"]);
   if (up.status !== 0) {
-    const status = docker(project, envFile, environment, ["ps", "--all"]);
+    const status = compose(["ps", "--all"]);
     stop();
     throw new Error(
       `docker compose up failed (exit ${up.status}):\n${up.stderr.slice(-2000)}\n${status.stdout}`,

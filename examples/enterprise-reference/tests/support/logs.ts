@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 // PISHIP_REFERENCE_LOG_DIR names a directory (the reference E2E workflow sets
 // it and uploads the directory when a run fails). The logs pass through
 // scripts/scrub-logs.mjs first, which replaces every secret of the stack's env
-// file and every key, token, and bearer shape; unscrubbed logs are never
-// written.
+// file, the live provider's settings (LIVE_PROVIDER_*, which the scrubber reads
+// from the environment), and every key, token, and bearer shape; unscrubbed
+// logs are never written.
 
 const scrubber = fileURLToPath(
   new URL("../../scripts/scrub-logs.mjs", import.meta.url),
@@ -24,7 +25,14 @@ export function keepLogs(project: string, envFile: string, logs: string) {
   if (!directory) return;
   const scrubbed = spawnSync(
     process.execPath,
-    [scrubber, "--env-file", envFile],
+    [
+      scrubber,
+      "--env-file",
+      envFile,
+      ...Object.keys(process.env)
+        .filter((name) => name.startsWith("LIVE_PROVIDER_"))
+        .flatMap((name) => ["--redact-env", name]),
+    ],
     { input: logs, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
   mkdirSync(directory, { recursive: true });
