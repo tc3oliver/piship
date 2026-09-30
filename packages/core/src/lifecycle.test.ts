@@ -2167,6 +2167,38 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     );
     expect(existsSync(state)).toBe(false);
   });
+
+  it("uninstall with purge refuses a rewritten command shim before it deletes a secret", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const state = stateDir();
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#1`,
+      }),
+    );
+    const { store, memory } = testStore(() => false);
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    // Another tool rewrote the command: the uninstall refuses, and because it
+    // checks before deleting, the state still names credentials that exist.
+    const shim = readFileSync(receipt.commandPath, "utf8");
+    writeFileSync(receipt.commandPath, `${shim}\n# rewritten`);
+    await expect(
+      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+    ).rejects.toThrow(/not owned/);
+    expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
+    expect(existsSync(state)).toBe(true);
+    expect(existsSync(receipt.payload)).toBe(true);
+    writeFileSync(receipt.commandPath, shim);
+    const result = await uninstallAndPurgeDistribution(ID, {
+      secretStore: store,
+    });
+    expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
+    expect(memory.refs()).toEqual([]);
+    expect(existsSync(state)).toBe(false);
+  });
 });
 
 describe.runIf(HOST_EVIDENCED)("uninstall after an interrupted update", () => {

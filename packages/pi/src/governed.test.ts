@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -654,6 +655,30 @@ describe("governed read resource bounds", () => {
       run(read, { path: "many.log", offset: 5_000, limit: 10 }),
     ).rejects.toThrow(/over the 16\.0MB limit of the governed read tool/);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a FIFO at once instead of waiting for a writer",
+    async () => {
+      const { session, workspace } = await open();
+      const fifo = join(workspace, "planted.fifo");
+      const made = spawnSync("mkfifo", [fifo]);
+      expect(made.status).toBe(0);
+      const tools = governedTools(session, workspace);
+      await expect(
+        run(tool(tools, "read"), { path: "planted.fifo" }),
+      ).rejects.toThrow(/planted\.fifo is a named pipe, not a file/);
+      await expect(
+        run(tool(tools, "edit"), {
+          path: "planted.fifo",
+          edits: [{ oldText: "a", newText: "b" }],
+        }),
+      ).rejects.toThrow();
+      await expect(
+        run(tool(tools, "write"), { path: "planted.fifo", content: "x" }),
+      ).rejects.toThrow();
+    },
+    20_000,
+  );
 
   it("refuses a huge image before loading it", async () => {
     const { session, workspace } = await open();

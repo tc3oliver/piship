@@ -238,6 +238,10 @@ export async function gatePath(
 }
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+// Opening a FIFO without it waits for a peer on a thread no abort can release,
+// and a few such opens stop all async file I/O of the process. With it the
+// open returns at once, and a FIFO is then refused by its type.
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
 
 /**
  * The largest file the governed read and edit tools load. Pi's read tool
@@ -337,7 +341,12 @@ async function readBounded(
   path: string,
   tool: string,
 ): Promise<Buffer> {
-  const { size } = await handle.stat();
+  const stats = await handle.stat();
+  if (stats.isFIFO())
+    throw new Error(
+      `${path} is a named pipe, not a file, so the governed ${tool} tool does not read it.`,
+    );
+  const { size } = stats;
   if (size > GOVERNED_READ_LIMIT_BYTES)
     throw tooLarge(path, formatSize(size), tool);
   const chunks: Buffer[] = [];
@@ -363,12 +372,13 @@ async function readBounded(
 
 /** Open for writing without following a final symlink; create only when absent. */
 async function openFile(path: string, flags: number): Promise<FileHandle> {
-  if (!(flags & constants.O_WRONLY)) return open(path, flags | NOFOLLOW);
+  const plain = flags | NOFOLLOW | NONBLOCK;
+  if (!(flags & constants.O_WRONLY)) return open(path, plain);
   try {
-    return await open(path, flags | NOFOLLOW);
+    return await open(path, plain);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return open(path, flags | constants.O_CREAT | constants.O_EXCL | NOFOLLOW);
+    return open(path, plain | constants.O_CREAT | constants.O_EXCL);
   }
 }
 

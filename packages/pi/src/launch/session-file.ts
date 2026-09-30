@@ -524,6 +524,47 @@ function mebibytes(size: number): string {
 }
 
 /**
+ * File text inside a diagnostic: control characters are shown escaped and the
+ * length is bounded, so a crafted entry ID can neither drive the terminal nor
+ * flood the message.
+ */
+function printable(text: string, limit = 240): string {
+  const clean = text.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return clean.length > limit ? `${clean.slice(0, limit)}...` : clean;
+}
+
+/**
+ * Why a `/resume` into `target` is refused, worded for the user, or undefined
+ * when it may go ahead: another live process owns the file, or it is over the
+ * size limit or damaged, which Pi's own load would not report.
+ */
+export function resumeRefusal(
+  ownership: SessionOwnership,
+  target: string,
+  command: string,
+): string | undefined {
+  if (ownership.heldByOther(target))
+    return `That session is open in another ${command} process. Continue it there, or start a new session here.`;
+  let problem: SessionProblem | undefined;
+  try {
+    problem = inspectSession(target);
+  } catch {
+    // Unreadable: Pi reports it when it opens the file.
+    return undefined;
+  }
+  if (!problem) return undefined;
+  const why =
+    problem.kind === "oversized"
+      ? `it is ${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit for resuming a session automatically`
+      : `it is damaged and Pi would continue without the damaged part (${printable(problem.reason)})`;
+  return `That session is not resumed: ${why}. The file was not loaded or changed. Start a new session here instead.`;
+}
+
+/**
  * Opens the session a launch continues: the project's most recent one when
  * no other live process owns it and it is safe to load, a new one when
  * `newSession` is set or another process owns the most recent. A corrupt or
@@ -563,7 +604,7 @@ export function openSession(
           )
         : new PiShipError(
             "CONFIG_UNAVAILABLE",
-            `The most recent session of this project is damaged and is not resumed, because Pi would continue without the damaged part: ${problem.reason}: ${recent}`,
+            `The most recent session of this project is damaged and is not resumed, because Pi would continue without the damaged part: ${printable(problem.reason)}: ${recent}`,
             { userAction: action, component: "session" },
           );
     }

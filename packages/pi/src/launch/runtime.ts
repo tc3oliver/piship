@@ -30,7 +30,11 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
-import { openSession, type SessionOwnership } from "./session-file.js";
+import {
+  openSession,
+  resumeRefusal,
+  type SessionOwnership,
+} from "./session-file.js";
 
 function verifyBuiltResources(ctx: LaunchContext): void {
   const resourceDir = join(ctx.distributionDir, "resources");
@@ -87,16 +91,15 @@ function sessionOwnerExtension(
     name: "piship-session-owner",
     factory: (pi) => {
       pi.on("session_before_switch", (event, extension) => {
-        if (
-          event.reason !== "resume" ||
-          !event.targetSessionFile ||
-          !ownership.heldByOther(event.targetSessionFile)
-        )
+        if (event.reason !== "resume" || !event.targetSessionFile)
           return undefined;
-        extension.ui.notify(
-          `That session is open in another ${command} process. Continue it there, or start a new session here.`,
-          "warning",
+        const refusal = resumeRefusal(
+          ownership,
+          event.targetSessionFile,
+          command,
         );
+        if (!refusal) return undefined;
+        extension.ui.notify(refusal, "warning");
         return { cancel: true };
       });
     },
@@ -181,7 +184,17 @@ async function startRuntime(
   }) => {
     // A `/new`, `/resume`, or fork moves the owner record to the new file.
     const sessionFile = sessionManager.getSessionFile();
-    if (sessionFile) ownership.claim(sessionFile);
+    // `session_before_switch` already refused a session another process owns;
+    // losing the race after that must not leave two writers on one file.
+    if (sessionFile && !ownership.claim(sessionFile))
+      throw new PiShipError(
+        "CONFIG_UNAVAILABLE",
+        `Another ${ctx.metadata.app.command} process opened the session ${sessionFile} first, so it is not used here.`,
+        {
+          userAction: `Start ${ctx.metadata.app.command} again to continue, or run it with --new-session.`,
+          component: "session",
+        },
+      );
     const settingsManager = SettingsManager.inMemory();
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,

@@ -35,6 +35,7 @@ import {
   mostRecentSession,
   OWNER_DIRECTORY,
   openSession,
+  resumeRefusal,
   SessionOwnership,
 } from "./session-file.js";
 
@@ -415,6 +416,79 @@ describe("a very large session is not resumed automatically (#65)", () => {
     expect(opened.sessionManager.getSessionId()).not.toBe(id);
     expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
     opened.ownership.release();
+  });
+});
+
+describe("a /resume checks its target like a launch does (#57, #62, #65)", () => {
+  it("lets a valid session that nobody owns be resumed", () => {
+    const { file } = persistedSession();
+    const ownership = new SessionOwnership();
+    expect(resumeRefusal(ownership, file, "mypi")).toBeUndefined();
+    expect(ownerRecords()).toEqual([]);
+  });
+
+  it("refuses a session another live process owns", () => {
+    const { file } = persistedSession();
+    const other = new SessionOwnership();
+    expect(other.claim(file)).toBe(true);
+    expect(resumeRefusal(new SessionOwnership(), file, "mypi")).toMatch(
+      /open in another mypi process/,
+    );
+    other.release();
+  });
+
+  it("refuses a damaged session and an oversized one, and leaves the file alone", () => {
+    const { file, lines: entries } = persistedSession();
+    const ownership = new SessionOwnership();
+    rewrite(file, [...entries.slice(0, 3), "{not json"]);
+    const damaged = readFileSync(file);
+    expect(resumeRefusal(ownership, file, "mypi")).toMatch(
+      /not resumed: it is damaged.*line 4 is not valid JSON/,
+    );
+    expect(readFileSync(file).equals(damaged)).toBe(true);
+    rewrite(file, [entries[0]]);
+    const fd = openSync(file, "r+");
+    try {
+      ftruncateSync(fd, MAX_RESUME_BYTES + 1);
+    } finally {
+      closeSync(fd);
+    }
+    expect(resumeRefusal(ownership, file, "mypi")).toMatch(
+      /not resumed: it is 64\.0 MiB, over the 64\.0 MiB limit/,
+    );
+    expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
+  });
+
+  it("leaves a file that cannot be read to Pi", () => {
+    expect(
+      resumeRefusal(
+        new SessionOwnership(),
+        join(sessionDir, "gone.jsonl"),
+        "mypi",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("shows an entry ID from the file escaped and bounded, never raw", () => {
+    const { file, lines: entries } = persistedSession();
+    const id = `x\u001b]0;owned\u0007${"y".repeat(5000)}`;
+    rewrite(file, [
+      ...entries.slice(0, 2),
+      { ...entries[2], id },
+      { ...entries[3], id },
+      ...entries.slice(4),
+    ]);
+    const message = resumeRefusal(new SessionOwnership(), file, "mypi") ?? "";
+    expect(message).toContain("the message entry x\\u001b]0;owned\\u0007yyy");
+    expect(
+      [...message].some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 32 || (code >= 127 && code < 160);
+      }),
+    ).toBe(false);
+    expect(message).toContain("\\u001b");
+    expect(message.length).toBeLessThan(600);
+    expectRefused(file, /message entry x\\u001b\]0;owned/);
   });
 });
 

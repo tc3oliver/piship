@@ -18,10 +18,13 @@ import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
 
 /**
  * Take every lock an uninstall needs (the command, the lifecycle lock, and
- * the launch gate) and refuse while a runtime session is live. `remove`
- * deletes the shim, the launcher, every retained release, and the receipt.
+ * the launch gate) and refuse while a runtime session is live. `verify`
+ * throws for everything that would make `remove` refuse, without changing
+ * anything; `remove` deletes the shim, the launcher, every retained
+ * release, and the receipt.
  */
 function holdForUninstall(id: string): {
+  readonly verify: () => void;
   readonly remove: () => void;
   readonly release: () => void;
 } {
@@ -57,34 +60,42 @@ function holdForUninstall(id: string): {
       throw new Error(
         `Cannot uninstall ${id} while ${live.length} runtime session(s) still use its payload; close them and retry`,
       );
-    const remove = () => {
+    const verify = () => {
       if (
         !gate.stillHeld() ||
         !commandHold.stillHeld() ||
         (hold && !hold.stillHeld())
       )
         throw new Error(`Install ownership lock for ${id} was lost`);
+      assertOwnedShim(id, receipt);
+    };
+    const remove = () => {
+      verify();
       removeInstall(id, receipt);
     };
-    return { remove, release };
+    return { verify, remove, release };
   } catch (error) {
     release();
     throw error;
   }
 }
 
+/** Refuses a command path that holds something other than this install's shim. */
+function assertOwnedShim(id: string, receipt: InstallReceipt): void {
+  if (!existsSync(receipt.commandPath)) return;
+  // A receipt written before v1 has no launcher: its shim runs the
+  // payload's command script directly.
+  const target =
+    receipt.launcher ?? join(receipt.payload, "bin", receipt.app.command);
+  if (!ownsCommandShim(receipt.commandPath, target))
+    throw new Error(
+      `Command shim ${receipt.commandPath} is not owned by ${id}`,
+    );
+}
+
 function removeInstall(id: string, receipt: InstallReceipt): void {
-  if (existsSync(receipt.commandPath)) {
-    // A receipt written before v1 has no launcher: its shim runs the
-    // payload's command script directly.
-    const target =
-      receipt.launcher ?? join(receipt.payload, "bin", receipt.app.command);
-    if (!ownsCommandShim(receipt.commandPath, target))
-      throw new Error(
-        `Command shim ${receipt.commandPath} is not owned by ${id}`,
-      );
+  if (existsSync(receipt.commandPath))
     rmSync(receipt.commandPath, { force: true });
-  }
   rmSync(appDirectory(id), { recursive: true, force: true });
   rmSync(receiptPath(id), { force: true });
 }
@@ -120,6 +131,10 @@ export async function uninstallAndPurgeDistribution(
   const hold = holdForUninstall(id);
   try {
     const state = runtimeStateDirectory({ value: id });
+    // Everything that can refuse the uninstall is checked before the first
+    // secret goes: a refusal afterwards would leave state that names
+    // credentials that are already gone.
+    hold.verify();
     const deletedSecrets = await deleteReferencedSecrets(id, state, options);
     hold.remove();
     rmSync(state, { recursive: true, force: true });
