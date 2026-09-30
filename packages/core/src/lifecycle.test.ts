@@ -43,6 +43,7 @@ import {
   runtimeLeases,
   uninstallDistribution,
 } from "./install/index.js";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import { readStateMarker } from "./migration.js";
 import {
   type CommandResult,
@@ -2147,6 +2148,35 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     } finally {
       child.kill();
     }
+  }, 30_000);
+
+  it("reclaims a registration gate a killed launcher left, and waits only briefly for a live one", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    const gate = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `.${ID}.launch.lock`,
+    );
+    const holder = (pid: number) =>
+      `${JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid, instance: "left-behind" })}\n`;
+    writeFileSync(gate, holder(deadPid()));
+    const launched = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(launched.status, launched.stderr).toBe(0);
+    expect(launched.stdout).toContain("payload");
+    expect(existsSync(gate)).toBe(false);
+    // A live holder (this process) is waited for, then reported.
+    writeFileSync(gate, holder(process.pid));
+    const started = Date.now();
+    const busy = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(busy.status).toBe(1);
+    expect(busy.stderr).toMatch(/registering; retry/);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    rmSync(gate);
   }, 30_000);
 
   it.runIf(process.platform !== "win32")(

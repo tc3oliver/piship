@@ -91,7 +91,7 @@ function ownedIncompleteInstall(
 
 function launcherSource(id: string): string {
   return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
-import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -102,11 +102,58 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const home = dirname(fileURLToPath(import.meta.url));
 const gatePath = join(home, "..", "..", "receipts", ${JSON.stringify(`.${id}.launch.lock`)});
 const gateRecord = JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid: process.pid, instance: randomUUID() }) + "\\n";
-try {
-  writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
-} catch {
-  console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering; retry.`)});
-  process.exit(1);
+// The gate is judged as the lifecycle lock is: a holder whose process is gone
+// (killed before its exit handler ran) is stale at once, a live one only
+// after 24 hours without a refresh. A live holder is waited for briefly.
+const gateHolder = () => {
+  let stat;
+  try { stat = lstatSync(gatePath); } catch { return undefined; }
+  let raw = null;
+  try { raw = readFileSync(gatePath, "utf8"); } catch (error) { if (error.code === "ENOENT") return undefined; }
+  let pid = null;
+  if (raw !== null && /^\\d+$/.test(raw.trim())) pid = Number(raw.trim());
+  else try {
+    const record = JSON.parse(raw ?? "");
+    if (record.schema === "piship-lifecycle-lock/v1" && typeof record.instance === "string") pid = record.pid;
+  } catch {}
+  return { raw, pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, mtimeMs: stat.mtimeMs, regular: stat.isFile() };
+};
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+};
+const gateStale = (holder) => {
+  const age = Date.now() - holder.mtimeMs;
+  if (!holder.regular) return false;
+  if (holder.raw === null) return age > 86400000;
+  if (holder.raw === "") return age > 5000;
+  if (holder.pid === null || age > 86400000) return true;
+  return holder.pid !== process.pid && !alive(holder.pid);
+};
+// Moved aside under a unique name first, so only one launcher removes it; a
+// gate that turned out to be another one is put back.
+const breakGate = (observed) => {
+  const aside = gatePath + ".p" + process.pid + "-" + randomUUID() + ".stale";
+  try { renameSync(gatePath, aside); } catch { return; }
+  try {
+    const raw = readFileSync(aside, "utf8");
+    if (raw !== observed.raw) linkSync(aside, gatePath);
+  } catch {}
+  try { rmSync(aside, { force: true }); } catch {}
+};
+const gateDeadline = Date.now() + 500;
+for (;;) {
+  try {
+    writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
+    break;
+  } catch (error) {
+    const holder = error.code === "EEXIST" ? gateHolder() : undefined;
+    if (error.code !== "EEXIST" || Date.now() > gateDeadline) {
+      console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering; retry.`)});
+      process.exit(1);
+    }
+    if (holder && gateStale(holder)) breakGate(holder);
+    else if (holder) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 const clearGate = () => {
   try { if (readFileSync(gatePath, "utf8") === gateRecord) rmSync(gatePath, { force: true }); } catch {}
