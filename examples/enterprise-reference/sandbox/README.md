@@ -40,7 +40,7 @@ node service/server.mjs
 The distribution is the reference distribution built from [`piship.yaml`](piship.yaml) in this directory, with the [reference stack](../README.md) running for sign-in. `COMMAND` is the launcher's name, `app.command` in the manifest:
 
 ```sh
-COMMAND=acmecode
+COMMAND=acmecode-reference
 export ACMECODE_SANDBOX_URL=http://127.0.0.1:18075
 # ...and the stack's variables, as in the reference README ("Try it")
 npm exec -- piship build examples/enterprise-reference/sandbox/piship.yaml
@@ -50,7 +50,7 @@ node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
 cd ~/Developer/src/some-repository && "$COMMAND" doctor
 ```
 
-`sandbox login` needs a signed-in user: the key is bound to that user and to the origin of `ACMECODE_SANDBOX_URL`. `doctor` then shows the sandbox (`acme-container`, remote, its guarantees), the stored credential (`valid (stored, api_key)`), and the workspace as `pending`: it is verified before the first command the agent runs, never by `doctor`. This build and the reference build have the same ID, command, and state: install one or the other.
+`sandbox login` needs a signed-in user: the key is bound to that user and to the origin of `ACMECODE_SANDBOX_URL`. `doctor` then shows the sandbox (`acme-container`, remote, its guarantees), the stored credential (`valid (stored, api_key)`), and the workspace as `pending`: it is verified before the first command the agent runs, never by `doctor`. This build and the reference build have the same ID, command, and state: install one or the other. Both install the launcher `acmecode-reference`, which is not the demo company example's `acmecode`, so neither replaces that one.
 ### The registry: what a key may mount
 
 The service starts each container as the owner of the project it mounts, so a key that could name any project under `SANDBOX_WORKSPACE_ROOTS` could mount another user's project read-write, as that user. Every registry entry is therefore bound to what it may mount, and `generate-key.mjs` writes the binding:
@@ -169,7 +169,7 @@ The service reads its environment only, and refuses to start on a bad value, nam
 | --- | --- |
 | [`test/service.test.mjs`](test/service.test.mjs), [`test/adapter.test.mjs`](test/adapter.test.mjs): `node --test test/*.test.mjs` here | The service against a [fake docker](test/fake-docker.mjs) that runs commands with `/bin/sh` on this machine: configuration, the registry (its bindings, and an entry with none) and `generate-key`, credential and Host checks, refusals, every argument of `docker run` and `docker exec` (no privilege, the mounts, the environment on standard input and nowhere else), ownership by key and by host user, root's user and group, streaming, cancellation when the caller goes away (a sweep, and only the marked processes while another command runs), delete, idle, lifetime, and size limits, shutdown, the start-up sweep and its two labels, the exit when a supervisor's pipe closes, and what the log holds. The adapter against a stub `fetch`: what it declares (and that PiShip accepts it), what it sends and to whom, that it never repeats a create, and that no credential, body, or transport message reaches an error |
 | [`tests/sandbox.test.ts`](../tests/sandbox.test.ts), with the reference tests (`npm run test:reference`) | The service as a user starts it, with real containers: its boundary, the container as `docker inspect` shows it, a project only for the key bound to its owner, a command's environment off the process list and out of every file, the strays a cancelled command leaves, the sandbox conformance kit (and a scan of its report and output for the user's real key), a service that exits when its supervisor is gone, and a governed session built from the committed manifest and lock (below) |
-| [`tests/reference-sandbox-variant.test.ts`](../../../tests/reference-sandbox-variant.test.ts), with the unit tests | The variant differs from the reference manifest only in its sandbox and one runtime variable, has the same resources, and its adapter is one file that imports only the SDK; the committed lock is kept current by the example-lock test |
+| [`tests/reference-sandbox-variant.test.ts`](../../../tests/reference-sandbox-variant.test.ts), with the unit tests | The variant differs from the reference manifest only in its sandbox and one runtime variable, has the same resources, the same ID and launcher command (`acmecode-reference`, not the demo company's), and its adapter is one file that imports only the SDK; the committed lock is kept current by the example-lock test |
 
 The live test starts the service on `127.0.0.1:48075` (`SANDBOX_PORT` changes it; a second service the orphan test starts uses the next port), as instance `piship-reftest-<pid>-sandbox-<random>`, with keys made by `generate-key.mjs` in a temporary directory, alice's bound to the user running the tests and bob's to another. Every container it starts carries that instance's label. The service removes its own on `SIGTERM`; the test then removes anything still carrying the label, by ID, and its directory, and checks that the service left none.
 

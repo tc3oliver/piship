@@ -8,11 +8,12 @@ schema: piship/v1alpha4
 # is the same distribution (same ID, command, and state) built differently:
 # install this build or the other, not both.
 app:
-  # Its own ID, so its state and secret-store entries (piship:<id>:*) never
-  # meet those of an installed `acmecode` such as the demo company's.
+  # Its own ID and command, so its state, its secret-store entries
+  # (piship:<id>:*), and its launcher never meet those of an installed
+  # `acmecode` such as the demo company's.
   id: acmecode-reference
   name: AcmeCode
-  command: acmecode
+  command: acmecode-reference
   version: 1.0.0
   banner: AcmeCode enterprise reference distribution (fictional)
 

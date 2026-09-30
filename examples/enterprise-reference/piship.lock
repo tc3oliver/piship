@@ -2,12 +2,12 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "3759e30bc2613133d974d525f44180b391070c1105d7014fb9e9481f331ddc84"
+    "sha256": "1a7660f20ff5f3efb26c56aae6f1270c5ce4c1fca578863cf520134cc94c1bea"
   },
   "app": {
     "id": "acmecode-reference",
     "name": "AcmeCode",
-    "command": "acmecode",
+    "command": "acmecode-reference",
     "version": "1.0.0",
     "banner": "AcmeCode enterprise reference distribution (fictional)"
   },

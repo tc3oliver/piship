@@ -71,6 +71,31 @@ describe("the sandbox variant of the reference distribution", () => {
     expect(variantSandbox.network).toEqual({ mode: "deny" });
   });
 
+  it("installs under the reference's own ID and launcher, apart from the demo company's", () => {
+    const app = (document: Document) =>
+      document.app as { id: string; command: string };
+    const demo = readManifestDocument(
+      fileURLToPath(
+        new URL("../examples/demo-company/piship.yaml", import.meta.url),
+      ),
+    ) as Document;
+    // The variant is the same distribution: the same ID and command as the
+    // reference, in the manifest and in the lock built from it.
+    expect(app(variant).id).toBe(app(base).id);
+    expect(app(variant).command).toBe(app(base).command);
+    expect(app(base).command).toBe("acmecode-reference");
+    for (const directory of [reference, sandbox]) {
+      const lock = JSON.parse(
+        readFileSync(join(directory, "piship.lock"), "utf8"),
+      ) as { app: { id: string; command: string } };
+      expect(lock.app).toMatchObject(app(base));
+    }
+    // What the reference launcher must never share with the demo company's:
+    // installing one would otherwise replace the other's command.
+    expect(app(base).command).not.toBe(app(demo).command);
+    expect(app(base).id).not.toBe(app(demo).id);
+  });
+
   it("carries the same resources as the reference distribution", () => {
     const names = (root: string) =>
       files(join(root, "resources")).map((path) =>

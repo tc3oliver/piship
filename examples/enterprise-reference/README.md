@@ -116,7 +116,7 @@ The files run one at a time. Each took 20 to 80 s on the machine measured below 
 | `gateway-rate-limits.test.ts` | Requests per minute and tokens per minute on the employee's LiteLLM user are enforced by the gateway, on every key of that employee |
 | `gateway-concurrency-entitlement.test.ts` | The key's `max_parallel_requests` and its `models` list are enforced by the gateway; refused requests never reach the upstream |
 | `team-member-budget.test.ts` | Decision D-01's check: a team-member budget (`max_budget_in_team`) is enforced across all of the member's team keys, while the member's personal budget is not applied to team keys. The broker issues keys without a team; this file sets a team up with the master key |
-| `gateway-evidence.test.ts` | How LiteLLM refuses a missing, malformed, unknown, deleted, expired or blocked key, and that PiShip's inference client reads each as `CREDENTIAL_REVOKED`; the installed AcmeCode distribution (signed in as alice) renewing a key the gateway blocked or expired at launch, and reporting `CREDENTIAL_REVOKED` when the broker is down for the renewal; `/v1/models` listing only a key's models, and PiShip offering the intersection of allowlist, entitlement and live list, also in `acmecode models`; a streamed answer (chunks, `stop`, usage, `[DONE]`) and one the upstream cuts; upstream 401, 403, 429 and 5xx through LiteLLM (status, body, retries, cooldown) and how PiShip's status mapping and its in-session reading of Pi's error messages take them, through `acmecode --smoke-model` |
+| `gateway-evidence.test.ts` | How LiteLLM refuses a missing, malformed, unknown, deleted, expired or blocked key, and that PiShip's inference client reads each as `CREDENTIAL_REVOKED`; the installed AcmeCode distribution (signed in as alice) renewing a key the gateway blocked or expired at launch, and reporting `CREDENTIAL_REVOKED` when the broker is down for the renewal; `/v1/models` listing only a key's models, and PiShip offering the intersection of allowlist, entitlement and live list, also in `acmecode-reference models`; a streamed answer (chunks, `stop`, usage, `[DONE]`) and one the upstream cuts; upstream 401, 403, 429 and 5xx through LiteLLM (status, body, retries, cooldown) and how PiShip's status mapping and its in-session reading of Pi's error messages take them, through `acmecode-reference --smoke-model` |
 
 Spend is read with the master key from `/spend/users`, `/spend/logs`, `/user/info`, `/key/info` and `/team/info`, polled until it lands. Tokens, keys and the master key stay in the test's memory; response bodies are scrubbed of key and token shapes before any assertion.
 
@@ -193,7 +193,7 @@ These figures are from one developer machine. Running on GitHub's `ubuntu-latest
 
 | Section | Value |
 | --- | --- |
-| `app` | ID `acmecode-reference`, command `acmecode`. The ID differs from the demo company's `acmecode`, so the two never share a state directory or secret-store entries (`piship:<id>:*`); the broker serves this ID (`BROKER_DISTRIBUTION` in `compose.yaml`), and model IDs in the Pi runtime read `acmecode-reference/<model>` |
+| `app` | ID `acmecode-reference`, command `acmecode-reference`. Both differ from the demo company's `acmecode`, so the two never share a state directory, secret-store entries (`piship:<id>:*`), or launcher; the broker serves this ID (`BROKER_DISTRIBUTION` in `compose.yaml`), and model IDs in the Pi runtime read `acmecode-reference/<model>` |
 | `identity.oidc` | Issuer `${ACMECODE_OIDC_ISSUER}` (the Keycloak realm), public client `acmecode`, scopes `openid profile email`, redirect `http://127.0.0.1/callback` (port-less, so PiShip listens on an ephemeral loopback port and Keycloak matches it) |
 | `credential` | `http-broker` at `${ACMECODE_CREDENTIAL_BROKER_URL}` with revoke at `${ACMECODE_CREDENTIAL_REVOKE_URL}` (the reference broker), stored in the platform secret store (`provider: system`) |
 | `inference` | `openai-compatible` at `${ACMECODE_LLM_GATEWAY_URL}` (LiteLLM), with the live model catalog |
@@ -239,17 +239,17 @@ export ACMECODE_LLM_GATEWAY_URL=http://127.0.0.1:14000/v1
 
 npm exec -- piship build examples/enterprise-reference/piship.yaml
 node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
-~/.local/bin/acmecode login              # sign in as alice on the Keycloak page
-~/.local/bin/acmecode models
-~/.local/bin/acmecode --smoke-model
-~/.local/bin/acmecode login              # sign in as bob, without a logout
-~/.local/bin/acmecode models             # acme/general is no longer available
-~/.local/bin/acmecode logout
+~/.local/bin/acmecode-reference login              # sign in as alice on the Keycloak page
+~/.local/bin/acmecode-reference models
+~/.local/bin/acmecode-reference --smoke-model
+~/.local/bin/acmecode-reference login              # sign in as bob, without a logout
+~/.local/bin/acmecode-reference models             # acme/general is no longer available
+~/.local/bin/acmecode-reference logout
 node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 ( cd examples/enterprise-reference && docker compose down )
 ```
 
-The launcher is named `acmecode`, like the one the demo company example installs at `~/.local/bin/acmecode`: installing this distribution replaces that launcher, and uninstalling it removes it. Its state and secret-store entries are kept apart by the distribution ID (`acmecode-reference`), so only the launcher path is shared; uninstall the demo first if you have installed it.
+The launcher is named `acmecode-reference` (`app.command`), so it installs beside the demo company example's `acmecode` without replacing it, and uninstalling one leaves the other. The two share nothing: the launcher, and the state and secret-store entries (kept apart by the distribution ID, `acmecode-reference`), differ. The reference tests read the command from the manifest.
 
 `login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
 
@@ -281,9 +281,9 @@ The reference manifest above is unchanged: it keeps the native OS sandbox. The v
 | Workspace | Declared `shared`; PiShip's two-way sentinel finds both directions immediate, and its git control probe finds every protected path read-only |
 | Conformance | The [sandbox conformance kit](../../docs/adapter-sdk.md#sandbox-conformance-kit) passes all 16 behaviors against the service with real containers: none failed, none skipped |
 
-The kit's behaviors, all `passed`: availability, capabilities, prepare, execute, environment filtering, secret leakage, filesystem claims, network claims, timeout, cancellation, cleanup, dispose, fail-closed behavior, workspace consistency, git control protection, workspace re-check. The kit is not vacuous against this service: seeded by hand while the service was written (no test keeps them), a writable `.git` mount failed only `git control protection`, a network that stayed on with the profile denying it failed only `network claims`, and a cancel that only killed the `docker exec` client failed `timeout` and `cancellation`.
+The kit's behaviors, all `passed`: availability, capabilities, prepare, execute, environment filtering, secret leakage, filesystem claims, network claims, timeout, cancellation, cleanup, dispose, fail-closed behavior, workspace consistency, git control protection, workspace re-check. The kit is not vacuous against this service: seeded by hand while the service was written, a writable `.git` mount failed only `git control protection`, a network that stayed on with the profile denying it failed only `network claims`, and a cancel that only killed the `docker exec` client failed `timeout` and `cancellation`. No test seeds them again; each is pinned by its own test instead ([which](sandbox/README.md#conformance)).
 
-[`tests/sandbox.test.ts`](tests/sandbox.test.ts) runs it all, without the stack, with `npm run test:reference` (Docker required): the service as a user starts it on `127.0.0.1:48075` with keys from `generate-key.mjs`, the container as `docker inspect` shows it, the kit, and a governed session opened on the payload built from the committed manifest and lock, whose first sandboxed command is preceded by the workspace check. Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0): the file takes 85 to 120 s (other work was running on the machine), of which the kit is about 25 to 30 s and the build of the distribution about 12 s. Its containers carry the service's instance label, `piship-reftest-<pid>-sandbox-<random>`, and are removed when the file ends, also after a failure; the reference suite's global setup removes those of a run killed outright. The contract tests (`node --test test/*.test.mjs` in `sandbox/`) need no Docker.
+[`tests/sandbox.test.ts`](tests/sandbox.test.ts) runs it all, without the stack, with `npm run test:reference` (Docker required): the service as a user starts it on `127.0.0.1:48075` with keys from `generate-key.mjs`, the container as `docker inspect` shows it, the kit, and a governed session opened on the payload built from the committed manifest and lock, whose first sandboxed command is preceded by the workspace check. Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0): the file takes 85 to 120 s (other work was running on the machine), of which the kit is about 25 to 30 s and the build of the distribution about 12 s. Its containers carry the service's instance label, `piship-reftest-<pid>-sandbox-<random>`, and are removed when the file ends, also after a failure; the reference suite's global setup removes those of a run killed outright, and the service such a run leaves exits by itself, removing its containers, because the test owns it through a pipe (`SANDBOX_EXIT_ON_STDIN_END=1`) and a start refuses to count an answer that names another instance. The contract tests (`node --test test/*.test.mjs` in `sandbox/`) need no Docker.
 
 ## Reference E2E workflow
 
@@ -315,7 +315,7 @@ The live routing is two files beside `compose.yaml`, which stays unchanged:
 | `LIVE_PROVIDER_BASE_URL` | The provider's API base URL. Default `https://api.openai.com/v1`; set it for any other provider |
 | `LIVE_PROVIDER_MODEL` | A LiteLLM model string, whose prefix picks the protocol: `openai/<model>` for OpenAI or any OpenAI-compatible API, `anthropic/<model>` for Anthropic. Default `openai/gpt-4.1-mini` |
 
-The workflow reads the three from secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
+The workflow reads the three from secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode-reference --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
 
 Dispatch inputs:
 
