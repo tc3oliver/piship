@@ -62,6 +62,15 @@ import {
 } from "./scans.js";
 import { gate, hash, writeJson } from "./shared.js";
 
+/**
+ * The fixed directories of a release's staging directory. The built payload
+ * lands in the same directory as `<id>`, and a distribution ID is lowercase
+ * letters, digits, and hyphens, so a name that starts with a dot can never be
+ * one (an ID of `release` or `audit` would have collided with plain names).
+ */
+const RELEASE_DIRECTORY = ".release";
+const AUDIT_DIRECTORY = ".audit";
+
 function createdTime(): string {
   const epoch = Number(process.env.SOURCE_DATE_EPOCH);
   const seconds =
@@ -197,14 +206,20 @@ export async function buildRelease(
   const archive = join(outputRoot, `${name}.tar.gz`);
   mkdirSync(outputRoot, { recursive: true });
   sweepOutputStaging(outputRoot, "release", options);
-  const temporary = createTemporaryDirectory(outputRoot, "release", name);
+  // Every character of the staging path counts on Windows, where npm cannot
+  // run an install script in a directory longer than 260 characters, and the
+  // deepest such directory is inside the build's own staging directory. So
+  // this one is named for the distribution, not the release, and the payload
+  // is assembled straight into it (as `<stage>/<id>`).
+  const temporary = createTemporaryDirectory(
+    outputRoot,
+    "release",
+    lock.app.id,
+  );
   const stage = temporary.path;
   try {
-    const built = (options.assemble ?? buildDistribution)(
-      manifestPath,
-      join(stage, "build"),
-    );
-    const payload = join(stage, "release", "payload");
+    const built = (options.assemble ?? buildDistribution)(manifestPath, stage);
+    const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });
     renameSync(built, payload);
     const root = dirname(payload);
@@ -213,7 +228,7 @@ export async function buildRelease(
       lock,
       options.runTest ?? runPayloadCommand,
     );
-    const lockDirectory = join(stage, "audit");
+    const lockDirectory = join(stage, AUDIT_DIRECTORY);
     mkdirSync(lockDirectory);
     copyFileSync(
       join(payload, "package-lock.json"),

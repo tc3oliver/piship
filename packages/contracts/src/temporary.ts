@@ -159,7 +159,8 @@ const SHAPES: Record<TemporaryKind, Shape> = {
     name: new RegExp(`^\\.piship-[a-z][a-z0-9-]*-${RANDOM}$`),
     label: /^[a-z][a-z0-9-]*$/,
   },
-  // `.piship-release-<release name>-XXXXXX`
+  // `.piship-release-<distribution id>-XXXXXX`; the label stays open to the
+  // longer names an earlier layout used, which it still recognises.
   release: {
     prefix: (label) => `.piship-release-${label}-`,
     name: new RegExp(
@@ -291,7 +292,7 @@ export interface TemporaryDirectory {
  * Create a private (0700) temporary directory of `kind` in `parent`, with its
  * marker (0600) written before anything else. `label` completes the name of
  * the kinds that carry one (`build`: the distribution ID; `release`: the
- * release name). A failure to write the marker removes the directory and
+ * distribution ID). A failure to write the marker removes the directory and
  * throws: an unmarked directory would never be recovered.
  */
 export function createTemporaryDirectory(

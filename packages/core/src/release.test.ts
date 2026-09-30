@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1432,7 +1432,7 @@ describe("evaluateVulnerabilities", () => {
 
 describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
   const staging = (releases: string) => {
-    const name = `.piship-release-acmepi-1.0.0-${currentTarget()}-`;
+    const name = ".piship-release-acmepi-";
     const stale = plantTemporary(
       releases,
       `${name}aaaaaa`,
@@ -1508,7 +1508,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
     const releases = join(dir, "dist", "releases");
     const stale = plantTemporary(
       releases,
-      `.piship-release-acmepi-1.0.0-${currentTarget()}-aaaaaa`,
+      ".piship-release-acmepi-aaaaaa",
       "release",
       deadPid(),
     );
@@ -1520,6 +1520,52 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
     );
     expect(existsSync(stale)).toBe(false);
     expect(readdirSync(releases)).toEqual([]);
+  });
+});
+
+describe.runIf(HOST_EVIDENCED)("release staging paths", () => {
+  // On Windows npm cannot run an install script in a directory longer than 260
+  // characters; the deepest is inside the build's staging directory, below the
+  // release staging directory. Every character of the staging path counts.
+  it("are at least 20 characters shorter than the layout that named the release and nested the build", async () => {
+    const { dir, path } = project();
+    const releases = join(dir, "dist", "releases");
+    let outputRoot = "";
+    await build(path, {
+      assemble: (manifest, root) => {
+        outputRoot = root;
+        return fakeAssemble(manifest, root);
+      },
+    });
+    // The build is assembled straight into the staging directory, which is
+    // named for the distribution and lies directly in the releases directory.
+    expect(dirname(outputRoot)).toBe(releases);
+    expect(basename(outputRoot)).toMatch(
+      /^\.piship-release-acmepi-[A-Za-z0-9]{6}$/,
+    );
+    // The longest staging directory is the build's own, inside it.
+    const longest = join(outputRoot, ".piship-acmepi-XXXXXX", "payload");
+    // What a typical Windows release named its staging directory and where it
+    // nested the build before: the release name, and a `build` directory.
+    const before = join(
+      releases,
+      ".piship-release-acmepi-1.0.0-win32-x64-XXXXXX",
+      "build",
+      ".piship-acmepi-XXXXXX",
+      "payload",
+    );
+    expect(before.length - longest.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("do not collide with a distribution whose ID is one of the fixed names", async () => {
+    for (const id of ["release", "audit"]) {
+      const { dir, path } = project({ id });
+      const built = await build(path);
+      expect(readdirSync(built.directory)).toContain("payload");
+      expect(readdirSync(join(dir, "dist", "releases"))).toEqual(
+        expect.arrayContaining([built.name, `${built.name}.tar.gz`]),
+      );
+    }
   });
 });
 

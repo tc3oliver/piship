@@ -141,7 +141,7 @@ Every temporary directory a PiShip workflow makes is created by one helper in `@
 | `release-test` | `piship-release-test-XXXXXX` | OS temp directory | the required tests of `piship release` | at every start |
 | `staging` | `.staging-XXXXXX` | the install home, and `apps/<id>` | install and update | at every start |
 | `build` | `.piship-<distribution id>-XXXXXX` | the output directory of `piship build`, `dev`, and `test` | payload assembly (the payload is built in its `payload` subdirectory, so the marker never enters it) | only with `--reclaim-staging` |
-| `release` | `.piship-release-<release name>-XXXXXX` | `<output>/releases` | `piship release` | only with `--reclaim-staging` |
+| `release` | `.piship-release-<distribution id>-XXXXXX` | `<output>/releases` | `piship release` (the build is assembled in a `.piship-<id>-XXXXXX/payload` staging directory inside it, lands at `<stage>/<id>`, and is then moved to `.release/payload`; the names are short because Windows cannot run an npm install script in a directory longer than 260 characters) | only with `--reclaim-staging` |
 
 The marker is the file `.piship-owner` (0600), one JSON record: `schema` (`piship-temporary-owner/v1`), `kind`, the directory's own `name`, the owner's `pid`, a random `instance` ID, a `host` token (a hash of the host name and, on Linux, the PID namespace), and `created`. The owner refreshes the marker's modification time every 15 minutes while it runs.
 
