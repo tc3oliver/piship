@@ -1482,30 +1482,67 @@ describe("missingControlFileInWritablePath", () => {
     files,
     directories: [],
   });
-  // What Seatbelt is: the files git follows in `.git` are guarded when missing.
+  // What Seatbelt is: it denies the path of a missing file, so the file can be
+  // neither created nor renamed into place.
   const seatbeltLike = { guardsMissingFiles: true };
 
-  it("is true only for a protected file that does not exist, in the working tree", () => {
+  it("counts a protected file that does not exist in the working tree when the isolator cannot guard it", () => {
     writeFileSync(join(workspace, ".gitconfig"), "[core]\n");
     const missing = (...files: string[]) =>
-      missingControlFileInWritablePath(
-        workspace,
-        paths(...files),
-        seatbeltLike,
-      );
+      missingControlFileInWritablePath(workspace, paths(...files));
     // An include the sandbox could create, and one that is there already.
     expect(missing(join(workspace, ".gitconfig.local"))).toBe(true);
     expect(missing(join(workspace, ".gitconfig"))).toBe(false);
     expect(
       missing(join(workspace, ".gitconfig"), join(workspace, "sub", "cfg")),
     ).toBe(true);
-    // Files git follows in the git directory are the guarded set's own
-    // business, and a file outside the workspace is not the sandbox's.
+    // A file outside the workspace is not the sandbox's.
+    expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
+    expect(missing()).toBe(false);
+  });
+
+  it("excuses, for an isolator that denies the path itself, a missing file whose directory cannot be swapped, and only that", () => {
+    writeFileSync(join(workspace, ".gitconfig"), "[core]\n");
+    const missing = (...files: string[]) =>
+      missingControlFileInWritablePath(
+        workspace,
+        paths(join(git, "config"), ...files),
+        seatbeltLike,
+      );
+    // In the workspace root (nothing can rename it from inside), and in .git
+    // (pinned: .git/config exists).
+    expect(missing(join(workspace, ".gitconfig.local"))).toBe(false);
     expect(missing(join(git, "commondir"), join(git, "config.worktree"))).toBe(
       false,
     );
-    expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
-    expect(missing()).toBe(false);
+    // In a directory that exists but holds no protected path: a command can
+    // build a directory of its own, with the file in it, and rename it over
+    // `sub`, which the rule on `sub/cfg` does not cover.
+    expect(missing(join(workspace, "sub", "cfg"))).toBe(true);
+    // In a directory that does not exist either.
+    expect(missing(join(workspace, "absent", "cfg"))).toBe(true);
+    // In a directory that holds an existing protected path, which is pinned.
+    writeFileSync(join(workspace, "sub", "held"), "");
+    expect(
+      missingControlFileInWritablePath(
+        workspace,
+        paths(join(workspace, "sub", "held"), join(workspace, "sub", "cfg")),
+        seatbeltLike,
+      ),
+    ).toBe(false);
+    // In no repository yet: .git is missing and denied whole, which covers
+    // what is below it.
+    expect(
+      missingControlFileInWritablePath(
+        workspace,
+        paths(
+          join(workspace, ".nogit"),
+          join(workspace, ".nogit", "config"),
+          join(workspace, ".nogit", "commondir"),
+        ),
+        seatbeltLike,
+      ),
+    ).toBe(false);
   });
 
   it("also counts a missing file in another path the sandbox may write, such as the home directory", () => {
@@ -1517,13 +1554,21 @@ describe("missingControlFileInWritablePath", () => {
         ...seatbeltLike,
         writable: [home],
       });
-    // A global config nobody has created, which the sandbox could create.
+    // A global config nobody has created, in a directory that does not exist
+    // either: the directory can be built elsewhere and renamed into place.
     expect(missing(join(home, ".config", "git", "config"))).toBe(true);
     expect(missing(join(home, ".gitconfig"))).toBe(false);
-    // Outside every writable path it is read-only already, and the workspace's
-    // own .git is the guarded set's business.
+    // In the home directory itself, which is a writable root.
+    expect(missing(join(home, ".gitconfig.local"))).toBe(false);
+    expect(
+      missingControlFileInWritablePath(
+        workspace,
+        paths(join(home, ".gitconfig.local")),
+        { writable: [home] },
+      ),
+    ).toBe(true);
+    // Outside every writable path it is read-only already.
     expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
-    expect(missing(join(git, "commondir"))).toBe(false);
     // Without the writable path the home directory is not the sandbox's.
     expect(
       missingControlFileInWritablePath(
@@ -1578,7 +1623,7 @@ describe("missingFilesWarning", () => {
         join(root, "home", ".gitconfig"),
       ],
       "linux-bubblewrap",
-      true,
+      "cannot",
     );
     expect(warning).toContain(
       "git control is not verified: linux-bubblewrap cannot guard a protected file that does not exist yet",
@@ -1595,11 +1640,22 @@ describe("missingFilesWarning", () => {
         workspace,
         [join(git, "commondir")],
         "acme-local",
-        false,
+        "say",
       ),
     ).toContain("acme-local does not say it can guard a protected file");
+    // An isolator that denies the path but not the directory above it.
+    const directory = missingFilesWarning(
+      workspace,
+      [join(workspace, "sub", "cfg")],
+      "macos-seatbelt",
+      "directory",
+    );
+    expect(directory).toContain(
+      "macos-seatbelt denies the path of a protected file that does not exist yet, but not the directory above it, which can be swapped (sub/cfg)",
+    );
+    expect(directory).toContain("rename its directory into place");
     expect(
-      missingFilesWarning(workspace, [], "acme-local", false),
+      missingFilesWarning(workspace, [], "acme-local", "say"),
     ).toBeUndefined();
   });
 });
@@ -1629,6 +1685,19 @@ describe("gitControlUnproven", () => {
     const missing = paths({ files: [join(workspace, ".gitconfig.local")] });
     expect(gitControlUnproven(workspace, missing, "local")).toBe(true);
     expect(gitControlUnproven(workspace, missing, "remote")).toBe(false);
+    // An isolator that denies the path itself guards it: the file is in the
+    // workspace root, which nothing can rename from inside.
+    expect(
+      gitControlUnproven(workspace, missing, "local", {
+        guardsMissingFiles: true,
+      }),
+    ).toBe(false);
+    const nested = paths({ files: [join(workspace, "sub", "cfg")] });
+    expect(
+      gitControlUnproven(workspace, nested, "local", {
+        guardsMissingFiles: true,
+      }),
+    ).toBe(true);
     // The same for a global config that does not exist in a directory the
     // sandbox may write: a remote check reaches only the workspace.
     const home = join(root, "home");
@@ -1873,6 +1942,40 @@ describe.skipIf(!nativeReady && !requireSandbox)(
         "does not exist yet",
       );
       await present.dispose();
+    });
+
+    it("reports an isolator that denies a missing path as guarding it, unless the directory above it can be swapped", async () => {
+      const activateWith = (file: string) =>
+        activateSandbox(policy(), {
+          workspace,
+          homeDir: join(root, "home"),
+          backend: fakeWrappingBackend(native, true, {
+            guardsMissingFiles: true,
+          }),
+          protectedPaths: { files: [file], directories: [] },
+        });
+      // In the workspace root: the path is denied, and nothing can rename the
+      // root. Verified, and no warning.
+      const inRoot = await activateWith(join(workspace, ".gitconfig.local"));
+      expect(inRoot.report.workspace).toMatchObject({
+        gitControlProtection: "verified",
+      });
+      expect(inRoot.report.warnings.join("\n")).not.toContain(
+        "does not exist yet",
+      );
+      await inRoot.dispose();
+      // In a directory a command can swap: the path is denied, the directory
+      // is not, and the report says so.
+      const nested = await activateWith(join(workspace, "sub", "cfg"));
+      expect(nested.report.workspace).toMatchObject({
+        gitControlProtection: "not-verified",
+      });
+      expect(nested.report.warnings).toContainEqual(
+        expect.stringContaining(
+          "acme-local denies the path of a protected file that does not exist yet, but not the directory above it, which can be swapped (sub/cfg)",
+        ),
+      );
+      await nested.dispose();
     });
 
     it("does not report it as verified while a config file git includes from the working tree does not exist", async () => {

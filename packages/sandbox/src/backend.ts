@@ -113,11 +113,14 @@ export interface SandboxCapabilities {
   /**
    * Local backends only: whether the isolator keeps a protected file that
    * does not exist yet (`.git/commondir`, `.git/config.worktree`) from being
-   * created. Omitted or false means it cannot, which is true of bubblewrap
-   * (a mount needs a path that exists): git control is then reported not
-   * verified while such a file lies where the sandbox may write, because a
-   * command could create one and redirect the next git command. PiShip does
-   * not create placeholder files in the project instead.
+   * created or renamed into place. Omitted or false means it cannot, which is
+   * true of bubblewrap (a mount needs a path that exists): git control is
+   * then reported not verified while such a file lies where the sandbox may
+   * write, because a command could create one and redirect the next git
+   * command. True (Seatbelt) still leaves a file whose directory can be
+   * swapped (neither a writable root nor holding an existing protected path)
+   * not verified, since the rule covers the path and not the directory. PiShip
+   * does not create placeholder files in the project instead.
    */
   readonly guardsMissingFiles?: boolean;
   /**

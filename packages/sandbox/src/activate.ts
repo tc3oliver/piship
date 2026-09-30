@@ -993,7 +993,11 @@ export async function activateSandbox(
         profile.workspace,
         missingControlFiles(profile.workspace, profile.writeProtect, isolator),
         backend.id,
-        capabilities.guardsMissingFiles === false,
+        capabilities.guardsMissingFiles === true
+          ? "directory"
+          : capabilities.guardsMissingFiles === false
+            ? "cannot"
+            : "say",
       );
       if (unguarded) warnings.push(unguarded);
     }
