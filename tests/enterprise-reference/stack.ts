@@ -4,10 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  keepLogs,
-  logDirectory,
-} from "../../examples/enterprise-reference/tests/support/logs.js";
+import { registerTeardown } from "../../examples/enterprise-reference/tests/support/teardown.js";
 
 // The live enterprise reference stack (examples/enterprise-reference) for
 // `npm run test:reference`. Each test file starts its own copy under its own
@@ -263,38 +260,18 @@ export function startReferenceStack({
   }
   const compose = ["compose", "-p", project, "--env-file", envFile, ...files];
 
-  let stopped = false;
-  const onSignal = (signal: NodeJS.Signals) => {
-    try {
-      stop();
-    } finally {
-      process.exit(signal === "SIGINT" ? 130 : 143);
-    }
-  };
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    process.off("exit", stop);
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    if (logDirectory()) {
-      const logs = run([...compose, "logs", "--no-color", "--timestamps"]);
-      keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
-    }
+  // The worker's exit, Ctrl-C, or termination between start and afterAll still
+  // stops the stack, and a stop that failed can be called again (see
+  // teardown.ts). A worker killed outright cannot: global-setup.ts removes
+  // that stack on the next run.
+  const stop = registerTeardown({
+    project,
+    envFile,
+    directory,
+    compose: (args) => run([...compose, ...args]),
     // No `-v`: the stack has no named volume and keeps its data on tmpfs.
-    const down = run([...compose, "down", "--remove-orphans"]);
-    rmSync(directory, { recursive: true, force: true });
-    if (down.status !== 0)
-      throw new Error(
-        `docker compose down failed for ${project}: ${down.stderr.trim()}`,
-      );
-  };
-  // A worker that exits, or is interrupted or terminated (Ctrl-C, a vitest
-  // timeout), between start and afterAll still removes the stack. A worker
-  // killed outright cannot: global-setup.ts removes that stack on the next run.
-  process.once("exit", stop);
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+    downArguments: ["down", "--remove-orphans"],
+  });
 
   const started = performance.now();
   const up = run([...compose, "up", "-d", "--wait", "--wait-timeout", "300"]);

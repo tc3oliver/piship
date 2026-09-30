@@ -41,6 +41,7 @@ import {
   readInstallReceipt,
   recoverInstallation,
   runtimeLeases,
+  uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
 import { deadPid } from "../../../tests/helpers/processes.js";
@@ -537,6 +538,108 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(repaired).toEqual(receipt);
     expect(existsSync(receipt.commandPath)).toBe(true);
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  // A first install in a child process that is killed (SIGKILL, so no
+  // cleanup runs) just before one file operation; the built core is used.
+  const INSTALL_CHILD = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const [core, artifact, operation, pattern] = process.argv.slice(2);
+const original = fs[operation];
+if (original)
+  fs[operation] = function (path, ...rest) {
+    if (typeof path === "string" && new RegExp(pattern).test(path))
+      process.kill(process.pid, "SIGKILL");
+    return original.call(this, path, ...rest);
+  };
+syncBuiltinESMExports();
+const { installDistribution } = await import(core);
+await installDistribution(artifact);
+`;
+  function installChild(operation: string, pattern: RegExp, payload: string) {
+    const script = join(temp("piship-install-child-"), "install.mjs");
+    writeFileSync(script, INSTALL_CHILD);
+    return [
+      script,
+      pathToFileURL(resolve("packages/core/dist/index.js")).href,
+      payload,
+      operation,
+      pattern.source,
+    ];
+  }
+
+  for (const [phase, operation, pattern] of [
+    [
+      "the app directory is staged",
+      "writeFileSync",
+      /\.initial-install\.json$/,
+    ],
+    ["the payload is installed", "writeFileSync", /launch\.mjs$/],
+    ["the launcher is written", "openSync", /receipts[/\\]acmepi\.json/],
+    ["the receipt is written", "writeFileSync", /bin[/\\]acmepi(\.cmd)?$/],
+    ["the shim is written", "rmSync", /\.initial-install\.json$/],
+  ] as const)
+    it(`a first install killed after ${phase} is completed by the next install`, async () => {
+      const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+      const killed = spawnSync(
+        process.execPath,
+        installChild(operation, pattern, payload),
+        { encoding: "utf8" },
+      );
+      expect(killed.status, killed.stderr).not.toBe(0);
+      expect(killed.stderr).not.toContain("Error");
+      const receipt = await installDistribution(payload);
+      expect(receipt.active).toBe("1.0.0");
+      expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+      expect(readInstallReceipt(ID)).toEqual(receipt);
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      // Nothing of the killed install is left behind, and uninstall works.
+      expect(
+        readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
+      ).toEqual(["apps", "receipts"]);
+      uninstallDistribution(ID);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+    });
+
+  it("names the directory in the way when no installation is recorded", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    mkdirSync(appsDir(), { recursive: true });
+    writeFileSync(join(appsDir(), "notes.txt"), "not PiShip's\n");
+    await expect(installDistribution(payload)).rejects.toThrow(
+      `${appsDir()} exists but no PiShip installation of ${ID} is recorded; move it aside`,
+    );
+    // Never removed: PiShip did not create it.
+    expect(readFileSync(join(appsDir(), "notes.txt"), "utf8")).toBe(
+      "not PiShip's\n",
+    );
+  });
+
+  it("lets exactly one of two concurrent first installs of a distribution win", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const run = () =>
+      new Promise<{ status: number | null; stderr: string }>((done) => {
+        const child = spawn(
+          process.execPath,
+          installChild("none", /$^/, payload),
+          { stdio: ["ignore", "ignore", "pipe"] },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("close", (status) => done({ status, stderr }));
+      });
+    const outcomes = await Promise.all([run(), run()]);
+    expect(outcomes.filter((item) => item.status === 0)).toHaveLength(1);
+    const loser = outcomes.find((item) => item.status !== 0);
+    expect(loser?.stderr).toMatch(
+      /Another (initial install of acmepi|operation owns command acmepi)|Install collision for acmepi\/acmepi; uninstall/,
+    );
+    const receipt = readInstallReceipt(ID);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    uninstallDistribution(ID);
   });
 
   it("serializes different distributions claiming the same command", async () => {
@@ -1977,6 +2080,125 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     });
     expect(existsSync(state)).toBe(false);
   });
+
+  it("refuses install, uninstall, and purge when the roots overlap, deleting nothing", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const install = process.env.PISHIP_INSTALL_HOME as string;
+    const state = process.env.PISHIP_STATE_HOME as string;
+    const bin = process.env.PISHIP_BIN_HOME as string;
+    // State inside <install-home>/apps: the payload and state of acmepi
+    // would be the same directory.
+    process.env.PISHIP_STATE_HOME = join(install, "apps");
+    await expect(installDistribution(payload)).rejects.toThrow(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(existsSync(join(install, "apps", ID))).toBe(false);
+    expect(existsSync(join(install, "receipts", `${ID}.json`))).toBe(false);
+    // Installed with separate roots, then the state home is moved over the
+    // install: uninstall refuses and keeps everything.
+    process.env.PISHIP_STATE_HOME = state;
+    const receipt = await installDistribution(payload);
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    process.env.PISHIP_STATE_HOME = join(install, "apps");
+    expect(() => uninstallDistribution(ID)).toThrow(/overlap/);
+    expect(existsSync(receipt.payload)).toBe(true);
+    process.env.PISHIP_STATE_HOME = state;
+    expect(uninstallDistribution(ID)).toBe(stateDir());
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    // A bin home inside acmepi's state holds another distribution's shim:
+    // purging acmepi refuses rather than deleting it.
+    process.env.PISHIP_BIN_HOME = join(stateDir(), "bin");
+    write(join(stateDir(), "bin", "otherpi"), "#!/bin/sh\n");
+    await expect(purgeDistributionState(ID)).rejects.toThrow(/overlap/);
+    expect(existsSync(join(stateDir(), "bin", "otherpi"))).toBe(true);
+    process.env.PISHIP_BIN_HOME = bin;
+  });
+
+  it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const state = stateDir();
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#1`,
+      }),
+    );
+    write(join(state, "sessions", "s1.jsonl"), '{"type":"message"}\n');
+    const lock = { on: true };
+    const { store, memory } = testStore(
+      (ref) => lock.on && ref.endsWith("inference#1"),
+    );
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    await memory.put("piship:other:inference#1", new SecretValue(SENTINEL));
+    // A live runtime refuses it before any secret is touched.
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      await expect(
+        uninstallAndPurgeDistribution(ID, { secretStore: store }),
+      ).rejects.toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    // A secret that cannot be deleted leaves the installed manager, the
+    // receipt, and the state in place, so the same command can be retried.
+    const before = treeHash(state);
+    const error = await rejection(
+      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(existsSync(receipt.payload)).toBe(true);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    expect(treeHash(state)).toEqual(before);
+    expect(memory.refs()).toContain(`piship:${ID}:inference#1`);
+    lock.on = false;
+    const result = await uninstallAndPurgeDistribution(ID, {
+      secretStore: store,
+    });
+    expect(result.state).toBe(state);
+    expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
+    expect(memory.refs()).toEqual(["piship:other:inference#1"]);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(existsSync(appsDir())).toBe(false);
+    expect(() => readInstallReceipt(ID)).toThrow(
+      /No PiShip installation recorded/,
+    );
+    expect(existsSync(state)).toBe(false);
+  });
+
+  it("uninstall with purge refuses a rewritten command shim before it deletes a secret", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const state = stateDir();
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#1`,
+      }),
+    );
+    const { store, memory } = testStore(() => false);
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    // Another tool rewrote the command: the uninstall refuses, and because it
+    // checks before deleting, the state still names credentials that exist.
+    const shim = readFileSync(receipt.commandPath, "utf8");
+    writeFileSync(receipt.commandPath, `${shim}\n# rewritten`);
+    await expect(
+      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+    ).rejects.toThrow(/not owned/);
+    expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
+    expect(existsSync(state)).toBe(true);
+    expect(existsSync(receipt.payload)).toBe(true);
+    writeFileSync(receipt.commandPath, shim);
+    const result = await uninstallAndPurgeDistribution(ID, {
+      secretStore: store,
+    });
+    expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
+    expect(memory.refs()).toEqual([]);
+    expect(existsSync(state)).toBe(false);
+  });
 });
 
 describe.runIf(HOST_EVIDENCED)("uninstall after an interrupted update", () => {
@@ -2153,6 +2375,133 @@ describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
         resolvePromise();
       }
     });
+
+  // A release whose command is a long-running session: it reports that it
+  // started, waits for a signal, then reads a packaged resource of its own
+  // release on demand, as Pi reads a skill file, and exits.
+  const SESSION = `#!/usr/bin/env node
+const { existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const dir = process.env.ACMEPI_SESSION;
+const root = join(__dirname, "..");
+writeFileSync(join(dir, "ready"), "");
+const lock = JSON.parse(readFileSync(join(root, "piship.lock"), "utf8"));
+const wait = () => {
+  if (!existsSync(join(dir, "go"))) return setTimeout(wait, 20);
+  writeFileSync(join(dir, "read"), readFileSync(join(root, "resources", lock.resources[0].path), "utf8"));
+};
+wait();
+`;
+  const sessionAssemble = (manifest: string, outputRoot: string) => {
+    const out = fakeAssemble(manifest, outputRoot);
+    const lock = JSON.parse(readFileSync(join(out, "piship.lock"), "utf8")) as {
+      app: { command: string };
+    };
+    writeFileSync(join(out, "bin", lock.app.command), SESSION);
+    const inventory = join(out, "metadata", "inventory.json");
+    rmSync(inventory);
+    writeFileSync(
+      inventory,
+      `${JSON.stringify(payloadInventory(out), null, 2)}\n`,
+    );
+    return out;
+  };
+  const sessionRelease = (version: string, rollback = true) =>
+    buildRelease(project(version, rollback), {
+      outputRoot: temp("piship-session-dist-"),
+      assemble: sessionAssemble,
+      runTest: fakeRun,
+      scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+      signatureAuditor,
+    });
+  const startSession = async (launcher: string) => {
+    const dir = temp("piship-session-");
+    const child = spawn(process.execPath, [launcher], {
+      env: { ...process.env, ACMEPI_SESSION: dir },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const exited = new Promise<number | null>((done) =>
+      child.once("exit", done),
+    );
+    await Promise.race([
+      waitForFile(join(dir, "ready")),
+      exited.then(() => {
+        throw new Error(`The session exited early: ${stderr}`);
+      }),
+    ]);
+    return {
+      child,
+      /** Ask the session for its resource and wait for it to exit. */
+      async finish(): Promise<string> {
+        writeFileSync(join(dir, "go"), "");
+        expect(await exited, stderr).toBe(0);
+        return readFileSync(join(dir, "read"), "utf8");
+      },
+    };
+  };
+  const releaseDirs = () => apps().filter((name) => /^\d/.test(name));
+
+  it("keeps a running session's release through two updates, then reclaims it after the session exits", async () => {
+    const [v1, v2, v3] = [
+      await sessionRelease("1.0.0"),
+      await sessionRelease("1.1.0"),
+      await sessionRelease("1.2.0"),
+    ];
+    const channel = temp("piship-channel-");
+    const options: UpdateOptions = { source: channel, runCheck: fakeRun };
+    const receipt = await installDistribution(v1.archive);
+    const session = await startSession(receipt.launcher as string);
+    try {
+      await sign(channel, [v2.archive]);
+      await updateDistribution(ID, options);
+      await sign(channel, [v3.archive]);
+      await updateDistribution(ID, options);
+      const current = readInstallReceipt(ID);
+      expect(current.active).toBe("1.2.0");
+      expect(current.releases.map((item) => item.version)).not.toContain(
+        "1.0.0",
+      );
+      // The receipt no longer names 1.0.0, but its session still runs it.
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0", "1.2.0"]);
+      recoverInstallation(ID);
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0", "1.2.0"]);
+      expect(() => uninstallDistribution(ID)).toThrow(
+        /while 1 runtime session\(s\) still use its payload/,
+      );
+      expect(await session.finish()).toBe("# AcmePi 1.0.0\n");
+    } finally {
+      session.child.kill();
+    }
+    recoverInstallation(ID);
+    expect(releaseDirs()).toEqual(["1.1.0", "1.2.0"]);
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
+  }, 60_000);
+
+  it("keeps a running session's release through an update that disables rollback", async () => {
+    const v1 = await sessionRelease("1.0.0");
+    const v2 = await sessionRelease("1.1.0", false);
+    const channel = temp("piship-channel-");
+    const receipt = await installDistribution(v1.archive);
+    const session = await startSession(receipt.launcher as string);
+    try {
+      await sign(channel, [v2.archive]);
+      await updateDistribution(ID, { source: channel, runCheck: fakeRun });
+      expect(
+        readInstallReceipt(ID).releases.map((item) => item.version),
+      ).toEqual(["1.1.0"]);
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0"]);
+      expect(await session.finish()).toBe("# AcmePi 1.0.0\n");
+    } finally {
+      session.child.kill();
+    }
+    recoverInstallation(ID);
+    expect(releaseDirs()).toEqual(["1.1.0"]);
+  }, 60_000);
 
   it("holds launcher registration against uninstall through core import", async () => {
     const { a } = await fixture();

@@ -40,7 +40,7 @@ describe("sightings", () => {
     expect(found).toEqual([
       {
         where: "text",
-        secret: "fake-sec…",
+        secret: "secret #1",
         form: "plain",
         // What carried it, with the secret itself masked.
         context: "token=<secret>;",

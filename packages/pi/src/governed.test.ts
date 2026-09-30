@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -6,11 +8,12 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
 import { dirname, join, parse } from "node:path";
 import {
   type ExtensionContext,
@@ -22,7 +25,7 @@ import { LocalMetrics } from "@piship/audit";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askUserExtension,
   DEFAULT_PLAN_PROMPT,
@@ -30,7 +33,13 @@ import {
   workflowExtension,
 } from "./builtins.js";
 import { GovernanceSession, inspectGovernance } from "./governance-session.js";
-import { governedTools, pathClass } from "./governed-tools.js";
+import {
+  GOVERNED_READ_LIMIT_BYTES,
+  governedBashOperations,
+  governedTools,
+  pathClass,
+  SHELL_OUTPUT_LIMIT_BYTES,
+} from "./governed-tools.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -591,6 +600,256 @@ describe("governed built-in tools", () => {
     expect(await call?.({ toolName: "bash", input: {} }, context())).toEqual(
       expect.objectContaining({ block: true }),
     );
+  });
+});
+
+// On APFS and ext4 a truncated-up file is sparse and allocates nothing. NTFS
+// does not make it sparse, so Windows uses a file just over the limit.
+const HUGE =
+  process.platform === "win32"
+    ? GOVERNED_READ_LIMIT_BYTES + 1
+    : 20 * 1024 * 1024 * 1024;
+
+/** A file of `size` bytes that starts with `head`, extended without writing. */
+function sparse(path: string, size: number, head = "") {
+  writeFileSync(path, head);
+  truncateSync(path, size);
+}
+
+describe("governed read resource bounds", () => {
+  it("reads a normal small file unchanged", async () => {
+    const { session, workspace } = await open();
+    writeFileSync(join(workspace, "lines.txt"), "one\ntwo\nthree\n");
+    const read = tool(governedTools(session, workspace), "read");
+    expect(text(await run(read, { path: "lines.txt" }))).toBe(
+      "one\ntwo\nthree\n",
+    );
+    expect(
+      text(await run(read, { path: "lines.txt", offset: 2, limit: 1 })),
+    ).toBe("two\n\n[2 more lines in file. Use offset=3 to continue.]");
+  });
+
+  it("refuses a huge single-line file before loading it, with a bash alternative", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "huge.log"), HUGE);
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "huge.log" })).rejects.toThrow(
+      /huge\.log is .+, over the 16\.0MB limit of the governed read tool\. Use bash .*sed -n/,
+    );
+  });
+
+  it("refuses a file just over the limit", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "over.log"), GOVERNED_READ_LIMIT_BYTES + 1);
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "over.log" })).rejects.toThrow(
+      /over the 16\.0MB limit/,
+    );
+  });
+
+  it("refuses an offset read of a huge many-line file", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "many.log"), HUGE, "line\n".repeat(10_000));
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(
+      run(read, { path: "many.log", offset: 5_000, limit: 10 }),
+    ).rejects.toThrow(/over the 16\.0MB limit of the governed read tool/);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a FIFO at once instead of waiting for a writer",
+    async () => {
+      const { session, workspace } = await open();
+      const fifo = join(workspace, "planted.fifo");
+      const made = spawnSync("mkfifo", [fifo]);
+      expect(made.status).toBe(0);
+      const tools = governedTools(session, workspace);
+      await expect(
+        run(tool(tools, "read"), { path: "planted.fifo" }),
+      ).rejects.toThrow(/planted\.fifo is a named pipe, not a file/);
+      await expect(
+        run(tool(tools, "edit"), {
+          path: "planted.fifo",
+          edits: [{ oldText: "a", newText: "b" }],
+        }),
+      ).rejects.toThrow();
+      await expect(
+        run(tool(tools, "write"), { path: "planted.fifo", content: "x" }),
+      ).rejects.toThrow();
+    },
+    20_000,
+  );
+
+  it("refuses a huge image before loading it", async () => {
+    const { session, workspace } = await open();
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48,
+      0x44, 0x52,
+    ]);
+    sparse(join(workspace, "huge.png"), HUGE, png.toString("latin1"));
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "huge.png" })).rejects.toThrow(
+      /over the 16\.0MB limit/,
+    );
+  });
+
+  it("bounds the edit tool's read of a huge file", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "huge.txt"), HUGE, "needle\n");
+    const edit = tool(governedTools(session, workspace), "edit");
+    await expect(
+      run(
+        edit,
+        {
+          path: "huge.txt",
+          edits: [{ oldText: "needle", newText: "thread" }],
+        },
+        context(true),
+      ),
+    ).rejects.toThrow(/over the 16\.0MB limit of the governed edit tool/);
+  });
+
+  // The bound is on the bytes read from the opened handle, not on a size
+  // looked up first: /dev/zero reports size 0 and never ends, like a file
+  // that keeps growing while it is read.
+  it.skipIf(process.platform === "win32")(
+    "bounds a file that grows while it is read",
+    async () => {
+      const { session, workspace } = await open([], {
+        userRules: [
+          {
+            id: "me.zero",
+            action: "filesystem.read",
+            resource: "/dev/zero",
+            effect: "allow",
+          },
+        ],
+      });
+      const read = tool(governedTools(session, workspace), "read");
+      await expect(run(read, { path: "/dev/zero" })).rejects.toThrow(
+        /over the 16\.0MB limit of the governed read tool/,
+      );
+    },
+  );
+});
+
+describe("governed shell output bounds", () => {
+  const node = process.execPath.replaceAll("\\", "/");
+  // Writes its pid, then 64 KiB chunks forever. The trailing `echo` keeps the
+  // shell from exec'ing node, so node is a grandchild of the spawned shell.
+  const runaway = `"${node}" -e "require('fs').writeFileSync('runaway.pid', String(process.pid)); const b = Buffer.alloc(65536, 120); const w = () => process.stdout.write(b, w); w()"; echo after`;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const allowShell = {
+    userRules: [{ id: "me.shell", action: "shell.execute", effect: "allow" }],
+  };
+
+  it("stops a runaway command at the output limit, reports the cap, bounds the full-output file, and kills the process tree", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const bash = tool(governedTools(session, workspace), "bash");
+    // The timeout only stops the command if the output bound does not.
+    const message = await run(bash, { command: runaway, timeout: 30 }).then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    expect(message).toContain(
+      "[output exceeded the 64 MiB shell output limit; PiShip stopped the command.",
+    );
+    expect(message).not.toContain("after");
+    const fullOutput = /Full output: (\S+?)\]/.exec(message)?.[1];
+    expect(fullOutput).toBeDefined();
+    try {
+      expect(statSync(fullOutput as string).size).toBeLessThanOrEqual(
+        SHELL_OUTPUT_LIMIT_BYTES + 1024,
+      );
+    } finally {
+      rmSync(fullOutput as string, { force: true });
+    }
+    const pid = Number(readFileSync(join(workspace, "runaway.pid"), "utf8"));
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 10_000,
+    });
+  }, 60_000);
+
+  it("stops a runaway sandboxed command through the same bound", async () => {
+    let chunks = 0;
+    let aborted = false;
+    const gov = {
+      workflowMode: "build",
+      currentChannel: () => undefined,
+      decide: async () => ({ outcome: "allow" }),
+      sandbox: {
+        report: { level: "enforced" },
+        exec: async (
+          _command: string,
+          _cwd: string,
+          io: { onData: (data: Buffer) => void; signal?: AbortSignal },
+        ) => {
+          const chunk = Buffer.alloc(1024 * 1024, 120);
+          while (!io.signal?.aborted) {
+            io.onData(chunk);
+            chunks += 1;
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          aborted = true;
+          throw new Error("aborted");
+        },
+      },
+    } as unknown as GovernanceSession;
+    let received = 0;
+    let last = "";
+    const result = await governedBashOperations(gov, "user-bash").exec(
+      "yes",
+      tmpdir(),
+      {
+        onData: (data) => {
+          received += data.length;
+          last = data.toString("utf8");
+        },
+      },
+    );
+    expect(aborted).toBe(true);
+    expect(chunks).toBeLessThanOrEqual(65);
+    expect(result).toEqual({ exitCode: null });
+    expect(last).toContain("64 MiB shell output limit");
+    expect(received).toBeLessThanOrEqual(SHELL_OUTPUT_LIMIT_BYTES + 1024);
+  });
+
+  it("keeps normal output truncation unchanged below the limit", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const bash = tool(governedTools(session, workspace), "bash");
+    const result = await run(bash, {
+      command: `"${node}" -e "for (let i = 1; i <= 3000; i++) console.log('line ' + i)"`,
+    });
+    const output = text(result);
+    expect(output).toContain("line 3000");
+    expect(output).toMatch(/\[Showing lines 1001-3000 of 3000\. Full output: /);
+    expect(output).not.toContain("shell output limit");
+    const fullOutput = (result.details as { fullOutputPath?: string })
+      .fullOutputPath;
+    if (fullOutput) rmSync(fullOutput, { force: true });
+  });
+
+  it("still reports a caller's abort as an abort", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const operations = governedBashOperations(session, "user-bash");
+    const controller = new AbortController();
+    const running = operations.exec(
+      `"${node}" -e "setTimeout(() => {}, 60000)"`,
+      workspace,
+      {
+        onData: () => {},
+        signal: controller.signal,
+      },
+    );
+    setTimeout(() => controller.abort(), 200);
+    await expect(running).rejects.toThrow(/aborted/);
   });
 });
 

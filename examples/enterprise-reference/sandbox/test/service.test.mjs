@@ -1486,18 +1486,19 @@ describe("what it logs", () => {
       const logs = service.logs();
       assert.match(logs, /"event":"sandbox.create"/);
       assert.match(logs, /"event":"sandbox.exec"/);
-      for (const secret of [
+      // A failure names the value by its position, never by any part of it.
+      for (const [index, secret] of [
         ...Object.values(service.keys),
         marker,
         envMarker,
         "wrong-credential-marker-0001",
         service.root,
         workspace,
-      ])
+      ].entries())
         assert.equal(
           logs.includes(secret),
           false,
-          `the log holds ${secret.slice(0, 12)}`,
+          `the log holds protected value #${index + 1}`,
         );
       for (const line of logs.split("\n").filter(Boolean)) JSON.parse(line);
     } finally {

@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type ActivationContext,
   activateSandbox,
@@ -53,6 +53,7 @@ import {
   missingControlFiles,
   missingFilesWarning,
   removeSentinelDirectory,
+  verifyWorkspace,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
 } from "./workspace.js";
@@ -1394,19 +1395,96 @@ describe.skipIf(!posix)("the sentinel location", () => {
   });
 });
 
+describe.skipIf(!posix)("the propagation window", () => {
+  /**
+   * A remote whose check writes its sandbox-to-host token into the host
+   * workspace after `delayMs`, or never; the wall clock jumps by `jumpMs`
+   * 100 ms into the wait.
+   */
+  const verifyWithJump = async (jumpMs: number, delayMs?: number) => {
+    const wall = Date.now;
+    const started = performance.now();
+    const spy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(
+        () => wall() + (performance.now() - started > 100 ? jumpMs : 0),
+      );
+    try {
+      const { report } = await verifyWorkspace(
+        async (command, onData) => {
+          const dir = /d='\.\/([^']+)'/.exec(command)?.[1];
+          const token = /printf '%s' '([0-9a-f]+)'/.exec(command)?.[1];
+          if (dir && token && delayMs !== undefined)
+            setTimeout(
+              () =>
+                writeFileSync(join(workspace, ...dir.split("/"), "s2h"), token),
+              delayMs,
+            );
+          onData(
+            Buffer.from(
+              "piship-ws h2s 0\npiship-ws s2h written\npiship-ws done\n",
+            ),
+          );
+          return 0;
+        },
+        {
+          workspace,
+          origin: "unknown",
+          declaration: { mode: "synchronized", propagationMs: 1000 },
+          protectedPaths: { files: [], directories: [] },
+        },
+      );
+      return { report, elapsed: performance.now() - started };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it.each([
+    ["backward", -3600_000],
+    ["forward", 3600_000],
+  ])(
+    "waits exactly the declared window when the wall clock jumps %s",
+    async (_direction, jumpMs) => {
+      const { report, elapsed } = await verifyWithJump(jumpMs);
+      expect(report.sandboxToHost).toBe("missing");
+      // Not cut short by a forward jump. The upper bound only has to catch a
+      // wait that a backward jump stretched by the hour: generous, so a
+      // loaded CI runner does not fail it.
+      expect(elapsed).toBeGreaterThanOrEqual(950);
+      expect(elapsed).toBeLessThan(15_000);
+    },
+    30_000,
+  );
+
+  it.each([
+    ["backward", -3600_000],
+    ["forward", 3600_000],
+  ])(
+    "sees a delayed change within the window when the wall clock jumps %s",
+    async (_direction, jumpMs) => {
+      const { report } = await verifyWithJump(jumpMs, 300);
+      expect(report.sandboxToHost).toBe("delayed");
+    },
+  );
+});
+
 describe.skipIf(!posix)("the validity window", () => {
   it("checks again before the next command after 30 minutes or a new environment", async () => {
-    let now = TIME;
+    let monotonic = 1000;
     let epoch = "pod-1";
     const fake = sharedBackend({ epoch: () => epoch });
-    const sandbox = await activate(fake, { now: () => now });
+    const sandbox = await activate(fake, {
+      now: () => TIME,
+      monotonic: () => monotonic,
+    });
     await run(sandbox, "one");
     await run(sandbox, "two");
     expect(checks(fake)).toHaveLength(1);
-    now += WORKSPACE_VALIDITY_MS - 1;
+    monotonic += WORKSPACE_VALIDITY_MS - 1;
     await run(sandbox, "three");
     expect(checks(fake)).toHaveLength(1);
-    now += 1;
+    monotonic += 1;
     await run(sandbox, "four");
     expect(checks(fake)).toHaveLength(2);
     epoch = "pod-2";
@@ -1428,9 +1506,68 @@ describe.skipIf(!posix)("the validity window", () => {
       "check",
       "five",
     ]);
-    expect(sandbox.workspace()?.verifiedAt).toBe(
-      new Date(now).toISOString().replace(".000Z", "Z"),
-    );
+    expect(sandbox.workspace()?.verifiedAt).toBe("2026-09-29T12:00:00Z");
+    await sandbox.dispose();
+  });
+
+  it("re-verifies after 30 monotonic minutes when the wall clock moved backward", async () => {
+    let now = TIME;
+    let monotonic = 1000;
+    const fake = sharedBackend();
+    const sandbox = await activate(fake, {
+      now: () => now,
+      monotonic: () => monotonic,
+    });
+    await run(sandbox, "one");
+    expect(checks(fake)).toHaveLength(1);
+    // The clock is set back a day: the result still expires on time.
+    now -= 24 * 3600_000;
+    monotonic += WORKSPACE_VALIDITY_MS - 1;
+    await run(sandbox, "two");
+    expect(checks(fake)).toHaveLength(1);
+    monotonic += 1;
+    await run(sandbox, "three");
+    expect(checks(fake)).toHaveLength(2);
+    // verifiedAt is still the wall clock, for diagnostics.
+    expect(sandbox.workspace()?.verifiedAt).toBe("2026-09-28T12:00:00Z");
+    await sandbox.dispose();
+  });
+
+  it("re-verifies after a suspend: the wall clock counts when the monotonic one stopped", async () => {
+    let now = TIME;
+    let monotonic = 1000;
+    const fake = sharedBackend();
+    const sandbox = await activate(fake, {
+      now: () => now,
+      monotonic: () => monotonic,
+    });
+    await run(sandbox, "one");
+    // Asleep for 45 minutes: the monotonic clock advanced 5.
+    now += 45 * 60_000;
+    monotonic += 5 * 60_000;
+    await run(sandbox, "two");
+    expect(checks(fake)).toHaveLength(2);
+    expect(sandbox.workspace()?.verifiedAt).toBe("2026-09-29T12:45:00Z");
+    await sandbox.dispose();
+  });
+
+  it("counts a forward wall-clock jump as elapsed time, like a suspend", async () => {
+    let now = TIME;
+    let monotonic = 1000;
+    const fake = sharedBackend();
+    const sandbox = await activate(fake, {
+      now: () => now,
+      monotonic: () => monotonic,
+    });
+    await run(sandbox, "one");
+    now += WORKSPACE_VALIDITY_MS - 1;
+    monotonic += 1;
+    await run(sandbox, "two");
+    expect(checks(fake)).toHaveLength(1);
+    // Indistinguishable from a suspend: the check runs again early.
+    now += 1;
+    await run(sandbox, "three");
+    expect(checks(fake)).toHaveLength(2);
     await sandbox.dispose();
   });
 

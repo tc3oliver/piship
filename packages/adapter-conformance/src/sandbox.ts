@@ -255,8 +255,46 @@ function listing(path: string): string {
 // the whole process, so concurrent kit runs never restore each other's. A
 // line that holds a watched credential is counted and passed on with the
 // credential removed, so the kit's own sentinel never reaches a terminal.
+// A stream write may hold only part of a credential, so each stream keeps
+// back a tail shorter than the longest credential until the next write (or
+// until the watch ends) and looks for credentials across the two.
 const logWatchers = new Map<string, () => void>();
 let restoreLogs: (() => void) | undefined;
+const REDACTED = Buffer.from("[redacted]");
+
+/**
+ * The bytes of `pending` and `chunk` that can be passed on, with every
+ * watched credential that starts in them removed, and the tail to keep.
+ * At the end of the watch (`final`) nothing is kept.
+ */
+function scrubStream(
+  bytes: Buffer,
+  final: boolean,
+): { output: Buffer; tail: Buffer } {
+  const secrets = [...logWatchers].map(
+    ([secret, onLeak]) => [Buffer.from(secret), onLeak] as const,
+  );
+  const longest = Math.max(0, ...secrets.map(([secret]) => secret.length));
+  // A credential that starts at or after `limit` may still be incomplete.
+  const limit = final ? bytes.length : bytes.length - (longest - 1);
+  const parts: Buffer[] = [];
+  let from = 0;
+  for (;;) {
+    let found: { at: number; secret: Buffer; onLeak: () => void } | undefined;
+    for (const [secret, onLeak] of secrets) {
+      const at = bytes.indexOf(secret, from);
+      if (at !== -1 && at < limit && (!found || at < found.at))
+        found = { at, secret, onLeak };
+    }
+    if (!found) break;
+    found.onLeak();
+    parts.push(bytes.subarray(from, found.at), REDACTED);
+    from = found.at + found.secret.length;
+  }
+  const cut = Math.max(from, limit);
+  parts.push(bytes.subarray(from, cut));
+  return { output: Buffer.concat(parts), tail: bytes.subarray(cut) };
+}
 
 /** The line with every watched credential removed, or undefined when it holds none. */
 function scrubLogged(text: string): string | undefined {
@@ -286,13 +324,29 @@ function watchLogs(secret: string, onLeak: () => void): () => void {
     });
     const streams = [process.stdout, process.stderr];
     const writes = streams.map((stream) => stream.write);
+    const tails = streams.map(() => Buffer.alloc(0));
     streams.forEach((stream, index) => {
       const previous = writes[index] as (...args: unknown[]) => boolean;
       stream.write = ((chunk: unknown, ...rest: unknown[]) => {
-        const scrubbed = scrubLogged(
-          typeof chunk === "string" ? chunk : String(chunk),
+        const encoding = typeof rest[0] === "string" ? rest[0] : undefined;
+        const done = rest.find((arg) => typeof arg === "function") as
+          | ((error?: Error | null) => void)
+          | undefined;
+        let bytes: Buffer;
+        if (typeof chunk === "string")
+          bytes = Buffer.from(chunk, encoding as BufferEncoding | undefined);
+        else if (chunk instanceof Uint8Array)
+          bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.length);
+        // Not something a stream writes: the stream reports the error.
+        else return previous.call(stream, chunk, ...rest);
+        const { output, tail } = scrubStream(
+          Buffer.concat([tails[index] as Buffer, bytes]),
+          false,
         );
-        return previous.call(stream, scrubbed ?? chunk, ...rest);
+        tails[index] = Buffer.from(tail);
+        if (output.length > 0) return previous.call(stream, output, done);
+        if (done) process.nextTick(done);
+        return true;
       }) as typeof stream.write;
     });
     restoreLogs = () => {
@@ -301,46 +355,50 @@ function watchLogs(secret: string, onLeak: () => void): () => void {
       });
       streams.forEach((stream, index) => {
         stream.write = writes[index] as typeof stream.write;
+        const { output } = scrubStream(tails[index] as Buffer, true);
+        tails[index] = Buffer.alloc(0);
+        if (output.length > 0) stream.write(output);
       });
     };
   }
   return () => {
-    logWatchers.delete(secret);
-    if (logWatchers.size === 0) {
+    // The last watch flushes the kept tails while its credential is still watched.
+    if (logWatchers.size === 1 && logWatchers.has(secret)) {
       restoreLogs?.();
       restoreLogs = undefined;
     }
+    logWatchers.delete(secret);
   };
 }
 
 // The launcher environment the kit plants while environment filtering runs.
-// Reference-counted, so concurrent kit runs do not remove each other's.
-const planted = new Map<string, { count: number; previous?: string }>();
+// process.env holds one value per name, so concurrent kit runs take turns:
+// each run's command starts under its own planted values, and a check never
+// looks for one run's value while the environment holds another's.
+let planting: Promise<void> = Promise.resolve();
 
-function plant(variables: Record<string, string>): () => void {
-  for (const [name, value] of Object.entries(variables)) {
-    const entry = planted.get(name);
-    if (entry) entry.count++;
-    else
-      planted.set(name, {
-        count: 1,
-        ...(process.env[name] !== undefined
-          ? { previous: process.env[name] }
-          : {}),
-      });
-    process.env[name] = value;
+async function withPlanted<T>(
+  variables: Record<string, string>,
+  body: () => Promise<T>,
+): Promise<T> {
+  const turn = planting;
+  let done = () => {};
+  planting = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  await turn;
+  const previous = Object.keys(variables).map(
+    (name) => [name, process.env[name]] as const,
+  );
+  Object.assign(process.env, variables);
+  try {
+    return await body();
+  } finally {
+    for (const [name, value] of previous)
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    done();
   }
-  return () => {
-    for (const name of Object.keys(variables)) {
-      const entry = planted.get(name);
-      if (!entry) continue;
-      entry.count--;
-      if (entry.count > 0) continue;
-      planted.delete(name);
-      if (entry.previous === undefined) delete process.env[name];
-      else process.env[name] = entry.previous;
-    }
-  };
 }
 
 // ------------------------------------------------------------ declaration
@@ -1144,9 +1202,11 @@ class Harness {
         };
         if (read()) sandboxToHost = "immediate";
         else {
-          const deadline = Date.now() + windowMs;
-          while (Date.now() < deadline) {
-            await sleep(Math.min(POLL_MS, deadline - Date.now()));
+          // Elapsed time, not the wall clock: a clock set back must not
+          // stretch the window (#80).
+          const deadline = performance.now() + windowMs;
+          while (performance.now() < deadline) {
+            await sleep(Math.min(POLL_MS, deadline - performance.now()));
             if (read()) {
               sandboxToHost = "delayed";
               break;
@@ -1361,12 +1421,12 @@ const checks: Record<SandboxBehavior, Check> = {
   async "environment filtering"(h) {
     await h.capabilities();
     const approved = `conformance-approved-${h.run}`;
-    const unplant = plant({
+    const planted = {
       [ENV.hostToken]: h.hostToken,
       [ENV.hostOnly]: h.hostOnly,
       [ENV.approved]: h.hostApproved,
-    });
-    try {
+    };
+    await withPlanted(planted, async () => {
       const instance = await h.prepare();
       const out = await h.ok(
         instance,
@@ -1398,9 +1458,7 @@ const checks: Record<SandboxBehavior, Check> = {
         out.includes(`piship-env approved ${approved}`),
         "an allowlisted variable did not arrive with its approved value",
       );
-    } finally {
-      unplant();
-    }
+    });
     return undefined;
   },
 

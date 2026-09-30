@@ -2,7 +2,6 @@
 // resources. The lease names a process instance, so a reused PID does not
 // make a crashed session look live.
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -16,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { installHome } from "../index.js";
+import { processIdentity } from "../process-identity.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { appDirectory, syncDirectory, VERSION_NAME } from "./receipt.js";
 
@@ -28,41 +28,6 @@ interface Lease {
   readonly identity: string | null;
   readonly instance: string;
   readonly version: string;
-}
-
-function processIdentity(pid: number): string | undefined {
-  if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
-  try {
-    if (process.platform === "linux") {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      const boot = readFileSync(
-        "/proc/sys/kernel/random/boot_id",
-        "utf8",
-      ).trim();
-      return fields[19] ? `${boot}:${fields[19]}` : undefined;
-    }
-    if (process.platform === "win32") {
-      const value = execFileSync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
-        ],
-        { encoding: "utf8", timeout: 5000, windowsHide: true },
-      ).trim();
-      return /^\d+$/.test(value) ? value : undefined;
-    }
-    const value = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
-      encoding: "utf8",
-      timeout: 5000,
-    }).trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function leaseRoot(id: string): string {

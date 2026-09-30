@@ -154,8 +154,13 @@ export interface ActivationContext {
    * the workspace check only in a `company` project. Default `unknown`.
    */
   readonly projectOrigin?: "company" | "external" | "unknown";
-  /** Wall clock for the workspace check's validity window (tests). */
+  /** Wall clock for the workspace check's `verifiedAt` (tests). */
   readonly now?: () => number;
+  /**
+   * Monotonic clock for the workspace check's propagation wait and, with the
+   * wall clock, its validity window (tests). Default `performance.now`.
+   */
+  readonly monotonic?: () => number;
 }
 
 /** Structurally compatible with Pi's `BashOperations.exec` options. */
@@ -393,6 +398,7 @@ interface Session {
   readonly declaration?: SandboxWorkspaceDeclaration;
   readonly projectOrigin: "company" | "external" | "unknown";
   readonly now: () => number;
+  readonly monotonic: () => number;
   /** Added to the workspace window to bound the workspace check command. */
   readonly checkTimeoutMs: number;
 }
@@ -507,7 +513,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     declaration.mode !== "snapshot";
   let workspace = report.workspace;
   const listeners: ((report: WorkspaceReport) => void)[] = [];
-  let checkedAt: number | undefined;
+  let checkedAt: { monotonic: number; wall: number } | undefined;
   let checkedEpoch: string | undefined;
   let unsafe: PiShipError | undefined;
   let verifying: Promise<boolean> | undefined;
@@ -522,7 +528,12 @@ function createActiveSandbox(session: Session): ActiveSandbox {
   const due = () =>
     verifies &&
     (checkedAt === undefined ||
-      session.now() - checkedAt >= WORKSPACE_VALIDITY_MS ||
+      // Elapsed on whichever clock advanced more: the monotonic clock stops
+      // while the machine sleeps, and the wall clock can be set back.
+      Math.max(
+        session.monotonic() - checkedAt.monotonic,
+        session.now() - checkedAt.wall,
+      ) >= WORKSPACE_VALIDITY_MS ||
       epoch() !== checkedEpoch);
   /** One verification; false when the caller's signal cancelled it. */
   const verifyOnce = async (signal?: AbortSignal): Promise<boolean> => {
@@ -556,6 +567,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
         declaration,
         protectedPaths: profile.writeProtect,
         now: session.now,
+        monotonic: session.monotonic,
       },
     ).catch(() => ({
       // Anything unexpected on the host side proves nothing: fail closed.
@@ -573,7 +585,7 @@ function createActiveSandbox(session: Session): ActiveSandbox {
       retire();
     }
     workspace = outcome.report;
-    checkedAt = session.now();
+    checkedAt = { monotonic: session.monotonic(), wall: session.now() };
     checkedEpoch = epoch();
     for (const listener of listeners)
       try {
@@ -969,6 +981,7 @@ export async function activateSandbox(
       settleMs,
       projectOrigin: ctx.projectOrigin ?? ("unknown" as const),
       now: ctx.now ?? Date.now,
+      monotonic: ctx.monotonic ?? (() => performance.now()),
       checkTimeoutMs: ctx.probeTimeoutMs ?? 30_000,
     };
     const fail = async (reason: string) => {

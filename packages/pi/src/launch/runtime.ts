@@ -5,7 +5,7 @@ import {
   createAgentSession,
   createAgentSessionRuntime,
   DefaultResourceLoader,
-  SessionManager,
+  type SessionManager,
   SettingsManager,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
@@ -30,6 +30,11 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
+import {
+  openSession,
+  resumeRefusal,
+  type SessionOwnership,
+} from "./session-file.js";
 
 function verifyBuiltResources(ctx: LaunchContext): void {
   const resourceDir = join(ctx.distributionDir, "resources");
@@ -74,11 +79,47 @@ export function publishContext(context: EnterpriseContext | null): void {
   else delete holder[ENTERPRISE_CONTEXT_SYMBOL];
 }
 
+/**
+ * Keeps the owner record on the session file the runtime writes, and refuses
+ * a `/resume` of a session another live process owns.
+ */
+function sessionOwnerExtension(
+  ownership: SessionOwnership,
+  command: string,
+): InlineExtension {
+  return {
+    name: "piship-session-owner",
+    factory: (pi) => {
+      pi.on("session_before_switch", (event, extension) => {
+        if (event.reason !== "resume" || !event.targetSessionFile)
+          return undefined;
+        const refusal = resumeRefusal(
+          ownership,
+          event.targetSessionFile,
+          command,
+        );
+        if (!refusal) return undefined;
+        extension.ui.notify(refusal, "warning");
+        return { cancel: true };
+      });
+    },
+  };
+}
+
+export interface SessionOptions {
+  readonly sessionDir: string;
+  /** Start a new session instead of resuming the most recent one. */
+  readonly newSession: boolean;
+  /** A session that holds no user work: a damaged one is replaced, not refused. */
+  readonly disposable?: boolean;
+}
+
 async function startRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
-  sessionDir: string,
-  gov: GovernanceSession | null = null,
+  sessionManager: SessionManager,
+  gov: GovernanceSession | null,
+  ownership: SessionOwnership,
 ) {
   verifyBuiltResources(ctx);
   const instructions = gov
@@ -135,10 +176,27 @@ async function startRuntime(
       });
     },
   };
+  const ownerExtension = sessionOwnerExtension(
+    ownership,
+    ctx.metadata.app.command,
+  );
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({
     cwd,
     sessionManager,
   }) => {
+    // A `/new`, `/resume`, or fork moves the owner record to the new file.
+    const sessionFile = sessionManager.getSessionFile();
+    // `session_before_switch` already refused a session another process owns;
+    // losing the race after that must not leave two writers on one file.
+    if (sessionFile && !ownership.claim(sessionFile))
+      throw new PiShipError(
+        "CONFIG_UNAVAILABLE",
+        `Another ${ctx.metadata.app.command} process opened the session ${sessionFile} first, so it is not used here.`,
+        {
+          userAction: `Start ${ctx.metadata.app.command} again to continue, or run it with --new-session.`,
+          component: "session",
+        },
+      );
     const settingsManager = SettingsManager.inMemory();
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,
@@ -164,6 +222,7 @@ async function startRuntime(
         ? gov.loader.themes
         : resourcePaths(ctx, "themes"),
       extensionFactories: [
+        ownerExtension,
         ...(ctx.metadata.access ? [governanceExtension] : []),
         ...builtinExtensions,
         // Last, so the message Pi persists is the redacted one.
@@ -254,20 +313,41 @@ async function startRuntime(
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: process.cwd(),
     agentDir: ctx.agentDir,
-    sessionManager: SessionManager.continueRecent(process.cwd(), sessionDir),
+    sessionManager,
   });
   return { runtime, theme, context, governed: () => governedRef };
 }
 
+/**
+ * Starts the Pi runtime on the session `openSession` chose. The returned
+ * ownership is released when the session ends (or, at the latest, when the
+ * process exits).
+ */
 export async function startGoverned(
   ctx: LaunchContext,
   prepared: PreparedAccess,
-  sessionDir: string,
+  session: SessionOptions,
   gov: GovernanceSession | null,
 ) {
+  let ownership: SessionOwnership | undefined;
   try {
-    return await startRuntime(ctx, prepared, sessionDir, gov);
+    const opened = openSession(process.cwd(), session.sessionDir, {
+      newSession: session.newSession,
+      command: ctx.metadata.app.command,
+      ...(session.disposable ? { disposable: true } : {}),
+    });
+    ownership = opened.ownership;
+    if (opened.notice) ctx.err(`Notice: ${opened.notice}`);
+    const started = await startRuntime(
+      ctx,
+      prepared,
+      opened.sessionManager,
+      gov,
+      opened.ownership,
+    );
+    return { ...started, ownership: opened.ownership };
   } catch (error) {
+    ownership?.release();
     // The start error stays the command's error; a close that lost audit
     // events is reported next to it instead of replacing it. Both are counted
     // in the local startup failures, as an open failure is.

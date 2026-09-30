@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import {
@@ -409,6 +409,29 @@ describe("e2b-compatible backend against a mock server", () => {
     ).toHaveLength(1);
   });
 
+  it("does not treat a 403 from the control plane as a rejected key", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0005";
+    const mock = await e2bServer({ apiKey: key, create: 403 });
+    let rejected = 0;
+    const error = await activate(
+      e2b(mock.url, {
+        credential: async () => key,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    expect(String((error as Error).message)).toMatch(/HTTP 403/);
+    expect(rejected).toBe(0);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === "/sandboxes",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("kills the remote process on timeout and reports PiShip's outcome", async () => {
     const mock = await e2bServer({
       command: (start) =>
@@ -766,7 +789,11 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
       command.includes("slow") ? { hang: true } : { stdout: "ok\n" },
     );
     const sandbox = await activate(
-      kubernetes(mock.url, { lifetimeSeconds: 1, now: () => now }),
+      kubernetes(mock.url, {
+        lifetimeSeconds: 1,
+        now: () => now,
+        monotonic: () => now,
+      }),
     );
     const patches = () =>
       mock.requests.filter((request) => request.method === "PATCH");
@@ -842,7 +869,11 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     // The cluster has not removed the claim yet, so a PATCH would succeed.
     const mock = await kubernetesServer();
     const sandbox = await activate(
-      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+      kubernetes(mock.url, {
+        lifetimeSeconds: 60,
+        now: () => now,
+        monotonic: () => now,
+      }),
     );
     const [first] = claimNames(mock.requests);
     now += 61_000;
@@ -873,12 +904,114 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
   });
 
+  it("retires a claim the router no longer knows and never replays the command", async () => {
+    const cluster: Cluster = { routerGone: new Set() };
+    const mock = await kubernetesServer(
+      (command) => ({ stdout: `${command.split("'").at(-2)}\n` }),
+      cluster,
+    );
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 3600 }),
+    );
+    const [first] = claimNames(mock.requests);
+    // The API still lists the claim, far from renewal; only the router
+    // answers that its sandbox is gone.
+    cluster.routerGone?.add(first ?? "");
+    await expect(run(sandbox, "echo one")).rejects.toThrow(
+      /no longer knows this sandbox/,
+    );
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    expect((await run(sandbox, "echo two")).output).toBe("echo two\n");
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    const commands = mock.requests
+      .filter((request) => request.path === "/execute")
+      .map((request) => ({
+        sandbox: request.headers["x-sandbox-id"],
+        one: request.body.toString().includes("echo one"),
+        two: request.body.toString().includes("echo two"),
+      }))
+      .filter((command) => command.one || command.two);
+    // Sent once to the stale sandbox, never again; the next one is fresh.
+    expect(commands).toEqual([
+      { sandbox: `pool-${first}`, one: true, two: false },
+      { sandbox: `pool-${names[1]}`, one: false, two: true },
+    ]);
+    await sandbox.dispose();
+  });
+
+  it("retires a claim that disappears while a command runs, without replaying it", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((done) => {
+      finish = done;
+    });
+    const cluster: Cluster = { expired: new Set() };
+    const mock = await kubernetesServer(
+      (command) =>
+        command.includes("slow")
+          ? { stdout: "slow done\n", after: finished }
+          : { stdout: "ok\n" },
+      cluster,
+    );
+    // A one-second lifetime renews a running command every 250 ms.
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 1 }),
+    );
+    const [first] = claimNames(mock.requests);
+    const slow = run(sandbox, "slow job");
+    const sent = Date.now() + 10_000;
+    while (
+      !mock.requests.some((request) =>
+        request.body.toString().includes("slow job"),
+      ) &&
+      Date.now() < sent
+    )
+      await new Promise((done) => setTimeout(done, 10));
+    cluster.expired?.add(first ?? "");
+    // The keepalive learns that the claim is gone.
+    const deadline = Date.now() + 10_000;
+    while (
+      !mock.requests.some(
+        (request) =>
+          request.method === "PATCH" && request.path === `${CLAIMS}/${first}`,
+      ) &&
+      Date.now() < deadline
+    )
+      await new Promise((done) => setTimeout(done, 25));
+    finish();
+    // The command's own outcome stands; it is not sent again.
+    expect((await slow).output).toBe("slow done\n");
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    const execute = mock.requests.filter(
+      (request) => request.path === "/execute",
+    );
+    expect(
+      execute.filter((request) => request.body.toString().includes("slow job")),
+    ).toHaveLength(1);
+    expect(execute.at(-1)?.headers["x-sandbox-id"]).toBe(`pool-${names[1]}`);
+    await sandbox.dispose();
+  });
+
   it("reports a new epoch once an expired claim is replaced", async () => {
     let now = Date.parse("2026-09-28T18:00:00Z");
     const mock = await kubernetesServer();
     const instance = await kubernetes(mock.url, {
       lifetimeSeconds: 60,
       now: () => now,
+      monotonic: () => now,
     }).prepare({ profile: {} as SandboxProfile });
     const io = {
       signal: new AbortController().signal,
@@ -915,7 +1048,11 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     };
     const mock = await kubernetesServer(undefined, cluster);
     const sandbox = await activate(
-      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+      kubernetes(mock.url, {
+        lifetimeSeconds: 60,
+        now: () => now,
+        monotonic: () => now,
+      }),
     );
     const [first] = claimNames(mock.requests);
     // Due for renewal; the cluster answers that the claim is gone only
@@ -943,7 +1080,11 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     const cluster: Cluster = { expired: new Set() };
     const mock = await kubernetesServer(undefined, cluster);
     const sandbox = await activate(
-      kubernetes(mock.url, { lifetimeSeconds: 60, now: () => now }),
+      kubernetes(mock.url, {
+        lifetimeSeconds: 60,
+        now: () => now,
+        monotonic: () => now,
+      }),
     );
     const [first] = claimNames(mock.requests);
     cluster.expired?.add(first ?? "");
@@ -956,6 +1097,270 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
         ?.headers["x-sandbox-id"],
     ).toBe(`pool-${names[1]}`);
     await sandbox.dispose();
+  });
+
+  describe("when the local wall clock changes", () => {
+    const T = Date.parse("2026-09-28T18:00:00Z");
+    const shutdowns = (requests: readonly Recorded[]) =>
+      requests
+        .filter(
+          (request) =>
+            (request.method === "POST" && request.path === CLAIMS) ||
+            request.method === "PATCH",
+        )
+        .map((request) => lifecycleOf(request)?.shutdownTime);
+    const at = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
+
+    it("keeps a keepalive renewal at or after the committed shutdownTime when the clock moves backward", async () => {
+      let now = T;
+      // Frozen: no monotonic time passes while the clock moves.
+      const monotonic = 0;
+      const mock = await kubernetesServer((command) =>
+        command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+      );
+      // A one-second lifetime renews a running command every 250 ms.
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 1,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      now -= 3600_000;
+      const controller = new AbortController();
+      const pending = sandbox
+        .exec("sleep 600", workspace, {
+          onData: () => {},
+          signal: controller.signal,
+        })
+        .catch(() => undefined);
+      const deadline = Date.now() + 10_000;
+      while (
+        !mock.requests.some((request) => request.method === "PATCH") &&
+        Date.now() < deadline
+      )
+        await new Promise((done) => setTimeout(done, 25));
+      controller.abort();
+      await pending;
+      const values = shutdowns(mock.requests);
+      expect(values.length).toBeGreaterThanOrEqual(2);
+      // No monotonic time passed: every renewal commits the creation value.
+      for (const value of values) expect(value).toBe(at(T + 1000));
+      await sandbox.dispose();
+    });
+
+    it.each([
+      ["backward by an hour", -3600_000],
+      ["backward by two seconds (a small correction)", -2000],
+    ])(
+      "renews from monotonic elapsed time when the clock moves %s",
+      async (_name, jumpMs) => {
+        let now = T;
+        let monotonic = 5000;
+        const mock = await kubernetesServer();
+        const sandbox = await activate(
+          kubernetes(mock.url, {
+            lifetimeSeconds: 60,
+            now: () => now,
+            monotonic: () => monotonic,
+          }),
+        );
+        now += jumpMs;
+        monotonic += 40_000;
+        await run(sandbox, "echo a");
+        // Several renewals, with the clock moving again between them.
+        now -= jumpMs / 2;
+        monotonic += 40_000;
+        await run(sandbox, "echo b");
+        expect(shutdowns(mock.requests)).toEqual([
+          at(T + 60_000),
+          at(T + 100_000),
+          at(T + 140_000),
+        ]);
+        expect(claimNames(mock.requests)).toHaveLength(1);
+        // The local deadline is the committed one: just before it the claim
+        // is renewed and kept, just after it replaced without renewal.
+        monotonic += 59_999;
+        await run(sandbox, "echo c");
+        expect(claimNames(mock.requests)).toHaveLength(1);
+        // 139.999 s elapsed plus the lifetime, rounded up to the second.
+        expect(shutdowns(mock.requests).at(-1)).toBe(at(T + 200_000));
+        monotonic += 60_001;
+        await run(sandbox, "echo d");
+        expect(claimNames(mock.requests)).toHaveLength(2);
+        await sandbox.dispose();
+      },
+    );
+
+    it("renews on wall elapsed time after a suspend stopped the monotonic clock", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 3600,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      // Asleep for 45 minutes; the monotonic clock advanced 5.
+      now += 45 * 60_000;
+      monotonic += 5 * 60_000;
+      await run(sandbox, "echo a");
+      expect(shutdowns(mock.requests)).toEqual([
+        at(T + 3600_000),
+        at(T + 45 * 60_000 + 3600_000),
+      ]);
+      expect(claimNames(mock.requests)).toHaveLength(1);
+      await sandbox.dispose();
+    });
+
+    it("replaces a claim the wall clock says expired during a suspend, without reviving it", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 3600,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      now += 61 * 60_000;
+      monotonic += 5 * 60_000;
+      await run(sandbox, "echo ok");
+      expect(claimNames(mock.requests)).toHaveLength(2);
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(0);
+      await sandbox.dispose();
+    });
+
+    it("never lets a late keepalive revive a claim past its shutdownTime", async () => {
+      let now = T;
+      // Frozen: the machine slept, only the wall clock moved.
+      const monotonic = 0;
+      const mock = await kubernetesServer((command) =>
+        command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+      );
+      // A one-second lifetime renews a running command every 250 ms.
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 1,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      const controller = new AbortController();
+      const pending = sandbox
+        .exec("sleep 600", workspace, {
+          onData: () => {},
+          signal: controller.signal,
+        })
+        .catch(() => undefined);
+      const sent = Date.now() + 10_000;
+      while (
+        !mock.requests.some((request) =>
+          request.body.toString().includes("sleep 600"),
+        ) &&
+        Date.now() < sent
+      )
+        await new Promise((done) => setTimeout(done, 10));
+      // The command runs; the machine sleeps past the claim's shutdownTime.
+      now += 5000;
+      // Two keepalive intervals pass with the claim already expired.
+      await new Promise((done) => setTimeout(done, 700));
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(0);
+      controller.abort();
+      await pending;
+      await sandbox.dispose();
+    });
+
+    it("counts a forward jump as elapsed time: renewal comes earlier, and shutdownTime moves by at most the jump", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 60,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      // 10 s pass and the clock is also set 25 s ahead: 35 s count.
+      now += 35_000;
+      monotonic += 10_000;
+      await run(sandbox, "echo a");
+      // Monotonic time alone would neither renew yet nor give T + 70 s;
+      // the jump lengthens the lifetime by at most its own 25 s.
+      expect(shutdowns(mock.requests)).toEqual([
+        at(T + 60_000),
+        at(T + 95_000),
+      ]);
+      // A jump past the committed shutdownTime counts as expiry.
+      now += 86_400_000;
+      await run(sandbox, "echo b");
+      expect(claimNames(mock.requests)).toHaveLength(2);
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(1);
+      await sandbox.dispose();
+    });
+
+    it("expires a claim locally at its committed shutdownTime after the clock moved backward", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 60,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      now -= 3600_000;
+      monotonic += 61_000;
+      await run(sandbox, "echo ok");
+      // Past the committed shutdownTime: replaced, never revived by a PATCH.
+      expect(claimNames(mock.requests)).toHaveLength(2);
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(0);
+      await sandbox.dispose();
+    });
+
+    it.each([
+      ["backward", -3600_000],
+      ["forward", 3600_000],
+    ])(
+      "times out waiting for Ready after the configured time when the clock jumps %s",
+      async (_direction, jumpMs) => {
+        const mock = await kubernetesServer(undefined, { neverReady: true });
+        const wall = Date.now;
+        const started = performance.now();
+        const spy = vi
+          .spyOn(Date, "now")
+          .mockImplementation(
+            () => wall() + (performance.now() - started > 100 ? jumpMs : 0),
+          );
+        try {
+          const failure = await kubernetes(mock.url, { readyTimeoutMs: 600 })
+            .prepare({ profile: {} as SandboxProfile })
+            .catch((error: unknown) => error);
+          const elapsed = performance.now() - started;
+          expect(String(failure)).toContain("did not become ready in time");
+          // Not cut short by a forward jump; the generous upper bound only
+          // has to catch a wait a backward jump stretched by the hour.
+          expect(elapsed).toBeGreaterThanOrEqual(550);
+          expect(elapsed).toBeLessThan(15_000);
+        } finally {
+          spy.mockRestore();
+        }
+      },
+      30_000,
+    );
   });
 
   it("disposes idempotently", async () => {
@@ -980,6 +1385,91 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect(
       leaks(mock.requests, "runtime-credential-2", ["authorization"]),
     ).toEqual([]);
+  });
+
+  it("reports an RBAC 403 on claim creation without rejecting the bearer", async () => {
+    const token = "fake-bearer-SENTINEL-0006";
+    const mock = await kubernetesServer(undefined, {
+      token,
+      createStatus: 403,
+    });
+    let rejected = 0;
+    const error = await activate(
+      kubernetes(mock.url, {
+        credential: async () => token,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toMatch(/creating the SandboxClaim failed: HTTP 403/);
+    expect(message).not.toContain(token);
+    expect(rejected).toBe(0);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reports an RBAC 403 from the router without rejecting the bearer", async () => {
+    const token = "fake-bearer-SENTINEL-0007";
+    const mock = await kubernetesServer(
+      (command) =>
+        command.includes("forbidden") ? { status: 403 } : { stdout: "ok\n" },
+      { token },
+    );
+    let rejected = 0;
+    const sandbox = await activate(
+      kubernetes(mock.url, {
+        credential: async () => token,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    );
+    const error = await run(sandbox, "echo forbidden").catch(
+      (caught: unknown) => caught,
+    );
+    const message = String((error as Error).message);
+    expect(message).toMatch(/running the command failed: HTTP 403/);
+    expect(message).not.toContain(token);
+    expect(rejected).toBe(0);
+    // The credential stays usable for the next command.
+    expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+    expect(rejected).toBe(0);
+    await sandbox.dispose();
+  });
+
+  it("rejects the bearer on a 401 and creates no claim", async () => {
+    const mock = await kubernetesServer(undefined, {
+      token: "fake-bearer-expected-0000",
+    });
+    let rejected = 0;
+    const error = await activate(
+      kubernetes(mock.url, {
+        credential: async () => "fake-bearer-SENTINEL-0008",
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toMatch(/HTTP 401/);
+    expect(message).not.toContain("fake-bearer-SENTINEL-0008");
+    expect(rejected).toBeGreaterThanOrEqual(1);
+    // The API refused the bearer before any claim was requested.
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ),
+    ).toHaveLength(0);
   });
 
   it("quotes commands and environment for the runtime's shell-like split", () => {

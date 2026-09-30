@@ -565,8 +565,21 @@ describe("CLI", () => {
     if (qualification) {
       expect(existsSync(otherLauncher)).toBe(true);
       expect(launchOther().status).toBe(0);
-      expect(relocatedBuilder("uninstall", "other-agent").status).toBe(0);
-      expect(relocatedBuilder("purge", "other-agent", "--yes").status).toBe(0);
+      // The installed manager removes its own install and state.
+      const otherManager = spawnSync(
+        process.execPath,
+        [
+          join(temp, "install's", "apps", "other-agent", "1.0.0", "piship.mjs"),
+          "uninstall",
+          "other-agent",
+          "--purge",
+          "--yes",
+        ],
+        { cwd: temp, env, encoding: "utf8" },
+      );
+      expect(otherManager.status, otherManager.stderr).toBe(0);
+      expect(existsSync(otherLauncher)).toBe(false);
+      expect(existsSync(join(temp, "state", "other-agent"))).toBe(false);
       expect(existsSync(join(temp, "state", "mypi"))).toBe(true);
       const movedEnv = {
         ...env,
@@ -612,9 +625,23 @@ describe("CLI", () => {
         sessionId: firstResult.sessionId,
         resumed: true,
       });
-      expect(movedCommand("uninstall", "mypi").status).toBe(0);
-      expect(movedCommand("purge", "mypi").status).toBe(1);
-      expect(movedCommand("purge", "mypi", "--yes").status).toBe(0);
+      const movedManager = (...args: string[]) =>
+        spawnSync(
+          process.execPath,
+          [
+            join(temp, "moved-install", "apps", "mypi", "1.0.0", "piship.mjs"),
+            ...args,
+          ],
+          { cwd: temp, env: movedEnv, encoding: "utf8" },
+        );
+      expect(movedManager("uninstall", "mypi", "--purge").status).toBe(1);
+      expect(existsSync(movedLauncher)).toBe(true);
+      const removed = movedManager("uninstall", "mypi", "--purge", "--yes");
+      expect(removed.status, removed.stderr).toBe(0);
+      expect(existsSync(movedLauncher)).toBe(false);
+      expect(existsSync(join(temp, "moved-install", "apps", "mypi"))).toBe(
+        false,
+      );
     } else {
       expect(localCli("purge", "mypi").status).toBe(1);
       expect(localCli("purge", "mypi", "--yes").status).toBe(0);

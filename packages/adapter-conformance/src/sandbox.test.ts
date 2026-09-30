@@ -887,6 +887,272 @@ describe("sandbox conformance kit: contract", () => {
   });
 });
 
+// An in-process backend with no isolator: its command never runs, `exec`
+// answers it. Enough for the checks of the kit's process-global fixtures (the
+// watched streams and the planted launcher environment), which need no
+// sandbox and so run on every machine.
+function inProcessAdapter(hooks: {
+  readonly prepared?: (credential: string) => void;
+  readonly exec?: (request: SandboxExecRequest) => Promise<string>;
+}) {
+  return defineSandboxAdapter(async (context) => ({
+    id: "acme-in-process",
+    available: async () => ({ available: true }),
+    capabilities: (): SandboxCapabilities => ({
+      isolation: "remote",
+      network: ["deny"],
+      localProcesses: false,
+      planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
+      workspace: { mode: "snapshot" },
+    }),
+    async prepare() {
+      hooks.prepared?.((await context.credential?.()) ?? "");
+      return {
+        async exec(request: SandboxExecRequest, io: SandboxExecIO) {
+          const out = (await hooks.exec?.(request)) ?? "";
+          if (out) io.onStdout(Buffer.from(out));
+          return { exitCode: out ? 0 : 127, signal: null };
+        },
+        async dispose() {},
+      };
+    },
+  }));
+}
+
+/** Everything written to `stream` while `body` runs, kept from the terminal. */
+async function captured(
+  stream: NodeJS.WriteStream,
+  body: () => Promise<unknown>,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const write = stream.write;
+  stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    const encoding = typeof rest[0] === "string" ? rest[0] : "utf8";
+    chunks.push(
+      typeof chunk === "string"
+        ? Buffer.from(chunk, encoding as BufferEncoding)
+        : Buffer.from(chunk),
+    );
+    const done = rest.find((arg) => typeof arg === "function");
+    if (done) setImmediate(done as () => void);
+    return true;
+  }) as typeof stream.write;
+  try {
+    await body();
+  } finally {
+    stream.write = write;
+  }
+  return Buffer.concat(chunks);
+}
+
+describe("sandbox conformance kit: process-global fixtures", () => {
+  // The backend writes the credential in pieces, each its own write. The
+  // kit must see the credential across the pieces and pass none of them on.
+  const leakInPieces = (
+    stream: NodeJS.WriteStream,
+    pieces: (credential: string) => (string | Uint8Array)[],
+  ) => {
+    let leaked = false;
+    return inProcessAdapter({
+      prepared(credential) {
+        if (leaked) return;
+        leaked = true;
+        stream.write("before:");
+        for (const piece of pieces(credential)) stream.write(piece);
+        stream.write(":after\n");
+      },
+    });
+  };
+
+  const leakage = (adapter: ReturnType<typeof inProcessAdapter>) =>
+    testSandboxAdapter(adapter, { ...TIMINGS, only: ["secret leakage"] });
+
+  it("fails secret leakage for a credential split across two writes at every boundary, and passes none of it on", async () => {
+    const length = "conformance-sandbox-credential-".length + 16;
+    for (let at = 1; at < length; at++) {
+      let report: ConformanceReport | undefined;
+      const output = await captured(process.stderr, async () => {
+        report = await leakage(
+          leakInPieces(process.stderr, (credential) => [
+            credential.slice(0, at),
+            credential.slice(at),
+          ]),
+        );
+      });
+      expect(statuses(report as ConformanceReport)["secret leakage"]).toBe(
+        "failed",
+      );
+      expect(reasons(report as ConformanceReport)["secret leakage"]).toMatch(
+        /in a line the backend logged/,
+      );
+      expect(output.toString("utf8")).toBe("before:[redacted]:after\n");
+    }
+  }, 120_000);
+
+  it("fails secret leakage for a credential written in many fragments, mixing Buffer and string writes", async () => {
+    for (const stream of [process.stdout, process.stderr]) {
+      let report: ConformanceReport | undefined;
+      const output = await captured(stream, async () => {
+        report = await leakage(
+          leakInPieces(stream, (credential) => {
+            const pieces: (string | Uint8Array)[] = [];
+            for (let at = 0; at < credential.length; at += 3) {
+              const piece = credential.slice(at, at + 3);
+              pieces.push(
+                pieces.length % 2 ? Buffer.from(piece) : piece,
+                pieces.length % 3 ? "" : new Uint8Array(0),
+              );
+            }
+            return pieces;
+          }),
+        );
+      });
+      expect(statuses(report as ConformanceReport)["secret leakage"]).toBe(
+        "failed",
+      );
+      expect(output.toString("utf8")).toBe("before:[redacted]:after\n");
+    }
+  }, 120_000);
+
+  it("passes output without a credential on byte for byte, only holding back a short tail until the next write", async () => {
+    // A multibyte character split between two writes, a string in another
+    // encoding, and bytes that are not UTF-8 at all.
+    const euro = Buffer.from("price: €5\n", "utf8");
+    const pieces: [string | Uint8Array, BufferEncoding?][] = [
+      [euro.subarray(0, 9)],
+      [euro.subarray(9)],
+      [Buffer.from("hex line\n").toString("hex"), "hex"],
+      [Buffer.from([0xff, 0xfe, 0x00, 0x80])],
+      ["tail\n"],
+    ];
+    const expected = Buffer.concat([
+      euro,
+      Buffer.from("hex line\n"),
+      Buffer.from([0xff, 0xfe, 0x00, 0x80]),
+      Buffer.from("tail\n"),
+    ]);
+    let report: ConformanceReport | undefined;
+    const callbacks: string[] = [];
+    let written = false;
+    const output = await captured(process.stderr, async () => {
+      report = await leakage(
+        inProcessAdapter({
+          prepared() {
+            if (written) return;
+            written = true;
+            pieces.forEach(([piece, encoding], index) => {
+              const done = () => callbacks.push(String(index));
+              if (encoding) process.stderr.write(piece, encoding, done);
+              else process.stderr.write(piece, done);
+            });
+          },
+        }),
+      );
+    });
+    expect(statuses(report as ConformanceReport)["secret leakage"]).toBe(
+      "passed",
+    );
+    expect(output.toString("hex")).toBe(expected.toString("hex"));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(callbacks.sort()).toEqual(["0", "1", "2", "3", "4"]);
+  }, 120_000);
+
+  // Two runs overlap in environment filtering. Each run's approved value and
+  // planted values carry its run id, so the backend can tell whose launcher
+  // environment a command was started under.
+  const approvedRun = (request: SandboxExecRequest) =>
+    request.env.PISHIP_CONFORMANCE_APPROVED?.replace(
+      "conformance-approved-",
+      "",
+    );
+  const plantedRun = () =>
+    process.env.PISHIP_CONFORMANCE_HOST_TOKEN?.replace(
+      "conformance-host-token-",
+      "",
+    );
+
+  /** A backend whose command waits for the other run's, up to `waitMs`. */
+  const overlapping = (
+    arrived: { count: number; wake: () => void; both: Promise<void> },
+    waitMs: number,
+    answer: (request: SandboxExecRequest) => string,
+  ) =>
+    inProcessAdapter({
+      async exec(request) {
+        if (!request.command.includes("piship-env approved")) return "";
+        arrived.count++;
+        if (arrived.count === 2) arrived.wake();
+        await Promise.race([arrived.both, sleep(waitMs)]);
+        return answer(request);
+      },
+    });
+
+  const meeting = () => {
+    let wake = () => {};
+    const both = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    return { count: 0, wake: () => wake(), both };
+  };
+
+  const filtering = (adapter: ReturnType<typeof inProcessAdapter>) =>
+    testSandboxAdapter(adapter, {
+      ...TIMINGS,
+      only: ["environment filtering"],
+    });
+
+  it.each([
+    ["the first run ends first", 50, 400],
+    ["the second run ends first", 400, 50],
+  ])(
+    "gives each of two concurrent runs its own launcher environment throughout environment filtering (%s)",
+    async (_, firstMs, secondMs) => {
+      const before = { ...process.env };
+      const seen: [string | undefined, string | undefined][] = [];
+      const arrived = meeting();
+      const correct = (waitMs: number) =>
+        overlapping(arrived, waitMs, (request) => {
+          seen.push([approvedRun(request), plantedRun()]);
+          return `piship-env approved ${request.env.PISHIP_CONFORMANCE_APPROVED}\n`;
+        });
+      const reports = await Promise.all([
+        filtering(correct(firstMs)),
+        filtering(correct(secondMs)),
+      ]);
+      for (const report of reports)
+        expect(statuses(report)["environment filtering"]).toBe("passed");
+      expect(seen).toHaveLength(2);
+      for (const [approved, planted] of seen) expect(planted).toBe(approved);
+      expect(process.env).toEqual(before);
+    },
+    60_000,
+  );
+
+  it("fails both of two concurrent runs whose backend leaks a launcher value under another name", async () => {
+    const before = { ...process.env };
+    const arrived = meeting();
+    const leaking = () =>
+      overlapping(
+        arrived,
+        400,
+        (request) =>
+          `piship-env approved ${request.env.PISHIP_CONFORMANCE_APPROVED}\nCOPIED=${process.env.PISHIP_CONFORMANCE_HOST_TOKEN}\n`,
+      );
+    const reports = await Promise.all([
+      filtering(leaking()),
+      filtering(leaking()),
+    ]);
+    for (const report of reports) {
+      expect(statuses(report)["environment filtering"]).toBe("failed");
+      expect(reasons(report)["environment filtering"]).toMatch(
+        /a value from the launcher's environment reached the command/,
+      );
+      expectCleanReasons(report);
+    }
+    expect(process.env).toEqual(before);
+  }, 60_000);
+});
+
 describeIsolated(isolator)(
   `sandbox conformance kit against reference backends (${isolator ?? "no isolator"})`,
   () => {

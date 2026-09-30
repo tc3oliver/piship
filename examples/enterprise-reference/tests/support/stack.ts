@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
-import { keepLogs, logDirectory } from "./logs.js";
+import { registerTeardown } from "./teardown.js";
 
 // The enterprise reference stack (Keycloak, PostgreSQL, LiteLLM, the broker and
 // the mock upstream) started with Docker Compose for one test file. The stack
@@ -54,7 +54,11 @@ export interface Stack {
   password(user: ReferenceUser): string;
   /** LiteLLM's admin key. Only admin calls that inspect or delete keys. */
   masterKey(): string;
-  /** Stop the stack and remove its env file. Safe to call twice. */
+  /**
+   * Stop the stack and remove its env file. Throws when a step failed, after
+   * the others ran; call it again to retry what is left. Once it has
+   * succeeded, calling it again does nothing.
+   */
   stop(): void;
 }
 
@@ -145,38 +149,25 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
 
   const compose = (args: readonly string[]) =>
     docker(project, envFile, environment, args, files);
-  let stopped = false;
-  const onSignal = (signal: NodeJS.Signals) => {
-    try {
-      stop();
-    } finally {
-      process.exit(signal === "SIGINT" ? 130 : 143);
-    }
-  };
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    process.off("exit", stop);
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    if (logDirectory()) {
-      const logs = compose(["logs", "--no-color", "--timestamps"]);
-      keepLogs(project, envFile, `${logs.stdout}${logs.stderr}`);
-    }
+  // The worker's exit, Ctrl-C, or termination between start and afterAll still
+  // stops the stack, and a stop that failed can be called again (see
+  // teardown.ts).
+  const stop = registerTeardown({
+    project,
+    envFile,
+    directory,
+    compose,
     // No `-v`: the stack keeps no volume, and a volume is never pruned here.
-    compose(["down", "--timeout", "10"]);
-    rmSync(directory, { recursive: true, force: true });
-  };
-
-  // A worker that exits, or is interrupted or terminated, between start and
-  // afterAll still removes the stack.
-  process.once("exit", stop);
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+    downArguments: ["down", "--timeout", "10"],
+  });
   const up = compose(["up", "--wait", "--wait-timeout", "300"]);
   if (up.status !== 0) {
     const status = compose(["ps", "--all"]);
-    stop();
+    try {
+      stop();
+    } catch {
+      // Report the start failure, not the cleanup one.
+    }
     throw new Error(
       `docker compose up failed (exit ${up.status}):\n${up.stderr.slice(-2000)}\n${status.stdout}`,
     );

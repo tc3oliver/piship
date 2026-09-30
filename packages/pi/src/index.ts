@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
 import {
+  assertDisjointRoots,
   type DistributionLock,
   runConfig,
   runLogin,
@@ -65,12 +66,23 @@ export async function launchPiDistribution(
     );
   let args = [...options.args];
   let requestedModel: string | undefined;
-  if (args[0] === "--model") {
-    requestedModel = args[1];
-    if (!requestedModel)
-      throw new PiShipError("CONFIG_INVALID", "--model needs a model id");
-    args = args.slice(2);
+  let newSession = false;
+  // The session options come first, in either order.
+  for (;;) {
+    if (args[0] === "--model" && requestedModel === undefined) {
+      requestedModel = args[1];
+      if (!requestedModel)
+        throw new PiShipError("CONFIG_INVALID", "--model needs a model id");
+      args = args.slice(2);
+    } else if (args[0] === "--new-session" && !newSession) {
+      newSession = true;
+      args = args.slice(1);
+    } else break;
   }
+  const sessionOption = !!requestedModel || newSession;
+  // Before anything is written to a layout in which one lifecycle operation
+  // could delete another's files.
+  assertDisjointRoots();
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
   const agentDir = join(stateDir, "agent");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -93,7 +105,7 @@ export async function launchPiDistribution(
   };
   const [command, ...rest] = args;
   if (
-    !requestedModel &&
+    !sessionOption &&
     args.length === 1 &&
     (command === "--version" || command === "version")
   ) {
@@ -102,7 +114,7 @@ export async function launchPiDistribution(
     );
     return;
   }
-  if (!requestedModel && args.length === 1 && command === "--help") {
+  if (!sessionOption && args.length === 1 && command === "--help") {
     const governanceHelp = metadata.governance
       ? `\n  policy explain <action> <resource> [--json] | capabilities [--json]${
           metadata.governance.manifest.sandbox.credential === "stored"
@@ -120,16 +132,16 @@ export async function launchPiDistribution(
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--smoke | --smoke-model]${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--smoke | --smoke-model]${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor | version | update [--check] | rollback${governanceHelp}\n  [--smoke]`
+        ? `\n\nCommands:\n  doctor | version | update [--check] | rollback${governanceHelp}\n  [--new-session] [--smoke]`
         : "\n\nCommands:\n  doctor | version";
     ctx.out(
-      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke]${managedHelp}\nPi ${VERSION} by Earendil Works`,
+      `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
     return;
   }
-  if (!requestedModel) {
+  if (!sessionOption) {
     if (args.length === 1 && command === "login") return runLogin(ctx);
     if (args.length === 1 && command === "logout") return runLogout(ctx);
     if (args.length === 1 && command === "doctor") return runDoctor(ctx);
@@ -148,8 +160,13 @@ export async function launchPiDistribution(
     args.length === 1 &&
     (command === "--smoke" || command === "--smoke-model")
   )
-    return runSmoke(ctx, requestedModel, command === "--smoke-model");
+    return runSmoke(
+      ctx,
+      requestedModel,
+      command === "--smoke-model",
+      newSession,
+    );
   if (args.length > 0)
     throw new Error(`Unknown branded command option: ${args.join(" ")}`);
-  return runInteractive(ctx, requestedModel);
+  return runInteractive(ctx, requestedModel, newSession);
 }
