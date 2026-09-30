@@ -13,6 +13,7 @@ import {
   parseRuleList,
   projectGitControlDirectories,
   projectGitControlFiles,
+  projectGitControlLinks,
   projectGitControlUnverified,
   readProjectRestrictions,
 } from "@piship/policy";
@@ -103,10 +104,18 @@ export function sandboxConfig(options: GovernanceOptions) {
  * The git files that classify the project and the git trees that run
  * outside the sandbox (hooks) stay read-only for tool subprocesses. A `.git`
  * directory itself stays writable so git keeps working inside the sandbox.
+ * The list also holds the user's and the machine's own git config wherever it
+ * lies (`~/.gitconfig`, `/etc/gitconfig`, and what they include): a sandbox
+ * that may write the directory holding one must not plant a hooks path in it.
+ * PiShip's file tools do not refuse those files (`builtinDenial`), so the
+ * user's git configuration stays editable by the agent's edit tool.
+ * `links` are the symbolic links on the way to those paths, which the sandbox
+ * cannot hold in place.
  */
 export function gitProtection(root: string): {
   files: string[];
   directories: string[];
+  links?: string[];
   unverified?: string;
 } {
   const isDirectory = (path: string) => {
@@ -117,9 +126,13 @@ export function gitProtection(root: string): {
     }
   };
   const unverified = projectGitControlUnverified(root);
+  const links = projectGitControlLinks(root);
   return {
-    files: projectGitControlFiles(root).filter((path) => !isDirectory(path)),
+    files: projectGitControlFiles(root, { scope: "sandbox" }).filter(
+      (path) => !isDirectory(path),
+    ),
     directories: projectGitControlDirectories(root),
+    ...(links.length ? { links } : {}),
     ...(unverified === undefined ? {} : { unverified }),
   };
 }

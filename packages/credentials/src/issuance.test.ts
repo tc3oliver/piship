@@ -828,6 +828,8 @@ describe("a PiShip process killed mid-acquire", () => {
   });
 
   it("repeats the recorded key in the next process, so the broker issues once", async () => {
+    // A file URL, not a path: an ES module import of a Windows path
+    // (`D:\...`) fails, and the child would exit before any request.
     const dist = (name: string) =>
       new URL(`../../${name}/dist/index.js`, import.meta.url).href;
     const script = join(temp, "acquire.mjs");
@@ -850,8 +852,18 @@ await manager.ensure(
 );
 `,
     );
+    // The broker holds the request unanswered and tells the test it arrived.
+    let arrived!: () => void;
+    const received = new Promise<"received">((resolve) => {
+      arrived = () => resolve("received");
+    });
+    onIssued = () => arrived();
     const child = spawn(process.execPath, [script, url, metadataPath()], {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
     });
     const exited = new Promise<{
       code: number | null;
@@ -859,7 +871,13 @@ await manager.ensure(
     }>((resolve) =>
       child.on("exit", (code, signal) => resolve({ code, signal })),
     );
-    onIssued = () => child.kill("SIGKILL");
+    // The child must reach the broker before it is killed; one that exits
+    // first failed on its own, and its error is the failure.
+    const first = await Promise.race([received, exited]);
+    expect(first, stderr).toBe("received");
+    // The key was recorded before the request left.
+    expect(pending()?.idempotency_key).toBe(keys[0]);
+    child.kill("SIGKILL");
     // Killed, not a clean exit (Windows reports an exit code instead).
     const { code, signal } = await exited;
     expect(signal === "SIGKILL" || code !== 0).toBe(true);

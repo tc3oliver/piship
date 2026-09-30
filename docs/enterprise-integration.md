@@ -168,7 +168,7 @@ Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 | Cancelled by the caller | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
 | Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION`, unchanged |
 
-The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
+The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `transport` (the system error code, such as `ECONNRESET`, when the connection failed with one), `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
 
 ### Idempotency and retries
 
@@ -184,7 +184,7 @@ A lost answer can hide an issued credential: the broker may create a gateway key
 
 A renewal after a gateway rejection and an entitlement re-read after a model denial are requests of their own: they repeat only a key recorded by the same kind of request, never an older request's key, whose credential the broker would replay. A `login` of the same principal repeats whatever key is pending. A caller that passes its own `CredentialContext.idempotencyKey` has it recorded and sent only when no key is pending; a pending key is never replaced by a different caller key. Details are in [pending issuance](credentials.md#pending-issuance).
 
-A dropped key can leave a credential behind: logout or a change of principal with an unresolved request leaves a credential the broker may have issued valid until it expires (or the broker's rotation deletes it). Logout revokes only the stored credential, and PiShip does not re-send the request to find the other one.
+A dropped key can leave a credential behind: logout or a change of principal with an unresolved request, or a rejection renewal or entitlement re-read that replaces the pending key of another request with its own, leaves a credential the broker may have issued valid until it expires (or the broker's rotation deletes it). Logout revokes only the stored credential, and PiShip does not re-send the request to find the other one.
 
 The key also appears in the `credential.acquire` and `credential.refresh` audit events (`idempotencyKey`, with `resumed: true` when it was repeated) and in the error's `detail.idempotencyKey`, so broker logs can be matched to PiShip's. PiShip does not send the retention it assumes; it is part of this contract.
 
@@ -287,7 +287,7 @@ For `GET /models` at launch and in `doctor`:
 
 Each result is also counted in the local `<state>/logs/metrics.json`, which holds error codes and counts only, never the URL or a response. `GATEWAY_UNREACHABLE` (including 5xx) counts as unreachable; any other status counts as reachable, because the gateway answered. A successful live list also records the time and the number of models.
 
-During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed.
+During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed. A 401 or 403 that LiteLLM relays from its model provider (its error message starts with `litellm.` and its type is not one of LiteLLM's own key or model refusals) is the gateway's provider refusing, not the gateway refusing the credential or the model: PiShip leaves the credential and its entitlement alone and classifies it as `GATEWAY_UNREACHABLE`, not retryable. A 429 without `Retry-After` takes LiteLLM's `llm_provider-retry-after`, at most one hour.
 
 ## Sandbox backend (optional)
 

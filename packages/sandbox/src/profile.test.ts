@@ -29,6 +29,24 @@ const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
   ...overrides,
 });
 
+/**
+ * Whether this platform lets a test create a symbolic link: Windows without
+ * developer mode or elevation does not.
+ */
+const canSymlink = (() => {
+  try {
+    const probe = mkdtempSync(join(tmpdir(), "piship-symlink-probe-"));
+    try {
+      symlinkSync(probe, join(probe, "link"), "dir");
+      return true;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  } catch {
+    return false;
+  }
+})();
+
 describe("path tokens", () => {
   const ctx = { workspace: "/w", homeDir: "/h", tmpDir: "/t" };
   it("expands workspace, tmp, ~ and nested forms", () => {
@@ -181,6 +199,78 @@ describe("resolveProfile", () => {
       "git control is not verified: the git config lists too much",
     ]);
   });
+
+  it("reports git control unverified for a link in a directory the sandbox may write, and only there", () => {
+    const ws = join(root, "ws");
+    mkdirSync(ws);
+    const ctx = {
+      workspace: ws,
+      homeDir: join(root, "home"),
+      tmpDir: join(root, "t"),
+    };
+    const resolve = (links: string[], unverified?: string) =>
+      resolveProfile(policy(), {
+        ...ctx,
+        protectedPaths: {
+          files: [],
+          directories: [],
+          links,
+          ...(unverified ? { unverified } : {}),
+        },
+      });
+    // Protection covers what a link points to, and nothing holds the link
+    // itself in place: a link the sandbox can replace is a path it can retarget.
+    const inside = resolve([join(ws, ".gitconfig-team")]);
+    expect(inside.writeProtect.unverified).toContain("symbolic link");
+    expect(inside.writeProtect.unverified).toContain(
+      join(ws, ".gitconfig-team"),
+    );
+    expect(inside.warnings).toEqual([
+      `git control is not verified: ${inside.writeProtect.unverified}`,
+    ]);
+    // A link the sandbox cannot write next to is not retargetable from inside.
+    const outside = resolve([
+      join(root, "home", ".gitconfig"),
+      join(root, "elsewhere", "hooks"),
+    ]);
+    expect(outside.writeProtect).toEqual({ files: [], directories: [] });
+    expect(outside.warnings).toEqual([]);
+    // Every reason is kept, and a long list of links is counted.
+    const both = resolve(
+      Array.from({ length: 5 }, (_, index) => join(ws, `link-${index}`)),
+      "the git config lists too much",
+    );
+    expect(both.writeProtect.unverified).toMatch(
+      /^the git config lists too much; .*link-0.*link-2 and 2 more\)/,
+    );
+    expect(both.writeProtect.unverified).not.toContain("link-3");
+  });
+
+  // Skipped, and reported as skipped, where links cannot be made; the check
+  // before it fails on Linux and macOS.
+  it("can create symbolic links on this platform, which the test below needs", () => {
+    if (process.platform !== "win32") expect(canSymlink).toBe(true);
+  });
+
+  it.skipIf(!canSymlink)(
+    "takes the directory that holds a link as it resolves, however it is named",
+    () => {
+      const ws = join(root, "ws");
+      mkdirSync(ws);
+      symlinkSync(ws, join(root, "ws-link"));
+      const profile = resolveProfile(policy(), {
+        workspace: ws,
+        homeDir: join(root, "home"),
+        tmpDir: join(root, "t"),
+        protectedPaths: {
+          files: [],
+          directories: [],
+          links: [join(root, "ws-link", "x")],
+        },
+      });
+      expect(profile.writeProtect.unverified).toContain("symbolic link");
+    },
+  );
 
   it("warns when a deny hides a writable path", () => {
     const profile = resolveProfile(

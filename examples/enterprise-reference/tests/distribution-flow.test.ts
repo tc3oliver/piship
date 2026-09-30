@@ -261,7 +261,7 @@ describe.skipIf(process.platform === "win32")(
       expect(doctor.stdout).toMatch(/Credential\n {2}✓ provider\s+http-broker/);
       expect(doctor.stdout).toMatch(/✓ valid\s+\d+m remaining/);
       expect(doctor.stdout).toMatch(
-        /Gateway\n(?: {2}.*\n)*? {2}✓ gateway\s+reachable \(2 listed\)/,
+        /Gateway\n(?: {2}.*\n)*? {2}✓ gateway\s+reachable \(2 listed; model providers not contacted\)/,
       );
       expect(doctor.stdout).toMatch(
         new RegExp(`Secret Store\\n {2}[✓!] backend\\s+${backend}`),

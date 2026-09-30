@@ -308,10 +308,19 @@ describe("http-broker credential provider", () => {
   it("reports an unreachable broker as a retryable acquisition failure", async () => {
     const provider = broker();
     await services.close();
-    await expect(provider.acquire(identity, ctx)).rejects.toMatchObject({
+    const error = (await provider.acquire(identity, ctx).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )) as Error;
+    expect(error).toMatchObject({
       code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    // The broker is named with the system code, never the gateway's code
+    // the managed fetch reports a transport failure with.
+    expect(error.message).toBe(
+      "The credential broker is unreachable (ECONNREFUSED)",
+    );
     services = await startLocalServices();
   });
 
@@ -811,10 +820,76 @@ describe("http-broker failure and retry contract", () => {
         retryable: true,
         sanitizedDetail: { operation, reason: "unreachable" },
       });
+      // The system error behind the managed fetch's code is shown, and only
+      // that: not the gateway's code, the host, or the URL the fetch's
+      // message names.
+      expect(error.message).toMatch(
+        /\((ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\)$/,
+      );
+      expect(error.message).not.toContain("GATEWAY_UNREACHABLE");
+      expect(error.sanitizedDetail).toMatchObject({
+        transport: error.message.match(/\(([A-Z_]+)\)$/)?.[1],
+      });
+      expect(error.message).not.toContain("http");
+      expect(error.message).not.toContain("127.0.0.1");
       expectNoSecret(error);
       services = await startLocalServices();
     },
   );
+
+  it.each([
+    ["ECONNRESET", "unknown"],
+    ["ECONNREFUSED", "not-sent"],
+    ["UND_ERR_SOCKET", "unknown"],
+  ] as const)(
+    "shows %s, never the managed fetch's GATEWAY_UNREACHABLE or the host, and does not retry",
+    async (code, outcome) => {
+      let calls = 0;
+      const error = await failure(
+        broker({
+          fetch: async () => {
+            calls += 1;
+            // What the managed fetch raises: its code, the host, the system code.
+            throw new PiShipError(
+              "GATEWAY_UNREACHABLE",
+              `credential request to broker.acme.example:8443 failed: ${code}`,
+              { retryable: true, component: "credential" },
+            );
+          },
+        }).acquire(identity, ctx),
+      );
+      expect(error.message).toBe(
+        `The credential broker is unreachable (${code})`,
+      );
+      expect(error.sanitizedDetail).toMatchObject({
+        reason: "unreachable",
+        outcome,
+        transport: code,
+      });
+      expect(JSON.stringify(error.sanitizedDetail)).not.toContain("acme");
+      // A retry of the broker POST needs the idempotency key: not done here.
+      expect(calls).toBe(1);
+    },
+  );
+
+  it("says network error when the managed fetch knows no system code", async () => {
+    const error = await failure(
+      broker({
+        fetch: async () => {
+          throw new PiShipError(
+            "GATEWAY_UNREACHABLE",
+            "credential request to broker.acme.example failed: network error",
+            { retryable: true, component: "credential" },
+          );
+        },
+      }).acquire(identity, ctx),
+    );
+    expect(error.message).toBe(
+      "The credential broker is unreachable (network error)",
+    );
+    expect(error.sanitizedDetail).not.toHaveProperty("transport");
+    expect(error.sanitizedDetail).toMatchObject({ outcome: "unknown" });
+  });
 
   // Regression: revoke used to call fetch directly, so a transport failure
   // escaped as an uncoded error.

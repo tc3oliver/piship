@@ -1074,8 +1074,10 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     ]);
     expect(memory.refs()).toEqual([]);
     expect(containing(SENTINEL_V2)).toEqual([]);
-    // The 1.0.0 file fallback secret goes with the cleared credential class.
-    expect(containing(SENTINEL)).toEqual([]);
+    // The identity session is kept, so the file store it may use is kept
+    // too: only the cleared class's own references were deleted.
+    expect(existsSync(join(stateDir(), "identity", "session.json"))).toBe(true);
+    expect(existsSync(join(stateDir(), "secrets"))).toBe(true);
   });
 
   it("fetches through the declared https source", async () => {
@@ -1447,7 +1449,6 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
         credential_ref: `piship:${ID}:inference#2`,
       }),
     );
-    write(join(stateDir(), "secrets", "inference-v2"), `${SENTINEL_V2}\n`);
     const identity = readFileSync(
       join(stateDir(), "identity", "session.json"),
       "utf8",
@@ -1475,12 +1476,13 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(
       existsSync(join(stateDir(), "credentials-metadata", "inference.json")),
     ).toBe(false);
-    expect(existsSync(join(stateDir(), "secrets"))).toBe(false);
+    // The identity session is kept, and with it the file store it may use:
+    // the cleared credential's own reference was deleted above.
+    expect(existsSync(join(stateDir(), "secrets"))).toBe(true);
     expect(
       readFileSync(join(stateDir(), "identity", "session.json"), "utf8"),
     ).toBe(identity);
     expect(containing(SENTINEL_V2)).toEqual([]);
-    expect(containing(SENTINEL)).toEqual([]);
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 

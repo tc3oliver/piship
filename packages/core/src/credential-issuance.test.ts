@@ -292,6 +292,60 @@ describe("pending credential issuance across update and rollback", () => {
   });
 });
 
+describe("a switch that clears one secret class keeps the file store of the others", () => {
+  const current = { version: "1.1.0", pi: "0.87.1" };
+
+  it("clearing only the sandbox credential keeps the runtime credential's and identity's secrets", async () => {
+    await login();
+    const store = new RestrictedFileSecretStore(path("secrets"));
+    const credential = JSON.parse(
+      readFileSync(path("credentials-metadata", "inference.json"), "utf8"),
+    );
+    const identity = JSON.parse(
+      readFileSync(path("identity", "session.json"), "utf8"),
+    );
+    const sandboxRef = `piship:${ID}:sandbox#1`;
+    await store.put(sandboxRef, new SecretValue("fake-sandbox-SENTINEL-0001"));
+    writeFileSync(
+      path("credentials-metadata", "sandbox.json"),
+      JSON.stringify({
+        schema: "piship-sandbox-credential-metadata/v1",
+        mode: "local-secret",
+        source: "stored",
+        origins: ["https://sandbox.example.test"],
+        credential_ref: sandboxRef,
+        generation: 1,
+        kind: "api_key",
+        acquired_at: new Date().toISOString(),
+        secret_store: "file",
+      }),
+    );
+    // A release that reads the runtime credential and identity, but not the
+    // sandbox credential.
+    const { sandboxCredential: _absent, ...older } = STATE_SCHEMAS;
+    const report = checkStateMigration(
+      stateDir(),
+      { version: "1.0.0", pi: "0.87.1", schemas: older },
+      current,
+    );
+    expect(
+      report.items
+        .filter((item) => item.action === "clear-and-reacquire")
+        .map((item) => item.name),
+    ).toEqual(["sandbox credential metadata"]);
+    await clearCredentials(stateDir(), ID, report, { secretStore: store });
+    expect(existsSync(path("credentials-metadata", "sandbox.json"))).toBe(
+      false,
+    );
+    expect(await store.get(sandboxRef)).toBeNull();
+    expect(await store.get(credential.credential_ref)).not.toBeNull();
+    expect(await store.get(identity.secretRef)).not.toBeNull();
+    // The next launch reuses both: no sign-in, no new credential.
+    await open().activate();
+    expect(services.state.credentialCount).toBe(1);
+  });
+});
+
 describe("the pending issuance never names a secret to delete", () => {
   // A reference the stored credential does not name, planted where only
   // the pending record points.

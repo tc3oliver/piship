@@ -125,16 +125,23 @@ export function fakeBackend(options: FakeBackendOptions = {}): FakeBackend {
  * through `native`; without it the command is wrapped as itself, contained by
  * nothing. With `ignoreWriteProtect` it contains everything except the
  * profile's protected paths, as an adapter that never reads `writeProtect`.
+ * `guardsMissingFiles` is what the wrapper declares about a protected file
+ * that does not exist yet; omitted, it declares nothing.
  */
 export function fakeWrappingBackend(
   native: Pick<SandboxAdapter, "wrap">,
   contain: boolean,
-  options: { ignoreWriteProtect?: boolean } = {},
+  options: { ignoreWriteProtect?: boolean; guardsMissingFiles?: boolean } = {},
 ): SandboxBackend {
   return customBackend({
     id: "acme-local",
     available: async () => ({ available: true }),
-    capabilities: () => LOCAL_CAPABILITIES,
+    capabilities: () => ({
+      ...LOCAL_CAPABILITIES,
+      ...(options.guardsMissingFiles === undefined
+        ? {}
+        : { guardsMissingFiles: options.guardsMissingFiles }),
+    }),
     prepare: async ({ profile }: { profile: SandboxProfile }) => ({
       wrap: (command: SandboxCommand): WrappedCommand =>
         contain

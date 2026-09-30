@@ -15,8 +15,9 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   governModelRuntime,
   isCredentialRejection,
-  isLiteLLMUpstreamFailure,
   isModelDenial,
+  requestFailure,
+  acceptanceFailure,
 } from "./governance.js";
 
 const model = (id: string) => ({
@@ -397,26 +398,95 @@ describe("personal Pi-native governance", () => {
       }),
     ).toBe(false);
     expect(isModelDenial(undefined)).toBe(false);
-    for (const [status, type] of [
-      ["401", "authentication_error"],
-      ["403", "permission_error"],
-    ]) {
-      const upstream = failed(
-        `${status}: ${JSON.stringify({ message: "litellm.AuthenticationError: provider secret xyz", type })}`,
-      );
-      expect(isLiteLLMUpstreamFailure(upstream)).toBe(true);
-      expect(isCredentialRejection(upstream)).toBe(false);
-      expect(isModelDenial(upstream)).toBe(false);
-    }
-    expect(
-      isCredentialRejection(
-        failed('401: {"message":"virtual key blocked","type":"auth_error"}'),
-      ),
-    ).toBe(true);
+  });
+  it("does not take a model provider's 401 or 403 relayed by the gateway as the user's", () => {
+    // Pi's messages for LiteLLM v1.103.0's answers
+    // (tests/enterprise-reference/gateway-evidence.test.ts).
+    const failed = (errorMessage: string) => ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage,
+    });
+    const upstream401 = failed(
+      '401: {"message":"litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided.. Received Model Group=acme/coder","type":"authentication_error","param":null,"code":"401"}',
+    );
+    const upstream403 = failed(
+      '403: {"message":"litellm.APIError: APIError: OpenAIException - Mock upstream denies this request.. Received Model Group=acme/coder","type":"permission_error","param":null,"code":"403"}',
+    );
+    expect(isCredentialRejection(upstream401)).toBe(false);
+    expect(isModelDenial(upstream401)).toBe(false);
+    expect(isCredentialRejection(upstream403)).toBe(false);
+    expect(isModelDenial(upstream403)).toBe(false);
+    // The gateway's own refusals keep their meaning.
+    for (const type of ["auth_error", "token_not_found_in_db", "expired_key"])
+      expect(
+        isCredentialRejection(
+          failed(
+            `401: {"message":"Authentication Error, ...","type":"${type}","param":"None","code":"401"}`,
+          ),
+        ),
+      ).toBe(true);
     expect(
       isModelDenial(
-        failed('403: {"message":"denied","type":"key_model_access_denied"}'),
+        failed(
+          `403: {"message":"The requested model 'acme/general' is not available for this API key","type":"key_model_access_denied","param":"model","code":"403"}`,
+        ),
       ),
     ).toBe(true);
+    expect(requestFailure(upstream401)).toMatchObject({
+      status: 401,
+      body: { type: "authentication_error" },
+    });
+    expect(
+      requestFailure(failed("Stream ended without finish_reason")),
+    ).toEqual({ message: "Stream ended without finish_reason" });
+  });
+  it("reports a failed acceptance request with the code of the gateway's status", () => {
+    const failed = (errorMessage: string) => ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage,
+    });
+    const code = (errorMessage: string) =>
+      acceptanceFailure(failed(errorMessage));
+    expect(
+      code(
+        '503: {"message":"litellm.ServiceUnavailableError: ...","type":"internal_server_error","param":null,"code":"503"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
+    expect(
+      code(
+        '429: {"message":"litellm.RateLimitError: ...","type":"throttling_error","param":null,"code":"429"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_RATE_LIMITED", retryable: true });
+    expect(
+      code(
+        '401: {"message":"Authentication Error, Key is blocked.","type":"auth_error","param":"None","code":"401"}',
+      ).code,
+    ).toBe("CREDENTIAL_REVOKED");
+    expect(
+      code(
+        '401: {"message":"litellm.AuthenticationError: ...","type":"authentication_error","param":null,"code":"401"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: false });
+    expect(
+      code(
+        `403: {"message":"The requested model 'acme/general' is not available for this API key","type":"key_model_access_denied","param":"model","code":"403"}`,
+      ).code,
+    ).toBe("MODEL_DENIED");
+    // A stream cut after it started carries no status: a protocol error.
+    const cut = code(
+      "litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
+    );
+    expect(cut).toMatchObject({
+      code: "GATEWAY_PROTOCOL_ERROR",
+      retryable: false,
+    });
+    expect(cut.message).toBe(
+      "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
+    );
+    expect(
+      acceptanceFailure({ role: "assistant", stopReason: "aborted" }).code,
+    ).toBe("GATEWAY_PROTOCOL_ERROR");
   });
 });

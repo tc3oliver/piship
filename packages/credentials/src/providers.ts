@@ -173,16 +173,38 @@ const CREDENTIAL_ID = /^[A-Za-z0-9._:-]{1,256}$/;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
 
 /**
- * A short, fixed description of a transport failure. Never an error message:
- * undici puts an invalid header value, such as a bearer token, into its
- * message. Only a PiShip error code or a system error code is used.
+ * The system error code behind a transport failure (`ECONNRESET`,
+ * `ECONNREFUSED`), or undefined. A raw fetch error carries it as its cause;
+ * the managed fetch keeps only the code, at the end of its
+ * `GATEWAY_UNREACHABLE` message, after the host it names. Only a bare code is
+ * ever taken: never a message, a URL, a header, or a body.
  */
-function transportCode(error: unknown): string {
-  if (error instanceof PiShipError) return error.code;
+function systemCode(error: unknown): string | undefined {
+  if (error instanceof PiShipError)
+    return error.code === "GATEWAY_UNREACHABLE"
+      ? /: ([A-Z][A-Z0-9_]{0,63})$/.exec(error.message)?.[1]
+      : undefined;
   const code = (error as { cause?: { code?: unknown } })?.cause?.code;
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
     ? code
-    : "network error";
+    : undefined;
+}
+
+/**
+ * A short, fixed description of a transport failure. Never an error message:
+ * undici puts an invalid header value, such as a bearer token, into its
+ * message. The system error code comes first. The managed fetch reports
+ * every transport failure as the gateway's `GATEWAY_UNREACHABLE`, whatever
+ * the host, so that code never names a broker failure; another PiShip code,
+ * such as `NETWORK_DENIED`, is kept.
+ */
+function transportCode(error: unknown): string {
+  return (
+    systemCode(error) ??
+    (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE"
+      ? error.code
+      : "network error")
+  );
 }
 
 /**
@@ -205,13 +227,8 @@ const NOT_SENT_CODES = new Set([
  * message in another shape reads as possibly sent, never as not sent.
  */
 function failedBeforeSend(error: unknown): boolean {
-  const code =
-    error instanceof PiShipError
-      ? error.code === "GATEWAY_UNREACHABLE"
-        ? /: ([A-Z][A-Z0-9_]{0,63})$/.exec(error.message)?.[1]
-        : undefined
-      : (error as { cause?: { code?: unknown } })?.cause?.code;
-  return typeof code === "string" && NOT_SENT_CODES.has(code);
+  const code = systemCode(error);
+  return code !== undefined && NOT_SENT_CODES.has(code);
 }
 
 /** Read at most `MAX_BODY_BYTES` of a body; a larger one breaks the contract. */
@@ -306,6 +323,7 @@ async function brokerRequest(
         `${subject} did not respond in time`,
         { retryable: true, outcome: "unknown", detail },
       );
+    const code = systemCode(error);
     return brokerFailure(
       operation,
       "unreachable",
@@ -313,7 +331,8 @@ async function brokerRequest(
       {
         retryable: true,
         outcome: failedBeforeSend(error) ? "not-sent" : "unknown",
-        detail,
+        // The system code, when there is one, so a log or a test sees why.
+        detail: { ...detail, ...(code ? { transport: code } : {}) },
       },
     );
   };

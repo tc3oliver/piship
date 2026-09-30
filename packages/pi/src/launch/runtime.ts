@@ -21,7 +21,6 @@ import type { DistributionLock } from "@piship/core";
 import {
   type GovernedRuntime,
   isCredentialRejection,
-  isLiteLLMUpstreamFailure,
   isModelDenial,
 } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
@@ -104,12 +103,6 @@ async function startRuntime(
     name: "piship-governance",
     factory: (pi) => {
       pi.on("message_end", async (event) => {
-        if (isLiteLLMUpstreamFailure(event.message)) {
-          const message = event.message as { errorMessage?: string };
-          const status = message.errorMessage?.slice(0, 3);
-          message.errorMessage = `GATEWAY_PROTOCOL_ERROR: LiteLLM upstream provider returned HTTP ${status}`;
-          return;
-        }
         // A message that reads as both ("403 invalid api key") is a rejected
         // credential first.
         if (isCredentialRejection(event.message)) {
