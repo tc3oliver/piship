@@ -1,27 +1,72 @@
-import type { InlineExtension } from "@earendil-works/pi-coding-agent";
-import { redact } from "@piship/contracts";
+import type {
+  InlineExtension,
+  MessageEndEvent,
+} from "@earendil-works/pi-coding-agent";
+import { redact, redactValue } from "@piship/contracts";
 import { installCrashRedaction } from "./crash-redaction.js";
+
+type AssistantMessage = Extract<
+  MessageEndEvent["message"],
+  { role: "assistant" }
+>;
+
+/**
+ * Every field of Pi's assistant message, by what it holds: provider error
+ * text PiShip redacts, the model's own output, or metadata PiShip or Pi set.
+ * A Pi upgrade that adds or removes a field fails to compile here until the
+ * field is classified, so new provider text cannot reach the session file
+ * unnoticed.
+ */
+export const ASSISTANT_MESSAGE_FIELDS: Record<
+  keyof AssistantMessage,
+  "redacted" | "model-output" | "metadata"
+> = {
+  role: "metadata",
+  content: "model-output",
+  api: "metadata",
+  provider: "metadata",
+  model: "metadata",
+  responseModel: "metadata",
+  responseId: "metadata",
+  providerThinkingLevel: "metadata",
+  diagnostics: "redacted",
+  usage: "metadata",
+  stopReason: "metadata",
+  deferred: "metadata",
+  errorMessage: "redacted",
+  rawStopReason: "metadata",
+  endTurn: "metadata",
+  timestamp: "metadata",
+};
 
 /**
  * The assistant message with its provider error text redacted, or undefined
  * when there is nothing to redact. Pi records a failed request's error text
- * (`errorMessage`) in the session file, and a gateway that echoes the request's
- * Authorization header into its error body would otherwise leave the runtime
- * credential there. `redact` removes every registered secret value and the
- * common token shapes, so the status code and wording that retry and
- * credential-rejection classification read stay.
+ * (`errorMessage`) and the provider's diagnostics (`diagnostics`, each an
+ * error message, stack, and details) in the session file, and a gateway that
+ * echoes the request's Authorization header into its error body would
+ * otherwise leave the runtime credential there. `redact` removes every
+ * registered secret value and the common token shapes, so the status code and
+ * wording that retry and credential-rejection classification read stay.
  */
 export function redactProviderError(message: unknown): unknown {
   const value = message as
-    | { role?: string; errorMessage?: unknown }
+    | { role?: string; errorMessage?: unknown; diagnostics?: unknown }
     | null
     | undefined;
-  if (value?.role !== "assistant" || typeof value.errorMessage !== "string")
-    return undefined;
-  const errorMessage = redact(value.errorMessage);
-  return errorMessage === value.errorMessage
-    ? undefined
-    : { ...value, errorMessage };
+  if (value?.role !== "assistant") return undefined;
+  const changes: Record<string, unknown> = {};
+  if (typeof value.errorMessage === "string") {
+    const errorMessage = redact(value.errorMessage);
+    if (errorMessage !== value.errorMessage)
+      changes.errorMessage = errorMessage;
+  }
+  if (value.diagnostics !== undefined) {
+    const diagnostics = redactValue(value.diagnostics);
+    if (JSON.stringify(diagnostics) !== JSON.stringify(value.diagnostics))
+      changes.diagnostics = diagnostics;
+  }
+  return Object.keys(changes).length ? { ...value, ...changes } : undefined;
 }
 
 /**

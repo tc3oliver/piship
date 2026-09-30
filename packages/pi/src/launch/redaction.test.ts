@@ -40,6 +40,31 @@ describe("redactProviderError", () => {
     expect(message.errorMessage).toContain(CREDENTIAL);
   });
 
+  it("redacts the provider diagnostics Pi stores with the message", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "error",
+      diagnostics: [
+        {
+          error: {
+            message: `stream failed: ${CREDENTIAL}`,
+            stack: `Error: stream failed: ${CREDENTIAL}\n    at x`,
+          },
+          details: { request: { headers: { authorization: CREDENTIAL } } },
+        },
+      ],
+    };
+    const redacted = redactProviderError(message) as typeof message;
+    expect(JSON.stringify(redacted.diagnostics)).not.toContain(CREDENTIAL);
+    expect(redacted.diagnostics[0]?.error.message).toBe(
+      "stream failed: [REDACTED]",
+    );
+    expect(redacted.stopReason).toBe("error");
+    expect(redactProviderError({ role: "assistant", diagnostics: [] })).toBe(
+      undefined,
+    );
+  });
+
   it("leaves a message without secret text, without error text, or of another role alone", () => {
     expect(
       redactProviderError({

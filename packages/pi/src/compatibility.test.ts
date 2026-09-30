@@ -48,6 +48,7 @@ import {
   installCrashRedaction,
   uninstallCrashRedaction,
 } from "./launch/crash-redaction.js";
+import { ASSISTANT_MESSAGE_FIELDS } from "./launch/redaction.js";
 
 // The scheduled Pi latest canary installs the newest published Pi over the
 // pin in a throwaway checkout and runs this suite read-only. Only the
@@ -784,6 +785,30 @@ describe("Pi session seams used by governance", () => {
     );
     expect(file).toContain("PISHIP-REPLACED");
     expect(file).not.toContain("gateway failure");
+    agent.dispose();
+  });
+
+  it("builds assistant messages only from fields PiShip has classified for redaction", async () => {
+    // launch/redaction.ts classifies every AssistantMessage field at compile
+    // time; this checks the messages Pi builds at run time, answered and
+    // failed, against the same list, and which fields are redacted.
+    expect(
+      Object.entries(ASSISTANT_MESSAGE_FIELDS)
+        .filter(([, kind]) => kind === "redacted")
+        .map(([field]) => field)
+        .sort(),
+    ).toEqual(["diagnostics", "errorMessage"]);
+    const { session: agent } = await session();
+    await agent.prompt("hello");
+    services.knobs.gatewayStatus = 500;
+    await agent.prompt("fail");
+    const assistants = agent.messages.filter(
+      (message) => (message as { role: string }).role === "assistant",
+    );
+    expect(assistants.length).toBe(2);
+    for (const message of assistants)
+      for (const field of Object.keys(message))
+        expect(Object.keys(ASSISTANT_MESSAGE_FIELDS)).toContain(field);
     agent.dispose();
   });
 
