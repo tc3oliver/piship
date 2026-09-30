@@ -308,10 +308,19 @@ describe("http-broker credential provider", () => {
   it("reports an unreachable broker as a retryable acquisition failure", async () => {
     const provider = broker();
     await services.close();
-    await expect(provider.acquire(identity, ctx)).rejects.toMatchObject({
+    const error = (await provider.acquire(identity, ctx).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )) as Error;
+    expect(error).toMatchObject({
       code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    // The broker is named with the system code, never the gateway's code
+    // the managed fetch reports a transport failure with.
+    expect(error.message).toBe(
+      "The credential broker is unreachable (ECONNREFUSED)",
+    );
     services = await startLocalServices();
   });
 
@@ -812,12 +821,14 @@ describe("http-broker failure and retry contract", () => {
         sanitizedDetail: { operation, reason: "unreachable" },
       });
       // The system error behind the managed fetch's code is shown, and only
-      // that: not the host or the URL the fetch's message names.
+      // that: not the gateway's code, the host, or the URL the fetch's
+      // message names.
       expect(error.message).toMatch(
-        /\(GATEWAY_UNREACHABLE: (ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\)$/,
+        /\((ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\)$/,
       );
+      expect(error.message).not.toContain("GATEWAY_UNREACHABLE");
       expect(error.sanitizedDetail).toMatchObject({
-        transport: error.message.match(/: ([A-Z_]+)\)$/)?.[1],
+        transport: error.message.match(/\(([A-Z_]+)\)$/)?.[1],
       });
       expect(error.message).not.toContain("http");
       expect(error.message).not.toContain("127.0.0.1");
@@ -831,7 +842,7 @@ describe("http-broker failure and retry contract", () => {
     ["ECONNREFUSED", "not-sent"],
     ["UND_ERR_SOCKET", "unknown"],
   ] as const)(
-    "shows %s behind the managed fetch's GATEWAY_UNREACHABLE, never the host, and does not retry",
+    "shows %s, never the managed fetch's GATEWAY_UNREACHABLE or the host, and does not retry",
     async (code, outcome) => {
       let calls = 0;
       const error = await failure(
@@ -848,7 +859,7 @@ describe("http-broker failure and retry contract", () => {
         }).acquire(identity, ctx),
       );
       expect(error.message).toBe(
-        `The credential broker is unreachable (GATEWAY_UNREACHABLE: ${code})`,
+        `The credential broker is unreachable (${code})`,
       );
       expect(error.sanitizedDetail).toMatchObject({
         reason: "unreachable",
@@ -861,7 +872,7 @@ describe("http-broker failure and retry contract", () => {
     },
   );
 
-  it("keeps the code alone when the managed fetch knows no system code", async () => {
+  it("says network error when the managed fetch knows no system code", async () => {
     const error = await failure(
       broker({
         fetch: async () => {
@@ -874,7 +885,7 @@ describe("http-broker failure and retry contract", () => {
       }).acquire(identity, ctx),
     );
     expect(error.message).toBe(
-      "The credential broker is unreachable (GATEWAY_UNREACHABLE)",
+      "The credential broker is unreachable (network error)",
     );
     expect(error.sanitizedDetail).not.toHaveProperty("transport");
     expect(error.sanitizedDetail).toMatchObject({ outcome: "unknown" });
@@ -1774,6 +1785,8 @@ describe("credential lifecycle events", () => {
       generation: 1,
       credentialId: "vk_1",
       expiresAt: expect.any(String),
+      // The request's non-secret idempotency key, as it was sent.
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     await credentials.ensure(null, ctx, {
       allowAcquire: false,
@@ -1783,6 +1796,11 @@ describe("credential lifecycle events", () => {
       event: "credential.refresh",
       detail: { reason: "rejected", generation: 2, credentialId: "vk_2" },
     });
+    // A renewal is a new logical request with a new key.
+    expect(events.at(-1)?.detail.idempotencyKey).toEqual(expect.any(String));
+    expect(events.at(-1)?.detail.idempotencyKey).not.toBe(
+      events[0]?.detail.idempotencyKey,
+    );
     expect(await credentials.logout(ctx)).toEqual([]);
     expect(events.at(-1)).toEqual({
       event: "credential.revoke",

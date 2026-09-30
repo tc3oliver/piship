@@ -286,7 +286,7 @@ Branded commands of installed distributions add `update [--channel <name>] [--fr
 | Identity | Identity mode, whether a session is signed in, and the configured issuer. No claim of the session (subject, name, email, groups) is shown. |
 | Credential | Provider, state or remaining validity, and, in managed mode, that ambient credentials are removed. Never a value, reference, or credential ID. |
 | Inference | Provider, activation, and the allowed and default models. |
-| Gateway | The managed endpoint's origin and whether its model list answers. |
+| Gateway | The managed endpoint's origin and whether its model list answers. The list is the gateway's own: it shows the gateway reachable and the credential accepted, not that a model provider behind the gateway answers. |
 | Secret Store | The store PiShip keeps secrets in; the plaintext file store is a warning. |
 | Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment the agent's commands (the `bash` tool) receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode it is not restricted. MCP stdio servers get only their own `env.allow`. |
 | Release | Whether the running payload is a verified release artifact, a payload directory, or a build directory. |

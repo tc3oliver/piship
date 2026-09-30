@@ -139,6 +139,7 @@ function stateTemporaries(stateDir: string): StateTemporaries {
       paths.identity,
       paths.principal,
       paths.credential,
+      paths.credentialIssuance,
       paths.revocationRetry,
       paths.preferences,
       join(stateDir, "config", "policy.json"),
@@ -167,7 +168,8 @@ export function sweepStateTemporaries(stateDir: string): string[] {
 /**
  * Remove the temporaries of identity and credential state at logout, so no
  * signed-out identity metadata, credential metadata, or file-store secret
- * outlives it. Runs under the credential lock and then the identity lock,
+ * outlives it, nor a temporary of the pending credential issuance. Runs
+ * under the credential lock and then the identity lock,
  * the order a sign-in takes them: every writer of the session, the
  * credential metadata, and their secrets holds one of them, so every such
  * temporary found is abandoned and removed. The principal binding and the
@@ -188,7 +190,7 @@ export async function removeAccessTemporaries(
       ),
       ...removeStaleTemporaries(
         dirname(paths.credential),
-        [basename(paths.credential)],
+        [basename(paths.credential), basename(paths.credentialIssuance)],
         { force: true },
       ),
       ...removeStaleTemporaries(paths.secrets, "any", { force: true }),
