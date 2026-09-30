@@ -3,7 +3,9 @@ import { LocalMetrics } from "@piship/audit";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  type NetworkPolicy,
   PiShipError,
+  type ResolvedEndpoints,
   type SecretStore,
   formatError,
 } from "@piship/contracts";
@@ -12,7 +14,11 @@ import {
   type SecretStoreProvider,
 } from "@piship/credentials";
 import { resolveTemplate } from "@piship/schema";
-import { accessStatePaths } from "../access/index.js";
+import {
+  accessStatePaths,
+  networkPolicyFor,
+  resolveRuntimeReferences,
+} from "../access/index.js";
 import {
   type AccessEvent,
   formatMigrationReport,
@@ -97,6 +103,42 @@ function storeOf(
 }
 
 /**
+ * The network policy of update and rollback's own requests (the update
+ * channel and HTTP audit sinks): the launch's policy. When a runtime
+ * reference does not resolve (a gateway variable unset in the shell that runs
+ * update), it comes from the manifest alone: the declared proxy setting,
+ * private-only, and allowHosts apply as they do at launch, the hosts of the
+ * endpoints are not added, and a CA bundle whose path does not resolve is
+ * left out. That policy is never wider than the launch's.
+ */
+export function lifecycleNetwork(ctx: BrandedContext): NetworkPolicy {
+  const access = ctx.metadata.access;
+  if (!access) return DEFAULT_NETWORK_POLICY;
+  let endpoints: ResolvedEndpoints;
+  try {
+    endpoints = resolveRuntimeReferences(access);
+  } catch {
+    endpoints = {
+      additionalCA: access.network.tls.additionalCA.flatMap((path, index) => {
+        try {
+          return [
+            resolveTemplate(
+              `network.tls.additionalCA[${index}]`,
+              path,
+              access.variables,
+              process.env,
+            ),
+          ];
+        } catch {
+          return [];
+        }
+      }),
+    };
+  }
+  return networkPolicyFor(access, endpoints, ctx.mode);
+}
+
+/**
  * runtime.update and runtime.rollback at their activation boundary. Best
  * effort for optional sinks; throws AUDIT_UNAVAILABLE when a required sink
  * does not take the event (see recordAudit).
@@ -108,13 +150,7 @@ export async function auditLifecycle(
   detail: Record<string, string>,
 ): Promise<void> {
   if (!governedLock(ctx)) return;
-  let network = DEFAULT_NETWORK_POLICY;
-  try {
-    if (ctx.metadata.access) network = openAccess(ctx).network;
-  } catch {
-    // The default policy still applies to an HTTP sink.
-  }
-  await recordAudit(ctx, network, [
+  await recordAudit(ctx, lifecycleNetwork(ctx), [
     {
       event,
       user: null,
@@ -192,12 +228,7 @@ export async function runUpdate(
   requireInstalled(ctx, `${app.command} update`);
   const check = flags.has("--check");
   const revokeCredential = credentialRevoker(ctx);
-  let network = DEFAULT_NETWORK_POLICY;
-  try {
-    if (ctx.metadata.access) network = openAccess(ctx).network;
-  } catch {
-    // Proxy and CA settings default when access cannot be resolved.
-  }
+  const network = lifecycleNetwork(ctx);
   // Proxy, CA, and TLS policy apply. Only the update host the distribution
   // declares is added to the allowed hosts; a --from URL gets no exception.
   const declaredHost = updateSourceHost(ctx);
