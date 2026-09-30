@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 // @ts-expect-error The stand-in model server is plain JavaScript.
 import { startModelServer } from "../../examples/personal/local-model/model-server.mjs";
 import {
@@ -26,7 +26,8 @@ import {
 // release with the script shipped inside it, update through a signed loopback
 // channel, and reach a stand-in model server on loopback. The examples differ
 // in who holds the credential: MyPi delegates it to Pi, MyPi Local keeps it in
-// its own secret store.
+// its own secret store. Each flow has a test file of its own, so Portable E2E
+// can run the two on different runners.
 
 interface ModelRequest {
   method: string;
@@ -117,7 +118,8 @@ async function update(s: PersonalScenario, name: string): Promise<void> {
   expect(doctor.stdout).toMatch(/rollback\s+1\.0\.0 retained/);
 }
 
-describe("personal clean machine (specification 30.4, local fixtures)", () => {
+/** MyPi's flow; personal-clean-machine-mypi.test.ts runs it. */
+export function myPiFlow(): void {
   it("MyPi: installs, delegates its credential to Pi, makes a model request, resumes the session, updates, rolls back, and uninstalls", async () => {
     const key = "sk-mypi-pi-native-owner-key";
     const server = await startModelServer({ key });
@@ -329,7 +331,10 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
     ).toBe(personalAuth);
     expect(existsSync(join(s.home, ".pi", "agent", "models.json"))).toBe(false);
   }, 1200000);
+}
 
+/** MyPi Local's flow; personal-clean-machine-local.test.ts runs it. */
+export function myPiLocalFlow(): void {
   it("MyPi Local: installs, stores its key, makes a model request, resumes the session, updates, rolls back, and uninstalls", async () => {
     const key = "sk-mypi-local-clean-machine-key";
     const server = await startModelServer({ key });
@@ -494,4 +499,4 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
     expect(existsSync(join(state, "secrets"))).toBe(true);
     expect(existsSync(join(s.home, ".pi"))).toBe(false);
   }, 1200000);
-});
+}

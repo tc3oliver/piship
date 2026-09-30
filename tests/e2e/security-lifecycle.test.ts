@@ -31,7 +31,7 @@ import { selfSignedLoopbackCertificate } from "../helpers/x509.js";
 // rollback and in the rollback snapshots, and the network policy and TLS
 // that the update transport keeps. The credential-class matrix of
 // rollback resurrection is tests/e2e/lifecycle-credentials.test.ts; user
-// switching across update and rollback is tests/e2e/user-switching.test.ts.
+// switching across update and rollback is tests/e2e/user-switching.ts.
 // This file adds what neither looked at: what the commands print, what a
 // snapshot holds by class, and that the update host is held to the policy.
 
