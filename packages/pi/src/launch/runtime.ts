@@ -5,7 +5,7 @@ import {
   createAgentSession,
   createAgentSessionRuntime,
   DefaultResourceLoader,
-  SessionManager,
+  type SessionManager,
   SettingsManager,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
@@ -30,6 +30,7 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
+import { openSession } from "./session-file.js";
 
 function verifyBuiltResources(ctx: LaunchContext): void {
   const resourceDir = join(ctx.distributionDir, "resources");
@@ -74,11 +75,17 @@ export function publishContext(context: EnterpriseContext | null): void {
   else delete holder[ENTERPRISE_CONTEXT_SYMBOL];
 }
 
+export interface SessionOptions {
+  readonly sessionDir: string;
+  /** Start a new session instead of resuming the most recent one. */
+  readonly newSession: boolean;
+}
+
 async function startRuntime(
   ctx: LaunchContext,
   prepared: PreparedAccess,
-  sessionDir: string,
-  gov: GovernanceSession | null = null,
+  sessionManager: SessionManager,
+  gov: GovernanceSession | null,
 ) {
   verifyBuiltResources(ctx);
   const instructions = gov
@@ -254,19 +261,24 @@ async function startRuntime(
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: process.cwd(),
     agentDir: ctx.agentDir,
-    sessionManager: SessionManager.continueRecent(process.cwd(), sessionDir),
+    sessionManager,
   });
   return { runtime, theme, context, governed: () => governedRef };
 }
 
+/** Starts the Pi runtime on the session `openSession` chose. */
 export async function startGoverned(
   ctx: LaunchContext,
   prepared: PreparedAccess,
-  sessionDir: string,
+  session: SessionOptions,
   gov: GovernanceSession | null,
 ) {
   try {
-    return await startRuntime(ctx, prepared, sessionDir, gov);
+    const opened = openSession(process.cwd(), session.sessionDir, {
+      newSession: session.newSession,
+      command: ctx.metadata.app.command,
+    });
+    return await startRuntime(ctx, prepared, opened.sessionManager, gov);
   } catch (error) {
     // The start error stays the command's error; a close that lost audit
     // events is reported next to it instead of replacing it. Both are counted

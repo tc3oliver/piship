@@ -130,6 +130,7 @@ export async function runSmoke(
   ctx: LaunchContext,
   requestedModel: string | undefined,
   withModelRequest: boolean,
+  newSession: boolean,
 ): Promise<void> {
   const cacheDir = join(ctx.stateDir, "cache");
   const logsDir = join(ctx.stateDir, "logs");
@@ -139,7 +140,12 @@ export async function runSmoke(
   const prepared = await prepareAccess(ctx, requestedModel);
   const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
   const gov = await openGovernance(ctx, prepared, false);
-  const { runtime } = await startGoverned(ctx, prepared, sessionDir, gov);
+  const { runtime } = await startGoverned(
+    ctx,
+    prepared,
+    { sessionDir, newSession },
+    gov,
+  );
   let sessionFailed = false;
   try {
     const { resourceLoader } = runtime.services;
@@ -288,6 +294,7 @@ function governanceSummary(gov: GovernanceSession) {
 export async function runInteractive(
   ctx: LaunchContext,
   requestedModel: string | undefined,
+  newSession: boolean,
 ): Promise<void> {
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
@@ -303,7 +310,7 @@ export async function runInteractive(
   const { runtime, theme } = await startGoverned(
     ctx,
     prepared,
-    sessionDir,
+    { sessionDir, newSession },
     gov,
   );
   let sessionFailed = false;

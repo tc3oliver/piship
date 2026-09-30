@@ -863,6 +863,65 @@ describe("Pi session seams used by governance", () => {
   });
 });
 
+describe("Pi session loading that PiShip gates before a resume", () => {
+  function persisted() {
+    const sessionDir = join(temp, "sessions");
+    const manager = SessionManager.create(temp, sessionDir);
+    manager.appendMessage({ role: "user", content: "one", timestamp: 1 });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "two" }],
+      api: "piship-test",
+      provider: "piship",
+      model: "none",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    manager.appendMessage({ role: "user", content: "three", timestamp: 3 });
+    const file = manager.getSessionFile() as string;
+    return { sessionDir, file, lines: readFileSync(file, "utf8").split("\n") };
+  }
+
+  // PiShip inspects the session first (launch/session-file.ts) because Pi
+  // resumes these files silently. When Pi reports them instead, the gate
+  // can be reconsidered.
+  it("continueRecent drops a malformed line without a signal", () => {
+    const { sessionDir, file, lines } = persisted();
+    writeFileSync(file, [lines[0], "{broken", ...lines.slice(2)].join("\n"));
+    const resumed = SessionManager.continueRecent(temp, sessionDir);
+    expect(resumed.getSessionFile()).toBe(file);
+    expect(resumed.getEntries()).toHaveLength(2);
+  });
+
+  it("continueRecent completes a truncated last record by writing to the file", () => {
+    const { sessionDir, file, lines } = persisted();
+    const truncated = `${lines.slice(0, 3).join("\n")}\n${lines[3]?.slice(0, 20)}`;
+    writeFileSync(file, truncated);
+    SessionManager.continueRecent(temp, sessionDir);
+    expect(readFileSync(file, "utf8")).toBe(`${truncated}\n`);
+  });
+
+  it("open with the cwd resumes the file continueRecent resumes, as it would", () => {
+    const { sessionDir, file } = persisted();
+    const recent = SessionManager.continueRecent(temp, sessionDir);
+    const opened = SessionManager.open(file, sessionDir, temp);
+    expect(opened.getSessionFile()).toBe(recent.getSessionFile());
+    expect(opened.getSessionId()).toBe(recent.getSessionId());
+    expect(opened.getLeafId()).toBe(recent.getLeafId());
+    expect(opened.getCwd()).toBe(recent.getCwd());
+    expect(opened.getSessionDir()).toBe(recent.getSessionDir());
+    expect(opened.buildSessionContext()).toEqual(recent.buildSessionContext());
+  });
+});
+
 describe("Pi ends an interactive session by awaiting dispose, then exiting", () => {
   // PiShip ends its governance session inside `runtime.dispose()` because
   // nothing after `InteractiveMode.run()` ever runs: Pi's shutdown awaits the
