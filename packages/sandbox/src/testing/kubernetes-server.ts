@@ -9,10 +9,22 @@ export const CLAIMS =
 
 /** Cluster behavior a test can change while the mock runs. */
 export interface Cluster {
+  /**
+   * Status for a claim POST; 403 answers as RBAC does for a valid bearer that
+   * may not create claims (the body echoes the Authorization header).
+   */
+  createStatus?: number;
   /** Status for DELETE; 500 simulates an API outage during cleanup. */
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
   expired?: Set<string>;
+  /**
+   * Claims the API still lists but whose sandbox the router no longer knows:
+   * the router answers 404 for them.
+   */
+  routerGone?: Set<string>;
+  /** Claims never report Ready. */
+  neverReady?: boolean;
   /** Holds PATCH responses until it resolves. */
   patchGate?: Promise<void>;
   /**
@@ -27,6 +39,10 @@ export async function kubernetesServer(
     stdout?: string;
     exit_code?: number;
     hang?: boolean;
+    /** Answer only once this resolves. */
+    after?: Promise<void>;
+    /** An HTTP error status from the router instead of a result. */
+    status?: number;
   },
   cluster: Cluster = {},
 ): Promise<MockServer> {
@@ -48,6 +64,16 @@ export async function kubernetesServer(
     if (request.method === "GET" && path === CLAIMS)
       return void response.end(JSON.stringify({ items: [] }));
     if (request.method === "POST" && path === CLAIMS) {
+      if (cluster.createStatus !== undefined && cluster.createStatus >= 400) {
+        response.statusCode = cluster.createStatus;
+        return void response.end(
+          JSON.stringify({
+            kind: "Status",
+            reason: "Forbidden",
+            message: `sandboxclaims is forbidden: ${request.headers.authorization ?? "anonymous"} cannot create resource "sandboxclaims" in namespace "agents"`,
+          }),
+        );
+      }
       response.statusCode = 201;
       return void response.end(request.body);
     }
@@ -73,7 +99,7 @@ export async function kubernetesServer(
       return void response.end(
         JSON.stringify({
           status:
-            seen < 2
+            seen < 2 || cluster.neverReady
               ? { conditions: [{ type: "Ready", status: "False" }] }
               : {
                   conditions: [{ type: "Ready", status: "True" }],
@@ -86,7 +112,8 @@ export async function kubernetesServer(
       const sandbox = request.headers["x-sandbox-id"];
       if (
         typeof sandbox === "string" &&
-        cluster.expired?.has(sandbox.slice(5))
+        (cluster.expired?.has(sandbox.slice(5)) ||
+          cluster.routerGone?.has(sandbox.slice(5)))
       ) {
         response.statusCode = 404;
         return void response.end("{}");
@@ -106,7 +133,18 @@ export async function kubernetesServer(
         );
       const answer = execute?.(command) ?? { stdout: "", exit_code: 0 };
       if (answer.hang) return;
-      return void response.end(JSON.stringify({ stderr: "", ...answer }));
+      const { after, status, ...body } = answer;
+      if (status !== undefined) {
+        response.statusCode = status;
+        return void response.end(
+          JSON.stringify({
+            message: `forbidden: ${request.headers.authorization ?? "anonymous"} may not execute in this sandbox`,
+          }),
+        );
+      }
+      return void (after ?? Promise.resolve()).then(() =>
+        response.end(JSON.stringify({ stderr: "", ...body })),
+      );
     }
     response.statusCode = 404;
     response.end("{}");

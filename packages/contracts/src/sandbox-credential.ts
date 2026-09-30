@@ -24,6 +24,6 @@ export interface SandboxCredentialAccess {
    * rejected, or bound to another principal.
    */
   secret(signal?: AbortSignal): Promise<SecretValue>;
-  /** The service answered 401/403 for this secret. */
+  /** The service answered 401 (authentication rejected) for this secret. */
   rejected(): Promise<void>;
 }

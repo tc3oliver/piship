@@ -13,7 +13,9 @@ export interface RemoteBackendOptions {
    */
   readonly credential?: () => Promise<string | undefined>;
   /**
-   * Called when an origin the credential was sent to answers 401 or 403.
+   * Called when an origin the credential was sent to answers 401: the
+   * credential was not accepted. A 403 (authenticated, but not allowed, such
+   * as Kubernetes RBAC) is returned to the caller and rejects nothing.
    * Resolves true when a renewed credential is ready: the backend then
    * repeats that one request once, unless the request may have created
    * something (a sandbox, a claim, or a command).
@@ -23,11 +25,14 @@ export interface RemoteBackendOptions {
   readonly workdir?: string;
 }
 
-const rejectedStatus = (status: number) => status === 401 || status === 403;
+// Only an authentication failure rejects the credential. A 403 means the
+// credential was accepted and a policy denied the request; replacing the
+// credential cannot fix that, and marking it rejected would discard it.
+const rejectedStatus = (status: number) => status === 401;
 
 /**
  * One request that carries the backend's credential, when it has one, in the
- * header `header` builds. A 401 or 403 to a request that carried it is
+ * header `header` builds. A 401 to a request that carried it is
  * reported through `credentialRejected`; a repeatable request is sent once
  * more with the renewed credential, a second rejection is reported again
  * and returned. The credential is read per request, never kept here.

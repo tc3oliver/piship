@@ -44,8 +44,13 @@ export interface KubernetesAgentSandboxOptions extends RemoteBackendOptions {
    * renewed while the session uses it. Default 3600.
    */
   readonly lifetimeSeconds?: number;
-  /** Test seam: the clock `shutdownTime` is computed from. */
+  /** Test seam: the wall clock a claim's `shutdownTime` is anchored to. */
   readonly now?: () => number;
+  /**
+   * Test seam: the monotonic clock for elapsed time (renewal, expiry, the
+   * readiness wait). Default `performance.now`.
+   */
+  readonly monotonic?: () => number;
 }
 
 const GROUP = "extensions.agents.x-k8s.io/v1beta1";
@@ -81,18 +86,31 @@ const CAPABILITIES: SandboxCapabilities = {
 interface Claim {
   readonly claim: string;
   readonly sandbox: string;
-  /** When the cluster deletes the claim unless it is renewed (epoch ms). */
+  /**
+   * The last `shutdownTime` the cluster accepted (epoch ms, whole seconds):
+   * when it deletes the claim unless it is renewed.
+   */
   expiresAt: number;
+  /**
+   * The wall clock and the monotonic clock when the claim was created. The
+   * claim's time is the first plus the monotonic time elapsed since, so a
+   * later change to the wall clock neither shortens nor extends its lifetime.
+   */
+  readonly wallAt: number;
+  readonly monotonicAt: number;
 }
 
 /** The claim no longer exists (deleted or expired). */
 class ClaimGone extends Error {}
 
-/** RFC 3339 at whole seconds, rounded up so the lifetime is never shorter. */
+/** Rounded up to the second, so the lifetime is never shorter. */
+function wholeSecond(ms: number): number {
+  return Math.ceil(ms / 1000) * 1000;
+}
+
+/** RFC 3339 of a whole-second time. */
 function shutdownTime(ms: number): string {
-  return new Date(Math.ceil(ms / 1000) * 1000)
-    .toISOString()
-    .replace(".000Z", "Z");
+  return new Date(ms).toISOString().replace(".000Z", "Z");
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -208,7 +226,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       const claim = await entry.claim.catch(() => undefined);
       // Normal cleanup. If it fails, the claim's shutdownTime still removes
       // it, at most one lifetime after its last renewal.
-      if (claim) await this.#delete(claim);
+      if (claim) await this.#delete(claim.claim);
     };
     const retire = (entry: Lease) => {
       entry.retired = true;
@@ -303,8 +321,17 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     return this.#options.now?.() ?? Date.now();
   }
 
+  #monotonic(): number {
+    return this.#options.monotonic?.() ?? performance.now();
+  }
+
+  /** The wall clock on the claim's timeline: its creation plus elapsed time. */
+  #claimTime(claim: Claim): number {
+    return claim.wallAt + (this.#monotonic() - claim.monotonicAt);
+  }
+
   async #renewIfDue(claim: Claim, signal: AbortSignal): Promise<void> {
-    const left = claim.expiresAt - this.#now();
+    const left = claim.expiresAt - this.#claimTime(claim);
     // Past its shutdownTime the claim may already be shutting down, even if
     // the controller has not removed it yet: replace it, never revive it.
     if (left <= 0) throw new ClaimGone("the SandboxClaim expired");
@@ -328,9 +355,12 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     await response.body?.cancel().catch(() => undefined);
   }
 
-  /** Move the claim's shutdownTime one lifetime ahead. */
+  /** Move the claim's shutdownTime one lifetime ahead, never back. */
   async #renew(claim: Claim, signal?: AbortSignal): Promise<void> {
-    const expiresAt = this.#now() + this.#lifetimeMs();
+    const expiresAt = Math.max(
+      claim.expiresAt,
+      wholeSecond(this.#claimTime(claim) + this.#lifetimeMs()),
+    );
     const response = await this.#request(`${this.#claims()}/${claim.claim}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/merge-patch+json" },
@@ -348,6 +378,8 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         `renewing the SandboxClaim failed: ${await describeFailure(response)}`,
       );
     await response.body?.cancel().catch(() => undefined);
+    // Both values are on the claim's timeline; a concurrent renewal that was
+    // accepted first may have committed a later one.
     claim.expiresAt = Math.max(claim.expiresAt, expiresAt);
   }
 
@@ -377,7 +409,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
 
   async #claim(signal: AbortSignal | undefined): Promise<Claim> {
     const name = `piship-${randomBytes(6).toString("hex")}`;
-    const expiresAt = this.#now() + this.#lifetimeMs();
+    const wallAt = this.#now();
+    const monotonicAt = this.#monotonic();
+    const expiresAt = wholeSecond(wallAt + this.#lifetimeMs());
     const created = await this.#request(this.#claims(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -406,9 +440,14 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       );
     await created.body?.cancel().catch(() => undefined);
     try {
-      return { ...(await this.#ready(name, signal)), expiresAt };
+      return {
+        ...(await this.#ready(name, signal)),
+        expiresAt,
+        wallAt,
+        monotonicAt,
+      };
     } catch (error) {
-      await this.#delete({ claim: name, sandbox: name, expiresAt });
+      await this.#delete(name);
       throw error;
     }
   }
@@ -416,8 +455,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
   async #ready(
     name: string,
     signal: AbortSignal | undefined,
-  ): Promise<Omit<Claim, "expiresAt">> {
-    const deadline = Date.now() + (this.#options.readyTimeoutMs ?? 120_000);
+  ): Promise<Pick<Claim, "claim" | "sandbox">> {
+    const deadline =
+      this.#monotonic() + (this.#options.readyTimeoutMs ?? 120_000);
     for (;;) {
       const response = await this.#request(`${this.#claims()}/${name}`, {
         method: "GET",
@@ -445,15 +485,15 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         TERMINAL_REASONS.has(ready.reason)
       )
         throw new Error(`the SandboxClaim failed: ${ready.reason}`);
-      if (Date.now() >= deadline)
+      if (this.#monotonic() >= deadline)
         throw new Error("the SandboxClaim did not become ready in time");
       await wait(this.#options.pollMs ?? 1000, signal);
     }
   }
 
-  async #delete(claim: Claim): Promise<void> {
+  async #delete(name: string): Promise<void> {
     try {
-      const response = await this.#request(`${this.#claims()}/${claim.claim}`, {
+      const response = await this.#request(`${this.#claims()}/${name}`, {
         method: "DELETE",
       });
       await response.body?.cancel().catch(() => undefined);

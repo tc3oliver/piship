@@ -97,6 +97,8 @@ export interface SentinelContext {
   readonly protectedPaths: ProtectedPaths;
   /** Wall clock for `verifiedAt` and the stale sweep. */
   readonly now?: () => number;
+  /** Monotonic clock for the propagation wait. Default `performance.now`. */
+  readonly monotonic?: () => number;
 }
 
 /** How long a verification result counts before the next command checks again. */
@@ -788,6 +790,7 @@ export async function verifyWorkspace(
   ctx: SentinelContext,
 ): Promise<{ readonly report: WorkspaceReport; readonly unsafe?: string }> {
   const now = ctx.now ?? Date.now;
+  const monotonic = ctx.monotonic ?? (() => performance.now());
   const declared = ctx.declaration.mode;
   const windowMs = workspaceWindowMs(ctx.declaration);
   const nonce = randomBytes(16).toString("hex");
@@ -898,9 +901,9 @@ export async function verifyWorkspace(
         const target = join(sentinelDir, "s2h");
         if (readToken(target) === sandboxToken) s2h = "immediate";
         else {
-          const deadline = Date.now() + windowMs;
-          while (Date.now() < deadline) {
-            await sleep(Math.min(POLL_MS, Math.max(1, deadline - Date.now())));
+          const deadline = monotonic() + windowMs;
+          while (monotonic() < deadline) {
+            await sleep(Math.min(POLL_MS, Math.max(1, deadline - monotonic())));
             if (readToken(target) === sandboxToken) {
               s2h = "delayed";
               break;
