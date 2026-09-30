@@ -130,6 +130,7 @@ describe("STATE_DATA_CLASSES", () => {
       "identity/session.json",
       "credentials-metadata/inference.json",
       "credentials-metadata/sandbox.json",
+      "credentials-metadata/pending-issuance.json",
       "secrets",
       "agent",
     ]);

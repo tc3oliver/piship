@@ -1710,6 +1710,8 @@ describe("credential lifecycle events", () => {
       generation: 1,
       credentialId: "vk_1",
       expiresAt: expect.any(String),
+      // The request's non-secret idempotency key, as it was sent.
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     await credentials.ensure(null, ctx, {
       allowAcquire: false,
@@ -1719,6 +1721,11 @@ describe("credential lifecycle events", () => {
       event: "credential.refresh",
       detail: { reason: "rejected", generation: 2, credentialId: "vk_2" },
     });
+    // A renewal is a new logical request with a new key.
+    expect(events.at(-1)?.detail.idempotencyKey).toEqual(expect.any(String));
+    expect(events.at(-1)?.detail.idempotencyKey).not.toBe(
+      events[0]?.detail.idempotencyKey,
+    );
     expect(await credentials.logout(ctx)).toEqual([]);
     expect(events.at(-1)).toEqual({
       event: "credential.revoke",
