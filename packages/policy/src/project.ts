@@ -346,6 +346,40 @@ interface KnownConfigs {
   readonly settings: readonly EnvironmentSetting[];
   /** More settings than are read. */
   readonly settingsOverflow: boolean;
+  readonly settingsUnverified: boolean;
+}
+
+/** Git stores inherited -c parameters as shell single-quoted key=value words. */
+function parameterSettings(input: string): EnvironmentSetting[] | undefined {
+  const settings: EnvironmentSetting[] = [];
+  let index = 0;
+  while (index < input.length) {
+    while (/\s/.test(input[index] ?? "") && index < input.length) index++;
+    if (index === input.length) break;
+    let word = "";
+    let quoted = false;
+    let seenQuote = false;
+    while (index < input.length && (quoted || !/\s/.test(input[index] ?? ""))) {
+      const char = input[index++];
+      if (char === "'") {
+        quoted = !quoted;
+        seenQuote = true;
+        continue;
+      }
+      if (char === "\\" && !quoted) {
+        if (index === input.length) return undefined;
+        word += input[index++];
+      } else word += char;
+    }
+    if (quoted || !seenQuote || !word.includes("=")) return undefined;
+    const equals = word.indexOf("=");
+    const key = word.slice(0, equals);
+    if (!/^[A-Za-z][A-Za-z0-9.-]*\.[A-Za-z0-9.:-]+$/.test(key))
+      return undefined;
+    settings.push({ key, value: word.slice(equals + 1) });
+    if (settings.length > MAX_CONFIG_REFERENCES) return undefined;
+  }
+  return settings;
 }
 
 /** Git's boolean for an environment variable: only a clear "true" counts, so an odd value never hides the system config. */
@@ -374,6 +408,12 @@ function knownConfigs(
     files.push(join(home, ".gitconfig"), join(base, "git", "config"));
   }
   const settings: EnvironmentSetting[] = [];
+  const parameters = env.GIT_CONFIG_PARAMETERS ?? "";
+  const parsedParameters =
+    parameters.length <= MAX_CONFIG_BYTES
+      ? parameterSettings(parameters)
+      : undefined;
+  if (parsedParameters) settings.push(...parsedParameters);
   const count = Number(env.GIT_CONFIG_COUNT ?? "");
   const declared = Number.isInteger(count) && count > 0 ? count : 0;
   for (
@@ -388,7 +428,10 @@ function knownConfigs(
   return {
     files,
     settings,
-    settingsOverflow: declared > MAX_CONFIG_REFERENCES,
+    settingsOverflow:
+      declared > MAX_CONFIG_REFERENCES ||
+      settings.length > MAX_CONFIG_REFERENCES,
+    settingsUnverified: parameters !== "" && parsedParameters === undefined,
   };
 }
 
@@ -530,6 +573,9 @@ function scanGitConfigs(
     visit(target, otherIncluded, 1);
   }
   if (known.settingsOverflow) unverified = TOO_MANY_REFERENCES;
+  if (known.settingsUnverified)
+    unverified =
+      "GIT_CONFIG_PARAMETERS could not be safely interpreted; Git control cannot be verified";
   return {
     scan: {
       hooksPaths,

@@ -820,6 +820,17 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
   });
 
+  it("replaces a claim removed early by the cluster before a command", async () => {
+    const cluster: Cluster = { expired: new Set() };
+    const mock = await kubernetesServer(undefined, cluster);
+    const sandbox = await activate(kubernetes(mock.url, { lifetimeSeconds: 3600 }));
+    const [first] = claimNames(mock.requests);
+    cluster.expired?.add(first ?? "");
+    expect((await run(sandbox, "echo fresh")).exitCode).toBe(0);
+    expect(claimNames(mock.requests)).toHaveLength(2);
+    await sandbox.dispose();
+  });
+
   it("reports a new epoch once an expired claim is replaced", async () => {
     let now = Date.parse("2026-09-28T18:00:00Z");
     const mock = await kubernetesServer();

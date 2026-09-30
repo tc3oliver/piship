@@ -41,6 +41,8 @@ export async function credentialedFetch(
   init: RequestInit,
   header: (credential: string) => readonly [string, string],
   repeatable: boolean,
+  /** Zero for a command data-plane request whose lifetime is caller governed. */
+  timeoutMs = 30_000,
 ): Promise<Response> {
   const send = async () => {
     const headers = new Headers(init.headers);
@@ -52,10 +54,15 @@ export async function credentialedFetch(
       new SecretValue(credential);
       headers.set(...header(credential));
     }
+    const deadline = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    const signal =
+      deadline && init.signal
+        ? AbortSignal.any([init.signal, deadline])
+        : (deadline ?? init.signal);
     const response = await options.fetch(url, {
       ...init,
       headers,
-      signal: init.signal ?? AbortSignal.timeout(30_000),
+      signal: signal ?? null,
     });
     return { response, sent: !!credential };
   };

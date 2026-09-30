@@ -49,6 +49,7 @@ const CONFIG_VARIABLES = [
   "GIT_CONFIG_SYSTEM",
   "GIT_CONFIG_NOSYSTEM",
   "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_KEY_${index}`),
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_VALUE_${index}`),
 ];
@@ -704,6 +705,38 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     // A count that is not a number reads nothing.
     process.env.GIT_CONFIG_COUNT = "many";
     expect(dirs(root)).toHaveLength(4);
+  });
+
+  it("protects hooks and includes inherited through GIT_CONFIG_PARAMETERS and invalidates the cache", () => {
+    const root = repo("parameters-repo");
+    const outside = dir("parameters-include");
+    write(join(outside, "extra"), hooks("from-include"));
+    process.env.GIT_CONFIG_PARAMETERS = `'core.hooksPath=quoted hooks' 'include.path=${posix(join(outside, "extra"))}'`;
+    expect(dirs(root)).toEqual(
+      expect.arrayContaining([
+        at(root, "quoted hooks"),
+        at(root, "from-include"),
+      ]),
+    );
+    process.env.GIT_CONFIG_PARAMETERS = "'core.hooksPath=changed hooks'";
+    expect(dirs(root)).toContain(at(root, "changed hooks"));
+    expect(dirs(root)).not.toContain(at(root, "quoted hooks"));
+    process.env.GIT_CONFIG_PARAMETERS = "'core.hooksPath=escaped'\\''quote'";
+    expect(dirs(root)).toContain(at(root, "escaped'quote"));
+  });
+
+  it("marks unsupported inherited Git parameters unverified", () => {
+    const root = repo("bad-parameters-repo");
+    for (const value of [
+      "'core.hooksPath=unterminated",
+      "core.hooksPath=unquoted",
+      "'include.path=x' trailing\\",
+    ]) {
+      process.env.GIT_CONFIG_PARAMETERS = value;
+      expect(projectGitControlUnverified(root)).toMatch(
+        /GIT_CONFIG_PARAMETERS/,
+      );
+    }
   });
 
   it("protects a GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM file only where it lies inside the project", () => {
