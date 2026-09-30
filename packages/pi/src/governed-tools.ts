@@ -115,7 +115,9 @@ export const CHANGED_RULE = "piship.path-changed";
  * Built-in denials that no policy or sandbox level relaxes: the distribution
  * state (credentials metadata and the user policy file) is never read or
  * written, and the git files that classify the project and the git hooks
- * and info trees are never written.
+ * and info trees are never written. The user's own git config outside the
+ * project (`~/.gitconfig`) is not among them: only sandboxed processes are
+ * kept from it (`gitProtection`), so the edit tool still changes it.
  */
 function builtinDenial(
   gov: GovernanceSession,

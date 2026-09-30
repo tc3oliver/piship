@@ -8,9 +8,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:net";
@@ -226,13 +228,31 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
           declared: "shared",
           effective: "shared",
           verification: "not-required",
-          gitControlProtection: "verified",
+          // The list holds `.git/config.worktree` and `.git/commondir`, which
+          // do not exist. Seatbelt denies the paths themselves; bubblewrap
+          // cannot mount over a file that is not there, so it reports the
+          // gap instead of claiming the files are protected.
+          gitControlProtection: adapter.guardsMissingFiles
+            ? "verified"
+            : "not-verified",
           complete: true,
         },
       });
       expect(sandbox.report.warnings.join("\n")).not.toContain(
         "git-control-protection",
       );
+      if (adapter.guardsMissingFiles)
+        expect(sandbox.report.warnings.join("\n")).not.toContain(
+          "does not exist yet",
+        );
+      else
+        expect(sandbox.report.warnings).toContainEqual(
+          expect.stringContaining(
+            `${adapter.id} cannot guard a protected file that does not exist yet (.git/config.worktree, .git/commondir)`,
+          ),
+        );
+      expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
+      expect(existsSync(join(ws, ".git", "config.worktree"))).toBe(false);
       expect(open.report.planes).not.toContain("network-deny");
       expect(open.report.planes).toContain("git-control-protection");
     });
@@ -377,6 +397,190 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         });
       } finally {
         await husky.dispose();
+      }
+    });
+
+    it("cannot hold a linked include target in place, and reports git control as not verified for it", async () => {
+      // `.git/config` includes `linked.cfg`, a link to `shared/real.cfg`.
+      // Protection covers the file the link points to; the link is an entry
+      // in the writable workspace.
+      const target = join(ws, "shared", "real.cfg");
+      const link = join(ws, "linked.cfg");
+      mkdirSync(join(ws, "shared"));
+      writeFileSync(target, "[user]\n\tname = someone\n");
+      symlinkSync(target, link);
+      const box = await activateSandbox(config, {
+        workspace: ws,
+        homeDir: home,
+        env: { ...process.env, HOME: home },
+        protectedPaths: {
+          files: [join(ws, ".git", "config"), target],
+          directories: [join(ws, ".git", "hooks")],
+          links: [link],
+        },
+      });
+      try {
+        const attempt = async (command: string) =>
+          (await box.exec(command, ws, { onData: () => {} })).exitCode;
+        expect(await attempt(`echo x >> "${target}"`)).not.toBe(0);
+        expect(readFileSync(target, "utf8")).toBe("[user]\n\tname = someone\n");
+        // Nothing holds the link itself: a command can point it at a file of
+        // its own, which is why the report cannot claim the protection.
+        expect(
+          await attempt(`ln -sfn "${join(ws, "evil.cfg")}" "${link}"`),
+        ).toBe(0);
+        expect(readlinkSync(link)).toBe(join(ws, "evil.cfg"));
+        expect(box.report.planes).toContain("git-control-protection");
+        expect(box.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+        expect(box.report.warnings.join("\n")).toContain("symbolic link");
+      } finally {
+        await box.dispose();
+        rmSync(link, { force: true });
+        rmSync(join(ws, "shared"), { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the user's own git config read-only where the sandbox may write the home directory", async () => {
+      // A distribution that lets commands write `~`: the global config git
+      // reads there must not take a hooks path from a sandboxed command.
+      const globalConfig = join(home, ".gitconfig");
+      const original = "[user]\n\tname = someone\n";
+      writeFileSync(globalConfig, original);
+      const writableHome: SandboxPolicy = {
+        ...config,
+        filesystem: {
+          ...config.filesystem,
+          write: { allow: ["workspace", "tmp", "~"] },
+        },
+      };
+      const context = (files: string[]) => ({
+        workspace: ws,
+        homeDir: home,
+        env: { ...process.env, HOME: home },
+        protectedPaths: { files, directories: [join(ws, ".git", "hooks")] },
+      });
+      const box = await activateSandbox(
+        writableHome,
+        context([join(ws, ".git", "config"), globalConfig]),
+      );
+      try {
+        const attempt = async (command: string) =>
+          (await box.exec(command, ws, { onData: () => {} })).exitCode;
+        expect(
+          await attempt(
+            `printf '[core]\\n\\thooksPath = /tmp/x\\n' >> "${globalConfig}"`,
+          ),
+        ).not.toBe(0);
+        expect(await attempt(`rm -f "${globalConfig}"`)).not.toBe(0);
+        expect(
+          await attempt(`mv "${globalConfig}" "${globalConfig}.old"`),
+        ).not.toBe(0);
+        expect(readFileSync(globalConfig, "utf8")).toBe(original);
+        expect(existsSync(`${globalConfig}.old`)).toBe(false);
+        // The rest of the home directory stays writable.
+        expect(await attempt(`echo ok > "${join(home, "notes")}"`)).toBe(0);
+        expect(box.report.planes).toContain("git-control-protection");
+        expect(box.report.workspace).toMatchObject({
+          gitControlProtection: "verified",
+        });
+      } finally {
+        await box.dispose();
+      }
+      // A global config nobody has created yet, in a directory that does not
+      // exist either: bubblewrap cannot guard the file, and Seatbelt guards its
+      // path but not the directory a command could build elsewhere and rename
+      // into place, so git control is not verified on either.
+      const missing = await activateSandbox(
+        writableHome,
+        context([join(home, ".config", "git", "config")]),
+      );
+      try {
+        expect(missing.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      } finally {
+        await missing.dispose();
+      }
+    });
+
+    it("guards a missing protected file in the workspace root only where the isolator denies the path, and never one whose directory can be swapped", async () => {
+      const inRoot = join(ws, ".gitconfig.local");
+      const nested = join(ws, "cfg", "local.cfg");
+      mkdirSync(join(ws, "cfg"));
+      const activateWith = (file: string) =>
+        activateSandbox(config, {
+          workspace: ws,
+          homeDir: home,
+          env: { ...process.env, HOME: home },
+          protectedPaths: {
+            files: [join(ws, ".git", "config"), file],
+            directories: [join(ws, ".git", "hooks")],
+          },
+        });
+      const attempts = async (box: ActiveSandbox, commands: string[]) => {
+        const codes: number[] = [];
+        for (const command of commands)
+          codes.push(
+            (await box.exec(command, ws, { onData: () => {} })).exitCode ?? -1,
+          );
+        return codes;
+      };
+      try {
+        // In the workspace root. Seatbelt denies the path: the file can be
+        // neither created nor renamed into place, and git control is verified.
+        // Bubblewrap cannot guard it, the file can be created, and it is not.
+        const root1 = await activateWith(inRoot);
+        try {
+          const [created, renamed] = await attempts(root1, [
+            `echo x > "${inRoot}"`,
+            `echo y > "${ws}/tmp-cfg" && mv "${ws}/tmp-cfg" "${inRoot}"`,
+          ]);
+          if (adapter.guardsMissingFiles) {
+            expect(created).not.toBe(0);
+            expect(renamed).not.toBe(0);
+            expect(existsSync(inRoot)).toBe(false);
+          } else {
+            expect(created).toBe(0);
+          }
+          expect(root1.report.workspace).toMatchObject({
+            gitControlProtection: adapter.guardsMissingFiles
+              ? "verified"
+              : "not-verified",
+          });
+        } finally {
+          await root1.dispose();
+          rmSync(inRoot, { force: true });
+          rmSync(join(ws, "tmp-cfg"), { force: true });
+        }
+
+        // In a directory that exists and holds no protected path. A direct
+        // create fails under Seatbelt, but the directory is not pinned: a
+        // command builds one of its own and renames it over `cfg`. Not
+        // verified on either.
+        const swapped = await activateWith(nested);
+        try {
+          const [direct, swap] = await attempts(swapped, [
+            `echo x > "${nested}"`,
+            `mkdir "${ws}/built" && echo y > "${ws}/built/local.cfg" && mv "${ws}/cfg" "${ws}/cfg.old" && mv "${ws}/built" "${ws}/cfg"`,
+          ]);
+          if (adapter.guardsMissingFiles) expect(direct).not.toBe(0);
+          else expect(direct).toBe(0);
+          // Seatbelt: the swap works, which is why the report cannot say
+          // verified. Bubblewrap: the file was already creatable.
+          if (adapter.guardsMissingFiles) expect(swap).toBe(0);
+          expect(swapped.report.workspace).toMatchObject({
+            gitControlProtection: "not-verified",
+          });
+        } finally {
+          await swapped.dispose();
+          rmSync(join(ws, "cfg"), { recursive: true, force: true });
+          rmSync(join(ws, "cfg.old"), { recursive: true, force: true });
+          rmSync(join(ws, "built"), { recursive: true, force: true });
+        }
+      } finally {
+        rmSync(join(ws, "cfg"), { recursive: true, force: true });
       }
     });
 
