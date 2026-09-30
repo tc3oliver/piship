@@ -309,6 +309,11 @@ export interface PolicyEngineInput {
    * `allow` rules are ignored and reported, and the rest can only tighten.
    */
   readonly userRuleMode?: "replace-default" | "narrowing";
+  /**
+   * Problems reading the rule inputs (such as a project restriction file
+   * that could not be read), reported first among the engine's diagnostics.
+   */
+  readonly diagnostics?: readonly PolicyDiagnostic[];
   readonly context: PolicyContext;
 }
 
@@ -359,7 +364,7 @@ export class PolicyEngine {
       ...normalizeTokenContext(input.context),
       containment: { ...input.context.containment },
     };
-    const diagnostics: PolicyDiagnostic[] = [];
+    const diagnostics: PolicyDiagnostic[] = [...(input.diagnostics ?? [])];
     const ignored: IgnoredRule[] = [];
     const wrap = (
       rules: readonly PolicyRule[],
@@ -443,13 +448,21 @@ export class PolicyEngine {
     return matchGlob(pattern, resource);
   }
 
+  /**
+   * The first rule of `layer` that matches; with `source`, the first of that
+   * source's rules only. Team and project rules share a layer but are matched
+   * separately, so a team `ask` never hides a project `deny`.
+   */
   #firstMatch(
     layer: PolicyLayer,
     action: string,
     resource: string,
+    source?: string,
   ): LayerRule | undefined {
-    return this.#layers[layer].find((entry) =>
-      this.#matches(entry, action, resource),
+    return this.#layers[layer].find(
+      (entry) =>
+        (source === undefined || entry.source === source) &&
+        this.#matches(entry, action, resource),
     );
   }
 
@@ -478,7 +491,13 @@ export class PolicyEngine {
       action,
       resource,
     );
-    const team = this.#firstMatch("team-project", action, resource);
+    const team = this.#firstMatch("team-project", action, resource, "team");
+    const project = this.#firstMatch(
+      "team-project",
+      action,
+      resource,
+      "project",
+    );
     const userRule = this.#firstMatch("user-preference", action, resource);
     // In managed mode a user rule only narrows; otherwise it replaces the
     // matching distribution default.
@@ -490,10 +509,11 @@ export class PolicyEngine {
     const effect = strictest(
       enforced?.rule.effect,
       team?.rule.effect,
+      project?.rule.effect,
       narrowingUser?.rule.effect,
       baseEffect,
     );
-    const deciding = [enforced, team, base, narrowingUser].find(
+    const deciding = [enforced, team, project, base, narrowingUser].find(
       (entry) => entry?.rule.effect === effect,
     );
     const enforcement = enforcementPlane(action, this.context.containment);
@@ -523,9 +543,12 @@ export class PolicyEngine {
     const decision = this.#decide(request.action, resource);
     const matches: RuleMatch[] = [];
     for (const layer of Object.keys(this.#layers) as PolicyLayer[]) {
-      let first = true;
+      // First per source: team and project rules are matched separately.
+      const matched = new Set<string>();
       for (const entry of this.#layers[layer]) {
         if (!this.#matches(entry, request.action, resource)) continue;
+        const first = !matched.has(entry.source);
+        matched.add(entry.source);
         matches.push({
           layer,
           source: entry.source,
@@ -537,7 +560,6 @@ export class PolicyEngine {
             : { reason: redact(entry.rule.reason) }),
           first,
         });
-        first = false;
       }
     }
     const ignored = this.#ignored.map((item) => ({

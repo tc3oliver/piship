@@ -64,7 +64,7 @@ The migration check compares each local data class with the state schemas the ta
 | State marker | `state.json` (`piship-state/v1`) | Rewritten after each update and rollback activation with the distribution, version, Pi, and PiShip versions. One that cannot be written then keeps its previous content, is reported as a notice, and is repaired by the next update or rollback |
 | Identity session | `identity/session.json` | Credential class: kept when the target reads its schema, otherwise cleared with its secret-store entry and reacquired by `login` |
 | Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable, otherwise cleared with its secret-store entry and reacquired |
-| File secret fallback | `secrets/` | Never copied, snapshotted, or restored; removed when any credential class is cleared |
+| File secret fallback | `secrets/` | Never copied, snapshotted, or restored; a cleared class's own secrets are deleted from it; the directory is removed only when every present class that holds secrets is cleared (always for a change of storage provider), so a kept credential or identity keeps its secrets |
 | Preferences | `config/preferences.json` | Kept in place; `unsupported` when the target cannot read its schema; included in the snapshot |
 | User policy rules | `config/policy.json` | Kept in place; included in the snapshot |
 | Pi agent configuration | `agent/` | Owned by Pi and kept in place; Pi-native `auth.json` is a credential and never snapshotted |

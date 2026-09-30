@@ -4,6 +4,29 @@ const REDACTED = "[REDACTED]";
 const revealed = new Set<string>();
 
 /**
+ * A secret as it reads once encoded whole: base64 and base64url (a Basic
+ * credential of the secret alone, a token in a data field), percent-encoded
+ * (a URL or form), and JSON-escaped (inside a JSON string). Only forms at least
+ * as long as a registrable secret are kept; a secret encoded together with
+ * other bytes (such as `user:secret` in Basic) is not one of them.
+ */
+function secretForms(value: string): string[] {
+  const bytes = Buffer.from(value, "utf8");
+  const base64 = bytes.toString("base64");
+  // Base64 pads to a multiple of four with zero, one, or two `=`.
+  const padding = (3 - (bytes.length % 3)) % 3;
+  const forms = new Set([
+    value,
+    base64,
+    base64.slice(0, base64.length - padding),
+    bytes.toString("base64url"),
+    encodeURIComponent(value),
+    JSON.stringify(value).slice(1, -1),
+  ]);
+  return [...forms].filter((form) => form.length >= 6);
+}
+
+/**
  * A secret that redacts itself in string conversion, JSON serialization, and
  * debug inspection. Only `reveal()` returns the value, and every revealed value
  * is registered so `redact()` can scrub it from later diagnostics.
@@ -14,7 +37,8 @@ export class SecretValue {
     if (typeof value !== "string" || value.length === 0)
       throw new TypeError("SecretValue requires a non-empty string");
     this.#value = value;
-    if (value.length >= 6) revealed.add(value);
+    if (value.length >= 6)
+      for (const form of secretForms(value)) revealed.add(form);
   }
   reveal(): string {
     return this.#value;
@@ -42,7 +66,7 @@ export function isSecretValue(value: unknown): value is SecretValue {
 
 /** Forget a value once it is no longer held, so redaction sets stay small. */
 export function forgetSecret(value: SecretValue): void {
-  revealed.delete(value.reveal());
+  for (const form of secretForms(value.reveal())) revealed.delete(form);
 }
 
 /**
@@ -73,9 +97,14 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /("?(?:access_token|refresh_token|id_token|credential|api_?key|client_secret|password|secret)"?\s*[:=]\s*"?)([^"\s,}&]+)/gi,
 ];
 
-/** Object keys whose values are always secret, whatever they hold. */
+/**
+ * Object keys whose values are always secret, whatever they hold: the plain
+ * names, their camelCase, snake_case, and kebab-case spellings (`apiToken`,
+ * `x-api-key`, `auth_token`), and the header names that carry credentials.
+ * Counts such as `maxTokens` are not secret and do not match.
+ */
 export const SECRET_KEY_PATTERN =
-  /^(?:access_?token|refresh_?token|id_?token|token|credential|secret|client_?secret|api_?key|password|passwd|authorization|cookie|bearer)$/i;
+  /^(?:x[-_])?(?:(?:access|refresh|id|auth|api|bearer|session|csrf|xsrf)[-_]?token|token|credential|secret|client[-_]?secret|api[-_]?key|private[-_]?key|password|passwd|(?:proxy[-_]?)?authorization|(?:set[-_]?)?cookie|bearer)$/i;
 
 /** Remove known secret values and common token shapes from diagnostic text. */
 export function redact(text: string): string {
@@ -91,22 +120,42 @@ export function redact(text: string): string {
   return output;
 }
 
-/** Deep-copy a value for display, replacing SecretValues and secret-looking keys. */
+/**
+ * Deep-copy a value for display, replacing SecretValues and secret-looking
+ * keys. Bytes are shown as their redacted UTF-8 text, and a reference back to
+ * an object being copied as `[Circular]`.
+ */
 export function redactValue(value: unknown): unknown {
+  return redactWithin(value, new WeakSet());
+}
+
+function redactWithin(value: unknown, copying: WeakSet<object>): unknown {
   if (value instanceof SecretValue) return REDACTED;
   if (typeof value === "string") return redact(value);
-  if (Array.isArray(value)) return value.map(redactValue);
   if (value instanceof Date) return value.toISOString();
-  if (value && typeof value === "object") {
+  if (value instanceof Uint8Array)
+    return redact(
+      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString(
+        "utf8",
+      ),
+    );
+  if (!value || typeof value !== "object") return value;
+  if (copying.has(value)) return "[Circular]";
+  copying.add(value);
+  try {
+    if (Array.isArray(value))
+      return value.map((item) => redactWithin(item, copying));
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value))
       output[key] =
         SECRET_KEY_PATTERN.test(key) && item !== null
           ? REDACTED
-          : redactValue(item);
+          : redactWithin(item, copying);
     return output;
+  } finally {
+    // Only an ancestor is circular; the same object twice side by side is not.
+    copying.delete(value);
   }
-  return value;
 }
 
 export const REDACTED_TEXT = REDACTED;
