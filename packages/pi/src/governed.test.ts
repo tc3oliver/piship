@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -7,10 +8,10 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
 import { dirname, join, parse } from "node:path";
 import {
   type ExtensionContext,
@@ -30,7 +31,11 @@ import {
   workflowExtension,
 } from "./builtins.js";
 import { GovernanceSession, inspectGovernance } from "./governance-session.js";
-import { governedTools, pathClass } from "./governed-tools.js";
+import {
+  GOVERNED_READ_LIMIT_BYTES,
+  governedTools,
+  pathClass,
+} from "./governed-tools.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -592,6 +597,112 @@ describe("governed built-in tools", () => {
       expect.objectContaining({ block: true }),
     );
   });
+});
+
+// On APFS and ext4 a truncated-up file is sparse and allocates nothing. NTFS
+// does not make it sparse, so Windows uses a file just over the limit.
+const HUGE =
+  process.platform === "win32"
+    ? GOVERNED_READ_LIMIT_BYTES + 1
+    : 20 * 1024 * 1024 * 1024;
+
+/** A file of `size` bytes that starts with `head`, extended without writing. */
+function sparse(path: string, size: number, head = "") {
+  writeFileSync(path, head);
+  truncateSync(path, size);
+}
+
+describe("governed read resource bounds", () => {
+  it("reads a normal small file unchanged", async () => {
+    const { session, workspace } = await open();
+    writeFileSync(join(workspace, "lines.txt"), "one\ntwo\nthree\n");
+    const read = tool(governedTools(session, workspace), "read");
+    expect(text(await run(read, { path: "lines.txt" }))).toBe(
+      "one\ntwo\nthree\n",
+    );
+    expect(
+      text(await run(read, { path: "lines.txt", offset: 2, limit: 1 })),
+    ).toBe("two\n\n[2 more lines in file. Use offset=3 to continue.]");
+  });
+
+  it("refuses a huge single-line file before loading it, with a bash alternative", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "huge.log"), HUGE);
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "huge.log" })).rejects.toThrow(
+      /huge\.log is .+, over the 16\.0MB limit of the governed read tool\. Use bash .*sed -n/,
+    );
+  });
+
+  it("refuses a file just over the limit", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "over.log"), GOVERNED_READ_LIMIT_BYTES + 1);
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "over.log" })).rejects.toThrow(
+      /over the 16\.0MB limit/,
+    );
+  });
+
+  it("refuses an offset read of a huge many-line file", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "many.log"), HUGE, "line\n".repeat(10_000));
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(
+      run(read, { path: "many.log", offset: 5_000, limit: 10 }),
+    ).rejects.toThrow(/over the 16\.0MB limit of the governed read tool/);
+  });
+
+  it("refuses a huge image before loading it", async () => {
+    const { session, workspace } = await open();
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48,
+      0x44, 0x52,
+    ]);
+    sparse(join(workspace, "huge.png"), HUGE, png.toString("latin1"));
+    const read = tool(governedTools(session, workspace), "read");
+    await expect(run(read, { path: "huge.png" })).rejects.toThrow(
+      /over the 16\.0MB limit/,
+    );
+  });
+
+  it("bounds the edit tool's read of a huge file", async () => {
+    const { session, workspace } = await open();
+    sparse(join(workspace, "huge.txt"), HUGE, "needle\n");
+    const edit = tool(governedTools(session, workspace), "edit");
+    await expect(
+      run(
+        edit,
+        {
+          path: "huge.txt",
+          edits: [{ oldText: "needle", newText: "thread" }],
+        },
+        context(true),
+      ),
+    ).rejects.toThrow(/over the 16\.0MB limit of the governed edit tool/);
+  });
+
+  // The bound is on the bytes read from the opened handle, not on a size
+  // looked up first: /dev/zero reports size 0 and never ends, like a file
+  // that keeps growing while it is read.
+  it.skipIf(process.platform === "win32")(
+    "bounds a file that grows while it is read",
+    async () => {
+      const { session, workspace } = await open([], {
+        userRules: [
+          {
+            id: "me.zero",
+            action: "filesystem.read",
+            resource: "/dev/zero",
+            effect: "allow",
+          },
+        ],
+      });
+      const read = tool(governedTools(session, workspace), "read");
+      await expect(run(read, { path: "/dev/zero" })).rejects.toThrow(
+        /over the 16\.0MB limit of the governed read tool/,
+      );
+    },
+  );
 });
 
 describe("piship-ask-user", () => {
