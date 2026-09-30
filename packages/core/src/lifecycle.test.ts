@@ -2081,6 +2081,39 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(existsSync(state)).toBe(false);
   });
 
+  it("refuses install, uninstall, and purge when the roots overlap, deleting nothing", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const install = process.env.PISHIP_INSTALL_HOME as string;
+    const state = process.env.PISHIP_STATE_HOME as string;
+    const bin = process.env.PISHIP_BIN_HOME as string;
+    // State inside <install-home>/apps: the payload and state of acmepi
+    // would be the same directory.
+    process.env.PISHIP_STATE_HOME = join(install, "apps");
+    await expect(installDistribution(payload)).rejects.toThrow(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(existsSync(join(install, "apps", ID))).toBe(false);
+    expect(existsSync(join(install, "receipts", `${ID}.json`))).toBe(false);
+    // Installed with separate roots, then the state home is moved over the
+    // install: uninstall refuses and keeps everything.
+    process.env.PISHIP_STATE_HOME = state;
+    const receipt = await installDistribution(payload);
+    write(join(stateDir(), "sessions", "s1.jsonl"), "{}\n");
+    process.env.PISHIP_STATE_HOME = join(install, "apps");
+    expect(() => uninstallDistribution(ID)).toThrow(/overlap/);
+    expect(existsSync(receipt.payload)).toBe(true);
+    process.env.PISHIP_STATE_HOME = state;
+    expect(uninstallDistribution(ID)).toBe(stateDir());
+    expect(existsSync(join(stateDir(), "sessions", "s1.jsonl"))).toBe(true);
+    // A bin home inside acmepi's state holds another distribution's shim:
+    // purging acmepi refuses rather than deleting it.
+    process.env.PISHIP_BIN_HOME = join(stateDir(), "bin");
+    write(join(stateDir(), "bin", "otherpi"), "#!/bin/sh\n");
+    await expect(purgeDistributionState(ID)).rejects.toThrow(/overlap/);
+    expect(existsSync(join(stateDir(), "bin", "otherpi"))).toBe(true);
+    process.env.PISHIP_BIN_HOME = bin;
+  });
+
   it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
     const a = await release("1.0.0");
     const receipt = await installDistribution(a.archive);

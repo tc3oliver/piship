@@ -20,6 +20,7 @@ import {
   writeFileAtomic,
 } from "@piship/credentials";
 import {
+  assertDisjointRoots,
   binHome,
   installHome,
   distributionStateDirectory,
@@ -256,6 +257,7 @@ export function acquireLock(
   id: string,
   code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
 ): LifecycleLock {
+  assertDisjointRoots();
   const path = join(appDirectory(id), ".lifecycle.lock");
   const operation = code === "UPDATE_FAILED" ? "update" : "rollback";
   const hold = acquireLifecycleLock(

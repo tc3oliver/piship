@@ -3,7 +3,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { SecretStore } from "@piship/contracts";
-import { runtimeStateDirectory } from "../index.js";
+import { assertDisjointRoots, runtimeStateDirectory } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { ownsCommandShim } from "./install.js";
 import { deleteReferencedSecrets, type PurgeResult } from "./purge.js";
@@ -25,6 +25,7 @@ function holdForUninstall(id: string): {
   readonly remove: () => void;
   readonly release: () => void;
 } {
+  assertDisjointRoots();
   const receipt = readInstallReceipt(id);
   const apps = appDirectory(id);
   const releases: (() => void)[] = [];

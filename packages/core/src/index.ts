@@ -55,10 +55,12 @@ export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
 export * from "./signing.js";
 export {
+  assertDisjointRoots,
   binHome,
   distributionStateDirectory,
   installHome,
   runtimeStateDirectory,
+  stateHome,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
 export {

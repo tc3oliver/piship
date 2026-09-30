@@ -15,6 +15,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { sha256File } from "../archive.js";
 import {
+  assertDisjointRoots,
   installHome,
   runtimeStateDirectory,
   verifyPayload,
@@ -239,6 +240,7 @@ export async function installDistribution(
   const source = resolve(artifact);
   const isArchive = statSync(source).isFile();
   const isRelease = isArchive || existsSync(join(source, "release.json"));
+  assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
   const temporary = createStagingDirectory(installHome());
   const staging = temporary.path;

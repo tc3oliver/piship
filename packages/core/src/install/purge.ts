@@ -9,7 +9,11 @@ import {
   metadataSecretRefs,
 } from "@piship/credentials";
 import { accessStatePaths } from "../access/index.js";
-import { distributionStateDirectory, runtimeStateDirectory } from "../index.js";
+import {
+  assertDisjointRoots,
+  distributionStateDirectory,
+  runtimeStateDirectory,
+} from "../index.js";
 import { receiptPath } from "./receipt.js";
 
 export interface PurgeResult {
@@ -38,6 +42,7 @@ export async function purgeDistributionState(
   options: { readonly secretStore?: SecretStore } = {},
 ): Promise<PurgeResult> {
   distributionStateDirectory({ value: id });
+  assertDisjointRoots();
   if (existsSync(receiptPath(id)))
     throw new Error(
       `Uninstall ${id} before purging its state, or run uninstall ${id} --purge --yes`,
