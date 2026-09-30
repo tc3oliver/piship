@@ -78,6 +78,8 @@ export const CREDENTIAL_ISSUANCE_FILE = "pending-issuance.json";
  * acquire starts a new key instead.
  */
 export const ISSUANCE_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** A pending issuance dated further ahead of the clock than this fails closed like an expired one. */
+const ISSUANCE_CLOCK_TOLERANCE_MS = 60 * 1000;
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
@@ -1058,18 +1060,22 @@ export class CredentialManager {
     }
     // Wall time cannot prove broker retention across clock steps, sleep or a
     // process restart. Never turn an unresolved remote side effect into a new
-    // key. Once the recorded age exceeds the broker's promised window, stop
-    // automatic issuance and require reconciliation instead of guessing.
+    // key. Once the recorded age exceeds the broker's promised window, or the
+    // record is dated ahead of the clock by more than the tolerance (its age
+    // cannot be known), stop automatic issuance and require reconciliation
+    // instead of guessing. Only logout removes the record.
+    const age = this.#now() - Date.parse(pending.created_at);
     if (
-      this.#now() - Date.parse(pending.created_at) >=
-      (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS)
+      !(age >= -ISSUANCE_CLOCK_TOLERANCE_MS) ||
+      age >= (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS)
     )
       throw new PiShipError(
         "CREDENTIAL_ACQUIRE_FAILED",
         "An unresolved credential request may be older than broker idempotency retention; reconcile it before acquiring again",
         {
+          component: "credential",
           userAction:
-            "Check the broker for the pending issuance key and resolve or revoke that credential before retrying",
+            "Check the broker for the pending issuance key and revoke a credential it issued, then run the branded logout command and the branded login command",
         },
       );
     return pending;
