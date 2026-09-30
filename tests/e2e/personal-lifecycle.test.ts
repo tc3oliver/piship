@@ -232,6 +232,36 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
       resumed: true,
     });
 
+    // A damaged session is not resumed: the launch stops with the file
+    // named and unchanged, and --new-session starts a new session beside it.
+    const acceptance = join(s.state, "mypi", "sessions", "acceptance");
+    const [sessionName] = readdirSync(acceptance).filter((name) =>
+      name.endsWith(`_${first.sessionId}.jsonl`),
+    );
+    expect(sessionName).toBeDefined();
+    const sessionFile = join(acceptance, sessionName as string);
+    const [header, ...entries] = readFileSync(sessionFile, "utf8").split("\n");
+    writeFileSync(sessionFile, [header, "{damaged", ...entries].join("\n"));
+    const damaged = readFileSync(sessionFile);
+    const refused = await s.run(["--smoke"]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("line 2 is not valid JSON");
+    expect(refused.stderr).toContain(sessionFile);
+    expect(refused.stderr).toContain("mypi --new-session");
+    expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
+    const fresh = await s.run(["--new-session", "--smoke"]);
+    expect(fresh.status, fresh.stderr).toBe(0);
+    const freshSmoke = JSON.parse(fresh.stdout) as Smoke;
+    expect(freshSmoke).toMatchObject({ ...expected, resumed: false });
+    expect(freshSmoke.sessionId).not.toBe(first.sessionId);
+    const afterFresh = await s.run(["--smoke"]);
+    expect(afterFresh.status, afterFresh.stderr).toBe(0);
+    expect(JSON.parse(afterFresh.stdout)).toMatchObject({
+      sessionId: freshSmoke.sessionId,
+      resumed: true,
+    });
+    expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
+
     // Nothing but the channel was contacted, and no enterprise state exists.
     const channelFiles = new Set([
       "stable.json",
@@ -274,6 +304,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     expect(existsSync(s.command)).toBe(false);
     expect(existsSync(join(s.install, "apps", "mypi"))).toBe(false);
     expect(readdirSync(join(state, "sessions")).length).toBeGreaterThan(0);
+    expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
     expect(existsSync(join(state, "state.json"))).toBe(true);
 
     // The user's personal Pi configuration is untouched.
