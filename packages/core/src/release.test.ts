@@ -14,6 +14,12 @@ import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deadPid,
+  livePid,
+  stopLiveProcesses,
+} from "../../../tests/helpers/processes.js";
+import { plantTemporary } from "../../../tests/helpers/temporaries.js";
+import {
   buildDistribution,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
@@ -71,6 +77,7 @@ beforeEach(() => {
   process.env.SOURCE_DATE_EPOCH = EPOCH;
 });
 afterEach(() => {
+  stopLiveProcesses();
   for (const [key, value] of Object.entries(savedEnv))
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -1422,6 +1429,59 @@ describe("evaluateVulnerabilities", () => {
 });
 
 // ------------------------------------------------------------ build output
+
+describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
+  it("is removed by the next release build, and a live build's is kept", async () => {
+    const { dir, path } = project();
+    const releases = join(dir, "dist", "releases");
+    const name = `.piship-release-acmepi-1.0.0-${currentTarget()}-`;
+    const stale = plantTemporary(
+      releases,
+      `${name}aaaaaa`,
+      "release",
+      deadPid(),
+    );
+    const live = plantTemporary(
+      releases,
+      `${name}bbbbbb`,
+      "release",
+      livePid(),
+    );
+    const user = join(releases, `${name}notes`);
+    mkdirSync(user);
+    writeFileSync(join(user, "keep.txt"), "user data");
+    const built = await build(path);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(join(live, "x", "output.txt"))).toBe(true);
+    expect(readFileSync(join(user, "keep.txt"), "utf8")).toBe("user data");
+    // The build's own staging is gone, and it left no release-test state.
+    expect(readdirSync(releases).sort()).toEqual(
+      [
+        `${name}bbbbbb`,
+        `${name}notes`,
+        built.name,
+        `${built.name}.tar.gz`,
+        `${built.name}.tar.gz.sha256`,
+      ].sort(),
+    );
+  });
+
+  it("is removed by the next build even when that build fails", async () => {
+    const { dir, path } = project();
+    const releases = join(dir, "dist", "releases");
+    const stale = plantTemporary(
+      releases,
+      `.piship-release-acmepi-1.0.0-${currentTarget()}-aaaaaa`,
+      "release",
+      deadPid(),
+    );
+    await rejection(
+      build(path, { runTest: () => ({ status: 1, stdout: "", stderr: "no" }) }),
+    );
+    expect(existsSync(stale)).toBe(false);
+    expect(readdirSync(releases)).toEqual([]);
+  });
+});
 
 describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
   it("writes the release layout, checksums, and a deterministic archive", async () => {

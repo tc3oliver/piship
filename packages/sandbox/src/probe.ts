@@ -1,17 +1,15 @@
 // Live verification: an adapter is only reported as enforcing a plane after a
 // real child inside it failed to cross that plane.
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  createTemporaryDirectory,
+  reclaimTemporaryDirectories,
+  type TemporaryDirectory,
+} from "@piship/contracts";
 import type {
   SandboxAdapter,
   SandboxCommand,
@@ -102,13 +100,17 @@ const connect = (host, port) => new Promise((done) => {
 })();
 `;
 
-function outsideLocation(profile: SandboxProfile): string | undefined {
+function outsideLocation(
+  profile: SandboxProfile,
+): TemporaryDirectory | undefined {
   const candidates = ["/var/tmp", tmpdir(), profile.homeDir];
   for (const candidate of candidates) {
     const real = realpathNearest(candidate);
     if (profile.writeAllow.some((path) => isWithin(real, path))) continue;
     try {
-      return mkdtempSync(join(real, ".piship-probe-"));
+      // A probe killed before it cleaned up left its directory here.
+      reclaimTemporaryDirectories(real, ["probe"]);
+      return createTemporaryDirectory(real, "probe");
     } catch {
       // not writable on the host; try the next one
     }
@@ -225,8 +227,11 @@ export async function probeSandbox(
 ): Promise<ProbeResult> {
   const secret = randomBytes(12).toString("hex");
   mkdirSync(profile.tmpDir, { recursive: true, mode: 0o700 });
-  const probeDir = mkdtempSync(join(profile.tmpDir, ".piship-probe-"));
-  const outsideDir = outsideLocation(profile);
+  reclaimTemporaryDirectories(profile.tmpDir, ["probe"]);
+  const probe = createTemporaryDirectory(profile.tmpDir, "probe");
+  const probeDir = probe.path;
+  const outside = outsideLocation(profile);
+  const outsideDir = outside?.path;
   const listener = profile.network === "deny" ? await listen() : undefined;
   try {
     if (!outsideDir)
@@ -370,7 +375,7 @@ export async function probeSandbox(
     };
   } finally {
     listener?.server.close();
-    rmSync(probeDir, { recursive: true, force: true });
-    if (outsideDir) rmSync(outsideDir, { recursive: true, force: true });
+    probe.remove();
+    outside?.remove();
   }
 }

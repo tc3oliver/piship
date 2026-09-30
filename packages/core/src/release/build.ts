@@ -7,7 +7,6 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -15,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createTemporaryDirectory } from "@piship/contracts";
 import {
   RELEASE_CHANNELS,
   type ReleaseManifest,
@@ -34,6 +34,10 @@ import {
   listPayloadPackages,
   verifySbom,
 } from "../supply-chain.js";
+import {
+  reclaimBuildTemporaries,
+  reclaimOsTemporaries,
+} from "../temporary-directories.js";
 import {
   checkReleaseInputs,
   piCompatibility,
@@ -99,10 +103,11 @@ function runReleaseTests(
   lock: DistributionLock,
   runTest: ReleaseTestRunner,
 ): ReleaseTestResult[] {
-  const state = mkdtempSync(join(tmpdir(), "piship-release-test-"));
+  reclaimOsTemporaries();
+  const state = createTemporaryDirectory(tmpdir(), "release-test");
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PISHIP_STATE_HOME: state,
+    PISHIP_STATE_HOME: state.path,
     PISHIP_NO_BROWSER: "1",
   };
   delete env.PISHIP_BUILD_INPUT;
@@ -143,7 +148,7 @@ function runReleaseTests(
       return { name, result: "passed" as const };
     });
   } finally {
-    rmSync(state, { recursive: true, force: true });
+    state.remove();
   }
 }
 
@@ -191,7 +196,10 @@ export async function buildRelease(
   const directory = join(outputRoot, name);
   const archive = join(outputRoot, `${name}.tar.gz`);
   mkdirSync(outputRoot, { recursive: true });
-  const stage = mkdtempSync(join(outputRoot, `.${name}-`));
+  // Staging that a killed release build left behind.
+  reclaimBuildTemporaries(outputRoot, "release");
+  const temporary = createTemporaryDirectory(outputRoot, "release", name);
+  const stage = temporary.path;
   try {
     const built = (options.assemble ?? buildDistribution)(
       manifestPath,
@@ -332,6 +340,6 @@ export async function buildRelease(
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
     return { name, directory, archive, sha256: result.sha256, metadata };
   } finally {
-    rmSync(stage, { recursive: true, force: true });
+    temporary.remove();
   }
 }

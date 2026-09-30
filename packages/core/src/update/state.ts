@@ -14,7 +14,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { PiShipError, redact } from "@piship/contracts";
+import {
+  createTemporaryDirectory,
+  PiShipError,
+  redact,
+} from "@piship/contracts";
 import {
   deleteSecretsVerified,
   metadataFileSecretRefs,
@@ -42,6 +46,7 @@ import {
 } from "../migration.js";
 import type { ReleaseTestRunner } from "../release/index.js";
 import { storageTransitionNotice } from "../storage-transition.js";
+import { reclaimOsTemporaries } from "../temporary-directories.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";
 const SNAPSHOT_RETENTION = 3;
@@ -451,15 +456,16 @@ export function checkPayload(
 ): void {
   // The candidate is not active yet: it runs against throwaway state, never
   // the user's.
-  const state = mkdtempSync(join(tmpdir(), "piship-launch-check-"));
+  reclaimOsTemporaries();
+  const state = createTemporaryDirectory(tmpdir(), "launch-check");
   let result: ReturnType<ReleaseTestRunner>;
   try {
     result = runCheck(payload, lock.app.command, ["version"], {
       ...env,
-      PISHIP_STATE_HOME: state,
+      PISHIP_STATE_HOME: state.path,
     });
   } finally {
-    rmSync(state, { recursive: true, force: true });
+    state.remove();
   }
   if (
     result.status !== 0 ||

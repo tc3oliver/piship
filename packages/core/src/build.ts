@@ -4,12 +4,12 @@ import {
   copyFileSync,
   cpSync,
   mkdirSync,
-  mkdtempSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createTemporaryDirectory } from "@piship/contracts";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
 import {
@@ -19,6 +19,7 @@ import {
 } from "./payload.js";
 import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
+import { reclaimBuildTemporaries } from "./temporary-directories.js";
 
 /**
  * Assemble the portable payload from a current lock. By default the release
@@ -37,7 +38,14 @@ export function buildDistribution(
   const output = join(outputRoot, lock.app.id);
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });
-  const stage = mkdtempSync(join(outputRoot, `.piship-${lock.app.id}-`));
+  // Staging that a killed build left behind.
+  reclaimBuildTemporaries(outputRoot, "build");
+  // The payload is assembled in `payload`, beside the staging directory's
+  // ownership marker, so the marker never becomes part of the payload (its
+  // inventory lists every file).
+  const temporary = createTemporaryDirectory(outputRoot, "build", lock.app.id);
+  const stage = join(temporary.path, "payload");
+  mkdirSync(stage);
   try {
     let phase = process.hrtime.bigint();
     copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
@@ -123,8 +131,12 @@ export function buildDistribution(
     rmSync(output, { recursive: true, force: true });
     renameSync(stage, output);
     return output;
-  } catch (error) {
-    rmSync(stage, { recursive: true, force: true });
-    throw error;
+  } finally {
+    try {
+      temporary.remove();
+    } catch {
+      // What is left is the marker of a directory whose owner is this
+      // process: the next start removes it once the process is gone.
+    }
   }
 }
