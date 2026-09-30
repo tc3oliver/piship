@@ -27,6 +27,7 @@ import {
   expectOwnParts,
   LIVE_SECRET_STORE,
   platformStoreRefs,
+  PRIMARY_STORAGE,
   primaryRefs,
   type Storage,
   shareKeychainSearchList,
@@ -94,24 +95,48 @@ function pinKey(source: string, publicKey: string, version: string): string {
 }
 
 /**
- * The demo company, storing its secrets in the file fallback or, as the
- * example ships, in the system store. Platform store references are named
- * after the app ID alone (`piship:<id>:...`), so the system variant has an ID
- * of its own for each test run: it never meets an entry of a real install
- * or of an earlier run.
+ * The owner's edit for a flow that runs agent commands: Build mode by
+ * default and shell execution allowed, which the required sandbox contains.
+ * As shipped, the demo starts in Plan mode and asks before every command,
+ * which a headless run resolves to a denial.
  */
-function demo(storage: Storage, fixtures: string): Distribution {
+function allowCommands(source: string): string {
+  const shell =
+    ' - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect:';
+  const edited = source
+    .replace("defaultMode: plan", "defaultMode: build")
+    .replace(`${shell} ask`, `${shell} allow`);
+  if (
+    !edited.includes("defaultMode: build") ||
+    !edited.includes(`${shell} allow`)
+  )
+    throw new Error("demo: the command policy was not patched");
+  return edited;
+}
+
+/**
+ * The demo company, storing its secrets in the file fallback or, as the
+ * example ships, in the system store, and with `commands` allowing sandboxed
+ * agent commands. Platform store references are named after the app ID alone
+ * (`piship:<id>:...`), so the system variant has an ID of its own for each
+ * test run: it never meets an entry of a real install or of an earlier run.
+ */
+function demo(
+  storage: Storage,
+  fixtures: string,
+  commands = false,
+): Distribution {
   const id =
     storage === "file"
       ? "acmecode"
       : `acmelive-${createHash("sha256").update(fixtures).digest("hex").slice(0, 8)}`;
   return {
     example: "demo-company",
-    fixture: storage === "file" ? "demo-company" : "demo-company-system",
+    fixture: `${storage === "file" ? "demo-company" : "demo-company-system"}${commands ? "-commands" : ""}`,
     id,
     name: "AcmeCode",
     updateVariable: "ACMECODE_UPDATE_SOURCE",
-    plainBuild: storage === "file",
+    plainBuild: storage === "file" && !commands,
     patch(source, publicKey, version) {
       const stored =
         storage === "file"
@@ -123,7 +148,10 @@ function demo(storage: Storage, fixtures: string): Distribution {
               .replace(/^( {2}(?:id|command)): acmecode$/gm, `$1: ${id}`)
               .replace('resource: "acmecode/**"', `resource: "${id}/**"`);
       const patched = pinKey(
-        stored.replace("127.0.0.1:8765", "127.0.0.1"),
+        (commands ? allowCommands(stored) : stored).replace(
+          "127.0.0.1:8765",
+          "127.0.0.1",
+        ),
         publicKey,
         version,
       );
@@ -441,7 +469,9 @@ export function personalLocalReleases(): Promise<ReleaseFixtures> {
  * Build every distribution's fixtures into `fixtures` before any scenario
  * starts, through the same election the scenarios use, so they find them
  * ready instead of building while other E2E files compete for the CPU. The
- * system-store demo is built only when the platform store is live.
+ * system-store demo is built only when the platform store is live, and the
+ * demo that allows sandboxed commands only in the storage of the managed
+ * clean-machine flow.
  */
 export async function prebuildLifecycleFixtures(
   fixtures: string,
@@ -449,6 +479,7 @@ export async function prebuildLifecycleFixtures(
   await Promise.all([
     sharedReleases(demo("file", fixtures), fixtures),
     sharedReleases(PERSONAL, fixtures),
+    sharedReleases(demo(PRIMARY_STORAGE, fixtures, true), fixtures),
     ...(LIVE_SECRET_STORE
       ? [sharedReleases(demo("system", fixtures), fixtures)]
       : []),
@@ -764,25 +795,27 @@ async function createScenario<Releases extends ReleaseFixtures>(
  * With `storage: "system"` the distribution keeps the example's platform
  * secret store, which needs PISHIP_LIVE_SECRET_STORE=1; it starts with no
  * entry of its app ID in the store and deletes whatever it left on teardown.
+ *
+ * With `commands: true` the owner has allowed agent shell commands, in Build
+ * mode, inside the required sandbox (Windows has none, and its copy of the
+ * demo does not require one). It has releases of its own.
  */
 export async function lifecycleScenario(
   name: string,
-  options: { readonly storage?: Storage } = {},
+  options: { readonly storage?: Storage; readonly commands?: boolean } = {},
 ): Promise<Scenario> {
   const storage = options.storage ?? "file";
+  const commands = options.commands ?? false;
   if (storage === "file") {
-    const releases = await lifecycleReleases();
+    const fixtures = inject("lifecycleFixtures");
+    const distribution = demo("file", fixtures, commands);
+    const releases = await sharedReleases(distribution, fixtures);
     const services: Services = await startLocalServices();
-    const scenario = await createScenario(
-      demo("file", inject("lifecycleFixtures")),
-      releases,
-      name,
-      {
-        env: services.env(),
-        approve: (url) => services.approve(url),
-        close: () => services.close(),
-      },
-    );
+    const scenario = await createScenario(distribution, releases, name, {
+      env: services.env(),
+      approve: (url) => services.approve(url),
+      close: () => services.close(),
+    });
     const state = join(scenario.state, "acmecode");
     const storeRefs = (): string[] => {
       throw new Error("A file-storage scenario has no platform store");
@@ -804,7 +837,7 @@ export async function lifecycleScenario(
       "A system-storage scenario writes to the platform secret store; set PISHIP_LIVE_SECRET_STORE=1",
     );
   const fixtures = inject("lifecycleFixtures");
-  const distribution = demo("system", fixtures);
+  const distribution = demo("system", fixtures, commands);
   const releases = await sharedReleases(distribution, fixtures);
   const prefix = `piship:${distribution.id}:`;
   // One system-store scenario at a time: every such scenario of a run
