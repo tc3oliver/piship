@@ -2179,6 +2179,27 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     rmSync(gate);
   }, 30_000);
 
+  it("launches a release whose PiShip predates runtime leases", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    writeFileSync(
+      join(
+        receipt.payload,
+        "node_modules",
+        "@piship",
+        "core",
+        "dist",
+        "index.js",
+      ),
+      "export {};\n",
+    );
+    const launched = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(launched.status, launched.stderr).toBe(0);
+    expect(launched.stdout).toContain("payload");
+  });
+
   it.runIf(process.platform !== "win32")(
     "launches when the receipt records a symlinked install path",
     async () => {

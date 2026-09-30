@@ -185,7 +185,9 @@ if (!payload) {
   process.exit(1);
 }
 const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
-core.holdRuntimeLease(${JSON.stringify(id)}, version);
+// A release older than runtime leases (after a rollback, or an older archive
+// installed by a newer CLI) has no holdRuntimeLease: it launches without one.
+if (typeof core.holdRuntimeLease === "function") core.holdRuntimeLease(${JSON.stringify(id)}, version);
 if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
 clearLaunching();
 process.removeListener("exit", clearLaunching);
