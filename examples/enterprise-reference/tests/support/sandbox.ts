@@ -352,7 +352,7 @@ export async function startSandboxService(
     if (Date.now() > deadline) {
       await stop();
       throw new Error(
-        `the sandbox service did not answer:\n${logs.slice(-2000)}`,
+        `the sandbox service did not answer /health as instance ${instance}:\n${logs.slice(-2000)}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
