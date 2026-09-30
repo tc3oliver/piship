@@ -62,7 +62,11 @@ export class NativeBackend implements SandboxBackend {
   }
 
   capabilities(): SandboxCapabilities {
-    return NATIVE_CAPABILITIES;
+    // What the isolator can guard is its own property, not the platform's.
+    return {
+      ...NATIVE_CAPABILITIES,
+      guardsMissingFiles: this.adapter.guardsMissingFiles === true,
+    };
   }
 
   async prepare({ profile }: SandboxPrepareRequest): Promise<SandboxInstance> {

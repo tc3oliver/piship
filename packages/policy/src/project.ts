@@ -1,6 +1,12 @@
 // Project identity, origin classification, and project resource discovery.
 // No git binary is executed: the origin remote is read from the git config.
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  type Dirent,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
@@ -17,6 +23,7 @@ import {
   isWithin,
   matchGlob,
   normalizePathResource,
+  toPosixPath,
 } from "./glob.js";
 import { projectEffectReason, type ProjectOrigin } from "./trust.js";
 
@@ -45,6 +52,17 @@ function isFile(path: string): boolean {
     return false;
   }
 }
+
+function isSymbolicLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The directories of a git directory that git runs or trusts, protected as whole trees. */
+const GIT_CONTROL_TREES = ["hooks", "info", "modules", "worktrees"] as const;
 
 function readText(path: string): string | undefined {
   try {
@@ -185,13 +203,24 @@ function gitConfigPath(gitDir: string): string {
  * `.git` entry itself (a `gitdir:` pointer when it is a file), the git
  * directory's `config`, `config.worktree`, and `commondir`, the shared
  * `config` a worktree points to, and the files those configs include
- * (`include.path`, `includeIf.*.path`), whether or not they exist yet. Also
- * the system, global, and environment config (see `knownConfigs`), and what
- * only they include, when they lie inside the project. Rewriting any of
- * them could change the origin remote a later launch reads or the commands
- * git runs. Paths are normalized (symlink-resolved, POSIX separators).
+ * (`include.path`, `includeIf.*.path`), whether or not they exist yet.
+ * Rewriting any of them could change the origin remote a later launch reads
+ * or the commands git runs. Paths are normalized (symlink-resolved, POSIX
+ * separators).
+ *
+ * The system, global, and environment config (see `knownConfigs`), and what
+ * only they include, are the user's or the machine's own. With the default
+ * `scope: "project"` they are listed only when they lie inside the project;
+ * this is the list PiShip's file tools refuse to write, and listing
+ * `~/.gitconfig` there would stop them editing the user's own git
+ * configuration. With `scope: "sandbox"` they are listed wherever they lie,
+ * for the paths a sandboxed process must not change: a sandbox that may
+ * write the home directory could otherwise plant a hooks path there.
  */
-export function projectGitControlFiles(root: string): string[] {
+export function projectGitControlFiles(
+  root: string,
+  options: { readonly scope?: "project" | "sandbox" } = {},
+): string[] {
   const dotGit = join(root, ".git");
   const files = [real(dotGit), real(join(dotGit, "config"))];
   const gitDir = gitDirectory(root);
@@ -205,11 +234,12 @@ export function projectGitControlFiles(root: string): string[] {
   }
   const scan = gitConfigScan(root, gitDir);
   files.push(...scan.repositoryIncludes);
-  // Those configs are the user's or the machine's, not the project's: only a
-  // file inside the project (the home directory holding a repository, an
-  // include into the working tree) is one the sandbox could write.
   const project = real(root);
-  files.push(...scan.otherFiles.filter((path) => isWithin(project, path)));
+  files.push(
+    ...(options.scope === "sandbox"
+      ? scan.otherFiles
+      : scan.otherFiles.filter((path) => isWithin(project, path))),
+  );
   return [...new Set(files)];
 }
 
@@ -334,18 +364,21 @@ interface EnvironmentSetting {
 
 /**
  * What git reads besides the repository, from the process environment PiShip
- * itself has: the system config (`GIT_CONFIG_SYSTEM`, or `/etc/gitconfig`,
+ * itself has: the system config (`GIT_CONFIG_SYSTEM`, or `/etc/gitconfig` and
+ * the other places a git installation keeps it (`SYSTEM_CONFIG_PATHS`),
  * unless `GIT_CONFIG_NOSYSTEM` is true), the global config (`GIT_CONFIG_GLOBAL`
  * alone when it is set, else `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`,
- * `~/.config/git/config` by default), and the `GIT_CONFIG_COUNT` settings.
- * These are the only sources besides the repository, and the includes of all
- * of them.
+ * `~/.config/git/config` by default), the `GIT_CONFIG_COUNT` settings, and
+ * the `GIT_CONFIG_PARAMETERS` ones (what `git -c` exports). These are the only
+ * sources besides the repository, and the includes of all of them.
  */
 interface KnownConfigs {
   readonly files: readonly string[];
   readonly settings: readonly EnvironmentSetting[];
   /** More settings than are read. */
   readonly settingsOverflow: boolean;
+  /** `GIT_CONFIG_PARAMETERS` is set and not in the format git writes. */
+  readonly parametersUnreadable: boolean;
 }
 
 /** Git's boolean for an environment variable: only a clear "true" counts, so an odd value never hides the system config. */
@@ -356,14 +389,37 @@ function environmentTrue(value: string | undefined): boolean {
   return text !== "" && Number.isFinite(number) && number !== 0;
 }
 
+/**
+ * Where git reads its system config when `GIT_CONFIG_SYSTEM` does not say. The
+ * path is fixed when git is built, so `/etc/gitconfig` (a distribution's git)
+ * is only one of them: Homebrew's git reads its own `etc` (Apple silicon,
+ * Intel, and Linux), and the git of Xcode and the Command Line Tools reads the
+ * `etc` of its toolchain. PiShip cannot tell which git a user's next command
+ * runs, so it reads and protects all of them; a file git does not read only
+ * adds a protected path. A git built with another prefix (Nix, a source build)
+ * reads a file PiShip does not know, which `GIT_CONFIG_SYSTEM` has to name.
+ */
+const SYSTEM_CONFIG_PATHS = [
+  "/etc/gitconfig",
+  "/opt/homebrew/etc/gitconfig",
+  "/usr/local/etc/gitconfig",
+  "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+  "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
+  "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
+];
+
 function knownConfigs(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
 ): KnownConfigs {
   const files: string[] = [];
   if (!environmentTrue(env.GIT_CONFIG_NOSYSTEM)) {
-    const system = env.GIT_CONFIG_SYSTEM ?? "/etc/gitconfig";
-    if (system !== "") files.push(resolve(system));
+    // Set, it names the one file (an empty value, none); unset, every place a
+    // git installation keeps it.
+    if (env.GIT_CONFIG_SYSTEM === undefined)
+      files.push(...SYSTEM_CONFIG_PATHS.map((path) => resolve(path)));
+    else if (env.GIT_CONFIG_SYSTEM !== "")
+      files.push(resolve(env.GIT_CONFIG_SYSTEM));
   }
   if (env.GIT_CONFIG_GLOBAL !== undefined) {
     if (env.GIT_CONFIG_GLOBAL !== "")
@@ -385,11 +441,89 @@ function knownConfigs(
     const value = env[`GIT_CONFIG_VALUE_${index}`];
     if (key !== undefined && value !== undefined) settings.push({ key, value });
   }
+  // What `git -c` exports to the commands it starts, counted with the rest.
+  const parameters = parseConfigParameters(
+    env.GIT_CONFIG_PARAMETERS ?? "",
+    MAX_CONFIG_REFERENCES + 1,
+  );
+  settings.push(...parameters.settings);
   return {
     files,
-    settings,
-    settingsOverflow: declared > MAX_CONFIG_REFERENCES,
+    settings: settings.slice(0, MAX_CONFIG_REFERENCES),
+    settingsOverflow:
+      declared > MAX_CONFIG_REFERENCES ||
+      settings.length > MAX_CONFIG_REFERENCES,
+    parametersUnreadable: parameters.unreadable,
   };
+}
+
+/**
+ * The settings in a `GIT_CONFIG_PARAMETERS` value, which is what `git -c
+ * key=value` exports to the commands it starts: items separated by white
+ * space, each a shell-quoted `'key=value'` (older git) or `'key'='value'` (git
+ * 2.31 and later), a `'key'` alone being a setting with no value. A single
+ * quote inside a quoted string is written `'\''`. At most `limit` settings are
+ * returned; `unreadable` is set when the text is not in that format, where git
+ * itself refuses it.
+ */
+function parseConfigParameters(
+  text: string,
+  limit: number,
+): { readonly settings: EnvironmentSetting[]; readonly unreadable: boolean } {
+  const settings: EnvironmentSetting[] = [];
+  /** One quoted string from `start`, and where it ends. */
+  const quoted = (
+    start: number,
+  ): { readonly value: string; readonly end: number } | undefined => {
+    if (text[start] !== "'") return undefined;
+    let value = "";
+    let position = start;
+    for (;;) {
+      if (text[position] === "'") {
+        const close = text.indexOf("'", position + 1);
+        if (close < 0) return undefined;
+        value += text.slice(position + 1, close);
+        position = close + 1;
+      } else if (
+        text[position] === "\\" &&
+        (text[position + 1] === "'" || text[position + 1] === "!") &&
+        text[position + 2] === "'"
+      ) {
+        value += text[position + 1];
+        position += 2;
+      } else return { value, end: position };
+    }
+  };
+  let position = 0;
+  while (settings.length < limit) {
+    while (/\s/.test(text[position] ?? "x")) position += 1;
+    if (position >= text.length) break;
+    const first = quoted(position);
+    if (!first) return { settings, unreadable: true };
+    position = first.end;
+    let key = first.value;
+    let value = "";
+    if (text[position] === "=") {
+      // `'key'='value'`, or `'key'=` with no value.
+      position += 1;
+      const second = quoted(position);
+      if (second) {
+        value = second.value;
+        position = second.end;
+      }
+    } else {
+      // `'key=value'`, or `'key'` with no value.
+      const equals = key.indexOf("=");
+      if (equals >= 0) {
+        value = key.slice(equals + 1);
+        key = key.slice(0, equals);
+      }
+    }
+    if (position < text.length && !/\s/.test(text[position] ?? ""))
+      return { settings, unreadable: true };
+    settings.push({ key, value });
+  }
+  return { settings, unreadable: false };
 }
 
 /** `core.hooksPath` and `include.path` values among environment settings; a key is `section.name` or `section.subsection.name`. */
@@ -430,11 +564,16 @@ function readConfig(path: string): string | undefined | "too-large" {
   }
 }
 
-/** What identifies a config file's state: changed, replaced, created, or removed makes it differ. */
+/**
+ * What identifies a config file's state: changed, replaced, created, or removed
+ * makes it differ. The change time is part of it because a writer can put the
+ * modification time back (`utimes`, `cp -p`, `touch -r`), but only the kernel
+ * sets the change time.
+ */
 function stampOf(path: string): string {
   try {
     const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
+    return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
   } catch (error) {
     return `absent:${(error as NodeJS.ErrnoException)?.code ?? ""}`;
   }
@@ -447,11 +586,15 @@ interface GitConfigScan {
   readonly repositoryIncludes: readonly string[];
   /** The known system and global config files, and the files only they and the environment include, normalized. */
   readonly otherFiles: readonly string[];
+  /** Every config file the scan tried, as it was named (not resolved), whether or not it exists. */
+  readonly tried: readonly string[];
   /** Why the scan stopped short, when it did. */
   readonly unverified: string | undefined;
 }
 
 const TOO_MANY_REFERENCES = `the git config lists more than ${MAX_CONFIG_REFERENCES} included files, hooks paths, or environment settings; PiShip follows the first ${MAX_CONFIG_REFERENCES} and cannot vouch for the rest`;
+const UNREADABLE_PARAMETERS =
+  "GIT_CONFIG_PARAMETERS is set but not in the format git writes, so PiShip cannot vouch for the hooks paths and includes it sets";
 
 /**
  * Read the given config files, the known ones, and the environment's
@@ -530,11 +673,13 @@ function scanGitConfigs(
     visit(target, otherIncluded, 1);
   }
   if (known.settingsOverflow) unverified = TOO_MANY_REFERENCES;
+  if (known.parametersUnreadable) unverified ??= UNREADABLE_PARAMETERS;
   return {
     scan: {
       hooksPaths,
       repositoryIncludes: [...repositoryIncludes],
       otherFiles: [...new Set([...known.files.map(real), ...otherIncluded])],
+      tried: [...stamps.keys()],
       unverified,
     },
     stamps,
@@ -554,9 +699,11 @@ const scanCache = new Map<string, CachedScan>();
  * is the repository's config paths and the environment inputs (the home
  * directory, the `GIT_CONFIG_*` and `XDG_CONFIG_HOME` variables); an entry
  * stays valid while every file the scan tried, an include that did not exist
- * included, has the same modification time, size, and inode, and for at most
- * `SCAN_CACHE_MAX_AGE_MS`. A change to any of those files shows at the next
- * access, and one that keeps time, size, and inode within ten seconds.
+ * included, has the same modification time, change time, size, and inode, and
+ * for at most `SCAN_CACHE_MAX_AGE_MS`. A change to any of those files shows at
+ * the next access, and one that keeps all four (the kernel sets the change
+ * time, so only a file system with a coarse clock lets one through) within
+ * ten seconds.
  */
 function gitConfigScan(
   root: string,
@@ -591,23 +738,30 @@ function gitConfigScan(
  * read-only tree without making the whole project read-only, so it is left
  * out.
  */
-function hooksPathDirectories(
+function hooksPathTargets(
   root: string,
   gitDir: string | undefined,
-): string[] {
+): { readonly named: string; readonly directory: string }[] {
   const project = real(root);
-  const directories: string[] = [];
+  const targets: { named: string; directory: string }[] = [];
   const values = gitConfigScan(root, gitDir).hooksPaths;
   for (const value of values) {
-    const path = value.startsWith("~/")
+    const named = value.startsWith("~/")
       ? join(homedir(), value.slice(2))
       : isAbsolute(value)
         ? value
         : resolve(root, value);
-    const directory = real(path);
-    if (!isWithin(directory, project)) directories.push(directory);
+    const directory = real(named);
+    if (!isWithin(directory, project)) targets.push({ named, directory });
   }
-  return directories;
+  return targets;
+}
+
+function hooksPathDirectories(
+  root: string,
+  gitDir: string | undefined,
+): string[] {
+  return hooksPathTargets(root, gitDir).map(({ directory }) => directory);
 }
 
 /**
@@ -631,13 +785,62 @@ export function projectGitControlDirectories(root: string): string[] {
   if (gitDir) bases.push(gitDir, commonDirectory(gitDir));
   const directories = [
     ...bases.flatMap((base) =>
-      ["hooks", "info", "modules", "worktrees"].map((name) =>
-        real(join(base, name)),
-      ),
+      GIT_CONTROL_TREES.map((name) => real(join(base, name))),
     ),
     ...hooksPathDirectories(root, gitDir),
   ];
   return [...new Set(directories)];
+}
+
+/**
+ * The symbolic links on the way to a path the lists above protect, as the
+ * links themselves (not what they point to), for the project's own git
+ * paths, every config file the scan tried, and every `core.hooksPath`
+ * directory. Protection follows a link: it covers the target and never the
+ * link, and nothing a sandbox offers can hold a link in place (a bind mount
+ * or a Seatbelt rule on it acts on the target). A sandboxed command that may
+ * write the directory holding the link can therefore replace it with a
+ * file or a link of its own before the next scan, and git follows that. The
+ * sandbox keeps the links that lie in a path it may write and reports git
+ * control `not-verified` for them. Paths are absolute with POSIX separators.
+ */
+export function projectGitControlLinks(root: string): string[] {
+  const dotGit = join(root, ".git");
+  const gitDir = gitDirectory(root);
+  const bases = [dotGit];
+  const named = [dotGit, join(dotGit, "config")];
+  if (gitDir) {
+    const common = commonDirectory(gitDir);
+    bases.push(gitDir, common);
+    named.push(
+      join(gitDir, "config"),
+      join(gitDir, "config.worktree"),
+      join(gitDir, "commondir"),
+      join(common, "config"),
+    );
+  }
+  for (const base of bases)
+    for (const name of GIT_CONTROL_TREES) named.push(join(base, name));
+  named.push(
+    ...gitConfigScan(root, gitDir).tried,
+    ...hooksPathTargets(root, gitDir).map((target) => target.named),
+  );
+  const links = new Set<string>();
+  const checked = new Map<string, boolean>();
+  for (const path of named)
+    for (
+      let current = resolve(path);
+      dirname(current) !== current;
+      current = dirname(current)
+    ) {
+      let isLink = checked.get(current);
+      if (isLink === undefined) {
+        isLink = isSymbolicLink(current);
+        checked.set(current, isLink);
+      }
+      if (isLink) links.add(toPosixPath(current));
+    }
+  return [...links];
 }
 
 function matcherMatches(
