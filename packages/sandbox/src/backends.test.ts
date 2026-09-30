@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,7 +26,7 @@ import {
   type SandboxExecResult,
 } from "./backend.js";
 import { customBackend } from "./custom.js";
-import type { SandboxPolicy } from "./profile.js";
+import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import { selectAdapter } from "./select.js";
 import {
   answerCheck,
@@ -504,18 +510,37 @@ describe("capability mismatch", () => {
 describe("remote network denial evidence", () => {
   const modes = (options: Parameters<typeof fakeBackend>[0] = {}) => {
     const prepared: string[] = [];
+    const profiles: SandboxProfile[] = [];
     const fake = fakeBackend({
       ...options,
-      onPrepare: (mode) => prepared.push(mode),
+      onPrepare: (profile) => {
+        prepared.push(profile.network);
+        profiles.push(profile);
+      },
     });
-    return { ...fake, prepared };
+    return { ...fake, prepared, profiles };
   };
 
   it("is verified when the same probe is reachable with the network allowed and blocked with it denied", async () => {
-    const { backend, events, requests, prepared } = modes({
+    const { backend, events, requests, prepared, profiles } = modes({
       capabilities: PROBED,
     });
     const sandbox = await activate(backend);
+    // The allow-mode sandbox gets an empty workspace PiShip made, nothing
+    // protected, and no environment; it is gone once activation returns.
+    const [session, contrast] = profiles;
+    expect(session?.workspace).toBe(workspace);
+    expect(contrast?.workspace).not.toBe(workspace);
+    expect(contrast?.workspace.startsWith(`${workspace}/`)).toBe(false);
+    expect(contrast).toMatchObject({
+      network: "allow",
+      environmentAllow: [],
+      readDeny: [],
+      writeProtect: { files: [], directories: [] },
+    });
+    expect(existsSync(contrast?.workspace ?? "")).toBe(false);
+    expect(requests[0]?.env).toMatchObject({ LANG: "C.UTF-8" });
+    expect(requests[1]?.env).toEqual({});
     expect(sandbox.report).toMatchObject({
       verification: "backend-attested",
       planes: expect.arrayContaining(["network-deny"]),
@@ -607,7 +632,7 @@ describe("remote network denial evidence", () => {
 
   it("is attested when the allow-mode sandbox cannot be created", async () => {
     let calls = 0;
-    const { backend, events } = modes({
+    const { backend, events, profiles } = modes({
       capabilities: PROBED,
       prepare: async () => {
         if (++calls === 2) throw new Error("no capacity");
@@ -621,12 +646,14 @@ describe("remote network denial evidence", () => {
       ),
     });
     expect(sandbox.report.level).toBe("enforced");
+    expect(profiles).toHaveLength(2);
+    expect(existsSync(profiles[1]?.workspace ?? "")).toBe(false);
     await sandbox.dispose();
     expect(events.filter((event) => event === "dispose")).toHaveLength(1);
   });
 
   it("is attested when the allow-mode check fails, and disposes the allow-mode sandbox", async () => {
-    const { backend, events } = modes({
+    const { backend, events, profiles } = modes({
       capabilities: PROBED,
       check: (request, io, mode) =>
         mode === "allow"
@@ -636,6 +663,7 @@ describe("remote network denial evidence", () => {
     const sandbox = await activate(backend);
     expect(sandbox.report.networkDenial?.evidence).toBe("attested");
     expect(events.filter((event) => event === "dispose")).toHaveLength(1);
+    expect(existsSync(profiles[1]?.workspace ?? "")).toBe(false);
     await sandbox.dispose();
   });
 

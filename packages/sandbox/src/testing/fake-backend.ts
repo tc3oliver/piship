@@ -108,8 +108,8 @@ export interface FakeBackendOptions {
     mode: "deny" | "allow",
   ) => void;
   network?: FakeNetwork;
-  /** Called with the profile's network mode on each `prepare`. */
-  onPrepare?: (mode: "deny" | "allow") => void;
+  /** Called with the profile of each `prepare`. */
+  onPrepare?: (profile: SandboxProfile) => void;
 }
 
 export interface FakeBackend {
@@ -142,7 +142,7 @@ export function fakeBackend(options: FakeBackendOptions = {}): FakeBackend {
       profile: SandboxProfile;
     }): Promise<SandboxInstance> => {
       events.push("prepare");
-      options.onPrepare?.(profile.network);
+      options.onPrepare?.(profile);
       await options.prepare?.();
       return {
         exec: async (request, io) => {

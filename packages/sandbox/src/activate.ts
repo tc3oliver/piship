@@ -841,8 +841,7 @@ async function networkDenial(
   capabilities: SandboxCapabilities,
   probe: SandboxNetworkProbe | undefined,
   denied: NetworkCheck | undefined,
-  contrast: (profile: SandboxProfile) => Promise<NetworkCheck | undefined>,
-  profile: SandboxProfile,
+  contrast: () => Promise<NetworkCheck | undefined>,
 ): Promise<{ failure: string } | { report: NetworkDenialReport }> {
   const attested = (reason: string): { report: NetworkDenialReport } => ({
     report: { evidence: "attested", probe: probe !== undefined, reason },
@@ -865,7 +864,7 @@ async function networkDenial(
     );
   let allowed: NetworkCheck | undefined;
   try {
-    allowed = await contrast({ ...profile, network: "allow" });
+    allowed = await contrast();
   } catch {
     return attested(
       `the ${backend.id} sandbox backend could not prepare an allow-mode sandbox to reach its network probe from`,
@@ -876,6 +875,35 @@ async function networkDenial(
       "the backend's network probe was not reachable from an allow-mode sandbox either, so a blocked connection proves nothing",
     );
   return { report: { evidence: "verified", probe: true } };
+}
+
+/**
+ * The profile of the allow-mode sandbox that contrasts network denial: an
+ * empty workspace and temp directory under `root`, writable and nothing else,
+ * with no path protected, hidden, or kept readable and no variable allowed.
+ */
+function contrastProfile(
+  root: string,
+  profile: SandboxProfile,
+): SandboxProfile {
+  const workspace = join(root, "workspace");
+  const tmp = join(root, "tmp");
+  mkdirSync(workspace, { mode: 0o700 });
+  mkdirSync(tmp, { mode: 0o700 });
+  const real = realpathSync(workspace);
+  const realTmp = realpathSync(tmp);
+  return {
+    workspace: real,
+    homeDir: profile.homeDir,
+    tmpDir: realTmp,
+    readDeny: [],
+    writeAllow: [real, realTmp],
+    readOnly: [],
+    writeProtect: { files: [], directories: [] },
+    network: "allow",
+    environmentAllow: [],
+    warnings: [],
+  };
 }
 
 /** A probe target that prepares a separate wrapping instance per probe. */
@@ -1079,21 +1107,27 @@ export async function activateSandbox(
           capabilities,
           probe,
           check.network,
-          async (allowProfile) => {
-            const allowed = await backend.prepare({ profile: allowProfile });
+          async () => {
+            // The allow-mode sandbox sees none of the user's files or
+            // environment: an empty workspace PiShip made, nothing protected
+            // in it, and no variable to pass.
+            const scratch = createTemporaryDirectory(tmpdir(), "sandbox");
+            let allowed: SandboxInstance | undefined;
             try {
+              const allowProfile = contrastProfile(scratch.path, profile);
+              allowed = await backend.prepare({ profile: allowProfile });
               const contrast = await checkAttested(
                 allowed,
                 { ...session, profile: allowProfile },
-                sourceEnv,
+                {},
                 checkOptions,
               );
               return contrast.failure ? undefined : contrast.network;
             } finally {
-              await allowed.dispose().catch(() => undefined);
+              await allowed?.dispose().catch(() => undefined);
+              scratch.remove();
             }
           },
-          profile,
         );
         if ("failure" in denial)
           return await fail(
