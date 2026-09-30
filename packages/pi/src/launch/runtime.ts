@@ -30,7 +30,7 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
-import { openSession } from "./session-file.js";
+import { openSession, type SessionOwnership } from "./session-file.js";
 
 function verifyBuiltResources(ctx: LaunchContext): void {
   const resourceDir = join(ctx.distributionDir, "resources");
@@ -75,6 +75,34 @@ export function publishContext(context: EnterpriseContext | null): void {
   else delete holder[ENTERPRISE_CONTEXT_SYMBOL];
 }
 
+/**
+ * Keeps the owner record on the session file the runtime writes, and refuses
+ * a `/resume` of a session another live process owns.
+ */
+function sessionOwnerExtension(
+  ownership: SessionOwnership,
+  command: string,
+): InlineExtension {
+  return {
+    name: "piship-session-owner",
+    factory: (pi) => {
+      pi.on("session_before_switch", (event, extension) => {
+        if (
+          event.reason !== "resume" ||
+          !event.targetSessionFile ||
+          !ownership.heldByOther(event.targetSessionFile)
+        )
+          return undefined;
+        extension.ui.notify(
+          `That session is open in another ${command} process. Continue it there, or start a new session here.`,
+          "warning",
+        );
+        return { cancel: true };
+      });
+    },
+  };
+}
+
 export interface SessionOptions {
   readonly sessionDir: string;
   /** Start a new session instead of resuming the most recent one. */
@@ -86,6 +114,7 @@ async function startRuntime(
   prepared: PreparedAccess,
   sessionManager: SessionManager,
   gov: GovernanceSession | null,
+  ownership: SessionOwnership,
 ) {
   verifyBuiltResources(ctx);
   const instructions = gov
@@ -142,10 +171,17 @@ async function startRuntime(
       });
     },
   };
+  const ownerExtension = sessionOwnerExtension(
+    ownership,
+    ctx.metadata.app.command,
+  );
   const createRuntime: CreateAgentSessionRuntimeFactory = async ({
     cwd,
     sessionManager,
   }) => {
+    // A `/new`, `/resume`, or fork moves the owner record to the new file.
+    const sessionFile = sessionManager.getSessionFile();
+    if (sessionFile) ownership.claim(sessionFile);
     const settingsManager = SettingsManager.inMemory();
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,
@@ -171,6 +207,7 @@ async function startRuntime(
         ? gov.loader.themes
         : resourcePaths(ctx, "themes"),
       extensionFactories: [
+        ownerExtension,
         ...(ctx.metadata.access ? [governanceExtension] : []),
         ...builtinExtensions,
         // Last, so the message Pi persists is the redacted one.
@@ -266,20 +303,35 @@ async function startRuntime(
   return { runtime, theme, context, governed: () => governedRef };
 }
 
-/** Starts the Pi runtime on the session `openSession` chose. */
+/**
+ * Starts the Pi runtime on the session `openSession` chose. The returned
+ * ownership is released when the session ends (or, at the latest, when the
+ * process exits).
+ */
 export async function startGoverned(
   ctx: LaunchContext,
   prepared: PreparedAccess,
   session: SessionOptions,
   gov: GovernanceSession | null,
 ) {
+  let ownership: SessionOwnership | undefined;
   try {
     const opened = openSession(process.cwd(), session.sessionDir, {
       newSession: session.newSession,
       command: ctx.metadata.app.command,
     });
-    return await startRuntime(ctx, prepared, opened.sessionManager, gov);
+    ownership = opened.ownership;
+    if (opened.notice) ctx.err(`Notice: ${opened.notice}`);
+    const started = await startRuntime(
+      ctx,
+      prepared,
+      opened.sessionManager,
+      gov,
+      opened.ownership,
+    );
+    return { ...started, ownership: opened.ownership };
   } catch (error) {
+    ownership?.release();
     // The start error stays the command's error; a close that lost audit
     // events is reported next to it instead of replacing it. Both are counted
     // in the local startup failures, as an open failure is.

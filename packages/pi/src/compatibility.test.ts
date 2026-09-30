@@ -861,6 +861,63 @@ describe("Pi session seams used by governance", () => {
       "continue",
     );
   });
+
+  it("passes a switched session through the runtime factory, and a session_before_switch handler can cancel a resume", async () => {
+    const sessionDir = join(temp, "sessions");
+    const target = SessionManager.create(temp, sessionDir);
+    target.appendMessage({ role: "user", content: "other", timestamp: 1 });
+    const targetFile = target.getSessionFile() as string;
+    writeFileSync(targetFile, `${JSON.stringify(target.getHeader())}\n`);
+    const factoryFiles: (string | undefined)[] = [];
+    const switches: string[] = [];
+    const refuse: InlineExtension = {
+      name: "piship-session-owner",
+      factory: (pi) => {
+        pi.on("session_before_switch", (event) => {
+          switches.push(`${event.reason}:${event.targetSessionFile ?? ""}`);
+          return event.reason === "resume" ? { cancel: true } : undefined;
+        });
+      },
+    };
+    const runtime = await createAgentSessionRuntime(
+      async ({ sessionManager }) => {
+        factoryFiles.push(sessionManager.getSessionFile());
+        const result = await session({
+          sessionManager,
+          extensions: [refuse],
+        });
+        return {
+          ...result,
+          services: {
+            cwd: temp,
+            agentDir: temp,
+            settingsManager: SettingsManager.inMemory(),
+            modelRuntime: result.session.modelRuntime,
+            resourceLoader: result.session.resourceLoader,
+            diagnostics: [],
+          },
+          diagnostics: [],
+        };
+      },
+      {
+        cwd: temp,
+        agentDir: temp,
+        sessionManager: SessionManager.create(temp, sessionDir),
+      },
+    );
+    const initial = runtime.session.sessionFile;
+    expect(await runtime.switchSession(targetFile)).toEqual({
+      cancelled: true,
+    });
+    expect(runtime.session.sessionFile).toBe(initial);
+    expect(switches).toEqual([`resume:${targetFile}`]);
+    expect(await runtime.newSession()).toEqual({ cancelled: false });
+    expect(factoryFiles).toHaveLength(2);
+    expect(factoryFiles[0]).toBe(initial);
+    expect(factoryFiles[1]).toBe(runtime.session.sessionFile);
+    expect(factoryFiles[1]).not.toBe(initial);
+    await runtime.dispose();
+  });
 });
 
 describe("Pi session loading that PiShip gates before a resume", () => {

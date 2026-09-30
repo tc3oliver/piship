@@ -1,28 +1,41 @@
 // The session a launch resumes: corrupt and oversized session files are
-// refused before Pi reads them (#62, #65). The files are written by Pi's own
-// SessionManager.
+// refused before Pi reads them (#62, #65), and a session file has one owner
+// process at a time (#57). The files are written by Pi's own SessionManager;
+// the owner tests run the built module in real child processes.
+import { type ChildProcess, spawn } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   ftruncateSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  deadPid,
+  livePid,
+  stopLiveProcesses,
+} from "../../../../tests/helpers/processes.js";
+import {
   inspectSession,
   MAX_RESUME_BYTES,
   mostRecentSession,
+  OWNER_DIRECTORY,
   openSession,
+  SessionOwnership,
 } from "./session-file.js";
 
 let temp: string;
@@ -36,6 +49,7 @@ beforeEach(() => {
   mkdirSync(sessionDir, { recursive: true });
 });
 afterEach(() => {
+  stopLiveProcesses();
   rmSync(temp, { recursive: true, force: true });
 });
 
@@ -131,6 +145,8 @@ function expectRefused(file: string, pattern: RegExp) {
   expect(refused.userAction).toContain("kept unchanged");
   expect(readFileSync(file).equals(before)).toBe(true);
   expect(statSync(file).mtimeMs).toBe(mtime);
+  // The owner record taken for the inspection is given back.
+  expect(readdirSync(join(sessionDir, OWNER_DIRECTORY))).toEqual([]);
   return refused;
 }
 
@@ -149,6 +165,7 @@ describe("resuming a persisted session", () => {
       reference.buildSessionContext(),
     );
     expect(readFileSync(file).equals(before)).toBe(true);
+    opened.ownership.release();
   });
 
   it("starts a new session when the project has none", () => {
@@ -156,6 +173,7 @@ describe("resuming a persisted session", () => {
     const opened = open();
     expect(opened.sessionManager.getSessionFile()).not.toBe(undefined);
     expect(opened.sessionManager.getEntries()).toEqual([]);
+    opened.ownership.release();
   });
 
   it("migrates a version 1 session as Pi does", () => {
@@ -187,6 +205,7 @@ describe("resuming a persisted session", () => {
     expect(
       JSON.stringify(opened.sessionManager.buildSessionContext().messages),
     ).toContain("old answer");
+    opened.ownership.release();
   });
 
   it("migrates a version 2 session as Pi does", () => {
@@ -208,8 +227,9 @@ describe("resuming a persisted session", () => {
       },
     ]);
     expect(inspectSession(file)).toBeUndefined();
-    open();
+    const opened = open();
     expect(lines(file)[1]).toMatchObject({ message: { role: "custom" } });
+    opened.ownership.release();
   });
 });
 
@@ -338,12 +358,14 @@ describe("a corrupt session is not resumed (#62)", () => {
       timestamp: Date.now(),
     });
     opened.sessionManager.appendMessage(assistant("hello"));
+    opened.ownership.release();
     expect(readFileSync(file).equals(before)).toBe(true);
     // The next plain launch continues the new session.
     const next = open();
     expect(next.sessionManager.getSessionId()).toBe(
       opened.sessionManager.getSessionId(),
     );
+    next.ownership.release();
   });
 });
 
@@ -359,6 +381,7 @@ describe("a very large session is not resumed automatically (#65)", () => {
     });
     const opened = open();
     expect(opened.sessionManager.getSessionId()).toBe(id);
+    opened.ownership.release();
   });
 
   it("refuses a session over the default limit without reading it", () => {
@@ -391,6 +414,7 @@ describe("a very large session is not resumed automatically (#65)", () => {
     const opened = open(true);
     expect(opened.sessionManager.getSessionId()).not.toBe(id);
     expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
+    opened.ownership.release();
   });
 });
 
@@ -413,5 +437,265 @@ describe("finding the most recent session", () => {
       later.file,
     );
     expect(mostRecentSession(join(temp, "missing"), project)).toBeUndefined();
+  });
+});
+
+const DIST = pathToFileURL(
+  resolve(import.meta.dirname, "../../dist/launch/session-file.js"),
+).href;
+
+/**
+ * A launch in a child process: opens the session like PiShip does, reports
+ * it, then appends one turn for each line it reads and exits on `exit`.
+ */
+const CHILD = `
+import { createInterface } from "node:readline";
+import { openSession } from ${JSON.stringify(DIST)};
+const [cwd, dir] = process.argv.slice(2);
+const opened = openSession(cwd, dir, { newSession: false, command: "mypi" });
+const manager = opened.sessionManager;
+console.log(JSON.stringify({
+  file: manager.getSessionFile(),
+  id: manager.getSessionId(),
+  notice: opened.notice ?? null,
+}));
+const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+for await (const line of createInterface({ input: process.stdin })) {
+  if (line === "exit") break;
+  manager.appendMessage({ role: "user", content: line, timestamp: Date.now() });
+  manager.appendMessage({ role: "assistant", content: [{ type: "text", text: line }],
+    api: "piship-test", provider: "piship", model: "none", usage,
+    stopReason: "stop", timestamp: Date.now() });
+  console.log("appended");
+}
+opened.ownership.release();
+// The open standard input would keep the process running.
+process.exit(0);
+`;
+
+interface Launch {
+  readonly child: ChildProcess;
+  readonly next: () => Promise<string>;
+  readonly exited: Promise<number | null>;
+}
+
+const launches: ChildProcess[] = [];
+afterEach(() => {
+  for (const child of launches.splice(0)) child.kill("SIGKILL");
+});
+
+function launch(cwd = project, dir = sessionDir): Launch {
+  const script = join(temp, "launch.mjs");
+  writeFileSync(script, CHILD);
+  const child = spawn(process.execPath, [script, cwd, dir], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  launches.push(child);
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const queue: string[] = [];
+  const waiting: ((line: string) => void)[] = [];
+  createInterface({ input: child.stdout as NodeJS.ReadableStream }).on(
+    "line",
+    (line) => {
+      const resolveLine = waiting.shift();
+      if (resolveLine) resolveLine(line);
+      else queue.push(line);
+    },
+  );
+  const exited = new Promise<number | null>((done) =>
+    child.on("exit", (code) => done(code)),
+  );
+  const next = () =>
+    queue.length
+      ? Promise.resolve(queue.shift() as string)
+      : Promise.race([
+          new Promise<string>((done) => waiting.push(done)),
+          exited.then((code) => {
+            throw new Error(`launch exited with ${code}: ${stderr}`);
+          }),
+          new Promise<string>((_, fail) =>
+            setTimeout(
+              () => fail(new Error(`launch did not answer: ${stderr}`)),
+              30_000,
+            ).unref(),
+          ),
+        ]);
+  return { child, next, exited };
+}
+
+async function started(launched: Launch) {
+  return JSON.parse(await launched.next()) as {
+    file: string;
+    id: string;
+    notice: string | null;
+  };
+}
+
+async function turn(launched: Launch, text: string) {
+  launched.child.stdin?.write(`${text}\n`);
+  expect(await launched.next()).toBe("appended");
+}
+
+function ownerRecords(): string[] {
+  const directory = join(sessionDir, OWNER_DIRECTORY);
+  return existsSync(directory) ? readdirSync(directory) : [];
+}
+
+/** Every entry's parent is the entry before it: one branch, no fork. */
+function expectLinear(file: string) {
+  const entries = lines(file).slice(1);
+  entries.forEach((entry, index) => {
+    expect(entry.parentId).toBe(index === 0 ? null : entries[index - 1]?.id);
+  });
+}
+
+describe("one owner per session file (#57)", () => {
+  it("gives a second concurrent launch a new session instead of the owned one", async () => {
+    const { file, id } = persistedSession(project, sessionDir, 1);
+    const simple = [...lines(file)];
+    // Keep the fixture linear: drop everything after the first turn.
+    rewrite(file, simple.slice(0, 3));
+    const a = launch();
+    const first = await started(a);
+    expect(first).toMatchObject({ file, id, notice: null });
+    const b = launch();
+    const second = await started(b);
+    expect(second.file).not.toBe(file);
+    expect(second.id).not.toBe(id);
+    expect(second.notice).toContain("open in another mypi process");
+    expect(second.notice).toContain(file);
+    await turn(a, "from A 1");
+    await turn(b, "from B 1");
+    await turn(a, "from A 2");
+    await turn(b, "from B 2");
+    a.child.stdin?.write("exit\n");
+    b.child.stdin?.write("exit\n");
+    expect(await a.exited).toBe(0);
+    expect(await b.exited).toBe(0);
+    const owned = readFileSync(file, "utf8");
+    expect(owned).toContain("from A 2");
+    expect(owned).not.toContain("from B");
+    expectLinear(file);
+    const other = readFileSync(second.file, "utf8");
+    expect(other).toContain("from B 2");
+    expect(other).not.toContain("from A");
+    expectLinear(second.file);
+    // A clean exit gives both files back.
+    expect(ownerRecords()).toEqual([]);
+  }, 60_000);
+
+  it("takes the session over after its owner crashed", async () => {
+    const { file, id } = persistedSession();
+    const a = launch();
+    expect(await started(a)).toMatchObject({ file, id });
+    expect(ownerRecords()).toHaveLength(1);
+    a.child.kill("SIGKILL");
+    await a.exited;
+    expect(ownerRecords()).toHaveLength(1);
+    const b = launch();
+    expect(await started(b)).toMatchObject({ file, id, notice: null });
+    await turn(b, "after the crash");
+    b.child.stdin?.write("exit\n");
+    expect(await b.exited).toBe(0);
+    expect(readFileSync(file, "utf8")).toContain("after the crash");
+    expect(ownerRecords()).toEqual([]);
+  }, 60_000);
+
+  it("takes over a record whose PID now belongs to another process", () => {
+    const { file, id } = persistedSession();
+    const directory = join(sessionDir, OWNER_DIRECTORY);
+    mkdirSync(directory);
+    const session = file.slice(sessionDir.length + 1);
+    const stale = (pid: number, instance: string) =>
+      writeFileSync(
+        join(directory, `${session}.${instance}.json`),
+        JSON.stringify({
+          schema: "piship-session-owner/v1",
+          session,
+          pid,
+          identity: "a process that started earlier",
+          host: hostname(),
+          instance,
+        }),
+      );
+    // A live process that is not the recorded owner, and an exited one.
+    stale(livePid(), "00000000-0000-4000-8000-000000000001");
+    stale(deadPid(), "00000000-0000-4000-8000-000000000002");
+    const opened = open();
+    expect(opened.notice).toBeUndefined();
+    expect(opened.sessionManager.getSessionId()).toBe(id);
+    expect(ownerRecords()).toHaveLength(1);
+    opened.ownership.release();
+    expect(ownerRecords()).toEqual([]);
+  }, 30_000);
+
+  it("lets launches in different projects run at once", async () => {
+    const mine = persistedSession();
+    const otherProject = join(temp, "other-project");
+    mkdirSync(otherProject);
+    const theirs = persistedSession(otherProject);
+    const a = launch();
+    const b = launch(otherProject);
+    expect(await started(a)).toMatchObject({ file: mine.file, notice: null });
+    expect(await started(b)).toMatchObject({ file: theirs.file, notice: null });
+    a.child.stdin?.write("exit\n");
+    b.child.stdin?.write("exit\n");
+    expect(await a.exited).toBe(0);
+    expect(await b.exited).toBe(0);
+  }, 60_000);
+
+  it("keeps acceptance sessions apart from user sessions", async () => {
+    const acceptance = join(temp, "sessions", "acceptance");
+    const user = persistedSession();
+    const smoke = persistedSession(project, acceptance);
+    const a = launch();
+    expect(await started(a)).toMatchObject({ file: user.file });
+    const opened = openSession(project, acceptance, {
+      newSession: false,
+      command: "mypi",
+    });
+    expect(opened.notice).toBeUndefined();
+    expect(opened.sessionManager.getSessionFile()).toBe(smoke.file);
+    opened.ownership.release();
+    a.child.stdin?.write("exit\n");
+    expect(await a.exited).toBe(0);
+  }, 60_000);
+
+  it("refuses to claim a file another live owner holds, and follows a switch", () => {
+    const { file } = persistedSession();
+    const first = new SessionOwnership();
+    const second = new SessionOwnership();
+    expect(first.claim(file)).toBe(true);
+    expect(second.heldByOther(file)).toBe(true);
+    expect(first.heldByOther(file)).toBe(false);
+    expect(second.claim(file)).toBe(false);
+    expect(second.file).toBeUndefined();
+    // `/new` in the first process moves its record to the new file.
+    const next = join(sessionDir, "next.jsonl");
+    expect(first.claim(next)).toBe(true);
+    expect(first.file).toBe(next);
+    expect(second.claim(file)).toBe(true);
+    first.release();
+    second.release();
+    expect(ownerRecords()).toEqual([]);
+  });
+
+  it("keeps a record that is still being written", () => {
+    const { file } = persistedSession();
+    const directory = join(sessionDir, OWNER_DIRECTORY);
+    mkdirSync(directory);
+    const session = file.slice(sessionDir.length + 1);
+    writeFileSync(
+      join(directory, `${session}.00000000-0000-4000-8000-000000000003.json`),
+      '{"schema":',
+    );
+    const opened = open();
+    expect(opened.sessionManager.getSessionFile()).not.toBe(file);
+    expect(opened.notice).toContain("open in another mypi process");
+    opened.ownership.release();
   });
 });

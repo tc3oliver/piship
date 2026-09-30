@@ -23,6 +23,7 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
+import type { SessionOwnership } from "../launch/session-file.js";
 import { endInsideDispose } from "./dispose-hook.js";
 
 /**
@@ -61,6 +62,7 @@ async function endSession(
   runtime: { dispose(): Promise<void> },
   gov: GovernanceSession | null,
   sessionFailed: boolean,
+  ownership: SessionOwnership,
 ): Promise<void> {
   const failures: unknown[] = [];
   try {
@@ -68,6 +70,8 @@ async function endSession(
   } catch (error) {
     failures.push(error);
   }
+  // Pi has written its last entry; another launch may continue the session.
+  ownership.release();
   try {
     await gov?.close();
   } catch (error) {
@@ -140,7 +144,7 @@ export async function runSmoke(
   const prepared = await prepareAccess(ctx, requestedModel);
   const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
   const gov = await openGovernance(ctx, prepared, false);
-  const { runtime } = await startGoverned(
+  const { runtime, ownership } = await startGoverned(
     ctx,
     prepared,
     { sessionDir, newSession },
@@ -251,7 +255,7 @@ export async function runSmoke(
     sessionFailed = true;
     throw error;
   } finally {
-    await endSession(ctx, prepared, runtime, gov, sessionFailed);
+    await endSession(ctx, prepared, runtime, gov, sessionFailed, ownership);
   }
 }
 
@@ -307,7 +311,7 @@ export async function runInteractive(
     prepared,
     !!process.stdin.isTTY && !!process.stderr.isTTY,
   );
-  const { runtime, theme } = await startGoverned(
+  const { runtime, theme, ownership } = await startGoverned(
     ctx,
     prepared,
     { sessionDir, newSession },
@@ -319,7 +323,8 @@ export async function runInteractive(
   const piDispose = runtime.dispose.bind(runtime);
   const end = endInsideDispose(
     runtime,
-    (failed) => endSession(ctx, prepared, { dispose: piDispose }, gov, failed),
+    (failed) =>
+      endSession(ctx, prepared, { dispose: piDispose }, gov, failed, ownership),
     (error) => ctx.err(`Error: ${formatError(error)}`),
   );
   try {
