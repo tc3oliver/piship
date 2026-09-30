@@ -98,7 +98,9 @@ const session = `
       exec: async (request, io) => {
         io.onStdout(Buffer.from("piship-sandbox-ready unset\\n"));
         if (request.command.includes("piship-network"))
-          io.onStdout(Buffer.from("piship-network-blocked\\n"));
+          io.onStdout(Buffer.from(request.command.includes("piship-network-allow-check")
+            ? "piship-network-reachable\\n"
+            : "piship-network-blocked\\npiship-metadata-blocked\\n"));
         return { exitCode: 0 };
       },
       dispose: async () => {},
