@@ -328,14 +328,13 @@ The job log of a public repository is public, so the workflow prints nothing der
 
 ### Protecting the provider key
 
-A repository secret is available to a run of this workflow from any branch. Keep the three secrets in a GitHub environment limited to `main` instead:
+A repository secret is available to a run of this workflow from any branch, so the three secrets live in the GitHub environment `live-provider` instead, and the `live` job names it (`environment: live-provider`). Set it up once:
 
 1. In the repository's Settings, Environments, create the environment `live-provider`.
-2. Under Deployment branches and tags, choose Selected branches and add `main`. Optionally add a required reviewer, so every run waits for approval.
-3. Add `LIVE_PROVIDER_API_KEY`, `LIVE_PROVIDER_BASE_URL`, and `LIVE_PROVIDER_MODEL` as secrets of that environment, and delete the repository secrets of the same names.
-4. Add `environment: live-provider` to the `live` job in `live-provider.yml`.
+2. Under Deployment branches and tags, allow only protected branches (or Selected branches with `main`). Optionally add a required reviewer, so every run waits for approval.
+3. Add `LIVE_PROVIDER_API_KEY` and `LIVE_PROVIDER_MODEL`, and optionally `LIVE_PROVIDER_BASE_URL` (the default is `https://api.openai.com/v1`), as secrets of that environment, and keep no repository secret of the same names.
 
-Do step 4 last. A job that names an environment that does not exist makes GitHub create it without protection rules, so the committed workflow names none. Between steps 3 and 4 a run fails at once with `The LIVE_PROVIDER_API_KEY secret is not set`.
+The environment must exist and be restricted before the first run: a job that names an environment that does not exist makes GitHub create it without protection rules. A run from a branch the environment does not allow is refused before any step starts.
 
 To run it locally, with Docker and after `npm run build`, set the variables and `PISHIP_LIVE_PROVIDER=1` for `npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts` at the repository root, without printing the key or leaving it in your shell history. It uses the same ports and project as the other tests in `tests/`.
 
