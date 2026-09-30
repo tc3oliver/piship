@@ -369,7 +369,14 @@ async function clearItems(
   for (const item of items) {
     const path = join(stateDir, ...item.path.split("/"));
     let refs: string[] = [];
-    if (existsSync(path) && statSync(path).isFile()) {
+    // A metadata-only class names no secret to delete: the pending issuance
+    // records the reference of the credential it renews, which is the live
+    // credential's and must never be deleted with the record.
+    if (
+      !metadataOnly(item.path) &&
+      existsSync(path) &&
+      statSync(path).isFile()
+    ) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -449,7 +456,19 @@ async function clearItems(
     )
   )
     rmSync(paths.credentialIssuance, { force: true });
-  rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
+  // The file store's secrets go with a class that holds secrets, never with
+  // one that only records metadata (the pending issuance): the credential
+  // and identity kept in place still need theirs.
+  if (items.some((item) => !metadataOnly(item.path)))
+    rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
+}
+
+/** A credential class that holds no secret and names none to delete. */
+function metadataOnly(path: string): boolean {
+  return (
+    STATE_DATA_CLASSES.find((entry) => entry.path === path)?.sensitivity ===
+    "metadata"
+  );
 }
 
 export function checkPayload(

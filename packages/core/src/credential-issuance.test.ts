@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MemorySecretStore } from "@piship/credentials";
+import { SecretValue } from "@piship/contracts";
+import {
+  MemorySecretStore,
+  RestrictedFileSecretStore,
+} from "@piship/credentials";
 import type { AccessManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
@@ -22,6 +26,7 @@ import { DistributionAccess } from "./access/index.js";
 import type { BrandedContext } from "./branded/context.js";
 import { runLogout } from "./branded/login.js";
 import { resolveLock } from "./index.js";
+import { purgeDistributionState } from "./install/purge.js";
 import { checkStateMigration, STATE_SCHEMAS } from "./migration.js";
 import { clearCredentials, snapshotState } from "./update/state.js";
 
@@ -241,5 +246,135 @@ describe("pending credential issuance across update and rollback", () => {
       false,
     );
     expect(existsSync(issuanceFile())).toBe(false);
+  });
+
+  it("clearing a pending renewal for an older release never deletes the live credential it names", async () => {
+    await login();
+    const metadataFile = path("credentials-metadata", "inference.json");
+    const metadata = JSON.parse(readFileSync(metadataFile, "utf8"));
+    const store = new RestrictedFileSecretStore(path("secrets"));
+    expect(await store.get(metadata.credential_ref)).not.toBeNull();
+    // An ambiguous renewal of the stored credential is pending.
+    writeFileSync(
+      issuanceFile(),
+      JSON.stringify({
+        schema: "piship-credential-issuance/v1",
+        idempotency_key: "0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b",
+        mode: "http-broker",
+        request: "renewal",
+        renews: {
+          credential_ref: metadata.credential_ref,
+          acquired_at: metadata.acquired_at,
+        },
+        created_at: new Date().toISOString(),
+      }),
+    );
+    const { credentialIssuance: _absent, ...older } = STATE_SCHEMAS;
+    const report = checkStateMigration(
+      stateDir(),
+      { version: "1.0.0", pi: "0.87.1", schemas: older },
+      current,
+    );
+    expect(
+      report.items.find((item) => item.name === "runtime credential metadata")
+        ?.action,
+    ).toBe("keep");
+    await clearCredentials(stateDir(), ID, report, { secretStore: store });
+    expect(existsSync(issuanceFile())).toBe(false);
+    expect(readFileSync(metadataFile, "utf8")).toContain(
+      metadata.credential_ref,
+    );
+    expect(await store.get(metadata.credential_ref)).not.toBeNull();
+    // The next launch reuses it: nothing is acquired.
+    await open().activate();
+    expect(services.state.credentialCount).toBe(1);
+    expect(services.state.idempotencyKeys).toHaveLength(1);
+  });
+});
+
+describe("the pending issuance never names a secret to delete", () => {
+  // A reference the stored credential does not name, planted where only
+  // the pending record points.
+  const planted = `piship:${ID}:inference#7`;
+  const record = () =>
+    JSON.stringify({
+      schema: "piship-credential-issuance/v1",
+      idempotency_key: "0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b",
+      mode: "http-broker",
+      request: "renewal",
+      renews: {
+        credential_ref: planted,
+        acquired_at: new Date().toISOString(),
+      },
+      created_at: new Date().toISOString(),
+    });
+
+  it("in purge", async () => {
+    const home = join(temp, "home");
+    const saved = {
+      state: process.env.PISHIP_STATE_HOME,
+      install: process.env.PISHIP_INSTALL_HOME,
+    };
+    process.env.PISHIP_STATE_HOME = home;
+    process.env.PISHIP_INSTALL_HOME = join(temp, "install");
+    try {
+      const metadata = join(home, ID, "credentials-metadata");
+      mkdirSync(metadata, { recursive: true });
+      writeFileSync(
+        join(metadata, "inference.json"),
+        JSON.stringify({
+          schema: "piship-credential-metadata/v1",
+          mode: "http-broker",
+          credential_ref: `piship:${ID}:inference#1`,
+          generation: 1,
+          kind: "api_key",
+          acquired_at: new Date().toISOString(),
+          secret_store: "system",
+        }),
+      );
+      writeFileSync(join(metadata, "pending-issuance.json"), record());
+      const store = new MemorySecretStore();
+      for (const ref of [`piship:${ID}:inference#1`, planted])
+        await store.put(ref, new SecretValue("fake-purge-SENTINEL-0001"));
+      const result = await purgeDistributionState(ID, { secretStore: store });
+      expect(result.deletedSecrets).toEqual([
+        `piship:${ID}:inference#1`,
+        `piship:${ID}:inference#2`,
+      ]);
+      expect(await store.get(planted)).not.toBeNull();
+    } finally {
+      for (const [key, value] of [
+        ["PISHIP_STATE_HOME", saved.state],
+        ["PISHIP_INSTALL_HOME", saved.install],
+      ] as const)
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
+  });
+
+  it("in logout, with and without the runtime variables", async () => {
+    const { lock, access } = manifest();
+    const ctx: BrandedContext = {
+      metadata: { ...lock, access },
+      distributionDir: temp,
+      stateDir: stateDir(),
+      mode: "managed",
+      out: () => {},
+      err: () => {},
+    };
+    const store = new RestrictedFileSecretStore(path("secrets"));
+    for (const withVariables of [true, false]) {
+      await login();
+      await store.put(planted, new SecretValue("fake-logout-SENTINEL-0001"));
+      writeFileSync(issuanceFile(), record());
+      if (!withVariables)
+        for (const name of Object.keys(services.env()))
+          delete process.env[name];
+      await runLogout(ctx);
+      expect(existsSync(issuanceFile())).toBe(false);
+      expect(await store.get(planted)).not.toBeNull();
+      Object.assign(process.env, services.env());
+      await store.delete(planted);
+    }
   });
 });
