@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -736,6 +737,47 @@ describe("Pi session seams used by governance", () => {
       "decision failed",
     );
     expect(readdirSync(temp)).toEqual([]);
+    agent.dispose();
+  });
+
+  it("persists the message a message_end handler returns in place of a provider error", async () => {
+    // PiShip redacts provider error text this way before Pi records it
+    // (launch/redaction.ts): the replacement must be what the session file
+    // and the agent state keep, with the original text in neither.
+    services.knobs.gatewayStatus = 500;
+    const replacer: InlineExtension = {
+      name: "piship-replace-error",
+      factory: (pi) => {
+        pi.on("message_end", (event) => {
+          const message = event.message as { errorMessage?: string };
+          if (typeof message.errorMessage !== "string") return undefined;
+          return {
+            message: {
+              ...event.message,
+              errorMessage: message.errorMessage.replace(
+                "gateway failure",
+                "PISHIP-REPLACED",
+              ),
+            } as typeof event.message,
+          };
+        });
+      },
+    };
+    const sessionDir = join(temp, "sessions");
+    const { session: agent } = await session({
+      extensions: [replacer],
+      sessionManager: SessionManager.create(temp, sessionDir),
+    });
+    await agent.bindExtensions({});
+    await agent.prompt("fail");
+    const last = agent.messages.at(-1) as { errorMessage?: string };
+    expect(last.errorMessage).toContain("PISHIP-REPLACED");
+    const file = readFileSync(
+      agent.sessionManager.getSessionFile() ?? "",
+      "utf8",
+    );
+    expect(file).toContain("PISHIP-REPLACED");
+    expect(file).not.toContain("gateway failure");
     agent.dispose();
   });
 
