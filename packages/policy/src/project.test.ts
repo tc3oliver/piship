@@ -50,6 +50,7 @@ const CONFIG_VARIABLES = [
   "GIT_CONFIG_SYSTEM",
   "GIT_CONFIG_NOSYSTEM",
   "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_KEY_${index}`),
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_VALUE_${index}`),
 ];
@@ -705,6 +706,96 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     // A count that is not a number reads nothing.
     process.env.GIT_CONFIG_COUNT = "many";
     expect(dirs(root)).toHaveLength(4);
+  });
+
+  it("takes core.hooksPath and include.path from GIT_CONFIG_PARAMETERS, as `git -c` exports them, in either format", () => {
+    const outside = dir("parameters-include");
+    write(join(outside, "extra"), hooks("extra-hooks"));
+    const root = repo("parameters-repo");
+    // Git before 2.31 writes 'key=value', later versions 'key'='value'; a
+    // quote inside a value is written '\\''.
+    process.env.GIT_CONFIG_PARAMETERS = [
+      "'core.hooksPath=.old-format-hooks'",
+      "'core.hookspath'='.new-format-hooks'",
+      `'include.path'='${posix(join(outside, "extra"))}'`,
+      "'core.hooksPath'='it'\\''s here'",
+      // As git writes a leading `!`.
+      "'core.hooksPath'=''\\!'bang-hooks'",
+      "'core.editor=vi'",
+      "'color.ui'",
+      "'core.pager'=",
+      "'include.path=relative-is-refused'",
+    ].join(" ");
+    expect(projectGitControlDirectories(root)).toEqual(
+      expect.arrayContaining([
+        at(root, ".old-format-hooks"),
+        at(root, ".new-format-hooks"),
+        at(root, "extra-hooks"),
+        at(root, "it's here"),
+        at(root, "!bang-hooks"),
+      ]),
+    );
+    // What it includes is protected for sandboxed processes, wherever it lies.
+    expect(projectGitControlFiles(root, { scope: "sandbox" })).toContain(
+      at(outside, "extra"),
+    );
+    expect(projectGitControlFiles(root)).not.toContain(at(outside, "extra"));
+    expect(projectGitControlFiles(root)).not.toContain(
+      at(root, "relative-is-refused"),
+    );
+    // Nothing is left unread.
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+    // A change of the variable is seen at the next access.
+    process.env.GIT_CONFIG_PARAMETERS = "'core.hooksPath=.only-hooks'";
+    const directories = projectGitControlDirectories(root);
+    expect(directories).toContain(at(root, ".only-hooks"));
+    expect(directories).not.toContain(at(root, ".old-format-hooks"));
+    delete process.env.GIT_CONFIG_PARAMETERS;
+    expect(projectGitControlDirectories(root)).toHaveLength(4);
+  });
+
+  it("counts GIT_CONFIG_PARAMETERS with the other environment settings, and reports what it cannot read", () => {
+    const root = repo("parameters-limits");
+    process.env.GIT_CONFIG_PARAMETERS = Array.from(
+      { length: 100 },
+      (_, index) => `'core.hooksPath=p${index}'`,
+    ).join(" ");
+    const directories = projectGitControlDirectories(root);
+    expect(directories).toContain(at(root, "p0"));
+    expect(directories).toContain(at(root, "p63"));
+    expect(directories).not.toContain(at(root, "p64"));
+    expect(projectGitControlUnverified(root)).toMatch(
+      /more than 64 included files, hooks paths, or environment settings/,
+    );
+    // The same 64 are shared with GIT_CONFIG_COUNT.
+    process.env.GIT_CONFIG_PARAMETERS = Array.from(
+      { length: 60 },
+      (_, index) => `'core.editor=e${index}'`,
+    ).join(" ");
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+    for (let index = 0; index < 8; index++)
+      setting(index, "core.pager", "less");
+    process.env.GIT_CONFIG_COUNT = "8";
+    expect(projectGitControlUnverified(root)).toMatch(
+      /more than 64 included files, hooks paths, or environment settings/,
+    );
+    delete process.env.GIT_CONFIG_COUNT;
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+
+    // Text that is not what git writes is not guessed at.
+    for (const value of [
+      "core.hooksPath=x",
+      "'core.hooksPath=unclosed",
+      "'core.hooksPath=x'junk",
+      "'a' 'b'x",
+    ]) {
+      process.env.GIT_CONFIG_PARAMETERS = value;
+      expect(projectGitControlUnverified(root), value).toMatch(
+        /GIT_CONFIG_PARAMETERS is set but not in the format git writes/,
+      );
+    }
+    process.env.GIT_CONFIG_PARAMETERS = "";
+    expect(projectGitControlUnverified(root)).toBeUndefined();
   });
 
   it("lists the config outside the project for sandboxed processes only, not for the file tools", () => {

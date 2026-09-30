@@ -367,15 +367,17 @@ interface EnvironmentSetting {
  * itself has: the system config (`GIT_CONFIG_SYSTEM`, or `/etc/gitconfig`,
  * unless `GIT_CONFIG_NOSYSTEM` is true), the global config (`GIT_CONFIG_GLOBAL`
  * alone when it is set, else `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`,
- * `~/.config/git/config` by default), and the `GIT_CONFIG_COUNT` settings.
- * These are the only sources besides the repository, and the includes of all
- * of them.
+ * `~/.config/git/config` by default), the `GIT_CONFIG_COUNT` settings, and
+ * the `GIT_CONFIG_PARAMETERS` ones (what `git -c` exports). These are the only
+ * sources besides the repository, and the includes of all of them.
  */
 interface KnownConfigs {
   readonly files: readonly string[];
   readonly settings: readonly EnvironmentSetting[];
   /** More settings than are read. */
   readonly settingsOverflow: boolean;
+  /** `GIT_CONFIG_PARAMETERS` is set and not in the format git writes. */
+  readonly parametersUnreadable: boolean;
 }
 
 /** Git's boolean for an environment variable: only a clear "true" counts, so an odd value never hides the system config. */
@@ -415,11 +417,89 @@ function knownConfigs(
     const value = env[`GIT_CONFIG_VALUE_${index}`];
     if (key !== undefined && value !== undefined) settings.push({ key, value });
   }
+  // What `git -c` exports to the commands it starts, counted with the rest.
+  const parameters = parseConfigParameters(
+    env.GIT_CONFIG_PARAMETERS ?? "",
+    MAX_CONFIG_REFERENCES + 1,
+  );
+  settings.push(...parameters.settings);
   return {
     files,
-    settings,
-    settingsOverflow: declared > MAX_CONFIG_REFERENCES,
+    settings: settings.slice(0, MAX_CONFIG_REFERENCES),
+    settingsOverflow:
+      declared > MAX_CONFIG_REFERENCES ||
+      settings.length > MAX_CONFIG_REFERENCES,
+    parametersUnreadable: parameters.unreadable,
   };
+}
+
+/**
+ * The settings in a `GIT_CONFIG_PARAMETERS` value, which is what `git -c
+ * key=value` exports to the commands it starts: items separated by white
+ * space, each a shell-quoted `'key=value'` (older git) or `'key'='value'` (git
+ * 2.31 and later), a `'key'` alone being a setting with no value. A single
+ * quote inside a quoted string is written `'\''`. At most `limit` settings are
+ * returned; `unreadable` is set when the text is not in that format, where git
+ * itself refuses it.
+ */
+function parseConfigParameters(
+  text: string,
+  limit: number,
+): { readonly settings: EnvironmentSetting[]; readonly unreadable: boolean } {
+  const settings: EnvironmentSetting[] = [];
+  /** One quoted string from `start`, and where it ends. */
+  const quoted = (
+    start: number,
+  ): { readonly value: string; readonly end: number } | undefined => {
+    if (text[start] !== "'") return undefined;
+    let value = "";
+    let position = start;
+    for (;;) {
+      if (text[position] === "'") {
+        const close = text.indexOf("'", position + 1);
+        if (close < 0) return undefined;
+        value += text.slice(position + 1, close);
+        position = close + 1;
+      } else if (
+        text[position] === "\\" &&
+        (text[position + 1] === "'" || text[position + 1] === "!") &&
+        text[position + 2] === "'"
+      ) {
+        value += text[position + 1];
+        position += 2;
+      } else return { value, end: position };
+    }
+  };
+  let position = 0;
+  while (settings.length < limit) {
+    while (/\s/.test(text[position] ?? "x")) position += 1;
+    if (position >= text.length) break;
+    const first = quoted(position);
+    if (!first) return { settings, unreadable: true };
+    position = first.end;
+    let key = first.value;
+    let value = "";
+    if (text[position] === "=") {
+      // `'key'='value'`, or `'key'=` with no value.
+      position += 1;
+      const second = quoted(position);
+      if (second) {
+        value = second.value;
+        position = second.end;
+      }
+    } else {
+      // `'key=value'`, or `'key'` with no value.
+      const equals = key.indexOf("=");
+      if (equals >= 0) {
+        value = key.slice(equals + 1);
+        key = key.slice(0, equals);
+      }
+    }
+    if (position < text.length && !/\s/.test(text[position] ?? ""))
+      return { settings, unreadable: true };
+    settings.push({ key, value });
+  }
+  return { settings, unreadable: false };
 }
 
 /** `core.hooksPath` and `include.path` values among environment settings; a key is `section.name` or `section.subsection.name`. */
@@ -484,6 +564,8 @@ interface GitConfigScan {
 }
 
 const TOO_MANY_REFERENCES = `the git config lists more than ${MAX_CONFIG_REFERENCES} included files, hooks paths, or environment settings; PiShip follows the first ${MAX_CONFIG_REFERENCES} and cannot vouch for the rest`;
+const UNREADABLE_PARAMETERS =
+  "GIT_CONFIG_PARAMETERS is set but not in the format git writes, so PiShip cannot vouch for the hooks paths and includes it sets";
 
 /**
  * Read the given config files, the known ones, and the environment's
@@ -562,6 +644,7 @@ function scanGitConfigs(
     visit(target, otherIncluded, 1);
   }
   if (known.settingsOverflow) unverified = TOO_MANY_REFERENCES;
+  if (known.parametersUnreadable) unverified ??= UNREADABLE_PARAMETERS;
   return {
     scan: {
       hooksPaths,
