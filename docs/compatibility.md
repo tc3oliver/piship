@@ -10,14 +10,13 @@
 
 ## Managed surface
 
-Managed access (`piship/v1alpha2`) is a **candidate** on Pi 0.87.1. It is verified on the pinned public API with deterministic local fixtures: a loopback OIDC provider, `http-broker`, and OpenAI-compatible gateway that auto-approve sign-in. Tests cover login, credential acquisition, refresh, gateway rejection and renewal, model governance, streamed text, a tool-call round trip, cancellation, session resume, `config explain`, `doctor`, logout, and the personal `local-secret` and `none` modes. These fixtures prove PiShip's contracts, not an integration with a real identity provider or gateway.
+Managed access (`piship/v1alpha2`) is a **candidate** on Pi 0.87.1. It is verified on the pinned public API with deterministic local fixtures: a loopback OIDC provider, `http-broker`, and OpenAI-compatible gateway that auto-approve sign-in. Tests cover login, credential acquisition, refresh, gateway rejection and renewal, model governance, streamed text, a tool-call round trip, cancellation, session resume, `config explain`, `doctor`, logout, and the personal `local-secret` and `none` modes. These fixtures prove PiShip's contracts. Beyond them, the Reference E2E runs the AcmeCode reference distribution on Ubuntu against the [enterprise reference stack](../examples/enterprise-reference/README.md): sign-in on a real Keycloak, a credential from the reference broker, and model requests through a real LiteLLM gateway to a deterministic mock upstream. The platform secret stores are live in CI: the `CI` check job runs the secret-store test against macOS Keychain, Windows Credential Manager, and the Linux Secret Service (GNOME Keyring) on every pull request, and the managed E2E scenarios use the live store on every Portable E2E target.
 
 Still pending:
 
-- A live OIDC login against a real identity provider.
-- Live inference through a real gateway, and a real authenticated personal model request.
+- Sign-in at a production identity provider and inference through a production gateway; the reference stack stands in for both.
+- A model request that reaches a real model provider. The gateway's upstream in Reference E2E is a mock, and the personal flows send their request to a stand-in model server. The manual `Live provider` workflow sends one request through LiteLLM to a real provider; no run of it is recorded.
 - Current-head three-target installed E2E for the managed surface. The managed demo E2E runs on all three targets in the nightly and manual Portable E2E; see [status](status.md#recorded-evidence).
-- Broader platform secret-store evidence. Unit tests use a command-runner double. An opt-in live Keychain and Credential Manager test runs in the `CI` check jobs on macOS and Windows runners on every pull request; Linux Secret Service has no live coverage.
 
 ## Governance surface
 
@@ -27,7 +26,7 @@ Governance (`piship/v1alpha3` and later) is recorded as the `governance` surface
 | --- | --- |
 | Linux | Real bubblewrap in the fast merge gate (`CI` on Ubuntu, for example [this run](https://github.com/tc3oliver/piship/actions/runs/36389270268)): the live probe enforces filesystem read deny, write allowlist, network deny, and the environment filter. The governance E2E runs in the nightly and manual Portable E2E |
 | macOS | Seatbelt in the fast merge gate (`CI` on macOS 26 arm64, [same run](https://github.com/tc3oliver/piship/actions/runs/36389270268)): the live probe and the boundary tests, including refused launchd, `open`, and `osascript` escapes. The governance E2E runs in Portable E2E |
-| Windows | No native sandbox adapter. A distribution with a required native sandbox fails closed with `SANDBOX_UNAVAILABLE`, which the governance E2E checks; with the sandbox optional, the governance E2E runs in Portable E2E. Remote [sandbox backends](sandbox.md) do not depend on the host OS but are a preview without E2E evidence |
+| Windows | No native sandbox adapter. A distribution with a required native sandbox fails closed with `SANDBOX_UNAVAILABLE`, which the governance E2E checks; with the sandbox optional, the governance E2E runs in Portable E2E. Remote [sandbox backends](sandbox.md) do not depend on the host OS; each is a preview, with its evidence in the [per-backend table](status.md#sandbox-backends) |
 
 The fixtures prove PiShip's governance contracts, not a production deployment. A [Portable E2E run](https://github.com/tc3oliver/piship/actions/runs/36389270287) on the v0.3 pull request passed on Ubuntu, macOS, and Windows; the latest results are on the [status page](status.md#recorded-evidence). A release of a distribution that declares governance, which every `piship/v1alpha3` or later manifest does, records the `governance` surface in `release.json` and counts it toward the release's compatibility status. Still missing before `supported`: live company services (identity provider, gateway, audit sink) and a Windows sandbox adapter.
 

@@ -398,7 +398,7 @@ Nothing is currently published to npm or as an official GitHub Release.
 
 The portable personal distribution core is the most mature surface. Managed access, governance, and release lifecycle are currently compatibility candidates, and remote sandbox backends are preview functionality.
 
-Many integration paths are tested with deterministic local fixtures. The project does **not** currently claim live qualification against a real company IdP, LLM gateway, E2B deployment, CubeSandbox deployment, or Kubernetes Agent Sandbox cluster.
+Many integration paths are tested with deterministic local fixtures. The project does **not** currently claim live qualification against a real company IdP, LLM gateway, model provider, E2B deployment, CubeSandbox deployment, or Kubernetes Agent Sandbox cluster. The [enterprise reference stack](examples/enterprise-reference/README.md) (Keycloak, a reference credential broker, LiteLLM in front of a mock model, and a reference container sandbox) runs the managed flow against real services of those kinds on Ubuntu in the nightly and manual Reference E2E; it stands in for a company's services and is not one.
 
 The [project status page](docs/status.md) is the source of truth for current support and the evidence behind each claim.
 
@@ -435,6 +435,7 @@ See [compatibility](docs/compatibility.md).
 | LLM gateway and models | [Inference](docs/inference.md) |
 | Policy and security boundaries | [Security](docs/security.md) |
 | Sandbox backends | [Sandbox](docs/sandbox.md) |
+| Writing and testing adapters | [Adapter SDK](docs/adapter-sdk.md) |
 | Release, update, rollback | [Release](docs/release.md) |
 | Pi compatibility | [Compatibility](docs/compatibility.md) |
 | Future direction | [Roadmap](docs/roadmap.md) |
