@@ -4,10 +4,18 @@
 //
 //   node --test test/
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { after, before, describe, it } from "node:test";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { CREDENTIAL_ID_PATTERN } from "../src/broker.mjs";
 import { ISSUER } from "./fakes.mjs";
 import { GATEWAY_BASE_URL, startHarness } from "./harness.mjs";
@@ -22,9 +30,8 @@ if (!existsSync(credentialsDist) || !existsSync(contractsDist))
   throw new Error(
     `PiShip packages are not built under ${root}: run "npm ci && npm run build" at the repository root`,
   );
-const { HttpBrokerCredentialProvider } = await import(
-  pathToFileURL(credentialsDist).href
-);
+const { CredentialManager, HttpBrokerCredentialProvider, MemorySecretStore } =
+  await import(pathToFileURL(credentialsDist).href);
 const { SecretValue } = await import(pathToFileURL(contractsDist).href);
 
 const ALICE = { sub: "0f1e2d3c-alice", groups: ["/engineering"] };
@@ -212,5 +219,133 @@ describe("PiShip HttpBrokerCredentialProvider against the reference broker", () 
     const error = await code(provider.revoke(credential, ctx()));
     assert.equal(error.code, "CREDENTIAL_REVOKED");
     assert.equal(error.retryable, true);
+  });
+});
+
+describe("PiShip CredentialManager against the reference broker: durable idempotency", () => {
+  let h;
+  let temp;
+  const metadataPath = () =>
+    join(temp, "credentials-metadata", "inference.json");
+  const pendingKey = () => {
+    const file = join(temp, "credentials-metadata", "pending-issuance.json");
+    return existsSync(file)
+      ? JSON.parse(readFileSync(file, "utf8")).idempotency_key
+      : null;
+  };
+  const manager = (fetch, extra = {}) =>
+    new CredentialManager({
+      distributionId: "acmecode",
+      provider: new HttpBrokerCredentialProvider({
+        endpoint: `${h.url}/v1/credential`,
+        fetch,
+        expectedBaseUrl: GATEWAY_BASE_URL,
+      }),
+      store: new MemorySecretStore(),
+      metadataPath: metadataPath(),
+      beforeExpirySeconds: 300,
+      ...extra,
+    });
+  const alice = () => ({
+    subject: ALICE.sub,
+    issuer: ISSUER,
+    accessToken: new SecretValue(h.keycloak.mint(ALICE)),
+  });
+
+  beforeEach(async () => {
+    h = await startHarness({ BROKER_ACQUIRE_LIMIT_PER_MINUTE: "50" });
+    temp = mkdtempSync(join(tmpdir(), "piship-broker-issuance-"));
+  });
+  afterEach(async () => {
+    await h.close();
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("an acquire whose answer was lost is recovered by the next process with the same key: one LiteLLM key", async () => {
+    // The broker issues and answers; the answer is lost on the way back.
+    const lossy = async (url, init) => {
+      const response = await fetch(url, init);
+      await response.text();
+      throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+    };
+    await assert.rejects(
+      manager(lossy).ensure(alice(), ctx(), { allowAcquire: true }),
+      (error) => error.sanitizedDetail.outcome === "unknown",
+    );
+    const key = pendingKey();
+    assert.ok(key);
+    assert.equal(h.litellm.keys.size, 1);
+    // A new manager reads the key from disk; a new identity token of the
+    // same principal is the same input to the broker.
+    const active = await manager(globalThis.fetch).ensure(alice(), ctx(), {
+      allowAcquire: true,
+    });
+    assert.equal(h.litellm.keys.size, 1);
+    assert.ok(h.litellm.keys.has(active.secret.reveal()));
+    assert.equal(pendingKey(), null);
+    assert.ok(
+      h.logLines.some((line) => JSON.parse(line).idempotency === "replay"),
+    );
+  });
+
+  it("a PiShip process killed after the broker answered and before it committed: the next process gets the same credential", async () => {
+    const script = join(temp, "acquire.mjs");
+    writeFileSync(
+      script,
+      `import { CredentialManager, HttpBrokerCredentialProvider, MemorySecretStore } from ${JSON.stringify(pathToFileURL(credentialsDist).href)};
+import { SecretValue } from ${JSON.stringify(pathToFileURL(contractsDist).href)};
+const [url, metadataPath, subject, issuer, token] = process.argv.slice(2);
+// The answer arrives, the parent is told, and this process never commits it.
+const stalled = async (target, init) => {
+  const response = await fetch(target, init);
+  await response.text();
+  process.stdout.write("answered\\n");
+  return new Promise(() => {});
+};
+setInterval(() => {}, 1000);
+await new CredentialManager({
+  distributionId: "acmecode",
+  provider: new HttpBrokerCredentialProvider({ endpoint: url, fetch: stalled }),
+  store: new MemorySecretStore(),
+  metadataPath,
+  beforeExpirySeconds: 300,
+}).ensure({ subject, issuer, accessToken: new SecretValue(token) }, { distributionId: "acmecode" }, { allowAcquire: true });
+`,
+    );
+    // The token is a test token of the fake Keycloak, passed as an argument
+    // to the child only.
+    const child = spawn(
+      process.execPath,
+      [
+        script,
+        `${h.url}/v1/credential`,
+        metadataPath(),
+        ALICE.sub,
+        ISSUER,
+        h.keycloak.mint(ALICE),
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    const exited = new Promise((done) =>
+      child.on("exit", (code, signal) => done({ code, signal })),
+    );
+    child.stdout.on("data", (chunk) => {
+      if (String(chunk).includes("answered")) child.kill("SIGKILL");
+    });
+    // Killed, not a clean exit (Windows reports an exit code instead).
+    const { code, signal } = await exited;
+    assert.ok(signal === "SIGKILL" || code !== 0);
+    assert.equal(h.litellm.keys.size, 1);
+    assert.ok(pendingKey());
+    assert.equal(existsSync(metadataPath()), false);
+
+    const active = await manager(globalThis.fetch, {
+      // The killed process left its lock: take it over without the
+      // production wait.
+      lockTiming: { heartbeatMs: 50, staleMs: 300, waitMs: 5000 },
+    }).ensure(alice(), ctx(), { allowAcquire: true });
+    assert.equal(h.litellm.keys.size, 1);
+    assert.ok(h.litellm.keys.has(active.secret.reveal()));
+    assert.equal(pendingKey(), null);
   });
 });
