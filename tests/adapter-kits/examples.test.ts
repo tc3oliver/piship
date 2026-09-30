@@ -47,7 +47,9 @@ afterAll(() => {
 const every = (behaviors: readonly string[], status: string) =>
   Object.fromEntries(behaviors.map((behavior) => [behavior, status]));
 
-describe("the SDK example adapters under the conformance kits", () => {
+// The kits wait out timeouts and marker windows more than they compute, and
+// each example runs against its own fake service, so the three run together.
+describe.concurrent("the SDK example adapters under the conformance kits", () => {
   it("credential.mjs passes every credential behavior", async () => {
     const adapter = await payload.load<AdapterFactory<CredentialProvider>>(
       "credential.mjs",
