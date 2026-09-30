@@ -287,7 +287,7 @@ For `GET /models` at launch and in `doctor`:
 
 Each result is also counted in the local `<state>/logs/metrics.json`, which holds error codes and counts only, never the URL or a response. `GATEWAY_UNREACHABLE` (including 5xx) counts as unreachable; any other status counts as reachable, because the gateway answered. A successful live list also records the time and the number of models.
 
-During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed.
+During a session Pi performs the request and reports errors in the conversation. PiShip recognizes an authentication rejection (401, "unauthorized", "invalid api key", "authentication failed" in Pi's error) and renews the credential before the next request; the rejected request is not replayed. A 401 or 403 that LiteLLM relays from its model provider (its error message starts with `litellm.` and its type is not one of LiteLLM's own key or model refusals) is the gateway's provider refusing, not the gateway refusing the credential or the model: PiShip leaves the credential and its entitlement alone and classifies it as `GATEWAY_UNREACHABLE`, not retryable. A 429 without `Retry-After` takes LiteLLM's `llm_provider-retry-after`, at most one hour.
 
 ## Sandbox backend (optional)
 

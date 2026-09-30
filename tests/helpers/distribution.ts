@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { basename, join } from "node:path";
 
 export interface Result {
   status: number | null;
@@ -15,7 +15,21 @@ export function launcher(artifact: string, command: string): string {
   );
 }
 
-/** Run a branded command; acts as the browser for any printed sign-in URL. */
+/** Kill a command and what it started; `cmd.exe` leaves its child running. */
+function kill(child: ChildProcess): void {
+  if (process.platform === "win32" && child.pid !== undefined)
+    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+  else child.kill("SIGKILL");
+}
+
+/**
+ * Run a branded command; acts as the browser for any printed sign-in URL.
+ * With `timeoutMs`, a command still running then is killed and the promise
+ * rejects with its arguments and the output so far, instead of the test
+ * hanging until its own timeout with no sign of the step.
+ */
 export function branded(
   command: string,
   args: readonly string[],
@@ -24,9 +38,10 @@ export function branded(
     env: NodeJS.ProcessEnv;
     approve?: (url: string) => Promise<unknown>;
     input?: string;
+    timeoutMs?: number;
   },
 ): Promise<Result> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child =
       process.platform === "win32"
         ? spawn(
@@ -56,6 +71,20 @@ export function branded(
       }
     });
     child.stdin.end(options.input ?? "");
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            kill(child);
+            reject(
+              new Error(
+                `${basename(command)} ${args.join(" ")} did not finish in ${options.timeoutMs} ms\nstdout: ${stdout}\nstderr: ${stderr}`,
+              ),
+            );
+          }, options.timeoutMs);
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    });
   });
 }

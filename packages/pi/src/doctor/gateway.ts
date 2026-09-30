@@ -1,5 +1,7 @@
 // Gateway group: the managed inference endpoint (by origin only) and whether
-// its model list answers.
+// its model list answers. The model list is the gateway's own: it shows the
+// gateway reachable and the credential accepted, never that a model provider
+// behind the gateway answers, so the line says so.
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
@@ -21,6 +23,9 @@ export function gatewayGroup(data: DoctorData, out: DoctorSection): void {
   if (activation.gatewayOrigin) out.ok("endpoint", activation.gatewayOrigin);
   if (access.gateway?.error) out.bad("gateway", access.gateway.error);
   else if (access.gateway?.listed !== undefined)
-    out.ok("gateway", `reachable (${access.gateway.listed} listed)`);
+    out.ok(
+      "gateway",
+      `reachable (${access.gateway.listed} listed; model providers not contacted)`,
+    );
   else out.info("gateway", "not probed; the provider has no model list");
 }

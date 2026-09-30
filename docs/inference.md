@@ -51,18 +51,19 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 
 ## Gateway status
 
-`GET {baseUrl}/models` (the live catalog at launch, and `doctor`) is classified as:
+`GET {baseUrl}/models` (the live catalog at launch, and `doctor`) shows that the gateway is reachable, that it accepts the runtime credential, and which models it lists for it. It does not reach a model provider behind the gateway: a gateway such as LiteLLM answers it from its own configuration, so a provider that is down, refuses the gateway's own provider key, or rate limits it shows only when a request is sent (in a session, or with `--smoke-model`). `doctor` says `model providers not contacted` for this reason. An answer is classified as:
 
 | Status | Code |
 | --- | --- |
 | 401 | `CREDENTIAL_REVOKED` |
 | 403 | `MODEL_DENIED` |
+| 401 or 403 whose error message starts with `litellm.`, unless its type is one of LiteLLM's own refusals (`auth_error`, `token_not_found_in_db`, `expired_key`, `key_model_access_denied`) | `GATEWAY_UNREACHABLE`, not retryable: LiteLLM relays its model provider's refusal (a provider key or permission of the gateway's), which says nothing about the runtime credential or its entitlement |
 | 404 | `MODEL_UNAVAILABLE` |
-| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
+| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. Without it, LiteLLM's `llm_provider-retry-after` (the provider's value it relays) is used, at most one hour |
 | 5xx, network failure, timeout (15 s, including the body) | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, malformed list | `GATEWAY_PROTOCOL_ERROR` |
 
-During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.
+During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). A 401 or 403 that LiteLLM relays from its model provider (Pi's message carries the status and the gateway's error object, whose message starts with `litellm.`) is neither: the credential is not marked and the entitlement is not re-read. `--smoke-model` reports a failed acceptance request with the code the table above gives for the status and error body in Pi's message (a 503 is `GATEWAY_UNREACHABLE`, a gateway 401 `CREDENTIAL_REVOKED`) with its retry flag (Pi's message carries no headers, so no retry time), and as `GATEWAY_PROTOCOL_ERROR` when the message carries no status: a stream that failed after it started, or an aborted request.
 
 ## Failure policy
 
