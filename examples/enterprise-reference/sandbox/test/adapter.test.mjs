@@ -205,7 +205,9 @@ describe("the credential", () => {
     );
     assert.equal(redirected.calls.length, 1);
     assert.equal(redirected.calls[0].redirect, "manual");
-    assert.equal(redirected.calls[0].url.startsWith(ENDPOINT), true);
+    // The one request went to the endpoint's own origin, compared as parsed
+    // origins: a prefix of the text would also match a longer host name.
+    assert.equal(new URL(redirected.calls[0].url).origin, ENDPOINT);
   });
 
   it("is read for each request, and never placed in a URL, a body, or a command", async () => {
