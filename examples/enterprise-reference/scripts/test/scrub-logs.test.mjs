@@ -88,4 +88,79 @@ test("replaces OAuth code, state, and session_state values", () => {
   );
   // Only whole parameter names.
   assert.equal(scrub("errorcode=5 xstate=1\n"), "errorcode=5 xstate=1\n");
+  assert.equal(
+    scrub("GET /x?errorcode=5&xstate=1\n"),
+    "GET /x?errorcode=5&xstate=1\n",
+  );
+});
+
+test("replaces them anywhere in a query string, and in a fragment", () => {
+  assert.equal(
+    scrub("GET /cb?a=1&code=fake-code-0000&b=2 HTTP/1.1\n"),
+    "GET /cb?a=1&code=<redacted>&b=2 HTTP/1.1\n",
+  );
+  assert.equal(
+    scrub(
+      "redirected to http://127.0.0.1/cb#state=fake-state-0000&code=fake-code-0000\n",
+    ),
+    "redirected to http://127.0.0.1/cb#state=<redacted>&code=<redacted>\n",
+  );
+});
+
+test("keeps the same words in ordinary log text, where they are not URL parameters", () => {
+  for (const line of [
+    "container exit code=137\n",
+    "level=info state=running code=1 session_state=ok\n",
+    "process exited: code=0 state=stopped\n",
+    "what state=unknown? code=2\n",
+  ])
+    assert.equal(scrub(line), line);
+  // Inside a URL they are parameters, whatever the value.
+  assert.equal(
+    scrub("GET /cb?state=running HTTP/1.1\n"),
+    "GET /cb?state=<redacted> HTTP/1.1\n",
+  );
+});
+
+test("replaces them in a URL that is percent-encoded inside another one", () => {
+  assert.equal(
+    scrub(
+      "redirect_uri=http%3A%2F%2F127.0.0.1%2Fcb%3Fstate%3Dfake-state-0000%26session_state%3D0000-fake%26code%3D0000.fake-code.0000&scope=openid\n",
+    ),
+    "redirect_uri=http%3A%2F%2F127.0.0.1%2Fcb%3Fstate%3D<redacted>%26session_state%3D<redacted>%26code%3D<redacted>&scope=openid\n",
+  );
+  // Lower-case hex, and an encoded `=` after a plain separator.
+  assert.equal(
+    scrub("next=%2Fcb%3fcode%3daaaa-bbbb%26x%3D1 and /cb?code%3Dcccc-dddd\n"),
+    "next=%2Fcb%3fcode%3d<redacted>%26x%3D1 and /cb?code%3D<redacted>\n",
+  );
+  // Only whole parameter names, encoded too.
+  assert.equal(
+    scrub("next=%2Fcb%3Ferrorcode%3D5%26xstate%3D1\n"),
+    "next=%2Fcb%3Ferrorcode%3D5%26xstate%3D1\n",
+  );
+});
+
+test("replaces token-shaped values of code, state, and session_state members of JSON", () => {
+  assert.equal(
+    scrub(
+      '{"code":"0000.fake-code.0000-0000","state": "fake-state-0000-0000","session_state" :"0000-fake-0000-0000"}\n',
+    ),
+    '{"code":"<redacted>","state": "<redacted>","session_state" :"<redacted>"}\n',
+  );
+  // JSON that is itself a quoted string of a log line.
+  assert.equal(
+    scrub('{"msg":"{\\"code\\":\\"0000.fake-code.0000-0000\\",\\"n\\":1}"}\n'),
+    '{"msg":"{\\"code\\":\\"<redacted>\\",\\"n\\":1}"}\n',
+  );
+});
+
+test("keeps statuses and numbers in JSON members of the same names", () => {
+  for (const line of [
+    '{"state":"running","code":"401","session_state":"ok"}\n',
+    '{"code":137,"state":null,"state_reason":"0000-fake-0000-0000-0000"}\n',
+    '{"errorcode":"0000.fake-code.0000-0000","xstate":"fake-state-0000-0000"}\n',
+    '{"code":"not a token, though it is longer than sixteen"}\n',
+  ])
+    assert.equal(scrub(line), line);
 });
