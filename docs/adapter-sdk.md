@@ -58,7 +58,7 @@ A unit test pins this list, checks that every value is the public package's own 
 
 A custom sandbox backend gets its credential through `CustomBackendContext`, from one of three sources:
 
-| Source | Where it comes from | `credentialOrigins` | After a 401 or 403 |
+| Source | Where it comes from | `credentialOrigins` | After a 401 |
 | --- | --- | --- | --- |
 | `sandbox.credential: runtime` | The runtime (inference) credential, when `sandbox.endpoint` is on the gateway's origin | The gateway's origin | No `credentialRejected`: the backend reports the failure |
 | `sandbox.credential: stored` | The API key or token a person stored with `<command> sandbox login` | The origins it was stored for | It is marked rejected and the next launch asks for `sandbox login`; `credentialRejected()` resolves false |
@@ -66,7 +66,7 @@ A custom sandbox backend gets its credential through `CustomBackendContext`, fro
 
 - `credential()` returns the value for one request. Call it for each request instead of keeping the value: rotation, rejection, and a user switch take effect at once. For a stored or adapter credential it rejects with `SANDBOX_UNAVAILABLE` when the credential may no longer be used.
 - Send it only to an origin in `credentialOrigins`. PiShip has already checked that the declared endpoint (and, for a stored credential, every URL it was stored for) is one of them; anything else the backend contacts gets no credential.
-- On a 401 or 403 from one of those origins, call `credentialRejected()` when the context has it. Repeat a request only when it resolved true and the request created nothing (never a sandbox, a claim, or a command).
+- On an authentication rejection (HTTP 401) from one of those origins, call `credentialRejected()` when the context has it. A 403 means the credential was accepted and a policy denied the request: report it as an error and do not call `credentialRejected()`, which would discard or rotate a credential that still works. Repeat a request only when it resolved true and the request created nothing (never a sandbox, a claim, or a command).
 - `sandboxCredential` is a `CredentialProvider` (`acquire`, optional `refresh` and `revoke`) exported next to the default factory. It receives the signed-in identity (`null` without identity) and returns an `api_key` or `bearer` credential, with `expiresAt` when it expires; an `opaque` credential is refused. Exporting it while the manifest also declares `sandbox.credential` fails closed.
 
 `SandboxCredentialAccess` in `@piship/contracts` is how PiShip holds the stored or adapter credential behind `credential()`; a backend never sees it, so the SDK does not export it. See [sandbox credentials](sandbox.md#credentials) for storage, binding, and clearing.

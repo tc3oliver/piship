@@ -409,6 +409,29 @@ describe("e2b-compatible backend against a mock server", () => {
     ).toHaveLength(1);
   });
 
+  it("does not treat a 403 from the control plane as a rejected key", async () => {
+    const key = "fake-sandbox-key-SENTINEL-0005";
+    const mock = await e2bServer({ apiKey: key, create: 403 });
+    let rejected = 0;
+    const error = await activate(
+      e2b(mock.url, {
+        credential: async () => key,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    expect(String((error as Error).message)).toMatch(/HTTP 403/);
+    expect(rejected).toBe(0);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === "/sandboxes",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("kills the remote process on timeout and reports PiShip's outcome", async () => {
     const mock = await e2bServer({
       command: (start) =>
@@ -1245,6 +1268,91 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect(
       leaks(mock.requests, "runtime-credential-2", ["authorization"]),
     ).toEqual([]);
+  });
+
+  it("reports an RBAC 403 on claim creation without rejecting the bearer", async () => {
+    const token = "fake-bearer-SENTINEL-0006";
+    const mock = await kubernetesServer(undefined, {
+      token,
+      createStatus: 403,
+    });
+    let rejected = 0;
+    const error = await activate(
+      kubernetes(mock.url, {
+        credential: async () => token,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toMatch(/creating the SandboxClaim failed: HTTP 403/);
+    expect(message).not.toContain(token);
+    expect(rejected).toBe(0);
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("reports an RBAC 403 from the router without rejecting the bearer", async () => {
+    const token = "fake-bearer-SENTINEL-0007";
+    const mock = await kubernetesServer(
+      (command) =>
+        command.includes("forbidden") ? { status: 403 } : { stdout: "ok\n" },
+      { token },
+    );
+    let rejected = 0;
+    const sandbox = await activate(
+      kubernetes(mock.url, {
+        credential: async () => token,
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    );
+    const error = await run(sandbox, "echo forbidden").catch(
+      (caught: unknown) => caught,
+    );
+    const message = String((error as Error).message);
+    expect(message).toMatch(/running the command failed: HTTP 403/);
+    expect(message).not.toContain(token);
+    expect(rejected).toBe(0);
+    // The credential stays usable for the next command.
+    expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+    expect(rejected).toBe(0);
+    await sandbox.dispose();
+  });
+
+  it("rejects the bearer on a 401 and creates no claim", async () => {
+    const mock = await kubernetesServer(undefined, {
+      token: "fake-bearer-expected-0000",
+    });
+    let rejected = 0;
+    const error = await activate(
+      kubernetes(mock.url, {
+        credential: async () => "fake-bearer-SENTINEL-0008",
+        credentialRejected: async () => {
+          rejected++;
+          return true;
+        },
+      }),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toMatch(/HTTP 401/);
+    expect(message).not.toContain("fake-bearer-SENTINEL-0008");
+    expect(rejected).toBeGreaterThanOrEqual(1);
+    // The API refused the bearer before any claim was requested.
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ),
+    ).toHaveLength(0);
   });
 
   it("quotes commands and environment for the runtime's shell-like split", () => {

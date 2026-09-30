@@ -9,6 +9,11 @@ export const CLAIMS =
 
 /** Cluster behavior a test can change while the mock runs. */
 export interface Cluster {
+  /**
+   * Status for a claim POST; 403 answers as RBAC does for a valid bearer that
+   * may not create claims (the body echoes the Authorization header).
+   */
+  createStatus?: number;
   /** Status for DELETE; 500 simulates an API outage during cleanup. */
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
@@ -36,6 +41,8 @@ export async function kubernetesServer(
     hang?: boolean;
     /** Answer only once this resolves. */
     after?: Promise<void>;
+    /** An HTTP error status from the router instead of a result. */
+    status?: number;
   },
   cluster: Cluster = {},
 ): Promise<MockServer> {
@@ -57,6 +64,16 @@ export async function kubernetesServer(
     if (request.method === "GET" && path === CLAIMS)
       return void response.end(JSON.stringify({ items: [] }));
     if (request.method === "POST" && path === CLAIMS) {
+      if (cluster.createStatus !== undefined && cluster.createStatus >= 400) {
+        response.statusCode = cluster.createStatus;
+        return void response.end(
+          JSON.stringify({
+            kind: "Status",
+            reason: "Forbidden",
+            message: `sandboxclaims is forbidden: ${request.headers.authorization ?? "anonymous"} cannot create resource "sandboxclaims" in namespace "agents"`,
+          }),
+        );
+      }
       response.statusCode = 201;
       return void response.end(request.body);
     }
@@ -116,7 +133,15 @@ export async function kubernetesServer(
         );
       const answer = execute?.(command) ?? { stdout: "", exit_code: 0 };
       if (answer.hang) return;
-      const { after, ...body } = answer;
+      const { after, status, ...body } = answer;
+      if (status !== undefined) {
+        response.statusCode = status;
+        return void response.end(
+          JSON.stringify({
+            message: `forbidden: ${request.headers.authorization ?? "anonymous"} may not execute in this sandbox`,
+          }),
+        );
+      }
       return void (after ?? Promise.resolve()).then(() =>
         response.end(JSON.stringify({ stderr: "", ...body })),
       );

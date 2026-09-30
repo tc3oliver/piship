@@ -32,7 +32,8 @@ export interface CustomBackendContext {
    */
   readonly credentialOrigins?: readonly string[];
   /**
-   * Report a 401 or 403 from one of those origins. Resolves true when a
+   * Report an authentication rejection (HTTP 401) from one of those
+   * origins; an authorization denial (403) is not one. Resolves true when a
    * renewed credential is ready for one retry of a request that created
    * nothing.
    */
