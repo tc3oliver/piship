@@ -265,6 +265,17 @@ function credentialMetadata(): { credential_id: string; rejected_at?: string } {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+/**
+ * The credential AcmeCode will use, after one start has renewed it if it
+ * must. The broker keeps a user's newest three keys, so the keys other tests
+ * acquire for alice can delete the one AcmeCode holds, and the next start
+ * renews it; a test that compares credential IDs starts from this one.
+ */
+async function settledCredential(): Promise<string> {
+  await installed().smoke();
+  return credentialMetadata().credential_id;
+}
+
 /** The key AcmeCode holds now, for admin calls by its hash. */
 async function heldKey(): Promise<{ key: string; hash: string }> {
   const held = await installed().secrets();
@@ -802,7 +813,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
 
   describe("in a session: Pi's request through the gateway, read by PiShip", () => {
     it("an upstream 401 leaves the runtime credential alone", async () => {
-      const before = credentialMetadata().credential_id;
+      const before = await settledCredential();
       const bob = await stack.acquire("bob");
       cooling = bob.key;
       await queueFaults({ status: 401, count: 1 });
@@ -830,14 +841,18 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       // marked rejected nor replaced at the next start.
       expect(isCredentialRejection(assistantMessage(result))).toBe(false);
       expect(credentialMetadata().rejected_at).toBeUndefined();
+      expect(credentialMetadata().credential_id).toBe(before);
 
       await untilServed(bob.key);
       const next = await installed().smoke();
-      expect(next.access.credential.credentialId).toBe(before);
+      expect(
+        next.access.credential.credentialId,
+        next.access.notices.join("; "),
+      ).toBe(before);
     });
 
     it("an upstream 403 is not a model denial and re-reads no entitlement", async () => {
-      const before = credentialMetadata().credential_id;
+      const before = await settledCredential();
       await queueFaults({ status: 403, count: 3 });
       const { value: result, upstream } = await upstreamDuring(() =>
         smokeModel(),
