@@ -184,7 +184,7 @@ A lost answer can hide an issued credential: the broker may create a gateway key
 
 A renewal after a gateway rejection and an entitlement re-read after a model denial are requests of their own: they repeat only a key recorded by the same kind of request, never an older request's key, whose credential the broker would replay. A `login` of the same principal repeats whatever key is pending. A caller that passes its own `CredentialContext.idempotencyKey` has it recorded and sent only when no key is pending; a pending key is never replaced by a different caller key. Details are in [pending issuance](credentials.md#pending-issuance).
 
-A dropped key can leave a credential behind: logout or a change of principal with an unresolved request leaves a credential the broker may have issued valid until it expires (or the broker's rotation deletes it). Logout revokes only the stored credential, and PiShip does not re-send the request to find the other one.
+A dropped key can leave a credential behind: logout or a change of principal with an unresolved request, or a rejection renewal or entitlement re-read that replaces the pending key of another request with its own, leaves a credential the broker may have issued valid until it expires (or the broker's rotation deletes it). Logout revokes only the stored credential, and PiShip does not re-send the request to find the other one.
 
 The key also appears in the `credential.acquire` and `credential.refresh` audit events (`idempotencyKey`, with `resumed: true` when it was repeated) and in the error's `detail.idempotencyKey`, so broker logs can be matched to PiShip's. PiShip does not send the retention it assumes; it is part of this contract.
 
