@@ -4,9 +4,10 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
-import { relative, join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { STATE_DATA_CLASSES } from "@piship/core";
 import { describe, expect, it } from "vitest";
 import { branded } from "../helpers/distribution.js";
@@ -43,6 +44,16 @@ function ownTemp(s: Scenario): void {
   mkdirSync(tmp, { recursive: true });
   Object.assign(s.env, { TMPDIR: tmp, TMP: tmp, TEMP: tmp });
 }
+
+/** The environment that switches certificate verification off, kept as data. */
+const VERIFICATION_OFF = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      new URL("../fixtures/tls-verification-off.json", import.meta.url),
+    ),
+    "utf8",
+  ),
+) as Record<string, string>;
 
 const CREDENTIAL_CLASSES = STATE_DATA_CLASSES.filter(
   (entry) => entry.credential || entry.sensitivity === "secret-reference",
@@ -239,7 +250,7 @@ describe("the update transport keeps the network policy and TLS (local fixtures)
       const insecure = await branded(
         s.command,
         ["update", "--check", "--from", `https://127.0.0.1:${untrusted.port}/`],
-        { cwd: s.temp, env: { ...s.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" } },
+        { cwd: s.temp, env: { ...s.env, ...VERIFICATION_OFF } },
       );
       expect(insecure.status).toBe(1);
       expect(insecure.stderr).toContain("TLS_POLICY_VIOLATION");

@@ -1,9 +1,11 @@
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
@@ -73,39 +75,81 @@ describe("the trust roots a policy declares", () => {
   });
 });
 
+// The environment an in-process extension could set at any time is data, read
+// from a fixture by a child process that creates the client first: the
+// parent never switches verification off in its own process.
+const VERIFICATION_OFF = fileURLToPath(
+  new URL("../fixtures/tls-verification-off.json", import.meta.url),
+);
+const REPOSITORY = fileURLToPath(new URL("../../", import.meta.url));
+const CHILD = `
+import { readFileSync } from "node:fs";
+import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
+const client = createManagedFetch({
+  ...DEFAULT_NETWORK_POLICY,
+  inheritProxyEnvironment: false,
+  additionalCA: [process.env.TEST_CA],
+});
+const before = await (await client(process.env.TEST_URL)).text();
+Object.assign(process.env, JSON.parse(readFileSync(process.env.TEST_LATE_ENVIRONMENT, "utf8")));
+let code = "none";
+try {
+  await client(process.env.TEST_URL);
+} catch (error) {
+  code = error.code;
+}
+console.log(JSON.stringify({ before, code }));
+`;
+
+/** Run `script` in a child node process and resolve with its output. */
+function inChild(
+  script: string,
+  env: Record<string, string>,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      { cwd: REPOSITORY, env: { ...process.env, ...env } },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
 describe("disabling verification after a client exists", () => {
   it("refuses the next request, before any connection", async () => {
-    let connections = 0;
-    const served = selfSignedLoopbackCertificate();
+    let served = 0;
+    const certificate = selfSignedLoopbackCertificate();
     const server = createHttpsServer(
-      { cert: served.certificate, key: served.key },
+      { cert: certificate.certificate, key: certificate.key },
       (_request, response) => {
+        served += 1;
         response.end("ok");
       },
     );
-    server.on("connection", () => {
-      connections += 1;
-    });
     const port = await listen(server);
     const bundle = join(temp(), "ca.pem");
-    writeFileSync(bundle, served.certificate);
-    const client = createManagedFetch({ ...direct, additionalCA: [bundle] });
-    // The control: the client works while verification is on.
-    expect(await (await client(`https://127.0.0.1:${port}/`)).text()).toBe(
-      "ok",
-    );
-    const before = connections;
+    writeFileSync(bundle, certificate.certificate);
 
-    const saved = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    // An in-process extension can set this at any time.
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-    cleanup.push(() => {
-      if (saved === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = saved;
+    const child = await inChild(CHILD, {
+      TEST_CA: bundle,
+      TEST_URL: `https://127.0.0.1:${port}/`,
+      TEST_LATE_ENVIRONMENT: VERIFICATION_OFF,
     });
-    await expect(client(`https://127.0.0.1:${port}/`)).rejects.toMatchObject({
-      code: "TLS_POLICY_VIOLATION",
-    });
-    expect(connections).toBe(before);
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout) as { before: string; code: string };
+    // The control: the client works while verification is on.
+    expect(result.before).toBe("ok");
+    // Then it refuses, and the server was asked for nothing more.
+    expect(result.code).toBe("TLS_POLICY_VIOLATION");
+    expect(served).toBe(1);
   });
 });
