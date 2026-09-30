@@ -234,6 +234,25 @@ describe("sanitizeEvent", () => {
     );
   });
 
+  it("drops a detail key that holds a secret", () => {
+    const secret = new SecretValue("piship-fake-detail-key-0123");
+    const event = sanitizeEvent(
+      {
+        event: "policy.violation",
+        distribution: "acmecode",
+        detail: {
+          [secret.reveal()]: true,
+          "sk-live0123456789abcdef": 1,
+          source: "project",
+        },
+      },
+      NO_CONTENT_CAPTURE,
+    );
+    expect(event.detail).toEqual({ source: "project" });
+    expect(JSON.stringify(event)).not.toContain(secret.reveal());
+    expectNoTokens(event);
+  });
+
   it("drops invalid decision and enforcement values", () => {
     const event = sanitizeEvent(
       {
