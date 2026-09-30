@@ -9,6 +9,7 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   buildModelDefinitions,
   classifyGatewayStatus,
+  isUpstreamProviderError,
   OpenAICompatibleInferenceProvider,
   PiNativeInferenceProvider,
   resolveRequestedModel,
@@ -114,6 +115,86 @@ describe("model catalog", () => {
       code: "GATEWAY_PROTOCOL_ERROR",
       retryable: false,
     });
+  });
+  // Bodies as LiteLLM v1.103.0 answered them (tests/enterprise-reference/
+  // gateway-evidence.test.ts).
+  const litellm = (type: string, message: string, code: string) => ({
+    error: { message, type, param: null, code },
+  });
+  it("tells a model provider's 401 and 403 relayed by LiteLLM from the gateway's own", () => {
+    const upstream401 = litellm(
+      "authentication_error",
+      "litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided.. Received Model Group=acme/coder",
+      "401",
+    );
+    const upstream403 = litellm(
+      "permission_error",
+      "litellm.APIError: APIError: OpenAIException - Mock upstream denies this request.. Received Model Group=acme/coder",
+      "403",
+    );
+    for (const [status, body] of [
+      [401, upstream401],
+      [403, upstream403],
+    ] as const) {
+      expect(isUpstreamProviderError(body)).toBe(true);
+      expect(classifyGatewayStatus(status, {}, body)).toMatchObject({
+        code: "GATEWAY_UNREACHABLE",
+        retryable: false,
+        message: expect.stringContaining(
+          `model provider refused the request (HTTP ${status})`,
+        ),
+      });
+    }
+    // The gateway's own refusals of the key and the model keep their codes.
+    for (const body of [
+      litellm("auth_error", "Authentication Error, Key is blocked.", "401"),
+      litellm(
+        "token_not_found_in_db",
+        "Authentication Error, Invalid proxy server token passed.",
+        "401",
+      ),
+      litellm(
+        "expired_key",
+        "Authentication Error - Expired Key. Key Expiry time ...",
+        "401",
+      ),
+    ]) {
+      expect(isUpstreamProviderError(body)).toBe(false);
+      expect(classifyGatewayStatus(401, {}, body)?.code).toBe(
+        "CREDENTIAL_REVOKED",
+      );
+    }
+    const denied = litellm(
+      "key_model_access_denied",
+      "The requested model 'acme/general' is not available for this API key",
+      "403",
+    );
+    expect(classifyGatewayStatus(403, {}, denied)?.code).toBe("MODEL_DENIED");
+    // The error object alone, as Pi's error message carries it.
+    expect(isUpstreamProviderError(upstream401.error)).toBe(true);
+    expect(isUpstreamProviderError(undefined)).toBe(false);
+    expect(isUpstreamProviderError("litellm.AuthenticationError")).toBe(false);
+  });
+  it("reads a retry time the gateway relays from its provider, bounded", () => {
+    expect(
+      classifyGatewayStatus(429, { "llm_provider-retry-after": "1" })
+        ?.retryAfterMs,
+    ).toBe(1000);
+    // The gateway's own retry-after comes first.
+    expect(
+      classifyGatewayStatus(429, {
+        "retry-after": "5",
+        "llm_provider-retry-after": "1",
+      })?.retryAfterMs,
+    ).toBe(5000);
+    expect(
+      classifyGatewayStatus(429, { "llm_provider-retry-after": "86400" })
+        ?.retryAfterMs,
+    ).toBe(3_600_000);
+    expect(
+      classifyGatewayStatus(429, { "llm_provider-retry-after": "soon" })
+        ?.retryAfterMs,
+    ).toBeUndefined();
   });
   it("limits Pi-native personal selection to the owner allowlist when present", async () => {
     const provider = new PiNativeInferenceProvider(["openai/gpt-4o"]);

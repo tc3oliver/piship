@@ -1,5 +1,6 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
+import { isUpstreamProviderError } from "@piship/core";
 
 type Model = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 type AuthResult = Awaited<ReturnType<ModelRuntime["getAuth"]>>;
@@ -222,36 +223,70 @@ export function governModelRuntime(
   };
 }
 
+/** A failed request as Pi reports it: the status and error body, when its message carries them. */
+export interface RequestFailure {
+  readonly message: string;
+  readonly status?: number;
+  readonly body?: unknown;
+}
+
 /**
- * Pi reports a rejected request (the SDK throws before a response event) as
- * an assistant message with stopReason "error". Recognize authentication
- * rejections so the next request re-acquires the runtime credential.
+ * Pi reports a failed request (the SDK throws before a response event) as an
+ * assistant message with stopReason "error". For an HTTP error its message
+ * is the status and the gateway's error object, `401: {"message": ...}`;
+ * a stream that failed after it started carries the message alone.
  */
-export function isCredentialRejection(message: unknown): boolean {
+export function requestFailure(message: unknown): RequestFailure | undefined {
   const value = message as
     | { role?: string; stopReason?: string; errorMessage?: string }
     | undefined;
+  if (value?.role !== "assistant" || value.stopReason !== "error")
+    return undefined;
+  const text = value.errorMessage ?? "";
+  const match = /^(\d{3})\b:?\s*/.exec(text);
+  if (!match?.[1]) return { message: text };
+  const rest = text.slice(match[0].length);
+  let body: unknown;
+  try {
+    body = rest.startsWith("{") ? JSON.parse(rest) : undefined;
+  } catch {
+    // Not a JSON body: the status alone is known.
+  }
+  return {
+    message: text,
+    status: Number(match[1]),
+    ...(body === undefined ? {} : { body }),
+  };
+}
+
+/**
+ * Whether a failed request was the gateway rejecting the runtime credential,
+ * so the next request re-acquires it. A 401 the gateway relays from its own
+ * model provider (a provider key the gateway holds) is not: the user's
+ * credential was accepted.
+ */
+export function isCredentialRejection(message: unknown): boolean {
+  const failure = requestFailure(message);
   return (
-    value?.role === "assistant" &&
-    value.stopReason === "error" &&
+    failure !== undefined &&
     /(^|\D)401(\D|$)|unauthori[sz]ed|invalid api key|authentication failed/i.test(
-      value.errorMessage ?? "",
-    )
+      failure.message,
+    ) &&
+    !isUpstreamProviderError(failure.body)
   );
 }
 
 /**
- * Whether an assistant message ended because the gateway denied the model
- * (HTTP 403): the credential may be fine while what it is entitled to has
- * changed, so the entitlement is re-read once (`refreshEntitlement`).
+ * Whether a failed request was the gateway denying the model (HTTP 403): the
+ * credential may be fine while what it is entitled to has changed, so the
+ * entitlement is re-read once (`refreshEntitlement`). A 403 the gateway
+ * relays from its model provider is not a decision about the entitlement.
  */
 export function isModelDenial(message: unknown): boolean {
-  const value = message as
-    | { role?: string; stopReason?: string; errorMessage?: string }
-    | undefined;
+  const failure = requestFailure(message);
   return (
-    value?.role === "assistant" &&
-    value.stopReason === "error" &&
-    /(^|\D)403(\D|$)|forbidden/i.test(value.errorMessage ?? "")
+    failure !== undefined &&
+    /(^|\D)403(\D|$)|forbidden/i.test(failure.message) &&
+    !isUpstreamProviderError(failure.body)
   );
 }

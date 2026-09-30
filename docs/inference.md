@@ -57,12 +57,13 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 | --- | --- |
 | 401 | `CREDENTIAL_REVOKED` |
 | 403 | `MODEL_DENIED` |
+| 401 or 403 whose error message starts with `litellm.` | `GATEWAY_UNREACHABLE`, not retryable: LiteLLM relays its model provider's refusal (a provider key or permission of the gateway's), which says nothing about the runtime credential or its entitlement |
 | 404 | `MODEL_UNAVAILABLE` |
-| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s` |
+| 429 | `GATEWAY_RATE_LIMITED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. Without it, LiteLLM's `llm_provider-retry-after` (the provider's value it relays) is used, at most one hour |
 | 5xx, network failure, timeout (15 s, including the body) | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, malformed list | `GATEWAY_PROTOCOL_ERROR` |
 
-During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.
+During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). A 401 or 403 that LiteLLM relays from its model provider (Pi's message carries the status and the gateway's error object, whose message starts with `litellm.`) is neither: the credential is not marked and the entitlement is not re-read. `--smoke-model` reports a failed acceptance request as `GATEWAY_PROTOCOL_ERROR`.
 
 ## Failure policy
 

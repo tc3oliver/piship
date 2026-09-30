@@ -16,6 +16,7 @@ import {
   governModelRuntime,
   isCredentialRejection,
   isModelDenial,
+  requestFailure,
 } from "./governance.js";
 
 const model = (id: string) => ({
@@ -396,5 +397,47 @@ describe("personal Pi-native governance", () => {
       }),
     ).toBe(false);
     expect(isModelDenial(undefined)).toBe(false);
+  });
+  it("does not take a model provider's 401 or 403 relayed by the gateway as the user's", () => {
+    // Pi's messages for LiteLLM v1.103.0's answers
+    // (tests/enterprise-reference/gateway-evidence.test.ts).
+    const failed = (errorMessage: string) => ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage,
+    });
+    const upstream401 = failed(
+      '401: {"message":"litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided.. Received Model Group=acme/coder","type":"authentication_error","param":null,"code":"401"}',
+    );
+    const upstream403 = failed(
+      '403: {"message":"litellm.APIError: APIError: OpenAIException - Mock upstream denies this request.. Received Model Group=acme/coder","type":"permission_error","param":null,"code":"403"}',
+    );
+    expect(isCredentialRejection(upstream401)).toBe(false);
+    expect(isModelDenial(upstream401)).toBe(false);
+    expect(isCredentialRejection(upstream403)).toBe(false);
+    expect(isModelDenial(upstream403)).toBe(false);
+    // The gateway's own refusals keep their meaning.
+    for (const type of ["auth_error", "token_not_found_in_db", "expired_key"])
+      expect(
+        isCredentialRejection(
+          failed(
+            `401: {"message":"Authentication Error, ...","type":"${type}","param":"None","code":"401"}`,
+          ),
+        ),
+      ).toBe(true);
+    expect(
+      isModelDenial(
+        failed(
+          `403: {"message":"The requested model 'acme/general' is not available for this API key","type":"key_model_access_denied","param":"model","code":"403"}`,
+        ),
+      ),
+    ).toBe(true);
+    expect(requestFailure(upstream401)).toMatchObject({
+      status: 401,
+      body: { type: "authentication_error" },
+    });
+    expect(
+      requestFailure(failed("Stream ended without finish_reason")),
+    ).toEqual({ message: "Stream ended without finish_reason" });
   });
 });

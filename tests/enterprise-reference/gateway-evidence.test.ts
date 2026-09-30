@@ -48,8 +48,9 @@ import {
 //   `llm_provider-retry-after`), 5xx `internal_server_error`. No cooldown.
 // - A stream the upstream cuts is 200, the chunks so far, then a
 //   `data: {"error": ..., "code": "500"}` event and no `[DONE]`; not retried.
-// PiShip reads an upstream 401 as its own credential rejected and an
-// upstream 403 as a model denial; the tests pin that as found.
+// PiShip tells the provider's 401 and 403 relayed by LiteLLM (a message that
+// starts with `litellm.`) from the gateway's own refusals of the key and the
+// model, and reads the relayed retry time.
 
 const LITELLM_VERSION = "1.103.0";
 const REPLY = "Reference mock reply from gpt-4.1.";
@@ -655,12 +656,11 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         code: "401",
       });
       expect(upstream).toHaveLength(1);
-      // PiShip reads the provider's 401 as its own credential being rejected.
-      // Pins current behavior, expected to change when the mapping is fixed:
-      // the provider's 401 is not the user's.
-      expect(classifyGatewayStatus(refused.status, refused.headers)?.code).toBe(
-        "CREDENTIAL_REVOKED",
-      );
+      // The provider's 401 is not the user's: PiShip reads it, by LiteLLM's
+      // `litellm.` prefix, as the gateway's provider refusing the request.
+      expect(
+        classifyGatewayStatus(refused.status, refused.headers, refused.body),
+      ).toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: false });
 
       // Every key's next request for that model is refused without reaching
       // the upstream; the other model is served.
@@ -747,19 +747,20 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
           status,
         ]);
         expect(refused.headers["retry-after"]).toBeUndefined();
-        // Pins current behavior, expected to change when the mapping is fixed:
-        // the upstream's retry time is only in llm_provider-retry-after, so
-        // PiShip's mapping below has no retryAfterMs for a 429.
+        // The upstream's retry time comes only as llm_provider-retry-after,
+        // which PiShip's mapping below reads.
         if (status === 429)
           expect(refused.headers["llm_provider-retry-after"]).toBe("1");
         console.info(
           `upstream ${status}: LiteLLM answered after ${elapsed} ms`,
         );
 
-        // Pins current behavior, expected to change when the mapping is fixed:
-        // an upstream 403 (permission_error) reads as MODEL_DENIED, and a 429
-        // has no retry time.
-        const failure = classifyGatewayStatus(refused.status, refused.headers);
+        // An upstream 403 is the provider refusing, not a model denial.
+        const failure = classifyGatewayStatus(
+          refused.status,
+          refused.headers,
+          refused.body,
+        );
         expect({
           code: failure?.code,
           retryable: failure?.retryable,
@@ -767,7 +768,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         }).toEqual(
           status === 403
             ? {
-                code: "MODEL_DENIED",
+                code: "GATEWAY_UNREACHABLE",
                 retryable: false,
                 retryAfterMs: undefined,
               }
@@ -775,7 +776,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
               ? {
                   code: "GATEWAY_RATE_LIMITED",
                   retryable: true,
-                  retryAfterMs: undefined,
+                  retryAfterMs: 1000,
                 }
               : {
                   code: "GATEWAY_UNREACHABLE",
@@ -802,7 +803,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
   });
 
   describe("in a session: Pi's request through the gateway, read by PiShip", () => {
-    it("an upstream 401 is taken as a rejected runtime credential, which the next start replaces", async () => {
+    it("an upstream 401 leaves the runtime credential alone", async () => {
       const before = credentialMetadata().credential_id;
       const bob = await stack.acquire("bob");
       cooling = bob.key;
@@ -824,18 +825,17 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         '"type":"authentication_error"',
       );
       expect(upstream.map((record) => record.status)).toEqual([401]);
-      // Pins current behavior, expected to change when the mapping is fixed: an
-      // upstream 401 (type authentication_error) is not the user's credential,
-      // which should be neither marked rejected nor replaced.
-      expect(isCredentialRejection(assistantMessage(result))).toBe(true);
-      expect(credentialMetadata().rejected_at).toEqual(expect.any(String));
+      // The provider's 401 is not the user's: the credential is neither
+      // marked rejected nor replaced at the next start.
+      expect(isCredentialRejection(assistantMessage(result))).toBe(false);
+      expect(credentialMetadata().rejected_at).toBeUndefined();
 
       await untilServed(bob.key);
       const next = await installed().smoke();
-      expect(next.access.credential.credentialId).not.toBe(before);
+      expect(next.access.credential.credentialId).toBe(before);
     });
 
-    it("an upstream 403 is taken as a model denial, which re-reads the entitlement", async () => {
+    it("an upstream 403 is not a model denial and re-reads no entitlement", async () => {
       const before = credentialMetadata().credential_id;
       await queueFaults({ status: 403, count: 3 });
       const { value: result, upstream } = await upstreamDuring(() =>
@@ -852,13 +852,11 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       expect(result.modelRequest?.error).toContain('"type":"permission_error"');
       expect(upstream.map((record) => record.status)).toEqual([403, 403, 403]);
       expect(isCredentialRejection(assistantMessage(result))).toBe(false);
-      // Pins current behavior, expected to change when the mapping is fixed: an
-      // upstream 403 (permission_error) is not the gateway's model denial
-      // (key_model_access_denied), yet it re-reads the entitlement.
-      expect(isModelDenial(assistantMessage(result))).toBe(true);
-      // The entitlement re-read is a renewal through the refresh path: it
-      // mints a new credential.
-      expect(credentialMetadata().credential_id).not.toBe(before);
+      // The provider's 403 is not the gateway's model denial
+      // (key_model_access_denied): no entitlement re-read, which would mint
+      // a new credential.
+      expect(isModelDenial(assistantMessage(result))).toBe(false);
+      expect(credentialMetadata().credential_id).toBe(before);
     });
 
     it("an upstream 429 that clears is retried by Pi and answered", async () => {

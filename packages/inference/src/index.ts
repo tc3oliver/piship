@@ -112,13 +112,76 @@ export interface GatewayFailure {
   readonly error: PiShipError;
 }
 
-/** Map a gateway HTTP status to the error contract and retry rules. */
+/** The OpenAI-style error object of a gateway answer's body. */
+export interface GatewayErrorBody {
+  readonly type?: string;
+  readonly code?: string;
+  readonly message?: string;
+}
+
+/**
+ * The error object of a gateway answer: `{"error": {...}}` as the gateway
+ * sends it, or the object itself as Pi's error message carries it.
+ */
+export function gatewayErrorBody(body: unknown): GatewayErrorBody | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const nested = (body as { error?: unknown }).error;
+  const error = (
+    typeof nested === "object" && nested !== null ? nested : body
+  ) as Record<string, unknown>;
+  const text = (key: string) =>
+    typeof error[key] === "string" ? { [key]: error[key] as string } : {};
+  const read = { ...text("type"), ...text("code"), ...text("message") };
+  return Object.keys(read).length > 0 ? read : undefined;
+}
+
+/**
+ * Whether a gateway error relays its upstream model provider's answer rather
+ * than the gateway's own decision about the request. LiteLLM wraps a
+ * provider's exception as `litellm.<ExceptionClass>: ...`; its own refusals
+ * (a key it does not accept, a model outside the key's list, a limit) do not
+ * start that way. A 401 or 403 relayed from the provider says nothing about
+ * the user's credential or entitlement.
+ */
+export function isUpstreamProviderError(body: unknown): boolean {
+  const message = gatewayErrorBody(body)?.message;
+  return typeof message === "string" && /^litellm\.\w+/.test(message);
+}
+
+/** The upper bound on a retry time relayed from the upstream provider. */
+const MAX_UPSTREAM_RETRY_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * Map a gateway answer to the error contract and retry rules. `body`, the
+ * parsed answer when there is one, tells a provider's 401 or 403 relayed by
+ * the gateway from the gateway's own.
+ */
 export function classifyGatewayStatus(
   status: number,
   headers: Readonly<Record<string, string>> = {},
+  body?: unknown,
 ): PiShipError | null {
   if (status < 400) return null;
-  const retryAfterMs = parseRetryAfter(headers["retry-after"]);
+  // LiteLLM passes an upstream provider's headers on with an
+  // `llm_provider-` prefix; the gateway's own `retry-after` comes first.
+  const upstreamRetryAfterMs = parseRetryAfter(
+    headers["llm_provider-retry-after"],
+  );
+  const retryAfterMs =
+    parseRetryAfter(headers["retry-after"]) ??
+    (upstreamRetryAfterMs === undefined
+      ? undefined
+      : Math.min(upstreamRetryAfterMs, MAX_UPSTREAM_RETRY_AFTER_MS));
+  if ((status === 401 || status === 403) && isUpstreamProviderError(body))
+    return new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `The inference gateway's model provider refused the request (HTTP ${status}); the runtime credential was not rejected`,
+      {
+        component: "inference",
+        userAction:
+          "Ask the gateway administrator to check the gateway's provider configuration",
+      },
+    );
   if (status === 401)
     return new PiShipError(
       "CREDENTIAL_REVOKED",
