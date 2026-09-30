@@ -396,7 +396,7 @@ See the [release documentation](docs/release.md).
 
 Nothing is currently published to npm or as an official GitHub Release.
 
-The portable personal distribution core is the most mature surface. Managed access, governance, and release lifecycle are currently compatibility candidates, and remote sandbox backends are preview functionality.
+The portable personal distribution core is the most mature surface. Managed access, governance, and release lifecycle are currently compatibility candidates. Sandbox maturity is reported per backend: the native Linux (bubblewrap) and macOS (Seatbelt) sandboxes are candidates, native Windows is unavailable, and the `custom`, `e2b-compatible`, and `kubernetes-agent-sandbox` backends are preview functionality ([per-backend table](docs/status.md#sandbox-backends)).
 
 Many integration paths are tested with deterministic local fixtures. The project does **not** currently claim live qualification against a real company IdP, LLM gateway, model provider, E2B deployment, CubeSandbox deployment, or Kubernetes Agent Sandbox cluster. The [enterprise reference stack](examples/enterprise-reference/README.md) (Keycloak, a reference credential broker, LiteLLM in front of a mock model, and a reference container sandbox) runs the managed flow against real services of those kinds on Ubuntu in the nightly and manual Reference E2E; it stands in for a company's services and is not one.
 
