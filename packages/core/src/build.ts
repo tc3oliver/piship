@@ -138,11 +138,6 @@ export function buildDistribution(
     renameSync(stage, output);
     return output;
   } finally {
-    try {
-      temporary.remove();
-    } catch {
-      // What is left is the marker of a directory whose owner is this
-      // process: the next start removes it once the process is gone.
-    }
+    temporary.remove();
   }
 }

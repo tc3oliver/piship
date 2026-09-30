@@ -12,7 +12,13 @@ export default async function setup(project: TestProject) {
       project.getProvidedContext().lifecycleFixtures,
     );
   } catch (error) {
-    cleanup();
+    // The build that failed is what has to be reported. A fixture directory a
+    // process still holds (Windows cannot remove one) must not replace it.
+    try {
+      cleanup();
+    } catch {
+      // Left in the temp directory.
+    }
     throw error;
   }
   return cleanup;

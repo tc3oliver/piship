@@ -96,6 +96,9 @@ export const TEMPORARY_OWNER_SCHEMA = "piship-temporary-owner/v1";
 export const TEMPORARY_LEASE_MS = 24 * 60 * 60_000;
 /** A held directory's marker is refreshed this often (an unref'd timer). */
 export const TEMPORARY_HEARTBEAT_MS = 15 * 60_000;
+/** Retries of a removal that fails for a moment (EBUSY, EPERM, ENOTEMPTY), with a growing wait. */
+const REMOVE_RETRIES = 5;
+const REMOVE_RETRY_MS = 50;
 /** A marker is a few hundred bytes; a larger file is not one. */
 const MARKER_LIMIT = 4096;
 
@@ -273,11 +276,15 @@ export interface TemporaryDirectory {
   /** The instance ID its marker records. */
   readonly instance: string;
   /**
-   * Remove the directory and stop refreshing its marker. Idempotent, and
-   * throws what `rmSync` throws when the directory cannot be removed (the
-   * marker then stays, so a later process reclaims it once this one is gone).
+   * Remove the directory and stop refreshing its marker. Idempotent and best
+   * effort: it retries what a scanner or another process's open handle makes
+   * fail for a moment (on Windows an open handle blocks the removal of a
+   * directory), and when the directory still cannot be removed it returns
+   * false rather than throwing, because the operation it belonged to is done
+   * and a scratch directory must not fail it. What is left is reclaimed by a
+   * later process once this one is gone.
    */
-  remove(): void;
+  remove(): boolean;
 }
 
 /**
@@ -326,10 +333,20 @@ export function createTemporaryDirectory(
     path,
     instance,
     remove() {
-      if (removed) return;
+      if (removed) return true;
       release(instance);
-      rmSync(path, { recursive: true, force: true });
+      try {
+        rmSync(path, {
+          recursive: true,
+          force: true,
+          maxRetries: REMOVE_RETRIES,
+          retryDelay: REMOVE_RETRY_MS,
+        });
+      } catch {
+        return false;
+      }
       removed = true;
+      return true;
     },
   };
 }

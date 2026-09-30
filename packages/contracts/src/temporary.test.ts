@@ -520,6 +520,69 @@ describe("reclaimTemporaryDirectories", () => {
   });
 });
 
+describe("handles", () => {
+  const openDescriptors = () =>
+    readdirSync(process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd")
+      .length;
+
+  it.runIf(process.platform === "linux" || process.platform === "darwin")(
+    "keeps no descriptor open after creating, reading, sweeping, and removing",
+    () => {
+      const cycle = () => {
+        const item = createTemporaryDirectory(root, "verify");
+        readTemporaryOwner(item.path);
+        found(root, ["verify"]);
+        reclaimTemporaryDirectories(root, ["verify", "staging", "sandbox"]);
+        plant("piship-verify-abcdef");
+        reclaimTemporaryDirectories(root, ["verify"]);
+        expect(item.remove()).toBe(true);
+      };
+      cycle();
+      const before = openDescriptors();
+      for (let run = 0; run < 25; run += 1) cycle();
+      expect(openDescriptors()).toBe(before);
+    },
+  );
+
+  it("leaves a directory removable right after a sweep read its marker", () => {
+    // On Windows an open handle on the marker makes the directory's own
+    // removal fail; nothing here may hold one once a sweep has looked.
+    const item = createTemporaryDirectory(root, "verify");
+    expect(readTemporaryOwner(item.path)?.owner.instance).toBe(item.instance);
+    expect(found(root, ["verify"])).toEqual([]);
+    expect(reclaimTemporaryDirectories(root, ["verify"]).failed).toEqual([]);
+    rmSync(item.path, { recursive: true });
+    expect(existsSync(item.path)).toBe(false);
+    expect(item.remove()).toBe(true);
+  });
+
+  it("removes its own directory without a retry when nothing holds it", () => {
+    const item = createTemporaryDirectory(root, "verify");
+    writeFileSync(join(item.path, "file"), "x");
+    expect(item.remove()).toBe(true);
+    expect(existsSync(item.path)).toBe(false);
+  });
+
+  it.runIf(notRoot)(
+    "reports a directory it cannot remove instead of throwing, and finishes later",
+    () => {
+      const item = createTemporaryDirectory(root, "verify");
+      const locked = join(item.path, "locked");
+      mkdirSync(locked);
+      writeFileSync(join(locked, "file"), "x");
+      chmodSync(locked, 0o500);
+      try {
+        expect(item.remove()).toBe(false);
+        expect(existsSync(locked)).toBe(true);
+      } finally {
+        chmodSync(locked, 0o700);
+      }
+      expect(item.remove()).toBe(true);
+      expect(existsSync(item.path)).toBe(false);
+    },
+  );
+});
+
 describe("the heartbeat of a directory this process holds", () => {
   it("refreshes the marker so it is never older than the lease, and stops when released", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
