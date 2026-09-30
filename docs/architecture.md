@@ -129,7 +129,7 @@ Secrets held in a platform secret store live outside this directory, keyed by di
 
 ### Temporary directories
 
-Every temporary directory a PiShip workflow makes is created by one helper in `@piship/contracts`: private (0700), with an ownership marker written before anything else. A `finally`, `dispose()`, or `exit` hook removes it in the normal case; none of them runs after SIGKILL, a machine reset, or power loss, so a later PiShip process removes what a dead owner left.
+Every temporary directory a PiShip workflow makes is created by one helper in `@piship/contracts`: private (0700), with an ownership marker written before anything else. A `finally`, `dispose()`, or `exit` hook removes it in the normal case; none of them runs after SIGKILL, a machine reset, or power loss, so a later PiShip process removes what a dead owner left. The owner's own removal retries for a moment and, when the directory still cannot be removed (an open handle blocks it on Windows), leaves it for a later sweep instead of failing the operation it belonged to.
 
 | Kind | Name | Where | Made by | Swept |
 | --- | --- | --- | --- | --- |
