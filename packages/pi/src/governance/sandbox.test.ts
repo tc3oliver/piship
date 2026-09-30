@@ -410,51 +410,74 @@ describe("file-tool denial labels", () => {
   );
 });
 
+/**
+ * Whether this platform lets a test create a symbolic link: Windows without
+ * developer mode or elevation does not.
+ */
+const canSymlink = (() => {
+  try {
+    const probe = mkdtempSync(join(tmpdir(), "piship-symlink-probe-"));
+    try {
+      symlinkSync(probe, join(probe, "link"), "dir");
+      return true;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  } catch {
+    return false;
+  }
+})();
+
 describe("a linked git config file or hooks directory", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("is passed to the sandbox as a link its protection cannot cover", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-git-link-")));
-    try {
-      const home = join(root, "home");
-      const workspace = join(root, "ws");
-      mkdirSync(join(workspace, ".git"), { recursive: true });
-      mkdirSync(home);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
-      for (const name of [
-        "XDG_CONFIG_HOME",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_COUNT",
-      ])
-        vi.stubEnv(name, undefined);
-      writeFileSync(
-        join(workspace, ".git", "config"),
-        "[include]\n\tpath = ../team.cfg\n",
-      );
-      writeFileSync(join(workspace, "real.cfg"), "[user]\n\tname = x\n");
-      expect(gitProtection(workspace).links).toBeUndefined();
-
-      try {
-        symlinkSync(join(workspace, "real.cfg"), join(workspace, "team.cfg"));
-      } catch {
-        // Windows without developer mode or elevation cannot create links.
-        expect(process.platform).toBe("win32");
-        return;
-      }
-      const protection = gitProtection(workspace);
-      expect(protection.links).toEqual([
-        join(workspace, "team.cfg").split("\\").join("/"),
-      ]);
-      // The target is protected all the same.
-      expect(protection.files).toContain(
-        join(workspace, "real.cfg").split("\\").join("/"),
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  // Skipped, and reported as skipped, where links cannot be made; this check
+  // fails on Linux and macOS.
+  it("can create symbolic links on this platform, which the test below needs", () => {
+    if (process.platform !== "win32") expect(canSymlink).toBe(true);
   });
+
+  it.skipIf(!canSymlink)(
+    "is passed to the sandbox as a link its protection cannot cover",
+    () => {
+      const root = realpathSync(
+        mkdtempSync(join(tmpdir(), "piship-git-link-")),
+      );
+      try {
+        const home = join(root, "home");
+        const workspace = join(root, "ws");
+        mkdirSync(join(workspace, ".git"), { recursive: true });
+        mkdirSync(home);
+        vi.stubEnv("HOME", home);
+        vi.stubEnv("USERPROFILE", home);
+        vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+        for (const name of [
+          "XDG_CONFIG_HOME",
+          "GIT_CONFIG_GLOBAL",
+          "GIT_CONFIG_COUNT",
+        ])
+          vi.stubEnv(name, undefined);
+        writeFileSync(
+          join(workspace, ".git", "config"),
+          "[include]\n\tpath = ../team.cfg\n",
+        );
+        writeFileSync(join(workspace, "real.cfg"), "[user]\n\tname = x\n");
+        expect(gitProtection(workspace).links).toBeUndefined();
+
+        symlinkSync(join(workspace, "real.cfg"), join(workspace, "team.cfg"));
+        const protection = gitProtection(workspace);
+        expect(protection.links).toEqual([
+          join(workspace, "team.cfg").split("\\").join("/"),
+        ]);
+        // The target is protected all the same.
+        expect(protection.files).toContain(
+          join(workspace, "real.cfg").split("\\").join("/"),
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("the user's git config outside the project", () => {

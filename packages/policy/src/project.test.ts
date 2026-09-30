@@ -151,6 +151,24 @@ function trySymlink(
     return false;
   }
 }
+/**
+ * Whether this platform lets a test create a symbolic link: Windows without
+ * developer mode or elevation does not.
+ */
+const canSymlink = (() => {
+  try {
+    const probe = mkdtempSync(join(base, "symlink-probe-"));
+    symlinkSync(probe, join(probe, "link"), "dir");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+/** A link the test needs: a failure here is a failure of the test. */
+function link(target: string, path: string, type: "dir" | "file"): void {
+  mkdirSync(dirname(path), { recursive: true });
+  symlinkSync(target, path, type);
+}
 const posix = (path: string) => toPosixPath(path);
 /** `path` with the links of its existing part resolved, as the policy package names a protected path. */
 function realNearest(path: string): string {
@@ -979,80 +997,82 @@ describe("symbolic links on the way to a protected path", () => {
     expect(links(root)).toEqual([]);
   });
 
-  it("names a symbolic link that is an include target, whose target is protected but not the link", () => {
-    const root = repo("links-include");
-    write(join(root, ".git", "config"), cfg("[include]\n\tpath = ../team.cfg"));
-    write(join(root, "shared", "team.cfg"), hooks("team-hooks"));
-    if (
-      !trySymlink(
-        join(root, "shared", "team.cfg"),
-        join(root, "team.cfg"),
-        "file",
-      )
-    )
-      return;
-    // Protection follows the link to the real file...
-    expect(projectGitControlFiles(root)).toContain(
-      at(root, "shared", "team.cfg"),
-    );
-    expect(projectGitControlFiles(root)).not.toContain(at(root, "team.cfg"));
-    // ...so the link itself is named, for the sandbox to weigh.
-    expect(links(root)).toEqual([at(root, "team.cfg")]);
+  // A test that needs a link is skipped, and reported as skipped, where the
+  // platform cannot make one; the check above fails on Linux and macOS.
+  const linkIt = it.skipIf(!canSymlink);
+
+  it("can create symbolic links on this platform, which the link tests need", () => {
+    if (process.platform !== "win32") expect(canSymlink).toBe(true);
   });
 
-  it("names a link among the directories on the way to an include target", () => {
-    const root = repo("links-parent");
-    write(
-      join(root, ".git", "config"),
-      cfg("[include]\n\tpath = ../conf/team.cfg"),
-    );
-    write(join(root, "real-conf", "team.cfg"), hooks("team-hooks"));
-    if (!trySymlink(join(root, "real-conf"), join(root, "conf"), "dir")) return;
-    expect(links(root)).toEqual([at(root, "conf")]);
-  });
+  linkIt(
+    "names a symbolic link that is an include target, whose target is protected but not the link",
+    () => {
+      const root = repo("links-include");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../team.cfg"),
+      );
+      write(join(root, "shared", "team.cfg"), hooks("team-hooks"));
+      link(join(root, "shared", "team.cfg"), join(root, "team.cfg"), "file");
+      // Protection follows the link to the real file...
+      expect(projectGitControlFiles(root)).toContain(
+        at(root, "shared", "team.cfg"),
+      );
+      expect(projectGitControlFiles(root)).not.toContain(at(root, "team.cfg"));
+      // ...so the link itself is named, for the sandbox to weigh.
+      expect(links(root)).toEqual([at(root, "team.cfg")]);
+    },
+  );
 
-  it("names a link that is a core.hooksPath directory, or on the way to one", () => {
-    const husky = repo("links-husky");
-    write(join(husky, ".git", "config"), hooks(".husky/_"));
-    mkdirSync(join(husky, ".githooks"));
-    if (
-      !trySymlink(join(husky, ".githooks"), join(husky, ".husky", "_"), "dir")
-    )
-      return;
-    expect(projectGitControlDirectories(husky)).toContain(
-      at(husky, ".githooks"),
-    );
-    expect(links(husky)).toEqual([at(husky, ".husky", "_")]);
+  linkIt(
+    "names a link among the directories on the way to an include target",
+    () => {
+      const root = repo("links-parent");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../conf/team.cfg"),
+      );
+      write(join(root, "real-conf", "team.cfg"), hooks("team-hooks"));
+      link(join(root, "real-conf"), join(root, "conf"), "dir");
+      expect(links(root)).toEqual([at(root, "conf")]);
+    },
+  );
 
-    const nested = repo("links-hooks-parent");
-    write(join(nested, ".git", "config"), hooks("tools/hooks"));
-    mkdirSync(join(nested, "real-tools", "hooks"), { recursive: true });
-    if (!trySymlink(join(nested, "real-tools"), join(nested, "tools"), "dir"))
-      return;
-    expect(links(nested)).toEqual([at(nested, "tools")]);
-  });
+  linkIt(
+    "names a link that is a core.hooksPath directory, or on the way to one",
+    () => {
+      const husky = repo("links-husky");
+      write(join(husky, ".git", "config"), hooks(".husky/_"));
+      mkdirSync(join(husky, ".githooks"));
+      link(join(husky, ".githooks"), join(husky, ".husky", "_"), "dir");
+      expect(projectGitControlDirectories(husky)).toContain(
+        at(husky, ".githooks"),
+      );
+      expect(links(husky)).toEqual([at(husky, ".husky", "_")]);
 
-  it("names a linked .git/hooks, the shared hooks directory some teams use", () => {
-    const root = repo("links-git-hooks");
-    mkdirSync(join(root, ".githooks"));
-    if (
-      !trySymlink(join(root, ".githooks"), join(root, ".git", "hooks"), "dir")
-    )
-      return;
-    expect(links(root)).toEqual([at(root, ".git", "hooks")]);
-  });
+      const nested = repo("links-hooks-parent");
+      write(join(nested, ".git", "config"), hooks("tools/hooks"));
+      mkdirSync(join(nested, "real-tools", "hooks"), { recursive: true });
+      link(join(nested, "real-tools"), join(nested, "tools"), "dir");
+      expect(links(nested)).toEqual([at(nested, "tools")]);
+    },
+  );
 
-  it("names a linked global config, as dotfile managers set it up", () => {
+  linkIt(
+    "names a linked .git/hooks, the shared hooks directory some teams use",
+    () => {
+      const root = repo("links-git-hooks");
+      mkdirSync(join(root, ".githooks"));
+      link(join(root, ".githooks"), join(root, ".git", "hooks"), "dir");
+      expect(links(root)).toEqual([at(root, ".git", "hooks")]);
+    },
+  );
+
+  linkIt("names a linked global config, as dotfile managers set it up", () => {
     const dotfiles = dir("links-dotfiles");
     write(join(dotfiles, "gitconfig"), hooks(".global-hooks"));
-    if (
-      !trySymlink(
-        join(dotfiles, "gitconfig"),
-        join(fakeHome, ".gitconfig"),
-        "file",
-      )
-    )
-      return;
+    link(join(dotfiles, "gitconfig"), join(fakeHome, ".gitconfig"), "file");
     const root = repo("links-global");
     expect(links(root)).toEqual([at(fakeHome, ".gitconfig")]);
     // Followed for what it sets all the same.
@@ -1061,17 +1081,22 @@ describe("symbolic links on the way to a protected path", () => {
     );
   });
 
-  it("sees a link that appears after the last look, since the links are not cached", () => {
-    const root = repo("links-late");
-    write(join(root, ".git", "config"), cfg("[include]\n\tpath = ../late.cfg"));
-    write(join(root, "late.cfg"), hooks("late-hooks"));
-    expect(links(root)).toEqual([]);
-    write(join(root, "other.cfg"), hooks("late-hooks"));
-    rmSync(join(root, "late.cfg"));
-    if (!trySymlink(join(root, "other.cfg"), join(root, "late.cfg"), "file"))
-      return;
-    expect(links(root)).toEqual([at(root, "late.cfg")]);
-  });
+  linkIt(
+    "sees a link that appears after the last look, since the links are not cached",
+    () => {
+      const root = repo("links-late");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../late.cfg"),
+      );
+      write(join(root, "late.cfg"), hooks("late-hooks"));
+      expect(links(root)).toEqual([]);
+      write(join(root, "other.cfg"), hooks("late-hooks"));
+      rmSync(join(root, "late.cfg"));
+      link(join(root, "other.cfg"), join(root, "late.cfg"), "file");
+      expect(links(root)).toEqual([at(root, "late.cfg")]);
+    },
+  );
 });
 
 describe("the limit on what the git config lists, and the scan cache", () => {
