@@ -1239,14 +1239,16 @@ describe("no Enterprise feature and no secret in any log line", () => {
       const planted = [MASTER_KEY, ...h.litellm.issued];
       for (const line of h.logLines) {
         lines += 1;
-        JSON.parse(line);
+        const { event } = JSON.parse(line);
         for (const secret of planted)
           assert.ok(!line.includes(secret), "a key reached the log");
         for (const token of minted)
           assert.ok(!line.includes(token), "a token reached the log");
+        // The event name is the broker's own; the rest of the line may hold
+        // the sentinel, so a failure says which event and nothing else.
         assert.ok(
           !line.includes("SENTINEL"),
-          `a sentinel reached the log: ${line.slice(0, 80)}`,
+          `a sentinel reached the log in a "${event}" line`,
         );
         assert.doesNotMatch(line, /sk-[A-Za-z0-9]|eyJ/);
       }

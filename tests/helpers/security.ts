@@ -18,7 +18,11 @@ import { join, relative, sep } from "node:path";
 //   where it matters.
 // - A symbolic link is not followed.
 
-/** A secret and where it was found; only a short prefix, so a failure prints nothing usable. */
+/**
+ * A secret and where it was found. The secret is only `secret #<n>`, n counting
+ * the secrets given to the scan from 1: a failure is public CI output, and any
+ * part of a secret printed there, a prefix included, is a leak.
+ */
 export interface Sighting {
   readonly where: string;
   readonly secret: string;
@@ -59,16 +63,19 @@ export function sightings(
   { decode = true }: { decode?: boolean } = {},
 ): Sighting[] {
   const hits: Sighting[] = [];
-  const wanted = secrets.filter((secret) => secret.length > 0);
+  const named = secrets.flatMap((secret, index) =>
+    secret.length > 0 ? [{ secret, label: `secret #${index + 1}` }] : [],
+  );
+  const wanted = named.map(({ secret }) => secret);
   const widest = Math.max(0, ...wanted.map((secret) => secret.length));
-  const report = (secret: string, form: Sighting["form"], context?: string) =>
+  const report = (label: string, form: Sighting["form"], context?: string) =>
     hits.push({
       where,
-      secret: `${secret.slice(0, 8)}…`,
+      secret: label,
       form,
       ...(context === undefined ? {} : { context }),
     });
-  for (const secret of wanted) {
+  for (const { secret, label } of named) {
     const at = text.indexOf(secret);
     if (at < 0) continue;
     // Mask first, cut after: a window wide enough to hold a whole neighbouring
@@ -79,7 +86,7 @@ export function sightings(
     const centre = around.indexOf("<secret>");
     const from = Math.max(0, centre - CONTEXT);
     report(
-      secret,
+      label,
       "plain",
       around
         .slice(from, centre + "<secret>".length + CONTEXT)
@@ -89,9 +96,9 @@ export function sightings(
   if (!decode) return hits;
   for (const [run] of text.matchAll(BASE64_RUN)) {
     const candidates = decodings(run);
-    for (const secret of wanted)
+    for (const { secret, label } of named)
       if (candidates.some((candidate) => candidate.includes(secret)))
-        report(secret, "decoded");
+        report(label, "decoded");
   }
   return hits;
 }

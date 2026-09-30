@@ -93,7 +93,11 @@ export interface StoredSecrets {
   readonly accessToken: string;
   readonly idToken: string;
   readonly refreshToken: string;
-  /** Every value above except the ID, for scanning. */
+  /**
+   * Every value above except the ID, for scanning, in this order: the
+   * credential, then the access, ID, and refresh token. A failed leak
+   * assertion names a value by its position here.
+   */
   readonly values: readonly string[];
 }
 
@@ -619,8 +623,11 @@ async function assemble(
 }
 
 /**
- * Paths under `directory` whose contents include one of `secrets`. With the
- * file store the `secrets` directory is where secrets belong, so it is
+ * Paths under `directory` whose contents include one of `secrets`, each as
+ * `<path> contains protected secret #<n>`, n counting the secrets from 1 as
+ * they were given. The failure of an assertion on this list is public CI
+ * output, so it names the file and which secret, never any part of one. With
+ * the file store the `secrets` directory is where secrets belong, so it is
  * skipped; a test checks it separately.
  */
 export function scan(directory: string, secrets: readonly string[]): string[] {
@@ -632,9 +639,9 @@ export function scan(directory: string, secrets: readonly string[]): string[] {
         if (name !== "node_modules" && name !== "secrets") visit(child);
       } else {
         const text = readFileSync(child, "latin1");
-        for (const secret of secrets)
+        for (const [index, secret] of secrets.entries())
           if (secret && text.includes(secret))
-            hits.push(`${child} contains ${secret.slice(0, 6)}…`);
+            hits.push(`${child} contains protected secret #${index + 1}`);
       }
     }
   };
@@ -660,9 +667,14 @@ export function fileStoreValues(stateRoot: string): string[] {
     });
 }
 
-/** The secrets of `secrets` that appear in `text`, as short prefixes that are safe to print in a failure. */
+/**
+ * The secrets of `secrets` that appear in `text`, as `secret #<n>`, n counting
+ * them from 1 as they were given (for `StoredSecrets.values`: the credential,
+ * then the access, ID, and refresh token). Safe to print in a failure: a label
+ * is all it says, with no part of the secret.
+ */
 export function leaks(text: string, secrets: readonly string[]): string[] {
-  return secrets
-    .filter((secret) => secret && text.includes(secret))
-    .map((secret) => `${secret.slice(0, 6)}…`);
+  return secrets.flatMap((secret, index) =>
+    secret && text.includes(secret) ? [`secret #${index + 1}`] : [],
+  );
 }

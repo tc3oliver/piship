@@ -560,9 +560,9 @@ export function scan(directory: string, secrets: readonly string[]): string[] {
         if (name !== "node_modules") visit(child);
       } else {
         const text = readFileSync(child, "latin1");
-        for (const secret of secrets)
+        for (const [index, secret] of secrets.entries())
           if (secret && text.includes(secret))
-            hits.push(`${child} contains ${secret.slice(0, 10)}…`);
+            hits.push(`${child} contains protected secret #${index + 1}`);
       }
     }
   };
