@@ -35,6 +35,15 @@ export type AdapterAvailability =
 
 export interface SandboxAdapter {
   readonly id: SandboxAdapterId;
+  /**
+   * Whether the mechanism keeps a protected file that does not exist yet from
+   * being created (Seatbelt denies the path itself, so the file can never
+   * appear). Bubblewrap cannot: it protects a path by mounting over it, and a
+   * mount point for a missing file would be an empty file left on the host.
+   * Omitted means it cannot; git control is then not verified while a
+   * protected file is missing where the sandbox may write.
+   */
+  readonly guardsMissingFiles?: boolean;
   /** Checks that the mechanism works on this host (cached after the first call). */
   available(): Promise<AdapterAvailability>;
   /** Wrap a command. Only valid after `available()` resolved available. */

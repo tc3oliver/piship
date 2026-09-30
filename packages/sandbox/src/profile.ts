@@ -47,8 +47,17 @@ export interface ProtectedPaths {
   readonly files: readonly string[];
   readonly directories: readonly string[];
   /**
+   * The symbolic links on the way to a protected path, as the links
+   * themselves (absolute, not resolved). Protection covers what a link points
+   * to and nothing can hold the link in place, so a link in a directory the
+   * sandbox may write is a path it can retarget: `resolveProfile` turns such
+   * a link into `unverified`. Only used as input.
+   */
+  readonly links?: readonly string[];
+  /**
    * Why this list is known to be incomplete (the git config named more
-   * paths than are listed), when it is. Git control is then reported not
+   * paths than are listed, or a protected path is reached through a link the
+   * sandbox may replace), when it is. Git control is then reported not
    * verified, for every backend, and the reason is a warning.
    */
   readonly unverified?: string;
@@ -153,6 +162,31 @@ function conflicts(
   return [...new Set(warnings)];
 }
 
+/** How many links the reason names; the rest are counted. */
+const LINKS_NAMED = 3;
+
+/**
+ * Why git control cannot be verified for the links among `links` that lie in
+ * a path the sandbox may write, or undefined when none does. A link in a
+ * directory the sandbox cannot write cannot be retargeted from inside.
+ */
+function retargetableLinks(
+  links: readonly string[],
+  writeAllow: readonly string[],
+): string | undefined {
+  const writable = links.filter((link) => {
+    const holder = realpathNearest(dirname(link));
+    return writeAllow.some((allowed) => isWithin(holder, allowed));
+  });
+  if (writable.length === 0) return undefined;
+  const named = writable.slice(0, LINKS_NAMED).join(", ");
+  const more =
+    writable.length > LINKS_NAMED
+      ? ` and ${writable.length - LINKS_NAMED} more`
+      : "";
+  return `a protected git path is reached through a symbolic link in a directory the sandbox may write (${named}${more}); protection covers what a link points to and nothing can hold the link itself in place, so a command could point it at a file of its own`;
+}
+
 export function resolveProfile(
   config: SandboxPolicy,
   ctx: ProfileContext,
@@ -172,6 +206,12 @@ export function resolveProfile(
     (path) => !writeAllow.includes(path),
   );
   const protect = ctx.protectedPaths;
+  const unverified = [
+    protect?.unverified,
+    retargetableLinks(protect?.links ?? [], writeAllow),
+  ]
+    .filter((reason) => reason)
+    .join("; ");
   return {
     ...base,
     readDeny,
@@ -180,15 +220,13 @@ export function resolveProfile(
     writeProtect: {
       files: resolveAll(protect?.files ?? [], full),
       directories: resolveAll(protect?.directories ?? [], full),
-      ...(protect?.unverified ? { unverified: protect.unverified } : {}),
+      ...(unverified ? { unverified } : {}),
     },
     network: config.network.mode,
     environmentAllow: [...new Set(config.environment.allow)],
     warnings: [
       ...conflicts(readDeny, writeAllow, base.workspace),
-      ...(protect?.unverified
-        ? [`git control is not verified: ${protect.unverified}`]
-        : []),
+      ...(unverified ? [`git control is not verified: ${unverified}`] : []),
     ],
   };
 }
