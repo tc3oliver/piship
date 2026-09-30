@@ -419,6 +419,48 @@ describe("a very large session is not resumed automatically (#65)", () => {
   });
 });
 
+describe("a damaged acceptance session is replaced, not refused", () => {
+  const disposable = () =>
+    openSession(project, sessionDir, {
+      newSession: false,
+      command: "mypi",
+      disposable: true,
+    });
+
+  it("starts a new session with a notice for a damaged or oversized one and keeps the file", () => {
+    const { file, id, lines: entries } = persistedSession();
+    rewrite(file, [...entries.slice(0, 3), "{not json"]);
+    const damaged = readFileSync(file);
+    const first = disposable();
+    expect(first.sessionManager.getSessionId()).not.toBe(id);
+    expect(first.notice).toMatch(
+      /acceptance session is damaged \(line 4 is not valid JSON\), so this run starts a new one/,
+    );
+    expect(readFileSync(file).equals(damaged)).toBe(true);
+    first.ownership.release();
+    rewrite(file, [entries[0]]);
+    const fd = openSync(file, "r+");
+    try {
+      ftruncateSync(fd, MAX_RESUME_BYTES + 1);
+    } finally {
+      closeSync(fd);
+    }
+    const second = disposable();
+    expect(second.sessionManager.getSessionId()).not.toBe(id);
+    expect(second.notice).toMatch(/64\.0 MiB, over the 64\.0 MiB limit/);
+    expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
+    second.ownership.release();
+  });
+
+  it("still resumes a healthy one without a notice", () => {
+    const { id } = persistedSession();
+    const opened = disposable();
+    expect(opened.sessionManager.getSessionId()).toBe(id);
+    expect(opened.notice).toBeUndefined();
+    opened.ownership.release();
+  });
+});
+
 describe("a /resume checks its target like a launch does (#57, #62, #65)", () => {
   it("lets a valid session that nobody owns be resumed", () => {
     const { file } = persistedSession();

@@ -147,7 +147,7 @@ export async function runSmoke(
   const { runtime, ownership } = await startGoverned(
     ctx,
     prepared,
-    { sessionDir, newSession },
+    { sessionDir, newSession, disposable: true },
     gov,
   );
   let sessionFailed = false;

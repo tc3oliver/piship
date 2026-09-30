@@ -110,6 +110,8 @@ export interface SessionOptions {
   readonly sessionDir: string;
   /** Start a new session instead of resuming the most recent one. */
   readonly newSession: boolean;
+  /** A session that holds no user work: a damaged one is replaced, not refused. */
+  readonly disposable?: boolean;
 }
 
 async function startRuntime(
@@ -332,6 +334,7 @@ export async function startGoverned(
     const opened = openSession(process.cwd(), session.sessionDir, {
       newSession: session.newSession,
       command: ctx.metadata.app.command,
+      ...(session.disposable ? { disposable: true } : {}),
     });
     ownership = opened.ownership;
     if (opened.notice) ctx.err(`Notice: ${opened.notice}`);

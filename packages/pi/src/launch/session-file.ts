@@ -351,10 +351,8 @@ interface OwnerRecord {
   readonly instance: string;
 }
 
-let ownIdentity: string | null | undefined;
 function selfIdentity(): string | null {
-  ownIdentity ??= processIdentity(process.pid) ?? null;
-  return ownIdentity;
+  return processIdentity(process.pid) ?? null;
 }
 
 function recentlyModified(path: string, withinMs: number): boolean {
@@ -568,12 +566,20 @@ export function resumeRefusal(
  * Opens the session a launch continues: the project's most recent one when
  * no other live process owns it and it is safe to load, a new one when
  * `newSession` is set or another process owns the most recent. A corrupt or
- * oversized most recent session stops the launch with the file unchanged.
+ * oversized most recent session stops the launch with the file unchanged,
+ * except for a `disposable` one (the acceptance sessions of `--smoke`, which
+ * hold no user work and cannot be given `--new-session` by `piship test`,
+ * `dev --smoke`, or `doctor`): it starts a new session and says so, and the
+ * file is kept.
  */
 export function openSession(
   cwd: string,
   sessionDir: string,
-  options: { readonly newSession: boolean; readonly command: string },
+  options: {
+    readonly newSession: boolean;
+    readonly command: string;
+    readonly disposable?: boolean;
+  },
 ): OpenedSession {
   const ownership = new SessionOwnership();
   const fresh = () => {
@@ -594,6 +600,12 @@ export function openSession(
     };
   try {
     const problem = inspectSession(recent);
+    if (problem && options.disposable)
+      return {
+        sessionManager: fresh(),
+        ownership,
+        notice: `The most recent acceptance session is ${problem.kind === "oversized" ? `${mebibytes(problem.size)}, over the ${mebibytes(MAX_RESUME_BYTES)} limit` : `damaged (${printable(problem.reason)})`}, so this run starts a new one. The file is kept unchanged: ${recent}`,
+      };
     if (problem) {
       const action = `Run ${options.command} --new-session to start a new session. The file is kept unchanged for recovery; it was not loaded, repaired, or deleted.`;
       throw problem.kind === "oversized"

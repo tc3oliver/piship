@@ -13,6 +13,16 @@ import { readFileSync } from "node:fs";
  */
 export function processIdentity(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
+  // This process's own start time never changes; on Windows each lookup is a
+  // PowerShell start, and a launch asks for it from more than one place.
+  if (pid !== process.pid) return lookup(pid);
+  ownIdentity ??= lookup(pid);
+  return ownIdentity;
+}
+
+let ownIdentity: string | undefined;
+
+function lookup(pid: number): string | undefined {
   try {
     if (process.platform === "linux") {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
