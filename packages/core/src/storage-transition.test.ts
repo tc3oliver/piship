@@ -422,6 +422,57 @@ describe.each([
   });
 });
 
+describe("the other store of the sandbox credential", () => {
+  it("is opened by the rule of the access, as for the runtime credential: an injected store has none", async () => {
+    // The sandbox credential was stored in the file store, and the
+    // distribution now uses an injected platform-like store (not in memory)
+    // and no way to reach the other one.
+    const before = open("file");
+    await login(before);
+    const identity = before.readIdentityMetadata();
+    const principal = {
+      issuer: identity?.issuer ?? "",
+      subject: identity?.subject ?? "",
+    };
+    await sandboxSlot("file", principal).save(async () => SANDBOX_SECRET);
+    const sandboxFile = join(
+      stateDir(),
+      "credentials-metadata",
+      "sandbox.json",
+    );
+    const ref = JSON.parse(readFileSync(sandboxFile, "utf8")).credential_ref;
+    const injected: SecretStore = {
+      kind: "system",
+      description: "platform store (test, not in memory)",
+      put: (name, value) => platform.put(name, value),
+      get: (name) => platform.get(name),
+      delete: (name) => platform.delete(name),
+    };
+    const moved = DistributionAccess.open({
+      app: demo.app as Manifest["app"],
+      mode: "managed",
+      access: manifest("system"),
+      stateDir: stateDir(),
+      distributionDir: temp,
+      env: services.env(),
+      secretStore: injected,
+    });
+    const problems = await moved.sandboxCredential().clear();
+    // Not deleted from a file store the slot opened on its own: the secret
+    // stays, tracked, and the failure is reported.
+    expect(problems.join("\n")).toContain(
+      "the file secret store that holds it is not available",
+    );
+    expect(await fileStore().get(ref)).not.toBeNull();
+    expect(moved.sandboxCredential().present()).toBe(true);
+    expect(existsSync(sandboxFile)).toBe(true);
+    // Once the other store is reachable, the next command deletes it.
+    await open("system").sandboxCredential().clear();
+    expect(await fileStore().get(ref)).toBeNull();
+    expect(existsSync(sandboxFile)).toBe(false);
+  });
+});
+
 describe("purge after a storage provider change", () => {
   it("deletes platform-owned references from the platform store and leaves file-owned ones to the state directory", async () => {
     // The credential is in the file store, the identity in the platform

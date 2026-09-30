@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,11 +28,55 @@ import {
   projectDimensionEffect,
   projectGitControlDirectories,
   projectGitControlFiles,
+  projectGitControlLinks,
   projectGitControlUnverified,
   readProjectRestrictions,
   type ProjectResourceCandidate,
 } from "./project.js";
 import { defaultProjectTrust } from "./trust.js";
+
+/**
+ * The stat the scan cache sees in place of a file's real one, and a count of
+ * the reads of config files: a cache test needs a file that changes without
+ * its time, size, or inode changing, which only a file system with a coarse
+ * clock does, and needs to see whether a scan read the file again. Also files
+ * that exist only for the scan, at paths a test cannot write (`/opt/homebrew`).
+ */
+const frozenStats = vi.hoisted(() => new Map<string, unknown>());
+const virtualFiles = vi.hoisted(() => new Map<string, string>());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const statSync = ((path: string, ...rest: unknown[]) => {
+    const virtual = virtualFiles.get(String(path));
+    if (virtual !== undefined)
+      return {
+        isFile: () => true,
+        isDirectory: () => false,
+        size: virtual.length,
+        mtimeMs: 1,
+        ctimeMs: 1,
+        ino: 1,
+      };
+    return (
+      frozenStats.get(String(path)) ??
+      (actual.statSync as (...args: unknown[]) => unknown)(path, ...rest)
+    );
+  }) as typeof actual.statSync;
+  const readFileSync = vi.fn(
+    ((path: string, ...rest: unknown[]) =>
+      virtualFiles.get(String(path)) ??
+      (actual.readFileSync as (...args: unknown[]) => unknown)(
+        path,
+        ...rest,
+      )) as typeof actual.readFileSync,
+  );
+  return {
+    ...actual,
+    statSync,
+    readFileSync,
+    default: { ...actual, statSync, readFileSync },
+  };
+});
 
 const base = realpathSync(
   mkdtempSync(join(tmpdir(), "piship-policy-project-")),
@@ -49,6 +94,7 @@ const CONFIG_VARIABLES = [
   "GIT_CONFIG_SYSTEM",
   "GIT_CONFIG_NOSYSTEM",
   "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_KEY_${index}`),
   ...Array.from({ length: 8 }, (_, index) => `GIT_CONFIG_VALUE_${index}`),
 ];
@@ -56,6 +102,8 @@ const savedEnv = Object.fromEntries(
   CONFIG_VARIABLES.map((name) => [name, process.env[name]]),
 );
 beforeEach(() => {
+  frozenStats.clear();
+  virtualFiles.clear();
   rmSync(fakeHome, { recursive: true, force: true });
   mkdirSync(fakeHome, { recursive: true });
   for (const name of CONFIG_VARIABLES) delete process.env[name];
@@ -103,7 +151,40 @@ function trySymlink(
     return false;
   }
 }
+/**
+ * Whether this platform lets a test create a symbolic link: Windows without
+ * developer mode or elevation does not.
+ */
+const canSymlink = (() => {
+  try {
+    const probe = mkdtempSync(join(base, "symlink-probe-"));
+    symlinkSync(probe, join(probe, "link"), "dir");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+/** A link the test needs: a failure here is a failure of the test. */
+function link(target: string, path: string, type: "dir" | "file"): void {
+  mkdirSync(dirname(path), { recursive: true });
+  symlinkSync(target, path, type);
+}
 const posix = (path: string) => toPosixPath(path);
+/** `path` with the links of its existing part resolved, as the policy package names a protected path. */
+function realNearest(path: string): string {
+  const rest: string[] = [];
+  let current = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(path);
+      rest.push(basename(current));
+      current = parent;
+    }
+  }
+}
 
 const trust: ProjectTrustPolicy = {
   ...defaultProjectTrust("managed"),
@@ -673,6 +754,43 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     expect(dirs(root)).toContain(system);
   });
 
+  it("reads the system config of a Homebrew, Xcode, or Command Line Tools git too, since its path is fixed when git is built", () => {
+    const root = repo("system-prefixes");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    const prefixes = [
+      "/opt/homebrew/etc/gitconfig",
+      "/usr/local/etc/gitconfig",
+      "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+      "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
+      "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
+    ];
+    const listed = () => projectGitControlFiles(root, { scope: "sandbox" });
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).toContain(posix(realNearest(path)));
+    // What such a git sets applies: the hooks path of a Homebrew system config.
+    virtualFiles.set(resolve(prefixes[0] as string), hooks(".homebrew-hooks"));
+    expect(dirs(root)).toContain(at(root, ".homebrew-hooks"));
+    // The file tools' list is the project's: a system file is not on it.
+    for (const path of prefixes)
+      expect(files(root)).not.toContain(posix(realNearest(path)));
+    // GIT_CONFIG_SYSTEM names the one file, and empty, none.
+    const elsewhere = dir("system-named");
+    process.env.GIT_CONFIG_SYSTEM = join(elsewhere, "gitconfig");
+    expect(dirs(root)).not.toContain(at(root, ".homebrew-hooks"));
+    expect(listed()).toContain(at(elsewhere, "gitconfig"));
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
+    process.env.GIT_CONFIG_SYSTEM = "";
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
+    // And GIT_CONFIG_NOSYSTEM turns them all off.
+    delete process.env.GIT_CONFIG_SYSTEM;
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    expect(dirs(root)).not.toContain(at(root, ".homebrew-hooks"));
+    for (const path of prefixes)
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
+  });
+
   it("takes core.hooksPath and include.path from GIT_CONFIG_COUNT settings", () => {
     const outside = dir("env-include");
     write(join(outside, "extra"), hooks("extra-hooks"));
@@ -706,6 +824,137 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     expect(dirs(root)).toHaveLength(4);
   });
 
+  it("takes core.hooksPath and include.path from GIT_CONFIG_PARAMETERS, as `git -c` exports them, in either format", () => {
+    const outside = dir("parameters-include");
+    write(join(outside, "extra"), hooks("extra-hooks"));
+    const root = repo("parameters-repo");
+    // Git before 2.31 writes 'key=value', later versions 'key'='value'; a
+    // quote inside a value is written '\\''.
+    process.env.GIT_CONFIG_PARAMETERS = [
+      "'core.hooksPath=.old-format-hooks'",
+      "'core.hookspath'='.new-format-hooks'",
+      `'include.path'='${posix(join(outside, "extra"))}'`,
+      "'core.hooksPath'='it'\\''s here'",
+      // As git writes a leading `!`.
+      "'core.hooksPath'=''\\!'bang-hooks'",
+      "'core.editor=vi'",
+      "'color.ui'",
+      "'core.pager'=",
+      "'include.path=relative-is-refused'",
+    ].join(" ");
+    expect(projectGitControlDirectories(root)).toEqual(
+      expect.arrayContaining([
+        at(root, ".old-format-hooks"),
+        at(root, ".new-format-hooks"),
+        at(root, "extra-hooks"),
+        at(root, "it's here"),
+        at(root, "!bang-hooks"),
+      ]),
+    );
+    // What it includes is protected for sandboxed processes, wherever it lies.
+    expect(projectGitControlFiles(root, { scope: "sandbox" })).toContain(
+      at(outside, "extra"),
+    );
+    expect(projectGitControlFiles(root)).not.toContain(at(outside, "extra"));
+    expect(projectGitControlFiles(root)).not.toContain(
+      at(root, "relative-is-refused"),
+    );
+    // Nothing is left unread.
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+    // A change of the variable is seen at the next access.
+    process.env.GIT_CONFIG_PARAMETERS = "'core.hooksPath=.only-hooks'";
+    const directories = projectGitControlDirectories(root);
+    expect(directories).toContain(at(root, ".only-hooks"));
+    expect(directories).not.toContain(at(root, ".old-format-hooks"));
+    delete process.env.GIT_CONFIG_PARAMETERS;
+    expect(projectGitControlDirectories(root)).toHaveLength(4);
+  });
+
+  it("counts GIT_CONFIG_PARAMETERS with the other environment settings, and reports what it cannot read", () => {
+    const root = repo("parameters-limits");
+    process.env.GIT_CONFIG_PARAMETERS = Array.from(
+      { length: 100 },
+      (_, index) => `'core.hooksPath=p${index}'`,
+    ).join(" ");
+    const directories = projectGitControlDirectories(root);
+    expect(directories).toContain(at(root, "p0"));
+    expect(directories).toContain(at(root, "p63"));
+    expect(directories).not.toContain(at(root, "p64"));
+    expect(projectGitControlUnverified(root)).toMatch(
+      /more than 64 included files, hooks paths, or environment settings/,
+    );
+    // The same 64 are shared with GIT_CONFIG_COUNT.
+    process.env.GIT_CONFIG_PARAMETERS = Array.from(
+      { length: 60 },
+      (_, index) => `'core.editor=e${index}'`,
+    ).join(" ");
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+    for (let index = 0; index < 8; index++)
+      setting(index, "core.pager", "less");
+    process.env.GIT_CONFIG_COUNT = "8";
+    expect(projectGitControlUnverified(root)).toMatch(
+      /more than 64 included files, hooks paths, or environment settings/,
+    );
+    delete process.env.GIT_CONFIG_COUNT;
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+
+    // Text that is not what git writes is not guessed at.
+    for (const value of [
+      "core.hooksPath=x",
+      "'core.hooksPath=unclosed",
+      "'core.hooksPath=x'junk",
+      "'a' 'b'x",
+    ]) {
+      process.env.GIT_CONFIG_PARAMETERS = value;
+      expect(projectGitControlUnverified(root), value).toMatch(
+        /GIT_CONFIG_PARAMETERS is set but not in the format git writes/,
+      );
+    }
+    process.env.GIT_CONFIG_PARAMETERS = "";
+    expect(projectGitControlUnverified(root)).toBeUndefined();
+  });
+
+  it("lists the config outside the project for sandboxed processes only, not for the file tools", () => {
+    const outside = dir("sandbox-scope");
+    write(
+      join(fakeHome, ".gitconfig"),
+      cfg(`[include]\n\tpath = ${posix(join(outside, "extra"))}`),
+    );
+    write(join(outside, "extra"), hooks("outside-hooks"));
+    write(join(outside, "system"), hooks("system-hooks"));
+    process.env.GIT_CONFIG_SYSTEM = join(outside, "system");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    setting(0, "include.path", posix(join(outside, "from-env")));
+    process.env.GIT_CONFIG_COUNT = "1";
+    const root = repo("sandbox-scope-repo");
+    // What the file tools refuse to write leaves the user's own git
+    // configuration editable.
+    const tools = files(root);
+    for (const path of [
+      at(fakeHome, ".gitconfig"),
+      at(fakeHome, ".config", "git", "config"),
+      at(outside, "extra"),
+      at(outside, "system"),
+      at(outside, "from-env"),
+    ])
+      expect(tools).not.toContain(path);
+    // A sandboxed command must not plant a hooks path there either, when the
+    // sandbox may write the directory that holds one.
+    const sandbox = projectGitControlFiles(root, { scope: "sandbox" });
+    expect(sandbox).toEqual(
+      expect.arrayContaining([
+        at(fakeHome, ".gitconfig"),
+        at(fakeHome, ".config", "git", "config"),
+        at(outside, "extra"),
+        at(outside, "system"),
+        at(outside, "from-env"),
+        ...tools,
+      ]),
+    );
+    // The default scope is the project's.
+    expect(projectGitControlFiles(root, { scope: "project" })).toEqual(tools);
+  });
+
   it("protects a GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM file only where it lies inside the project", () => {
     const root = repo("known-inside");
     const elsewhere = dir("known-outside");
@@ -725,6 +974,129 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
       ]),
     );
   });
+});
+
+describe("symbolic links on the way to a protected path", () => {
+  const cfg = (text: string) => `${text}\n`;
+  const hooks = (value: string) => cfg(`[core]\n\thooksPath = ${value}`);
+  const links = (root: string) => projectGitControlLinks(root);
+  const at = (root: string, ...parts: string[]) => posix(join(root, ...parts));
+  const repo = (name: string) => {
+    const root = dir(name);
+    gitRepo(root);
+    return root;
+  };
+
+  it("names none for an ordinary repository, and none for a path that does not exist", () => {
+    const root = repo("links-none");
+    expect(links(root)).toEqual([]);
+    write(
+      join(root, ".git", "config"),
+      cfg(`[include]\n\tpath = missing\n${hooks("no-such-hooks").trim()}`),
+    );
+    expect(links(root)).toEqual([]);
+  });
+
+  // A test that needs a link is skipped, and reported as skipped, where the
+  // platform cannot make one; the check above fails on Linux and macOS.
+  const linkIt = it.skipIf(!canSymlink);
+
+  it("can create symbolic links on this platform, which the link tests need", () => {
+    if (process.platform !== "win32") expect(canSymlink).toBe(true);
+  });
+
+  linkIt(
+    "names a symbolic link that is an include target, whose target is protected but not the link",
+    () => {
+      const root = repo("links-include");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../team.cfg"),
+      );
+      write(join(root, "shared", "team.cfg"), hooks("team-hooks"));
+      link(join(root, "shared", "team.cfg"), join(root, "team.cfg"), "file");
+      // Protection follows the link to the real file...
+      expect(projectGitControlFiles(root)).toContain(
+        at(root, "shared", "team.cfg"),
+      );
+      expect(projectGitControlFiles(root)).not.toContain(at(root, "team.cfg"));
+      // ...so the link itself is named, for the sandbox to weigh.
+      expect(links(root)).toEqual([at(root, "team.cfg")]);
+    },
+  );
+
+  linkIt(
+    "names a link among the directories on the way to an include target",
+    () => {
+      const root = repo("links-parent");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../conf/team.cfg"),
+      );
+      write(join(root, "real-conf", "team.cfg"), hooks("team-hooks"));
+      link(join(root, "real-conf"), join(root, "conf"), "dir");
+      expect(links(root)).toEqual([at(root, "conf")]);
+    },
+  );
+
+  linkIt(
+    "names a link that is a core.hooksPath directory, or on the way to one",
+    () => {
+      const husky = repo("links-husky");
+      write(join(husky, ".git", "config"), hooks(".husky/_"));
+      mkdirSync(join(husky, ".githooks"));
+      link(join(husky, ".githooks"), join(husky, ".husky", "_"), "dir");
+      expect(projectGitControlDirectories(husky)).toContain(
+        at(husky, ".githooks"),
+      );
+      expect(links(husky)).toEqual([at(husky, ".husky", "_")]);
+
+      const nested = repo("links-hooks-parent");
+      write(join(nested, ".git", "config"), hooks("tools/hooks"));
+      mkdirSync(join(nested, "real-tools", "hooks"), { recursive: true });
+      link(join(nested, "real-tools"), join(nested, "tools"), "dir");
+      expect(links(nested)).toEqual([at(nested, "tools")]);
+    },
+  );
+
+  linkIt(
+    "names a linked .git/hooks, the shared hooks directory some teams use",
+    () => {
+      const root = repo("links-git-hooks");
+      mkdirSync(join(root, ".githooks"));
+      link(join(root, ".githooks"), join(root, ".git", "hooks"), "dir");
+      expect(links(root)).toEqual([at(root, ".git", "hooks")]);
+    },
+  );
+
+  linkIt("names a linked global config, as dotfile managers set it up", () => {
+    const dotfiles = dir("links-dotfiles");
+    write(join(dotfiles, "gitconfig"), hooks(".global-hooks"));
+    link(join(dotfiles, "gitconfig"), join(fakeHome, ".gitconfig"), "file");
+    const root = repo("links-global");
+    expect(links(root)).toEqual([at(fakeHome, ".gitconfig")]);
+    // Followed for what it sets all the same.
+    expect(projectGitControlDirectories(root)).toContain(
+      at(root, ".global-hooks"),
+    );
+  });
+
+  linkIt(
+    "sees a link that appears after the last look, since the links are not cached",
+    () => {
+      const root = repo("links-late");
+      write(
+        join(root, ".git", "config"),
+        cfg("[include]\n\tpath = ../late.cfg"),
+      );
+      write(join(root, "late.cfg"), hooks("late-hooks"));
+      expect(links(root)).toEqual([]);
+      write(join(root, "other.cfg"), hooks("late-hooks"));
+      rmSync(join(root, "late.cfg"));
+      link(join(root, "other.cfg"), join(root, "late.cfg"), "file");
+      expect(links(root)).toEqual([at(root, "late.cfg")]);
+    },
+  );
 });
 
 describe("the limit on what the git config lists, and the scan cache", () => {
@@ -814,19 +1186,52 @@ describe("the limit on what the git config lists, and the scan cache", () => {
     const T = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
     const stamp = (path: string, time = T) => utimesSync(path, time, time);
 
+    /** A file system with a coarse clock: the file reads back with the stat it had. */
+    const freeze = (path: string) => frozenStats.set(path, statSync(path));
+    const readsOf = (path: string) =>
+      vi.mocked(readFileSync).mock.calls.filter(([read]) => read === path)
+        .length;
+    /** Long enough for the clock of the file system to move on. */
+    const tick = () => new Promise((done) => setTimeout(done, 50));
+
     it("reuses a scan while nothing it read changed, and sees a change at the next access", () => {
       const root = repo("cache");
       const config = join(root, ".git", "config");
       write(config, hooks("aaaa"));
       stamp(config);
       expect(dirs(root)).toContain(at(root, "aaaa"));
-      // Same size, time, and inode: the scan is not repeated, so this is not seen.
+      // Nothing changed: the file is not read again.
+      const reads = readsOf(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      expect(files(root)).toContain(posix(config));
+      expect(readsOf(config)).toBe(reads);
+      // A new modification time is a change.
       writeFileSync(config, hooks("bbbb"));
+      stamp(config, new Date(T.getTime() + 5000));
+      expect(dirs(root)).toContain(at(root, "bbbb"));
+      expect(dirs(root)).not.toContain(at(root, "aaaa"));
+      expect(readsOf(config)).toBe(reads + 1);
+    });
+
+    it("sees a rewrite that puts the modification time back, though size and inode are kept", async () => {
+      const root = repo("cache-ctime");
+      const config = join(root, ".git", "config");
+      write(config, hooks("aaaa"));
       stamp(config);
       expect(dirs(root)).toContain(at(root, "aaaa"));
-      expect(dirs(root)).not.toContain(at(root, "bbbb"));
-      // A new modification time is a change.
-      stamp(config, new Date(T.getTime() + 5000));
+      await tick();
+      // Same length, same inode, same modification time: only the change
+      // time, which the kernel sets, shows it.
+      const before = statSync(config);
+      writeFileSync(config, hooks("bbbb"));
+      stamp(config);
+      const after = statSync(config);
+      expect([after.mtimeMs, after.size, after.ino]).toEqual([
+        before.mtimeMs,
+        before.size,
+        before.ino,
+      ]);
+      expect(after.ctimeMs).toBeGreaterThan(before.ctimeMs);
       expect(dirs(root)).toContain(at(root, "bbbb"));
       expect(dirs(root)).not.toContain(at(root, "aaaa"));
     });
@@ -864,7 +1269,9 @@ describe("the limit on what the git config lists, and the scan cache", () => {
         const config = join(root, ".git", "config");
         write(config, hooks("aaaa"));
         stamp(config);
+        freeze(config);
         expect(dirs(root)).toContain(at(root, "aaaa"));
+        // Nothing in the file's stat shows this change.
         writeFileSync(config, hooks("bbbb"));
         stamp(config);
         vi.setSystemTime(new Date("2026-01-01T00:00:09Z"));
