@@ -111,6 +111,16 @@ export interface SandboxCapabilities {
    */
   readonly localProcesses: boolean;
   /**
+   * Local backends only: whether the isolator keeps a protected file that
+   * does not exist yet (`.git/commondir`, `.git/config.worktree`) from being
+   * created. Omitted or false means it cannot, which is true of bubblewrap
+   * (a mount needs a path that exists): git control is then reported not
+   * verified while such a file lies where the sandbox may write, because a
+   * command could create one and redirect the next git command. PiShip does
+   * not create placeholder files in the project instead.
+   */
+  readonly guardsMissingFiles?: boolean;
+  /**
    * Remote backends only: how the sandbox sees the workspace. Omitted means
    * `snapshot`. A local backend runs commands against this host's files, so
    * its workspace is `shared` by construction and this field is ignored.

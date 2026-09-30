@@ -58,6 +58,8 @@ import {
   gitControlUnproven,
   initialWorkspaceReport,
   localWorkspaceReport,
+  missingControlFiles,
+  missingFilesWarning,
   verifyWorkspace,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -980,6 +982,21 @@ export async function activateSandbox(
       verification = "backend-attested";
       planes = claimedGuarantees(capabilities, config.network.mode);
     }
+    // What the isolator does about a protected file that does not exist yet:
+    // it decides whether git control can be reported as verified.
+    const isolator = {
+      writable: profile.writeAllow,
+      guardsMissingFiles: capabilities.guardsMissingFiles === true,
+    };
+    if (live && planes.includes(GIT_CONTROL_PROTECTION)) {
+      const unguarded = missingFilesWarning(
+        profile.workspace,
+        missingControlFiles(profile.workspace, profile.writeProtect, isolator),
+        backend.id,
+        capabilities.guardsMissingFiles === false,
+      );
+      if (unguarded) warnings.push(unguarded);
+    }
     return createActiveSandbox({
       ...session,
       instance,
@@ -1006,7 +1023,7 @@ export async function activateSandbox(
                     profile.workspace,
                     profile.writeProtect,
                     "local",
-                    profile.writeAllow,
+                    isolator,
                   ),
               )
             : initialWorkspaceReport(declaration),

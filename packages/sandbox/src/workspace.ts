@@ -143,51 +143,100 @@ export function hooksInWorkingTree(
   );
 }
 
+/** What a local isolator does about a protected file, for `gitControlUnproven`. */
+export interface LocalIsolator {
+  /** Paths beyond the workspace the sandbox may write (the profile's `writeAllow`). */
+  readonly writable?: readonly string[];
+  /**
+   * The isolator keeps a protected file that does not exist yet from being
+   * created (Seatbelt). Omitted means it cannot (bubblewrap), which makes
+   * every missing protected file, `.git/commondir` and `.git/config.worktree`
+   * included, a file git control cannot be reported as protected for.
+   */
+  readonly guardsMissingFiles?: boolean;
+}
+
 /**
- * Whether a protected file that does not exist yet lies where the sandbox may
- * write, instead of in the workspace's own `.git`: in the working tree, or in
- * one of the `writable` paths beyond it (a config file the git config
- * includes and nobody has created, or the global config in a writable home
- * directory). The live probe of a local backend covers only files it makes
- * itself, bubblewrap cannot guard a missing file (its mount point would be an
- * empty file left on the host), and git follows such a file if it appears, so
- * git control cannot be reported as protected. A remote backend is not asked:
+ * The protected files that do not exist yet and lie where the sandbox may
+ * write: in the working tree, or in one of the `writable` paths beyond it (a
+ * config file the git config includes and nobody has created, or the global
+ * config in a writable home directory). The live probe of a local backend
+ * covers only files it makes itself, git follows such a file if it appears,
+ * and an isolator that cannot guard a missing file (bubblewrap: its mount
+ * point would be an empty file left on the host) leaves it creatable, so git
+ * control cannot be reported as protected. One that can guard it (Seatbelt)
+ * guards the files git follows in the workspace's own `.git` (`commondir`,
+ * `config.worktree`), which are left out; one that cannot has them counted
+ * too. PiShip never creates the files itself. A remote backend is not asked:
  * its check tries to create the file, and reaches only the workspace.
  */
-export function missingControlFileInWritablePath(
+export function missingControlFiles(
   workspace: string,
   protectedPaths: ProtectedPaths,
-  writable: readonly string[] = [],
-): boolean {
+  isolator: LocalIsolator = {},
+): string[] {
   const dotGit = join(workspace, ".git");
-  const roots = [workspace, ...writable];
-  return protectedPaths.files.some(
+  const roots = [workspace, ...(isolator.writable ?? [])];
+  return protectedPaths.files.filter(
     (file) =>
-      !isWithin(file, dotGit) &&
+      (!isolator.guardsMissingFiles || !isWithin(file, dotGit)) &&
       roots.some((root) => file !== root && isWithin(file, root)) &&
       lstatOrUndefined(file) === undefined,
   );
+}
+
+export function missingControlFileInWritablePath(
+  workspace: string,
+  protectedPaths: ProtectedPaths,
+  isolator: LocalIsolator = {},
+): boolean {
+  return missingControlFiles(workspace, protectedPaths, isolator).length > 0;
 }
 
 /**
  * Whether git control cannot be reported as protected whatever a probe finds:
  * the protected list is known to be incomplete (`unverified`, with its reason
  * a warning), a hooks directory lies in the working tree, or, for a local
- * backend, a config file git includes does not exist in the working tree or
- * in another path the sandbox may write (`writable`).
+ * backend, a protected file the isolator cannot guard does not exist where the
+ * sandbox may write (`missingControlFiles`).
  */
 export function gitControlUnproven(
   workspace: string,
   protectedPaths: ProtectedPaths,
   backend: "local" | "remote",
-  writable: readonly string[] = [],
+  isolator: LocalIsolator = {},
 ): boolean {
   return (
     protectedPaths.unverified !== undefined ||
     hooksInWorkingTree(workspace, protectedPaths) ||
     (backend === "local" &&
-      missingControlFileInWritablePath(workspace, protectedPaths, writable))
+      missingControlFileInWritablePath(workspace, protectedPaths, isolator))
   );
+}
+
+/**
+ * The warning for missing protected files a local isolator cannot guard, or
+ * undefined: says which files, and why git control is not verified. Files in
+ * the workspace are named relative to it; others are counted. Never a full
+ * path outside the workspace.
+ */
+export function missingFilesWarning(
+  workspace: string,
+  missing: readonly string[],
+  isolator: string,
+  declared: boolean,
+): string | undefined {
+  if (missing.length === 0) return undefined;
+  const inside = missing
+    .filter((file) => isWithin(file, workspace))
+    .map((file) => relative(workspace, file).split(sep).join("/"));
+  const outside = missing.length - inside.length;
+  const named = [
+    ...inside.slice(0, 4),
+    ...(inside.length > 4 ? [`${inside.length - 4} more`] : []),
+    ...(outside ? [`${outside} outside the workspace`] : []),
+  ].join(", ");
+  return `git control is not verified: ${isolator} ${declared ? "cannot" : "does not say it can"} guard a protected file that does not exist yet (${named}), so a sandboxed command could create one and change what the next git command outside the sandbox does; PiShip does not create placeholder files in the project`;
 }
 
 /**

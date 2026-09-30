@@ -50,6 +50,8 @@ import {
   gitControlUnproven,
   hooksInWorkingTree,
   missingControlFileInWritablePath,
+  missingControlFiles,
+  missingFilesWarning,
   removeSentinelDirectory,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -1480,10 +1482,17 @@ describe("missingControlFileInWritablePath", () => {
     files,
     directories: [],
   });
+  // What Seatbelt is: the files git follows in `.git` are guarded when missing.
+  const seatbeltLike = { guardsMissingFiles: true };
+
   it("is true only for a protected file that does not exist, in the working tree", () => {
     writeFileSync(join(workspace, ".gitconfig"), "[core]\n");
     const missing = (...files: string[]) =>
-      missingControlFileInWritablePath(workspace, paths(...files));
+      missingControlFileInWritablePath(
+        workspace,
+        paths(...files),
+        seatbeltLike,
+      );
     // An include the sandbox could create, and one that is there already.
     expect(missing(join(workspace, ".gitconfig.local"))).toBe(true);
     expect(missing(join(workspace, ".gitconfig"))).toBe(false);
@@ -1504,7 +1513,10 @@ describe("missingControlFileInWritablePath", () => {
     mkdirSync(home);
     writeFileSync(join(home, ".gitconfig"), "[user]\n");
     const missing = (...files: string[]) =>
-      missingControlFileInWritablePath(workspace, paths(...files), [home]);
+      missingControlFileInWritablePath(workspace, paths(...files), {
+        ...seatbeltLike,
+        writable: [home],
+      });
     // A global config nobody has created, which the sandbox could create.
     expect(missing(join(home, ".config", "git", "config"))).toBe(true);
     expect(missing(join(home, ".gitconfig"))).toBe(false);
@@ -1517,8 +1529,78 @@ describe("missingControlFileInWritablePath", () => {
       missingControlFileInWritablePath(
         workspace,
         paths(join(home, ".config", "git", "config")),
+        seatbeltLike,
       ),
     ).toBe(false);
+  });
+
+  it("counts the files git follows in .git too when the isolator cannot guard a file that does not exist, as bubblewrap cannot", () => {
+    const files = [join(git, "config"), join(git, "commondir")];
+    files.push(join(git, "config.worktree"));
+    const protectedFiles = paths(...files);
+    // .git/config exists; commondir and config.worktree do not.
+    expect(missingControlFiles(workspace, protectedFiles)).toEqual([
+      join(git, "commondir"),
+      join(git, "config.worktree"),
+    ]);
+    expect(
+      missingControlFiles(workspace, protectedFiles, {
+        guardsMissingFiles: false,
+      }),
+    ).toEqual([join(git, "commondir"), join(git, "config.worktree")]);
+    // An isolator that guards a missing file leaves them to itself.
+    expect(
+      missingControlFiles(workspace, protectedFiles, seatbeltLike),
+    ).toEqual([]);
+    // Nothing is missing once the files exist, and PiShip created none.
+    writeFileSync(join(git, "commondir"), "..\n");
+    writeFileSync(join(git, "config.worktree"), "");
+    expect(missingControlFiles(workspace, protectedFiles)).toEqual([]);
+  });
+
+  it("does not count a missing file outside every path the sandbox may write", () => {
+    expect(
+      missingControlFiles(workspace, paths(join(root, "elsewhere", "cfg"))),
+    ).toEqual([]);
+    expect(
+      missingControlFiles(workspace, paths("/etc/piship-no-such-gitconfig")),
+    ).toEqual([]);
+  });
+});
+
+describe("missingFilesWarning", () => {
+  it("names the files, relative to the workspace, and why git control is not verified", () => {
+    const warning = missingFilesWarning(
+      workspace,
+      [
+        join(git, "commondir"),
+        join(git, "config.worktree"),
+        join(root, "home", ".gitconfig"),
+      ],
+      "linux-bubblewrap",
+      true,
+    );
+    expect(warning).toContain(
+      "git control is not verified: linux-bubblewrap cannot guard a protected file that does not exist yet",
+    );
+    expect(warning).toContain(
+      "(.git/commondir, .git/config.worktree, 1 outside the workspace)",
+    );
+    expect(warning).toContain("does not create placeholder files");
+    // Never a host path outside the workspace, or the workspace's own path.
+    expect(warning).not.toContain(root);
+    // A backend that only fails to say it can guard them is worded so.
+    expect(
+      missingFilesWarning(
+        workspace,
+        [join(git, "commondir")],
+        "acme-local",
+        false,
+      ),
+    ).toContain("acme-local does not say it can guard a protected file");
+    expect(
+      missingFilesWarning(workspace, [], "acme-local", false),
+    ).toBeUndefined();
   });
 });
 
@@ -1552,8 +1634,36 @@ describe("gitControlUnproven", () => {
     const home = join(root, "home");
     const global = paths({ files: [join(home, ".gitconfig")] });
     expect(gitControlUnproven(workspace, global, "local")).toBe(false);
-    expect(gitControlUnproven(workspace, global, "local", [home])).toBe(true);
-    expect(gitControlUnproven(workspace, global, "remote", [home])).toBe(false);
+    const writable = { writable: [home] };
+    expect(gitControlUnproven(workspace, global, "local", writable)).toBe(true);
+    expect(gitControlUnproven(workspace, global, "remote", writable)).toBe(
+      false,
+    );
+  });
+
+  it("is true for a local isolator that cannot guard the files git follows in .git while they are missing, and only for it", () => {
+    const followed = {
+      files: [join(git, "config"), join(git, "commondir")],
+      directories: [],
+    };
+    // Bubblewrap: no mount point for a file that does not exist.
+    expect(gitControlUnproven(workspace, followed, "local")).toBe(true);
+    expect(
+      gitControlUnproven(workspace, followed, "local", {
+        guardsMissingFiles: false,
+      }),
+    ).toBe(true);
+    // Seatbelt denies the path itself: unchanged.
+    expect(
+      gitControlUnproven(workspace, followed, "local", {
+        guardsMissingFiles: true,
+      }),
+    ).toBe(false);
+    // A remote check tries to create the file, and does not ask.
+    expect(gitControlUnproven(workspace, followed, "remote")).toBe(false);
+    // Present, both are proven.
+    writeFileSync(join(git, "commondir"), "..\n");
+    expect(gitControlUnproven(workspace, followed, "local")).toBe(false);
   });
 });
 
@@ -1691,6 +1801,78 @@ describe.skipIf(!nativeReady && !requireSandbox)(
         gitControlProtection: "verified",
       });
       await inGit.dispose();
+    });
+
+    it("does not report it as verified, and says why, while an isolator that cannot guard a missing file has files git follows in .git missing", async () => {
+      const files = [
+        join(git, "config"),
+        join(git, "config.worktree"),
+        join(git, "commondir"),
+      ];
+      const activateWith = (guardsMissingFiles?: boolean) =>
+        activateSandbox(policy(), {
+          workspace,
+          homeDir: join(root, "home"),
+          backend: fakeWrappingBackend(
+            native,
+            true,
+            guardsMissingFiles === undefined ? {} : { guardsMissingFiles },
+          ),
+          protectedPaths: {
+            files,
+            directories: [join(git, "hooks"), join(git, "info")],
+          },
+        });
+      const notVerified = (sandbox: Awaited<ReturnType<typeof activateWith>>) =>
+        expect(sandbox.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+
+      // Bubblewrap: no mount point for a file that does not exist. Reported,
+      // never failed, and nothing is created in the project.
+      const cannot = await activateWith(false);
+      expect(cannot.report.level).toBe("enforced");
+      expect(cannot.report.planes).toContain("git-control-protection");
+      notVerified(cannot);
+      expect(cannot.report.warnings).toContainEqual(
+        expect.stringContaining(
+          "acme-local cannot guard a protected file that does not exist yet (.git/config.worktree, .git/commondir)",
+        ),
+      );
+      expect(existsSync(join(git, "commondir"))).toBe(false);
+      expect(existsSync(join(git, "config.worktree"))).toBe(false);
+      await cannot.dispose();
+
+      // A backend that says nothing about it is treated the same.
+      const silent = await activateWith();
+      notVerified(silent);
+      expect(silent.report.warnings).toContainEqual(
+        expect.stringContaining("acme-local does not say it can guard"),
+      );
+      await silent.dispose();
+
+      // Seatbelt denies the path itself: verified, as before.
+      const guards = await activateWith(true);
+      expect(guards.report.workspace).toMatchObject({
+        gitControlProtection: "verified",
+      });
+      expect(guards.report.warnings.join("\n")).not.toContain(
+        "does not exist yet",
+      );
+      await guards.dispose();
+
+      // With the files there, an isolator that cannot guard a missing one has
+      // nothing missing.
+      writeFileSync(join(git, "commondir"), "..\n");
+      writeFileSync(join(git, "config.worktree"), "");
+      const present = await activateWith(false);
+      expect(present.report.workspace).toMatchObject({
+        gitControlProtection: "verified",
+      });
+      expect(present.report.warnings.join("\n")).not.toContain(
+        "does not exist yet",
+      );
+      await present.dispose();
     });
 
     it("does not report it as verified while a config file git includes from the working tree does not exist", async () => {

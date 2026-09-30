@@ -228,13 +228,31 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
           declared: "shared",
           effective: "shared",
           verification: "not-required",
-          gitControlProtection: "verified",
+          // The list holds `.git/config.worktree` and `.git/commondir`, which
+          // do not exist. Seatbelt denies the paths themselves; bubblewrap
+          // cannot mount over a file that is not there, so it reports the
+          // gap instead of claiming the files are protected.
+          gitControlProtection: adapter.guardsMissingFiles
+            ? "verified"
+            : "not-verified",
           complete: true,
         },
       });
       expect(sandbox.report.warnings.join("\n")).not.toContain(
         "git-control-protection",
       );
+      if (adapter.guardsMissingFiles)
+        expect(sandbox.report.warnings.join("\n")).not.toContain(
+          "does not exist yet",
+        );
+      else
+        expect(sandbox.report.warnings).toContainEqual(
+          expect.stringContaining(
+            `${adapter.id} cannot guard a protected file that does not exist yet (.git/config.worktree, .git/commondir)`,
+          ),
+        );
+      expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
+      expect(existsSync(join(ws, ".git", "config.worktree"))).toBe(false);
       expect(open.report.planes).not.toContain("network-deny");
       expect(open.report.planes).toContain("git-control-protection");
     });
