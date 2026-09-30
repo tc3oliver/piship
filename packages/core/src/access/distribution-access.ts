@@ -66,6 +66,7 @@ import { readPreferences, resolveEffectiveConfig } from "../config.js";
 import { type AdapterContext, loadAdapter } from "./adapters.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
+import { SandboxCredential, type SignedInGuard } from "./sandbox-credential.js";
 import {
   networkPolicyFor,
   type ResolvedEndpoints,
@@ -410,6 +411,31 @@ export class DistributionAccess {
     };
   }
 
+  /**
+   * The stored sandbox credential slot, in the distribution's configured
+   * store, for `principal`. Login clears it when another principal signs in,
+   * and logout clears it.
+   */
+  sandboxCredential(principal: PrincipalKey | null = null): SandboxCredential {
+    const store = this.store ?? this.options.secretStore;
+    return new SandboxCredential({
+      distributionId: this.options.app.id,
+      command: this.options.app.command,
+      stateDir: this.options.stateDir,
+      ...(this.options.access
+        ? { storage: this.options.access.credential.storage }
+        : {}),
+      ...(store ? { secretStore: store } : {}),
+      ...(this.options.secretStoreFor
+        ? { secretStoreFor: this.options.secretStoreFor }
+        : {}),
+      principal,
+      onEvent: (event) => this.#emit(event.event, event.detail),
+      ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
+      now: this.#now,
+    });
+  }
+
   // ------------------------------------------------------------ principal pin
 
   /**
@@ -455,6 +481,31 @@ export class DistributionAccess {
     if (stored && samePrincipal(stored, principalKey(identity))) return;
     this.#forgetSecret();
     throw principalChanged(this.options.app.command, !stored);
+  }
+
+  /**
+   * For something bound to `principal` (the stored sandbox credential): runs
+   * a task holding the identity lock after checking that `principal` is still
+   * the signed-in user, and throws, running nothing, when it is not. Undefined
+   * when there is no stored interactive identity to check (no identity, or a
+   * workload identity, whose principal comes from the workload).
+   */
+  async signedInGuard(
+    principal: PrincipalKey | null,
+  ): Promise<SignedInGuard | undefined> {
+    if (
+      !principal ||
+      this.identityMode === "none" ||
+      (await this.usesWorkloadIdentity())
+    )
+      return undefined;
+    return (task) =>
+      withFileLock(this.paths.identity, async () => {
+        const stored = this.readIdentityMetadata();
+        if (!stored || !samePrincipal(stored, principal))
+          throw principalChanged(this.options.app.command, !stored);
+        return task();
+      });
   }
 
   /** Whether the identity provider is a workload identity adapter. */
@@ -1248,6 +1299,11 @@ export class DistributionAccess {
           );
       }
       await this.options.onPhase?.("credential-cleared");
+      // Another principal's sandbox credential goes too, its deletion
+      // confirmed, before the new identity is stored: the stored sandbox
+      // credential is never usable by anyone but the one who stored it.
+      await this.sandboxCredential().clearUnlessBoundTo(principal);
+      await this.options.onPhase?.("sandbox-credential-cleared");
       if (provider && identity && principal) {
         const binding = this.#bindPrincipal(principal);
         await this.options.onPhase?.("principal-bound");
@@ -1264,6 +1320,11 @@ export class DistributionAccess {
             this.#workloadAt = this.#now();
           } else await this.#storeIdentity(identity);
         });
+        // A `sandbox login` of the previous user that checked the signed-in
+        // user before the identity was replaced stored its credential after
+        // the first clear: clear it again now that the identity is stored,
+        // after which the guard refuses any later one.
+        await this.sandboxCredential().clearUnlessBoundTo(principal);
         this.#emit("identity.login", {
           expiresAt: identity.expiresAt?.toISOString() ?? null,
           ...(binding.known ? { principalChange: true } : {}),
@@ -1291,9 +1352,10 @@ export class DistributionAccess {
   }
 
   /**
-   * Revoke and clear runtime and identity credentials; sessions, preferences,
-   * and the principal binding are kept. Runs under the credential lock, then
-   * the identity lock, like a login. Every problem is returned: a failed
+   * Revoke and clear runtime and identity credentials and delete the stored
+   * sandbox credential; sessions, preferences, and the principal binding are
+   * kept. Runs under the credential lock, then the sandbox credential lock,
+   * then the identity lock, like a login. Every problem is returned: a failed
    * revocation, and a secret that cannot be deleted. Credential secrets that
    * could not be deleted stay tracked by the credential's discarded marker.
    * Identity token bundles that could not be deleted leave an identity
@@ -1318,7 +1380,15 @@ export class DistributionAccess {
       );
       this.#forgetSecret();
       this.#workload = null;
-      if (!existsSync(this.paths.identity)) return;
+      const clearSandbox = async (): Promise<void> => {
+        // What cannot be deleted stays tracked by its discarded marker.
+        problems.push(
+          ...(await this.sandboxCredential().clear()).map(
+            (problem) => `sandbox credential: ${problem}`,
+          ),
+        );
+      };
+      if (!existsSync(this.paths.identity)) return clearSandbox();
       await withFileLock(this.paths.identity, async () => {
         const metadata = this.readIdentityMetadata();
         // A workload adapter never receives a person's tokens.
@@ -1360,6 +1430,10 @@ export class DistributionAccess {
           );
         if (metadata) this.#emit("identity.logout", { revocation });
       });
+      // After the identity, so a `sandbox login` that checked the signed-in
+      // user before this took the identity lock has stored its secret by
+      // now and is cleared here, and one that checks later finds no user.
+      await clearSandbox();
     };
     if (manager.storesSecrets) await manager.exclusive(signOut);
     else await signOut();

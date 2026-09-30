@@ -30,12 +30,14 @@ import {
   type DistributionAccess,
   accessStatePaths,
   networkPolicyFor,
+  SandboxCredential,
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
 import { removeAccessTemporaries } from "../install/temporaries.js";
 import {
   type BrandedContext,
   auditAccess,
+  eventDetail,
   openAccess,
   recordAudit,
   saveMetrics,
@@ -60,7 +62,12 @@ function openBrowser(url: string): void {
   }
 }
 
-async function readSecretInput(prompt: string): Promise<string> {
+/**
+ * Read a secret without it reaching argv, the environment, shell history, or
+ * the terminal: a prompt on stderr with no echo, or the first line of a piped
+ * stdin (for provisioning from a secret manager).
+ */
+export async function readSecretInput(prompt: string): Promise<string> {
   if (!process.stdin.isTTY) {
     let data = "";
     for await (const chunk of process.stdin) data += chunk;
@@ -269,6 +276,23 @@ async function logoutLocally(
             recorded,
           );
       });
+    // The stored sandbox credential has no remote revocation to miss. It goes
+    // after the identity, so a `sandbox login` that checked the signed-in
+    // user before the identity lock was taken is cleared here too.
+    problems.push(
+      ...(
+        await new SandboxCredential({
+          distributionId: id,
+          command: ctx.metadata.app.command,
+          stateDir: ctx.stateDir,
+          storage: { provider },
+          secretStore: store,
+          secretStoreFor: storeOf,
+          principal: null,
+          onEvent,
+        }).clear()
+      ).map((problem) => `sandbox credential: ${problem}`),
+    );
     return problems;
   });
 }
@@ -302,6 +326,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   const before = {
     identity: existsSync(paths.identity),
     credential: existsSync(paths.credential),
+    sandboxCredential: existsSync(paths.sandboxCredential),
   };
   // Only what happened is recorded: credential.revoke with its remote
   // revocation outcome when a credential existed, identity.logout when
@@ -314,7 +339,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
         event: event.event,
         user: signedIn ? principalId(signedIn) : null,
         session: null,
-        detail: { mode: manifest.credential.provider, ...event.detail },
+        detail: eventDetail(manifest.credential.provider, event.detail),
       })),
     );
   const problems: string[] = [];
@@ -369,6 +394,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     ...(manifest.credential.provider === "none"
       ? []
       : ([["credential", "the runtime credential"]] as const)),
+    ["sandboxCredential", "the sandbox credential"],
   ] as const;
   const kept = classes
     .filter(([key]) => existsSync(paths[key]))

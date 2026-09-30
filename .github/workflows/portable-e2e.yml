@@ -87,6 +87,7 @@ jobs:
         env:
           PISHIP_E2E_QUALIFICATION: "0"
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
+          PISHIP_REQUIRE_ISOLATOR: ${{ runner.os != 'Windows' && '1' || '0' }}
           PISHIP_LIVE_SECRET_STORE: "1"
       # A Linux runner has no desktop session, so the E2E run gets a private
       # D-Bus session with GNOME Keyring on a fresh data directory, unlocked
@@ -109,6 +110,7 @@ jobs:
         env:
           PISHIP_E2E_QUALIFICATION: "1"
           PISHIP_REQUIRE_SANDBOX: "1"
+          PISHIP_REQUIRE_ISOLATOR: "1"
           PISHIP_LIVE_SECRET_STORE: "1"
       - name: Delete the temporary keychain
         if: always() && runner.os == 'macOS'

@@ -5,10 +5,12 @@ import {
   principalKey,
   SecretValue,
   samePrincipal,
+  type WorkloadIdentityProvider,
 } from "@piship/contracts";
 
 import { retainClaims } from "./claims.js";
 
+export type { WorkloadIdentityProvider } from "@piship/contracts";
 export { RETAINED_CLAIMS, retainClaims } from "./claims.js";
 export { startLoopbackReceiver, type LoopbackReceiver } from "./loopback.js";
 export { OidcPkceIdentityProvider, type OidcIdentityOptions } from "./oidc.js";
@@ -153,16 +155,6 @@ export function assertSamePrincipal(
       userAction: refusal.userAction,
     });
   return refreshed;
-}
-
-/**
- * An identity adapter that obtains its session without a person: the
- * identity of a CI job, a scheduled automation, or a managed worker.
- * `login()` must never call `openUrl`; PiShip obtains a session from it at
- * every activation, holds the session in memory only, and never stores it.
- */
-export interface WorkloadIdentityProvider extends IdentityProvider {
-  readonly interactive: false;
 }
 
 /** Whether an identity provider declared itself non-interactive (a workload identity). */

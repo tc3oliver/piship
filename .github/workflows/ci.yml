@@ -65,6 +65,7 @@ jobs:
       - run: npm test
         env:
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
+          PISHIP_REQUIRE_ISOLATOR: ${{ runner.os != 'Windows' && '1' || '0' }}
       - run: npm run test:compatibility
       # Real platform secret stores: Keychain, Credential Manager, and the
       # Linux Secret Service. A Linux runner has no desktop session, so its

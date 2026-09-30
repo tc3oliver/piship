@@ -68,7 +68,10 @@ async function acquire(accessToken, key) {
       "content-type": "application/json",
       ...(key ? { "idempotency-key": key } : {}),
     },
-    body: JSON.stringify({ distribution: "acmecode", purpose: "inference" }),
+    body: JSON.stringify({
+      distribution: "acmecode-reference",
+      purpose: "inference",
+    }),
   });
   return { status: response.status, body: await response.json() };
 }
@@ -81,7 +84,7 @@ async function revoke(credential, credentialId) {
     },
     body: JSON.stringify({
       credential_id: credentialId,
-      distribution: "acmecode",
+      distribution: "acmecode-reference",
     }),
   });
   await response.body?.cancel();

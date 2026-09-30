@@ -48,6 +48,11 @@ const allowedLocal = {
     "@piship/audit",
   ],
   cli: ["@piship/core", "@piship/schema", "@piship/contracts"],
+  // The adapter SDK re-exports public contracts and wraps customBackend();
+  // it never reaches into core or Pi. The conformance kits test an adapter
+  // the way a company would, through the SDK only.
+  "adapter-sdk": ["@piship/contracts", "@piship/sandbox"],
+  "adapter-conformance": ["@piship/adapter-sdk"],
   tests: [
     "@piship/core",
     "@piship/pi",
@@ -60,6 +65,8 @@ const allowedLocal = {
     "@piship/audit",
     "@piship/sandbox",
     "@piship/mcp",
+    "@piship/adapter-sdk",
+    "@piship/adapter-conformance",
   ],
 };
 // Workspace imports that appear only inside source text a package generates,
@@ -141,11 +148,16 @@ function checkSpecifier(specifier, file, owner) {
 /**
  * A relative import never reaches into another package's directory; that
  * would bypass its public exports and the dependency map. Shared test
- * helpers and example fixtures outside packages/ stay reachable.
+ * helpers and example fixtures outside packages/ stay reachable, and the
+ * repository's tests may use a package's src/testing servers.
  */
 function checkRelative(specifier, path, owner) {
   if (!specifier.startsWith(".")) return;
-  const target = packageOf(resolve(dirname(path), specifier));
+  const resolved = resolve(dirname(path), specifier);
+  // The repository's own tests may use a package's test servers, which live
+  // in its src/testing directory and are not part of its public exports.
+  if (owner === "tests" && /[\\/]src[\\/]testing[\\/]/.test(resolved)) return;
+  const target = packageOf(resolved);
   if (target !== undefined && target !== owner)
     failures.push(
       `${relative(root, path)}: relative import ${specifier} crosses into packages/${target}; import @piship/${target} instead`,

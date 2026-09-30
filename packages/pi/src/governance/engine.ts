@@ -13,6 +13,7 @@ import {
   parseRuleList,
   projectGitControlDirectories,
   projectGitControlFiles,
+  projectGitControlUnverified,
   readProjectRestrictions,
 } from "@piship/policy";
 import { type ContainmentReport, enforcesPathPolicy } from "@piship/sandbox";
@@ -106,6 +107,7 @@ export function sandboxConfig(options: GovernanceOptions) {
 export function gitProtection(root: string): {
   files: string[];
   directories: string[];
+  unverified?: string;
 } {
   const isDirectory = (path: string) => {
     try {
@@ -114,9 +116,11 @@ export function gitProtection(root: string): {
       return false;
     }
   };
+  const unverified = projectGitControlUnverified(root);
   return {
     files: projectGitControlFiles(root).filter((path) => !isDirectory(path)),
     directories: projectGitControlDirectories(root),
+    ...(unverified === undefined ? {} : { unverified }),
   };
 }
 

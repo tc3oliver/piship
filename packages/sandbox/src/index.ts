@@ -24,7 +24,9 @@ export {
 export {
   capabilityMismatch,
   claimedGuarantees,
+  DEFAULT_PROPAGATION_MS,
   enforcesPathPolicy,
+  GIT_CONTROL_PROTECTION,
   HOST_FILESYSTEM_ISOLATION,
   isBackendId,
   PATH_POLICY_PLANES,
@@ -40,6 +42,11 @@ export {
   type SandboxInstance,
   type SandboxPrepareRequest,
   type SandboxProvider,
+  type SandboxWorkspaceDeclaration,
+  WORKSPACE_CONFINEMENT,
+  WORKSPACE_MODES,
+  type WorkspaceMode,
+  workspaceDeclaration,
 } from "./backend.js";
 export {
   BubblewrapAdapter,
@@ -96,6 +103,14 @@ export {
   selectAdapter,
   UnsupportedAdapter,
 } from "./select.js";
+export {
+  describeWorkspace,
+  type GitControlProtectionState,
+  type Propagation,
+  WORKSPACE_VALIDITY_MS,
+  type WorkspaceReport,
+  type WorkspaceVerification,
+} from "./workspace.js";
 export { type CustomBackendContext, customBackend } from "./custom.js";
 export {
   connectEnvelope,

@@ -202,6 +202,30 @@ describe.skipIf(!posix)("bubblewrap arguments", () => {
     expect(args.indexOf("/work/ws/.secrets")).toBeGreaterThan(config);
   });
 
+  it("pins the directories above a protected path that exists, and none above one that does not", () => {
+    const args = bubblewrapArgs(
+      profile({
+        writeProtect: {
+          files: ["/work/ws/config/local.cfg", "/work/ws/other/local.cfg"],
+          directories: [],
+        },
+      }),
+      command,
+      {
+        ...seams,
+        // Both directories exist; only the first file does.
+        exists: (path) =>
+          path !== "/work/ws/other/local.cfg" && seams.exists(path),
+      },
+    ).join(" ");
+    expect(args).toContain("--bind /work/ws/config /work/ws/config");
+    expect(args).toContain(
+      "--ro-bind /work/ws/config/local.cfg /work/ws/config/local.cfg",
+    );
+    // A missing file cannot be guarded, and its directory is not pinned.
+    expect(args).not.toContain("/work/ws/other");
+  });
+
   it("hides host escape sockets unless they are explicitly writable", () => {
     const args = bubblewrapArgs(profile(), command, {
       ...seams,
@@ -266,6 +290,30 @@ describe("seatbelt profile", () => {
     expect(block).not.toContain("/outside");
     expect(text).not.toContain(".git");
   });
+  it("denies moving the directories above a protected path that exists, and none above one that does not", () => {
+    const text = seatbeltProfile(
+      profile({
+        writeProtect: {
+          files: ["/work/ws/config/local.cfg", "/work/ws/absent/dir/local.cfg"],
+          directories: [],
+        },
+      }),
+      {
+        ...seams,
+        exists: (path) =>
+          !path.startsWith("/work/ws/absent") && seams.exists(path),
+        isDir: (path) => !path.endsWith("local.cfg") && seams.isDir(path),
+      },
+    );
+    expect(text).toContain('(literal "/work/ws/config")');
+    expect(text).toContain('(literal "/work/ws/config/local.cfg")');
+    // The missing file is denied where it would be created, and nothing
+    // above it is pinned.
+    expect(text).toContain('(subpath "/work/ws/absent/dir/local.cfg")');
+    expect(text).not.toContain('(literal "/work/ws/absent")');
+    expect(text).not.toContain('(literal "/work/ws/absent/dir")');
+  });
+
   it("denies launching processes outside the sandbox through launchd", () => {
     const deny = text.indexOf("(deny lsopen)");
     expect(deny).toBeGreaterThan(text.indexOf("(allow default)"));

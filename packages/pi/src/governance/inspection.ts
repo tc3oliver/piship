@@ -13,6 +13,7 @@ import {
   activateSandbox,
   adapterIdFor,
   describeContainment,
+  type WorkspaceReport,
 } from "@piship/sandbox";
 import { capabilityStates, staticProviderDenials } from "./capabilities.js";
 import {
@@ -53,6 +54,7 @@ export async function inspectGovernance(
   const manifest = options.lock.governance.manifest;
   const { project, candidates } = discoverProject(options, homeDir);
   let report: ContainmentReport;
+  let workspace: WorkspaceReport | undefined;
   let tmpDir = tmpdir();
   try {
     const backend = await sandboxBackend(options);
@@ -64,8 +66,12 @@ export async function inspectGovernance(
       // directory the sandbox otherwise replaces (such as /tmp).
       extraReadOnly: [options.distributionDir],
       protectedPaths: gitProtection(project.root),
+      projectOrigin: project.origin,
     });
     report = sandbox.report;
+    // Inspection runs no command, so a shared or synchronized remote
+    // workspace is still pending here: nothing is written into the project.
+    workspace = sandbox.workspace();
     tmpDir = sandbox.profile.tmpDir;
     await sandbox.dispose();
   } catch (error) {
@@ -168,7 +174,7 @@ export async function inspectGovernance(
     project,
     candidates,
     sandbox: report,
-    containment: describeContainment(report),
+    containment: describeContainment(report, workspace),
     engine,
     capabilities: capabilityStates(
       options,

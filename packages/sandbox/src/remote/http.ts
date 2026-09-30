@@ -1,6 +1,6 @@
 // Shared plumbing for remote sandbox backends: bounded JSON over a managed
 // fetch, and the rules for what a remote backend is sent.
-import { type ManagedFetch, redact } from "@piship/contracts";
+import { type ManagedFetch, redact, SecretValue } from "@piship/contracts";
 
 export interface RemoteBackendOptions {
   /** The backend's control endpoint (resolved; no runtime references). */
@@ -12,8 +12,64 @@ export interface RemoteBackendOptions {
    * one. PiShip decides whether it may be sent before passing it here.
    */
   readonly credential?: () => Promise<string | undefined>;
+  /**
+   * Called when an origin the credential was sent to answers 401 or 403.
+   * Resolves true when a renewed credential is ready: the backend then
+   * repeats that one request once, unless the request may have created
+   * something (a sandbox, a claim, or a command).
+   */
+  readonly credentialRejected?: () => Promise<boolean>;
   /** Directory in the remote environment that maps to the workspace. */
   readonly workdir?: string;
+}
+
+const rejectedStatus = (status: number) => status === 401 || status === 403;
+
+/**
+ * One request that carries the backend's credential, when it has one, in the
+ * header `header` builds. A 401 or 403 to a request that carried it is
+ * reported through `credentialRejected`; a repeatable request is sent once
+ * more with the renewed credential, a second rejection is reported again
+ * and returned. The credential is read per request, never kept here.
+ */
+export async function credentialedFetch(
+  options: Pick<
+    RemoteBackendOptions,
+    "fetch" | "credential" | "credentialRejected"
+  >,
+  url: string | URL,
+  init: RequestInit,
+  header: (credential: string) => readonly [string, string],
+  repeatable: boolean,
+): Promise<Response> {
+  const send = async () => {
+    const headers = new Headers(init.headers);
+    const credential = await options.credential?.();
+    if (credential) {
+      // Registered for redaction, whatever its source: a failure body that
+      // echoes it (some services answer 401 with the key they were sent)
+      // is scrubbed from every later error.
+      new SecretValue(credential);
+      headers.set(...header(credential));
+    }
+    const response = await options.fetch(url, {
+      ...init,
+      headers,
+      signal: init.signal ?? AbortSignal.timeout(30_000),
+    });
+    return { response, sent: !!credential };
+  };
+  const first = await send();
+  const rejected = options.credentialRejected;
+  if (!first.sent || !rejectedStatus(first.response.status) || !rejected)
+    return first.response;
+  const renewed = await rejected().catch(() => false);
+  if (!renewed || !repeatable) return first.response;
+  await first.response.body?.cancel().catch(() => undefined);
+  const second = await send();
+  if (second.sent && rejectedStatus(second.response.status))
+    await rejected().catch(() => false);
+  return second.response;
 }
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;

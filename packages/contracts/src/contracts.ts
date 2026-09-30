@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { PiShipError } from "./errors.js";
+import type { ManagedFetch } from "./network.js";
 import type { SecretValue } from "./secret.js";
 
 /*
@@ -256,6 +257,27 @@ export interface InferenceProvider {
   configureRuntime(
     ctx: RuntimeConfigurationContext,
   ): Promise<RuntimeProviderConfiguration>;
+}
+
+// --------------------------------------------------- adapter-facing context
+
+/** Endpoints of a distribution's access configuration, with runtime references resolved. */
+export interface ResolvedEndpoints {
+  readonly issuer?: string;
+  readonly clientId?: string;
+  readonly audience?: string;
+  readonly brokerEndpoint?: string;
+  readonly brokerRevokeEndpoint?: string;
+  readonly baseUrl?: string;
+  readonly additionalCA: readonly string[];
+}
+
+/** What an identity or credential adapter module's default-export factory receives. */
+export interface AdapterContext {
+  readonly distributionId: string;
+  /** PiShip's managed fetch: proxy, CA, and private-only policy applied. */
+  readonly fetch: ManagedFetch;
+  readonly endpoints: ResolvedEndpoints;
 }
 
 // ------------------------------------------------ extension-facing context

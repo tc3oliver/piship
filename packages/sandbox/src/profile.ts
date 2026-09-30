@@ -46,6 +46,12 @@ export interface ProfileContext {
 export interface ProtectedPaths {
   readonly files: readonly string[];
   readonly directories: readonly string[];
+  /**
+   * Why this list is known to be incomplete (the git config named more
+   * paths than are listed), when it is. Git control is then reported not
+   * verified, for every backend, and the reason is a warning.
+   */
+  readonly unverified?: string;
 }
 
 export interface SandboxProfile {
@@ -174,10 +180,16 @@ export function resolveProfile(
     writeProtect: {
       files: resolveAll(protect?.files ?? [], full),
       directories: resolveAll(protect?.directories ?? [], full),
+      ...(protect?.unverified ? { unverified: protect.unverified } : {}),
     },
     network: config.network.mode,
     environmentAllow: [...new Set(config.environment.allow)],
-    warnings: conflicts(readDeny, writeAllow, base.workspace),
+    warnings: [
+      ...conflicts(readDeny, writeAllow, base.workspace),
+      ...(protect?.unverified
+        ? [`git control is not verified: ${protect.unverified}`]
+        : []),
+    ],
   };
 }
 
@@ -258,15 +270,21 @@ export function writableProtected(
 /**
  * Directories between a writable root and a protected path, outermost
  * first. Their contents stay writable, but renaming or removing one would
- * move the protected path aside and let a replacement take its place.
+ * move the protected path aside and let a replacement take its place. A
+ * protected path that does not exist has none: there is nothing to move
+ * aside, git control is reported not verified for such a path anyway, and
+ * pinning its directories would only stop commands from moving or removing
+ * a directory that may hold it later.
  */
 export function protectedAncestors(
   profile: SandboxProfile,
   entries: readonly ProtectedEntry[],
   paths: ProfilePaths = NATIVE_PATHS,
+  exists: (path: string) => boolean = pathExists,
 ): string[] {
   const ancestors = new Set<string>();
   for (const { path } of entries) {
+    if (!exists(path)) continue;
     const roots = profile.writeAllow.filter((allowed) =>
       within(paths, path, allowed),
     );

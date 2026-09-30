@@ -68,6 +68,28 @@ export async function closeMockServers(): Promise<void> {
   servers = [];
 }
 
+/**
+ * Every place in the recorded requests that holds `value`, other than the
+ * headers named in `allowed` (lowercase): the path and query, the body, and
+ * any other header. A credential leak check for wire traffic.
+ */
+export function leaks(
+  requests: readonly Recorded[],
+  value: string,
+  allowed: readonly string[] = [],
+): string[] {
+  const hits: string[] = [];
+  for (const request of requests) {
+    if (request.path.includes(value)) hits.push(`${request.path}: path`);
+    if (request.body.toString("latin1").includes(value))
+      hits.push(`${request.path}: body`);
+    for (const [name, header] of Object.entries(request.headers))
+      if (!allowed.includes(name) && String(header).includes(value))
+        hits.push(`${request.path}: header ${name}`);
+  }
+  return hits;
+}
+
 /** A check-command answer: the marker line and a blocked outbound check. */
 export function checkAnswer(unlisted: string | undefined): string {
   return `${SANDBOX_READY_MARKER} ${unlisted ?? "unset"}\npiship-network-blocked\n`;

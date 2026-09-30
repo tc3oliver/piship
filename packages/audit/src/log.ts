@@ -464,7 +464,12 @@ class FileSinkWriter implements AuditSink {
   }
 }
 
-class HttpSinkWriter implements AuditSink {
+/**
+ * The `http` sink's delivery: one POST of a `piship-audit-batch/v1` batch,
+ * settled by the collector's answer. `AuditLog` owns queueing and retries;
+ * this is exported so the audit conformance kit can run against it.
+ */
+export class HttpSinkWriter implements AuditSink {
   constructor(
     readonly url: URL,
     readonly fetch: AuditFetch,

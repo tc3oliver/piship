@@ -1,0 +1,17 @@
+# Routes the reference LiteLLM to a real upstream provider instead of the
+# mock, for live provider qualification (README, "Live provider
+# qualification"). Use it on top of compose.yaml, which it leaves unchanged:
+#
+#   COMPOSE_FILE=compose.yaml:compose.live-provider.yaml docker compose up --wait
+#
+# LIVE_PROVIDER_API_KEY comes from the environment of the command that starts
+# the stack, never from a file. The mock upstream still runs, unused.
+services:
+  litellm:
+    environment:
+      LIVE_PROVIDER_API_KEY: ${LIVE_PROVIDER_API_KEY:?set LIVE_PROVIDER_API_KEY}
+      LIVE_PROVIDER_BASE_URL: ${LIVE_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      LIVE_PROVIDER_MODEL: ${LIVE_PROVIDER_MODEL:-openai/gpt-4.1-mini}
+    volumes:
+      # Replaces the mount of the enterprise-litellm config at the same path.
+      - ./litellm-live-provider.yaml:/etc/litellm/config.yaml:ro

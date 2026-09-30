@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 
-/** Which references a metadata file owns: runtime credentials or identity tokens. */
-export type SecretRefClass = "inference" | "identity";
+/**
+ * Which references a metadata file owns: runtime credentials, the stored
+ * sandbox credential, or identity tokens.
+ */
+export type SecretRefClass = "inference" | "sandbox" | "identity";
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -35,7 +38,7 @@ export function secretRefsFromText(
   const ref = `${escapeRegExp(prefix)}(\\d+)`;
   for (const match of text.matchAll(new RegExp(ref, "g")))
     add(Number(match[1]));
-  if (refClass === "inference")
+  if (refClass !== "identity")
     for (const match of text.matchAll(/"generation"\s*:\s*(\d+)/g))
       add(Number(match[1]), 1);
   else

@@ -142,4 +142,15 @@ There is no memory-only option yet: a headless Linux runner without a Secret Ser
 
 Launches acquire a broker or adapter credential automatically after `login`. `local-secret` is captured only by `login`; without it a launch fails with `CREDENTIAL_REQUIRED`. `login` always replaces the current runtime credential.
 
+## Sandbox credential
+
+A remote sandbox backend that declares `sandbox.credential: stored` uses a second, separate credential slot, filled only by `<command> sandbox login` ([sandbox credentials](sandbox.md#credentials)). It never replaces or reads the runtime credential.
+
+- Metadata in `credentials-metadata/sandbox.json` (`piship-sandbox-credential-metadata/v1`) holds the source (`stored`), the kind (`api_key` or `bearer`), a generation reference such as `piship:<id>:sandbox#1`, a random credential ID, the acquisition time, the principal (issuer and subject) that stored it, the origins it may be sent to, and `rejected_at` once the service rejected it. It never holds the secret. `metadataSecretRefs` finds its current, orphaned, and pending references, so `logout`, `purge`, update, and rollback delete them.
+- It uses the configured secret store (`access.credential.storage`, else `system`) and the same verified deletion and discarded marker as the runtime credential. Its operations run under their own lock (`credentials-metadata/sandbox.json.lock`), taken after the credential lock and before the identity lock.
+- Before the secret is read, one bound to another principal (or to none, once identity is configured) is deleted and refused, a rejected one is refused, and every URL it would reach must be one of its recorded origins. It has no remote revocation: `sandbox logout`, `logout`, a change of principal, and `purge` delete it.
+- Events are `credential.acquire` and `credential.revoke` with `purpose: "sandbox"`, `source`, `kind`, `generation`, a random `credentialId`, and `reason`; never the secret, the origins, or the endpoint.
+- `SandboxCredentialAccess` (`@piship/contracts`) is what a session receives: the source, kind, and origins, `secret()` for one request, and `rejected()`. A custom adapter's own `sandboxCredential` export is held by `AdapterSandboxCredential` in memory only and is never stored.
+
+
 See [inference](inference.md#failure-policy) for the combined failure policy.

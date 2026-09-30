@@ -383,7 +383,11 @@ async function clearItems(
           ...metadataFileSecretRefs(
             path,
             distributionId,
-            item.path.startsWith("identity/") ? "identity" : "inference",
+            item.path.startsWith("identity/")
+              ? "identity"
+              : item.path.endsWith("/sandbox.json")
+                ? "sandbox"
+                : "inference",
           ),
         ]),
       ].sort();

@@ -39,7 +39,10 @@ const LOCAL_CAPABILITIES: SandboxCapabilities = {
 };
 
 /** Answer PiShip's check command the way a contained shell would. */
-function answerCheck(request: SandboxExecRequest, io: SandboxExecIO): void {
+export function answerCheck(
+  request: SandboxExecRequest,
+  io: SandboxExecIO,
+): void {
   io.onStdout(
     Buffer.from(
       `${SANDBOX_READY_MARKER} ${request.env.PISHIP_PROBE_UNLISTED ?? "unset"}\n`,
@@ -114,11 +117,13 @@ export function fakeBackend(options: FakeBackendOptions = {}): FakeBackend {
 /**
  * A company wrapper around a local mechanism. With `contain` the command runs
  * through `native`; without it the command is wrapped as itself, contained by
- * nothing.
+ * nothing. With `ignoreWriteProtect` it contains everything except the
+ * profile's protected paths, as an adapter that never reads `writeProtect`.
  */
 export function fakeWrappingBackend(
   native: Pick<SandboxAdapter, "wrap">,
   contain: boolean,
+  options: { ignoreWriteProtect?: boolean } = {},
 ): SandboxBackend {
   return customBackend({
     id: "acme-local",
@@ -127,7 +132,12 @@ export function fakeWrappingBackend(
     prepare: async ({ profile }: { profile: SandboxProfile }) => ({
       wrap: (command: SandboxCommand): WrappedCommand =>
         contain
-          ? native.wrap(profile, command)
+          ? native.wrap(
+              options.ignoreWriteProtect
+                ? { ...profile, writeProtect: { files: [], directories: [] } }
+                : profile,
+              command,
+            )
           : { ...command, args: [...command.args] },
       exec: async () => ({ exitCode: 0 }),
       dispose: async () => {},

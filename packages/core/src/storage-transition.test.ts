@@ -25,7 +25,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
-import { DistributionAccess } from "./access/index.js";
+import { DistributionAccess, SandboxCredential } from "./access/index.js";
 import { purgeDistributionState } from "./install/index.js";
 import { checkStateMigration, STATE_SCHEMAS } from "./migration.js";
 import { storageOf } from "./storage-transition.js";
@@ -130,6 +130,26 @@ function open(provider: SecretStoreProvider): DistributionAccess {
   });
 }
 
+const SANDBOX_SECRET = "fake-sandbox-key-SENTINEL-0001";
+
+/** The stored sandbox credential slot of a release configured for `provider`. */
+function sandboxSlot(
+  provider: SecretStoreProvider,
+  principal: { issuer: string; subject: string },
+): SandboxCredential {
+  return new SandboxCredential({
+    distributionId: ID,
+    command: demo.app.command,
+    stateDir: stateDir(),
+    provider: "e2b-compatible",
+    storage: { provider },
+    secretStore: storeOf(provider),
+    secretStoreFor: storeOf,
+    principal,
+    targets: ["https://sandbox-api.test.invalid:8443/v1"],
+  });
+}
+
 function login(distribution: DistributionAccess) {
   return distribution.login({ openUrl: (url) => void services.approve(url) });
 }
@@ -208,6 +228,76 @@ describe.each([
     const newStore = storeOf(to);
     for (const ref of stateRefs())
       expect(await newStore.get(ref)).not.toBeNull();
+  });
+
+  it("clears the stored sandbox credential from the old store too, and sign-in still works", async () => {
+    const before = open(from);
+    await login(before);
+    const identity = before.readIdentityMetadata();
+    const principal = {
+      issuer: identity?.issuer ?? "",
+      subject: identity?.subject ?? "",
+    };
+    await sandboxSlot(from, principal).save(async () => SANDBOX_SECRET);
+    const sandboxFile = join(
+      stateDir(),
+      "credentials-metadata",
+      "sandbox.json",
+    );
+    const sandboxRefs = [
+      JSON.parse(readFileSync(sandboxFile, "utf8")).credential_ref,
+    ];
+    expect(JSON.parse(readFileSync(sandboxFile, "utf8")).secret_store).toBe(
+      from,
+    );
+    const oldStore = storeOf(from);
+    for (const ref of sandboxRefs)
+      expect(await oldStore.get(ref)).not.toBeNull();
+
+    const { report, notices } = await switchStore(from, to);
+    expect(
+      report.items.find(
+        (item) => item.path === "credentials-metadata/sandbox.json",
+      ),
+    ).toMatchObject({
+      verdict: "safe",
+      action: "clear-and-reacquire",
+      storageTransition: { from, to },
+    });
+    expect(notices.join("\n")).toContain("sandbox credential");
+    for (const ref of sandboxRefs) expect(await oldStore.get(ref)).toBeNull();
+    expect(existsSync(sandboxFile)).toBe(false);
+
+    // Nobody is locked out: the target signs in, and a sandbox login works.
+    const after = open(to);
+    await login(after);
+    await sandboxSlot(to, principal).save(async () => SANDBOX_SECRET);
+    expect(JSON.parse(readFileSync(sandboxFile, "utf8")).secret_store).toBe(to);
+  });
+
+  it("deletes a sandbox credential that records the other store when the provider changed without a switch clearing it", async () => {
+    const before = open(from);
+    await login(before);
+    const identity = before.readIdentityMetadata();
+    const principal = {
+      issuer: identity?.issuer ?? "",
+      subject: identity?.subject ?? "",
+    };
+    await sandboxSlot(from, principal).save(async () => SANDBOX_SECRET);
+    const sandboxFile = join(
+      stateDir(),
+      "credentials-metadata",
+      "sandbox.json",
+    );
+    const ref = JSON.parse(readFileSync(sandboxFile, "utf8")).credential_ref;
+    // The distribution is now configured for the other store, and its
+    // sandbox metadata still names the old one.
+    await sandboxSlot(to, {
+      ...principal,
+      subject: "someone-else",
+    }).clearUnlessBoundTo({ ...principal, subject: "someone-else" });
+    expect(await storeOf(from).get(ref)).toBeNull();
+    expect(existsSync(sandboxFile)).toBe(false);
   });
 
   it("keeps identity and credential state when the store stays the same", () => {

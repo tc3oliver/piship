@@ -7,7 +7,7 @@
 //   GET  /health                   liveness, no authentication
 //   GET  /v1/models                the upstream model IDs
 //   POST /v1/chat/completions      streaming (SSE) and non-streaming
-//   POST /__mock/faults            queue failures for the next completions
+//   POST /__mock/faults            queue failures or cut streams for the next completions
 //   DELETE /__mock/faults          clear queued failures
 //   GET  /__mock/requests          metadata of recent completion requests
 //
@@ -16,6 +16,13 @@
 // sent, so LiteLLM retries see the same answer. `POST /__mock/faults` with
 // `{"status": 503, "count": 1, "retryAfter": 2}` queues a failure for the
 // next `count` completion requests whatever their content.
+//
+// A user message containing `[mock:cut=N]` (1 to 50) makes a streamed answer
+// stop after its first N server-sent events: the connection is destroyed
+// with no `finish_reason`, no usage chunk and no `[DONE]`, as an upstream
+// that fails mid-answer does. `POST /__mock/faults` with `{"cut": 2}` queues
+// the same for the next `count` streamed requests. A request that is not
+// streamed is answered normally.
 //
 // A user message containing `[mock:delay=MS]` (0 to 10000) holds that
 // request for MS milliseconds before it is answered, so a test can keep a
@@ -125,6 +132,20 @@ function requestedFailure(messages) {
 }
 
 const MAX_DELAY_MS = 10_000;
+const MAX_CUT = 50;
+const CUT_DELAY_MS = 200;
+
+const isCut = (value) =>
+  Number.isInteger(value) && value >= 1 && value <= MAX_CUT;
+
+function requestedCut(messages) {
+  for (const message of messages) {
+    if (message?.role !== "user") continue;
+    const match = /\[mock:cut=(\d{1,2})\]/.exec(text(message.content));
+    if (match && isCut(Number(match[1]))) return Number(match[1]);
+  }
+  return undefined;
+}
 
 function requestedDelay(messages) {
   for (const message of messages) {
@@ -151,7 +172,7 @@ function chunk(id, model, delta, finish = null) {
   };
 }
 
-function complete(response, payload) {
+function complete(response, payload, cut) {
   const model = String(payload.model ?? "");
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const id = `chatcmpl-mock-${++sequence}`;
@@ -197,8 +218,15 @@ function complete(response, payload) {
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
-  for (const event of events)
+  for (const [index, event] of events.entries()) {
+    if (cut !== undefined && index >= cut) {
+      // No terminating chunk: once the events written so far have gone out,
+      // the peer sees the connection close mid-stream.
+      setTimeout(() => response.destroy(), CUT_DELAY_MS);
+      return;
+    }
     response.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
   response.end("data: [DONE]\n\n");
 }
 
@@ -210,13 +238,18 @@ async function handle(request, response) {
     return send(response, 200, { status: "ok" });
 
   if (path === "/__mock/faults" && request.method === "POST") {
-    const { status, count = 1, retryAfter } = await readJson(request);
-    if (!isFailureStatus(status) || !Number.isInteger(count) || count < 1)
+    const { status, cut, count = 1, retryAfter } = await readJson(request);
+    const valid =
+      cut === undefined
+        ? isFailureStatus(status)
+        : status === undefined && isCut(cut);
+    if (!valid || !Number.isInteger(count) || count < 1)
       return send(response, 400, {
-        error: "status must be 401, 403, 429 or 5xx; count a positive integer",
+        error:
+          "give status (401, 403, 429 or 5xx) or cut (1 to 50); count a positive integer",
       });
     for (let index = 0; index < count; index += 1)
-      faults.push({ status, retryAfter });
+      faults.push(cut === undefined ? { status, retryAfter } : { cut });
     return send(response, 200, { queued: faults.length });
   }
   if (path === "/__mock/faults" && request.method === "DELETE") {
@@ -245,18 +278,27 @@ async function handle(request, response) {
   if (path === "/v1/chat/completions" && request.method === "POST") {
     const payload = await readJson(request);
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
-    const fault = faults.shift();
+    const stream = payload.stream === true;
+    // A queued cut waits for a streamed request; a queued failure takes any.
+    const queued = faults.findIndex(
+      (fault) => fault.cut === undefined || stream,
+    );
+    const fault = queued === -1 ? undefined : faults.splice(queued, 1)[0];
     const status = fault?.status ?? requestedFailure(messages);
+    const cut = stream
+      ? (fault?.cut ?? (status ? undefined : requestedCut(messages)))
+      : undefined;
     record({
       time: new Date().toISOString(),
       model: payload.model ?? null,
-      stream: payload.stream === true,
+      stream,
       status: status ?? 200,
+      ...(cut === undefined ? {} : { cut }),
     });
     const delay = requestedDelay(messages);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     if (status) return sendError(response, status, fault?.retryAfter);
-    return complete(response, payload);
+    return complete(response, payload, cut);
   }
 
   return sendError(response, 404);

@@ -29,6 +29,7 @@ export function storageOf(lock: {
 const STORE_BOUND = new Set([
   "identity/session.json",
   "credentials-metadata/inference.json",
+  "credentials-metadata/sandbox.json",
 ]);
 
 /**

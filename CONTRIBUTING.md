@@ -38,6 +38,8 @@ Windows jobs disable Defender real-time scanning on the ephemeral runner and kee
 | Lock, payload, install, access orchestration, and configuration | `packages/core` |
 | Public Pi API integration and branded commands | `packages/pi` |
 | Command presentation | `packages/cli` |
+| The supported surface for writing identity, credential, sandbox, and audit adapters | `packages/adapter-sdk` |
+| Conformance kits that test an adapter through the SDK only | `packages/adapter-conformance` |
 | A particular agent's branding or private integration | Its distribution repository |
 
 Generic runtime behavior should be considered upstream in Pi first. `identity`, `credentials`, and `inference` may import only `contracts`, never each other; `policy`, `audit`, `sandbox`, and `mcp` are governance leaves composed by `core` and `pi`; `npm run check:boundaries` enforces these rules. Read [AGENTS.md](AGENTS.md) and the [architecture guide](docs/architecture.md) before changing package boundaries or Pi integration. Small documentation and test changes do not require reading the full architecture first.
