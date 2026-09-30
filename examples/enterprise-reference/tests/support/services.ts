@@ -175,6 +175,48 @@ export interface UpstreamRequest {
   readonly model: string | null;
   readonly stream: boolean;
   readonly status: number;
+  /** The tool the mock was queued to ask for in its answer, if it did. */
+  readonly toolCall?: string;
+}
+
+/**
+ * Queue tool calls at the mock upstream: each of the next streamed completion
+ * requests, in this order, is answered with one of them instead of text. A
+ * client that runs tools then sends the result back as its next request, so
+ * one call per turn scripts a conversation, and the request after the last
+ * call gets the plain reply.
+ */
+export async function queueToolCalls(
+  stack: Stack,
+  calls: readonly {
+    readonly name: string;
+    readonly arguments?: Record<string, unknown>;
+  }[],
+): Promise<void> {
+  for (const toolCall of calls) {
+    const response = await fetch(
+      `http://127.0.0.1:${stack.ports.MOCK_UPSTREAM_PORT}/__mock/faults`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ toolCall }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `the mock upstream refused a tool call: ${response.status}`,
+      );
+  }
+}
+
+/** Drop whatever the mock upstream still has queued, so a failed test leaves none for the next. */
+export async function clearQueuedFaults(stack: Stack): Promise<void> {
+  const response = await fetch(
+    `http://127.0.0.1:${stack.ports.MOCK_UPSTREAM_PORT}/__mock/faults`,
+    { method: "DELETE" },
+  );
+  if (!response.ok)
+    throw new Error(`the mock upstream answered ${response.status}`);
 }
 
 /**

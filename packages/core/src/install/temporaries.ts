@@ -4,6 +4,7 @@
 // deleted. A temporary a live writer is still filling is kept.
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { processAlive } from "@piship/contracts";
 import { withFileLock } from "@piship/credentials";
 import { accessStatePaths } from "../access/state.js";
 import { STATE_MARKER_FILE } from "../migration.js";
@@ -14,16 +15,6 @@ import { STATE_MARKER_FILE } from "../migration.js";
  * was reused by an unrelated process.
  */
 export const STALE_TEMPORARY_MS = 10 * 60_000;
-
-/** Whether a process with this ID exists (EPERM: it exists, not ours). */
-export function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
 
 /**
  * Whether work of `owner` (a process ID, or null when unknown), last changed
@@ -139,6 +130,7 @@ function stateTemporaries(stateDir: string): StateTemporaries {
       paths.identity,
       paths.principal,
       paths.credential,
+      paths.credentialIssuance,
       paths.revocationRetry,
       paths.preferences,
       join(stateDir, "config", "policy.json"),
@@ -167,7 +159,8 @@ export function sweepStateTemporaries(stateDir: string): string[] {
 /**
  * Remove the temporaries of identity and credential state at logout, so no
  * signed-out identity metadata, credential metadata, or file-store secret
- * outlives it. Runs under the credential lock and then the identity lock,
+ * outlives it, nor a temporary of the pending credential issuance. Runs
+ * under the credential lock and then the identity lock,
  * the order a sign-in takes them: every writer of the session, the
  * credential metadata, and their secrets holds one of them, so every such
  * temporary found is abandoned and removed. The principal binding and the
@@ -188,7 +181,7 @@ export async function removeAccessTemporaries(
       ),
       ...removeStaleTemporaries(
         dirname(paths.credential),
-        [basename(paths.credential)],
+        [basename(paths.credential), basename(paths.credentialIssuance)],
         { force: true },
       ),
       ...removeStaleTemporaries(paths.secrets, "any", { force: true }),

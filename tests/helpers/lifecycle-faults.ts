@@ -51,6 +51,7 @@ const ENV_KEYS = [
   "PISHIP_STATE_HOME",
   "SOURCE_DATE_EPOCH",
   "ACMEPI_UPDATE_SOURCE",
+  "ACMEPI_GATEWAY_URL",
 ];
 
 /** Give each test its own install, bin, and state homes, and clean up. */
@@ -87,7 +88,30 @@ export function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-function manifestSource(version: string): string {
+/**
+ * With `access`, the distribution also declares a gateway on
+ * `ACMEPI_GATEWAY_URL` and a private-only network.
+ */
+const ACCESS = `identity:
+  mode: none
+credential:
+  provider: none
+inference:
+  provider: openai-compatible
+  baseUrl: \${ACMEPI_GATEWAY_URL}
+models:
+  default: acme/coder
+  allowed: [acme/coder]
+  catalog:
+    acme/coder:
+      name: Coder
+      contextWindow: 32000
+      maxOutputTokens: 2048
+network:
+  privateOnly: true
+`;
+
+function manifestSource(version: string, access: boolean): string {
   return `schema: piship/v1alpha4
 app:
   id: ${ID}
@@ -100,7 +124,7 @@ deployment:
   mode: personal
 variables:
   - ACMEPI_UPDATE_SOURCE
-resources:
+${access ? `  - ACMEPI_GATEWAY_URL\n${ACCESS}` : ""}resources:
   instructions:
     user: [./resources/AGENTS.md]
 updates:
@@ -115,11 +139,11 @@ updates:
 `;
 }
 
-function project(version: string): string {
+function project(version: string, access: boolean): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version));
+  writeFileSync(path, manifestSource(version, access));
   lockManifest(path);
   return path;
 }
@@ -190,8 +214,8 @@ export function fakeRun(
   return { status: 2, stdout: "", stderr: `unexpected ${args.join(" ")}` };
 }
 
-async function release(version: string) {
-  const path = project(version);
+async function release(version: string, access = false) {
+  const path = project(version, access);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -200,10 +224,13 @@ async function release(version: string) {
   });
 }
 
-/** 1.0.0 installed over seeded state, and a signed channel offering 1.1.0. */
-export async function installed() {
-  const a = await release("1.0.0");
-  const b = await release("1.1.0");
+/**
+ * 1.0.0 installed over seeded state, and a signed channel offering 1.1.0;
+ * with `access`, both declare a gateway and a private-only network.
+ */
+export async function installed(access = false) {
+  const a = await release("1.0.0", access);
+  const b = await release("1.1.0", access);
   const channelDir = temp("piship-channel-");
   await signChannel({
     directory: channelDir,

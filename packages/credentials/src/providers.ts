@@ -193,15 +193,18 @@ function systemCode(error: unknown): string | undefined {
 /**
  * A short, fixed description of a transport failure. Never an error message:
  * undici puts an invalid header value, such as a bearer token, into its
- * message. Only a PiShip error code or a system error code is used, and both
- * when the managed fetch raised the failure, so the reason behind
- * `GATEWAY_UNREACHABLE` is not lost.
+ * message. The system error code comes first. The managed fetch reports
+ * every transport failure as the gateway's `GATEWAY_UNREACHABLE`, whatever
+ * the host, so that code never names a broker failure; another PiShip code,
+ * such as `NETWORK_DENIED`, is kept.
  */
 function transportCode(error: unknown): string {
-  const code = systemCode(error);
-  if (error instanceof PiShipError)
-    return code ? `${error.code}: ${code}` : error.code;
-  return code ?? "network error";
+  return (
+    systemCode(error) ??
+    (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE"
+      ? error.code
+      : "network error")
+  );
 }
 
 /**

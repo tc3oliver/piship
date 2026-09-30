@@ -115,12 +115,17 @@ jobs:
         timeout-minutes: 5
         working-directory: examples/enterprise-reference/sandbox
         run: node --test test/*.test.mjs
+      - name: Mock upstream tests
+        timeout-minutes: 5
+        working-directory: examples/enterprise-reference
+        run: node --test mock-upstream/test/*.test.mjs
 
       # Each test file starts its own stack under its own Compose project and
       # removes it (npm run test:reference, examples/enterprise-reference
       # README): OIDC sign-in on the real Keycloak, credential exchange at the
       # broker, the Secret Service store, gateway authentication and limits,
-      # model requests through LiteLLM, doctor, user switching, and logout.
+      # model requests through LiteLLM, doctor, commands in the sandbox,
+      # update, rollback, user switching, logout, and uninstall.
       # One file needs no stack: sandbox.test.ts starts the reference container
       # sandbox service (examples/enterprise-reference/sandbox) on 127.0.0.1
       # and its own containers, runs the sandbox conformance kit against it,

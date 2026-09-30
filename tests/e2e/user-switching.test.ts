@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   lifecycleScenario,
   type Services,
-  scan,
+  scanDecoded as scan,
 } from "../helpers/lifecycle.js";
 import { STORAGES } from "../helpers/secret-store.js";
 
@@ -10,8 +10,9 @@ import { STORAGES } from "../helpers/secret-store.js";
 // signs in over her without logging out, across an update and a rollback.
 // Bob never gets Alice's runtime credential, entitlement, or model
 // selection, and no secret of hers is left in the state directory, the file
-// secret store, rollback snapshots, or the install home. It runs with the
-// file fallback and, with PISHIP_LIVE_SECRET_STORE=1, the platform store.
+// secret store (searched in decoded form: the file store keeps values
+// base64url encoded), rollback snapshots, or the install home. It runs with
+// the file fallback and, with PISHIP_LIVE_SECRET_STORE=1, the platform store.
 
 const ALICE = {
   subject: "alice-0001",

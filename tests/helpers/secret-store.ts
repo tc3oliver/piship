@@ -28,6 +28,12 @@ export const STORAGES: readonly {
   { storage: "system", skip: liveStoreSkipReason },
 ];
 
+/**
+ * The storage of a scenario that runs once instead of once per storage: the
+ * platform store where it is live (CI), the file fallback everywhere else.
+ */
+export const PRIMARY_STORAGE: Storage = LIVE_SECRET_STORE ? "system" : "file";
+
 /** The `kind` PiShip reports for the platform store of this OS. */
 export const PLATFORM_STORE_KIND =
   process.platform === "darwin"

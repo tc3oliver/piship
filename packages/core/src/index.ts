@@ -13,6 +13,13 @@ export {
 } from "./compatibility.js";
 export * from "./config.js";
 export * from "./diff/index.js";
+// The gateway answer reading Pi's request path shares with the model list
+// check; the Pi seam cannot import @piship/inference itself.
+export {
+  classifyGatewayStatus,
+  gatewayErrorBody,
+  isUpstreamProviderError,
+} from "@piship/inference";
 export { canonicalJson } from "./digest.js";
 export { checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
@@ -54,4 +61,12 @@ export {
   runtimeStateDirectory,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
+export {
+  abandonedTemporaryCount,
+  reclaimInstallTemporaries,
+  reclaimOsTemporaries,
+  sweepOutputStaging,
+  type AbandonedStaging,
+  type OutputStagingOptions,
+} from "./temporary-directories.js";
 export * from "./trust.js";
