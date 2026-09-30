@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSecretStore } from "@piship/credentials";
+import { readManifestDocument } from "@piship/schema";
 import {
   type AuthorizationRequest,
   authorizationRequest,
@@ -30,6 +31,16 @@ import { type ChannelHost, serveChannel } from "./updates.js";
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 /** The built PiShip CLI, for a test that runs it directly. */
 export const cliPath = join(root, "packages/cli/dist/bin.js");
+/**
+ * The installed launcher's name, as the committed manifest gives it
+ * (`app.command`): the one place the reference tests learn it, so renaming it
+ * is a change to the manifest and its lock and to nothing here.
+ */
+export const launcherCommand = (
+  readManifestDocument(join(referenceDirectory, "piship.yaml")) as {
+    app: { command: string };
+  }
+).app.command;
 // Below vitest's testTimeout (120 s in vitest.reference.config.ts), so a hung
 // command is killed and fails with its own output rather than a bare timeout.
 const RUN_TIMEOUT_MS = 100_000;
@@ -418,7 +429,7 @@ async function assemble(
       `install failed (exit ${installed.status}):\n${installed.stderr}`,
     );
   }
-  const command = join(binHome, "acmecode");
+  const command = join(binHome, launcherCommand);
   const stateRoot = join(state, "acmecode-reference");
 
   /**

@@ -3,8 +3,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -21,22 +21,21 @@ import {
 import { plantTemporary } from "../../../tests/helpers/temporaries.js";
 import {
   buildDistribution,
+  currentTarget,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
-  PI_COMPATIBILITY,
-  currentTarget,
   lockManifest,
+  PI_COMPATIBILITY,
   payloadInventory,
   requireCurrentLock,
   resolveLock,
 } from "./index.js";
 import { STATE_SCHEMAS } from "./migration.js";
 import {
-  CHANNEL_SCHEMA,
-  RELEASE_FILES,
-  type CommandResult,
   buildRelease,
+  CHANNEL_SCHEMA,
+  type CommandResult,
   checkReleaseInputs,
   checkSourceUrl,
   compareReleases,
@@ -45,6 +44,7 @@ import {
   evaluateVulnerabilities,
   piCompatibility,
   piCompatibilitySurfaces,
+  RELEASE_FILES,
   readChannel,
   signChannel,
   verifyRelease,
@@ -2142,13 +2142,15 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
 describe("committed example locks", () => {
   // The release lock gate refuses a stale lock, so a dependency or resource
   // change must re-lock the examples in the same change.
-  it.each(["demo-company", "personal", "enterprise-reference"])(
-    "keeps examples/%s/piship.lock current",
-    (name) => {
-      const manifest = fileURLToPath(
-        new URL(`../../../examples/${name}/piship.yaml`, import.meta.url),
-      );
-      expect(() => requireCurrentLock(manifest)).not.toThrow();
-    },
-  );
+  it.each([
+    "demo-company",
+    "personal",
+    "enterprise-reference",
+    "enterprise-reference/sandbox",
+  ])("keeps examples/%s/piship.lock current", (name) => {
+    const manifest = fileURLToPath(
+      new URL(`../../../examples/${name}/piship.yaml`, import.meta.url),
+    );
+    expect(() => requireCurrentLock(manifest)).not.toThrow();
+  });
 });

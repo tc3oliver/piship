@@ -2,7 +2,7 @@
 
 A local, runnable version of the company services a managed PiShip distribution talks to: an OIDC identity provider, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
 
-This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md) and [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack. Nothing here needs an Internet model provider or a paid API key.
+This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md), [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack, and a [container sandbox](#reference-container-sandbox) that distribution can run its commands in. Nothing here needs an Internet model provider or a paid API key.
 
 | Service | Image (pinned by index digest) | Host port (default) | Role |
 | --- | --- | --- | --- |
@@ -116,7 +116,7 @@ The files run one at a time. Each took 20 to 80 s on the machine measured below 
 | `gateway-rate-limits.test.ts` | Requests per minute and tokens per minute on the employee's LiteLLM user are enforced by the gateway, on every key of that employee |
 | `gateway-concurrency-entitlement.test.ts` | The key's `max_parallel_requests` and its `models` list are enforced by the gateway; refused requests never reach the upstream |
 | `team-member-budget.test.ts` | Decision D-01's check: a team-member budget (`max_budget_in_team`) is enforced across all of the member's team keys, while the member's personal budget is not applied to team keys. The broker issues keys without a team; this file sets a team up with the master key |
-| `gateway-evidence.test.ts` | How LiteLLM refuses a missing, malformed, unknown, deleted, expired or blocked key, and that PiShip's inference client reads each as `CREDENTIAL_REVOKED`; the installed AcmeCode distribution (signed in as alice) renewing a key the gateway blocked or expired at launch, and reporting `CREDENTIAL_REVOKED` when the broker is down for the renewal; `/v1/models` listing only a key's models, and PiShip offering the intersection of allowlist, entitlement and live list, also in `acmecode models`; a streamed answer (chunks, `stop`, usage, `[DONE]`) and one the upstream cuts; upstream 401, 403, 429 and 5xx through LiteLLM (status, body, retries, cooldown) and how PiShip's status mapping and its in-session reading of Pi's error messages take them, through `acmecode --smoke-model` |
+| `gateway-evidence.test.ts` | How LiteLLM refuses a missing, malformed, unknown, deleted, expired or blocked key, and that PiShip's inference client reads each as `CREDENTIAL_REVOKED`; the installed AcmeCode distribution (signed in as alice) renewing a key the gateway blocked or expired at launch, and reporting `CREDENTIAL_REVOKED` when the broker is down for the renewal; `/v1/models` listing only a key's models, and PiShip offering the intersection of allowlist, entitlement and live list, also in `acmecode-reference models`; a streamed answer (chunks, `stop`, usage, `[DONE]`) and one the upstream cuts; upstream 401, 403, 429 and 5xx through LiteLLM (status, body, retries, cooldown) and how PiShip's status mapping and its in-session reading of Pi's error messages take them, through `acmecode-reference --smoke-model` |
 
 Spend is read with the master key from `/spend/users`, `/spend/logs`, `/user/info`, `/key/info` and `/team/info`, polled until it lands. Tokens, keys and the master key stay in the test's memory; response bodies are scrubbed of key and token shapes before any assertion.
 
@@ -194,7 +194,7 @@ These figures are from one developer machine. Running on GitHub's `ubuntu-latest
 
 | Section | Value |
 | --- | --- |
-| `app` | ID `acmecode-reference`, command `acmecode`. The ID differs from the demo company's `acmecode`, so the two never share a state directory or secret-store entries (`piship:<id>:*`); the broker serves this ID (`BROKER_DISTRIBUTION` in `compose.yaml`), and model IDs in the Pi runtime read `acmecode-reference/<model>` |
+| `app` | ID `acmecode-reference`, command `acmecode-reference`. Both differ from the demo company's `acmecode`, so the two never share a state directory, secret-store entries (`piship:<id>:*`), or launcher; the broker serves this ID (`BROKER_DISTRIBUTION` in `compose.yaml`), and model IDs in the Pi runtime read `acmecode-reference/<model>` |
 | `identity.oidc` | Issuer `${ACMECODE_OIDC_ISSUER}` (the Keycloak realm), public client `acmecode`, scopes `openid profile email`, redirect `http://127.0.0.1/callback` (port-less, so PiShip listens on an ephemeral loopback port and Keycloak matches it) |
 | `credential` | `http-broker` at `${ACMECODE_CREDENTIAL_BROKER_URL}` with revoke at `${ACMECODE_CREDENTIAL_REVOKE_URL}` (the reference broker), stored in the platform secret store (`provider: system`) |
 | `inference` | `openai-compatible` at `${ACMECODE_LLM_GATEWAY_URL}` (LiteLLM), with the live model catalog |
@@ -240,17 +240,17 @@ export ACMECODE_LLM_GATEWAY_URL=http://127.0.0.1:14000/v1
 
 npm exec -- piship build examples/enterprise-reference/piship.yaml
 node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
-~/.local/bin/acmecode login              # sign in as alice on the Keycloak page
-~/.local/bin/acmecode models
-~/.local/bin/acmecode --smoke-model
-~/.local/bin/acmecode login              # sign in as bob, without a logout
-~/.local/bin/acmecode models             # acme/general is no longer available
-~/.local/bin/acmecode logout
+~/.local/bin/acmecode-reference login              # sign in as alice on the Keycloak page
+~/.local/bin/acmecode-reference models
+~/.local/bin/acmecode-reference --smoke-model
+~/.local/bin/acmecode-reference login              # sign in as bob, without a logout
+~/.local/bin/acmecode-reference models             # acme/general is no longer available
+~/.local/bin/acmecode-reference logout
 node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 ( cd examples/enterprise-reference && docker compose down )
 ```
 
-The launcher is named `acmecode`, like the one the demo company example installs at `~/.local/bin/acmecode`: installing this distribution replaces that launcher, and uninstalling it removes it. Its state and secret-store entries are kept apart by the distribution ID (`acmecode-reference`), so only the launcher path is shared; uninstall the demo first if you have installed it.
+The launcher is named `acmecode-reference` (`app.command`), so it installs beside the demo company example's `acmecode` without replacing it, and uninstalling one leaves the other. The two share nothing: the launcher, and the state and secret-store entries (kept apart by the distribution ID, `acmecode-reference`), differ. The reference tests read the command from the manifest.
 
 `login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
 
@@ -269,16 +269,33 @@ Secret store: the platform store writes to the login keychain or keyring of whoe
 
 Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images already present and the file store: `distribution-flow.test.ts` 47 s and `user-switching.test.ts` 62 s, each including the stack start and stop. The platform-store run (`PISHIP_LIVE_SECRET_STORE=1`) has not been recorded: the Keychain refuses writes from a session without user interaction, and then the tests fail with `SECRET_STORE_UNAVAILABLE` instead of using a file.
 
+## Reference container sandbox
+
+[`sandbox/`](sandbox/README.md) is the custom sandbox of the reference distribution, written the way an organization that runs its own sandbox service would write it. The [service](sandbox/service/server.mjs) (Node built-ins and the `docker` command line, `127.0.0.1` only) starts a container per session for the user whose key asked, with the user's project bind-mounted at `/workspace`; the [adapter](sandbox/acme-container-sandbox.mjs) is one file on `@piship/adapter-sdk` that lets PiShip use it. Its workspace is `shared`, so the agent's file tools and its shell see the same files, and PiShip verifies that before the first command of a session.
+
+The reference manifest above is unchanged: it keeps the native OS sandbox. The variant is a second manifest and lock, [`sandbox/piship.yaml`](sandbox/piship.yaml), in a directory of its own (a lock is `piship.lock` next to its manifest, and a manifest cannot reach outside its directory). It is the reference manifest with `sandbox.provider: custom`, the adapter, `endpoint: ${ACMECODE_SANDBOX_URL}`, and `credential: stored`, and one more runtime variable; a unit test keeps everything else equal to the reference manifest, and the lock is kept current by the example-lock test. It is the same distribution, with the same ID, command, and state: install this build or the other.
+
+| Part | What it shows |
+| --- | --- |
+| Credential | `sandbox.credential: stored`: each user runs `sandbox login` and enters the API key the organization issued (`sandbox/scripts/generate-key.mjs`, which records only a hash). PiShip binds it to the signed-in user and to the origin of the endpoint; the adapter sends it only there, and reports a 401 so PiShip marks it rejected. The service answers 401 without it and gives a user only that user's sandboxes ([why stored](sandbox/README.md#the-credential)) |
+| Isolation | An unprivileged container of the workspace owner's user: no capabilities, no new privileges, a read-only root filesystem, resource limits, no network when the profile denies it, only the workspace mounted, and `.git` read-only so no git control file can be changed. It is a container, not a VM, and shares the host's kernel ([what it does and does not isolate](sandbox/README.md#what-it-does-and-does-not-isolate)) |
+| Workspace | Declared `shared`; PiShip's two-way sentinel finds both directions immediate, and its git control probe finds every protected path read-only |
+| Conformance | The [sandbox conformance kit](../../docs/adapter-sdk.md#sandbox-conformance-kit) passes all 16 behaviors against the service with real containers: none failed, none skipped |
+
+The kit's behaviors, all `passed`: availability, capabilities, prepare, execute, environment filtering, secret leakage, filesystem claims, network claims, timeout, cancellation, cleanup, dispose, fail-closed behavior, workspace consistency, git control protection, workspace re-check. The kit is not vacuous against this service: seeded by hand while the service was written, a writable `.git` mount failed only `git control protection`, a network that stayed on with the profile denying it failed only `network claims`, and a cancel that only killed the `docker exec` client failed `timeout` and `cancellation`. No test seeds them again; each is pinned by its own test instead ([which](sandbox/README.md#conformance)).
+
+[`tests/sandbox.test.ts`](tests/sandbox.test.ts) runs it all, without the stack, with `npm run test:reference` (Docker required): the service as a user starts it on `127.0.0.1:48075` with keys from `generate-key.mjs`, the container as `docker inspect` shows it, the kit, and a governed session opened on the payload built from the committed manifest and lock, whose first sandboxed command is preceded by the workspace check. Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0): the file takes 85 to 120 s (other work was running on the machine), of which the kit is about 25 to 30 s and the build of the distribution about 12 s. Its containers carry the service's instance label, `piship-reftest-<pid>-sandbox-<random>`, and are removed when the file ends, also after a failure; the reference suite's global setup removes those of a run killed outright, and the service such a run leaves exits by itself, removing its containers, because the test owns it through a pipe (`SANDBOX_EXIT_ON_STDIN_END=1`) and a start refuses to count an answer that names another instance. The contract tests (`node --test test/*.test.mjs` in `sandbox/`) need no Docker.
+
 ## Reference E2E workflow
 
 [`.github/workflows/reference-e2e.yml`](../../.github/workflows/reference-e2e.yml) (`Reference E2E`) runs everything above on a clean `ubuntu-latest` runner. It is part of `Release qualification`, whose `Release candidate` waits for it, and also runs nightly and by `workflow_dispatch`; it is not a pull request gate. One job, in order:
 
 1. Install bubblewrap (AcmeCode requires the OS sandbox) and GNOME Keyring with `secret-tool`, then `npm ci` and `npm run build`.
 2. Generate an `.env` outside the workspace, pull the images, `docker compose up --wait --wait-timeout 300`, and run `node broker/live-check.mjs` against the stack. The pull and startup times go into the job summary. The stack is then stopped and its `.env` deleted.
-3. `node --test test/*.test.mjs` in `broker/`, the broker's contract tests, `node --test scripts/test/*.test.mjs`, the log scrubber's tests, and `node --test mock-upstream/test/*.test.mjs`, the mock upstream's queued tool calls.
-4. `npm run test:reference` on a private D-Bus session with an unlocked GNOME Keyring, set up as in the `CI` check job, and `PISHIP_LIVE_SECRET_STORE=1`: AcmeCode stores its credential in the Linux Secret Service and fails with `SECRET_STORE_UNAVAILABLE` rather than use a file.
+3. `node --test test/*.test.mjs` in `broker/`, the broker's contract tests, `node --test scripts/test/*.test.mjs`, the log scrubber's tests, `node --test mock-upstream/test/*.test.mjs`, the mock upstream's queued tool calls, and `node --test test/*.test.mjs` in `sandbox/`, the [container sandbox](#reference-container-sandbox)'s contract tests
+4. `npm run test:reference` on a private D-Bus session with an unlocked GNOME Keyring, set up as in the `CI` check job, and `PISHIP_LIVE_SECRET_STORE=1`: AcmeCode stores its credential in the Linux Secret Service and fails with `SECRET_STORE_UNAVAILABLE` rather than use a file. It runs `tests/sandbox.test.ts` too, which needs no stack: it starts the container sandbox service and its own containers.
 
-Every step that can hang has a `timeout-minutes`. When a step fails, the run uploads `reference-e2e-logs` (kept 14 days): the container logs of the step-2 stack and of every stack a test file started. The workflow's stack and the test stacks write their logs only through [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs), which replaces every value of 8 characters or more in the stack's `.env` except the ports (every generated secret is 36 characters or longer), anything shaped like a LiteLLM key (`sk-...`), a JWT, or a `Bearer` or `Basic` authorization value, and the value of an OAuth `code`, `state`, or `session_state` parameter. It knows these shapes only: it is a filter for this stack's logs, not a general secret scanner. The `.env` itself is never uploaded. The tests keep logs only when `PISHIP_REFERENCE_LOG_DIR` names a directory, one file per stack, `<project>-<time>.log`; the workflow sets it. A failed nightly run opens or updates the `Nightly Reference E2E is failing` issue.
+Every step that can hang has a `timeout-minutes`. When a step fails, the run uploads `reference-e2e-logs` (kept 14 days): the container logs of the step-2 stack and of every stack a test file started, and the log of the sandbox service. The workflow's stack and the test stacks write their logs only through [`scripts/scrub-logs.mjs`](scripts/scrub-logs.mjs), which replaces every value of 8 characters or more in the stack's `.env` except the ports (every generated secret is 36 characters or longer), anything shaped like a LiteLLM key (`sk-...`), a JWT, or a `Bearer` or `Basic` authorization value, and the value of an OAuth `code`, `state`, or `session_state` parameter. It knows these shapes only: it is a filter for this stack's logs, not a general secret scanner. The `.env` itself is never uploaded. The tests keep logs only when `PISHIP_REFERENCE_LOG_DIR` names a directory, one file per stack, `<project>-<time>.log`; the workflow sets it. A failed nightly run opens or updates the `Nightly Reference E2E is failing` issue.
 
 What the job does not cover: the update host and its signing key belong to the test, not to the stack, so `update` and `rollback` prove PiShip's lifecycle on an installed distribution that signs in against the live stack, not anything of the stack; the commands the sandbox runs are scripted through the mock upstream, so they prove the sandbox and the policy, not what a real model would ask for. The same flow runs against local fixtures on Linux, macOS, and Windows (where the sandbox step is reported as not run, since Windows has no native sandbox backend) in Portable E2E.
 
@@ -299,7 +316,7 @@ The live routing is two files beside `compose.yaml`, which stays unchanged:
 | `LIVE_PROVIDER_BASE_URL` | The provider's API base URL. Default `https://api.openai.com/v1`; set it for any other provider |
 | `LIVE_PROVIDER_MODEL` | A LiteLLM model string, whose prefix picks the protocol: `openai/<model>` for OpenAI or any OpenAI-compatible API, `anthropic/<model>` for Anthropic. Default `openai/gpt-4.1-mini` |
 
-The workflow reads the three from secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
+The workflow reads the three from secrets of the same names, into the environment of its one request step only. That step runs [`tests/live-provider.test.ts`](tests/live-provider.test.ts), which is skipped unless `PISHIP_LIVE_PROVIDER=1`: it starts the stack with the override, installs AcmeCode, signs Alice in on Keycloak, acquires her key at the broker, runs `acmecode-reference --model acme/coder --smoke-model` (the prompt asks for a short greeting), checks for a non-empty reply that ended with `stop`, and signs out. AcmeCode's environment never holds a `LIVE_PROVIDER_*` variable. The test writes the gateway model, exit status, stop reason, reply length, and request time to `PISHIP_LIVE_PROVIDER_RESULT`, never the reply, the provider, or its model, and the workflow puts them in the job summary.
 
 Dispatch inputs:
 
@@ -312,14 +329,13 @@ The job log of a public repository is public, so the workflow prints nothing der
 
 ### Protecting the provider key
 
-A repository secret is available to a run of this workflow from any branch. Keep the three secrets in a GitHub environment limited to `main` instead:
+A repository secret is available to a run of this workflow from any branch, so the three secrets live in the GitHub environment `live-provider` instead, and the `live` job names it (`environment: live-provider`). Set it up once:
 
 1. In the repository's Settings, Environments, create the environment `live-provider`.
-2. Under Deployment branches and tags, choose Selected branches and add `main`. Optionally add a required reviewer, so every run waits for approval.
-3. Add `LIVE_PROVIDER_API_KEY`, `LIVE_PROVIDER_BASE_URL`, and `LIVE_PROVIDER_MODEL` as secrets of that environment, and delete the repository secrets of the same names.
-4. Add `environment: live-provider` to the `live` job in `live-provider.yml`.
+2. Under Deployment branches and tags, allow only protected branches (or Selected branches with `main`). Optionally add a required reviewer, so every run waits for approval.
+3. Add `LIVE_PROVIDER_API_KEY` and `LIVE_PROVIDER_MODEL`, and optionally `LIVE_PROVIDER_BASE_URL` (the default is `https://api.openai.com/v1`), as secrets of that environment, and keep no repository secret of the same names.
 
-Do step 4 last. A job that names an environment that does not exist makes GitHub create it without protection rules, so the committed workflow names none. Between steps 3 and 4 a run fails at once with `The LIVE_PROVIDER_API_KEY secret is not set`.
+The environment must exist and be restricted before the first run: a job that names an environment that does not exist makes GitHub create it without protection rules. A run from a branch the environment does not allow is refused before any step starts.
 
 To run it locally, with Docker and after `npm run build`, set the variables and `PISHIP_LIVE_PROVIDER=1` for `npx vitest run --config vitest.reference.config.ts examples/enterprise-reference/tests/live-provider.test.ts` at the repository root, without printing the key or leaving it in your shell history. It uses the same ports and project as the other tests in `tests/`.
 

@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   type Installed,
   installDistribution,
+  launcherCommand,
 } from "../../examples/enterprise-reference/tests/support/distribution.js";
 import type { Stack } from "../../examples/enterprise-reference/tests/support/stack.js";
 import {
@@ -126,7 +127,7 @@ beforeAll(async () => {
   });
   const login = await acme.login("alice");
   if (login.status !== 0)
-    throw new Error(`acmecode login failed:\n${login.stderr}`);
+    throw new Error(`${launcherCommand} login failed:\n${login.stderr}`);
   console.info(
     `AcmeCode built, installed and signed in in ${Math.round((performance.now() - installing) / 100) / 10} s`,
   );
@@ -296,7 +297,7 @@ interface SmokeResult {
   access?: { credential: { credentialId: string }; notices: string[] };
 }
 
-/** `acmecode --smoke-model`: one real prompt through Pi, the gateway and the mock. */
+/** The launcher's `--smoke-model`: one real prompt through Pi, the gateway and the mock. */
 async function smokeModel(args: string[] = []): Promise<SmokeResult> {
   const started = performance.now();
   const done = await installed().run([...args, "--smoke-model"]);

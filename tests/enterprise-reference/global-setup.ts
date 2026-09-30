@@ -67,6 +67,43 @@ function removeOrphans() {
       rmSync(join(tmpdir(), entry), { recursive: true, force: true });
 }
 
+// The reference sandbox tests start containers outside any Compose project.
+// Each carries the label `piship.sandbox.instance=piship-reftest-<pid>-...`,
+// and only one whose instance name has that shape and whose process <pid> is
+// gone is removed, by ID: a sandbox service of a developer's own, or of a run
+// still going on, has another instance name or a live owner.
+function removeOrphanSandboxes() {
+  const listed = spawnSync(
+    "docker",
+    [
+      "ps",
+      "--all",
+      "--filter",
+      "label=piship.sandbox.instance",
+      "--format",
+      '{{.ID}} {{.Label "piship.sandbox.instance"}}',
+    ],
+    { encoding: "utf8", cwd: tmpdir() },
+  );
+  if (listed.status !== 0)
+    throw new Error(`docker ps failed: ${listed.stderr.trim()}`);
+  const ids = listed.stdout.split("\n").flatMap((line) => {
+    const [id, instance] = line.trim().split(" ");
+    return id && instance?.startsWith(PROJECT_PREFIX) && orphaned(instance)
+      ? [id]
+      : [];
+  });
+  if (ids.length === 0) return;
+  spawnSync("docker", ["rm", "--force", ...ids], {
+    encoding: "utf8",
+    cwd: tmpdir(),
+  });
+  console.info(
+    `removed ${ids.length} sandbox container(s) left by an earlier run`,
+  );
+}
+
 export default function setup() {
   removeOrphans();
+  removeOrphanSandboxes();
 }

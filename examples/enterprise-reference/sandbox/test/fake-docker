@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs fake-docker.mjs. Node reads a `--env-file <path>` anywhere on its own
+# command line as one of its options, which would make it read the
+# environment the service sends on standard input (`--env-file /dev/stdin`)
+# before the script could; the real docker CLI is not Node. After `--` Node
+# leaves the arguments alone.
+exec node "$(dirname "$0")/fake-docker.mjs" -- "$@"

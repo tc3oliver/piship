@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "1a7660f20ff5f3efb26c56aae6f1270c5ce4c1fca578863cf520134cc94c1bea"
+    "sha256": "b16f584e72dc8d2cb8fddbea2ab8a5dd7f6bfe21e2c426eb550e79791281aa08"
   },
   "app": {
     "id": "acmecode-reference",
@@ -953,6 +953,11 @@
   },
   "resources": [
     {
+      "kind": "adapters",
+      "path": "acme-container-sandbox.mjs",
+      "sha256": "251814437a6ad822189ab875073d851359becd5eebc6c8c0baa06061efae65ff"
+    },
+    {
       "kind": "instructions",
       "path": "resources/AGENTS.md",
       "sha256": "bd3602989e2f2b303a86c9873abf0a22886addace71f05e2eee7971fa6e9f396",
@@ -1079,7 +1084,8 @@
       "ACMECODE_CREDENTIAL_BROKER_URL",
       "ACMECODE_CREDENTIAL_REVOKE_URL",
       "ACMECODE_LLM_GATEWAY_URL",
-      "ACMECODE_UPDATE_SOURCE"
+      "ACMECODE_UPDATE_SOURCE",
+      "ACMECODE_SANDBOX_URL"
     ]
   },
   "governance": {
@@ -1286,6 +1292,10 @@
       },
       "sandbox": {
         "required": true,
+        "provider": "custom",
+        "adapter": "./acme-container-sandbox.mjs",
+        "endpoint": "${ACMECODE_SANDBOX_URL}",
+        "credential": "stored",
         "filesystem": {
           "read": {
             "deny": [
@@ -1372,13 +1382,13 @@
     ]
   },
   "digests": {
-    "resources": "sha256-4a4a3cc477b9e63dacd22b6e947a9878ae36e25a7d5c7ff71208d30d8ef56084",
+    "resources": "sha256-9ddfc766c8c8016160e148cde2665b34c9155f237a695d7eacd3c78d166e012d",
     "policy": "sha256-46875264b4f021e64b701d5b047032cebaa18a7a23bf5380d7420cc8e324393e",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
-    "sandbox": "sha256-21769510398546dd1f3e6e21b5439fde07c432a8d5e2f74c23fbdb4fbfd4b5d1",
+    "sandbox": "sha256-66ae4d3c11737942f74b3aa657f99993b638fdfc0b34f267f874df848074b550",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
-    "access": "sha256-6a8a373c132d67da6a5ef19b63c8050901fe45a048f5af37c9e1128ab1d2a81d"
+    "access": "sha256-95f55a511790acc6a48615da164793c842cb5057cdb8d5fbf27befc539e7e4f4"
   },
   "updates": {
     "channel": "stable",
