@@ -155,6 +155,127 @@ describe("no combination of layers below the distribution widens its decision", 
   }
 });
 
+/**
+ * A rule's resource as a file rule names it, and what of the three requests
+ * below it covers. A narrower rule of a lower layer under a broader rule of
+ * the distribution (and the reverse) is where widening through specificity
+ * would show; a matrix of rules that all say `**` cannot see it.
+ */
+const PATTERNS: readonly {
+  glob: string;
+  covers: (resource: string) => boolean;
+}[] = [
+  { glob: "workspace/**", covers: () => true },
+  {
+    glob: "workspace/private/**",
+    covers: (resource) => resource.startsWith("private/"),
+  },
+  {
+    glob: "workspace/private/key.txt",
+    covers: (resource) => resource === "private/key.txt",
+  },
+];
+const FILES = ["private/key.txt", "private/other.txt", "notes.txt"];
+
+/** One slot of the matrix: absent, or an effect on one of the patterns. */
+const SLOTS: readonly ({
+  effect: PolicyEffect;
+  pattern: (typeof PATTERNS)[number];
+} | null)[] = [
+  null,
+  ...EFFECTS.flatMap((effect) =>
+    PATTERNS.map((pattern) => ({ effect, pattern })),
+  ),
+];
+type Slot = (typeof SLOTS)[number];
+
+const slotRules = (id: string, slot: Slot): PolicyRule[] =>
+  slot
+    ? [
+        {
+          id,
+          action: "filesystem.read",
+          resource: slot.pattern.glob,
+          effect: slot.effect,
+        },
+      ]
+    : [];
+const slotEffect = (slot: Slot, file: string): PolicyEffect | undefined =>
+  slot?.pattern.covers(file) ? slot.effect : undefined;
+
+describe("a rule that names less or more than the distribution's does not widen its decision", () => {
+  // One lower layer's rule at a time (the combinations of several layers are
+  // the matrix above); each against every enforced and default rule.
+  for (const mode of ["narrowing", "replace-default"] as const)
+    for (const layer of ["team", "user"] as const)
+      it(`${mode === "narrowing" ? "managed" : "personal"} mode: a ${layer} rule over a broad, a directory and a file resource, against every enforced and default rule`, () => {
+        let combinations = 0;
+        for (const enforced of SLOTS)
+          for (const dflt of SLOTS)
+            for (const lower of SLOTS) {
+              const engine = new PolicyEngine({
+                policy: policy(
+                  "ask",
+                  slotRules("enforced", enforced),
+                  slotRules("default", dflt),
+                ),
+                ...(layer === "team"
+                  ? { teamRules: slotRules("team", lower) }
+                  : { userRules: slotRules("user", lower) }),
+                userRuleMode: mode,
+                context,
+              });
+              for (const file of FILES) {
+                const decided = engine.evaluate({
+                  action: "filesystem.read",
+                  resource: file,
+                }).effect;
+                // What the distribution alone decides for this file is the
+                // floor (in personal mode only what it enforces).
+                const enforcedHere = slotEffect(enforced, file);
+                const floor =
+                  mode === "narrowing"
+                    ? strictest(enforcedHere, slotEffect(dflt, file) ?? "ask")
+                    : (enforcedHere ?? "allow");
+                expect(
+                  RANK[decided],
+                  JSON.stringify({ file, enforced, dflt, lower, decided }),
+                ).toBeGreaterThanOrEqual(RANK[floor]);
+              }
+              combinations += 1;
+            }
+        expect(combinations).toBe(SLOTS.length ** 3);
+      });
+
+  // KNOWN GAP (V07-82 finding 3), not yet fixed in the product: the team rules
+  // and the project rules are one layer, and a layer decides by its first
+  // matching rule, so a team `ask` hides a project `deny` for the same
+  // request. It never widens past the distribution (the matrix above holds),
+  // but the project's restriction is lost. This asserts the decision as it is,
+  // so only the behaviour decides it; when the fix that takes the strictest of
+  // the team and the project rule lands (branch v0.7/security-findings),
+  // change the expectation to "deny".
+  it("lets a team ask hide a project deny for the same request (known gap; invert when the fix lands)", () => {
+    const request = { action: "shell.execute", resource: "git push" } as const;
+    const engine = new PolicyEngine({
+      policy: policy("allow", [], []),
+      teamRules: rules("team", request.action, "ask"),
+      projectRules: rules("project", request.action, "deny"),
+      userRuleMode: "narrowing",
+      context,
+    });
+    expect(engine.evaluate(request).effect).toBe("ask");
+    // The control: the project's deny does apply when no team rule matches.
+    const alone = new PolicyEngine({
+      policy: policy("allow", [], []),
+      projectRules: rules("project", request.action, "deny"),
+      userRuleMode: "narrowing",
+      context,
+    });
+    expect(alone.evaluate(request).effect).toBe("deny");
+  });
+});
+
 describe("a path cannot be spelled around an enforced deny", () => {
   const home = context.homeDir;
   const secret = join(home, ".ssh", "id_rsa");
