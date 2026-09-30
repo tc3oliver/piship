@@ -19,14 +19,13 @@ export const liveStoreSkipReason: string | null = LIVE_SECRET_STORE
   ? null
   : "the platform secret store is live only with PISHIP_LIVE_SECRET_STORE=1 (it writes to the user's store; the Portable E2E workflow uses a throwaway one)";
 
-/** The storages a lifecycle scenario runs with, and why one is skipped. */
-export const STORAGES: readonly {
-  readonly storage: Storage;
-  readonly skip: string | null;
-}[] = [
-  { storage: "file", skip: null },
-  { storage: "system", skip: liveStoreSkipReason },
-];
+/**
+ * Why a lifecycle scenario with `storage` does not run here, or null when it
+ * does. A scenario that runs once per storage has a test file per storage.
+ */
+export function storageSkipReason(storage: Storage): string | null {
+  return storage === "system" ? liveStoreSkipReason : null;
+}
 
 /**
  * The storage of a scenario that runs once instead of once per storage: the

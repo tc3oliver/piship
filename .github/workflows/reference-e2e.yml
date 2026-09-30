@@ -3,8 +3,10 @@ name: Reference E2E
 # stack (examples/enterprise-reference): Keycloak, the credential broker,
 # LiteLLM, PostgreSQL, and the mock upstream in Docker Compose. Release
 # qualification and nightly evidence, not a pull request gate (see AGENTS.md,
-# CI evidence tiers): it pulls about 0.85 GB of images and starts the stack once
-# per test file.
+# CI evidence tiers): every job pulls about 0.85 GB of images, and each test
+# file starts the stack once. The test files run in four groups on four
+# runners at once, beside the job that checks the stack as a user starts it;
+# the run passes only when all five pass.
 on:
   schedule:
     - cron: "30 18 * * *"
@@ -18,11 +20,14 @@ concurrency:
   group: reference-e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  reference:
+  # The stack as a user starts it (README, "Run it"), with the broker's happy
+  # path against it, and the contract tests that need no stack. Starting the
+  # stack needs Node built-ins only; the broker and sandbox contract tests
+  # import PiShip's built packages, so npm ci and the build run here too.
+  stack:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 30
     env:
-      npm_config_prefer_offline: "true"
       COMPOSE_PROJECT: piship-reference-e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -31,24 +36,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22.19.x
-          cache: npm
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
+      - run: npm ci
+      - run: npm run build
       - run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
-      # AcmeCode requires the OS sandbox (bubblewrap and unprivileged user
-      # namespaces, which Ubuntu restricts through AppArmor by default) and
-      # stores its credential in the Linux Secret Service (GNOME Keyring, a
-      # D-Bus session, and secret-tool), as in the CI check job.
-      - timeout-minutes: 5
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends bubblewrap gnome-keyring dbus dbus-x11 libsecret-tools
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          bwrap --version
-      - timeout-minutes: 10
-        run: npm ci
-      - timeout-minutes: 10
-        run: npm run build
-      - run: git diff --exit-code
 
       # Every secret of the stack lives in an env file outside the workspace,
       # and the log directory, the only thing uploaded, holds scrubbed
@@ -60,8 +51,8 @@ jobs:
           echo "PISHIP_REFERENCE_LOG_DIR=$RUNNER_TEMP/reference-logs" >> "$GITHUB_ENV"
           node examples/enterprise-reference/scripts/generate-env.mjs --out "$RUNNER_TEMP/reference/.env"
 
-      # Pull once, so the timings below and every test's `up --wait` measure
-      # startup and not the registries (ghcr.io, quay.io, Docker Hub).
+      # Pull once, so the timings below measure startup and not the
+      # registries (ghcr.io, quay.io, Docker Hub).
       - name: Pull the stack images
         timeout-minutes: 15
         working-directory: examples/enterprise-reference
@@ -70,8 +61,6 @@ jobs:
           docker compose -p "$COMPOSE_PROJECT" --env-file "$REFERENCE_ENV_FILE" pull --quiet
           echo "PULL_SECONDS=$(( $(date +%s) - started ))" >> "$GITHUB_ENV"
 
-      # The stack as a user starts it (README, "Run it"), with the broker's
-      # happy path against it, before the tests start their own copies.
       - name: Start the stack and run the broker live check
         timeout-minutes: 10
         working-directory: examples/enterprise-reference
@@ -120,21 +109,121 @@ jobs:
         working-directory: examples/enterprise-reference
         run: node --test mock-upstream/test/*.test.mjs
 
-      # Each test file starts its own stack under its own Compose project and
-      # removes it (npm run test:reference, examples/enterprise-reference
-      # README): OIDC sign-in on the real Keycloak, credential exchange at the
-      # broker, the Secret Service store, gateway authentication and limits,
-      # model requests through LiteLLM, doctor, commands in the sandbox,
-      # update, rollback, user switching, logout, and uninstall.
-      # One file needs no stack: sandbox.test.ts starts the reference container
-      # sandbox service (examples/enterprise-reference/sandbox) on 127.0.0.1
-      # and its own containers, runs the sandbox conformance kit against it,
-      # and checks the workspace in a governed session.
+      - name: List leftover stacks
+        if: failure()
+        run: |
+          docker compose ls --all
+          docker ps --all --format '{{.Names}} {{.Status}}'
+      - name: Upload the scrubbed container logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: reference-e2e-logs-stack
+          path: ${{ runner.temp }}/reference-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Each test file starts its own stack under its own Compose project and
+  # removes it (npm run test:reference, examples/enterprise-reference
+  # README): OIDC sign-in on the real Keycloak, credential exchange at the
+  # broker, the Secret Service store, gateway authentication and limits,
+  # model requests through LiteLLM, doctor, commands in the sandbox,
+  # update, rollback, user switching, logout, and uninstall.
+  # One file needs no stack: sandbox.test.ts starts the reference container
+  # sandbox service (examples/enterprise-reference/sandbox) on 127.0.0.1
+  # and its own containers, runs the sandbox conformance kit against it,
+  # and checks the workspace in a governed session.
+  # vitest.reference.config.ts names the files of each group, balanced by
+  # their measured durations; one runner per group gives each its own Docker
+  # and its own fixed test ports.
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per group in vitest.reference.config.ts, which refuses a
+        # count that differs from its own.
+        shard: [1, 2, 3, 4]
+    env:
+      npm_config_prefer_offline: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.19.x
+          cache: npm
+      - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
+      - run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
+
+      # The image pull and the system packages run in the background while
+      # npm installs and builds; "Wait for the images and the system
+      # packages" collects them. The pull needs an env file only to fill
+      # compose.yaml's required variables: it is generated outside the
+      # workspace and deleted when the pull ends. The tests generate their own.
+      # AcmeCode requires the OS sandbox (bubblewrap and unprivileged user
+      # namespaces, which Ubuntu restricts through AppArmor by default) and
+      # stores its credential in the Linux Secret Service (GNOME Keyring, a
+      # D-Bus session, and secret-tool), as in the CI check job. None of these
+      # packages is on the runner image; `apt-get update` (about 10 s) runs
+      # only when the image's package lists cannot serve them.
+      - name: Start the image pull and the system packages in the background
+        run: |
+          background="$RUNNER_TEMP/background"
+          mkdir -p "$background" "$RUNNER_TEMP/reference" "$RUNNER_TEMP/reference-logs"
+          echo "PISHIP_REFERENCE_LOG_DIR=$RUNNER_TEMP/reference-logs" >> "$GITHUB_ENV"
+          env_file="$RUNNER_TEMP/reference/.env"
+          node examples/enterprise-reference/scripts/generate-env.mjs --out "$env_file"
+          images() {
+            local status=0
+            docker compose -f examples/enterprise-reference/compose.yaml -p piship-reference-pull --env-file "$env_file" pull --quiet || status=$?
+            rm -f "$env_file"
+            return "$status"
+          }
+          packages() {
+            local packages=(bubblewrap gnome-keyring dbus dbus-x11 libsecret-tools)
+            sudo apt-get install -y -qq --no-install-recommends "${packages[@]}" ||
+              { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends "${packages[@]}"; }
+          }
+          # Each writes its output and then its exit status to files of its
+          # own, and holds none of this step's output open.
+          start() {
+            {
+              local status=0 started
+              started=$(date +%s)
+              "$1" || status=$?
+              echo "$1: exit $status after $(( $(date +%s) - started )) s"
+              echo "$status" > "$background/$1.status"
+            } > "$background/$1.log" 2>&1 < /dev/null &
+          }
+          start images
+          start packages
+      - timeout-minutes: 10
+        run: npm ci
+      - timeout-minutes: 10
+        run: npm run build
+      - run: git diff --exit-code
+      - name: Wait for the images and the system packages
+        timeout-minutes: 15
+        run: |
+          background="$RUNNER_TEMP/background"
+          for name in packages images; do
+            until [ -f "$background/$name.status" ]; do sleep 1; done
+            echo "::group::$name"
+            cat "$background/$name.log"
+            echo "::endgroup::"
+            [ "$(cat "$background/$name.status")" = 0 ] || { echo "$name failed" >&2; exit 1; }
+          done
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --version
+
       # The keyring runs on a private D-Bus session exactly as in the CI check
       # job; PISHIP_LIVE_SECRET_STORE=1 makes the tests use it and fail with
       # SECRET_STORE_UNAVAILABLE rather than fall back to a file.
       - name: Reference tests with the Linux Secret Service
-        timeout-minutes: 45
+        timeout-minutes: 30
         run: |
           dbus-run-session -- bash -euo pipefail -c '
             XDG_DATA_HOME="$(mktemp -d)"
@@ -150,6 +239,7 @@ jobs:
           '
         env:
           PISHIP_LIVE_SECRET_STORE: "1"
+          PISHIP_REFERENCE_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: List leftover stacks
         if: failure()
@@ -160,7 +250,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: reference-e2e-logs
+          name: reference-e2e-logs-${{ matrix.shard }}
           path: ${{ runner.temp }}/reference-logs
           if-no-files-found: ignore
           retention-days: 14
@@ -170,7 +260,7 @@ jobs:
   # requests. Manual and Release qualification runs report in the Actions UI
   # only.
   report:
-    needs: reference
+    needs: [stack, reference]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

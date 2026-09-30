@@ -15,11 +15,27 @@ concurrency:
   cancel-in-progress: false
 jobs:
   portable:
+    name: portable (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Each target runs its E2E files in shards, one runner each, split by
+      # measured duration and by the release fixtures the files use
+      # (tests/helpers/e2e-shards.ts). Every shard pays the setup below and
+      # the prebuild of its own fixtures again, which sets the count: macOS
+      # builds fixtures slowest and hosted macOS runners are the scarcest, so
+      # it has fewer shards than Windows, whose files take longest.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, shard: 1, shards: 2 }
+          - { os: ubuntu-latest, shard: 2, shards: 2 }
+          - { os: macos-latest, shard: 1, shards: 3 }
+          - { os: macos-latest, shard: 2, shards: 3 }
+          - { os: macos-latest, shard: 3, shards: 3 }
+          - { os: windows-latest, shard: 1, shards: 4 }
+          - { os: windows-latest, shard: 2, shards: 4 }
+          - { os: windows-latest, shard: 3, shards: 4 }
+          - { os: windows-latest, shard: 4, shards: 4 }
     # Every `piship build` and `piship release` runs a real `npm ci`; reuse
     # cached package metadata instead of revalidating it with the registry.
     env:
@@ -80,10 +96,11 @@ jobs:
       # Every target runs the installed lifecycle, and the managed secret
       # store scenarios on the live platform store (PISHIP_LIVE_SECRET_STORE).
       # Ubuntu also qualifies the repeated clean build, relocated builder,
-      # and second distribution.
+      # and second distribution. Together the shards of a target run every
+      # E2E file once.
       - if: runner.os != 'Linux'
         timeout-minutes: 40
-        run: npm run test:e2e
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
         env:
           PISHIP_E2E_QUALIFICATION: "0"
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
@@ -105,7 +122,7 @@ jobs:
             }
             for _ in $(seq 100); do ready && break; sleep 0.1; done
             ready || { echo "GNOME Keyring did not unlock its login collection" >&2; exit 1; }
-            npm run test:e2e
+            npm run test:e2e -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
           '
         env:
           PISHIP_E2E_QUALIFICATION: "1"

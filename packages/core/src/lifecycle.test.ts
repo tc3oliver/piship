@@ -241,6 +241,18 @@ function fakeRun(
   return { status: 2, stdout: "", stderr: `unexpected ${args.join(" ")}` };
 }
 
+// What \`npm audit signatures\` answers for the fake payload, whose one
+// package the npm lock does not list. The default auditor spawns npm for
+// every release, which costs a process start (seconds on Windows) and shows
+// nothing these tests check; release.test.ts covers the signature policy.
+const signatureAuditor = () => ({
+  status: 1,
+  stdout: JSON.stringify({
+    error: { summary: "found no installed dependencies to audit", detail: "" },
+  }),
+  stderr: "",
+});
+
 async function release(
   version: string,
   rollback = true,
@@ -252,6 +264,7 @@ async function release(
     assemble: fakeAssemble,
     runTest: fakeRun,
     scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+    signatureAuditor,
   });
 }
 

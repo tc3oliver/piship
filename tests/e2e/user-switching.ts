@@ -4,7 +4,7 @@ import {
   type Services,
   scanDecoded as scan,
 } from "../helpers/lifecycle.js";
-import { STORAGES } from "../helpers/secret-store.js";
+import { type Storage, storageSkipReason } from "../helpers/secret-store.js";
 
 // User switching on one installed distribution: Alice signs in, then Bob
 // signs in over her without logging out, across an update and a rollback.
@@ -48,7 +48,13 @@ const credentialIds = (services: Services, subject: string): string[] =>
     .filter((entry: { subject: string }) => entry.subject === subject)
     .map((entry: { id: string }) => entry.id);
 
-for (const { storage, skip } of STORAGES)
+/**
+ * The scenario with one storage. Each storage has a test file of its own
+ * (user-switching-file.test.ts and user-switching-system.test.ts),
+ * so Portable E2E can run the two on different runners.
+ */
+export function userSwitching(storage: Storage): void {
+  const skip = storageSkipReason(storage);
   describe(`user switching: ${storage} storage (local fixtures)${skip ? ` [skipped: ${skip}]` : ""}`, () => {
     it.skipIf(skip !== null)(
       "gives Bob none of Alice's credential, entitlement, or model selection, and leaves none of her secrets, across update and rollback",
@@ -159,3 +165,4 @@ for (const { storage, skip } of STORAGES)
       900000,
     );
   });
+}

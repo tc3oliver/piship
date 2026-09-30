@@ -773,7 +773,7 @@ function replaceEnvironment(fault?: Fault) {
 // ---------------------------------------------------------------- helpers
 
 const TIMINGS = {
-  settleMs: 1_500,
+  settleMs: 3_000,
   callTimeoutMs: 20_000,
   sharedWindowMs: 1_500,
 } satisfies SandboxKitOptions;
@@ -889,50 +889,6 @@ describe("sandbox conformance kit: contract", () => {
 describeIsolated(isolator)(
   `sandbox conformance kit against reference backends (${isolator ?? "no isolator"})`,
   () => {
-    it.concurrent.each([
-      "local",
-      "snapshot",
-      "shared",
-      "synchronized",
-    ] as const)(
-      "passes the %s reference backend",
-      async (variant) => {
-        const report = await run({ variant });
-        expect(report.kind).toBe("sandbox");
-        expect(report.results.map((result) => result.behavior)).toEqual(
-          SANDBOX_BEHAVIORS,
-        );
-        expect({
-          statuses: statuses(report),
-          reasons: reasons(report),
-        }).toEqual({
-          statuses: expected[variant],
-          reasons: expect.any(Object),
-        });
-        expectCleanReasons(report);
-        // A snapshot or local backend's workspace checks are skipped, never
-        // passed, and say why.
-        if (variant === "snapshot" || variant === "local")
-          for (const behavior of WORKSPACE_BEHAVIORS)
-            expect(reasons(report)[behavior]).toMatch(
-              variant === "snapshot"
-                ? /^declares snapshot: .*never a complete coding-agent workspace$/
-                : /^a local backend runs commands on this host's files/,
-            );
-      },
-      120_000,
-    );
-
-    it.concurrent("passes a reference that returns a command's output only when it ends", async () => {
-      const report = await run({ variant: "shared", buffered: true });
-      expect(statuses(report)).toEqual(expected.shared);
-    }, 120_000);
-
-    it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
-      const report = await run({ variant: "shared", slowStart: true });
-      expect(statuses(report)).toEqual(expected.shared);
-    }, 120_000);
-
     it("skips cleanup without the sandboxes hook, and the network check for a deny-only backend", async () => {
       const service = new ControlService();
       const report = await testSandboxAdapter(
@@ -1001,109 +957,18 @@ describeIsolated(isolator)(
         });
     }, 120_000);
 
-    it.concurrent.each([
-      [
-        "an unknown guarantee",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          planes: [...caps.planes, "everything"],
-        }),
-        /unknown guarantee \(everything\)/,
-      ],
-      [
-        "propagationMs on a shared workspace",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          workspace: { mode: "shared", propagationMs: 100 },
-        }),
-        /propagationMs applies only to a synchronized workspace/,
-      ],
-      [
-        "an absolute sentinelDir",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          workspace: { mode: "shared", sentinelDir: "/etc" },
-        }),
-        /sentinelDir must be workspace-relative/,
-      ],
-      [
-        "a sentinelDir with ..",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          workspace: { mode: "shared", sentinelDir: "a/../b" },
-        }),
-        /must not contain \.\./,
-      ],
-      [
-        "a sentinelDir on a snapshot",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          workspace: { mode: "snapshot", sentinelDir: "sync" },
-        }),
-        /sentinelDir does not apply to a snapshot workspace/,
-      ],
-      [
-        "an unknown workspace mode",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          workspace: { mode: "mounted" } as never,
-        }),
-        /not snapshot, synchronized, or shared/,
-      ],
-      [
-        "localProcesses on a remote backend",
-        (caps: SandboxCapabilities) => ({ ...caps, localProcesses: true }),
-        /localProcesses is true for a remote backend/,
-      ],
-      [
-        "network deny without network-deny",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          planes: caps.planes.filter((plane) => plane !== "network-deny"),
-        }),
-        /lists network mode deny but does not claim network-deny/,
-      ],
-      [
-        "a shared workspace without git-control-protection",
-        (caps: SandboxCapabilities) => ({
-          ...caps,
-          planes: caps.planes.filter(
-            (plane) => plane !== "git-control-protection",
-          ),
-        }),
-        /must claim git-control-protection/,
-      ],
-    ] as const)(
-      "refuses a malformed declaration: %s",
-      async (_name, change, reason) => {
-        const service = new ControlService();
-        const good = referenceAdapter({ variant: "shared" });
-        const report = await testSandboxAdapter(
-          defineSandboxAdapter(async (context) => {
-            const backend = await good(context);
-            return {
-              id: "acme-reference",
-              available: () => backend.available(),
-              capabilities: () =>
-                change(backend.capabilities()) as SandboxCapabilities,
-              prepare: (request) => backend.prepare(request),
-            };
-          }),
-          {
-            ...TIMINGS,
-            context: { endpoint: ENDPOINT, fetch: service.fetch },
-            only: ["capabilities"],
-          },
-        );
-        expect(
-          report.results.find((result) => result.behavior === "capabilities"),
-        ).toMatchObject({
-          status: "failed",
-          reason: expect.stringMatching(reason),
-        });
-      },
-      120_000,
-    );
+    it("restores the launcher environment and console it planted and watched", async () => {
+      const before = { ...process.env };
+      const log = console.log;
+      const write = process.stderr.write;
+      await run(
+        { variant: "snapshot" },
+        { only: ["environment filtering", "secret leakage"] },
+      );
+      expect(process.env).toEqual(before);
+      expect(console.log).toBe(log);
+      expect(process.stderr.write).toBe(write);
+    }, 120_000);
 
     // Each seeded defect breaks exactly one behavior: the kit fails that one
     // with a reason and passes every other. A behavior that needs a verified
@@ -1264,6 +1129,78 @@ describeIsolated(isolator)(
       ],
     ];
 
+    it("covers every behavior with at least one seeded defect", () => {
+      expect(new Set(seeds.map(([, , behavior]) => behavior))).toEqual(
+        new Set(SANDBOX_BEHAVIORS),
+      );
+    });
+
+    // The kit runs below are one concurrent group: vitest runs consecutive
+    // concurrent tests together and waits for a sequential test between
+    // them, so the sequential tests come first. Most of a kit run is waiting
+    // (the marker and settle windows), so the longest runs start first.
+    it.concurrent("removes its fixture from a workspace the author supplies, and refuses one that is not empty", async () => {
+      const dir = realpathSync(
+        mkdtempSync(join(tmpdir(), "author-workspace-")),
+      );
+      try {
+        const report = await run({ variant: "shared" }, { workspace: dir });
+        expect(statuses(report)).toEqual(expected.shared);
+        expect(readdirSync(dir)).toEqual([]);
+        writeFileSync(join(dir, "keep"), "x");
+        await expect(
+          run({ variant: "shared" }, { workspace: dir }),
+        ).rejects.toThrow(/must be an empty directory/);
+        expect(readdirSync(dir)).toEqual(["keep"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 120_000);
+
+    it.concurrent.each([
+      "local",
+      "snapshot",
+      "shared",
+      "synchronized",
+    ] as const)(
+      "passes the %s reference backend",
+      async (variant) => {
+        const report = await run({ variant });
+        expect(report.kind).toBe("sandbox");
+        expect(report.results.map((result) => result.behavior)).toEqual(
+          SANDBOX_BEHAVIORS,
+        );
+        expect({
+          statuses: statuses(report),
+          reasons: reasons(report),
+        }).toEqual({
+          statuses: expected[variant],
+          reasons: expect.any(Object),
+        });
+        expectCleanReasons(report);
+        // A snapshot or local backend's workspace checks are skipped, never
+        // passed, and say why.
+        if (variant === "snapshot" || variant === "local")
+          for (const behavior of WORKSPACE_BEHAVIORS)
+            expect(reasons(report)[behavior]).toMatch(
+              variant === "snapshot"
+                ? /^declares snapshot: .*never a complete coding-agent workspace$/
+                : /^a local backend runs commands on this host's files/,
+            );
+      },
+      120_000,
+    );
+
+    it.concurrent("passes a reference that returns a command's output only when it ends", async () => {
+      const report = await run({ variant: "shared", buffered: true });
+      expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
+    it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
+      const report = await run({ variant: "shared", slowStart: true });
+      expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
     it.concurrent.each(seeds)(
       "fails only %j (%s reference), under %s",
       async (fault, variant, behavior, reason, dependents = []) => {
@@ -1287,41 +1224,108 @@ describeIsolated(isolator)(
       120_000,
     );
 
-    it("covers every behavior with at least one seeded defect", () => {
-      expect(new Set(seeds.map(([, , behavior]) => behavior))).toEqual(
-        new Set(SANDBOX_BEHAVIORS),
-      );
-    });
-
-    it("restores the launcher environment and console it planted and watched", async () => {
-      const before = { ...process.env };
-      const log = console.log;
-      const write = process.stderr.write;
-      await run(
-        { variant: "snapshot" },
-        { only: ["environment filtering", "secret leakage"] },
-      );
-      expect(process.env).toEqual(before);
-      expect(console.log).toBe(log);
-      expect(process.stderr.write).toBe(write);
-    }, 120_000);
-
-    it.concurrent("removes its fixture from a workspace the author supplies, and refuses one that is not empty", async () => {
-      const dir = realpathSync(
-        mkdtempSync(join(tmpdir(), "author-workspace-")),
-      );
-      try {
-        const report = await run({ variant: "shared" }, { workspace: dir });
-        expect(statuses(report)).toEqual(expected.shared);
-        expect(readdirSync(dir)).toEqual([]);
-        writeFileSync(join(dir, "keep"), "x");
-        await expect(
-          run({ variant: "shared" }, { workspace: dir }),
-        ).rejects.toThrow(/must be an empty directory/);
-        expect(readdirSync(dir)).toEqual(["keep"]);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    }, 120_000);
+    it.concurrent.each([
+      [
+        "an unknown guarantee",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          planes: [...caps.planes, "everything"],
+        }),
+        /unknown guarantee \(everything\)/,
+      ],
+      [
+        "propagationMs on a shared workspace",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          workspace: { mode: "shared", propagationMs: 100 },
+        }),
+        /propagationMs applies only to a synchronized workspace/,
+      ],
+      [
+        "an absolute sentinelDir",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          workspace: { mode: "shared", sentinelDir: "/etc" },
+        }),
+        /sentinelDir must be workspace-relative/,
+      ],
+      [
+        "a sentinelDir with ..",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          workspace: { mode: "shared", sentinelDir: "a/../b" },
+        }),
+        /must not contain \.\./,
+      ],
+      [
+        "a sentinelDir on a snapshot",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          workspace: { mode: "snapshot", sentinelDir: "sync" },
+        }),
+        /sentinelDir does not apply to a snapshot workspace/,
+      ],
+      [
+        "an unknown workspace mode",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          workspace: { mode: "mounted" } as never,
+        }),
+        /not snapshot, synchronized, or shared/,
+      ],
+      [
+        "localProcesses on a remote backend",
+        (caps: SandboxCapabilities) => ({ ...caps, localProcesses: true }),
+        /localProcesses is true for a remote backend/,
+      ],
+      [
+        "network deny without network-deny",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          planes: caps.planes.filter((plane) => plane !== "network-deny"),
+        }),
+        /lists network mode deny but does not claim network-deny/,
+      ],
+      [
+        "a shared workspace without git-control-protection",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          planes: caps.planes.filter(
+            (plane) => plane !== "git-control-protection",
+          ),
+        }),
+        /must claim git-control-protection/,
+      ],
+    ] as const)(
+      "refuses a malformed declaration: %s",
+      async (_name, change, reason) => {
+        const service = new ControlService();
+        const good = referenceAdapter({ variant: "shared" });
+        const report = await testSandboxAdapter(
+          defineSandboxAdapter(async (context) => {
+            const backend = await good(context);
+            return {
+              id: "acme-reference",
+              available: () => backend.available(),
+              capabilities: () =>
+                change(backend.capabilities()) as SandboxCapabilities,
+              prepare: (request) => backend.prepare(request),
+            };
+          }),
+          {
+            ...TIMINGS,
+            context: { endpoint: ENDPOINT, fetch: service.fetch },
+            only: ["capabilities"],
+          },
+        );
+        expect(
+          report.results.find((result) => result.behavior === "capabilities"),
+        ).toMatchObject({
+          status: "failed",
+          reason: expect.stringMatching(reason),
+        });
+      },
+      120_000,
+    );
   },
 );

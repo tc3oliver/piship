@@ -22,6 +22,7 @@ import { expect, inject, onTestFinished } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, type Result } from "./distribution.js";
+import type { LifecycleFixture } from "./e2e-shards.js";
 import {
   clearPlatformStore,
   expectOwnParts,
@@ -484,20 +485,27 @@ async function settledAll(promises: Promise<unknown>[]): Promise<void> {
  * ready instead of building while other E2E files compete for the CPU. The
  * system-store demo is built only when the platform store is live, and the
  * demo that allows sandboxed commands only in the storage of the managed
- * clean-machine flow.
+ * clean-machine flow. With `only`, just those fixtures: a Portable E2E shard
+ * builds what its files use (tests/helpers/e2e-shards.ts).
  */
 export async function prebuildLifecycleFixtures(
   fixtures: string,
+  only?: ReadonlySet<LifecycleFixture>,
 ): Promise<void> {
-  await settledAll([
-    sharedReleases(demo("file", fixtures), fixtures),
-    sharedReleases(PERSONAL, fixtures),
-    sharedReleases(demo(PRIMARY_STORAGE, fixtures, true), fixtures),
-    ...(LIVE_SECRET_STORE
-      ? [sharedReleases(demo("system", fixtures), fixtures)]
-      : []),
-    sharedReleases(PERSONAL_LOCAL, fixtures),
-  ]);
+  const distributions: [LifecycleFixture, Distribution | null][] = [
+    ["demo", demo("file", fixtures)],
+    ["personal", PERSONAL],
+    ["demo-commands", demo(PRIMARY_STORAGE, fixtures, true)],
+    ["demo-system", LIVE_SECRET_STORE ? demo("system", fixtures) : null],
+    ["personal-local", PERSONAL_LOCAL],
+  ];
+  await settledAll(
+    distributions.flatMap(([name, distribution]) =>
+      distribution && (!only || only.has(name))
+        ? [sharedReleases(distribution, fixtures)]
+        : [],
+    ),
+  );
 }
 
 /**

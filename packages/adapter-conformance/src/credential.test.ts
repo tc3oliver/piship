@@ -373,7 +373,9 @@ describe("credential conformance kit", () => {
       expect(entry.statement.length).toBeGreaterThan(40);
   });
 
-  it("passes every behavior for a conforming adapter", async () => {
+  // Each kit run is independent (its own adapter and broker) and mostly
+  // waits out request timeouts, so the runs below are one concurrent group.
+  it.concurrent("passes every behavior for a conforming adapter", async () => {
     const report = await run();
     expect(report.kind).toBe("credential");
     expect(report.results.map((result) => result.behavior)).toEqual(
@@ -384,7 +386,7 @@ describe("credential conformance kit", () => {
     ).toEqual([]);
   });
 
-  it("passes an adapter for another wire format through the issue hook", async () => {
+  it.concurrent("passes an adapter for another wire format through the issue hook", async () => {
     const report = await run(referenceAdapter({ wire: "custom" }), {
       issue: (credential: IssuedCredential) =>
         Response.json({
@@ -399,7 +401,7 @@ describe("credential conformance kit", () => {
     expect(statuses(mismatched).acquire).toBe("failed");
   });
 
-  it("skips revoke for an adapter without revoke() and never counts it as passed", async () => {
+  it.concurrent("skips revoke for an adapter without revoke() and never counts it as passed", async () => {
     const report = await run(referenceAdapter({ revoke: false }));
     const revoke = report.results.find(
       (result) => result.behavior === "revoke",
@@ -412,7 +414,7 @@ describe("credential conformance kit", () => {
     expect(statuses(report)).toEqual({ ...allPassed, revoke: "skipped" });
   });
 
-  it("skips idempotency when the adapter declares its service ignores keys", async () => {
+  it.concurrent("skips idempotency when the adapter declares its service ignores keys", async () => {
     const report = await run(referenceAdapter(), { idempotency: false });
     expect(statuses(report)).toEqual({ ...allPassed, idempotency: "skipped" });
     expect(
@@ -421,7 +423,7 @@ describe("credential conformance kit", () => {
     ).toMatch(/does not honor idempotency keys/);
   });
 
-  it("fails every behavior, with a reason, when the factory builds no provider", async () => {
+  it.concurrent("fails every behavior, with a reason, when the factory builds no provider", async () => {
     const report = await run(
       defineCredentialAdapter(() => undefined as unknown as CredentialProvider),
     );
@@ -431,7 +433,7 @@ describe("credential conformance kit", () => {
     }
   });
 
-  it("reports a factory that throws by code, never by its message", async () => {
+  it.concurrent("reports a factory that throws by code, never by its message", async () => {
     const report = await run(
       defineCredentialAdapter(() => {
         throw new TypeError("conformance-identity-token-in-a-message");
@@ -446,7 +448,7 @@ describe("credential conformance kit", () => {
     expectCleanReasons(report);
   });
 
-  it("refuses a request timeout that is not a positive number", async () => {
+  it.concurrent("refuses a request timeout that is not a positive number", async () => {
     for (const requestTimeoutMs of [
       0,
       -1,
@@ -541,7 +543,7 @@ describe("credential conformance kit", () => {
       /does not report its key as detail.idempotencyKey/,
     ],
   ];
-  it.each(seeds)(
+  it.concurrent.each(seeds)(
     "fails only %j, under %s",
     async (fault, behavior, reason) => {
       const report = await run(referenceAdapter({ fault }));

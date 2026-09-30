@@ -39,7 +39,7 @@ import {
 } from "./support.js";
 
 const TIMEOUT_MS = 200;
-const TIMINGS = { settleMs: 1_500, callTimeoutMs: 20_000 } as const;
+const TIMINGS = { settleMs: 3_000, callTimeoutMs: 20_000 } as const;
 const WORKSPACE = [
   "workspace consistency",
   "git control protection",
@@ -99,8 +99,10 @@ describe("PiShip's built-in implementations under the conformance kits", () => {
     });
   }, 60_000);
 
+  // Most of a sandbox kit run is waiting out its marker and settle windows,
+  // so the four backends run concurrently; each has its own service.
   describeIsolated(isolator)("sandbox backends", () => {
-    it("the native backend passes every sandbox behavior of a local backend", async () => {
+    it.concurrent("the native backend passes every sandbox behavior of a local backend", async () => {
       const report = record(
         `built-in NativeBackend (${isolator})`,
         await testSandboxAdapter(new NativeBackend(), TIMINGS),
@@ -124,7 +126,7 @@ describe("PiShip's built-in implementations under the conformance kits", () => {
       });
     }, 180_000);
 
-    it("a custom backend as PiShip's loader wraps it passes like the adapter itself", async () => {
+    it.concurrent("a custom backend as PiShip's loader wraps it passes like the adapter itself", async () => {
       const example = await payload.load<SandboxAdapterFactory>("sandbox.mjs");
       const service = new ExecutionService();
       try {
@@ -153,7 +155,7 @@ describe("PiShip's built-in implementations under the conformance kits", () => {
       }
     }, 180_000);
 
-    it.each(["group", "process"] as const)(
+    it.concurrent.each(["group", "process"] as const)(
       "the e2b-compatible backend, against a service whose SendSignal stops the %s",
       async (scope) => {
         const service = new E2bService(scope);

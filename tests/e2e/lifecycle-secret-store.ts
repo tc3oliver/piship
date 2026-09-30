@@ -5,7 +5,8 @@ import { lifecycleScenario, scan } from "../helpers/lifecycle.js";
 import {
   PLATFORM_STORE_KIND,
   partsOf,
-  STORAGES,
+  type Storage,
+  storageSkipReason,
 } from "../helpers/secret-store.js";
 
 // Lifecycle scenario: where a managed distribution keeps its secrets, from
@@ -29,7 +30,13 @@ const LONG_NAME = `Store Tester ${"x".repeat(12_000)}`;
 // name itself is not a secret and appears in the identity metadata.
 const ID_TOKEN_MARK = "eHh4".repeat(100);
 
-for (const { storage, skip } of STORAGES)
+/**
+ * The scenario with one storage. Each storage has a test file of its own
+ * (lifecycle-secret-store-file.test.ts and lifecycle-secret-store-system.test.ts),
+ * so Portable E2E can run the two on different runners.
+ */
+export function secretStoreLifecycle(storage: Storage): void {
+  const skip = storageSkipReason(storage);
   describe(`secret store lifecycle: ${storage} storage (local fixtures)${skip ? ` [skipped: ${skip}]` : ""}`, () => {
     it.skipIf(skip !== null)(
       "stores, loads, replaces, refreshes and deletes every secret across update, rollback, logout and purge",
@@ -195,3 +202,4 @@ for (const { storage, skip } of STORAGES)
       900000,
     );
   });
+}
