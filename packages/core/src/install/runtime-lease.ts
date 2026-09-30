@@ -15,6 +15,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { installHome } from "../index.js";
+import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { appDirectory, syncDirectory, VERSION_NAME } from "./receipt.js";
 
 const SCHEMA = "piship-runtime-lease/v1";
@@ -65,6 +67,19 @@ function processIdentity(pid: number): string | undefined {
 
 function leaseRoot(id: string): string {
   return join(appDirectory(id), ".runtime-leases");
+}
+
+/** Shared by launcher registration and every destructive payload operation. */
+export function acquireLaunchGate(id: string) {
+  const path = join(installHome(), "receipts", `.${id}.launch.lock`);
+  return acquireLifecycleLock(
+    path,
+    () =>
+      new Error(
+        `A launcher or lifecycle operation for ${id} is registering; retry`,
+      ),
+    () => new Error(`Could not lock launcher registration for ${id}`),
+  );
 }
 
 function parseLease(path: string, version: string): Lease | undefined {

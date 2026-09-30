@@ -65,7 +65,13 @@ function backend(capabilities: SandboxCapabilities) {
         exec: async (request, io) => {
           if (request.command.includes(SANDBOX_READY_MARKER)) {
             io.onStdout(Buffer.from(`${SANDBOX_READY_MARKER} unset\n`));
-            io.onStdout(Buffer.from("piship-network-blocked\n"));
+            io.onStdout(
+              Buffer.from(
+                request.command.includes("piship-network-allow-check")
+                  ? "piship-network-reachable\n"
+                  : "piship-network-blocked\npiship-metadata-blocked\n",
+              ),
+            );
           } else commands.push(request);
           return { exitCode: 0 };
         },

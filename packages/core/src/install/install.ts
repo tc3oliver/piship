@@ -11,6 +11,7 @@ import {
   statSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { sha256File } from "../archive.js";
@@ -43,6 +44,30 @@ function installMarker(apps: string): string {
   return join(apps, ".initial-install.json");
 }
 
+/** A receipt owns a command even when a crash preceded writing its shim. */
+function otherCommandOwner(
+  command: string,
+  id: string,
+  receipts: string,
+): string | undefined {
+  for (const name of readdirSync(receipts)) {
+    if (!name.endsWith(".json") || name === `${id}.json`) continue;
+    try {
+      const value = JSON.parse(
+        readFileSync(join(receipts, name), "utf8"),
+      ) as Partial<InstallReceipt>;
+      if (
+        value.app?.command === command ||
+        value.commandPath === commandPathFor(command)
+      )
+        return name.slice(0, -5);
+    } catch {
+      // A damaged receipt cannot establish ownership of this command.
+    }
+  }
+  return undefined;
+}
+
 function ownedIncompleteInstall(
   id: string,
   command: string,
@@ -73,6 +98,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // Both sides are canonicalized before comparing; a missing payload or one
 // outside this directory still fails closed.
 const home = dirname(fileURLToPath(import.meta.url));
+const gatePath = join(home, "..", "..", "receipts", ${JSON.stringify(`.${id}.launch.lock`)});
+const gateRecord = JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid: process.pid, instance: randomUUID() }) + "\\n";
+try {
+  writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
+} catch {
+  console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering; retry.`)});
+  process.exit(1);
+}
+const clearGate = () => {
+  try { if (readFileSync(gatePath, "utf8") === gateRecord) rmSync(gatePath, { force: true }); } catch {}
+};
+process.on("exit", clearGate);
 const launchingDir = join(home, ".runtime-leases", ".launching");
 mkdirSync(launchingDir, { recursive: true, mode: 0o700 });
 const launching = join(launchingDir, randomUUID() + ".json");
@@ -100,8 +137,11 @@ if (!payload) {
 }
 const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
 core.holdRuntimeLease(${JSON.stringify(id)}, version);
+if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
 clearLaunching();
 process.removeListener("exit", clearLaunching);
+clearGate();
+process.removeListener("exit", clearGate);
 await import(pathToFileURL(join(payload, "bin", command)).href);
 `;
 }
@@ -121,6 +161,19 @@ function writeShim(commandPath: string, launcher: string): void {
     );
     chmodSync(commandPath, 0o755);
   }
+}
+
+/** Require exact shim content before deleting or repairing an owned command. */
+export function ownsCommandShim(
+  commandPath: string,
+  launcher: string,
+): boolean {
+  if (!existsSync(commandPath)) return false;
+  const expected =
+    process.platform === "win32"
+      ? `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`
+      : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
+  return readFileSync(commandPath, "utf8") === expected;
 }
 
 /**
@@ -162,108 +215,130 @@ export async function installDistribution(
     const launcher = join(apps, "launch.mjs");
     const receipts = dirname(receiptPath(id));
     mkdirSync(receipts, { recursive: true });
-    const hold = acquireLifecycleLock(
-      join(receipts, `.${id}.initial-install.lock`),
+    mkdirSync(dirname(commandPath), { recursive: true });
+    const commandHold = acquireLifecycleLock(
+      `${commandPath}.piship.lock`,
       () =>
         new Error(
-          `Another initial install of ${id} is running; retry when it completes`,
+          `Another operation owns command ${command}; retry when it completes`,
         ),
-      () => new Error(`Could not acquire the initial install lock for ${id}`),
+      () => new Error(`Could not lock command ${command}`),
     );
     try {
-      if (
-        existsSync(receiptPath(id)) &&
-        ownedIncompleteInstall(id, command, apps)
-      ) {
-        const committed = readInstallReceipt(id);
-        if (committed.app.command !== command || existsSync(commandPath))
+      const hold = acquireLifecycleLock(
+        join(receipts, `.${id}.initial-install.lock`),
+        () =>
+          new Error(
+            `Another initial install of ${id} is running; retry when it completes`,
+          ),
+        () => new Error(`Could not acquire the initial install lock for ${id}`),
+      );
+      try {
+        const owner = otherCommandOwner(command, id, receipts);
+        if (owner)
+          throw new Error(
+            `Install collision: command ${command} is owned by ${owner}`,
+          );
+        if (
+          existsSync(receiptPath(id)) &&
+          ownedIncompleteInstall(id, command, apps)
+        ) {
+          const committed = readInstallReceipt(id);
+          if (committed.app.command !== command || existsSync(commandPath))
+            throw new Error(
+              `Install collision for ${id}/${command}; uninstall the existing distribution first`,
+            );
+          verifyPayload(committed.payload);
+          writeShim(commandPath, launcher);
+          syncDirectory(dirname(commandPath));
+          rmSync(installMarker(apps), { force: true });
+          return committed;
+        }
+        if (
+          process.platform === "win32" &&
+          ["%", "!", '"', "\r", "\n"].some((character) =>
+            launcher.includes(character),
+          )
+        )
+          throw new Error(
+            "Install path contains characters unsafe for a Windows command shim",
+          );
+        if (
+          existsSync(apps) &&
+          !existsSync(receiptPath(id)) &&
+          ownedIncompleteInstall(id, command, apps)
+        )
+          rmSync(apps, { recursive: true, force: true });
+        if (
+          existsSync(receiptPath(id)) ||
+          existsSync(apps) ||
+          existsSync(commandPath)
+        )
           throw new Error(
             `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
-        verifyPayload(committed.payload);
-        writeShim(commandPath, launcher);
-        syncDirectory(dirname(commandPath));
-        rmSync(installMarker(apps), { force: true });
-        return committed;
-      }
-      if (
-        process.platform === "win32" &&
-        ["%", "!", '"', "\r", "\n"].some((character) =>
-          launcher.includes(character),
+        if (
+          !useExistingState &&
+          existsSync(runtimeStateDirectory({ value: id }))
         )
-      )
-        throw new Error(
-          "Install path contains characters unsafe for a Windows command shim",
+          throw new Error(
+            `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
+          );
+        mkdirSync(apps, { recursive: true });
+        writeFileSync(
+          installMarker(apps),
+          `${JSON.stringify({ schema: INITIAL_INSTALL_SCHEMA, id, command })}\n`,
+          { flag: "wx", mode: 0o600 },
         );
-      if (
-        existsSync(apps) &&
-        !existsSync(receiptPath(id)) &&
-        ownedIncompleteInstall(id, command, apps)
-      )
-        rmSync(apps, { recursive: true, force: true });
-      if (
-        existsSync(receiptPath(id)) ||
-        existsSync(apps) ||
-        existsSync(commandPath)
-      )
-        throw new Error(
-          `Install collision for ${id}/${command}; uninstall the existing distribution first`,
-        );
-      if (!useExistingState && existsSync(runtimeStateDirectory({ value: id })))
-        throw new Error(
-          `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
-        );
-      mkdirSync(apps, { recursive: true });
-      writeFileSync(
-        installMarker(apps),
-        `${JSON.stringify({ schema: INITIAL_INSTALL_SCHEMA, id, command })}\n`,
-        { flag: "wx", mode: 0o600 },
-      );
-      syncDirectory(apps);
-      syncDirectory(dirname(apps));
-      mkdirSync(dirname(commandPath), { recursive: true });
-      try {
-        if (payload.startsWith(`${staging}`)) renameSync(payload, target);
-        else cpSync(payload, target, { recursive: true });
-        verifyPayload(target);
-        writeFileSync(launcher, launcherSource(id));
-        syncTree(apps);
+        syncDirectory(apps);
         syncDirectory(dirname(apps));
-        const receipt: InstallReceipt = {
-          schema: RECEIPT_SCHEMA,
-          app: lock.app,
-          payload: target,
-          commandPath,
-          launcher,
-          active: version,
-          releases: [
-            {
-              version,
-              payload: target,
-              installedAt: new Date().toISOString(),
-              ...(info ? { release: info } : {}),
-            },
-          ],
-          // Users start on the distribution's default channel, whatever
-          // channel the installed archive was built for.
-          ...(lock.updates ? { channel: lock.updates.channel } : {}),
-        };
-        if (!hold.stillHeld())
-          throw new Error(`Initial install lock for ${id} was lost; retry`);
-        writeReceipt(receipt);
-        writeShim(commandPath, launcher);
-        syncDirectory(dirname(commandPath));
-        rmSync(installMarker(apps), { force: true });
-        return receipt;
-      } catch (error) {
-        if (!existsSync(receiptPath(id))) {
-          rmSync(commandPath, { force: true });
-          rmSync(apps, { recursive: true, force: true });
+        mkdirSync(dirname(commandPath), { recursive: true });
+        try {
+          if (payload.startsWith(`${staging}`)) renameSync(payload, target);
+          else cpSync(payload, target, { recursive: true });
+          verifyPayload(target);
+          writeFileSync(launcher, launcherSource(id));
+          syncTree(apps);
+          syncDirectory(dirname(apps));
+          const receipt: InstallReceipt = {
+            schema: RECEIPT_SCHEMA,
+            app: lock.app,
+            payload: target,
+            commandPath,
+            launcher,
+            active: version,
+            releases: [
+              {
+                version,
+                payload: target,
+                installedAt: new Date().toISOString(),
+                ...(info ? { release: info } : {}),
+              },
+            ],
+            // Users start on the distribution's default channel, whatever
+            // channel the installed archive was built for.
+            ...(lock.updates ? { channel: lock.updates.channel } : {}),
+          };
+          if (!hold.stillHeld())
+            throw new Error(`Initial install lock for ${id} was lost; retry`);
+          writeReceipt(receipt);
+          writeShim(commandPath, launcher);
+          syncDirectory(dirname(commandPath));
+          rmSync(installMarker(apps), { force: true });
+          return receipt;
+        } catch (error) {
+          if (!existsSync(receiptPath(id))) {
+            if (ownsCommandShim(commandPath, launcher))
+              rmSync(commandPath, { force: true });
+            rmSync(apps, { recursive: true, force: true });
+          }
+          throw error;
         }
-        throw error;
+      } finally {
+        hold.release();
       }
     } finally {
-      hold.release();
+      commandHold.release();
     }
   } finally {
     rmSync(staging, { recursive: true, force: true });

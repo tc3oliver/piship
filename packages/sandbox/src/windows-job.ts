@@ -1,6 +1,5 @@
-// Windows PowerShell host for a governed child. The host puts itself in a
-// kill-on-close Job Object before it starts the command; children inherit the
-// job. Its exit therefore terminates descendants even if their leader exited.
+// The PowerShell supervisor stays outside the kill-on-close Job Object.
+// CreateProcess starts the child suspended; only after job assignment may it run.
 const SOURCE = String.raw`
 using System;
 using System.Diagnostics;
@@ -8,6 +7,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
 public static class PiShipJob {
   [StructLayout(LayoutKind.Sequential)] struct Basic {
     public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
@@ -26,11 +26,40 @@ public static class PiShipJob {
     public Counters IoInfo;
     public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
   }
+  [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes {
+    public int length;
+    public IntPtr descriptor;
+    [MarshalAs(UnmanagedType.Bool)] public bool inherit;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct StartupInfo {
+    public int cb;
+    public IntPtr reserved, desktop, title;
+    public int x, y, xSize, ySize, xCountChars, yCountChars, fillAttribute, flags;
+    public short showWindow, reserved2;
+    public IntPtr reservedBytes, stdInput, stdOutput, stdError;
+  }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessInformation {
+    public IntPtr process, thread;
+    public int processId, threadId;
+  }
   [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref Extended info, uint length);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-  [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SecurityAttributes attributes, int size);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, int mask, int flags);
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
+    bool inheritHandles, uint flags, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInformation process);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  static void Close(ref IntPtr handle) { if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; } }
+  static Exception Failure(string operation) { return new Exception(operation + " failed: " + Marshal.GetLastWin32Error()); }
+  static void Pipe(ref SecurityAttributes attributes, out IntPtr read, out IntPtr write) {
+    if (!CreatePipe(out read, out write, ref attributes, 0)) throw Failure("CreatePipe");
+  }
   public static string Arguments(string[] args) {
     var result = new StringBuilder();
     foreach (string arg in args) {
@@ -48,40 +77,72 @@ public static class PiShipJob {
     }
     return result.ToString();
   }
-  public static int Run(ProcessStartInfo start) {
-    IntPtr job = CreateJobObject(IntPtr.Zero, null);
-    if (job == IntPtr.Zero) throw new Exception("CreateJobObject failed");
+  public static int Run(ProcessStartInfo start, string[] args) {
+    IntPtr job = IntPtr.Zero, inputRead = IntPtr.Zero, inputWrite = IntPtr.Zero;
+    IntPtr outputRead = IntPtr.Zero, outputWrite = IntPtr.Zero;
+    IntPtr errorRead = IntPtr.Zero, errorWrite = IntPtr.Zero;
+    IntPtr environment = IntPtr.Zero;
+    var process = new ProcessInformation();
     try {
+      job = CreateJobObject(IntPtr.Zero, null);
+      if (job == IntPtr.Zero) throw Failure("CreateJobObject");
       var limits = new Extended();
-      limits.BasicLimitInformation.LimitFlags = 0x2000; // KILL_ON_JOB_CLOSE
+      limits.BasicLimitInformation.LimitFlags = 0x2000;
       if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(Extended))))
-        throw new Exception("SetInformationJobObject failed");
-      if (!AssignProcessToJobObject(job, Process.GetCurrentProcess().Handle))
-        throw new Exception("AssignProcessToJobObject failed");
-      using (var child = new Process()) {
-        child.StartInfo = start;
-        if (!child.Start()) throw new Exception("child start failed");
-        bool assigned;
-        if (!IsProcessInJob(child.Handle, job, out assigned) || !assigned) {
-          child.Kill();
-          throw new Exception("the governed child did not inherit the Job Object");
+        throw Failure("SetInformationJobObject");
+      var attributes = new SecurityAttributes { length = Marshal.SizeOf(typeof(SecurityAttributes)), inherit = true };
+      Pipe(ref attributes, out inputRead, out inputWrite);
+      Pipe(ref attributes, out outputRead, out outputWrite);
+      Pipe(ref attributes, out errorRead, out errorWrite);
+      if (!SetHandleInformation(inputWrite, 1, 0) || !SetHandleInformation(outputRead, 1, 0) ||
+          !SetHandleInformation(errorRead, 1, 0)) throw Failure("SetHandleInformation");
+      var startup = new StartupInfo {
+        cb = Marshal.SizeOf(typeof(StartupInfo)), flags = 0x100,
+        stdInput = inputRead, stdOutput = outputWrite, stdError = errorWrite
+      };
+      var names = new System.Collections.Generic.List<string>();
+      foreach (string name in start.EnvironmentVariables.Keys) names.Add(name);
+      names.Sort(StringComparer.OrdinalIgnoreCase);
+      var block = new StringBuilder();
+      foreach (string name in names) block.Append(name).Append('=').Append(start.EnvironmentVariables[name]).Append('\0');
+      block.Append('\0');
+      environment = Marshal.StringToHGlobalUni(block.ToString());
+      var command = new StringBuilder(Arguments(new string[] { start.FileName }) + " " + Arguments(args));
+      // CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT.
+      if (!CreateProcessW(null, command, IntPtr.Zero, IntPtr.Zero, true, 0x4 | 0x08000000 | 0x400,
+        environment, start.WorkingDirectory, ref startup, out process)) throw Failure("CreateProcess");
+      Close(ref inputRead); Close(ref outputWrite); Close(ref errorWrite);
+      if (!AssignProcessToJobObject(job, process.process)) throw Failure("AssignProcessToJobObject");
+      if (ResumeThread(process.thread) == 0xffffffff) throw Failure("ResumeThread");
+      using (var output = new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read)) {
+        outputRead = IntPtr.Zero;
+        using (var error = new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read)) {
+          errorRead = IntPtr.Zero;
+          using (var input = new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write)) {
+            inputWrite = IntPtr.Zero;
+            var outputTask = Task.Run(() => output.CopyTo(Console.OpenStandardOutput()));
+            var errorTask = Task.Run(() => error.CopyTo(Console.OpenStandardError()));
+            Task.Run(() => { try { Console.OpenStandardInput().CopyTo(input); input.Close(); } catch {} });
+            if (WaitForSingleObject(process.process, 0xffffffff) != 0) throw Failure("WaitForSingleObject");
+            uint code;
+            if (!GetExitCodeProcess(process.process, out code)) throw Failure("GetExitCodeProcess");
+            Close(ref job);
+            Task.WaitAll(outputTask, errorTask);
+            return unchecked((int)code);
+          }
         }
-        var output = Task.Run(() => child.StandardOutput.BaseStream.CopyTo(Console.OpenStandardOutput()));
-        var error = Task.Run(() => child.StandardError.BaseStream.CopyTo(Console.OpenStandardError()));
-        Task.Run(() => { try { Console.OpenStandardInput().CopyTo(child.StandardInput.BaseStream); child.StandardInput.Close(); } catch {} });
-        child.WaitForExit();
-        int code = child.ExitCode;
-        // Terminate any descendants now; otherwise inherited pipes might
-        // prevent output and error copy tasks from ever reaching EOF.
-        CloseHandle(job); job = IntPtr.Zero;
-        Task.WaitAll(new Task[] { output, error });
-        return code;
       }
-    } finally { if (job != IntPtr.Zero) CloseHandle(job); }
+    } finally {
+      if (process.process != IntPtr.Zero && job != IntPtr.Zero) TerminateProcess(process.process, 1);
+      Close(ref process.thread); Close(ref process.process); Close(ref job);
+      Close(ref inputRead); Close(ref inputWrite); Close(ref outputRead); Close(ref outputWrite);
+      Close(ref errorRead); Close(ref errorWrite);
+      if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
+    }
   }
 }`;
 
-const SCRIPT = String.raw`
+const SCRIPT = `
 $ErrorActionPreference = 'Stop'
 try {
   Add-Type -TypeDefinition @'
@@ -90,18 +151,12 @@ ${SOURCE}
   $request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PISHIP_JOB_REQUEST)) | ConvertFrom-Json
   $start = New-Object System.Diagnostics.ProcessStartInfo
   $start.FileName = [string]$request.file
-  $start.Arguments = [PiShipJob]::Arguments([string[]]$request.args)
   $start.WorkingDirectory = [string]$request.cwd
-  $start.UseShellExecute = $false
-  $start.RedirectStandardInput = $true
-  $start.RedirectStandardOutput = $true
-  $start.RedirectStandardError = $true
-  $start.CreateNoWindow = $true
   $start.EnvironmentVariables.Clear()
   foreach ($entry in $request.env.PSObject.Properties) { $start.EnvironmentVariables[$entry.Name] = [string]$entry.Value }
-  exit ([PiShipJob]::Run($start))
+  exit ([PiShipJob]::Run($start, [string[]]$request.args))
 } catch {
-  [Console]::Error.WriteLine('PISHIP_WINDOWS_JOB_ERROR')
+  [Console]::Error.WriteLine('PISHIP_WINDOWS_JOB_ERROR: ' + $_.Exception.Message)
   exit 127
 }`;
 

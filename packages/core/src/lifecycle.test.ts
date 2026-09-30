@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  watch,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { type SecretStore, SecretValue } from "@piship/contracts";
 import {
   MemorySecretStore,
@@ -196,6 +198,14 @@ function fakeAssemble(manifestPath: string, outputRoot: string): string {
   write(
     join(out, "node_modules", "alpha", "package.json"),
     JSON.stringify({ name: "alpha", version: "1.0.0", license: "MIT" }),
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "dist", "index.js"),
+    `export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};\n`,
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "package.json"),
+    '{"type":"module"}\n',
   );
   write(
     join(out, "metadata", "inventory.json"),
@@ -513,6 +523,44 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(repaired).toEqual(receipt);
     expect(existsSync(receipt.commandPath)).toBe(true);
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("serializes different distributions claiming the same command", async () => {
+    const first = fakeAssemble(project("1.0.0"), temp("piship-first-"));
+    const otherProject = temp("piship-other-project-");
+    const otherManifest = join(otherProject, "piship.yaml");
+    write(join(otherProject, "resources", "AGENTS.md"), "# other\n");
+    writeFileSync(
+      otherManifest,
+      manifestSource("1.0.0", true).replace("id: acmepi", "id: otherpi"),
+    );
+    lockManifest(otherManifest);
+    const second = fakeAssemble(otherManifest, temp("piship-second-"));
+    const outcomes = await Promise.allSettled([
+      installDistribution(first),
+      installDistribution(second),
+    ]);
+    expect(
+      outcomes.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const winner = outcomes.find((result) => result.status === "fulfilled");
+    if (winner?.status !== "fulfilled") throw new Error("No winner");
+    const loser = winner.value.app.id === ID ? "otherpi" : ID;
+    expect(
+      existsSync(
+        join(
+          process.env.PISHIP_INSTALL_HOME as string,
+          "receipts",
+          `${loser}.json`,
+        ),
+      ),
+    ).toBe(false);
+    const shim = readFileSync(winner.value.commandPath, "utf8");
+    expect(() => uninstallDistribution(loser)).toThrow(
+      /No PiShip installation/,
+    );
+    expect(readFileSync(winner.value.commandPath, "utf8")).toBe(shim);
+    uninstallDistribution(winner.value.app.id);
   });
 
   it("keeps a leased payload after it leaves the receipt and reclaims it when the runtime exits", async () => {
@@ -2039,6 +2087,65 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
 describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
   const launch = (launcher: string) =>
     spawnSync(process.execPath, [launcher], { encoding: "utf8" });
+  const waitForFile = (path: string): Promise<void> =>
+    new Promise((resolvePromise) => {
+      if (existsSync(path)) return resolvePromise();
+      const watcher = watch(dirname(path), () => {
+        if (existsSync(path)) {
+          watcher.close();
+          resolvePromise();
+        }
+      });
+      if (existsSync(path)) {
+        watcher.close();
+        resolvePromise();
+      }
+    });
+
+  it("holds launcher registration against uninstall through core import", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    const ready = join(temp("piship-launch-race-"), "ready");
+    const release = join(dirname(ready), "release");
+    const core = join(
+      receipt.payload,
+      "node_modules",
+      "@piship",
+      "core",
+      "dist",
+      "index.js",
+    );
+    writeFileSync(
+      core,
+      `import { writeFileSync, watch, existsSync } from "node:fs";
+import { dirname } from "node:path";
+writeFileSync(${JSON.stringify(ready)}, "ready");
+await new Promise((resolve) => {
+  const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+    if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+  });
+  if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+});
+export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};
+`,
+    );
+    const child = spawn(process.execPath, [receipt.launcher as string], {
+      stdio: "ignore",
+    });
+    try {
+      await waitForFile(ready);
+      expect(() => uninstallDistribution(ID)).toThrow(/registering/);
+      expect(existsSync(receipt.payload)).toBe(true);
+      writeFileSync(release, "continue");
+      const code = await new Promise<number | null>((resolvePromise) =>
+        child.once("exit", resolvePromise),
+      );
+      expect(code).toBe(0);
+      uninstallDistribution(ID);
+    } finally {
+      child.kill();
+    }
+  }, 30_000);
 
   it.runIf(process.platform !== "win32")(
     "launches when the receipt records a symlinked install path",

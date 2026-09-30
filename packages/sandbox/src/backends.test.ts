@@ -112,6 +112,9 @@ describe("custom adapter lifecycle", () => {
       "capabilities",
       "prepare",
       "check",
+      "prepare",
+      "check",
+      "dispose",
       "exec",
       "dispose",
     ]);
@@ -488,7 +491,10 @@ describe("remote network denial evidence", () => {
   it("rejects a target unreachable in both allow and deny mode", async () => {
     const { backend } = fakeBackend({
       check: (_request, io) =>
-        marker(io, "piship-network-blocked\npiship-metadata-blocked\npiship-other-reachable\n"),
+        marker(
+          io,
+          "piship-network-blocked\npiship-metadata-blocked\npiship-other-reachable\n",
+        ),
     });
     await expect(activate(backend)).rejects.toThrow(
       /same target was not reachable/,
@@ -623,14 +629,14 @@ describe("PiShip owns timeout, cancellation, and dispose", () => {
       "timeout:0.1",
     );
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
-    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
+    expect(events.filter((event) => event === "dispose")).toHaveLength(2);
     await expect(run(sandbox, "true")).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
       message: expect.stringContaining("retired"),
     });
     expect(() => sandbox.wrap("/bin/true", [], workspace)).toThrow(/retired/);
     await sandbox.dispose();
-    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
+    expect(events.filter((event) => event === "dispose")).toHaveLength(2);
   });
 
   it("redacts a backend failure", async () => {

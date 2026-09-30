@@ -29,7 +29,7 @@ import {
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
 import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
-import { runtimeLeases } from "./runtime-lease.js";
+import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
 
@@ -296,29 +296,36 @@ export function acquireLock(
  * Idempotent.
  */
 export function recoverInstallation(id: string): string[] {
-  const receipt = readInstallReceipt(id);
-  removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);
-  const apps = appDirectory(id);
-  const keep = new Set([
-    ...receipt.releases.map((item) => item.version),
-    "launch.mjs",
-    ".lifecycle.lock",
-    ".runtime-leases",
-  ]);
-  for (const lease of runtimeLeases(id, true)) {
-    if (!lease.live) continue;
-    if (lease.version === "*") {
-      for (const name of readdirSync(apps))
-        if (VERSION_NAME.test(name)) keep.add(name);
-    } else keep.add(lease.version);
-  }
-  const removed: string[] = [];
-  for (const name of readdirSync(apps))
-    if (!keep.has(name)) {
-      rmSync(join(apps, name), { recursive: true, force: true });
-      removed.push(name);
+  const gate = acquireLaunchGate(id);
+  try {
+    const receipt = readInstallReceipt(id);
+    removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);
+    const apps = appDirectory(id);
+    const keep = new Set([
+      ...receipt.releases.map((item) => item.version),
+      "launch.mjs",
+      ".lifecycle.lock",
+      ".runtime-leases",
+    ]);
+    for (const lease of runtimeLeases(id, true)) {
+      if (!lease.live) continue;
+      if (lease.version === "*") {
+        for (const name of readdirSync(apps))
+          if (VERSION_NAME.test(name)) keep.add(name);
+      } else keep.add(lease.version);
     }
-  return removed;
+    const removed: string[] = [];
+    for (const name of readdirSync(apps))
+      if (!keep.has(name)) {
+        if (!gate.stillHeld())
+          throw new Error(`Launcher registration lock for ${id} was lost`);
+        rmSync(join(apps, name), { recursive: true, force: true });
+        removed.push(name);
+      }
+    return removed;
+  } finally {
+    gate.release();
+  }
 }
 
 export function requireManaged(receipt: InstallReceipt): void {

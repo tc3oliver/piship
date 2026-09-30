@@ -143,6 +143,36 @@ describe("spawnManaged", () => {
   });
 
   it.skipIf(process.platform !== "win32")(
+    "returns the governed child's exit code after draining its output",
+    async () => {
+      let stdout = "";
+      let stderr = "";
+      const result = await spawnManaged({
+        file: node,
+        args: [
+          "-e",
+          "process.stdout.write('out'); process.stderr.write('err'); process.exit(37)",
+        ],
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "" },
+        onStdout: (chunk) => {
+          stdout += chunk.toString();
+        },
+        onStderr: (chunk) => {
+          stderr += chunk.toString();
+        },
+      }).exited;
+      expect(result).toMatchObject({
+        code: 37,
+        timedOut: false,
+        cancelled: false,
+      });
+      expect(stdout).toBe("out");
+      expect(stderr).toBe("err");
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
     "kills a live governed tree when PiShip exits",
     async () => {
       const heartbeat = join(dir, "shutdown-hb");

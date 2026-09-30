@@ -263,6 +263,32 @@ describe("durable credential issuance", () => {
     expect(pending()).toBeNull();
   });
 
+  it("keeps one lost-answer issuance across backward and forward clock steps and restart", async () => {
+    let now = Date.now();
+    const broker = new FakeBroker(issuancePath());
+    broker.plan.push("drop-after-create");
+    const first = brokerManager(broker, { now: () => now });
+    await failure(first.ensure(alice, ctx, { allowAcquire: true }));
+    const key = pending()?.idempotency_key;
+    expect(broker.issued).toHaveLength(1);
+    now -= 2 * 60 * 60_000;
+    broker.plan.push("drop-after-create");
+    const restarted = brokerManager(broker, { now: () => now });
+    await failure(restarted.ensure(alice, ctx, { allowAcquire: true }));
+    expect(broker.keys).toEqual([key, key]);
+    expect(broker.issued).toHaveLength(1);
+    now += ISSUANCE_RETENTION_MS + 3 * 60 * 60_000;
+    const error = await failure(
+      brokerManager(broker, { now: () => now }).ensure(alice, ctx, {
+        allowAcquire: true,
+      }),
+    );
+    expect(error.message).toMatch(/reconcile/);
+    expect(pending()?.idempotency_key).toBe(key);
+    expect(broker.keys).toEqual([key, key]);
+    expect(broker.issued).toHaveLength(1);
+  });
+
   it("repeats the key after a 5xx before anything was issued", async () => {
     const broker = new FakeBroker();
     broker.plan.push("unavailable");
@@ -355,7 +381,7 @@ describe("durable credential issuance", () => {
     expect(pending()).toBeNull();
   });
 
-  it("starts a new key once the retention has passed, and cannot recover a key the broker forgot", async () => {
+  it("fails closed when an unresolved key may be past broker retention", async () => {
     let now = Date.now();
     const broker = new FakeBroker();
     broker.plan.push("drop-after-create");
@@ -368,11 +394,15 @@ describe("durable credential issuance", () => {
     await failure(credentials.ensure(alice, ctx, { allowAcquire: true }));
     expect(broker.keys[1]).toBe(first);
     expect(broker.issued).toHaveLength(1);
-    // ...past it, the broker may have forgotten it: a new key.
+    // A forward clock jump or true expiry cannot justify a new issuance.
     now += 2000;
-    await credentials.ensure(alice, ctx, { allowAcquire: true });
-    expect(broker.keys[2]).not.toBe(first);
-    expect(broker.issued).toHaveLength(2);
+    const error = await failure(
+      credentials.ensure(alice, ctx, { allowAcquire: true }),
+    );
+    expect(error.message).toMatch(/reconcile/);
+    expect(broker.keys).toHaveLength(2);
+    expect(broker.issued).toHaveLength(1);
+    expect(pending()?.idempotency_key).toBe(first);
 
     // A broker that forgot its records (a restart without a durable store)
     // answers a repeated key with a new credential: PiShip repeats the key,
@@ -382,8 +412,8 @@ describe("durable credential issuance", () => {
     await failure(credentials.ensure(alice, ctx, { allowAcquire: true }));
     broker.forget();
     await credentials.ensure(alice, ctx, { allowAcquire: true });
-    expect(broker.keys[4]).toBe(broker.keys[3]);
-    expect(broker.issued).toHaveLength(4);
+    expect(broker.keys[3]).toBe(broker.keys[2]);
+    expect(broker.issued).toHaveLength(3);
   });
 
   it("starts a new key after the broker's final answer to it", async () => {
@@ -665,10 +695,6 @@ describe("durable credential issuance", () => {
       // recorded: never sent to this one.
       { ...base, target: targetOf("http-broker https://other.example.test/") },
       { ...base, target: undefined },
-      {
-        ...base,
-        created_at: new Date(Date.now() + 3_600_000).toISOString(),
-      },
     ]) {
       write(damaged);
       await credentials.ensure(alice, ctx, { allowAcquire: true });
@@ -676,6 +702,14 @@ describe("durable credential issuance", () => {
       expect(broker.keys.at(-1)).toMatch(UUID);
       await credentials.logout(ctx);
     }
+    // A backward clock correction leaves an unresolved key intact.
+    write({
+      ...base,
+      created_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    await credentials.ensure(alice, ctx, { allowAcquire: true });
+    expect(broker.keys.at(-1)).toBe("kept-key-0001");
+    await credentials.logout(ctx);
     // A valid record is repeated as it is.
     write(base);
     await credentials.ensure(alice, ctx, { allowAcquire: true });

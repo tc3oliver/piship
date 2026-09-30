@@ -78,8 +78,6 @@ export const CREDENTIAL_ISSUANCE_FILE = "pending-issuance.json";
  * acquire starts a new key instead.
  */
 export const ISSUANCE_RETENTION_MS = 24 * 60 * 60 * 1000;
-/** A pending issuance created this far in the future (a clock change) is dropped. */
-const ISSUANCE_CLOCK_TOLERANCE_MS = 60 * 1000;
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
@@ -1046,17 +1044,11 @@ export class CredentialManager {
   #settleIssuance(principal?: PrincipalKey | null): PendingIssuance | null {
     const pending = this.#readIssuance();
     if (!pending) return null;
-    const age =
-      pending === "invalid"
-        ? Number.NaN
-        : this.#now() - Date.parse(pending.created_at);
     const current = this.readMetadata();
     if (
       pending === "invalid" ||
       pending.mode !== this.mode ||
       pending.target !== this.#issuanceTarget ||
-      !(age >= -ISSUANCE_CLOCK_TOLERANCE_MS) ||
-      age >= (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS) ||
       (principal !== undefined &&
         !samePrincipal(pending.principal ?? null, principal)) ||
       (current !== null && !sameBase(current, pending.renews))
@@ -1064,6 +1056,22 @@ export class CredentialManager {
       this.#dropIssuance();
       return null;
     }
+    // Wall time cannot prove broker retention across clock steps, sleep or a
+    // process restart. Never turn an unresolved remote side effect into a new
+    // key. Once the recorded age exceeds the broker's promised window, stop
+    // automatic issuance and require reconciliation instead of guessing.
+    if (
+      this.#now() - Date.parse(pending.created_at) >=
+      (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS)
+    )
+      throw new PiShipError(
+        "CREDENTIAL_ACQUIRE_FAILED",
+        "An unresolved credential request may be older than broker idempotency retention; reconcile it before acquiring again",
+        {
+          userAction:
+            "Check the broker for the pending issuance key and resolve or revoke that credential before retrying",
+        },
+      );
     return pending;
   }
 
