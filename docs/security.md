@@ -79,7 +79,7 @@ A `piship/v1alpha3` or `piship/v1alpha4` launch opens a governance session befor
 For each request the policy engine takes the first matching rule of each layer and applies the strictest effect (`deny` over `ask` over `allow`):
 
 1. Distribution Enforced (`policy.enforced`).
-2. Team and project rules (`policy.adapter` and the project's `.piship/policy.json`): narrowing only; their `allow` rules are ignored and reported.
+2. Team and project rules (`policy.adapter` and the project's `.piship/policy.json`): narrowing only; their `allow` rules are ignored and reported. Team rules and project rules are matched separately, each taking its own first match, so a team `ask` never hides a project `deny` (and the other way round).
 3. Distribution Defaults (`policy.defaults`), or
 4. in personal mode, a matching User rule from `<state>/config/policy.json`, which takes the default's place. In managed mode user rules are a narrowing-only layer like step 2: their `allow` rules are ignored and reported (`doctor`, `policy explain`, and a `policy.violation` audit event), and their `ask` and `deny` rules join the strictest-effect comparison.
 
