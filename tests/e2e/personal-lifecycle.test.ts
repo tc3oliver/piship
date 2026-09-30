@@ -232,8 +232,8 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
       resumed: true,
     });
 
-    // A damaged session is not resumed: the launch stops with the file
-    // named and unchanged, and --new-session starts a new session beside it.
+    // A damaged acceptance session holds no user work: the run replaces it
+    // with a new one, says so, and keeps the file unchanged.
     const acceptance = join(s.state, "mypi", "sessions", "acceptance");
     const [sessionName] = readdirSync(acceptance).filter((name) =>
       name.endsWith(`_${first.sessionId}.jsonl`),
@@ -243,15 +243,12 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     const [header, ...entries] = readFileSync(sessionFile, "utf8").split("\n");
     writeFileSync(sessionFile, [header, "{damaged", ...entries].join("\n"));
     const damaged = readFileSync(sessionFile);
-    const refused = await s.run(["--smoke"]);
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("line 2 is not valid JSON");
-    expect(refused.stderr).toContain(sessionFile);
-    expect(refused.stderr).toContain("mypi --new-session");
+    const replaced = await s.run(["--smoke"]);
+    expect(replaced.status, replaced.stderr).toBe(0);
+    expect(replaced.stderr).toContain("line 2 is not valid JSON");
+    expect(replaced.stderr).toContain(sessionFile);
     expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
-    const fresh = await s.run(["--new-session", "--smoke"]);
-    expect(fresh.status, fresh.stderr).toBe(0);
-    const freshSmoke = JSON.parse(fresh.stdout) as Smoke;
+    const freshSmoke = JSON.parse(replaced.stdout) as Smoke;
     expect(freshSmoke).toMatchObject({ ...expected, resumed: false });
     expect(freshSmoke.sessionId).not.toBe(first.sessionId);
     const afterFresh = await s.run(["--smoke"]);
@@ -261,6 +258,19 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
       resumed: true,
     });
     expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
+
+    // A damaged user session is not resumed: the interactive launch stops
+    // before the TUI starts, with the file named and unchanged.
+    const users = join(s.state, "mypi", "sessions", "user");
+    mkdirSync(users, { recursive: true });
+    const userFile = join(users, sessionName as string);
+    writeFileSync(userFile, damaged);
+    const refused = await s.run([]);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("line 2 is not valid JSON");
+    expect(refused.stderr).toContain(userFile);
+    expect(refused.stderr).toContain("mypi --new-session");
+    expect(readFileSync(userFile).equals(damaged)).toBe(true);
 
     // Nothing but the channel was contacted, and no enterprise state exists.
     const channelFiles = new Set([

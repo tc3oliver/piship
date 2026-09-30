@@ -15,6 +15,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -349,6 +350,10 @@ describe("a corrupt session is not resumed (#62)", () => {
   it("starts a new session with --new-session and keeps the damaged one", () => {
     const { file, id, lines: entries } = persistedSession();
     rewrite(file, [...entries.slice(0, 2), "{not json", ...entries.slice(2)]);
+    // Older than the new session by more than the file system's timestamp
+    // granularity, so "the most recent" below never depends on a tie.
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(file, past, past);
     const before = readFileSync(file);
     const opened = open(true);
     expect(opened.sessionManager.getSessionId()).not.toBe(id);
