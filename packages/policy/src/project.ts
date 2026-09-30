@@ -1,6 +1,12 @@
 // Project identity, origin classification, and project resource discovery.
 // No git binary is executed: the origin remote is read from the git config.
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  type Dirent,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
@@ -17,6 +23,7 @@ import {
   isWithin,
   matchGlob,
   normalizePathResource,
+  toPosixPath,
 } from "./glob.js";
 import { projectEffectReason, type ProjectOrigin } from "./trust.js";
 
@@ -45,6 +52,17 @@ function isFile(path: string): boolean {
     return false;
   }
 }
+
+function isSymbolicLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The directories of a git directory that git runs or trusts, protected as whole trees. */
+const GIT_CONTROL_TREES = ["hooks", "info", "modules", "worktrees"] as const;
 
 function readText(path: string): string | undefined {
   try {
@@ -459,6 +477,8 @@ interface GitConfigScan {
   readonly repositoryIncludes: readonly string[];
   /** The known system and global config files, and the files only they and the environment include, normalized. */
   readonly otherFiles: readonly string[];
+  /** Every config file the scan tried, as it was named (not resolved), whether or not it exists. */
+  readonly tried: readonly string[];
   /** Why the scan stopped short, when it did. */
   readonly unverified: string | undefined;
 }
@@ -547,6 +567,7 @@ function scanGitConfigs(
       hooksPaths,
       repositoryIncludes: [...repositoryIncludes],
       otherFiles: [...new Set([...known.files.map(real), ...otherIncluded])],
+      tried: [...stamps.keys()],
       unverified,
     },
     stamps,
@@ -603,23 +624,30 @@ function gitConfigScan(
  * read-only tree without making the whole project read-only, so it is left
  * out.
  */
-function hooksPathDirectories(
+function hooksPathTargets(
   root: string,
   gitDir: string | undefined,
-): string[] {
+): { readonly named: string; readonly directory: string }[] {
   const project = real(root);
-  const directories: string[] = [];
+  const targets: { named: string; directory: string }[] = [];
   const values = gitConfigScan(root, gitDir).hooksPaths;
   for (const value of values) {
-    const path = value.startsWith("~/")
+    const named = value.startsWith("~/")
       ? join(homedir(), value.slice(2))
       : isAbsolute(value)
         ? value
         : resolve(root, value);
-    const directory = real(path);
-    if (!isWithin(directory, project)) directories.push(directory);
+    const directory = real(named);
+    if (!isWithin(directory, project)) targets.push({ named, directory });
   }
-  return directories;
+  return targets;
+}
+
+function hooksPathDirectories(
+  root: string,
+  gitDir: string | undefined,
+): string[] {
+  return hooksPathTargets(root, gitDir).map(({ directory }) => directory);
 }
 
 /**
@@ -643,13 +671,62 @@ export function projectGitControlDirectories(root: string): string[] {
   if (gitDir) bases.push(gitDir, commonDirectory(gitDir));
   const directories = [
     ...bases.flatMap((base) =>
-      ["hooks", "info", "modules", "worktrees"].map((name) =>
-        real(join(base, name)),
-      ),
+      GIT_CONTROL_TREES.map((name) => real(join(base, name))),
     ),
     ...hooksPathDirectories(root, gitDir),
   ];
   return [...new Set(directories)];
+}
+
+/**
+ * The symbolic links on the way to a path the lists above protect, as the
+ * links themselves (not what they point to), for the project's own git
+ * paths, every config file the scan tried, and every `core.hooksPath`
+ * directory. Protection follows a link: it covers the target and never the
+ * link, and nothing a sandbox offers can hold a link in place (a bind mount
+ * or a Seatbelt rule on it acts on the target). A sandboxed command that may
+ * write the directory holding the link can therefore replace it with a
+ * file or a link of its own before the next scan, and git follows that. The
+ * sandbox keeps the links that lie in a path it may write and reports git
+ * control `not-verified` for them. Paths are absolute with POSIX separators.
+ */
+export function projectGitControlLinks(root: string): string[] {
+  const dotGit = join(root, ".git");
+  const gitDir = gitDirectory(root);
+  const bases = [dotGit];
+  const named = [dotGit, join(dotGit, "config")];
+  if (gitDir) {
+    const common = commonDirectory(gitDir);
+    bases.push(gitDir, common);
+    named.push(
+      join(gitDir, "config"),
+      join(gitDir, "config.worktree"),
+      join(gitDir, "commondir"),
+      join(common, "config"),
+    );
+  }
+  for (const base of bases)
+    for (const name of GIT_CONTROL_TREES) named.push(join(base, name));
+  named.push(
+    ...gitConfigScan(root, gitDir).tried,
+    ...hooksPathTargets(root, gitDir).map((target) => target.named),
+  );
+  const links = new Set<string>();
+  const checked = new Map<string, boolean>();
+  for (const path of named)
+    for (
+      let current = resolve(path);
+      dirname(current) !== current;
+      current = dirname(current)
+    ) {
+      let isLink = checked.get(current);
+      if (isLink === undefined) {
+        isLink = isSymbolicLink(current);
+        checked.set(current, isLink);
+      }
+      if (isLink) links.add(toPosixPath(current));
+    }
+  return [...links];
 }
 
 function matcherMatches(

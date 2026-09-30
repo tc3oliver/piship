@@ -8,9 +8,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type Server } from "node:net";
@@ -377,6 +379,48 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         });
       } finally {
         await husky.dispose();
+      }
+    });
+
+    it("cannot hold a linked include target in place, and reports git control as not verified for it", async () => {
+      // `.git/config` includes `linked.cfg`, a link to `shared/real.cfg`.
+      // Protection covers the file the link points to; the link is an entry
+      // in the writable workspace.
+      const target = join(ws, "shared", "real.cfg");
+      const link = join(ws, "linked.cfg");
+      mkdirSync(join(ws, "shared"));
+      writeFileSync(target, "[user]\n\tname = someone\n");
+      symlinkSync(target, link);
+      const box = await activateSandbox(config, {
+        workspace: ws,
+        homeDir: home,
+        env: { ...process.env, HOME: home },
+        protectedPaths: {
+          files: [join(ws, ".git", "config"), target],
+          directories: [join(ws, ".git", "hooks")],
+          links: [link],
+        },
+      });
+      try {
+        const attempt = async (command: string) =>
+          (await box.exec(command, ws, { onData: () => {} })).exitCode;
+        expect(await attempt(`echo x >> "${target}"`)).not.toBe(0);
+        expect(readFileSync(target, "utf8")).toBe("[user]\n\tname = someone\n");
+        // Nothing holds the link itself: a command can point it at a file of
+        // its own, which is why the report cannot claim the protection.
+        expect(
+          await attempt(`ln -sfn "${join(ws, "evil.cfg")}" "${link}"`),
+        ).toBe(0);
+        expect(readlinkSync(link)).toBe(join(ws, "evil.cfg"));
+        expect(box.report.planes).toContain("git-control-protection");
+        expect(box.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+        expect(box.report.warnings.join("\n")).toContain("symbolic link");
+      } finally {
+        await box.dispose();
+        rmSync(link, { force: true });
+        rmSync(join(ws, "shared"), { recursive: true, force: true });
       }
     });
 

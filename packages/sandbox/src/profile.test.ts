@@ -182,6 +182,57 @@ describe("resolveProfile", () => {
     ]);
   });
 
+  it("reports git control unverified for a link in a directory the sandbox may write, and only there", () => {
+    const ws = join(root, "ws");
+    mkdirSync(ws);
+    symlinkSync(ws, join(root, "ws-link"));
+    const ctx = {
+      workspace: ws,
+      homeDir: join(root, "home"),
+      tmpDir: join(root, "t"),
+    };
+    const resolve = (links: string[], unverified?: string) =>
+      resolveProfile(policy(), {
+        ...ctx,
+        protectedPaths: {
+          files: [],
+          directories: [],
+          links,
+          ...(unverified ? { unverified } : {}),
+        },
+      });
+    // Protection covers what a link points to, and nothing holds the link
+    // itself in place: a link the sandbox can replace is a path it can retarget.
+    const inside = resolve([join(ws, ".gitconfig-team")]);
+    expect(inside.writeProtect.unverified).toContain("symbolic link");
+    expect(inside.writeProtect.unverified).toContain(
+      join(ws, ".gitconfig-team"),
+    );
+    expect(inside.warnings).toEqual([
+      `git control is not verified: ${inside.writeProtect.unverified}`,
+    ]);
+    // The directory that holds it is what counts, however it is named.
+    expect(
+      resolve([join(root, "ws-link", "x")]).writeProtect.unverified,
+    ).toContain("symbolic link");
+    // A link the sandbox cannot write next to is not retargetable from inside.
+    const outside = resolve([
+      join(root, "home", ".gitconfig"),
+      join(root, "elsewhere", "hooks"),
+    ]);
+    expect(outside.writeProtect).toEqual({ files: [], directories: [] });
+    expect(outside.warnings).toEqual([]);
+    // Every reason is kept, and a long list of links is counted.
+    const both = resolve(
+      Array.from({ length: 5 }, (_, index) => join(ws, `link-${index}`)),
+      "the git config lists too much",
+    );
+    expect(both.writeProtect.unverified).toMatch(
+      /^the git config lists too much; .*link-0.*link-2 and 2 more\)/,
+    );
+    expect(both.writeProtect.unverified).not.toContain("link-3");
+  });
+
   it("warns when a deny hides a writable path", () => {
     const profile = resolveProfile(
       policy({

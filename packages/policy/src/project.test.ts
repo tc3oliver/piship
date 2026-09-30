@@ -27,6 +27,7 @@ import {
   projectDimensionEffect,
   projectGitControlDirectories,
   projectGitControlFiles,
+  projectGitControlLinks,
   projectGitControlUnverified,
   readProjectRestrictions,
   type ProjectResourceCandidate,
@@ -765,6 +766,122 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
         at(root, "system-hooks"),
       ]),
     );
+  });
+});
+
+describe("symbolic links on the way to a protected path", () => {
+  const cfg = (text: string) => `${text}\n`;
+  const hooks = (value: string) => cfg(`[core]\n\thooksPath = ${value}`);
+  const links = (root: string) => projectGitControlLinks(root);
+  const at = (root: string, ...parts: string[]) => posix(join(root, ...parts));
+  const repo = (name: string) => {
+    const root = dir(name);
+    gitRepo(root);
+    return root;
+  };
+
+  it("names none for an ordinary repository, and none for a path that does not exist", () => {
+    const root = repo("links-none");
+    expect(links(root)).toEqual([]);
+    write(
+      join(root, ".git", "config"),
+      cfg(`[include]\n\tpath = missing\n${hooks("no-such-hooks").trim()}`),
+    );
+    expect(links(root)).toEqual([]);
+  });
+
+  it("names a symbolic link that is an include target, whose target is protected but not the link", () => {
+    const root = repo("links-include");
+    write(join(root, ".git", "config"), cfg("[include]\n\tpath = ../team.cfg"));
+    write(join(root, "shared", "team.cfg"), hooks("team-hooks"));
+    if (
+      !trySymlink(
+        join(root, "shared", "team.cfg"),
+        join(root, "team.cfg"),
+        "file",
+      )
+    )
+      return;
+    // Protection follows the link to the real file...
+    expect(projectGitControlFiles(root)).toContain(
+      at(root, "shared", "team.cfg"),
+    );
+    expect(projectGitControlFiles(root)).not.toContain(at(root, "team.cfg"));
+    // ...so the link itself is named, for the sandbox to weigh.
+    expect(links(root)).toEqual([at(root, "team.cfg")]);
+  });
+
+  it("names a link among the directories on the way to an include target", () => {
+    const root = repo("links-parent");
+    write(
+      join(root, ".git", "config"),
+      cfg("[include]\n\tpath = ../conf/team.cfg"),
+    );
+    write(join(root, "real-conf", "team.cfg"), hooks("team-hooks"));
+    if (!trySymlink(join(root, "real-conf"), join(root, "conf"), "dir")) return;
+    expect(links(root)).toEqual([at(root, "conf")]);
+  });
+
+  it("names a link that is a core.hooksPath directory, or on the way to one", () => {
+    const husky = repo("links-husky");
+    write(join(husky, ".git", "config"), hooks(".husky/_"));
+    mkdirSync(join(husky, ".githooks"));
+    if (
+      !trySymlink(join(husky, ".githooks"), join(husky, ".husky", "_"), "dir")
+    )
+      return;
+    expect(projectGitControlDirectories(husky)).toContain(
+      at(husky, ".githooks"),
+    );
+    expect(links(husky)).toEqual([at(husky, ".husky", "_")]);
+
+    const nested = repo("links-hooks-parent");
+    write(join(nested, ".git", "config"), hooks("tools/hooks"));
+    mkdirSync(join(nested, "real-tools", "hooks"), { recursive: true });
+    if (!trySymlink(join(nested, "real-tools"), join(nested, "tools"), "dir"))
+      return;
+    expect(links(nested)).toEqual([at(nested, "tools")]);
+  });
+
+  it("names a linked .git/hooks, the shared hooks directory some teams use", () => {
+    const root = repo("links-git-hooks");
+    mkdirSync(join(root, ".githooks"));
+    if (
+      !trySymlink(join(root, ".githooks"), join(root, ".git", "hooks"), "dir")
+    )
+      return;
+    expect(links(root)).toEqual([at(root, ".git", "hooks")]);
+  });
+
+  it("names a linked global config, as dotfile managers set it up", () => {
+    const dotfiles = dir("links-dotfiles");
+    write(join(dotfiles, "gitconfig"), hooks(".global-hooks"));
+    if (
+      !trySymlink(
+        join(dotfiles, "gitconfig"),
+        join(fakeHome, ".gitconfig"),
+        "file",
+      )
+    )
+      return;
+    const root = repo("links-global");
+    expect(links(root)).toEqual([at(fakeHome, ".gitconfig")]);
+    // Followed for what it sets all the same.
+    expect(projectGitControlDirectories(root)).toContain(
+      at(root, ".global-hooks"),
+    );
+  });
+
+  it("sees a link that appears after the last look, since the links are not cached", () => {
+    const root = repo("links-late");
+    write(join(root, ".git", "config"), cfg("[include]\n\tpath = ../late.cfg"));
+    write(join(root, "late.cfg"), hooks("late-hooks"));
+    expect(links(root)).toEqual([]);
+    write(join(root, "other.cfg"), hooks("late-hooks"));
+    rmSync(join(root, "late.cfg"));
+    if (!trySymlink(join(root, "other.cfg"), join(root, "late.cfg"), "file"))
+      return;
+    expect(links(root)).toEqual([at(root, "late.cfg")]);
   });
 });
 
