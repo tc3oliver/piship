@@ -881,6 +881,107 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     await sandbox.dispose();
   });
 
+  it("retires a claim the router no longer knows and never replays the command", async () => {
+    const cluster: Cluster = { routerGone: new Set() };
+    const mock = await kubernetesServer(
+      (command) => ({ stdout: `${command.split("'").at(-2)}\n` }),
+      cluster,
+    );
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 3600 }),
+    );
+    const [first] = claimNames(mock.requests);
+    // The API still lists the claim, far from renewal; only the router
+    // answers that its sandbox is gone.
+    cluster.routerGone?.add(first ?? "");
+    await expect(run(sandbox, "echo one")).rejects.toThrow(
+      /no longer knows this sandbox/,
+    );
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    expect((await run(sandbox, "echo two")).output).toBe("echo two\n");
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    const commands = mock.requests
+      .filter((request) => request.path === "/execute")
+      .map((request) => ({
+        sandbox: request.headers["x-sandbox-id"],
+        one: request.body.toString().includes("echo one"),
+        two: request.body.toString().includes("echo two"),
+      }))
+      .filter((command) => command.one || command.two);
+    // Sent once to the stale sandbox, never again; the next one is fresh.
+    expect(commands).toEqual([
+      { sandbox: `pool-${first}`, one: true, two: false },
+      { sandbox: `pool-${names[1]}`, one: false, two: true },
+    ]);
+    await sandbox.dispose();
+  });
+
+  it("retires a claim that disappears while a command runs, without replaying it", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((done) => {
+      finish = done;
+    });
+    const cluster: Cluster = { expired: new Set() };
+    const mock = await kubernetesServer(
+      (command) =>
+        command.includes("slow")
+          ? { stdout: "slow done\n", after: finished }
+          : { stdout: "ok\n" },
+      cluster,
+    );
+    // A one-second lifetime renews a running command every 250 ms.
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 1 }),
+    );
+    const [first] = claimNames(mock.requests);
+    const slow = run(sandbox, "slow job");
+    const sent = Date.now() + 10_000;
+    while (
+      !mock.requests.some((request) =>
+        request.body.toString().includes("slow job"),
+      ) &&
+      Date.now() < sent
+    )
+      await new Promise((done) => setTimeout(done, 10));
+    cluster.expired?.add(first ?? "");
+    // The keepalive learns that the claim is gone.
+    const deadline = Date.now() + 10_000;
+    while (
+      !mock.requests.some(
+        (request) =>
+          request.method === "PATCH" && request.path === `${CLAIMS}/${first}`,
+      ) &&
+      Date.now() < deadline
+    )
+      await new Promise((done) => setTimeout(done, 25));
+    finish();
+    // The command's own outcome stands; it is not sent again.
+    expect((await slow).output).toBe("slow done\n");
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+    const names = claimNames(mock.requests);
+    expect(names).toHaveLength(2);
+    const execute = mock.requests.filter(
+      (request) => request.path === "/execute",
+    );
+    expect(
+      execute.filter((request) => request.body.toString().includes("slow job")),
+    ).toHaveLength(1);
+    expect(execute.at(-1)?.headers["x-sandbox-id"]).toBe(`pool-${names[1]}`);
+    await sandbox.dispose();
+  });
+
   it("reports a new epoch once an expired claim is replaced", async () => {
     let now = Date.parse("2026-09-28T18:00:00Z");
     const mock = await kubernetesServer();

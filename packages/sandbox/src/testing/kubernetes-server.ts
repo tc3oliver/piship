@@ -13,6 +13,11 @@ export interface Cluster {
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
   expired?: Set<string>;
+  /**
+   * Claims the API still lists but whose sandbox the router no longer knows:
+   * the router answers 404 for them.
+   */
+  routerGone?: Set<string>;
   /** Claims never report Ready. */
   neverReady?: boolean;
   /** Holds PATCH responses until it resolves. */
@@ -29,6 +34,8 @@ export async function kubernetesServer(
     stdout?: string;
     exit_code?: number;
     hang?: boolean;
+    /** Answer only once this resolves. */
+    after?: Promise<void>;
   },
   cluster: Cluster = {},
 ): Promise<MockServer> {
@@ -88,7 +95,8 @@ export async function kubernetesServer(
       const sandbox = request.headers["x-sandbox-id"];
       if (
         typeof sandbox === "string" &&
-        cluster.expired?.has(sandbox.slice(5))
+        (cluster.expired?.has(sandbox.slice(5)) ||
+          cluster.routerGone?.has(sandbox.slice(5)))
       ) {
         response.statusCode = 404;
         return void response.end("{}");
@@ -108,7 +116,10 @@ export async function kubernetesServer(
         );
       const answer = execute?.(command) ?? { stdout: "", exit_code: 0 };
       if (answer.hang) return;
-      return void response.end(JSON.stringify({ stderr: "", ...answer }));
+      const { after, ...body } = answer;
+      return void (after ?? Promise.resolve()).then(() =>
+        response.end(JSON.stringify({ stderr: "", ...body })),
+      );
     }
     response.statusCode = 404;
     response.end("{}");
