@@ -148,13 +148,19 @@ export async function buildEngine(
   homeDir: string,
 ): Promise<PolicyEngine> {
   const manifest = options.lock.governance.manifest;
+  const projectRules = readProjectRestrictions(candidates);
   return new PolicyEngine({
     policy: manifest.policy,
     teamRules: await readTeamRules(
       options.distributionDir,
       manifest.policy.adapter,
     ),
-    projectRules: withIgnored(readProjectRestrictions(candidates)),
+    projectRules: withIgnored(projectRules),
+    // The engine reports ignored rules itself; this keeps the rest (a
+    // restriction file that could not be read).
+    diagnostics: projectRules.diagnostics.filter(
+      (item) => item.ruleId === undefined,
+    ),
     userRules: readUserRules(options.stateDir),
     // Managed: the distribution owns the policy, so user rules only narrow.
     userRuleMode:

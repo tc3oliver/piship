@@ -309,6 +309,11 @@ export interface PolicyEngineInput {
    * `allow` rules are ignored and reported, and the rest can only tighten.
    */
   readonly userRuleMode?: "replace-default" | "narrowing";
+  /**
+   * Problems reading the rule inputs (such as a project restriction file
+   * that could not be read), reported first among the engine's diagnostics.
+   */
+  readonly diagnostics?: readonly PolicyDiagnostic[];
   readonly context: PolicyContext;
 }
 
@@ -359,7 +364,7 @@ export class PolicyEngine {
       ...normalizeTokenContext(input.context),
       containment: { ...input.context.containment },
     };
-    const diagnostics: PolicyDiagnostic[] = [];
+    const diagnostics: PolicyDiagnostic[] = [...(input.diagnostics ?? [])];
     const ignored: IgnoredRule[] = [];
     const wrap = (
       rules: readonly PolicyRule[],

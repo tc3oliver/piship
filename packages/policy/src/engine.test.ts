@@ -367,6 +367,25 @@ describe("precedence", () => {
     }).evaluate({ action: "tool.execute", resource: "bash" });
     expect(decision.ruleId).toBe("e.deny");
   });
+  it("reports the diagnostics of reading its inputs first", () => {
+    const unreadable = {
+      level: "warning" as const,
+      source: "/work/.piship/policy.json",
+      message: "The project restriction file could not be read",
+    };
+    const e = engine({
+      diagnostics: [unreadable],
+      projectRules: [rule("p.allow", "shell.execute", "**", "allow")],
+    });
+    expect(e.diagnostics[0]).toEqual(unreadable);
+    expect(e.diagnostics.map((item) => item.ruleId)).toEqual([
+      undefined,
+      "p.allow",
+    ]);
+    expect(
+      e.explain({ action: "shell.execute", resource: "ls" }).diagnostics,
+    ).toContainEqual(unreadable);
+  });
   it("does not let a team ask hide a project deny", () => {
     const decision = engine({
       policy: makePolicy({ default: "allow" }),

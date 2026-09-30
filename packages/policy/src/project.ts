@@ -1109,6 +1109,8 @@ export function discoverProjectResources(
 /**
  * Read the project restriction file of a discovered candidate list. Rules
  * are always narrowing only; the file is not read when it escapes the root.
+ * A file that cannot be read adds no rules, which never widens anything, and
+ * a warning says so.
  */
 export function readProjectRestrictions(
   candidates: readonly ProjectResourceCandidate[],
@@ -1117,7 +1119,18 @@ export function readProjectRestrictions(
   if (!candidate || candidate.effect === "deny")
     return { rules: [], ignored: [], diagnostics: [] };
   const text = readText(candidate.resolvedPath);
-  if (text === undefined) return { rules: [], ignored: [], diagnostics: [] };
+  if (text === undefined)
+    return {
+      rules: [],
+      ignored: [],
+      diagnostics: [
+        {
+          level: "warning",
+          source: candidate.path,
+          message: `The project restriction file ${candidate.path} could not be read; its rules do not apply`,
+        },
+      ],
+    };
   let value: unknown;
   try {
     value = JSON.parse(text);
