@@ -144,6 +144,7 @@ public static class PiShipJob {
 
 const SCRIPT = `
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 try {
   Add-Type -TypeDefinition @'
 ${SOURCE}
@@ -152,6 +153,7 @@ ${SOURCE}
   $start = New-Object System.Diagnostics.ProcessStartInfo
   $start.FileName = [string]$request.file
   $start.WorkingDirectory = [string]$request.cwd
+  $start.UseShellExecute = $false
   $start.EnvironmentVariables.Clear()
   foreach ($entry in $request.env.PSObject.Properties) { $start.EnvironmentVariables[$entry.Name] = [string]$entry.Value }
   exit ([PiShipJob]::Run($start, [string[]]$request.args))
@@ -166,7 +168,16 @@ export function windowsJobCommand(target: {
   readonly cwd: string;
   readonly env: Readonly<Record<string, string>>;
 }): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
-  const request = Buffer.from(JSON.stringify(target)).toString("base64");
+  // Windows needs SystemRoot to resolve side-by-side runtime assemblies when
+  // CreateProcess receives an explicit environment block. Keep the rest of
+  // the child's environment restricted to the caller-approved values.
+  const childEnv = { ...target.env };
+  for (const name of ["SystemRoot", "WINDIR"] as const)
+    if (!(name in childEnv) && process.env[name])
+      childEnv[name] = process.env[name];
+  const request = Buffer.from(
+    JSON.stringify({ ...target, env: childEnv }),
+  ).toString("base64");
   return {
     file: "powershell.exe",
     args: [

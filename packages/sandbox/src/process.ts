@@ -252,7 +252,11 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   const exited = waitForExit(child, cleanup).then((result) => ({
     ...result,
     ...(jobError
-      ? { error: "ENOENT or Windows Job Object startup failed" }
+      ? {
+          code: null,
+          signal: null,
+          error: "ENOENT or Windows Job Object startup failed",
+        }
       : {}),
     timedOut,
     cancelled,

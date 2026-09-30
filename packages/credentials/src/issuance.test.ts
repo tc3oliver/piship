@@ -15,7 +15,6 @@ import {
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import {
   type CredentialProvider,
@@ -830,7 +829,7 @@ describe("a PiShip process killed mid-acquire", () => {
 
   it("repeats the recorded key in the next process, so the broker issues once", async () => {
     const dist = (name: string) =>
-      fileURLToPath(new URL(`../../${name}/dist/index.js`, import.meta.url));
+      new URL(`../../${name}/dist/index.js`, import.meta.url).href;
     const script = join(temp, "acquire.mjs");
     writeFileSync(
       script,

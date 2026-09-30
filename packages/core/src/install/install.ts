@@ -62,7 +62,9 @@ function otherCommandOwner(
       )
         return name.slice(0, -5);
     } catch {
-      // A damaged receipt cannot establish ownership of this command.
+      throw new Error(
+        `Cannot establish command ownership while receipt ${name} is damaged`,
+      );
     }
   }
   return undefined;

@@ -434,12 +434,12 @@ describe.skipIf(!posix)(
         complete: true,
       });
       expect(reports).toEqual([sandbox.workspace()]);
-      // The check ran first and exactly once; the sentinel is gone.
+      // Deny and allow network checks precede the one workspace check.
       expect(
         fake.requests.map((request) =>
           request.command.includes("piship-ws done"),
         ),
-      ).toEqual([false, true, false]);
+      ).toEqual([false, false, true, false]);
       expect(sentinels()).toEqual([]);
       expect(
         describeContainment(sandbox.report, sandbox.workspace()),

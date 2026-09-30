@@ -41,6 +41,12 @@ export function uninstallDistribution(id: string): string {
           throw new Error(
             `Cannot uninstall ${id} while ${live.length} runtime session(s) still use its payload; close them and retry`,
           );
+        if (
+          !gate.stillHeld() ||
+          !commandHold.stillHeld() ||
+          (hold && !hold.stillHeld())
+        )
+          throw new Error(`Install ownership lock for ${id} was lost`);
         if (existsSync(receipt.commandPath)) {
           if (
             !receipt.launcher ||
@@ -51,8 +57,6 @@ export function uninstallDistribution(id: string): string {
             );
           rmSync(receipt.commandPath, { force: true });
         }
-        if (!gate.stillHeld())
-          throw new Error(`Launcher registration lock for ${id} was lost`);
         rmSync(apps, { recursive: true, force: true });
         rmSync(receiptPath(id), { force: true });
         return runtimeStateDirectory({ value: id });

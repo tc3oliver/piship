@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnManaged } from "./process.js";
 
@@ -187,7 +187,14 @@ describe("spawnManaged", () => {
     `;
       execFileSync(
         node,
-        ["--input-type=module", "-e", source, modulePath, heartbeat, token],
+        [
+          "--input-type=module",
+          "-e",
+          source,
+          pathToFileURL(modulePath).href,
+          heartbeat,
+          token,
+        ],
         {
           cwd: dir,
           timeout: 20_000,
