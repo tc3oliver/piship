@@ -47,8 +47,9 @@ export interface KubernetesAgentSandboxOptions extends RemoteBackendOptions {
   /** Test seam: the wall clock a claim's `shutdownTime` is anchored to. */
   readonly now?: () => number;
   /**
-   * Test seam: the monotonic clock for elapsed time (renewal, expiry, the
-   * readiness wait). Default `performance.now`.
+   * Test seam: the monotonic clock. The readiness wait uses it alone; a
+   * claim's elapsed time is the larger of it and the wall clock. Default
+   * `performance.now`.
    */
   readonly monotonic?: () => number;
 }
@@ -93,8 +94,9 @@ interface Claim {
   expiresAt: number;
   /**
    * The wall clock and the monotonic clock when the claim was created. The
-   * claim's time is the first plus the monotonic time elapsed since, so a
-   * later change to the wall clock neither shortens nor extends its lifetime.
+   * claim's time is the first plus the larger of the two clocks' elapsed
+   * time: the monotonic clock stops while the machine sleeps, and the wall
+   * clock can be set back, so neither alone may shorten the elapsed time.
    */
   readonly wallAt: number;
   readonly monotonicAt: number;
@@ -111,6 +113,16 @@ function wholeSecond(ms: number): number {
 /** RFC 3339 of a whole-second time. */
 function shutdownTime(ms: number): string {
   return new Date(ms).toISOString().replace(".000Z", "Z");
+}
+
+/** Elapsed time on the clock that advanced more; never negative. */
+function elapsedSince(
+  monotonicAt: number,
+  wallAt: number,
+  monotonic: number,
+  wall: number,
+): number {
+  return Math.max(monotonic - monotonicAt, wall - wallAt, 0);
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -325,9 +337,22 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     return this.#options.monotonic?.() ?? performance.now();
   }
 
-  /** The wall clock on the claim's timeline: its creation plus elapsed time. */
+  /**
+   * The wall clock on the claim's timeline: its creation plus elapsed time,
+   * counted on whichever clock advanced more. A suspend is counted (the wall
+   * clock dominates) and a clock set back is not (the monotonic one does); a
+   * clock set forward is indistinguishable from a suspend and counts too.
+   */
   #claimTime(claim: Claim): number {
-    return claim.wallAt + (this.#monotonic() - claim.monotonicAt);
+    return (
+      claim.wallAt +
+      elapsedSince(
+        claim.monotonicAt,
+        claim.wallAt,
+        this.#monotonic(),
+        this.#now(),
+      )
+    );
   }
 
   async #renewIfDue(claim: Claim, signal: AbortSignal): Promise<void> {
@@ -357,6 +382,10 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
 
   /** Move the claim's shutdownTime one lifetime ahead, never back. */
   async #renew(claim: Claim, signal?: AbortSignal): Promise<void> {
+    // A claim past its shutdownTime (a keepalive late after a suspend) may
+    // already be shutting down: it is never revived.
+    if (this.#claimTime(claim) >= claim.expiresAt)
+      throw new ClaimGone("the SandboxClaim expired");
     const expiresAt = Math.max(
       claim.expiresAt,
       wholeSecond(this.#claimTime(claim) + this.#lifetimeMs()),
