@@ -19,6 +19,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -61,7 +62,14 @@ function containerFile(name) {
 // removed container takes them with it, as it would in Docker.
 function killGroups(matches) {
   for (const file of readdirSync(join(dir, "execs"))) {
-    const record = JSON.parse(readFileSync(join(dir, "execs", file), "utf8"));
+    if (!file.endsWith(".json")) continue;
+    let record;
+    try {
+      record = JSON.parse(readFileSync(join(dir, "execs", file), "utf8"));
+    } catch {
+      // not a record (yet): never let a half-written one crash a removal
+      continue;
+    }
     if (!matches(record)) continue;
     try {
       process.kill(-record.pid, "SIGKILL");
@@ -104,7 +112,7 @@ if (command === "version") {
   for (const name of args.slice(1).filter((value) => !value.startsWith("--"))) {
     if (existsSync(containerFile(name))) {
       killGroups((record) => record.container === name);
-      rmSync(containerFile(name));
+      rmSync(containerFile(name), { force: true });
     } else {
       missing = true;
       process.stderr.write(
@@ -171,14 +179,18 @@ if (command === "version") {
       detached: true,
     },
   );
+  // Written whole and renamed into place: a removal or a cancel that reads the
+  // records at the same moment sees this one complete, or not at all.
+  const record = join(dir, "execs", `${environment.PISHIP_EXEC_ID}.json`);
   writeFileSync(
-    join(dir, "execs", `${environment.PISHIP_EXEC_ID}.json`),
+    `${record}.tmp`,
     JSON.stringify({
       id: environment.PISHIP_EXEC_ID,
       pid: child.pid,
       container: args[separator - 4],
     }),
   );
+  renameSync(`${record}.tmp`, record);
   child.stdout.pipe(process.stdout);
   child.stderr.pipe(process.stderr);
   child.on("close", (code) => process.exit(code ?? 137));

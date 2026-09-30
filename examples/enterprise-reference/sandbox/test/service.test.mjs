@@ -1405,7 +1405,16 @@ describe("the life of the service", () => {
       assert.equal(ours().length, 1);
       // The supervisor is gone: its end of the pipe closes.
       held.child.stdin.end();
-      assert.equal(await held.exited, 0);
+      // A service that does not notice would otherwise hang the test.
+      let timer;
+      const outcome = await Promise.race([
+        held.exited,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve("still running"), 20_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      assert.equal(outcome, 0);
       assert.deepEqual(ours(), []);
     } finally {
       held?.child.kill("SIGKILL");

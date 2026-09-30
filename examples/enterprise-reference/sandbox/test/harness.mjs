@@ -220,7 +220,14 @@ export async function startService(extraEnv = {}, options = {}) {
       const leftover = readdirSync(join(docker, "containers")).map((file) =>
         file.replace(/\.json$/, ""),
       );
-      rmSync(root, { recursive: true, force: true });
+      // A fake `docker` started by a cancel may still be appending to its log
+      // when the service has stopped: retry while the directory refills.
+      rmSync(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
       return { leftover };
     },
   };
