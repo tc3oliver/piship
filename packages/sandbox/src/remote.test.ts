@@ -1152,8 +1152,6 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     it.each([
       ["backward by an hour", -3600_000],
       ["backward by two seconds (a small correction)", -2000],
-      ["forward by two seconds (a small correction)", 2000],
-      ["forward by a day", 86_400_000],
     ])(
       "renews from monotonic elapsed time when the clock moves %s",
       async (_name, jumpMs) => {
@@ -1193,6 +1191,123 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
         await sandbox.dispose();
       },
     );
+
+    it("renews on wall elapsed time after a suspend stopped the monotonic clock", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 3600,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      // Asleep for 45 minutes; the monotonic clock advanced 5.
+      now += 45 * 60_000;
+      monotonic += 5 * 60_000;
+      await run(sandbox, "echo a");
+      expect(shutdowns(mock.requests)).toEqual([
+        at(T + 3600_000),
+        at(T + 45 * 60_000 + 3600_000),
+      ]);
+      expect(claimNames(mock.requests)).toHaveLength(1);
+      await sandbox.dispose();
+    });
+
+    it("replaces a claim the wall clock says expired during a suspend, without reviving it", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 3600,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      now += 61 * 60_000;
+      monotonic += 5 * 60_000;
+      await run(sandbox, "echo ok");
+      expect(claimNames(mock.requests)).toHaveLength(2);
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(0);
+      await sandbox.dispose();
+    });
+
+    it("never lets a late keepalive revive a claim past its shutdownTime", async () => {
+      let now = T;
+      // Frozen: the machine slept, only the wall clock moved.
+      const monotonic = 0;
+      const mock = await kubernetesServer((command) =>
+        command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+      );
+      // A one-second lifetime renews a running command every 250 ms.
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 1,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      const controller = new AbortController();
+      const pending = sandbox
+        .exec("sleep 600", workspace, {
+          onData: () => {},
+          signal: controller.signal,
+        })
+        .catch(() => undefined);
+      const sent = Date.now() + 10_000;
+      while (
+        !mock.requests.some((request) =>
+          request.body.toString().includes("sleep 600"),
+        ) &&
+        Date.now() < sent
+      )
+        await new Promise((done) => setTimeout(done, 10));
+      // The command runs; the machine sleeps past the claim's shutdownTime.
+      now += 5000;
+      // Two keepalive intervals pass with the claim already expired.
+      await new Promise((done) => setTimeout(done, 700));
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(0);
+      controller.abort();
+      await pending;
+      await sandbox.dispose();
+    });
+
+    it("counts a forward jump as elapsed time: renewal comes earlier, and shutdownTime moves by at most the jump", async () => {
+      let now = T;
+      let monotonic = 0;
+      const mock = await kubernetesServer();
+      const sandbox = await activate(
+        kubernetes(mock.url, {
+          lifetimeSeconds: 60,
+          now: () => now,
+          monotonic: () => monotonic,
+        }),
+      );
+      // 10 s pass and the clock is also set 25 s ahead: 35 s count.
+      now += 35_000;
+      monotonic += 10_000;
+      await run(sandbox, "echo a");
+      // Monotonic time alone would neither renew yet nor give T + 70 s;
+      // the jump lengthens the lifetime by at most its own 25 s.
+      expect(shutdowns(mock.requests)).toEqual([
+        at(T + 60_000),
+        at(T + 95_000),
+      ]);
+      // A jump past the committed shutdownTime counts as expiry.
+      now += 86_400_000;
+      await run(sandbox, "echo b");
+      expect(claimNames(mock.requests)).toHaveLength(2);
+      expect(
+        mock.requests.filter((request) => request.method === "PATCH"),
+      ).toHaveLength(1);
+      await sandbox.dispose();
+    });
 
     it("expires a claim locally at its committed shutdownTime after the clock moved backward", async () => {
       let now = T;
@@ -1236,13 +1351,15 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
             .catch((error: unknown) => error);
           const elapsed = performance.now() - started;
           expect(String(failure)).toContain("did not become ready in time");
+          // Not cut short by a forward jump; the generous upper bound only
+          // has to catch a wait a backward jump stretched by the hour.
           expect(elapsed).toBeGreaterThanOrEqual(550);
-          expect(elapsed).toBeLessThan(3000);
+          expect(elapsed).toBeLessThan(15_000);
         } finally {
           spy.mockRestore();
         }
       },
-      10_000,
+      30_000,
     );
   });
 

@@ -1448,9 +1448,13 @@ describe.skipIf(!posix)("the propagation window", () => {
     async (_direction, jumpMs) => {
       const { report, elapsed } = await verifyWithJump(jumpMs);
       expect(report.sandboxToHost).toBe("missing");
+      // Not cut short by a forward jump. The upper bound only has to catch a
+      // wait that a backward jump stretched by the hour: generous, so a
+      // loaded CI runner does not fail it.
       expect(elapsed).toBeGreaterThanOrEqual(950);
-      expect(elapsed).toBeLessThan(3000);
+      expect(elapsed).toBeLessThan(15_000);
     },
+    30_000,
   );
 
   it.each([
@@ -1529,7 +1533,7 @@ describe.skipIf(!posix)("the validity window", () => {
     await sandbox.dispose();
   });
 
-  it("does not re-verify early when the wall clock jumps forward", async () => {
+  it("re-verifies after a suspend: the wall clock counts when the monotonic one stopped", async () => {
     let now = TIME;
     let monotonic = 1000;
     const fake = sharedBackend();
@@ -1538,11 +1542,32 @@ describe.skipIf(!posix)("the validity window", () => {
       monotonic: () => monotonic,
     });
     await run(sandbox, "one");
-    now += 24 * 3600_000;
+    // Asleep for 45 minutes: the monotonic clock advanced 5.
+    now += 45 * 60_000;
+    monotonic += 5 * 60_000;
+    await run(sandbox, "two");
+    expect(checks(fake)).toHaveLength(2);
+    expect(sandbox.workspace()?.verifiedAt).toBe("2026-09-29T12:45:00Z");
+    await sandbox.dispose();
+  });
+
+  it("counts a forward wall-clock jump as elapsed time, like a suspend", async () => {
+    let now = TIME;
+    let monotonic = 1000;
+    const fake = sharedBackend();
+    const sandbox = await activate(fake, {
+      now: () => now,
+      monotonic: () => monotonic,
+    });
+    await run(sandbox, "one");
+    now += WORKSPACE_VALIDITY_MS - 1;
     monotonic += 1;
     await run(sandbox, "two");
     expect(checks(fake)).toHaveLength(1);
-    expect(sandbox.workspace()?.verifiedAt).toBe("2026-09-29T12:00:00Z");
+    // Indistinguishable from a suspend: the check runs again early.
+    now += 1;
+    await run(sandbox, "three");
+    expect(checks(fake)).toHaveLength(2);
     await sandbox.dispose();
   });
 
