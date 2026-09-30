@@ -51,6 +51,8 @@ type Services = Awaited<ReturnType<typeof startLocalServices>>;
 // An obvious fake; never a real key.
 const AMBIENT = "sk-ambient-personal-key-SENTINEL-security";
 const PRIVATE_CANARY = "private-workspace-canary-SENTINEL";
+/** The audit buffer of the built distribution, in events. */
+const AUDIT_BUFFER = 60;
 
 /**
  * A team policy adapter whose behavior each run picks with an environment
@@ -195,6 +197,12 @@ function build(services: Services, auditUrl: string): Fixture {
       "  enforced:\n    - id: acme.secrets.read\n",
       '  enforced:\n    - id: acme.private\n      action: filesystem.read\n      resource: "workspace/private/**"\n      effect: deny\n      reason: The private directory is not delegated to the agent\n    - id: acme.secrets.read\n',
     )
+    // A buffer a required sink that has stopped taking events fills within a
+    // short session; a healthy sink drains it every second.
+    .replace(
+      "audit:\n  enabled: true\n",
+      `audit:\n  enabled: true\n  buffer:\n    maxEvents: ${AUDIT_BUFFER}\n    flushInterval: 1s\n`,
+    )
     .replace(
       "    - id: local\n      type: file\n      required: false",
       `    - id: local\n      type: file\n      required: false\n    - id: company\n      type: http\n      url: \${ACMECODE_AUDIT_URL}\n      required: true`,
@@ -204,6 +212,7 @@ function build(services: Services, auditUrl: string): Fixture {
     "acme.private",
     "type: http",
     "defaultMode: build",
+    `maxEvents: ${AUDIT_BUFFER}`,
     temp.replaceAll("\\", "/"),
   ])
     if (!source.includes(marker)) throw new Error(`patch failed: ${marker}`);
@@ -216,6 +225,8 @@ function build(services: Services, auditUrl: string): Fixture {
   const home = join(temp, "home");
   mkdirSync(join(home, ".ssh"), { recursive: true });
   writeFileSync(join(home, ".ssh", "id_rsa"), "ssh-private-key-canary\n");
+  const tmp = join(temp, "tmp");
+  mkdirSync(tmp, { recursive: true });
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...services.env(),
@@ -224,6 +235,9 @@ function build(services: Services, auditUrl: string): Fixture {
     PISHIP_NO_BROWSER: "1",
     HOME: home,
     USERPROFILE: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
   };
   delete baseEnv.PISHIP_BUILD_INPUT;
   delete baseEnv.PISHIP_SANDBOX_ADAPTER;
@@ -720,15 +734,21 @@ describe("integrity: a payload that changed does not run (case 13)", () => {
   });
 
   it("refuses a payload whose inventory is missing", async () => {
+    const { services } = fixture;
     const session = fixture.session();
     await session.login();
     const inventory = join(fixture.artifact, "metadata", "inventory.json");
     const original = readFileSync(inventory);
+    services.state.requests.length = 0;
     try {
       rmSync(inventory);
-      const refused = await session.run(["--smoke"]);
+      const refused = await session.run(["--smoke-model"]);
       expect(refused.status).toBe(1);
       expect(refused.stdout).not.toContain('"initialized"');
+      // The launcher could not read the inventory it verifies the payload
+      // against, and went no further: no gateway, no broker, no model.
+      expect(refused.stderr).toContain("inventory.json");
+      expect(services.state.requests).toEqual([]);
     } finally {
       writeFileSync(inventory, original);
     }
@@ -736,26 +756,69 @@ describe("integrity: a payload that changed does not run (case 13)", () => {
   });
 });
 
-describe("audit: a required sink that stops taking events ends the session (case 13)", () => {
-  it("fails the launch when the collector answers the readiness probe with an error", async () => {
+describe("audit: a required sink that stops taking events (case 13)", () => {
+  /** `count` reads of a file the agent may read: a step that ran answers with the file. */
+  const reads = (count: number) =>
+    Array.from({ length: count }, () => ({
+      name: "read",
+      arguments: { path: "notes.txt" },
+    }));
+
+  it("fails the launch before the agent does anything when the collector answers the readiness probe with an error", async () => {
+    const { services } = fixture;
     const session = fixture.session();
     await session.login();
     audit.control.status = 503;
-    const refused = await session.run(["--smoke"]);
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("AUDIT_UNAVAILABLE");
+    const { result, toolResults } = await session.script(reads(3));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("AUDIT_UNAVAILABLE");
+    // Nothing ran, and nothing was sent to the model.
+    expect(toolResults).toEqual([]);
+    expect(chatCalls(services)).toEqual([]);
   });
 
-  it("ends a session with AUDIT_UNAVAILABLE when the collector stops taking events after the launch", async () => {
+  it("stops the agent, its tool calls and its model requests once a sink that stopped taking events has a full buffer", async () => {
+    const { services } = fixture;
+    const session = fixture.session();
+    await session.login();
+    // The sink took the launch's probe and the session's first events; from
+    // the batch that carries the first tool decision on, it refuses
+    // everything. Events now pile up in the buffer.
+    audit.control.failOnEvent = "tool.allowed";
+    const steps = reads(AUDIT_BUFFER);
+    const { result } = await session.script(steps);
+    // The session ended with the loss, not with the agent's answer, and the
+    // model request that would have followed was refused before it was sent.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("AUDIT_UNAVAILABLE");
+    expect(result.stderr).toContain("the audit buffer is full");
+    // What ran is in the local log (the fixture only reports tool results of a
+    // script that finished). The control: the agent did act while the buffer
+    // had room. Then it stopped: a tool call after the buffer filled was
+    // denied, and the model was not asked for the turns that would have
+    // followed.
+    const events = auditEvents(session.state).map((event) => event.event);
+    const allowed = events.filter((event) => event === "tool.allowed").length;
+    expect(allowed).toBeGreaterThan(0);
+    expect(allowed).toBeLessThan(steps.length);
+    expect(events).toContain("tool.denied");
+    expect(chatCalls(services).length).toBeLessThan(steps.length + 1);
+    // And it stopped at the tool call that was denied: no later model turn.
+    expect(events.at(-1)).toBe("session.end");
+    expect(events.lastIndexOf("model.request")).toBeLessThan(
+      events.indexOf("tool.denied"),
+    );
+  });
+
+  it("reports the events a required sink did not take when the session ends", async () => {
     const session = fixture.session();
     await session.login();
     // The sink answers the launch's readiness probe and takes the session's
     // first events, then refuses the batch that closes the session and every
-    // one after it.
+    // one after it: the session has already run, so this proves the loss is
+    // reported (a failing exit), not that anything stopped.
     audit.control.failOnEvent = "session.end";
     const run = await session.run(["--smoke-model"]);
-    // Whatever the sink took before it failed is in the log; what it did
-    // not take is reported, never dropped silently.
     expect(run.status).toBe(1);
     expect(run.stderr).toContain("AUDIT_UNAVAILABLE");
     const local = auditEvents(session.state).map((event) => event.event);

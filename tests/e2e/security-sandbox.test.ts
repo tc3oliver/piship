@@ -108,6 +108,10 @@ function build(services: Services) {
   writeFileSync(manifest, source);
   const home = join(temp, "home");
   mkdirSync(home, { recursive: true });
+  // What a run writes to the system temp directory lands inside `temp`,
+  // where the scans look.
+  const tmp = join(temp, "tmp");
+  mkdirSync(tmp, { recursive: true });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...services.env(),
@@ -115,6 +119,9 @@ function build(services: Services) {
     PISHIP_NO_BROWSER: "1",
     HOME: home,
     USERPROFILE: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
   };
   delete env.PISHIP_BUILD_INPUT;
   delete env.PISHIP_SANDBOX_ADAPTER;
@@ -185,16 +192,38 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     const as = (subject: string) => {
       services.knobs.subject = subject;
     };
+    // The agent's command: it says where it ran, and leaves a marker file
+    // where it runs.
+    const agentCommand = (marker: string) =>
+      `echo remote-ok; touch ${JSON.stringify(marker)}`;
     const remote = async (label: string, marker: string) => {
+      // The same user resumes their session, and the fixture takes the tool
+      // calls of the resumed history for steps of its script already done: it
+      // would answer in text and the command would never be asked for. Every
+      // launch starts a new session.
+      rmSync(join(dist.state, "sessions"), { recursive: true, force: true });
       services.knobs.gatewayMode = "script";
-      services.knobs.toolScript = [
-        bash(`echo remote-ok; touch ${JSON.stringify(marker)}`),
-      ];
+      services.knobs.toolScript = [bash(agentCommand(marker))];
       services.state.toolResults = [];
       const done = await step(label, ["--smoke-model"]);
       services.knobs.gatewayMode = "text";
+      // The service received the command: that is where it ran.
+      expect(
+        service.requests.some(
+          (request) =>
+            request.path === "/execute" &&
+            request.body.toString("utf8").includes(marker),
+        ),
+      ).toBe(true);
       return done;
     };
+    // The control for every "not on the host" assertion below: run on the host
+    // itself, the same command does create its marker. (A host without a POSIX
+    // shell, such as a Windows runner, cannot run it, so it cannot have run it
+    // in place of the sandbox either.)
+    const control = join(dist.temp, "host-control");
+    const onHost = spawnSync("bash", ["-c", agentCommand(control)]);
+    if (onHost.status === 0) expect(existsSync(control)).toBe(true);
     const sandboxMetadata = join(
       dist.state,
       "credentials-metadata",
@@ -242,9 +271,7 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     expect(bobFirst.stderr).toContain("SANDBOX_UNAVAILABLE");
     expect(bobFirst.stderr).toMatch(/acmecode sandbox login/);
     expect(service.requests.slice(requests)).toEqual([]);
-    expect(
-      describeSightings(scanTree(dist.temp, [ALICE_TOKEN], ["node_modules"])),
-    ).toEqual([]);
+    expect(describeSightings(scanTree(dist.temp, [ALICE_TOKEN]))).toEqual([]);
 
     // Bob stores his own; the service takes only that token.
     cluster.token = BOB_TOKEN;
@@ -304,7 +331,7 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     await new Promise<void>((done) => service.server.close(() => done()));
     const markerDown = join(dist.temp, "host-down");
     services.knobs.gatewayMode = "script";
-    services.knobs.toolScript = [bash(`touch ${JSON.stringify(markerDown)}`)];
+    services.knobs.toolScript = [bash(agentCommand(markerDown))];
     services.state.toolResults = [];
     const down = await step("launch-down", ["--smoke-model"]);
     services.knobs.gatewayMode = "text";
@@ -318,7 +345,7 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     const everything = ledger.all();
     expect(
       describeSightings(
-        scanTree(dist.temp, everything, ["node_modules", "secrets"]),
+        scanTree(dist.temp, everything, ["state/acmecode/secrets"]),
       ),
     ).toEqual([]);
     expect(
@@ -331,8 +358,6 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     const out = await step("logout", ["logout"]);
     expect(out.status, out.stderr).toBe(0);
     expect(existsSync(sandboxMetadata)).toBe(false);
-    expect(
-      describeSightings(scanTree(dist.temp, ledger.all(), ["node_modules"])),
-    ).toEqual([]);
+    expect(describeSightings(scanTree(dist.temp, ledger.all()))).toEqual([]);
   }, 900000);
 });

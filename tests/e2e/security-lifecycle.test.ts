@@ -4,6 +4,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { mkdirSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
 import { relative, join, sep } from "node:path";
 import { STATE_DATA_CLASSES } from "@piship/core";
@@ -11,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { branded } from "../helpers/distribution.js";
 import {
   lifecycleScenario,
+  type Scenario,
   type Services,
   scanDecoded,
 } from "../helpers/lifecycle.js";
@@ -31,6 +33,16 @@ import { selfSignedLoopbackCertificate } from "../helpers/x509.js";
 // switching across update and rollback is tests/e2e/user-switching.test.ts.
 // This file adds what neither looked at: what the commands print, what a
 // snapshot holds by class, and that the update host is held to the policy.
+
+/**
+ * Give the scenario's commands a temp directory inside the scenario, so what
+ * they write there is under the directory the sweeps scan.
+ */
+function ownTemp(s: Scenario): void {
+  const tmp = join(s.temp, "tmp");
+  mkdirSync(tmp, { recursive: true });
+  Object.assign(s.env, { TMPDIR: tmp, TMP: tmp, TEMP: tmp });
+}
 
 const CREDENTIAL_CLASSES = STATE_DATA_CLASSES.filter(
   (entry) => entry.credential || entry.sensitivity === "secret-reference",
@@ -78,6 +90,7 @@ async function watch(kind: "http" | "https" = "http") {
 describe("update and rollback keep secrets out of their reports and snapshots (local fixtures)", () => {
   it("prints, snapshots and stores no secret of the run, across an update, a rollback, a user switch and a second update", async () => {
     const s = await lifecycleScenario("security-reports");
+    ownTemp(s);
     const services: Services = s.services;
     const ledger = new SecretLedger();
     const outputs = new Map<string, string>();
@@ -150,22 +163,19 @@ describe("update and rollback keep secrets out of their reports and snapshots (l
     expect(scanDecoded(s.state, alice)).toEqual([]);
     expect(scanDecoded(s.install, alice)).toEqual([]);
     expect(
-      describeSightings(
-        scanTree(s.state, everything, ["secrets", "node_modules"]),
-      ),
+      describeSightings(scanTree(s.state, everything, ["acmecode/secrets"])),
     ).toEqual([]);
     expect(describeSightings(scanTree(s.install, everything))).toEqual([]);
 
     await step("logout", ["logout"]);
-    expect(
-      describeSightings(scanTree(s.temp, ledger.all(), ["node_modules"])),
-    ).toEqual([]);
+    expect(describeSightings(scanTree(s.temp, ledger.all()))).toEqual([]);
   }, 1200000);
 });
 
 describe("the update transport keeps the network policy and TLS (local fixtures)", () => {
   it("contacts only the declared update host, over verified TLS, and follows no redirect", async () => {
     const s = await lifecycleScenario("security-update-network");
+    ownTemp(s);
     await s.installFirst();
     s.publish(1);
     const control = await s.run(["update", "--check"]);

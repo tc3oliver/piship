@@ -20,8 +20,10 @@ import { startLocalServices } from "../../examples/demo-company/fixtures/local-s
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 import {
   describeSightings,
+  filesUnder,
   SecretLedger,
   scanTree,
+  scanTreeReport,
   sightings,
 } from "../helpers/security.js";
 
@@ -189,6 +191,10 @@ function build(services: Services, auditUrl: string) {
   writeFileSync(manifest, source);
   const home = join(temp, "home");
   mkdirSync(home, { recursive: true });
+  // Everything the run writes to "the system temp directory" lands inside
+  // `temp`, where the sweep looks.
+  const tmp = join(temp, "tmp");
+  mkdirSync(tmp, { recursive: true });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...services.env(),
@@ -197,6 +203,9 @@ function build(services: Services, auditUrl: string) {
     PISHIP_NO_BROWSER: "1",
     HOME: home,
     USERPROFILE: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
   };
   delete env.PISHIP_BUILD_INPUT;
   delete env.PISHIP_SANDBOX_ADAPTER;
@@ -214,6 +223,7 @@ function build(services: Services, auditUrl: string) {
   writeFileSync(join(project, "notes.txt"), "project notes\n");
   return {
     temp,
+    tmp,
     project,
     state: join(temp, "state", "acmecode"),
     run: (args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Result> =>
@@ -259,17 +269,26 @@ async function start() {
     observe();
     return done;
   };
+  // The store's own directory is where a stored secret belongs.
+  const storeDirectory = "state/acmecode/secrets";
+  /** Files under the state directory too large to decode, searched plain only. */
+  let undecoded: string[] = [];
   /**
    * Every place a secret of the run could be, but the store's own directory
-   * (and, when named, `skip`): files, output of every command, the sink, and
-   * what the model was sent.
+   * (and, when named, `skip`, as paths below the run's directory): files
+   * (the state directory, the built distribution, and the temp directory the
+   * run was given), the output of every command, the sink, and what the model
+   * was sent.
    */
   const sweep = (skip: readonly string[] = []) => {
     const everything = ledger.all();
+    const files = scanTreeReport(dist.temp, everything, [
+      storeDirectory,
+      ...skip,
+    ]);
+    undecoded = files.plainOnly.filter((file) => file.startsWith(dist.state));
     return [
-      ...describeSightings(
-        scanTree(dist.temp, everything, ["node_modules", "secrets", ...skip]),
-      ),
+      ...describeSightings(files.found),
       ...[...outputs].flatMap(([label, text]) =>
         describeSightings(sightings(`output of ${label}`, text, everything)),
       ),
@@ -291,13 +310,32 @@ async function start() {
         ),
     ];
   };
-  return { services, sink, dist, secrets, ledger, outputs, step, sweep };
+  return {
+    services,
+    sink,
+    dist,
+    secrets,
+    ledger,
+    outputs,
+    step,
+    sweep,
+    undecoded: () => undecoded,
+  };
 }
 
 describe("credential and audit leakage sweep (local fixtures, real launcher)", () => {
   it("leaves no secret of the run in any file, output, audit event, sink request, model request or tool result", async () => {
-    const { services, sink, dist, secrets, ledger, outputs, step, sweep } =
-      await start();
+    const {
+      services,
+      sink,
+      dist,
+      secrets,
+      ledger,
+      outputs,
+      step,
+      sweep,
+      undecoded,
+    } = await start();
 
     // Sign in, and the commands a user runs around a launch.
     const login = await step("login", ["login"]);
@@ -305,9 +343,9 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
     // The control for every scan below: the run holds identity tokens and a
     // credential, and the scan finds them where they belong.
     expect(ledger.size).toBeGreaterThanOrEqual(4);
-    expect(
-      scanTree(secrets, ledger.all(), []).map((hit) => hit.form),
-    ).toContain("decoded");
+    expect(scanTree(secrets, ledger.all()).map((hit) => hit.form)).toContain(
+      "decoded",
+    );
     for (const [label, args] of [
       ["smoke", ["--smoke"]],
       ["models", ["models"]],
@@ -355,6 +393,9 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
                 command: `ls -la ${JSON.stringify(state)}; echo exit=$?`,
               },
             },
+            // Output longer than a tool result may be: Pi keeps the whole of
+            // it in a temp file, which the sweep must reach.
+            { name: "bash", arguments: { command: "seq 1 30000" } },
           ]),
     ];
     services.knobs.gatewayMode = "script";
@@ -369,8 +410,14 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
     expect(toolResults[0]).toMatch(/PATH=/);
     outputs.set("tool-results", toolResults.join("\n----\n"));
 
-    // Nothing outside the secret store holds any secret of the run.
+    // The temp directory the run was given is inside the sweep, and the run
+    // used it: the long output above is saved there.
+    if (!windows) expect(filesUnder(dist.tmp).length).toBeGreaterThan(0);
+
+    // Nothing outside the secret store holds any secret of the run, and no
+    // file of the state directory was too large to be searched decoded.
     expect(sweep()).toEqual([]);
+    expect(undecoded()).toEqual([]);
 
     // The scans looked at real data: the log and the sink hold the run's
     // events, and the model was sent the agent's turns.
@@ -393,9 +440,7 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
     // After sign-out the store is empty too, so nothing anywhere holds any.
     const logout = await step("logout", ["logout"]);
     expect(logout.status, logout.stderr).toBe(0);
-    expect(
-      describeSightings(scanTree(dist.temp, ledger.all(), ["node_modules"])),
-    ).toEqual([]);
+    expect(describeSightings(scanTree(dist.temp, ledger.all()))).toEqual([]);
   }, 900000);
 
   it("does not repeat what a broker or a revoke endpoint echoes back of a token or a credential", async () => {
@@ -437,9 +482,7 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
 
     expect(sweep()).toEqual([]);
     expect((await step("logout", ["logout"])).status).toBe(0);
-    expect(
-      describeSightings(scanTree(dist.temp, ledger.all(), ["node_modules"])),
-    ).toEqual([]);
+    expect(describeSightings(scanTree(dist.temp, ledger.all()))).toEqual([]);
   }, 900000);
 
   /**
@@ -474,7 +517,7 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
   it("keeps what a gateway echoes of the credential out of the launcher's output, the audit log and the audit sink", async () => {
     const { ledger, sweep, sessions } = await echoingGateway();
     expect(ledger.size).toBeGreaterThanOrEqual(4);
-    expect(sweep(["sessions"])).toEqual([]);
+    expect(sweep(["state/acmecode/sessions"])).toEqual([]);
     expect(existsSync(sessions)).toBe(true);
   }, 900000);
 
@@ -482,15 +525,21 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
   // provider's error text in the session file it writes under the state
   // directory, and PiShip redacts that text only where it prints it. A
   // gateway that echoes the credential leaves it in `sessions/` in plain text.
-  // `it.fails` documents the reproduction and passes while the gap is open;
-  // once the error text is redacted before Pi persists it, this test fails,
-  // and it becomes an ordinary `it`.
-  it.fails("keeps what a gateway echoes of the credential out of the Pi session file", async () => {
+  //
+  // This test asserts the known-bad state, so only the leak itself decides it:
+  // a broken setup (the build, the sign-in, the gateway not being asked, a
+  // changed error code) fails it, and so does the fix. When the pull request
+  // that redacts the provider's error text before Pi persists it lands
+  // (branch v0.7/security-findings), invert the last assertion: the scan of
+  // `sessions/` must then find nothing.
+  it("still leaves what a gateway echoes of the credential in the Pi session file (known gap; invert when the fix lands)", async () => {
     const { dist, ledger } = await echoingGateway();
-    expect(
-      describeSightings(
-        scanTree(join(dist.state, "sessions"), ledger.all(), []),
-      ),
-    ).toEqual([]);
+    const sessions = join(dist.state, "sessions");
+    const found = scanTree(sessions, ledger.all());
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.map((hit) => hit.form)).toContain("plain");
+    // It is the session file, under sessions/, that holds it.
+    for (const hit of found)
+      expect(hit.where.startsWith(`${sessions}/`)).toBe(true);
   }, 900000);
 });
