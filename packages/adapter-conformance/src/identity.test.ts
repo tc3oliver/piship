@@ -500,7 +500,9 @@ describe("identity conformance kit", () => {
       expect(entry.statement.length).toBeGreaterThan(40);
   });
 
-  it("passes an interactive device-style adapter, and skips the token checks without a harness", async () => {
+  // Each kit run builds its own adapter and harness and mostly waits out
+  // request timeouts, so the runs below are one concurrent group.
+  it.concurrent("passes an interactive device-style adapter, and skips the token checks without a harness", async () => {
     const report = await run();
     expect(report.kind).toBe("identity");
     expect(report.results.map((result) => result.behavior)).toEqual(
@@ -511,26 +513,26 @@ describe("identity conformance kit", () => {
       expect(reasonOf(report, behavior)).toMatch(/^needs harness: /);
   });
 
-  it("passes a workload adapter, which is never refreshed or logged out", async () => {
+  it.concurrent("passes a workload adapter, which is never refreshed or logged out", async () => {
     const report = await run(referenceAdapter({ workload: true }));
     expect(statuses(report)).toEqual(expected(WORKLOAD_SKIPS));
     expect(reasonOf(report, "refresh")).toMatch(/calls login\(\) again/);
     expect(reasonOf(report, "logout")).toMatch(/memory only/);
   });
 
-  it("passes every behavior, the token checks included, for a verifying adapter with a good harness", async () => {
+  it.concurrent("passes every behavior, the token checks included, for a verifying adapter with a good harness", async () => {
     const { adapter, harness } = verifyingSetup();
     const report = await run(adapter, { harness });
     expect(statuses(report)).toEqual(expected({}, true));
   });
 
-  it("passes a verifying workload adapter with a good harness", async () => {
+  it.concurrent("passes a verifying workload adapter with a good harness", async () => {
     const { adapter, harness } = verifyingSetup({ workload: true });
     const report = await run(adapter, { harness });
     expect(statuses(report)).toEqual(expected(WORKLOAD_SKIPS, true));
   });
 
-  it("skips a token check the harness cannot mint, and never counts it as passed", async () => {
+  it.concurrent("skips a token check the harness cannot mint, and never counts it as passed", async () => {
     const { adapter, harness } = verifyingSetup({}, [
       "revoked",
       "not-yet-valid",
@@ -544,14 +546,14 @@ describe("identity conformance kit", () => {
     );
   });
 
-  it("fails the token checks when the harness cannot mint a valid token", async () => {
+  it.concurrent("fails the token checks when the harness cannot mint a valid token", async () => {
     const { adapter, harness } = verifyingSetup({}, ["valid"]);
     const report = await run(adapter, { harness });
     for (const behavior of TOKEN_BEHAVIORS)
       expect(reasonOf(report, behavior)).toMatch(/cannot mint a valid token/);
   });
 
-  it("fails the token checks for an adapter that refuses every token, instead of passing them", async () => {
+  it.concurrent("fails the token checks for an adapter that refuses every token, instead of passing them", async () => {
     // Without the harness's keys, the adapter refuses even a valid token.
     const { harness } = tokenHarness();
     const { adapter } = verifyingSetup();
@@ -564,7 +566,7 @@ describe("identity conformance kit", () => {
     }
   });
 
-  it("skips refresh, logout, and the revoked session for an adapter without them", async () => {
+  it.concurrent("skips refresh, logout, and the revoked session for an adapter without them", async () => {
     const report = await run(
       referenceAdapter({ refresh: false, logout: false }),
     );
@@ -577,7 +579,7 @@ describe("identity conformance kit", () => {
     );
   });
 
-  it("passes an adapter for another protocol through the respond hook", async () => {
+  it.concurrent("passes an adapter for another protocol through the respond hook", async () => {
     const respond = (_request: unknown, answer: IdentityServiceAnswer) => {
       switch (answer.kind) {
         case "session": {
@@ -611,7 +613,7 @@ describe("identity conformance kit", () => {
     expect(statuses(await run(adapter)).login).toBe("failed");
   });
 
-  it("checks the issuer the adapter reports against options.issuer", async () => {
+  it.concurrent("checks the issuer the adapter reports against options.issuer", async () => {
     const report = await run(referenceAdapter(), {
       issuer: "https://another-issuer.conformance.invalid",
     });
@@ -633,7 +635,7 @@ describe("identity conformance kit", () => {
     );
   });
 
-  it("fails every behavior it can exercise, with a reason, when the factory builds no provider", async () => {
+  it.concurrent("fails every behavior it can exercise, with a reason, when the factory builds no provider", async () => {
     const report = await run(
       defineIdentityAdapter(() => undefined as unknown as IdentityProvider),
     );
@@ -647,7 +649,7 @@ describe("identity conformance kit", () => {
         });
   });
 
-  it("reports a factory that throws by code, never by its message", async () => {
+  it.concurrent("reports a factory that throws by code, never by its message", async () => {
     const report = await run(
       defineIdentityAdapter(() => {
         throw new TypeError("conformance-access-token-in-a-message");
@@ -663,7 +665,7 @@ describe("identity conformance kit", () => {
     expectCleanReasons(report);
   });
 
-  it("refuses a request timeout that is not a positive number", async () => {
+  it.concurrent("refuses a request timeout that is not a positive number", async () => {
     for (const requestTimeoutMs of [
       0,
       -1,
@@ -764,7 +766,7 @@ describe("identity conformance kit", () => {
       { verify: {} as Verification },
     ],
   ];
-  it.each(seeds)(
+  it.concurrent.each(seeds)(
     "fails only %j, under %s",
     async (fault, behavior, reason, options = {}) => {
       const withHarness = !!options.verify;
