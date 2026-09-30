@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { activateSandbox } from "./activate.js";
 import type { SandboxAdapter } from "./adapter.js";
 import type { SandboxExecIO, SandboxExecRequest } from "./backend.js";
+import { BubblewrapAdapter } from "./bubblewrap.js";
 import { NativeBackend } from "./native.js";
 import type { SandboxPolicy, SandboxProfile } from "./profile.js";
+import { SeatbeltAdapter } from "./seatbelt.js";
 import { selectAdapter } from "./select.js";
 
 const posix = process.platform !== "win32";
@@ -64,6 +66,34 @@ async function untilExists(path: string, ms = 3000): Promise<void> {
   expect(existsSync(path)).toBe(true);
 }
 
+describe("the native backend's capabilities", () => {
+  it("say whether the isolator guards a file that does not exist yet, not which platform it is", () => {
+    const isolator = (guardsMissingFiles?: boolean): SandboxAdapter => ({
+      ...identity,
+      ...(guardsMissingFiles === undefined ? {} : { guardsMissingFiles }),
+    });
+    const guards = (adapter: SandboxAdapter, platform: NodeJS.Platform) =>
+      new NativeBackend(adapter, platform).capabilities().guardsMissingFiles;
+    // The same answer on any platform: it belongs to the isolator.
+    expect(guards(isolator(true), "linux")).toBe(true);
+    expect(guards(isolator(false), "darwin")).toBe(false);
+    // An isolator that does not say cannot be assumed to.
+    expect(guards(isolator(), "darwin")).toBe(false);
+    const backend = new NativeBackend(isolator(true), "linux");
+    expect(backend.capabilities()).toEqual(backend.capabilities());
+    // The two real isolators.
+    expect(new BubblewrapAdapter().guardsMissingFiles).toBe(false);
+    expect(new SeatbeltAdapter().guardsMissingFiles).toBe(true);
+    expect(
+      new NativeBackend(new BubblewrapAdapter()).capabilities(),
+    ).toMatchObject({
+      isolation: "local",
+      localProcesses: true,
+      guardsMissingFiles: false,
+    });
+  });
+});
+
 describe.skipIf(!posix)("the native backend's dispose", () => {
   it("returns only once a command that ignores SIGTERM has been killed", async () => {
     const instance = await new NativeBackend(
@@ -91,11 +121,16 @@ describe.skipIf(!posix)("the native backend's dispose", () => {
       identity,
       process.platform,
     ).prepare({ profile: profile() });
-    const running = instance.exec(
-      request("sleep 30"),
-      io(new AbortController().signal),
-    );
+    let ended = false;
+    const running = instance
+      .exec(request("sleep 30"), io(new AbortController().signal))
+      .finally(() => {
+        ended = true;
+      });
     await instance.dispose();
+    // A dispose that does not wait for a command started in the same tick
+    // (one that returns after aborting) comes back while it is still dying.
+    expect(ended).toBe(true);
     expect(await running).toMatchObject({ signal: "SIGTERM" });
     await expect(
       instance.exec(request("true"), io(new AbortController().signal)),

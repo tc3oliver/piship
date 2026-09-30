@@ -226,6 +226,38 @@ describe.skipIf(!posix)("bubblewrap arguments", () => {
     expect(args).not.toContain("/work/ws/other");
   });
 
+  it("keeps the user's own git config read-only where the sandbox may write its directory", () => {
+    const args = bubblewrapArgs(
+      profile({
+        writeAllow: ["/work/ws", "/home/u", sessionTmp],
+        writeProtect: {
+          files: [
+            "/home/u/.gitconfig",
+            "/home/u/.config/git/config",
+            "/home/u/.gitconfig.local",
+          ],
+          directories: [],
+        },
+      }),
+      command,
+      {
+        ...seams,
+        exists: (path) =>
+          path !== "/home/u/.gitconfig.local" && seams.exists(path),
+      },
+    ).join(" ");
+    const home = args.indexOf("--bind /home/u /home/u");
+    expect(home).toBeGreaterThan(-1);
+    expect(args.indexOf("--ro-bind /home/u/.gitconfig ")).toBeGreaterThan(home);
+    expect(
+      args.indexOf("--ro-bind /home/u/.config/git/config "),
+    ).toBeGreaterThan(home);
+    // The directories above the global config that exists stay in place.
+    expect(args).toContain("--bind /home/u/.config/git /home/u/.config/git");
+    // A missing file cannot be guarded, and pins nothing.
+    expect(args).not.toContain(".gitconfig.local");
+  });
+
   it("hides host escape sockets unless they are explicitly writable", () => {
     const args = bubblewrapArgs(profile(), command, {
       ...seams,
@@ -289,6 +321,35 @@ describe("seatbelt profile", () => {
     expect(block).toContain('(subpath "/work/ws/.git/info")');
     expect(block).not.toContain("/outside");
     expect(text).not.toContain(".git");
+  });
+  it("denies writes to the user's own git config where the sandbox may write its directory", () => {
+    const global = seatbeltProfile(
+      profile({
+        writeAllow: ["/work/ws", "/home/u", sessionTmp],
+        writeProtect: {
+          files: [
+            "/home/u/.gitconfig",
+            "/home/u/.config/git/config",
+            "/home/u/.gitconfig.local",
+          ],
+          directories: [],
+        },
+      }),
+      {
+        ...seams,
+        exists: (path) =>
+          path !== "/home/u/.gitconfig.local" && seams.exists(path),
+        isDir: (path) => !/(\.gitconfig|git\/config)$/.test(path),
+      },
+    );
+    const protect = global.indexOf("(deny file-write*\n");
+    const block = global.slice(protect, global.indexOf(")\n(", protect));
+    expect(protect).toBeGreaterThan(global.indexOf("(allow file-write*"));
+    expect(block).toContain('(literal "/home/u/.gitconfig")');
+    expect(block).toContain('(literal "/home/u/.config/git/config")');
+    expect(block).toContain('(literal "/home/u/.config/git")');
+    // A missing file is denied where it would be created.
+    expect(block).toContain('(subpath "/home/u/.gitconfig.local")');
   });
   it("denies moving the directories above a protected path that exists, and none above one that does not", () => {
     const text = seatbeltProfile(

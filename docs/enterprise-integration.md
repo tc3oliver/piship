@@ -168,7 +168,7 @@ Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 | Cancelled by the caller | `CREDENTIAL_ACQUIRE_FAILED`, not retryable |
 | Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION`, unchanged |
 
-The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
+The timeout always applies; a caller's cancellation signal can end a request sooner but never removes the timeout. Where failures share a code, the error's `detail` tells them apart: `operation` (`acquire` or `revoke`), `reason` (`unreachable`, `timeout`, `cancelled`, `authentication`, `denied`, `rate-limited`, `unavailable`, `rejected`, `contract`, or `idempotency-conflict`), the HTTP `status` when there was one, `transport` (the system error code, such as `ECONNRESET`, when the connection failed with one), `outcome` for a failure without an answer, and the acquire's `idempotencyKey`. Broker responses are never logged or echoed in errors.
 
 ### Idempotency and retries
 
