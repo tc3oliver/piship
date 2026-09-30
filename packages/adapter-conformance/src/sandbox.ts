@@ -86,7 +86,7 @@ export const SANDBOX_CONTRACT = [
   {
     behavior: "network claims",
     statement:
-      "with the profile's network denied, a command inside the sandbox cannot connect to a listener that it reaches when the network is allowed",
+      "with the profile's network denied, a command inside the sandbox cannot connect to a listener that it reaches when the network is allowed; a remote backend's declared networkProbe is that listener unless networkTarget is given, and it must be reachable with the network allowed",
   },
   {
     behavior: "timeout",
@@ -345,6 +345,25 @@ function plant(variables: Record<string, string>): () => void {
 
 // ------------------------------------------------------------ declaration
 
+/** Why a network probe is malformed, or undefined (PiShip's rule). */
+function probeProblem(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return "it is not an object";
+  const { host, port } = value as { host?: unknown; port?: unknown };
+  if (
+    typeof host !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/.test(host)
+  )
+    return "the host must be a hostname or an IP address without brackets or a port";
+  if (
+    !Number.isInteger(port) ||
+    (port as number) < 1 ||
+    (port as number) > 65535
+  )
+    return "the port must be an integer from 1 to 65535";
+  return undefined;
+}
+
 /** Why a workspace declaration is malformed, or undefined. */
 function declarationProblem(raw: unknown): string | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -438,6 +457,10 @@ function capabilityProblem(value: unknown): string | undefined {
   if (caps.workspace !== undefined) {
     const problem = declarationProblem(caps.workspace);
     if (problem) return `it declares a malformed workspace: ${problem}`;
+  }
+  if (caps.networkProbe !== undefined) {
+    const problem = probeProblem(caps.networkProbe);
+    if (problem) return `it declares a malformed network probe: ${problem}`;
   }
   const mode = caps.workspace?.mode ?? "snapshot";
   if (mode === "snapshot") {
@@ -1553,9 +1576,15 @@ const checks: Record<SandboxBehavior, Check> = {
       hits++;
       socket.destroy();
     });
-    const own = h.options.networkTarget === undefined;
+    // A remote backend's declared probe is what PiShip checks it with.
+    const declared =
+      h.options.networkTarget === undefined && caps.isolation === "remote"
+        ? caps.networkProbe
+        : undefined;
+    const own = h.options.networkTarget === undefined && !declared;
     const target =
       h.options.networkTarget ??
+      declared ??
       (await new Promise<{ host: string; port: number }>((resolve, reject) => {
         server.once("error", reject);
         server.listen(0, "127.0.0.1", () => {
@@ -1566,7 +1595,11 @@ const checks: Record<SandboxBehavior, Check> = {
           });
         });
       }));
-    const what = own ? "the kit's loopback listener" : "the network target";
+    const what = own
+      ? "the kit's loopback listener"
+      : declared
+        ? "the declared network probe"
+        : "the network target";
     try {
       const attempt = async (network: "deny" | "allow") => {
         const instance = await h.prepare(network);
@@ -1593,6 +1626,10 @@ const checks: Record<SandboxBehavior, Check> = {
       if (!caps.network.includes("allow"))
         return "skipped: the backend enforces only network deny, so the kit cannot show that its connection attempt would succeed with the network allowed; a refused connection alone proves nothing";
       const allowed = await attempt("allow");
+      check(
+        allowed.connected || !declared,
+        "the declared network probe is not reachable from the sandbox with the network allowed, so PiShip reports network denial attested, not verified",
+      );
       if (!allowed.connected)
         return own
           ? "skipped: the kit's loopback listener is not reachable from the sandbox even with the network allowed (a remote sandbox has its own loopback); pass networkTarget, a listener the sandbox can reach, to check network denial"
