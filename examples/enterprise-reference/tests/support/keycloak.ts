@@ -38,6 +38,24 @@ export async function signInAtKeycloak(
   username: string,
   password: string,
 ): Promise<void> {
+  const location = await authorizeAtKeycloak(authorizeUrl, username, password);
+  // PiShip's listener answers the first callback and then closes.
+  const delivered = await fetch(location);
+  if (!delivered.ok)
+    throw new Error(`the loopback callback answered ${delivered.status}`);
+}
+
+/**
+ * Sign `username` in on the Keycloak page at `authorizeUrl` and return the
+ * callback URL Keycloak redirects to, without delivering it. A test that
+ * plays a hostile browser changes it before it reaches PiShip. The same
+ * guarantee as `signInAtKeycloak` holds for the messages of a rejection.
+ */
+export async function authorizeAtKeycloak(
+  authorizeUrl: string | URL,
+  username: string,
+  password: string,
+): Promise<string> {
   const cookies = new Map<string, string>();
   const keepCookies = (response: Response) => {
     for (const cookie of response.headers.getSetCookie()) {
@@ -49,7 +67,7 @@ export async function signInAtKeycloak(
   const cookieHeader = () =>
     [...cookies].map(([name, value]) => `${name}=${value}`).join("; ");
 
-  const request = authorizationRequest(authorizeUrl);
+  const request = authorizationRequest(String(authorizeUrl));
   const page = await fetch(authorizeUrl, { redirect: "manual" });
   keepCookies(page);
   const html = await page.text();
@@ -79,8 +97,5 @@ export async function signInAtKeycloak(
       `the sign-in returned no code (${callback.searchParams.get("error")})`,
     );
 
-  // PiShip's listener answers the first callback and then closes.
-  const delivered = await fetch(location);
-  if (!delivered.ok)
-    throw new Error(`the loopback callback answered ${delivered.status}`);
+  return location;
 }
