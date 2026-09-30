@@ -1,0 +1,94 @@
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runCli } from "./index.js";
+
+const ID = "mypi";
+let temp: string;
+
+/**
+ * An installed release whose branded command records the arguments it
+ * receives. Its `.cmd` shim is the one `piship build` writes, so a manager
+ * that forwarded through cmd.exe would reach it on Windows.
+ */
+function installRecorder(): { received: string; payload: string } {
+  const install = join(temp, "install home");
+  const payload = join(install, "apps", ID, "1.0.0");
+  const received = join(temp, "received.json");
+  mkdirSync(join(payload, "bin"), { recursive: true });
+  const command = join(payload, "bin", ID);
+  writeFileSync(
+    command,
+    `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(received)}, JSON.stringify(process.argv.slice(2)));\n`,
+  );
+  chmodSync(command, 0o755);
+  writeFileSync(`${command}.cmd`, `@echo off\r\nnode "%~dp0\\${ID}" %*\r\n`);
+  mkdirSync(join(install, "receipts"), { recursive: true });
+  const bin = join(temp, "bin");
+  writeFileSync(
+    join(install, "receipts", `${ID}.json`),
+    JSON.stringify({
+      schema: "piship-install/v1",
+      app: { id: ID, name: "MyPi", command: ID, version: "1.0.0" },
+      payload,
+      commandPath: join(bin, process.platform === "win32" ? `${ID}.cmd` : ID),
+      launcher: join(install, "apps", ID, "launch.mjs"),
+      active: "1.0.0",
+      releases: [{ version: "1.0.0", payload, installedAt: "" }],
+    }),
+  );
+  process.env.PISHIP_INSTALL_HOME = install;
+  process.env.PISHIP_BIN_HOME = bin;
+  return { received, payload };
+}
+
+async function cli(args: string[]): Promise<number> {
+  const errors: string[] = [];
+  const status = await runCli(args, {
+    stdout: () => {},
+    stderr: (message) => errors.push(message),
+  });
+  expect(errors.join("\n")).not.toContain("failed");
+  return status;
+}
+
+describe("forwarding update and rollback to the installed release", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-forward-"));
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_INSTALL_HOME;
+    delete process.env.PISHIP_BIN_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("passes a --from value with spaces and cmd metacharacters through unchanged", async () => {
+    const { received } = installRecorder();
+    const marker = join(temp, "planted");
+    const from = `${join(temp, "My Channel (v2) 100% ^x")} & echo planted> "${marker}" | %PATH% !`;
+    expect(await cli(["update", ID, "--from", from, "--check"])).toBe(0);
+    expect(JSON.parse(readFileSync(received, "utf8"))).toEqual([
+      "update",
+      "--from",
+      from,
+      "--check",
+    ]);
+    // Nothing in the value ran as a command.
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("forwards rollback unchanged", async () => {
+    const { received } = installRecorder();
+    expect(await cli(["rollback", ID])).toBe(0);
+    expect(JSON.parse(readFileSync(received, "utf8"))).toEqual(["rollback"]);
+  });
+});

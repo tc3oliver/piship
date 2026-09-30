@@ -210,35 +210,24 @@ function stagingNotice(found: AbandonedStaging): string {
     ? `${what} could not be removed; check its permissions.`
     : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; run again with --reclaim-staging to remove them.`;
 }
-function launcher(artifact: string, command: string): string {
-  return join(
-    artifact,
-    "bin",
-    process.platform === "win32" ? `${command}.cmd` : command,
-  );
-}
 function runLauncher(
   artifact: string,
   command: string,
   args: string[],
   interactive = false,
 ): { status: number | null; stdout: string; stderr: string } {
-  const target = launcher(artifact, command);
+  const target = join(artifact, "bin", command);
+  const options = {
+    encoding: "utf8",
+    stdio: interactive ? "inherit" : "pipe",
+  } as const;
+  // On Windows the payload's `.cmd` shim only runs this script with Node, and
+  // going through cmd.exe would split and interpret the arguments (spaces,
+  // & | ^ %), so Node runs it directly and each argument arrives unchanged.
   const result =
     process.platform === "win32"
-      ? spawnSync(
-          "cmd.exe",
-          ["/d", "/s", "/c", `call "${target}" ${args.join(" ")}`],
-          {
-            encoding: "utf8",
-            stdio: interactive ? "inherit" : "pipe",
-            windowsVerbatimArguments: true,
-          },
-        )
-      : spawnSync(target, args, {
-          encoding: "utf8",
-          stdio: interactive ? "inherit" : "pipe",
-        });
+      ? spawnSync(process.execPath, [target, ...args], options)
+      : spawnSync(target, args, options);
   return {
     status: result.status,
     stdout: result.stdout ?? "",

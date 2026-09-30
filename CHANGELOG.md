@@ -11,6 +11,7 @@ Preview milestone; not published to npm.
 - **Behavior change:** the `kubernetes-agent-sandbox` backend no longer claims network denial, because it cannot verify the warm pool's NetworkPolicy; a required `deny` sandbox on it fails closed. It declares `network: ["allow"]` only.
 - **Contract change:** `SandboxCapabilities` gains the optional `networkProbe: {host, port}` (remote backends; a malformed one fails closed), exported from the adapter SDK as `SandboxNetworkProbe`. `ContainmentReport` gains `networkDenial` (`evidence: "verified" | "attested"`, whether a probe was declared, and a fixed reason) in `deny` mode. `doctor`'s network line reads `deny (verified)` or `deny (attested by the backend, not verified: <reason>)`, and the local sandbox metric records `networkDenial`. The sandbox conformance kit's `capabilities` refuses a malformed probe, and `network claims` uses a declared probe as its default target and fails when it is not reachable with the network allowed.
 - **Behavior change:** Windows governed processes run inside a kill-on-close Job Object so descendants terminate when their leader or PiShip exits.
+- **Behavior change:** on Windows, `piship update <id>` and `piship rollback <id>` (and `config explain`, `doctor`, `dev`, and `test`) forwarded their arguments to the branded command through `cmd.exe` unquoted, so a `--from` path with spaces was split and `& | ^ %` in a value were interpreted by the shell. Node now runs the release's command script directly and every argument arrives unchanged.
 
 ### Added
 
