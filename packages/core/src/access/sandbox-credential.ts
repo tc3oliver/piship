@@ -76,7 +76,12 @@ export interface SandboxCredentialOptions {
    * recorded for it (`credential.storage.provider` changed since). By default
    * it is the other provider's store beside the state, except with an
    * injected in-memory `secretStore`, which has none. Without one, such
-   * references stay tracked and fail closed.
+   * references stay tracked and fail closed. `DistributionAccess` always
+   * passes its own rule (an injected store of any kind has none), so its
+   * slots open the other store exactly as its runtime credential and identity
+   * do; a caller that passes only `secretStore: access.store`, as the branded
+   * commands and the launch do, gets this default, which is the same for the
+   * store an access creates.
    */
   readonly secretStoreFor?: SecretStoreResolver;
   /** The principal the credential is used by or stored for; null without identity. */

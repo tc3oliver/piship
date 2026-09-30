@@ -42,6 +42,7 @@ The payload includes `piship.mjs`, so installation and diagnostics need no sourc
 <install-home>/receipts/<id>.json     piship-install/v1 receipt: owned paths, retained releases, active and previous version, channel
 <install-home>/apps/<id>/launch.mjs   reads the receipt and imports the active release's launcher
 <install-home>/apps/<id>/<version>/   immutable payload per retained release
+<install-home>/apps/<id>/.lifecycle.lock   one update, rollback, or uninstall at a time; may be removed by hand when none is running
 <bin-home>/<command>                  shim that runs launch.mjs with Node (<command>.cmd on Windows)
 ```
 

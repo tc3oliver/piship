@@ -153,6 +153,9 @@ const CHECK_BASE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
 
 export class BubblewrapAdapter implements SandboxAdapter {
   readonly id = "linux-bubblewrap" as const;
+  // A protected path is guarded by mounting over it; a file that does not
+  // exist has no mount point that would not leave an empty file on the host.
+  readonly guardsMissingFiles = false;
   #executable: string | undefined;
   #features: BubblewrapFeatures = MODERN_BUBBLEWRAP;
   #availability: Promise<AdapterAvailability> | undefined;

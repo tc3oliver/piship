@@ -426,9 +426,10 @@ export class DistributionAccess {
         ? { storage: this.options.access.credential.storage }
         : {}),
       ...(store ? { secretStore: store } : {}),
-      ...(this.options.secretStoreFor
-        ? { secretStoreFor: this.options.secretStoreFor }
-        : {}),
+      // Always this access's rule for the other store, the one the runtime
+      // credential and the identity follow, not the slot's own default (which
+      // opens it for any injected store that is not in memory).
+      secretStoreFor: this.#storeFor,
       principal,
       onEvent: (event) => this.#emit(event.event, event.detail),
       ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
