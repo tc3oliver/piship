@@ -1,10 +1,14 @@
+import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
+import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
 import {
@@ -13,6 +17,7 @@ import {
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
   checkDestination,
+  createDispatcher,
   createManagedFetch,
   formatError,
   parseRetryAfter,
@@ -351,6 +356,104 @@ describe("network policy", () => {
     await expect(direct("http://127.0.0.1:59999/broker")).rejects.toMatchObject(
       { code: "GATEWAY_UNREACHABLE" },
     );
+  });
+});
+
+// An HTTP/1.1 server in another process, as a broker is. It keeps
+// connections alive without a Keep-Alive hint, closes one after IDLE_MS idle
+// (a short server keep-alive timeout), and answers with the number of the
+// connection the request came on.
+const KEEP_ALIVE_SERVER = `
+let connections = 0;
+const server = require("node:net").createServer((socket) => {
+  const id = String(++connections);
+  let idle;
+  let buffered = "";
+  socket.on("error", () => {});
+  socket.on("data", (chunk) => {
+    clearTimeout(idle);
+    buffered += chunk.toString("latin1");
+    for (let end = buffered.indexOf("\\r\\n\\r\\n"); end !== -1; end = buffered.indexOf("\\r\\n\\r\\n")) {
+      const length = Number(/content-length: *(\\d+)/i.exec(buffered.slice(0, end))?.[1] ?? 0);
+      if (buffered.length < end + 4 + length) break;
+      buffered = buffered.slice(end + 4 + length);
+      socket.write("HTTP/1.1 200 OK\\r\\ncontent-length: " + id.length + "\\r\\nconnection: keep-alive\\r\\n\\r\\n" + id);
+    }
+    idle = setTimeout(() => socket.destroy(), Number(process.env.IDLE_MS));
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+`;
+
+async function keepAliveServer(idleMs = 300): Promise<string> {
+  const server = spawn(process.execPath, ["-e", KEEP_ALIVE_SERVER], {
+    stdio: ["ignore", "pipe", "inherit"],
+    env: { ...process.env, IDLE_MS: String(idleMs) },
+  });
+  cleanup.push(() => {
+    server.kill();
+  });
+  const port = await new Promise<string>((resolve) =>
+    server.stdout.once("data", (chunk) => resolve(String(chunk).trim())),
+  );
+  return `http://127.0.0.1:${port}/broker`;
+}
+
+describe("managed fetch connections", () => {
+  // A platform secret store call runs its tool synchronously (PowerShell on
+  // Windows takes seconds), so the process reads nothing of a pooled
+  // connection the server closed meanwhile; whether the next request still
+  // sees it closed depends on the event-loop phase it is made in. A request
+  // written into that dead connection fails, and a broker POST that fails
+  // that way has an unknown outcome and is never retried. So no managed
+  // request reuses a connection.
+  it("opens a connection per request, also right after the process was blocked", async () => {
+    const url = await keepAliveServer();
+    const fetch = createManagedFetch(DEFAULT_NETWORK_POLICY);
+    const block = new Int32Array(new SharedArrayBuffer(4));
+    const post = async (body: string) =>
+      (await fetch(url, { method: "POST", body })).text();
+    // undici returns a connection to its pool a turn after the response
+    // ends; waiting that turn makes a pooled connection certain to be
+    // reused, so a dispatcher that pools fails this test every time.
+    const settled = () => new Promise((resolve) => setImmediate(resolve));
+    const seen: string[] = [];
+    // The block runs in the continuation of a response body (as after a
+    // broker answer) and of a file read (a poll-phase callback, as after the
+    // state file reads before a store call); each is longer than the
+    // server's idle timeout.
+    const continuations = [
+      async () => {
+        await settled();
+        seen.push(await post("x"));
+      },
+      async () => {
+        await readFile(fileURLToPath(import.meta.url));
+      },
+    ];
+    for (let round = 0; round < 3; round += 1)
+      for (const continuation of continuations) {
+        await settled();
+        seen.push(await post("a"));
+        await continuation();
+        Atomics.wait(block, 0, 0, 1000);
+        seen.push(await post("b"));
+      }
+    expect(new Set(seen).size).toBe(seen.length);
+  }, 30_000);
+
+  it("keeps pooling connections for the process-wide dispatcher", async () => {
+    // A long idle time: this test needs a live connection, not a closed one.
+    const url = await keepAliveServer(5000);
+    const dispatcher = createDispatcher(DEFAULT_NETWORK_POLICY);
+    cleanup.push(() => dispatcher.close());
+    const post = async () =>
+      (
+        await undiciFetch(url, { method: "POST", body: "a", dispatcher })
+      ).text();
+    const first = await post();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(await post()).toBe(first);
   });
 });
 

@@ -6,6 +6,7 @@ import {
   EnvHttpProxyAgent,
   type Dispatcher,
   fetch as undiciFetch,
+  Pool,
   setGlobalDispatcher,
 } from "undici";
 import { PiShipError } from "./errors.js";
@@ -157,14 +158,42 @@ function trustRoots(extra: readonly string[]): string[] | undefined {
   return [...defaults, ...extra];
 }
 
-export function createDispatcher(policy: NetworkPolicy): Dispatcher {
+export interface DispatcherOptions {
+  /**
+   * Reuse connections between requests (the default). Without keep-alive
+   * every request opens its own connection and closes it after the
+   * response, including the connection to a plain-HTTP proxy, and HTTP/2 is
+   * not negotiated: its one session per origin would be reused like a
+   * pooled connection.
+   */
+  readonly keepAlive?: boolean;
+}
+
+export function createDispatcher(
+  policy: NetworkPolicy,
+  options: DispatcherOptions = {},
+): Dispatcher {
   const ca = trustRoots(loadCertificates(policy.additionalCA));
   const connect = ca
     ? { ca, rejectUnauthorized: true }
     : { rejectUnauthorized: true };
+  // `pipelining: 0` disables keep-alive for HTTP/1.1; HTTP/2, which undici
+  // negotiates by default over TLS, keeps one session per origin and ignores
+  // `pipelining`, so it is turned off too. The factory carries both to every
+  // pool the agents create, including a proxy agent's pool to the proxy,
+  // which does not receive the agent's own options.
+  const pooling =
+    options.keepAlive === false
+      ? {
+          pipelining: 0,
+          allowH2: false,
+          factory: (origin: string | URL, opts: object) =>
+            new Pool(origin, { ...opts, pipelining: 0, allowH2: false }),
+        }
+      : {};
   const base = policy.inheritProxyEnvironment
-    ? new EnvHttpProxyAgent({ connect })
-    : new Agent({ connect });
+    ? new EnvHttpProxyAgent({ connect, ...pooling })
+    : new Agent({ connect, ...pooling });
   if (!policy.privateOnly) return base;
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
@@ -224,7 +253,15 @@ export function createManagedFetch(
   policy: NetworkPolicy,
   component = "network",
 ): ManagedFetch {
-  const dispatcher = createDispatcher(policy);
+  // Platform secret store calls block the process (PowerShell on Windows
+  // for seconds), and a pooled connection the server closed meanwhile still
+  // looks usable until the close is read, which depends on where in the
+  // event loop the next request is made. A request sent on it fails with
+  // ECONNRESET, and a broker call that fails that way has an unknown outcome
+  // and is never retried. Managed requests (identity, broker, gateway probes,
+  // the audit sinks and update downloads) are few and small, so each opens its
+  // own connection.
+  const dispatcher = createDispatcher(policy, { keepAlive: false });
   return async (url, init = {}) => {
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());

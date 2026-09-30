@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { lifecycleScenario, target } from "../helpers/lifecycle.js";
+import {
+  lifecycleReleases,
+  lifecycleScenario,
+  target,
+} from "../helpers/lifecycle.js";
 
 // Lifecycle scenario: the consumer verifies the release, installs it with
 // the shipped install script, and uses it.
@@ -10,7 +14,7 @@ describe("production lifecycle: install (local fixtures)", () => {
     const s = await lifecycleScenario("install");
     // The release wraps exactly the payload `piship build` produces.
     expect(readFileSync(s.releases.releaseInventory)).toEqual(
-      readFileSync(s.releases.buildInventory),
+      readFileSync((await lifecycleReleases()).buildInventory),
     );
     const verified = s.cli("verify-release", s.releases.first, "--json");
     expect(verified.status, verified.stderr).toBe(0);
