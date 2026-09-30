@@ -51,10 +51,10 @@ Not claimed anywhere: a live OIDC login, live gateway inference, a real authenti
 | Tier | Workflows | When it runs | What it proves |
 | --- | --- | --- | --- |
 | Fast merge gate | `CI` (build, unit tests, and Pi compatibility on Ubuntu, macOS, and Windows; live secret store on macOS and Windows; format, lint, types, and boundaries on Ubuntu), `CodeQL` | Every pull request and every `main` push | A change is safe to merge |
-| Full Portable E2E | `Portable E2E` (`npm run test:e2e` on three targets; Ubuntu also runs the repeated-build qualification) | Nightly, `workflow_dispatch`, and inside `Release qualification`; not a pull request gate | The cross-platform installed integration surface |
-| Release qualification | `Release qualification`: `CI`, `CodeQL`, and `Portable E2E` in parallel, then `Release candidate` (demo company and personal example) | `workflow_dispatch` only, on the exact candidate commit | A specific commit and its artifacts are ready to ship |
+| Full Portable E2E | `Portable E2E` (`npm run test:e2e` on three targets; Ubuntu also runs the repeated-build qualification), `Reference E2E` (`npm run test:reference` and the broker contract tests against the enterprise reference stack on Ubuntu, with the Linux Secret Service) | Nightly, `workflow_dispatch`, and inside `Release qualification`; not a pull request gate | The cross-platform installed integration surface, and the managed distribution against live identity, broker, and gateway services |
+| Release qualification | `Release qualification`: `CI`, `CodeQL`, `Portable E2E`, and `Reference E2E` in parallel, then `Release candidate` (demo company and personal example) | `workflow_dispatch` only, on the exact candidate commit | A specific commit and its artifacts are ready to ship |
 
-Outside these tiers, `Pi latest canary` runs the compatibility suite nightly against the newest published Pi. It is early warning for the next Pi upgrade, not evidence for the pinned version. Scheduled failures of the canary and of Portable E2E open or update a tracking issue.
+Outside these tiers, `Pi latest canary` runs the compatibility suite nightly against the newest published Pi. It is early warning for the next Pi upgrade, not evidence for the pinned version. Scheduled failures of the canary, of Portable E2E, and of Reference E2E open or update a tracking issue.
 
 ## Recorded evidence
 

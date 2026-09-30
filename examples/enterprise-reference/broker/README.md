@@ -18,8 +18,8 @@ It is example code for tests and local exploration, not a package and not a prod
 
 | Request | Answer |
 | --- | --- |
-| `POST /v1/credential`, `Authorization: Bearer <Keycloak access token>`, body `{"distribution": "acmecode", "purpose": "inference"}`, optional `Idempotency-Key` | A new LiteLLM virtual key: `{"credential_type": "api_key", "credential", "credential_id", "expires_at", "models", "base_url", "subject"}` |
-| `POST /v1/revoke`, `Authorization: Bearer <that virtual key>`, body `{"credential_id": <id or null>, "distribution": "acmecode"}` | The key is deleted from LiteLLM: `{"revoked": true, "credential_id"}` |
+| `POST /v1/credential`, `Authorization: Bearer <Keycloak access token>`, body `{"distribution": "<BROKER_DISTRIBUTION>", "purpose": "inference"}`, optional `Idempotency-Key` | A new LiteLLM virtual key: `{"credential_type": "api_key", "credential", "credential_id", "expires_at", "models", "base_url", "subject"}` |
+| `POST /v1/revoke`, `Authorization: Bearer <that virtual key>`, body `{"credential_id": <id or null>, "distribution": "<BROKER_DISTRIBUTION>"}` | The key is deleted from LiteLLM: `{"revoked": true, "credential_id"}` |
 | `GET /health` | `{"status": "ok"}` |
 
 In `piship.yaml` these are `credential.broker.endpoint: http://127.0.0.1:<BROKER_PORT>/v1/credential` and `revokeEndpoint: http://127.0.0.1:<BROKER_PORT>/v1/revoke`, with `inference.baseUrl: http://127.0.0.1:<LITELLM_PORT>/v1`.
@@ -117,7 +117,7 @@ Revoke is authenticated only by the key it revokes, so it is limited by where it
 | `BROKER_GATEWAY_BASE_URL` | required | Returned as `base_url`; must equal PiShip's `inference.baseUrl` |
 | `BROKER_AUDIENCE` | `piship-reference-broker` | Required `aud` member |
 | `BROKER_AUTHORIZED_PARTY` | `acmecode` | Required `azp` |
-| `BROKER_DISTRIBUTION` | `acmecode` | The only `distribution` served |
+| `BROKER_DISTRIBUTION` | `acmecode` | The only `distribution` served; it must equal the distribution's `app.id` (the reference stack's compose file sets `acmecode-reference`) |
 | `BROKER_LISTEN_HOST`, `BROKER_LISTEN_PORT` | `127.0.0.1`, `8080` | Compose sets `0.0.0.0` inside the container and publishes the port on `127.0.0.1` only |
 | `BROKER_KEY_TTL_SECONDS` | `28800` | Key lifetime, 600 to 86400. Choose it well above PiShip's `refresh.beforeExpiry` |
 | `BROKER_USER_MAX_BUDGET`, `BROKER_USER_BUDGET_DURATION` | `10`, `30d` | Set on a user when it is created |

@@ -1,0 +1,30 @@
+# LiteLLM proxy configuration for live provider qualification: the
+# enterprise-litellm example's config (../enterprise-litellm/litellm-config.yaml)
+# with both model names routed to one real upstream model instead of the mock.
+# compose.live-provider.yaml mounts it in place of that config; see the README,
+# "Live provider qualification".
+#
+# LIVE_PROVIDER_MODEL is a LiteLLM model string, whose prefix picks the
+# provider protocol: `openai/<model>` for OpenAI or any OpenAI-compatible
+# endpoint, `anthropic/<model>` for Anthropic, and so on.
+model_list:
+  - model_name: acme/coder
+    litellm_params:
+      model: os.environ/LIVE_PROVIDER_MODEL
+      api_base: os.environ/LIVE_PROVIDER_BASE_URL
+      api_key: os.environ/LIVE_PROVIDER_API_KEY
+  - model_name: acme/general
+    litellm_params:
+      model: os.environ/LIVE_PROVIDER_MODEL
+      api_base: os.environ/LIVE_PROVIDER_BASE_URL
+      api_key: os.environ/LIVE_PROVIDER_API_KEY
+
+litellm_settings:
+  # Drop OpenAI request parameters that an upstream provider does not accept.
+  drop_params: true
+
+general_settings:
+  # Used only by the broker to create and delete virtual keys.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Virtual keys need a database.
+  database_url: os.environ/DATABASE_URL
