@@ -572,33 +572,44 @@ function isDirectoryWith(path: string, identity: DirectoryIdentity): boolean {
 }
 
 /** How the system removes a tree without following links, if it can. */
-interface Remover {
+export interface Remover {
   readonly file: string;
   readonly args: readonly string[];
 }
-const REMOVERS: readonly Remover[] = [
+/** Where an `rm` is looked for: absolute paths only, never `PATH`. */
+const REMOVER_FILES = [
+  "/bin/rm",
+  "/usr/bin/rm",
+  // NixOS keeps coreutils under the current system profile.
+  "/run/current-system/sw/bin/rm",
+] as const;
+const REMOVER_FLAGS: readonly (readonly string[])[] = [
   // GNU coreutils: fts with descriptor-relative removal, `--one-file-system`.
-  { file: "/bin/rm", args: ["-rf", "--one-file-system", "--"] },
+  ["-rf", "--one-file-system", "--"],
   // macOS and the BSDs: fts, `-x` does not cross mount points.
-  { file: "/bin/rm", args: ["-rfx", "--"] },
+  ["-rfx", "--"],
 ];
+/**
+ * The candidates in the order they are tried: each path with the GNU flags,
+ * then the BSD flags, before the next path.
+ */
+export const REMOVER_CANDIDATES: readonly Remover[] = REMOVER_FILES.flatMap(
+  (file) => REMOVER_FLAGS.map((args) => ({ file, args })),
+);
 let remover: Remover | null | undefined;
 
 /**
- * The system `rm` that removes a whole tree safely, or null. `rm` walks with
- * descriptor-relative calls (fts), so a directory swapped for a link while it
- * runs is never followed, and it cannot be given a path that is resolved
- * after a check, which a walk in this process cannot avoid. It is used only
- * after it proved on a throwaway tree, once per process, that it removes a
- * tree, leaves what a link inside it points to, and accepts the flags that
- * keep it on one filesystem (BusyBox `rm` does not, and is left out). Windows
- * has none: the portable walk is used there.
+ * The first of `candidates` that removes a whole tree safely, or null. `rm`
+ * walks with descriptor-relative calls (fts), so a directory swapped for a
+ * link while it runs is never followed, and it cannot be given a path that is
+ * resolved after a check, which a walk in this process cannot avoid. A
+ * candidate is used only after it proved on a throwaway tree that it removes a
+ * tree, leaves what a link inside it and a link operand point to, and accepts
+ * the flags that keep it on one filesystem (BusyBox `rm` does not). One that
+ * is missing, fails, or proves nothing is skipped for the next.
  */
-function systemRemover(): Remover | null {
-  if (remover !== undefined) return remover;
-  remover = null;
-  if (process.platform === "win32") return remover;
-  for (const candidate of REMOVERS) {
+export function findRemover(candidates: readonly Remover[]): Remover | null {
+  for (const candidate of candidates) {
     let scratch: string | undefined;
     try {
       scratch = mkdtempSync(join(tmpdir(), "piship-rm-probe-"));
@@ -621,8 +632,7 @@ function systemRemover(): Remover | null {
         !existsSync(join(scratch, "link")) &&
         readFileSync(join(scratch, "victim", "kept"), "utf8") === "kept"
       ) {
-        remover = candidate;
-        break;
+        return candidate;
       }
     } catch {
       // Not usable here; the next candidate, or the portable walk.
@@ -635,6 +645,18 @@ function systemRemover(): Remover | null {
         }
     }
   }
+  return null;
+}
+
+/**
+ * The system `rm` removal uses, found once per process; null where there is
+ * none (Windows has no such `rm`, and Alpine's BusyBox `rm` fails the probe),
+ * and the portable walk is used instead.
+ */
+function systemRemover(): Remover | null {
+  if (remover === undefined)
+    remover =
+      process.platform === "win32" ? null : findRemover(REMOVER_CANDIDATES);
   return remover;
 }
 
@@ -653,7 +675,8 @@ export function usesSystemRemover(): boolean {
  * is removed. What remains is the gap between that look and the removal of
  * each entry, which no path-based call can close: it is the fallback for
  * Windows, where no sandbox backend runs local processes, and for systems
- * without a usable `rm`.
+ * without a usable `rm` (Alpine), where the roots a sweep is allowed to look
+ * at carry the safety (see temporary-directories.ts in core).
  */
 function removeContents(
   path: string,

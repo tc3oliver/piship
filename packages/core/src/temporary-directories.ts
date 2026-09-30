@@ -31,8 +31,16 @@
 //   beside the output it will be renamed into, and a build or release says
 //   how many abandoned ones it found.
 //
-// Those claims rest on what a manifest lists, which PiShip does not control,
-// so removal does not rest on them.
+// Those claims rest on what a manifest lists, which PiShip does not control.
+// On a system with a usable `rm` (GNU coreutils or a BSD, found at /bin/rm,
+// /usr/bin/rm, or NixOS's /run/current-system/sw/bin/rm) removal does not rest
+// on them: it never follows a link whatever a contained command does. Where
+// there is none (Alpine's BusyBox, Windows) removal falls back to a path-based
+// walk with a gap no such walk can close, and there the claims carry the
+// safety: `--reclaim-staging` in a workspace-writable `dist/`, or a sweep of an
+// OS temp directory that the manifest lists as writable, can be steered by a
+// contained command that is still running. Windows has no native sandbox
+// backend, so that case does not arise there.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
