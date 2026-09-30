@@ -150,6 +150,39 @@ const PERSONAL: Distribution = {
   patch: pinKey,
 };
 
+/**
+ * MyPi Local as its owner would ship it: the example builds and installs
+ * locally, so the owner adds a channel source and a pinned key. The file
+ * secret store stands in for the system store, which needs a desktop keyring.
+ */
+const PERSONAL_LOCAL: Distribution = {
+  example: "personal/local-model",
+  fixture: "mypi-local",
+  id: "mypi-local",
+  name: "MyPi Local",
+  updateVariable: "MYPI_LOCAL_UPDATE_SOURCE",
+  plainBuild: false,
+  patch(source, publicKey, version) {
+    let patched = source;
+    for (const [from, to] of [
+      ["  storage:\n    provider: system", "  storage:\n    provider: file"],
+      [
+        "variables:\n  - MYPI_MODEL_URL\n",
+        "variables:\n  - MYPI_MODEL_URL\n  - MYPI_LOCAL_UPDATE_SOURCE\n",
+      ],
+      [
+        "  rollback: true\n",
+        `  rollback: true\n  source: \${MYPI_LOCAL_UPDATE_SOURCE}\n  trust:\n    keys: []\n`,
+      ],
+    ] as const) {
+      if (!patched.includes(from))
+        throw new Error(`mypi-local manifest lacks ${JSON.stringify(from)}`);
+      patched = patched.replace(from, to);
+    }
+    return pinKey(patched, publicKey, version);
+  },
+};
+
 interface Run {
   readonly status: number | null;
   readonly stdout: string;
@@ -400,8 +433,13 @@ export function personalReleases(): Promise<ReleaseFixtures> {
   return sharedReleases(PERSONAL);
 }
 
+/** The local-model variant's shared release fixtures, built on first use. */
+export function personalLocalReleases(): Promise<ReleaseFixtures> {
+  return sharedReleases(PERSONAL_LOCAL);
+}
+
 /**
- * Build the distributions' fixtures into `fixtures` before any scenario
+ * Build every distribution's fixtures into `fixtures` before any scenario
  * starts, through the same election the scenarios use, so they find them
  * ready instead of building while other E2E files compete for the CPU. The
  * system-store demo is built only when the platform store is live.
@@ -415,6 +453,7 @@ export async function prebuildLifecycleFixtures(
     ...(LIVE_SECRET_STORE
       ? [sharedReleases(demo("system", fixtures), fixtures)]
       : []),
+    sharedReleases(PERSONAL_LOCAL, fixtures),
   ]);
 }
 
@@ -503,8 +542,8 @@ export interface BaseScenario<Releases extends ReleaseFixtures> {
   readonly env: NodeJS.ProcessEnv;
   /** Run the PiShip CLI in this scenario's environment. */
   cli(...args: string[]): Run;
-  /** Run the installed branded command. */
-  run(args: string[]): Promise<Result>;
+  /** Run the installed branded command, with `input` on its standard input. */
+  run(args: string[], input?: string): Promise<Result>;
   /** Install 1.0.0 with the install script shipped inside its release. */
   installFirst(): Promise<void>;
   /** Publish a signed channel generation into this scenario's channel. */
@@ -514,7 +553,7 @@ export interface BaseScenario<Releases extends ReleaseFixtures> {
 export interface Scenario extends BaseScenario<ReleaseFixtures> {
   readonly services: Services;
   /** Run the installed branded command; acts as the browser for sign-in. */
-  run(args: string[]): Promise<Result>;
+  run(args: string[], input?: string): Promise<Result>;
   /** The app ID, which is also the branded command. */
   readonly id: string;
   /** Where the distribution stores its secrets. */
@@ -600,6 +639,15 @@ function expectSecretStore(
 export type PersonalScenario = BaseScenario<ReleaseFixtures>;
 
 /**
+ * The personal scenarios run a dozen or more installed commands in one test,
+ * so a hung one is killed and named instead of surfacing only when the test
+ * itself times out. The slowest, an update that verifies a 17,000-file
+ * archive, took about 230 s on a machine loaded with other builds and a few
+ * seconds otherwise.
+ */
+const PERSONAL_COMMAND_TIMEOUT_MS = 300_000;
+
+/**
  * A fresh, isolated environment over a distribution's shared releases: its
  * own update host, home, state, install home, and bin home. Everything is
  * torn down when the calling test finishes.
@@ -612,6 +660,8 @@ async function createScenario<Releases extends ReleaseFixtures>(
     env?: NodeJS.ProcessEnv;
     approve?: (url: string) => Promise<unknown>;
     close?: () => Promise<void>;
+    /** Kill any installed command still running after this long. */
+    commandTimeoutMs?: number;
   },
 ): Promise<BaseScenario<Releases>> {
   const { id } = distribution;
@@ -657,11 +707,15 @@ async function createScenario<Releases extends ReleaseFixtures>(
     });
     return { status: done.status, stdout: done.stdout, stderr: done.stderr };
   };
-  const run = (args: string[]): Promise<Result> =>
+  const run = (args: string[], input?: string): Promise<Result> =>
     branded(command, args, {
       cwd: temp,
       env,
       ...(options.approve ? { approve: options.approve } : {}),
+      ...(input === undefined ? {} : { input }),
+      ...(options.commandTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.commandTimeoutMs }),
     });
   return {
     releases,
@@ -823,5 +877,22 @@ export async function lifecycleScenario(
 export async function personalScenario(
   name: string,
 ): Promise<PersonalScenario> {
-  return createScenario(PERSONAL, await personalReleases(), name, {});
+  return createScenario(PERSONAL, await personalReleases(), name, {
+    commandTimeoutMs: PERSONAL_COMMAND_TIMEOUT_MS,
+  });
+}
+
+/**
+ * A fresh, isolated MyPi Local lifecycle environment over its shared
+ * releases, pointing at the model endpoint at `modelUrl`. The caller owns that
+ * server; the update host is the only service the scenario starts.
+ */
+export async function personalLocalScenario(
+  name: string,
+  modelUrl: string,
+): Promise<PersonalScenario> {
+  return createScenario(PERSONAL_LOCAL, await personalLocalReleases(), name, {
+    env: { MYPI_MODEL_URL: modelUrl },
+    commandTimeoutMs: PERSONAL_COMMAND_TIMEOUT_MS,
+  });
 }
