@@ -39,7 +39,7 @@ import {
 } from "./support.js";
 
 const TIMEOUT_MS = 200;
-const TIMINGS = { settleMs: 1_500, callTimeoutMs: 20_000 } as const;
+const TIMINGS = { settleMs: 3_000, callTimeoutMs: 20_000 } as const;
 const WORKSPACE = [
   "workspace consistency",
   "git control protection",

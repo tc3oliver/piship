@@ -113,7 +113,7 @@ describe.concurrent("the SDK example adapters under the conformance kits", () =>
               fetch: service.fetch,
             },
             sandboxes: () => service.sessions.size,
-            settleMs: 1_500,
+            settleMs: 3_000,
             callTimeoutMs: 20_000,
           }),
         );

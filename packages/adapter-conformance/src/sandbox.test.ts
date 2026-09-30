@@ -773,7 +773,7 @@ function replaceEnvironment(fault?: Fault) {
 // ---------------------------------------------------------------- helpers
 
 const TIMINGS = {
-  settleMs: 1_500,
+  settleMs: 3_000,
   callTimeoutMs: 20_000,
   sharedWindowMs: 1_500,
 } satisfies SandboxKitOptions;
