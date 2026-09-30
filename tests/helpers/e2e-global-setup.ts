@@ -1,4 +1,10 @@
 import type { TestProject } from "vitest/node";
+import {
+  e2eFileKey,
+  e2eFixtures,
+  e2eShard,
+  type LifecycleFixture,
+} from "./e2e-shards.js";
 import reserveFixtures from "./global-setup.js";
 import { prebuildLifecycleFixtures } from "./lifecycle.js";
 
@@ -10,6 +16,7 @@ export default async function setup(project: TestProject) {
   try {
     await prebuildLifecycleFixtures(
       project.getProvidedContext().lifecycleFixtures,
+      await shardFixtures(project),
     );
   } catch (error) {
     // The build that failed is what has to be reported. A fixture directory a
@@ -22,4 +29,23 @@ export default async function setup(project: TestProject) {
     throw error;
   }
   return cleanup;
+}
+
+/**
+ * With `--shard`, only the fixtures that this shard's files use: the same
+ * split the sequencer makes (vitest.e2e.config.ts), over every E2E file.
+ * Without it, every fixture.
+ */
+async function shardFixtures(
+  project: TestProject,
+): Promise<ReadonlySet<LifecycleFixture> | undefined> {
+  const shard = project.vitest.config.shard;
+  if (!shard) return undefined;
+  const { testFiles } = await project.globTestFiles();
+  const files = e2eShard(testFiles, shard.index, shard.count);
+  const fixtures = e2eFixtures(files);
+  console.info(
+    `E2E shard ${shard.index}/${shard.count}: ${files.map(e2eFileKey).join(", ")}; fixtures: ${[...fixtures].join(", ") || "none"}`,
+  );
+  return fixtures;
 }
