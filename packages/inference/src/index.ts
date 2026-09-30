@@ -135,6 +135,14 @@ export function gatewayErrorBody(body: unknown): GatewayErrorBody | undefined {
   return Object.keys(read).length > 0 ? read : undefined;
 }
 
+/** LiteLLM's error types for its own refusal of the key or the model. */
+const GATEWAY_OWN_REFUSALS = new Set([
+  "auth_error",
+  "token_not_found_in_db",
+  "expired_key",
+  "key_model_access_denied",
+]);
+
 /**
  * Whether a gateway error relays its upstream model provider's answer rather
  * than the gateway's own decision about the request. LiteLLM wraps a
@@ -144,8 +152,14 @@ export function gatewayErrorBody(body: unknown): GatewayErrorBody | undefined {
  * the user's credential or entitlement.
  */
 export function isUpstreamProviderError(body: unknown): boolean {
-  const message = gatewayErrorBody(body)?.message;
-  return typeof message === "string" && /^litellm\.\w+/.test(message);
+  const error = gatewayErrorBody(body);
+  return (
+    typeof error?.message === "string" &&
+    /^litellm\.\w+/.test(error.message) &&
+    // LiteLLM's own refusals of the key and the model, whatever their
+    // message: never read as the provider's.
+    !GATEWAY_OWN_REFUSALS.has(error.type ?? "")
+  );
 }
 
 /** The upper bound on a retry time relayed from the upstream provider. */

@@ -173,6 +173,20 @@ describe("model catalog", () => {
     // The error object alone, as Pi's error message carries it.
     expect(isUpstreamProviderError(upstream401.error)).toBe(true);
     expect(isUpstreamProviderError(undefined)).toBe(false);
+    // LiteLLM's own refusal types are the gateway's, even under a
+    // `litellm.` message.
+    for (const type of [
+      "auth_error",
+      "token_not_found_in_db",
+      "expired_key",
+      "key_model_access_denied",
+    ]) {
+      const own = litellm(type, "litellm.ProxyException: refused", "401");
+      expect(isUpstreamProviderError(own)).toBe(false);
+      expect(classifyGatewayStatus(401, {}, own)?.code).toBe(
+        "CREDENTIAL_REVOKED",
+      );
+    }
     expect(isUpstreamProviderError("litellm.AuthenticationError")).toBe(false);
   });
   it("reads a retry time the gateway relays from its provider, bounded", () => {

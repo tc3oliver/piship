@@ -297,6 +297,7 @@ export function isModelDenial(message: unknown): boolean {
  * model list check classifies that status (with the error body, so a
  * provider's refusal relayed by the gateway reads as such); an interrupted
  * stream, an abort, or a message without a status is a protocol error.
+ * Pi's message carries no response headers, so there is no retry time.
  */
 export function acceptanceFailure(message: unknown): PiShipError {
   const value = message as
@@ -314,9 +315,6 @@ export function acceptanceFailure(message: unknown): PiShipError {
     {
       component: "inference",
       retryable: classified?.retryable ?? false,
-      ...(classified?.retryAfterMs === undefined
-        ? {}
-        : { retryAfterMs: classified.retryAfterMs }),
       ...(classified?.userAction ? { userAction: classified.userAction } : {}),
     },
   );
