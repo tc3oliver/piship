@@ -93,6 +93,9 @@ function build(services: Services) {
         "",
       ].join("\n"),
     )
+    // The Kubernetes backend cannot verify the warm pool's NetworkPolicy, so it
+    // does not offer network deny and a required deny profile fails closed.
+    .replace("  network:\n    mode: deny\n", "  network:\n    mode: allow\n")
     .replace("defaultMode: plan", "defaultMode: build")
     .replace(
       '    - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect: ask',
@@ -100,6 +103,7 @@ function build(services: Services) {
     );
   for (const marker of [
     "credential: stored",
+    "  network:\n    mode: allow\n",
     "ACMECODE_SANDBOX_URL\n",
     "defaultMode: build",
     "effect: allow",

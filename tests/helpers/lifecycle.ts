@@ -74,7 +74,12 @@ export interface LifecycleReleases extends ReleaseFixtures {
 interface Distribution {
   /** Directory under `examples/`. */
   readonly example: string;
-  /** Subdirectory of the run's fixture directory. */
+  /**
+   * Subdirectory of the run's fixture directory, kept short: on Windows a
+   * release nests its staging, the payload and npm's deepest package in it,
+   * and npm cannot run an install script whose directory is longer than 260
+   * characters (`spawn cmd.exe ENOENT`).
+   */
   readonly fixture: string;
   /** App ID, which is also the branded command. */
   readonly id: string;
@@ -134,7 +139,7 @@ function demo(
       : `acmelive-${createHash("sha256").update(fixtures).digest("hex").slice(0, 8)}`;
   return {
     example: "demo-company",
-    fixture: `${storage === "file" ? "demo-company" : "demo-company-system"}${commands ? "-commands" : ""}`,
+    fixture: `${storage === "file" ? "demo" : "live"}${commands ? "-cmd" : ""}`,
     id,
     name: "AcmeCode",
     updateVariable: "ACMECODE_UPDATE_SOURCE",
