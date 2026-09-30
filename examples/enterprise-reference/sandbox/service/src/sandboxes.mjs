@@ -132,8 +132,9 @@ export function parseExec(body) {
     throw bad("env must be an object of at most 256 variables");
   const variables = [];
   for (const [name, value] of Object.entries(env)) {
-    // The value goes on one line of an env file, so it cannot hold a line
-    // break; the ID variable is this service's.
+    // The value goes on one line of the environment the reader in the
+    // container takes, so it cannot hold a line break; the ID variable is
+    // this service's.
     if (
       !ENV_NAME.test(name) ||
       name === EXEC_ID_VARIABLE ||

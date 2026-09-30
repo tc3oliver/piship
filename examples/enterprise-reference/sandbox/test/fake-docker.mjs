@@ -147,15 +147,14 @@ if (command === "version") {
     log({ command: "cancel", phase: "done", id, mode, main: pid });
     process.exit(0);
   }
-  // The environment comes from the standard input, as the service asks, or
-  // from a file, which the tests treat as a fault.
-  const envFile = flagValue("--env-file");
-  let source = "";
-  if (envFile === "/dev/stdin")
-    for await (const chunk of process.stdin) source += chunk;
-  else source = readFileSync(envFile, "utf8");
+  // The environment is on the standard input, which only `--interactive`
+  // forwards to the command, as Docker does; it is read here as well, for the
+  // log and the record, and given to the command whole.
+  let input = "";
+  for await (const chunk of process.stdin) input += chunk;
+  const interactive = args.includes("--interactive");
   const environment = {};
-  for (const line of source.split("\n"))
+  for (const line of input.split("\n"))
     if (line.includes("="))
       environment[line.slice(0, line.indexOf("="))] = line.slice(
         line.indexOf("=") + 1,
@@ -164,21 +163,20 @@ if (command === "version") {
     command,
     args,
     workdir: flagValue("--workdir"),
-    environment: { from: envFile, variables: environment },
+    environment: { interactive, variables: environment },
   });
   const separator = args.indexOf("piship-exec");
-  const wrapper = args[separator - 1];
   const shell = args[separator - 3];
-  const child = spawn(
-    shell,
-    ["-c", wrapper, "piship-exec", args[separator + 1]],
-    {
-      cwd: process.env.DOCKER_FAKE_CWD ?? tmpdir(),
-      env: { PATH: process.env.PATH, ...environment },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    },
-  );
+  const child = spawn(shell, ["-c", ...args.slice(separator - 1)], {
+    cwd: process.env.DOCKER_FAKE_CWD ?? tmpdir(),
+    env: { PATH: process.env.PATH },
+    stdio: [interactive ? "pipe" : "ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  if (interactive) {
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(input);
+  }
   // Written whole and renamed into place: a removal or a cancel that reads the
   // records at the same moment sees this one complete, or not at all.
   const record = join(dir, "execs", `${environment.PISHIP_EXEC_ID}.json`);

@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { createSandboxServer } from "../service/server.mjs";
 import { authenticate, loadRegistry } from "../service/src/auth.mjs";
 import { loadConfig } from "../service/src/config.mjs";
+import { environmentInput, execArguments } from "../service/src/docker.mjs";
 import { createLogger } from "../service/src/log.mjs";
 import { HOST_UID, IMAGE, startService, until, wait } from "./harness.mjs";
 
@@ -912,13 +913,38 @@ describe("commands", () => {
     const run = await running;
     // The command got its environment, exactly.
     assert.equal(run.out, value);
-    assert.equal(call.environment.from, "/dev/stdin");
+    assert.equal(call.environment.interactive, true);
     assert.match(call.environment.variables.PISHIP_EXEC_ID, /^[0-9a-f]{32}$/);
     assert.equal(call.environment.variables.EMPTY, "");
     // No value is on the command line, and none is named there.
     assert.equal(JSON.stringify(call.args).includes(value), false);
     assert.equal(call.args.includes("FOO"), false);
-    assert.deepEqual(flagValues(call.args, "--env-file"), ["/dev/stdin"]);
+    // Nor is a file named for Docker to open.
+    assert.equal(call.args.includes("--env-file"), false);
+  });
+
+  it("runs nothing when the environment is cut short on its way in", () => {
+    // What the container runs, fed here by hand: the environment ends with
+    // an empty line, and without it the command does not start.
+    const args = execArguments(
+      { shell: "/bin/sh" },
+      { workdir: "/workspace", container: "c", command: 'echo "ran $FOO"' },
+    );
+    const inContainer = args.slice(args.indexOf("/bin/sh") + 1);
+    const input = environmentInput("0".repeat(32), [["FOO", "bar"]]);
+    const whole = spawnSync("/bin/sh", inContainer, {
+      input,
+      encoding: "utf8",
+    });
+    assert.equal(whole.stdout, "ran bar\n");
+    for (const cut of [input.slice(0, -1), input.slice(0, 20), ""]) {
+      const done = spawnSync("/bin/sh", inContainer, {
+        input: cut,
+        encoding: "utf8",
+      });
+      assert.equal(done.status, 125);
+      assert.equal(done.stdout, "");
+    }
   });
 
   it("runs at the workspace path it is given and refuses a path outside", async () => {
