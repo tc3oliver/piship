@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { inspect } from "node:util";
 import { dirname, join, resolve } from "node:path";
 import * as upstreamPi from "@earendil-works/pi-coding-agent";
 import {
@@ -37,11 +38,16 @@ import {
   VERSION,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
+import { SecretValue } from "@piship/contracts";
 import { PI_VERSION } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { governModelRuntime, PINNED_PI_VERSION } from "./index.js";
+import {
+  installCrashRedaction,
+  uninstallCrashRedaction,
+} from "./launch/crash-redaction.js";
 
 // The scheduled Pi latest canary installs the newest published Pi over the
 // pin in a throwaway checkout and runs this suite read-only. Only the
@@ -891,5 +897,93 @@ describe("Pi ends an interactive session by awaiting dispose, then exiting", () 
     const source = String(upstreamPi.InteractiveMode);
     expect(source).toMatch(/constructor\(\s*runtimeHost\b/);
     expect(source).toMatch(/this\.runtimeHost\s*=\s*runtimeHost\s*;/);
+  });
+});
+
+describe("Pi's interactive crash handler runs after PiShip's crash redaction", () => {
+  // Pi's interactive mode prepends an uncaughtException handler that prints
+  // the error, records it in <agent dir>/crashes.json (which /bug attaches to
+  // a report), and exits. PiShip prepends a listener that redacts the error
+  // in place at session_start, which Pi emits only after it registered its
+  // handler, so PiShip's runs first and Pi prints and records redacted text.
+  type Proto = Record<string, (this: unknown, ...args: unknown[]) => unknown>;
+  const proto = upstreamPi.InteractiveMode.prototype as unknown as Proto;
+
+  it("registers its handler in init before it binds extensions", () => {
+    const init = String(proto.init);
+    const registers = init.indexOf("this.registerSignalHandlers()");
+    const binds = init.indexOf("this.rebindCurrentSession()");
+    expect(registers).toBeGreaterThanOrEqual(0);
+    expect(binds).toBeGreaterThan(registers);
+  });
+
+  it("prints and records a crash with registered secrets redacted", () => {
+    const secret = new SecretValue("piship-fake-crash-credential-0123456789");
+    const agentDir = join(temp, "agent");
+    mkdirSync(agentDir);
+    const savedDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const self = Object.create(proto) as Record<string, unknown>;
+    Object.assign(self, {
+      signalCleanupHandlers: [],
+      isShuttingDown: false,
+      ui: { stop: () => {} },
+    });
+    // `session` is a getter on the prototype; an own property shadows it.
+    Object.defineProperty(self, "session", {
+      value: {
+        sessionFile: undefined,
+        sessionManager: { getCwd: () => temp },
+        resourceLoader: { getExtensions: () => ({ extensions: [] }) },
+      },
+    });
+    const before = process.listeners("uncaughtException");
+    const rejections = process.listenerCount("unhandledRejection");
+    const printed: string[] = [];
+    const error = new Error(
+      `invalid header value: Authorization ${secret.reveal()}`,
+    );
+    (error as Error & { cause?: unknown }).cause = new Error(
+      `echoed ${secret.reveal()}`,
+    );
+    const consoleError = console.error;
+    const exit = process.exit;
+    try {
+      proto.registerSignalHandlers?.call(self);
+      const piHandler = process.listeners("uncaughtException")[0];
+      expect(before).not.toContain(piHandler);
+      // Pi adds no unhandledRejection listener: Node raises an unhandled
+      // rejection as an uncaught exception, which both listeners see.
+      expect(process.listenerCount("unhandledRejection")).toBe(rejections);
+      installCrashRedaction();
+      const [first, second] = process.listeners("uncaughtException");
+      expect(second).toBe(piHandler);
+      console.error = (...args: unknown[]) => {
+        printed.push(args.map((item) => inspect(item)).join(" "));
+      };
+      process.exit = ((code?: number) => {
+        throw new Error(`exit ${code}`);
+      }) as typeof process.exit;
+      for (const listener of [first, second])
+        try {
+          listener?.(error, "uncaughtException");
+        } catch (thrown) {
+          if ((thrown as Error).message !== "exit 1") throw thrown;
+        }
+    } finally {
+      console.error = consoleError;
+      process.exit = exit;
+      proto.unregisterSignalHandlers?.call(self);
+      uninstallCrashRedaction();
+      if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = savedDir;
+    }
+    const crashes = readFileSync(join(agentDir, "crashes.json"), "utf8");
+    expect(crashes).toContain("invalid header value");
+    expect(crashes).toContain("[REDACTED]");
+    expect(crashes).not.toContain(secret.reveal());
+    expect(printed.join("\n")).toContain("invalid header value");
+    expect(printed.join("\n")).not.toContain(secret.reveal());
+    expect(process.listeners("uncaughtException")).toEqual(before);
   });
 });

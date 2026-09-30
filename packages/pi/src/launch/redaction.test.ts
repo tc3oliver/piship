@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { SecretValue } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { uninstallCrashRedaction } from "./crash-redaction.js";
 import { providerErrorRedaction, redactProviderError } from "./redaction.js";
 
 // An obvious fake: registered as a SecretValue, as PiShip registers the
@@ -94,8 +95,18 @@ describe("a Pi session with provider error redaction", () => {
     gateway = await echoingGateway();
   });
   afterEach(async () => {
+    uninstallCrashRedaction();
     await gateway.close();
     rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("puts the crash redaction first at session_start", async () => {
+    const { session } = await open({ enabled: false });
+    const [first] = process.listeners("uncaughtException");
+    const error = new Error(`crash ${CREDENTIAL}`);
+    first?.(error, "uncaughtException");
+    expect(error.message).toBe("crash [REDACTED]");
+    session.dispose();
   });
 
   async function open(retry: { enabled: boolean; maxRetries?: number }) {

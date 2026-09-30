@@ -1,5 +1,6 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { redact } from "@piship/contracts";
+import { installCrashRedaction } from "./crash-redaction.js";
 
 /**
  * The assistant message with its provider error text redacted, or undefined
@@ -27,11 +28,14 @@ export function redactProviderError(message: unknown): unknown {
  * Redacts provider error text before Pi persists the message. Pi runs the
  * handlers of extensions loaded from paths before inline ones, in order, and
  * persists the message the last replacement produced, so this extension goes
- * last: whatever an earlier handler returned is redacted too.
+ * last: whatever an earlier handler returned is redacted too. At
+ * `session_start` it also puts the crash redaction in front of Pi's crash
+ * handler (see crash-redaction.ts).
  */
 export const providerErrorRedaction: InlineExtension = {
   name: "piship-redaction",
   factory: (pi) => {
+    pi.on("session_start", () => installCrashRedaction());
     pi.on("message_end", (event) => {
       const message = redactProviderError(event.message);
       return message ? { message: message as typeof event.message } : undefined;
