@@ -6,7 +6,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 // @ts-expect-error The stand-in model server is plain JavaScript.
 import { startModelServer } from "../../examples/personal/local-model/model-server.mjs";
@@ -56,6 +56,33 @@ function sessionHistory(sessionDir: string): { files: number; text: string } {
   };
 }
 
+/**
+ * Every file under `directory` that holds `secret` as it is or as the file
+ * secret store writes it (base64url, or base64), so a copy of the store's
+ * file anywhere else in state shows up too.
+ */
+function holders(directory: string, secret: string): string[] {
+  const forms = new Set([
+    secret,
+    Buffer.from(secret).toString("base64url"),
+    Buffer.from(secret).toString("base64"),
+  ]);
+  return [
+    ...new Set(
+      scan(directory, [...forms]).map(
+        (hit) => hit.split(" contains ")[0] as string,
+      ),
+    ),
+  ].sort();
+}
+
+/** Under `root`, `secret` is only in the one file `store` holds it in. */
+function expectOnlyInStore(root: string, store: string, secret: string): void {
+  const files = holders(root, secret);
+  expect(files).toHaveLength(1);
+  expect(dirname(files[0] as string)).toBe(store);
+}
+
 /** The `<METHOD> <path>` of every request the model server has seen. */
 function seen(requests: readonly ModelRequest[]): string[] {
   return requests.map((request) => `${request.method} ${request.path}`);
@@ -94,9 +121,9 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
   it("MyPi: installs, delegates its credential to Pi, makes a model request, resumes the session, updates, rolls back, and uninstalls", async () => {
     const key = "sk-mypi-pi-native-owner-key";
     const server = await startModelServer({ key });
+    onTestFinished(() => server.close());
     const requests = server.requests as ModelRequest[];
     const s = await personalScenario("clean-machine");
-    onTestFinished(() => server.close());
     // Provider keys in the environment and in the user's own ~/.pi must
     // never reach the model server: only Pi's sign-in kept in MyPi's state
     // may.
@@ -287,10 +314,9 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
     expect(s.hostRequests.filter((path) => !channelFiles.has(path))).toEqual(
       [],
     );
-    expect(
-      scan(s.state, [key]).map((hit) => hit.split(" contains ")[0]),
-    ).toEqual([join(state, "agent", "auth.json")]);
-    expect(scan(s.state, [ambient, personal])).toEqual([]);
+    expect(holders(s.state, key)).toEqual([join(state, "agent", "auth.json")]);
+    expect(holders(s.state, ambient)).toEqual([]);
+    expect(holders(s.state, personal)).toEqual([]);
 
     // Uninstall keeps sessions, state and Pi's credential, and leaves the
     // user's own ~/.pi as it was.
@@ -338,7 +364,7 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
     expect(login.stdout).toContain("No identity provider is configured");
     expect(existsSync(join(state, "secrets"))).toBe(true);
     expect(existsSync(join(state, "identity"))).toBe(false);
-    expect(scan(s.state, [key])).toEqual([]);
+    expectOnlyInStore(s.state, join(state, "secrets"), key);
     const launch = await s.run(["--smoke"]);
     expect(launch.status, launch.stderr).toBe(0);
     const first = JSON.parse(launch.stdout) as Smoke;
@@ -439,9 +465,9 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
 
     // Across the whole flow the model server saw only the stored key: three
     // chat requests, one per model request, and the model lists doctor asked
-    // for. The update host saw only the signed channel, and the key never
-    // appeared in plain view in state, including the update and rollback
-    // records.
+    // for. The update host saw only the signed channel, and the key is in
+    // state only in the secret store's file, encoded or not: the update and
+    // rollback records hold no copy.
     expect(
       seen(requests).filter((item) => item === "POST /v1/chat/completions"),
     ).toHaveLength(3);
@@ -459,7 +485,8 @@ describe("personal clean machine (specification 30.4, local fixtures)", () => {
     expect(s.hostRequests.filter((path) => !channelFiles.has(path))).toEqual(
       [],
     );
-    expect(scan(s.state, [key, ambient])).toEqual([]);
+    expectOnlyInStore(s.state, join(state, "secrets"), key);
+    expect(holders(s.state, ambient)).toEqual([]);
 
     // Uninstall keeps sessions, state and the stored key for a reinstall,
     // and creates no ~/.pi.
