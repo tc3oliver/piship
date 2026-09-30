@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
 import {
+  assertDisjointRoots,
   type DistributionLock,
   runConfig,
   runLogin,
@@ -79,6 +80,9 @@ export async function launchPiDistribution(
     } else break;
   }
   const sessionOption = !!requestedModel || newSession;
+  // Before anything is written to a layout in which one lifecycle operation
+  // could delete another's files.
+  assertDisjointRoots();
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
   const agentDir = join(stateDir, "agent");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });

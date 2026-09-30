@@ -13,7 +13,10 @@ export {
 } from "./receipt.js";
 export { lifecycleStatus, type LifecycleStatus } from "./status.js";
 export { sweepStateTemporaries } from "./temporaries.js";
-export { uninstallDistribution } from "./uninstall.js";
+export {
+  uninstallAndPurgeDistribution,
+  uninstallDistribution,
+} from "./uninstall.js";
 export {
   holdRuntimeLease,
   runtimeLeases,

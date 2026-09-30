@@ -9,7 +9,11 @@ import {
   metadataSecretRefs,
 } from "@piship/credentials";
 import { accessStatePaths } from "../access/index.js";
-import { distributionStateDirectory, runtimeStateDirectory } from "../index.js";
+import {
+  assertDisjointRoots,
+  distributionStateDirectory,
+  runtimeStateDirectory,
+} from "../index.js";
 import { receiptPath } from "./receipt.js";
 
 export interface PurgeResult {
@@ -38,9 +42,28 @@ export async function purgeDistributionState(
   options: { readonly secretStore?: SecretStore } = {},
 ): Promise<PurgeResult> {
   distributionStateDirectory({ value: id });
+  assertDisjointRoots();
   if (existsSync(receiptPath(id)))
-    throw new Error(`Uninstall ${id} before purging its state`);
+    throw new Error(
+      `Uninstall ${id} before purging its state, or run uninstall ${id} --purge --yes`,
+    );
   const state = runtimeStateDirectory({ value: id });
+  const deletedSecrets = await deleteReferencedSecrets(id, state, options);
+  rmSync(state, { recursive: true, force: true });
+  return { state, deletedSecrets };
+}
+
+/**
+ * Delete, confirming each deletion, the platform secret-store entries that
+ * the metadata in `state` references; the file store's go with the state
+ * directory. Throws SECRET_STORE_UNAVAILABLE, deleting no state, when one
+ * cannot be deleted. Returns the deleted references.
+ */
+export async function deleteReferencedSecrets(
+  id: string,
+  state: string,
+  options: { readonly secretStore?: SecretStore },
+): Promise<string[]> {
   const paths = accessStatePaths(state);
   // The restricted file fallback keeps its secrets under the state directory,
   // which is removed below; otherwise they live in the platform store.
@@ -89,6 +112,5 @@ export async function purgeDistributionState(
       );
     deletedSecrets.push(...sorted);
   }
-  rmSync(state, { recursive: true, force: true });
-  return { state, deletedSecrets };
+  return deletedSecrets;
 }
