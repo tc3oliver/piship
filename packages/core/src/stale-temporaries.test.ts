@@ -147,7 +147,7 @@ describe("where each start reclaims", () => {
     const releases = join(output, "releases");
     const release = plant(
       releases,
-      ".piship-release-acmepi-1.0.0-linux-x64-bbbbbb",
+      ".piship-release-acmepi-bbbbbb",
       "release",
       dead,
     );
