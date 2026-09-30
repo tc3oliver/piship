@@ -164,6 +164,16 @@ export interface ReferenceStack {
   startupSeconds: number;
   /** A Keycloak access token for alice or bob, by the Authorization Code + PKCE flow. */
   accessToken(user: "alice" | "bob"): string;
+  /**
+   * The whole token response of that flow: access token, ID token, and the
+   * refresh token. Live credentials for the reference realm; keep them in
+   * memory and never print them.
+   */
+  tokenResponse(user: "alice" | "bob"): {
+    access_token: string;
+    id_token: string;
+    refresh_token?: string;
+  };
   /** A fixture user's password, for the Keycloak sign-in form only. */
   password(user: "alice" | "bob"): string;
   /** Sign the user in and acquire a credential from the real broker. */
@@ -314,11 +324,11 @@ export function startReferenceStack({
   const broker = `http://127.0.0.1:${env.BROKER_PORT}`;
   const mock = `http://127.0.0.1:${env.MOCK_UPSTREAM_PORT}`;
 
-  const accessToken = (user: "alice" | "bob") => {
+  const getToken = (user: "alice" | "bob", args: string[] = []) => {
     // The helper prints the token on stdout; it is captured, never shown.
     const result = spawnSync(
       process.execPath,
-      [join(reference, "scripts/get-token.mjs"), user],
+      [join(reference, "scripts/get-token.mjs"), user, ...args],
       { env: { ...process.env, ...env }, encoding: "utf8" },
     );
     if (result.status !== 0)
@@ -327,6 +337,9 @@ export function startReferenceStack({
       );
     return result.stdout.trim();
   };
+  const accessToken = (user: "alice" | "bob") => getToken(user);
+  const tokenResponse = (user: "alice" | "bob") =>
+    JSON.parse(getToken(user, ["--response"]));
 
   const admin = (path: string, body?: unknown) =>
     request(`${gateway}${path}`, { bearer: masterKey, body });
@@ -344,6 +357,7 @@ export function startReferenceStack({
     mock,
     startupSeconds,
     accessToken,
+    tokenResponse,
     password(user) {
       const value = env[`REFERENCE_${user.toUpperCase()}_PASSWORD`];
       if (!value) throw new Error(`no password generated for ${user}`);

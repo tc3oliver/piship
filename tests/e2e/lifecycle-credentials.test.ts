@@ -9,7 +9,11 @@ import { join, relative, sep } from "node:path";
 import { STATE_DATA_CLASSES } from "@piship/core";
 import { describe, expect, it } from "vitest";
 import { branded } from "../helpers/distribution.js";
-import { lifecycleScenario, scan, windows } from "../helpers/lifecycle.js";
+import {
+  lifecycleScenario,
+  scanDecoded as scan,
+  windows,
+} from "../helpers/lifecycle.js";
 
 // Lifecycle scenario: every local credential class (identity tokens, the
 // runtime credential, a discarded credential whose deletion failed, and the

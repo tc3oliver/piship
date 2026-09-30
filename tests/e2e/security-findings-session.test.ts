@@ -151,7 +151,7 @@ describe("provider error text in Pi session files (local fixtures)", () => {
     const smoke = await run(["--smoke-model"]);
     expect(gateway.completions, "the gateway was asked").toBeGreaterThan(0);
     expect(smoke.status).toBe(1);
-    expect(smoke.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
+    expect(smoke.stderr).toContain("GATEWAY_UNREACHABLE");
     expect(smoke.stderr).toContain("upstream failure");
     expect(`${smoke.stdout}${smoke.stderr}`).not.toContain(CREDENTIAL);
 
