@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import {
@@ -913,6 +914,57 @@ describeIsolated(isolator)(
       );
     }, 120_000);
 
+    it("checks network denial against the declared network probe, which must be reachable with the network allowed", async () => {
+      const probed = async (port: number) => {
+        const service = new ControlService();
+        const good = referenceAdapter({ variant: "shared" });
+        return testSandboxAdapter(
+          defineSandboxAdapter(async (context) => {
+            const backend = await good(context);
+            return {
+              id: "acme-reference",
+              available: () => backend.available(),
+              capabilities: () => ({
+                ...backend.capabilities(),
+                networkProbe: { host: "127.0.0.1", port },
+              }),
+              prepare: (request) => backend.prepare(request),
+            };
+          }),
+          {
+            ...TIMINGS,
+            context: { endpoint: ENDPOINT, fetch: service.fetch },
+            only: ["capabilities", "network claims"],
+          },
+        );
+      };
+      let hits = 0;
+      const listener = createServer((socket) => {
+        hits++;
+        socket.destroy();
+      });
+      await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+      const address = listener.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      try {
+        const reachable = await probed(port);
+        expect(statuses(reachable)).toMatchObject({
+          capabilities: "passed",
+          "network claims": "passed",
+        });
+        // Only the allow-mode attempt reached the declared probe.
+        expect(hits).toBe(1);
+      } finally {
+        await new Promise((done) => listener.close(done));
+      }
+      // Nothing listens there any more: the declaration is false.
+      const unreachable = await probed(port);
+      expect(statuses(unreachable)["network claims"]).toBe("failed");
+      expect(reasons(unreachable)["network claims"]).toMatch(
+        /declared network probe is not reachable from the sandbox with the network allowed/,
+      );
+    }, 120_000);
+
     it("runs only the selected behaviors and reports the rest as not selected, never passed", async () => {
       const report = await run(
         { variant: "shared" },
@@ -1285,6 +1337,14 @@ describeIsolated(isolator)(
           planes: caps.planes.filter((plane) => plane !== "network-deny"),
         }),
         /lists network mode deny but does not claim network-deny/,
+      ],
+      [
+        "a malformed network probe",
+        (caps: SandboxCapabilities) => ({
+          ...caps,
+          networkProbe: { host: "probe.sandbox.test; true", port: 8443 },
+        }),
+        /malformed network probe: the host must be a hostname/,
       ],
       [
         "a shared workspace without git-control-protection",

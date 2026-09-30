@@ -38,7 +38,7 @@ describe("LocalMetrics", () => {
     metrics.recordPolicyDenial("filesystem.read");
     metrics.recordMcpHealth("docs", "healthy");
     metrics.recordMcpHealth("docs", "failed");
-    metrics.recordSandbox("enforced", "linux-bubblewrap");
+    metrics.recordSandbox("enforced", "linux-bubblewrap", "verified");
     metrics.recordStartupFailure("SANDBOX_UNAVAILABLE");
     metrics.recordStartupLatency(412.4);
     metrics.recordStartupLatency(200);
@@ -62,6 +62,7 @@ describe("LocalMetrics", () => {
       sandbox: {
         level: "enforced",
         adapter: "linux-bubblewrap",
+        networkDenial: "verified",
         updatedAt: "2026-09-28T10:00:00.000Z",
       },
       startupFailures: { SANDBOX_UNAVAILABLE: 1 },
@@ -419,7 +420,11 @@ describe("LocalMetrics", () => {
     metrics.recordMcpHealth("/home/alice/project/server.mjs", "healthy");
     metrics.recordMcpHealth("docs server with spaces", "healthy");
     metrics.recordMcpHealth("docs", "exploded" as never);
-    metrics.recordSandbox("enforced", "/usr/bin/bwrap --ro-bind / /");
+    metrics.recordSandbox(
+      "enforced",
+      "/usr/bin/bwrap --ro-bind / /",
+      "proven by the secret plan" as never,
+    );
     metrics.recordStartupFailure("Error: token sk-abcdef1234567 rejected");
     metrics.recordStartupLatency(Number.NaN);
     metrics.save();

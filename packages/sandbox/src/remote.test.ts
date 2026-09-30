@@ -155,6 +155,28 @@ describe("remote capability reporting", () => {
     ).toHaveLength(0);
   });
 
+  it("reports e2b network denial attested: no probe, one sandbox, no connection attempt", async () => {
+    const mock = await e2bServer();
+    const backend = e2b(mock.url);
+    expect(backend.capabilities().networkProbe).toBeUndefined();
+    const sandbox = await activate(backend);
+    expect(sandbox.report.networkDenial).toEqual({
+      evidence: "attested",
+      probe: false,
+      reason: "the backend declares no network probe to check it with",
+    });
+    const created = mock.requests.filter(
+      (request) => request.method === "POST" && request.path === "/sandboxes",
+    );
+    expect(created).toHaveLength(1);
+    expect(JSON.parse(created[0]?.body.toString() ?? "{}")).toMatchObject({
+      allow_internet_access: false,
+    });
+    for (const request of mock.requests)
+      expect(request.body.toString("latin1")).not.toContain("/dev/tcp/");
+    await sandbox.dispose();
+  });
+
   it("reports only enforced guarantees in the containment report and doctor line", async () => {
     const mock = await e2bServer();
     const sandbox = await activate(e2b(mock.url));
@@ -165,7 +187,7 @@ describe("remote capability reporting", () => {
     ]);
     const line = describeContainment(sandbox.report);
     expect(line).toBe(
-      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
+      "enforced by e2b-compatible (required, attested by the backend): network-deny, environment-filter, host-filesystem-isolation; network deny (attested by the backend, not verified). Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox cannot reach this host's files, but it does not enforce sandbox.filesystem path rules; they govern only the local file tools. Workspace: snapshot. Remote commands see a copy, not the files the agent edits; this is not a complete coding-agent workspace.",
     );
     expect(sandbox.report).toMatchObject({
       isolation: "remote",
@@ -228,7 +250,7 @@ describe("e2b-compatible backend against a mock server", () => {
       mock.requests.filter(
         (request) => request.path === "/sandboxes/sbx1/timeout",
       ),
-    ).toHaveLength(4);
+    ).toHaveLength(3);
     expect(mock.requests.at(-1)).toMatchObject({
       method: "DELETE",
       path: "/sandboxes/sbx1",

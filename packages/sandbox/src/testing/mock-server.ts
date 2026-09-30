@@ -90,11 +90,10 @@ export function leaks(
   return hits;
 }
 
-/** A check-command answer: the marker line and a blocked outbound check. */
-export function checkAnswer(
-  unlisted: string | undefined,
-  command = "",
-): string {
-  const allow = command.includes("piship-network-allow-check");
-  return `${SANDBOX_READY_MARKER} ${unlisted ?? "unset"}\n${command.includes("piship-network") ? `piship-network-${allow ? "reachable" : "blocked"}\n${allow ? "" : "piship-metadata-blocked\n"}` : ""}`;
+/**
+ * A check-command answer: the marker line. The built-in remote backends
+ * declare no network probe, so PiShip's check never tries a connection.
+ */
+export function checkAnswer(unlisted: string | undefined): string {
+  return `${SANDBOX_READY_MARKER} ${unlisted ?? "unset"}\n`;
 }

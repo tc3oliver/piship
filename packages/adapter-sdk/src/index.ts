@@ -78,6 +78,7 @@ export {
   type SandboxExecResult,
   type SandboxGuarantee,
   type SandboxInstance,
+  type SandboxNetworkProbe,
   type SandboxPrepareRequest,
   type SandboxProfile,
   type WrappedCommand,

@@ -141,7 +141,7 @@ function fake(
         exec: async (request: SandboxExecRequest, io: SandboxExecIO) => {
           requests.push(request);
           if (request.command.includes(SANDBOX_READY_MARKER)) {
-            answerCheck(request, io);
+            answerCheck(request, io, profile.network);
             return { exitCode: 0 };
           }
           if (isWorkspaceCheck(request) && options.check)

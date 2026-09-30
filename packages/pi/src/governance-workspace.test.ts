@@ -45,8 +45,18 @@ afterEach(async () => {
     .__pishipWorkspaceRequests;
 });
 
-/** A shared-workspace custom adapter; records every command on globalThis. */
-function adapter(declaration: Record<string, unknown>): string {
+/**
+ * A shared-workspace custom adapter; records every command on globalThis.
+ * With `network`, it declares that probe; with the network allowed its
+ * sandbox reaches the `reachable` targets (`host:port`), with it denied none.
+ */
+function adapter(
+  declaration: Record<string, unknown>,
+  network?: {
+    readonly probe: { host: string; port: number };
+    readonly reachable: readonly string[];
+  },
+): string {
   return `
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -59,16 +69,19 @@ export default () => ({
     network: ["deny", "allow"],
     localProcesses: false,
     workspace: ${JSON.stringify(declaration)},
+    ${network ? `networkProbe: ${JSON.stringify(network.probe)},` : ""}
   }),
   prepare: async ({ profile }) => ({
     exec: (request, io) => {
       (globalThis.__pishipWorkspaceRequests ??= []).push(request.command);
       if (request.command.includes("piship-sandbox-ready")) {
         io.onStdout(Buffer.from("piship-sandbox-ready " + (request.env.PISHIP_PROBE_UNLISTED ?? "unset") + "\\n"));
-        if (request.command.includes("piship-network"))
-          io.onStdout(Buffer.from(request.command.includes("piship-network-allow-check")
-            ? "piship-network-reachable\\n"
-            : "piship-network-blocked\\npiship-metadata-blocked\\n"));
+        const target = /\\/dev\\/tcp\\/([^/']+)\\/(\\d+)'/.exec(request.command);
+        if (target) {
+          const reached = profile.network === "allow" &&
+            ${JSON.stringify(network?.reachable ?? [])}.includes(target[1] + ":" + target[2]);
+          io.onStdout(Buffer.from(reached ? "piship-network-reachable\\n" : "piship-network-blocked\\n"));
+        }
         return Promise.resolve({ exitCode: 0 });
       }
       const cwd = request.workspacePath && request.workspacePath !== "."
@@ -107,6 +120,7 @@ async function open(options: {
   readonly company: boolean;
   /** Text added to the repository's git config. */
   readonly config?: string;
+  readonly network?: Parameters<typeof adapter>[1];
 }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-gov-ws-")));
   roots.push(root);
@@ -132,7 +146,7 @@ async function open(options: {
   chmodSync(join(git, "hooks"), 0o555);
   chmodSync(join(git, "info"), 0o555);
   chmodSync(git, 0o555);
-  const source = adapter(options.declaration);
+  const source = adapter(options.declaration, options.network);
   for (const path of ["sandbox/acme.mjs", "resources/sandbox/acme.mjs"]) {
     mkdirSync(dirname(join(distribution, path)), { recursive: true });
     writeFileSync(join(distribution, path), source);
@@ -361,6 +375,40 @@ describe.skipIf(!posix || asRoot)(
         ])
           expect(text).not.toContain(path);
       }
+    });
+
+    it("records network denial evidence, and shows one notice when a declared probe proved nothing", async () => {
+      const probe = { host: "probe.sandbox.test", port: 8443 };
+      const verified = await open({
+        declaration: { mode: "shared" },
+        company: false,
+        network: { probe, reachable: ["probe.sandbox.test:8443"] },
+      });
+      const quiet: string[] = [];
+      verified.session.attachNotices((message) => quiet.push(message));
+      expect(verified.session.metrics.snapshot().sandbox).toMatchObject({
+        level: "enforced",
+        networkDenial: "verified",
+      });
+      expect(quiet).toEqual([]);
+
+      // The allow-mode sandbox reaches something else: nothing is proven.
+      const attested = await open({
+        declaration: { mode: "shared" },
+        company: false,
+        network: { probe, reachable: ["other.sandbox.test:8443"] },
+      });
+      const notices: string[] = [];
+      attested.session.attachNotices((message) => notices.push(message));
+      expect(attested.session.metrics.snapshot().sandbox).toMatchObject({
+        level: "enforced",
+        networkDenial: "attested",
+      });
+      expect(notices).toEqual([
+        "Network denial in the sandbox is attested by the acme-shared backend, not verified: the backend's network probe was not reachable from an allow-mode sandbox either, so a blocked connection proves nothing.",
+      ]);
+      for (const text of notices)
+        expect(text).not.toContain("probe.sandbox.test");
     });
 
     it("shows the notice through the session's UI as soon as it is raised, once", async () => {

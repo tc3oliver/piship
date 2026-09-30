@@ -51,9 +51,10 @@ const SIGNAL_TIMEOUT_MS = 5000;
 
 // A remote VM: the host's files are out of reach, but PiShip's path rules
 // are not mapped into it, so no filesystem-* plane is claimed. The network
-// is denied at creation (allow_internet_access) and checked before use. The
-// sandbox is created from a template and sees a copy of the code, never the
-// files PiShip's file tools edit: its workspace is a snapshot.
+// is denied at creation (allow_internet_access); with no network probe to
+// check it against, that denial is attested by the service. The sandbox is
+// created from a template and sees a copy of the code, never the files
+// PiShip's file tools edit: its workspace is a snapshot.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
   planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],

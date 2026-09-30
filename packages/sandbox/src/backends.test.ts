@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,6 +18,7 @@ import {
   capabilityMismatch,
   claimedGuarantees,
   enforcesPathPolicy,
+  networkProbe,
   type SandboxBackend,
   type SandboxCapabilities,
   type SandboxExecIO,
@@ -19,13 +26,16 @@ import {
   type SandboxExecResult,
 } from "./backend.js";
 import { customBackend } from "./custom.js";
-import type { SandboxPolicy } from "./profile.js";
+import type { SandboxPolicy, SandboxProfile } from "./profile.js";
 import { selectAdapter } from "./select.js";
 import {
+  answerCheck,
   fakeBackend,
   fakeWrappingBackend,
   PATH_PLANES,
+  PROBED_CAPABILITIES as PROBED,
   REMOTE_CAPABILITIES as REMOTE,
+  TEST_PROBE,
 } from "./testing/fake-backend.js";
 
 const policy = (overrides: Partial<SandboxPolicy> = {}): SandboxPolicy => ({
@@ -112,9 +122,6 @@ describe("custom adapter lifecycle", () => {
       "capabilities",
       "prepare",
       "check",
-      "prepare",
-      "check",
-      "dispose",
       "exec",
       "dispose",
     ]);
@@ -232,41 +239,58 @@ describe("a required backend that is unavailable fails closed", () => {
     expect(events.at(-1)).toBe("dispose");
   });
 
-  it("fails closed when an outbound connection succeeds in deny mode", async () => {
-    const { backend } = fakeBackend({
-      check: (request, io) =>
-        io.onStdout(
-          Buffer.from(
-            `${SANDBOX_READY_MARKER} unset\n${request.command.includes("piship-network") ? "piship-network-reachable\n" : ""}`,
-          ),
-        ),
+  it("fails closed when the network probe is reachable in deny mode", async () => {
+    // A backend whose deny mode lets everything through.
+    const { backend, events } = fakeBackend({
+      capabilities: PROBED,
+      check: (request, io) => answerCheck(request, io, "allow"),
     });
     await expect(activate(backend)).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
-      message: expect.stringContaining("outbound network connection succeeded"),
+      message: expect.stringContaining(
+        "a connection to the backend's network probe succeeded although the network is denied",
+      ),
     });
+    // No allow-mode sandbox is created for a violation.
+    expect(events.filter((event) => event === "prepare")).toHaveLength(1);
+    expect(events.at(-1)).toBe("dispose");
   });
 
-  it("fails closed in deny mode when the outbound check cannot run", async () => {
-    const { backend } = fakeBackend({
+  it("reports network denial attested when the connection check cannot run", async () => {
+    const { backend, events } = fakeBackend({
+      capabilities: PROBED,
       check: (request, io) =>
         io.onStdout(
           Buffer.from(
-            `${SANDBOX_READY_MARKER} unset\n${request.command.includes("piship-network") ? "piship-network-unchecked\n" : ""}`,
+            `${SANDBOX_READY_MARKER} unset\n${request.command.includes("/dev/tcp/") ? "piship-network-unchecked\n" : ""}`,
           ),
         ),
     });
-    await expect(activate(backend)).rejects.toMatchObject({
-      code: "SANDBOX_UNAVAILABLE",
-      message: expect.stringContaining("network denial cannot be confirmed"),
+    const sandbox = await activate(backend);
+    expect(sandbox.report).toMatchObject({
+      level: "enforced",
+      planes: expect.arrayContaining(["network-deny"]),
+      networkDenial: {
+        evidence: "attested",
+        probe: true,
+        reason: expect.stringContaining("could not run inside the sandbox"),
+      },
     });
-    // With the network allowed there is nothing to confirm.
-    const sandbox = await activate(
+    expect(sandbox.report.warnings).toContainEqual(
+      expect.stringContaining(
+        "network denial is attested by the backend, not verified",
+      ),
+    );
+    expect(events.filter((event) => event === "prepare")).toHaveLength(1);
+    await sandbox.dispose();
+    // With the network allowed there is nothing to check.
+    const allowed = await activate(
       backend,
       policy({ network: { mode: "allow" } }),
     );
-    expect(sandbox.report.level).toBe("enforced");
-    await sandbox.dispose();
+    expect(allowed.report.level).toBe("enforced");
+    expect(allowed.report.networkDenial).toBeUndefined();
+    await allowed.dispose();
   });
 
   it("fails closed when capabilities() throws or availability is malformed", async () => {
@@ -484,41 +508,212 @@ describe("capability mismatch", () => {
 });
 
 describe("remote network denial evidence", () => {
-  const marker = (io: SandboxExecIO, answer: string) => {
-    io.onStdout(Buffer.from(`${SANDBOX_READY_MARKER} unset\n${answer}`));
+  const modes = (options: Parameters<typeof fakeBackend>[0] = {}) => {
+    const prepared: string[] = [];
+    const profiles: SandboxProfile[] = [];
+    const fake = fakeBackend({
+      ...options,
+      onPrepare: (profile) => {
+        prepared.push(profile.network);
+        profiles.push(profile);
+      },
+    });
+    return { ...fake, prepared, profiles };
   };
 
-  it("rejects a target unreachable in both allow and deny mode", async () => {
-    const { backend } = fakeBackend({
-      check: (_request, io) =>
-        marker(
-          io,
-          "piship-network-blocked\npiship-metadata-blocked\npiship-other-reachable\n",
-        ),
+  it("is verified when the same probe is reachable with the network allowed and blocked with it denied", async () => {
+    const { backend, events, requests, prepared, profiles } = modes({
+      capabilities: PROBED,
     });
-    await expect(activate(backend)).rejects.toThrow(
-      /same target was not reachable/,
-    );
-  });
-
-  it("accepts a deny transition when the same target works in allow mode", async () => {
-    const { backend } = fakeBackend();
     const sandbox = await activate(backend);
-    expect(sandbox.report.planes).toContain("network-deny");
+    // The allow-mode sandbox gets an empty workspace PiShip made, nothing
+    // protected, and no environment; it is gone once activation returns.
+    const [session, contrast] = profiles;
+    expect(session?.workspace).toBe(workspace);
+    expect(contrast?.workspace).not.toBe(workspace);
+    expect(contrast?.workspace.startsWith(`${workspace}/`)).toBe(false);
+    expect(contrast).toMatchObject({
+      network: "allow",
+      environmentAllow: [],
+      readDeny: [],
+      writeProtect: { files: [], directories: [] },
+    });
+    expect(existsSync(contrast?.workspace ?? "")).toBe(false);
+    expect(requests[0]?.env).toMatchObject({ LANG: "C.UTF-8" });
+    expect(requests[1]?.env).toEqual({});
+    expect(sandbox.report).toMatchObject({
+      verification: "backend-attested",
+      planes: expect.arrayContaining(["network-deny"]),
+      networkDenial: { evidence: "verified", probe: true },
+    });
+    expect(sandbox.report.networkDenial?.reason).toBeUndefined();
+    expect(describeContainment(sandbox.report)).toContain(
+      "network deny (verified)",
+    );
+    // One deny sandbox for the session and one allow sandbox for the
+    // contrast, gone before the session runs anything; both checks ask
+    // about the same target.
+    expect(prepared).toEqual(["deny", "allow"]);
+    expect(events).toEqual([
+      "available",
+      "capabilities",
+      "prepare",
+      "check",
+      "prepare",
+      "check",
+      "dispose",
+    ]);
+    const checks = requests.map((request) => request.command);
+    expect(checks).toHaveLength(2);
+    for (const command of checks)
+      expect(command).toContain(
+        `/dev/tcp/${TEST_PROBE.host}/${TEST_PROBE.port}'`,
+      );
     await sandbox.dispose();
   });
 
-  it("rejects cloud metadata reachability with public network blocked", async () => {
-    const { backend } = fakeBackend({
-      check: (request, io) =>
-        marker(
-          io,
-          request.command.includes("piship-network-allow-check")
-            ? "piship-network-reachable\n"
-            : "piship-network-blocked\npiship-metadata-reachable\n",
-        ),
+  it("proves nothing when the check asks about a target the allow-mode sandbox cannot reach", async () => {
+    // The fake's allow mode reaches a different target than the one declared.
+    const { backend } = modes({
+      capabilities: PROBED,
+      network: { reachable: ["elsewhere.sandbox.test:8443"] },
     });
-    await expect(activate(backend)).rejects.toThrow(/cloud metadata/);
+    const sandbox = await activate(backend);
+    expect(sandbox.report.networkDenial).toEqual({
+      evidence: "attested",
+      probe: true,
+      reason:
+        "the backend's network probe was not reachable from an allow-mode sandbox either, so a blocked connection proves nothing",
+    });
+    expect(sandbox.report.planes).toContain("network-deny");
+    expect(sandbox.report.warnings).toContain(
+      "network denial is attested by the backend, not verified: the backend's network probe was not reachable from an allow-mode sandbox either, so a blocked connection proves nothing",
+    );
+    expect(describeContainment(sandbox.report)).toContain(
+      "network deny (attested by the backend, not verified)",
+    );
+    await sandbox.dispose();
+  });
+
+  it("is attested, not failed, without a network probe, and creates no allow-mode sandbox", async () => {
+    const { backend, requests, prepared } = modes();
+    const sandbox = await activate(backend);
+    expect(sandbox.report).toMatchObject({
+      level: "enforced",
+      planes: expect.arrayContaining(["network-deny"]),
+      networkDenial: {
+        evidence: "attested",
+        probe: false,
+        reason: "the backend declares no network probe to check it with",
+      },
+    });
+    // Attested exactly as declared: not lower than the backend claims.
+    expect(sandbox.report.warnings).not.toContainEqual(
+      expect.stringContaining("network denial"),
+    );
+    expect(prepared).toEqual(["deny"]);
+    expect(requests[0]?.command).not.toContain("/dev/tcp/");
+    await sandbox.dispose();
+  });
+
+  it("is attested when the backend can only deny the network, and creates no allow-mode sandbox", async () => {
+    const { backend, prepared } = modes({
+      capabilities: { ...PROBED, network: ["deny"] },
+    });
+    const sandbox = await activate(backend);
+    expect(sandbox.report.networkDenial).toMatchObject({
+      evidence: "attested",
+      probe: true,
+      reason: expect.stringContaining("cannot allow the network"),
+    });
+    expect(prepared).toEqual(["deny"]);
+    await sandbox.dispose();
+  });
+
+  it("is attested when the allow-mode sandbox cannot be created", async () => {
+    let calls = 0;
+    const { backend, events, profiles } = modes({
+      capabilities: PROBED,
+      prepare: async () => {
+        if (++calls === 2) throw new Error("no capacity");
+      },
+    });
+    const sandbox = await activate(backend);
+    expect(sandbox.report.networkDenial).toMatchObject({
+      evidence: "attested",
+      reason: expect.stringContaining(
+        "could not prepare an allow-mode sandbox",
+      ),
+    });
+    expect(sandbox.report.level).toBe("enforced");
+    expect(profiles).toHaveLength(2);
+    expect(existsSync(profiles[1]?.workspace ?? "")).toBe(false);
+    await sandbox.dispose();
+    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
+  });
+
+  it("is attested when the allow-mode check fails, and disposes the allow-mode sandbox", async () => {
+    const { backend, events, profiles } = modes({
+      capabilities: PROBED,
+      check: (request, io, mode) =>
+        mode === "allow"
+          ? io.onStdout(Buffer.from("something else\n"))
+          : answerCheck(request, io, mode),
+    });
+    const sandbox = await activate(backend);
+    expect(sandbox.report.networkDenial?.evidence).toBe("attested");
+    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
+    expect(existsSync(profiles[1]?.workspace ?? "")).toBe(false);
+    await sandbox.dispose();
+  });
+
+  it("fails closed on a malformed network probe before anything is created", async () => {
+    for (const networkProbe of [
+      { host: "probe.sandbox.test; rm -rf /", port: 8443 },
+      { host: "-oProxyCommand=x", port: 8443 },
+      { host: "[::1]", port: 8443 },
+      { host: "probe.sandbox.test", port: 0 },
+      { host: "probe.sandbox.test", port: 1.5 },
+      "probe.sandbox.test:8443",
+    ]) {
+      const { backend, events } = modes({
+        capabilities: {
+          ...REMOTE,
+          networkProbe,
+        } as unknown as SandboxCapabilities,
+      });
+      await expect(activate(backend)).rejects.toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining("malformed network probe"),
+      });
+      expect(events).not.toContain("prepare");
+    }
+  });
+
+  it("ignores a local backend's network probe: the live probe decides", () => {
+    expect(
+      networkProbe({
+        isolation: "local",
+        planes: [],
+        network: ["deny"],
+        localProcesses: true,
+        networkProbe: { host: "bad host", port: 0 },
+      }),
+    ).toBeUndefined();
+    expect(networkProbe(PROBED)).toEqual({ probe: TEST_PROBE });
+    expect(networkProbe(REMOTE)).toBeUndefined();
+  });
+
+  it("does not check the network when the policy allows it", async () => {
+    const { backend, requests, prepared } = modes({ capabilities: PROBED });
+    const sandbox = await activate(
+      backend,
+      policy({ network: { mode: "allow" } }),
+    );
+    expect(sandbox.report.networkDenial).toBeUndefined();
+    expect(prepared).toEqual(["allow"]);
+    expect(requests[0]?.command).not.toContain("/dev/tcp/");
+    await sandbox.dispose();
   });
 });
 
@@ -629,14 +824,14 @@ describe("PiShip owns timeout, cancellation, and dispose", () => {
       "timeout:0.1",
     );
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
-    expect(events.filter((event) => event === "dispose")).toHaveLength(2);
+    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
     await expect(run(sandbox, "true")).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
       message: expect.stringContaining("retired"),
     });
     expect(() => sandbox.wrap("/bin/true", [], workspace)).toThrow(/retired/);
     await sandbox.dispose();
-    expect(events.filter((event) => event === "dispose")).toHaveLength(2);
+    expect(events.filter((event) => event === "dispose")).toHaveLength(1);
   });
 
   it("redacts a backend failure", async () => {

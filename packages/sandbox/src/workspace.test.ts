@@ -436,12 +436,12 @@ describe.skipIf(!posix)(
         complete: true,
       });
       expect(reports).toEqual([sandbox.workspace()]);
-      // Deny and allow network checks precede the one workspace check.
+      // The check ran first and exactly once; the sentinel is gone.
       expect(
         fake.requests.map((request) =>
           request.command.includes("piship-ws done"),
         ),
-      ).toEqual([false, false, true, false]);
+      ).toEqual([false, true, false]);
       expect(sentinels()).toEqual([]);
       expect(
         describeContainment(sandbox.report, sandbox.workspace()),
@@ -1815,7 +1815,7 @@ describe("the workspace sentence", () => {
     const fake = sharedBackend();
     const sandbox = await activate(fake);
     expect(describeContainment(sandbox.report)).toBe(
-      "enforced by acme-shared (required, attested by the backend): network-deny, environment-filter, git-control-protection, workspace-confinement; network deny. Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox reaches this host's files only through the workspace, where it does not enforce sandbox.filesystem path rules: a read-denied path inside the workspace is readable by sandboxed commands. Workspace: shared declared, verified before the first sandboxed command.",
+      "enforced by acme-shared (required, attested by the backend): network-deny, environment-filter, git-control-protection, workspace-confinement; network deny (attested by the backend, not verified). Contains shell commands; MCP stdio servers cannot be contained by this backend and do not start, not the agent process or in-process extensions. The sandbox reaches this host's files only through the workspace, where it does not enforce sandbox.filesystem path rules: a read-denied path inside the workspace is readable by sandboxed commands. Workspace: shared declared, verified before the first sandboxed command.",
     );
     expect(sandbox.report.isolation).toBe("remote");
     await sandbox.dispose();
