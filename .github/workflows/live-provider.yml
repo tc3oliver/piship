@@ -16,16 +16,12 @@ name: Live provider
 # catch. A failed run shows only the test's own messages, the result JSON, and
 # container states.
 #
-# Maintainer setup, so that no branch but main can run with the key:
-#   1. Settings > Environments > New environment: `live-provider`.
-#   2. Deployment branches and tags: Selected branches, add `main`.
-#      Optionally add a required reviewer.
-#   3. Add the three secrets to that environment and delete the repository
-#      secrets of the same names.
-#   4. Add `environment: live-provider` to the `live` job below.
-# Step 4 comes last on purpose: a job that names an environment which does not
-# exist makes GitHub create it with no protection rules, so the job does not
-# name one until the maintainer has created and restricted it.
+# The job runs in the `live-provider` environment, which holds the secrets and
+# restricts which branches can use them (created by the maintainer: Settings >
+# Environments; deployment branches limited to protected branches or to `main`;
+# the secrets live there, not as repository secrets). A job that names an
+# environment which does not exist makes GitHub create it with no protection
+# rules, so the environment must exist and be restricted before a run.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +43,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   live:
+    environment: live-provider
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

@@ -18,6 +18,7 @@ import {
   fileStoreValues,
   type Installed,
   installDistribution,
+  launcherCommand,
   leaks,
   scan,
   storeDescription,
@@ -135,7 +136,7 @@ describe.skipIf(process.platform === "win32")(
       const before = await acme.run(["--smoke"]);
       expect(before.status).toBe(1);
       expect(before.stderr).toContain("IDENTITY_REQUIRED");
-      expect(before.stderr).toContain("acmecode login");
+      expect(before.stderr).toContain(`${launcherCommand} login`);
     });
 
     it("signs Alice in on the Keycloak authorization page with PKCE and a loopback redirect", async () => {

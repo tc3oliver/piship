@@ -1,10 +1,12 @@
 schema: piship/v1alpha4
 
-# AcmeCode wired to the enterprise reference stack in this directory: the
-# Keycloak realm `piship-reference`, the reference credential broker, and the
-# LiteLLM gateway. It has the shape of examples/demo-company, whose manifest it
-# follows section by section, without that example's MCP server, certified
-# skill, or company extension: none of them touches the stack.
+# The AcmeCode reference distribution (../piship.yaml) with its commands run in
+# the organization's container sandbox service (README.md) instead of the
+# native OS sandbox: a custom adapter, the sandbox API key each user stores
+# with `<command> sandbox login`, and one more runtime variable. Every other
+# section is the reference manifest's, unchanged, and a test keeps it so. It
+# is the same distribution (same ID, command, and state) built differently:
+# install this build or the other, not both.
 app:
   # Its own ID and command, so its state, its secret-store entries
   # (piship:<id>:*), and its launcher never meet those of an installed
@@ -30,6 +32,7 @@ variables:
   - ACMECODE_CREDENTIAL_REVOKE_URL
   - ACMECODE_LLM_GATEWAY_URL
   - ACMECODE_UPDATE_SOURCE
+  - ACMECODE_SANDBOX_URL
 
 identity:
   mode: oidc
@@ -167,6 +170,17 @@ policy:
 
 sandbox:
   required: true
+  provider: custom
+  # Packaged and locked like any resource; one file that imports only the SDK.
+  adapter: ./acme-container-sandbox.mjs
+  # 127.0.0.1 is allowed by the network policy because the stack's own
+  # endpoints are on it; a service on another host is added to
+  # network.allowHosts.
+  endpoint: ${ACMECODE_SANDBOX_URL}
+  # The API key the organization issued to the user, stored by `<command>
+  # sandbox login`. PiShip binds it to the signed-in user and to the origin of
+  # the endpoint, and never writes it to a file that is tracked or locked.
+  credential: stored
   filesystem:
     read:
       # Credential stores an agent has no reason to read. Extend it with your
@@ -205,8 +219,10 @@ updates:
   trust:
     keys: []
 
-# The reference stack runs in Linux containers, and the required sandbox has
-# an adapter on Linux and macOS only, so the release targets are those two.
+# As in the reference manifest: the stack runs in Linux containers, and the
+# native sandbox has an adapter on Linux and macOS only. This build's sandbox
+# service runs commands in Docker on the developer's machine, so the release
+# targets stay those two.
 release:
   targets: [linux-x64, darwin-arm64]
   sources: [https://registry.npmjs.org]
