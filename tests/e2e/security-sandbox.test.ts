@@ -165,13 +165,16 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     const services: Services = await startLocalServices();
     closers.push(() => services.close());
     const cluster: Cluster = { token: ALICE_TOKEN };
-    const service: MockServer = await kubernetesServer(
-      (command) =>
-        command.includes("remote-ok")
-          ? { stdout: "remote-ok\n", exit_code: 0 }
-          : { stdout: "", exit_code: 0 },
-      cluster,
-    );
+    // What the sandbox service was asked to run, as the service parsed it: the
+    // raw request body is JSON, so a native path in it (a Windows one has
+    // backslashes) is escaped on the wire and never matches as written.
+    const commands: string[] = [];
+    const service: MockServer = await kubernetesServer((command) => {
+      commands.push(command);
+      return command.includes("remote-ok")
+        ? { stdout: "remote-ok\n", exit_code: 0 }
+        : { stdout: "", exit_code: 0 };
+    }, cluster);
     const dist = build(services);
     const sandbox = {
       ACMECODE_SANDBOX_URL: service.url,
@@ -211,13 +214,11 @@ describe("stored sandbox credential across users, rejection, and outage (local f
       services.state.toolResults = [];
       const done = await step(label, ["--smoke-model"]);
       services.knobs.gatewayMode = "text";
-      // The service received the command: that is where it ran.
+      // The service received the agent's command, unchanged: that is where it
+      // ran. (The marker is quoted inside it by JSON.stringify, which is also
+      // how it appears once the service has parsed the request.)
       expect(
-        service.requests.some(
-          (request) =>
-            request.path === "/execute" &&
-            request.body.toString("utf8").includes(marker),
-        ),
+        commands.some((command) => command.includes(agentCommand(marker))),
       ).toBe(true);
       return done;
     };
