@@ -13,10 +13,12 @@ const revealed = new Set<string>();
 function secretForms(value: string): string[] {
   const bytes = Buffer.from(value, "utf8");
   const base64 = bytes.toString("base64");
+  // Base64 pads to a multiple of four with zero, one, or two `=`.
+  const padding = (3 - (bytes.length % 3)) % 3;
   const forms = new Set([
     value,
     base64,
-    base64.replace(/=+$/, ""),
+    base64.slice(0, base64.length - padding),
     bytes.toString("base64url"),
     encodeURIComponent(value),
     JSON.stringify(value).slice(1, -1),

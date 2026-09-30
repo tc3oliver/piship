@@ -34,6 +34,31 @@ describe("redaction of a registered secret", () => {
   });
 });
 
+describe("encoded forms of a long secret", () => {
+  it("registers and redacts a 100k-character run of `=` in linear time", () => {
+    const run = "=".repeat(100_000);
+    const started = performance.now();
+    const secret = new SecretValue(run);
+    const text = redact(`before ${run} after ${"=".repeat(100_001)}`);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(text.startsWith("before [REDACTED] after [REDACTED]")).toBe(true);
+    const base64 = Buffer.from(run).toString("base64");
+    expect(redact(`x ${base64} y`)).toBe("x [REDACTED] y");
+    forgetSecret(secret);
+  });
+  it("strips exactly the base64 padding for every length", () => {
+    for (const value of ["abcdef", "abcdefg", "abcdefgh"]) {
+      const secret = new SecretValue(value);
+      const unpadded = Buffer.from(value)
+        .toString("base64")
+        .split("=")
+        .join("");
+      expect(redact(`<${unpadded}>`)).toBe("<[REDACTED]>");
+      forgetSecret(secret);
+    }
+  });
+});
+
 describe("SECRET_KEY_PATTERN", () => {
   it("matches the spellings of credential keys and header names", () => {
     for (const key of [
