@@ -625,6 +625,15 @@ function expectSecretStore(
 export type PersonalScenario = BaseScenario<ReleaseFixtures>;
 
 /**
+ * The personal scenarios run a dozen or more installed commands in one test,
+ * so a hung one is killed and named instead of surfacing only when the test
+ * itself times out. The slowest, an update that verifies a 17,000-file
+ * archive, took about 230 s on a machine loaded with other builds and a few
+ * seconds otherwise.
+ */
+const PERSONAL_COMMAND_TIMEOUT_MS = 300_000;
+
+/**
  * A fresh, isolated environment over a distribution's shared releases: its
  * own update host, home, state, install home, and bin home. Everything is
  * torn down when the calling test finishes.
@@ -637,6 +646,8 @@ async function createScenario<Releases extends ReleaseFixtures>(
     env?: NodeJS.ProcessEnv;
     approve?: (url: string) => Promise<unknown>;
     close?: () => Promise<void>;
+    /** Kill any installed command still running after this long. */
+    commandTimeoutMs?: number;
   },
 ): Promise<BaseScenario<Releases>> {
   const { id } = distribution;
@@ -688,6 +699,9 @@ async function createScenario<Releases extends ReleaseFixtures>(
       env,
       ...(options.approve ? { approve: options.approve } : {}),
       ...(input === undefined ? {} : { input }),
+      ...(options.commandTimeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.commandTimeoutMs }),
     });
   return {
     releases,
@@ -849,7 +863,9 @@ export async function lifecycleScenario(
 export async function personalScenario(
   name: string,
 ): Promise<PersonalScenario> {
-  return createScenario(PERSONAL, await personalReleases(), name, {});
+  return createScenario(PERSONAL, await personalReleases(), name, {
+    commandTimeoutMs: PERSONAL_COMMAND_TIMEOUT_MS,
+  });
 }
 
 /**
@@ -863,5 +879,6 @@ export async function personalLocalScenario(
 ): Promise<PersonalScenario> {
   return createScenario(PERSONAL_LOCAL, await personalLocalReleases(), name, {
     env: { MYPI_MODEL_URL: modelUrl },
+    commandTimeoutMs: PERSONAL_COMMAND_TIMEOUT_MS,
   });
 }
