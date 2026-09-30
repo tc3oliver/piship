@@ -295,14 +295,22 @@ export async function installDistribution(
           existsSync(receiptPath(id)) &&
           ownedIncompleteInstall(id, command, apps)
         ) {
+          // Committed, but interrupted before the shim was written or before
+          // the marker was removed: finish it.
           const committed = readInstallReceipt(id);
-          if (committed.app.command !== command || existsSync(commandPath))
+          if (committed.app.command !== command)
             throw new Error(
               `Install collision for ${id}/${command}; uninstall the existing distribution first`,
             );
-          verifyPayload(committed.payload);
-          writeShim(commandPath, launcher);
-          syncDirectory(dirname(commandPath));
+          if (!ownsCommandShim(commandPath, launcher)) {
+            if (existsSync(commandPath))
+              throw new Error(
+                `Install collision for ${id}/${command}; uninstall the existing distribution first`,
+              );
+            verifyPayload(committed.payload);
+            writeShim(commandPath, launcher);
+            syncDirectory(dirname(commandPath));
+          }
           rmSync(installMarker(apps), { force: true });
           return committed;
         }
@@ -321,14 +329,17 @@ export async function installDistribution(
           ownedIncompleteInstall(id, command, apps)
         )
           rmSync(apps, { recursive: true, force: true });
-        if (
-          existsSync(receiptPath(id)) ||
-          existsSync(apps) ||
-          existsSync(commandPath)
-        )
+        if (existsSync(receiptPath(id)))
           throw new Error(
             `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
+        // No receipt and no marker: PiShip did not create it, so it is never
+        // removed here, and uninstall has nothing recorded to remove.
+        for (const path of [apps, commandPath])
+          if (existsSync(path))
+            throw new Error(
+              `Install collision for ${id}/${command}: ${path} exists but no PiShip installation of ${id} is recorded; move it aside if it is not in use, then install again`,
+            );
         if (
           !useExistingState &&
           existsSync(runtimeStateDirectory({ value: id }))
@@ -336,13 +347,19 @@ export async function installDistribution(
           throw new Error(
             `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
           );
-        mkdirSync(apps, { recursive: true });
+        // The app directory appears with its marker in one rename, so an
+        // interruption never leaves an unmarked apps/<id> that the next
+        // install could not tell from someone else's directory.
+        mkdirSync(dirname(apps), { recursive: true });
+        const pending = join(staging, "initial-app");
+        mkdirSync(pending);
         writeFileSync(
-          installMarker(apps),
+          installMarker(pending),
           `${JSON.stringify({ schema: INITIAL_INSTALL_SCHEMA, id, command })}\n`,
           { flag: "wx", mode: 0o600 },
         );
-        syncDirectory(apps);
+        syncTree(pending);
+        renameSync(pending, apps);
         syncDirectory(dirname(apps));
         mkdirSync(dirname(commandPath), { recursive: true });
         try {

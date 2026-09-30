@@ -540,6 +540,108 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
   });
 
+  // A first install in a child process that is killed (SIGKILL, so no
+  // cleanup runs) just before one file operation; the built core is used.
+  const INSTALL_CHILD = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const [core, artifact, operation, pattern] = process.argv.slice(2);
+const original = fs[operation];
+if (original)
+  fs[operation] = function (path, ...rest) {
+    if (typeof path === "string" && new RegExp(pattern).test(path))
+      process.kill(process.pid, "SIGKILL");
+    return original.call(this, path, ...rest);
+  };
+syncBuiltinESMExports();
+const { installDistribution } = await import(core);
+await installDistribution(artifact);
+`;
+  function installChild(operation: string, pattern: RegExp, payload: string) {
+    const script = join(temp("piship-install-child-"), "install.mjs");
+    writeFileSync(script, INSTALL_CHILD);
+    return [
+      script,
+      pathToFileURL(resolve("packages/core/dist/index.js")).href,
+      payload,
+      operation,
+      pattern.source,
+    ];
+  }
+
+  for (const [phase, operation, pattern] of [
+    [
+      "the app directory is staged",
+      "writeFileSync",
+      /\.initial-install\.json$/,
+    ],
+    ["the payload is installed", "writeFileSync", /launch\.mjs$/],
+    ["the launcher is written", "openSync", /receipts[/\\]acmepi\.json/],
+    ["the receipt is written", "writeFileSync", /bin[/\\]acmepi(\.cmd)?$/],
+    ["the shim is written", "rmSync", /\.initial-install\.json$/],
+  ] as const)
+    it(`a first install killed after ${phase} is completed by the next install`, async () => {
+      const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+      const killed = spawnSync(
+        process.execPath,
+        installChild(operation, pattern, payload),
+        { encoding: "utf8" },
+      );
+      expect(killed.status, killed.stderr).not.toBe(0);
+      expect(killed.stderr).not.toContain("Error");
+      const receipt = await installDistribution(payload);
+      expect(receipt.active).toBe("1.0.0");
+      expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+      expect(readInstallReceipt(ID)).toEqual(receipt);
+      expect(existsSync(receipt.commandPath)).toBe(true);
+      // Nothing of the killed install is left behind, and uninstall works.
+      expect(
+        readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
+      ).toEqual(["apps", "receipts"]);
+      uninstallDistribution(ID);
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+    });
+
+  it("names the directory in the way when no installation is recorded", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    mkdirSync(appsDir(), { recursive: true });
+    writeFileSync(join(appsDir(), "notes.txt"), "not PiShip's\n");
+    await expect(installDistribution(payload)).rejects.toThrow(
+      `${appsDir()} exists but no PiShip installation of ${ID} is recorded; move it aside`,
+    );
+    // Never removed: PiShip did not create it.
+    expect(readFileSync(join(appsDir(), "notes.txt"), "utf8")).toBe(
+      "not PiShip's\n",
+    );
+  });
+
+  it("lets exactly one of two concurrent first installs of a distribution win", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    const run = () =>
+      new Promise<{ status: number | null; stderr: string }>((done) => {
+        const child = spawn(
+          process.execPath,
+          installChild("none", /$^/, payload),
+          { stdio: ["ignore", "ignore", "pipe"] },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("close", (status) => done({ status, stderr }));
+      });
+    const outcomes = await Promise.all([run(), run()]);
+    expect(outcomes.filter((item) => item.status === 0)).toHaveLength(1);
+    const loser = outcomes.find((item) => item.status !== 0);
+    expect(loser?.stderr).toMatch(
+      /Another (initial install of acmepi|operation owns command acmepi)|Install collision for acmepi\/acmepi; uninstall/,
+    );
+    const receipt = readInstallReceipt(ID);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    uninstallDistribution(ID);
+  });
+
   it("serializes different distributions claiming the same command", async () => {
     const first = fakeAssemble(project("1.0.0"), temp("piship-first-"));
     const otherProject = temp("piship-other-project-");
