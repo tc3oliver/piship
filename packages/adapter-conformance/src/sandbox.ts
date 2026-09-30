@@ -372,33 +372,33 @@ function watchLogs(secret: string, onLeak: () => void): () => void {
 }
 
 // The launcher environment the kit plants while environment filtering runs.
-// Reference-counted, so concurrent kit runs do not remove each other's.
-const planted = new Map<string, { count: number; previous?: string }>();
+// process.env holds one value per name, so concurrent kit runs take turns:
+// each run's command starts under its own planted values, and a check never
+// looks for one run's value while the environment holds another's.
+let planting: Promise<void> = Promise.resolve();
 
-function plant(variables: Record<string, string>): () => void {
-  for (const [name, value] of Object.entries(variables)) {
-    const entry = planted.get(name);
-    if (entry) entry.count++;
-    else
-      planted.set(name, {
-        count: 1,
-        ...(process.env[name] !== undefined
-          ? { previous: process.env[name] }
-          : {}),
-      });
-    process.env[name] = value;
+async function withPlanted<T>(
+  variables: Record<string, string>,
+  body: () => Promise<T>,
+): Promise<T> {
+  const turn = planting;
+  let done = () => {};
+  planting = new Promise<void>((resolve) => {
+    done = resolve;
+  });
+  await turn;
+  const previous = Object.keys(variables).map(
+    (name) => [name, process.env[name]] as const,
+  );
+  Object.assign(process.env, variables);
+  try {
+    return await body();
+  } finally {
+    for (const [name, value] of previous)
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    done();
   }
-  return () => {
-    for (const name of Object.keys(variables)) {
-      const entry = planted.get(name);
-      if (!entry) continue;
-      entry.count--;
-      if (entry.count > 0) continue;
-      planted.delete(name);
-      if (entry.previous === undefined) delete process.env[name];
-      else process.env[name] = entry.previous;
-    }
-  };
 }
 
 // ------------------------------------------------------------ declaration
@@ -1419,12 +1419,12 @@ const checks: Record<SandboxBehavior, Check> = {
   async "environment filtering"(h) {
     await h.capabilities();
     const approved = `conformance-approved-${h.run}`;
-    const unplant = plant({
+    const planted = {
       [ENV.hostToken]: h.hostToken,
       [ENV.hostOnly]: h.hostOnly,
       [ENV.approved]: h.hostApproved,
-    });
-    try {
+    };
+    await withPlanted(planted, async () => {
       const instance = await h.prepare();
       const out = await h.ok(
         instance,
@@ -1456,9 +1456,7 @@ const checks: Record<SandboxBehavior, Check> = {
         out.includes(`piship-env approved ${approved}`),
         "an allowlisted variable did not arrive with its approved value",
       );
-    } finally {
-      unplant();
-    }
+    });
     return undefined;
   },
 

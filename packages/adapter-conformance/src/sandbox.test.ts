@@ -1056,6 +1056,101 @@ describe("sandbox conformance kit: process-global fixtures", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(callbacks.sort()).toEqual(["0", "1", "2", "3", "4"]);
   }, 120_000);
+
+  // Two runs overlap in environment filtering. Each run's approved value and
+  // planted values carry its run id, so the backend can tell whose launcher
+  // environment a command was started under.
+  const approvedRun = (request: SandboxExecRequest) =>
+    request.env.PISHIP_CONFORMANCE_APPROVED?.replace(
+      "conformance-approved-",
+      "",
+    );
+  const plantedRun = () =>
+    process.env.PISHIP_CONFORMANCE_HOST_TOKEN?.replace(
+      "conformance-host-token-",
+      "",
+    );
+
+  /** A backend whose command waits for the other run's, up to `waitMs`. */
+  const overlapping = (
+    arrived: { count: number; wake: () => void; both: Promise<void> },
+    waitMs: number,
+    answer: (request: SandboxExecRequest) => string,
+  ) =>
+    inProcessAdapter({
+      async exec(request) {
+        if (!request.command.includes("piship-env approved")) return "";
+        arrived.count++;
+        if (arrived.count === 2) arrived.wake();
+        await Promise.race([arrived.both, sleep(waitMs)]);
+        return answer(request);
+      },
+    });
+
+  const meeting = () => {
+    let wake = () => {};
+    const both = new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+    return { count: 0, wake: () => wake(), both };
+  };
+
+  const filtering = (adapter: ReturnType<typeof inProcessAdapter>) =>
+    testSandboxAdapter(adapter, {
+      ...TIMINGS,
+      only: ["environment filtering"],
+    });
+
+  it.each([
+    ["the first run ends first", 50, 400],
+    ["the second run ends first", 400, 50],
+  ])(
+    "gives each of two concurrent runs its own launcher environment throughout environment filtering (%s)",
+    async (_, firstMs, secondMs) => {
+      const before = { ...process.env };
+      const seen: [string | undefined, string | undefined][] = [];
+      const arrived = meeting();
+      const correct = (waitMs: number) =>
+        overlapping(arrived, waitMs, (request) => {
+          seen.push([approvedRun(request), plantedRun()]);
+          return `piship-env approved ${request.env.PISHIP_CONFORMANCE_APPROVED}\n`;
+        });
+      const reports = await Promise.all([
+        filtering(correct(firstMs)),
+        filtering(correct(secondMs)),
+      ]);
+      for (const report of reports)
+        expect(statuses(report)["environment filtering"]).toBe("passed");
+      expect(seen).toHaveLength(2);
+      for (const [approved, planted] of seen) expect(planted).toBe(approved);
+      expect(process.env).toEqual(before);
+    },
+    60_000,
+  );
+
+  it("fails both of two concurrent runs whose backend leaks a launcher value under another name", async () => {
+    const before = { ...process.env };
+    const arrived = meeting();
+    const leaking = () =>
+      overlapping(
+        arrived,
+        400,
+        (request) =>
+          `piship-env approved ${request.env.PISHIP_CONFORMANCE_APPROVED}\nCOPIED=${process.env.PISHIP_CONFORMANCE_HOST_TOKEN}\n`,
+      );
+    const reports = await Promise.all([
+      filtering(leaking()),
+      filtering(leaking()),
+    ]);
+    for (const report of reports) {
+      expect(statuses(report)["environment filtering"]).toBe("failed");
+      expect(reasons(report)["environment filtering"]).toMatch(
+        /a value from the launcher's environment reached the command/,
+      );
+      expectCleanReasons(report);
+    }
+    expect(process.env).toEqual(before);
+  }, 60_000);
 });
 
 describeIsolated(isolator)(
