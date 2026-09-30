@@ -38,7 +38,7 @@ Every answer is JSON with `cache-control: no-store`. An error body is only `{"er
 | 413, 415 | Body over 4 KiB; not `application/json` | `rejected` |
 | 422 | `Idempotency-Key` already used by this principal with another body | `idempotency-conflict` |
 | 429 + `Retry-After` (s) | More than `BROKER_ACQUIRE_LIMIT_PER_MINUTE` new acquires by this principal in the current minute; more than `BROKER_REVOKE_LIMIT_PER_MINUTE` revokes from this client address | Retryable, `rate-limited` |
-| 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; retry with the same key |
+| 502 | A key may have been created but the broker could not confirm it was cleaned up | Retryable, `unavailable`; PiShip retries with the same key, but this broker keeps no record for it, so the retry issues a new credential and the half-issued key is left to rotation or expiry ([idempotency](#idempotency)) |
 | 503 + `Retry-After` | LiteLLM failed or is unreachable (nothing issued, or the half-issued key was deleted; on revoke, the key may still exist); the realm's JWKS is unavailable with nothing cached; the same `Idempotency-Key` is still in progress, or `BROKER_REVOKE_MAX_CONCURRENT` revokes are already waiting on LiteLLM (`Retry-After: 1`) | Retryable, `unavailable` |
 
 ## Token validation
@@ -91,7 +91,15 @@ As [docs/enterprise-integration.md](../../../docs/enterprise-integration.md#idem
 
 The store is **in memory**: a broker restart forgets every key, so a retry after a restart issues a new credential (the old one expires, or rotation deletes it). A production broker with several instances needs a shared store; so does the per-principal rate limit, which is also in memory.
 
-When LiteLLM fails after `/key/generate` may have created a key (the connection dropped before its answer), the broker deletes that key by its alias. If the deletion is confirmed, nothing was issued and the answer is 503; if not, 502.
+When LiteLLM fails after `/key/generate` may have created a key (the connection dropped before its answer), the broker deletes that key by its alias. If the deletion is confirmed, nothing was issued and the answer is 503; if not, 502, and the record of the key is abandoned.
+
+**Where this reference falls short of the contract.** The contract asks a broker to keep a key at least as long as the credential it issued stays valid, or 24 hours, whichever is shorter. This reference does not, in three cases, and a retry with the same key then issues a second credential while the first stays valid until rotation deletes it or it expires:
+
+- **Restart.** Records are in memory and a restart forgets them all.
+- **Per-principal cap.** A principal keeps at most twice `BROKER_MAX_KEYS_PER_USER` records; a new one evicts that principal's oldest finished record even while its credential is still valid.
+- **502 with an unknown upstream outcome.** The record is abandoned, so a retry is a new request, although a key may exist.
+
+A production broker needs a shared, durable store for the records, no eviction of a record whose credential is still valid, and on a 502 a tombstone under the key that makes a retry first finish the cleanup (or recover the key) before it issues anything.
 
 ## Revoke
 

@@ -945,6 +945,9 @@
       ],
       "sandboxCredential": [
         "piship-sandbox-credential-metadata/v1"
+      ],
+      "credentialIssuance": [
+        "piship-credential-issuance/v1"
       ]
     }
   },

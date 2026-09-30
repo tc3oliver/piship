@@ -184,13 +184,14 @@ export class GovernanceSession {
         detail: { diagnostics: engine.diagnostics.length },
       });
       // A team, project, or managed user file that tries to widen the policy
-      // is recorded.
+      // is recorded; a rule it names is what tried.
       for (const diagnostic of engine.diagnostics)
-        session.emit("policy.violation", {
-          policy: engine.id,
-          ...(diagnostic.ruleId ? { rule: diagnostic.ruleId } : {}),
-          detail: { source: diagnostic.source },
-        });
+        if (diagnostic.ruleId !== undefined)
+          session.emit("policy.violation", {
+            policy: engine.id,
+            rule: diagnostic.ruleId,
+            detail: { source: diagnostic.source },
+          });
       await resolveResources(session);
       await resolveProject(session, session.#projectServers);
       await startMcp(session, session.#projectServers);

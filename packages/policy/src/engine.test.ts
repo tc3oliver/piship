@@ -367,6 +367,81 @@ describe("precedence", () => {
     }).evaluate({ action: "tool.execute", resource: "bash" });
     expect(decision.ruleId).toBe("e.deny");
   });
+  it("reports the diagnostics of reading its inputs first", () => {
+    const unreadable = {
+      level: "warning" as const,
+      source: "/work/.piship/policy.json",
+      message: "The project restriction file could not be read",
+    };
+    const e = engine({
+      diagnostics: [unreadable],
+      projectRules: [rule("p.allow", "shell.execute", "**", "allow")],
+    });
+    expect(e.diagnostics[0]).toEqual(unreadable);
+    expect(e.diagnostics.map((item) => item.ruleId)).toEqual([
+      undefined,
+      "p.allow",
+    ]);
+    expect(
+      e.explain({ action: "shell.execute", resource: "ls" }).diagnostics,
+    ).toContainEqual(unreadable);
+  });
+  it("does not let a team ask hide a project deny", () => {
+    const decision = engine({
+      policy: makePolicy({ default: "allow" }),
+      teamRules: [rule("t.ask", "shell.execute", "**", "ask")],
+      projectRules: [rule("p.deny", "shell.execute", "rm *", "deny")],
+    }).evaluate({ action: "shell.execute", resource: "rm -rf build" });
+    expect(decision).toMatchObject({
+      effect: "deny",
+      ruleId: "p.deny",
+      layer: "team-project",
+    });
+  });
+  it("takes the strictest of the first team and the first project rule", () => {
+    const e = engine({
+      policy: makePolicy({ default: "allow" }),
+      teamRules: [
+        rule("t.deny", "shell.execute", "curl *", "deny"),
+        rule("t.ask", "shell.execute", "**", "ask"),
+      ],
+      projectRules: [
+        rule("p.ask", "shell.execute", "curl *", "ask"),
+        rule("p.deny", "shell.execute", "**", "deny"),
+      ],
+    });
+    // Team deny over project ask; a later project rule stays shadowed.
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "curl x" }),
+    ).toMatchObject({ effect: "deny", ruleId: "t.deny" });
+    // Project deny over team ask.
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "ls" }),
+    ).toMatchObject({ effect: "deny", ruleId: "p.deny" });
+    // Equal effects: the team rule is named, as before.
+    const tie = engine({
+      teamRules: [rule("t.ask", "shell.execute", "**", "ask")],
+      projectRules: [rule("p.ask", "shell.execute", "**", "ask")],
+    }).evaluate({ action: "shell.execute", resource: "ls" });
+    expect(tie).toMatchObject({ effect: "ask", ruleId: "t.ask" });
+    const explanation = e.explain({ action: "shell.execute", resource: "ls" });
+    expect(
+      explanation.matches.map((m) => [m.ruleId, m.source, m.first]),
+    ).toEqual([
+      ["t.ask", "team", true],
+      ["p.deny", "project", true],
+    ]);
+  });
+  it("a project deny beats an enforced ask when the team rules are silent", () => {
+    const decision = engine({
+      policy: makePolicy({
+        default: "allow",
+        enforced: [rule("e.ask", "shell.execute", "**", "ask")],
+      }),
+      projectRules: [rule("p.deny", "shell.execute", "rm *", "deny")],
+    }).evaluate({ action: "shell.execute", resource: "rm x" });
+    expect(decision).toMatchObject({ effect: "deny", ruleId: "p.deny" });
+  });
   it("explains every matching rule per layer", () => {
     const e = engine({
       policy: makePolicy({

@@ -29,6 +29,7 @@ import { saveMetrics } from "../launch-metrics.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
+import { providerErrorRedaction } from "./redaction.js";
 
 function verifyBuiltResources(ctx: LaunchContext): void {
   const resourceDir = join(ctx.distributionDir, "resources");
@@ -162,14 +163,12 @@ async function startRuntime(
       additionalThemePaths: gov
         ? gov.loader.themes
         : resourcePaths(ctx, "themes"),
-      ...(ctx.metadata.access || builtinExtensions.length
-        ? {
-            extensionFactories: [
-              ...(ctx.metadata.access ? [governanceExtension] : []),
-              ...builtinExtensions,
-            ],
-          }
-        : {}),
+      extensionFactories: [
+        ...(ctx.metadata.access ? [governanceExtension] : []),
+        ...builtinExtensions,
+        // Last, so the message Pi persists is the redacted one.
+        providerErrorRedaction,
+      ],
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,

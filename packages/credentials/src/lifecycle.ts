@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -23,6 +23,7 @@ import {
   withFileLock,
 } from "./file-lock.js";
 import { metadataFileSecretRefs, secretRefsFromText } from "./ownership.js";
+import { HttpBrokerCredentialProvider } from "./providers.js";
 import {
   metadataFileSecretStore,
   type SecretStoreProvider,
@@ -63,6 +64,22 @@ export const REVOCATION_RETRY_FILE = "revocation-retry.json";
  * dropped and only their number is kept.
  */
 export const REVOCATION_RETRY_LIMIT = 20;
+/**
+ * The runtime credential's pending issuance: the idempotency key of the one
+ * acquire or renewal that was sent and not yet resolved. Non-secret.
+ */
+export const CREDENTIAL_ISSUANCE_SCHEMA = "piship-credential-issuance/v1";
+/** Default file name of the pending issuance, beside the credential metadata. */
+export const CREDENTIAL_ISSUANCE_FILE = "pending-issuance.json";
+/**
+ * How long a pending issuance key is reused: the idempotency retention the
+ * broker contract requires at least. Past it, the broker may have forgotten
+ * the key, so reusing it no longer recovers an issued credential; the next
+ * acquire starts a new key instead.
+ */
+export const ISSUANCE_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** A pending issuance created this far in the future (a clock change) is dropped. */
+const ISSUANCE_CLOCK_TOLERANCE_MS = 60 * 1000;
 
 /** Non-secret credential state. The secret itself lives only in the SecretStore. */
 export interface CredentialMetadata {
@@ -224,6 +241,108 @@ export interface CredentialManagerOptions {
   readonly slot?: CredentialSlot;
   /** Sandbox slot: the origins recorded with a newly stored secret. */
   readonly origins?: readonly string[];
+  /**
+   * Where the pending issuance (the idempotency key of an unresolved
+   * acquire or renewal) is kept. Defaults to `pending-issuance.json` beside
+   * the metadata. Only an organization-issued (`http-broker` or `adapter`)
+   * runtime credential has one.
+   */
+  readonly issuancePath?: string;
+  /** How long a pending issuance key is reused. Default `ISSUANCE_RETENTION_MS`. */
+  readonly issuanceRetentionMs?: number;
+  /**
+   * What decides where an acquire goes, such as an adapter's module and its
+   * endpoints; recorded as a hash with a pending issuance, which is dropped
+   * when it changes. Defaults to the endpoint of an `HttpBrokerCredentialProvider`.
+   */
+  readonly issuanceTarget?: string;
+}
+
+/**
+ * The credential a renewal replaces, as a pending issuance records it:
+ * generations restart after a logout, so the acquisition time goes with the
+ * reference.
+ */
+export interface IssuanceBase {
+  readonly credential_ref: string;
+  readonly acquired_at: string;
+}
+
+/**
+ * One acquire or renewal that was sent (or was about to be) and has not been
+ * resolved: its idempotency key, recorded before the request leaves, so a
+ * retry after a lost answer or a crash sends the same key and a broker that
+ * honors it returns the credential it already issued. Never a secret.
+ */
+export interface PendingIssuance {
+  readonly schema: typeof CREDENTIAL_ISSUANCE_SCHEMA;
+  readonly idempotency_key: string;
+  readonly mode: CredentialProvider["mode"];
+  /** The principal the request was sent for; absent without an identity. */
+  readonly principal?: PrincipalKey;
+  /** The credential the renewal replaces; absent for a first acquire. */
+  readonly renews?: IssuanceBase;
+  /** Which kind of request it was (see `IssuanceRequest`). */
+  readonly request?: IssuanceRequest;
+  /**
+   * SHA-256 (hex) of where the request went: the broker endpoint, or what
+   * the manager was told decides an adapter's destination. A key is never
+   * sent to another service than the one it was recorded for.
+   */
+  readonly target?: string;
+  readonly created_at: string;
+}
+
+/**
+ * The logical request a pending issuance belongs to: a first `acquire`, a
+ * `renewal` before or after expiry, a renewal after a gateway `rejected` the
+ * credential, or an `entitlement` re-read. A rejection renewal and an
+ * entitlement re-read are requests of their own: they never repeat the key
+ * of another kind, whose credential the broker would replay.
+ */
+export type IssuanceRequest =
+  | "acquire"
+  | "renewal"
+  | "rejected"
+  | "entitlement";
+const ISSUANCE_REQUESTS: readonly IssuanceRequest[] = [
+  "acquire",
+  "renewal",
+  "rejected",
+  "entitlement",
+];
+
+function sameBase(
+  metadata: CredentialMetadata,
+  base: IssuanceBase | undefined,
+): boolean {
+  return (
+    !!base &&
+    metadata.credential_ref === base.credential_ref &&
+    metadata.acquired_at === base.acquired_at
+  );
+}
+
+/**
+ * Whether a failed acquire or renewal is the broker's (or adapter's) final
+ * answer to its key, so the next attempt is a new logical request with a new
+ * key. A failure that may have happened after the request took effect (no
+ * answer, `outcome`), one that invites a retry (`retryable`: 5xx, 429, a
+ * request still in progress, a timeout), one that says nothing about the
+ * request (identity, network or TLS policy), and anything that is not a
+ * PiShip error keep the key. A 403, a 409 or 422 conflict, another 4xx, and
+ * a contract violation settle it.
+ */
+function settlesIssuance(error: unknown): boolean {
+  if (!(error instanceof PiShipError)) return false;
+  const outcome = error.sanitizedDetail?.outcome;
+  if (outcome === "unknown" || outcome === "not-sent") return false;
+  if (error.retryable) return false;
+  return !(
+    error.code.startsWith("IDENTITY_") ||
+    error.code === "NETWORK_DENIED" ||
+    error.code === "TLS_POLICY_VIOLATION"
+  );
 }
 
 /** Credential metadata, its discarded marker, and the pending revocations. */
@@ -825,6 +944,293 @@ export class CredentialManager {
     return this.options.store;
   }
 
+  /**
+   * Whether this manager records pending issuances: only an
+   * organization-issued runtime credential is requested from a remote
+   * service that may issue it and lose the answer.
+   */
+  get #tracksIssuance(): boolean {
+    return this.slot === "inference" && this.renewable;
+  }
+
+  get #issuancePath(): string {
+    return (
+      this.options.issuancePath ??
+      join(dirname(this.options.metadataPath), CREDENTIAL_ISSUANCE_FILE)
+    );
+  }
+
+  /** The recorded pending issuance; `invalid` for a file that is not one. */
+  #readIssuance(): PendingIssuance | "invalid" | null {
+    if (!existsSync(this.#issuancePath)) return null;
+    let value: Partial<PendingIssuance>;
+    try {
+      value = JSON.parse(
+        readFileSync(this.#issuancePath, "utf8"),
+      ) as Partial<PendingIssuance>;
+    } catch {
+      return "invalid";
+    }
+    const principal = value?.principal as Partial<PrincipalKey> | undefined;
+    const renews = value?.renews as Partial<IssuanceBase> | undefined;
+    if (
+      value?.schema !== CREDENTIAL_ISSUANCE_SCHEMA ||
+      typeof value.idempotency_key !== "string" ||
+      !/^[\x21-\x7e]{1,255}$/.test(value.idempotency_key) ||
+      typeof value.mode !== "string" ||
+      typeof value.created_at !== "string" ||
+      Number.isNaN(Date.parse(value.created_at)) ||
+      (principal !== undefined &&
+        (typeof principal?.issuer !== "string" ||
+          typeof principal.subject !== "string")) ||
+      (renews !== undefined &&
+        (typeof renews?.credential_ref !== "string" ||
+          typeof renews.acquired_at !== "string")) ||
+      (value.request !== undefined &&
+        !ISSUANCE_REQUESTS.includes(value.request)) ||
+      (value.target !== undefined && typeof value.target !== "string")
+    )
+      return "invalid";
+    return value as PendingIssuance;
+  }
+
+  /** The hash of where this manager's requests go; undefined when unknown. */
+  get #issuanceTarget(): string | undefined {
+    const provider = this.options.provider;
+    const target =
+      this.options.issuanceTarget ??
+      (provider instanceof HttpBrokerCredentialProvider
+        ? `http-broker ${provider.options.endpoint}`
+        : undefined);
+    return target === undefined
+      ? undefined
+      : createHash("sha256").update(target).digest("hex");
+  }
+
+  /**
+   * The pending issuance of the runtime credential, if one is recorded: the
+   * idempotency key an acquire or renewal sent without a resolution yet.
+   * Non-secret; for diagnostics. Whether the next acquire reuses it is
+   * decided under the credential lock.
+   */
+  pendingIssuance(): {
+    readonly idempotencyKey: string;
+    readonly createdAt: string;
+    readonly renewal: boolean;
+  } | null {
+    if (!this.#tracksIssuance) return null;
+    const pending = this.#readIssuance();
+    if (!pending || pending === "invalid") return null;
+    return {
+      idempotencyKey: pending.idempotency_key,
+      createdAt: pending.created_at,
+      renewal: !!pending.renews,
+    };
+  }
+
+  #dropIssuance(): void {
+    rmSync(this.#issuancePath, { force: true });
+  }
+
+  /**
+   * Keep the recorded pending issuance only while it still names an
+   * unresolved request that the next acquire may repeat: recorded for this
+   * provider mode, within the retention, for `principal` (when given), and
+   * with no credential committed since it was recorded (the stored
+   * credential is absent or still the one it renews). Anything else is
+   * dropped: a credential committed since means the request was resolved,
+   * including by a process that stopped after committing and before it
+   * removed the record. Runs under the credential lock, before anything
+   * changes the metadata.
+   */
+  #settleIssuance(principal?: PrincipalKey | null): PendingIssuance | null {
+    const pending = this.#readIssuance();
+    if (!pending) return null;
+    const age =
+      pending === "invalid"
+        ? Number.NaN
+        : this.#now() - Date.parse(pending.created_at);
+    const current = this.readMetadata();
+    if (
+      pending === "invalid" ||
+      pending.mode !== this.mode ||
+      pending.target !== this.#issuanceTarget ||
+      !(age >= -ISSUANCE_CLOCK_TOLERANCE_MS) ||
+      age >= (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS) ||
+      (principal !== undefined &&
+        !samePrincipal(pending.principal ?? null, principal)) ||
+      (current !== null && !sameBase(current, pending.renews))
+    ) {
+      this.#dropIssuance();
+      return null;
+    }
+    return pending;
+  }
+
+  /**
+   * The idempotency key for the request about to be sent, recorded before
+   * it is sent: the pending issuance's when one is left (a retry of the
+   * same logical request), else the caller's when it passes one, or a new
+   * random UUID. A caller key never replaces a pending one: the pending key
+   * may already have issued a credential, which only it can recover. A
+   * rejection renewal or an entitlement re-read replaces a pending key of
+   * another kind of request instead of repeating it. Nothing is sent when
+   * the key cannot be recorded.
+   */
+  #beginIssuance(
+    principal: PrincipalKey | null,
+    base: CredentialMetadata | null,
+    requested: string | undefined,
+    kind: IssuanceRequest,
+  ): { readonly key: string; readonly resumed: boolean } {
+    const pending = this.#readIssuance();
+    if (
+      pending &&
+      pending !== "invalid" &&
+      ((kind !== "rejected" && kind !== "entitlement") ||
+        pending.request === kind)
+    )
+      return { key: pending.idempotency_key, resumed: true };
+    const key = requested ?? randomUUID();
+    const target = this.#issuanceTarget;
+    const record: PendingIssuance = {
+      schema: CREDENTIAL_ISSUANCE_SCHEMA,
+      idempotency_key: key,
+      mode: this.mode,
+      request: kind,
+      ...(target ? { target } : {}),
+      ...(principal
+        ? {
+            principal: {
+              issuer: principal.issuer,
+              subject: principal.subject,
+            },
+          }
+        : {}),
+      ...(base
+        ? {
+            renews: {
+              credential_ref: base.credential_ref,
+              acquired_at: base.acquired_at,
+            },
+          }
+        : {}),
+      created_at: new Date(this.#now()).toISOString(),
+    };
+    try {
+      writeAtomic(this.#issuancePath, `${JSON.stringify(record, null, 2)}\n`);
+    } catch (error) {
+      throw new PiShipError(
+        "CREDENTIAL_ACQUIRE_FAILED",
+        `The credential request could not be recorded before sending, so nothing was sent: ${redact(error instanceof Error ? error.message : String(error))}`,
+        {
+          component: "credential",
+          userAction:
+            "Make the distribution's state directory writable, then run the command again",
+          sanitizedDetail: { operation: "acquire", outcome: "not-sent" },
+        },
+      );
+    }
+    return { key, resumed: false };
+  }
+
+  /** Remove the pending issuance of `key`: it is resolved. */
+  #endIssuance(key: string): void {
+    const pending = this.#readIssuance();
+    if (pending === "invalid" || pending?.idempotency_key === key)
+      this.#dropIssuance();
+  }
+
+  /**
+   * Send one acquire or renewal (`call`) under a recorded idempotency key and
+   * normalize its credential. A failure that settles the request (see
+   * `settlesIssuance`), or an answer that cannot be used, ends the pending
+   * issuance, so the next attempt uses a new key; any other failure leaves
+   * it for the next attempt to repeat. A manager that does not record
+   * issuances sends the caller's key or a new one.
+   */
+  async #issue(
+    principal: PrincipalKey | null,
+    base: CredentialMetadata | null,
+    ctx: CredentialContext,
+    call: (ctx: CredentialContext) => Promise<RuntimeCredential | null>,
+    nothing: string,
+    kind: IssuanceRequest,
+  ): Promise<{
+    readonly credential: RuntimeCredential;
+    readonly key?: string;
+    readonly resumed: boolean;
+  }> {
+    const empty = () =>
+      new PiShipError("CREDENTIAL_ACQUIRE_FAILED", nothing, {
+        component: "credential",
+      });
+    if (!this.#tracksIssuance) {
+      const returned = await call(
+        ctx.idempotencyKey ? ctx : { ...ctx, idempotencyKey: randomUUID() },
+      );
+      if (!returned) throw empty();
+      return { credential: normalizeCredential(returned), resumed: false };
+    }
+    const { key, resumed } = this.#beginIssuance(
+      principal,
+      base,
+      ctx.idempotencyKey,
+      kind,
+    );
+    const end = () => {
+      try {
+        this.#endIssuance(key);
+      } catch {
+        // The next acquire drops it: a key that cannot be used again.
+      }
+    };
+    let returned: RuntimeCredential | null;
+    try {
+      returned = await call({ ...ctx, idempotencyKey: key });
+    } catch (error) {
+      if (settlesIssuance(error)) end();
+      throw error;
+    }
+    // Repeating the key would return the same unusable answer.
+    try {
+      if (!returned) throw empty();
+      return { credential: normalizeCredential(returned), key, resumed };
+    } catch (error) {
+      end();
+      throw error;
+    }
+  }
+
+  /**
+   * End the pending issuance that `metadata` was committed from. A failure
+   * is a notice, never a failed commit: the record names a request whose
+   * credential is now stored, which the next acquire recognizes and drops.
+   */
+  #resolveIssuance(key: string | undefined, notices: string[]): void {
+    if (key === undefined) return;
+    try {
+      this.#endIssuance(key);
+    } catch (error) {
+      notices.push(
+        `The record of the completed credential request could not be removed (${redact(error instanceof Error ? error.message : String(error))}); it is never reused, and the next command removes it`,
+      );
+    }
+  }
+
+  /** Non-secret issuance fields of an acquire or refresh event. */
+  #issuanceDetail(issued: {
+    readonly key?: string;
+    readonly resumed: boolean;
+  }): Record<string, string | boolean> {
+    return issued.key === undefined
+      ? {}
+      : {
+          idempotencyKey: issued.key,
+          ...(issued.resumed ? { resumed: true } : {}),
+        };
+  }
+
   /** Persist a newly acquired credential and switch metadata to it atomically. */
   async #commit(
     credential: RuntimeCredential,
@@ -1112,13 +1518,12 @@ export class CredentialManager {
       };
     }
     const notices: string[] = [];
-    // One idempotency key per logical acquire or renewal: the one request
-    // this call may send. Nothing here re-sends it; a caller that retries
-    // the same acquire passes the key back.
-    const attempt: CredentialContext = ctx.idempotencyKey
-      ? ctx
-      : { ...ctx, idempotencyKey: randomUUID() };
     const principal = identity ? principalKey(identity) : null;
+    // Before anything changes the metadata: a pending issuance is judged
+    // against the credential stored now, so one whose credential was
+    // committed (by a process that stopped before removing the record) is
+    // recognized while that credential is still there.
+    if (this.#tracksIssuance) this.#settleIssuance(principal);
     if (this.#incompatibleMetadataPresent()) {
       const discarded = this.#discardedPending();
       const damaged = this.#damaged();
@@ -1129,7 +1534,7 @@ export class CredentialManager {
       if (held) {
         const revoked = await this.#revoke(
           held.metadata,
-          attempt,
+          ctx,
           "lifecycle",
           held.store,
         );
@@ -1161,7 +1566,7 @@ export class CredentialManager {
       const unbound = !metadata.principal && !!principal;
       const revoked = await this.#revoke(
         metadata,
-        attempt,
+        ctx,
         unbound ? "unbound" : "principal-change",
       );
       await this.#clearMetadata(metadata);
@@ -1196,21 +1601,23 @@ export class CredentialManager {
             userAction: "Run the branded login command",
           },
         );
-      const returned = await this.options.provider.acquire(identity, attempt);
-      if (!returned)
-        throw new PiShipError(
-          "CREDENTIAL_ACQUIRE_FAILED",
-          "The credential provider returned no credential",
-          {
-            component: "credential",
-          },
-        );
-      const acquired = normalizeCredential(returned);
-      metadata = await this.#commit(acquired, principal, notices);
-      this.#emit("credential.acquire", this.#eventDetail(metadata));
+      const issued = await this.#issue(
+        principal,
+        null,
+        ctx,
+        (keyed) => this.options.provider.acquire(identity, keyed),
+        "The credential provider returned no credential",
+        "acquire",
+      );
+      metadata = await this.#commit(issued.credential, principal, notices);
+      this.#resolveIssuance(issued.key, notices);
+      this.#emit("credential.acquire", {
+        ...this.#eventDetail(metadata),
+        ...this.#issuanceDetail(issued),
+      });
       return {
         ref: this.#toRef(metadata),
-        secret: acquired.secret,
+        secret: issued.credential.secret,
         notices,
         acquiredAt: metadata.acquired_at,
       };
@@ -1237,18 +1644,23 @@ export class CredentialManager {
       };
       try {
         const provider = this.options.provider;
-        const returned = provider.refresh
-          ? await provider.refresh(identity, current, attempt)
-          : await provider.acquire(identity, attempt);
-        if (!returned)
-          throw new PiShipError(
-            "CREDENTIAL_ACQUIRE_FAILED",
-            "Credential refresh returned nothing",
-          );
-        const next = normalizeCredential(returned);
+        const issued = await this.#issue(
+          principal,
+          metadata,
+          ctx,
+          (keyed) =>
+            provider.refresh
+              ? provider.refresh(identity, current, keyed)
+              : provider.acquire(identity, keyed),
+          "Credential refresh returned nothing",
+          entitlement ? "entitlement" : rejected ? "rejected" : "renewal",
+        );
+        const next = issued.credential;
         metadata = await this.#commit(next, principal, notices);
+        this.#resolveIssuance(issued.key, notices);
         this.#emit("credential.refresh", {
           ...this.#eventDetail(metadata),
+          ...this.#issuanceDetail(issued),
           reason: entitlement
             ? "entitlement"
             : rejected
@@ -1362,13 +1774,24 @@ export class CredentialManager {
     });
   }
 
-  /** Revoke when supported, then clear local secrets and metadata. */
+  /**
+   * Revoke when supported, then clear local secrets and metadata, and the
+   * pending issuance. A sign-in that replaces the credential for `principal`
+   * passes `keepIssuanceFor`: a pending issuance of that principal that no
+   * commit resolved is kept, so the acquire that follows repeats its key and
+   * recovers a credential whose answer was lost, instead of issuing another.
+   */
   async logout(
     ctx: CredentialContext,
-    options: { readonly reason?: CredentialRevokeReason } = {},
+    options: {
+      readonly reason?: CredentialRevokeReason;
+      readonly keepIssuanceFor?: PrincipalKey | null;
+    } = {},
   ): Promise<string[]> {
     if (!this.storesSecrets) return [];
-    return this.#exclusive(() => this.#logout(ctx, options.reason ?? "logout"));
+    return this.#exclusive(() =>
+      this.#logout(ctx, options.reason ?? "logout", options.keepIssuanceFor),
+    );
   }
 
   /**
@@ -1565,8 +1988,20 @@ export class CredentialManager {
   async #logout(
     ctx: CredentialContext,
     reason: CredentialRevokeReason,
+    keepIssuanceFor?: PrincipalKey | null,
   ): Promise<string[]> {
     const problems: string[] = [];
+    // First, while the credential a commit may have resolved it with is
+    // still stored.
+    if (this.#tracksIssuance)
+      try {
+        if (keepIssuanceFor === undefined) this.#dropIssuance();
+        else this.#settleIssuance(keepIssuanceFor);
+      } catch (error) {
+        problems.push(
+          `the pending credential request record could not be removed (${redact(error instanceof Error ? error.message : String(error))})`,
+        );
+      }
     if (!this.hasStoredCredential()) return problems;
     const metadata = this.readMetadata();
     const foreign = metadata ? null : this.#foreignMetadata();

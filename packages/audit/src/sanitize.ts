@@ -114,7 +114,8 @@ function sanitizeDetail(
   let count = 0;
   for (const [key, value] of Object.entries(detail)) {
     if (count >= AUDIT_LIMITS.detailKeys) break;
-    if (!DETAIL_KEY.test(key)) continue;
+    // A key is kept verbatim, so one that holds a secret is dropped.
+    if (!DETAIL_KEY.test(key) || scrubText(key) !== key) continue;
     const sanitized = detailValue(key, value);
     if (sanitized === undefined) continue;
     output[key] = sanitized;

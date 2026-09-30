@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1669,6 +1670,36 @@ describe("discoverProjectResources", () => {
     expect(byKind(found, ".piship/policy.json")?.effect).toBe("deny");
     expect(readProjectRestrictions(found).rules).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a restriction file it cannot read",
+    () => {
+      const root = dir("restrict-unreadable");
+      const file = join(root, ".piship", "policy.json");
+      write(file, "[]");
+      chmodSync(file, 0o000);
+      try {
+        const found = discoverProjectResources(
+          identifyProject(root, trust),
+          managed,
+          { homeDir: home },
+        );
+        expect(readProjectRestrictions(found)).toEqual({
+          rules: [],
+          ignored: [],
+          diagnostics: [
+            {
+              level: "warning",
+              source: file,
+              message: `The project restriction file ${file} could not be read; its rules do not apply`,
+            },
+          ],
+        });
+      } finally {
+        chmodSync(file, 0o600);
+      }
+    },
+  );
 
   it("rejects an invalid restriction file", () => {
     const root = dir("restrict-bad");
