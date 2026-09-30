@@ -56,8 +56,10 @@ export {
 export * from "./supply-chain.js";
 export {
   abandonedTemporaryCount,
-  reclaimBuildTemporaries,
   reclaimInstallTemporaries,
   reclaimOsTemporaries,
+  sweepOutputStaging,
+  type AbandonedStaging,
+  type OutputStagingOptions,
 } from "./temporary-directories.js";
 export * from "./trust.js";

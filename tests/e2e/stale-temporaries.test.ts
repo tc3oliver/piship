@@ -72,31 +72,37 @@ const stagings = () =>
     : [];
 
 /** `piship build`, which stages under `dist/.piship-stale-agent-*`. */
-function startBuild() {
-  return spawn(process.execPath, [bin, "build", manifest], {
+function startBuild(flags: string[]) {
+  return spawn(process.execPath, [bin, "build", manifest, ...flags], {
     cwd: temp,
     env,
     // Its own process group, so the kill takes npm with it.
     detached: posix,
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
   });
 }
 
 /**
  * Wait until this build has staged (a directory that was not there before it
  * started has a readable marker: the file exists a moment before it has its
- * record), then kill it. Leftovers of the builds before it
- * do not count: they are there from the start.
+ * record), then kill it. Leftovers of the builds before it do not count: they
+ * are there from the start. Returns what the build said on stderr.
  */
-async function killBuildMidStaging(): Promise<void> {
+async function killBuildMidStaging(flags: string[] = []): Promise<string> {
   const before = new Set(stagings());
-  const child = startBuild();
+  const child = startBuild(flags);
+  let said = "";
+  child.stderr?.on("data", (chunk: Buffer) => {
+    said += chunk.toString("utf8");
+  });
   const exited = new Promise((resolve) => child.on("close", resolve));
   const deadline = Date.now() + 90_000;
   for (;;) {
     const name = stagings().find(
       (item) =>
         !before.has(item) &&
+        // Not the name a sweep gives a directory it is removing.
+        !item.startsWith(".piship-reclaim-") &&
         readTemporaryOwner(join(dist(), item)) !== undefined,
     );
     if (name) break;
@@ -105,6 +111,7 @@ async function killBuildMidStaging(): Promise<void> {
   }
   process.kill(-(child.pid as number), "SIGKILL");
   await exited;
+  return said;
 }
 
 let built: string | undefined;
@@ -122,22 +129,40 @@ function build(): string {
 }
 
 describe.runIf(posix)("piship build killed with SIGKILL", () => {
-  it("leaves one staging directory that the next build removes, however often it is killed", async () => {
+  it("leaves its staging, which a later build reports and removes only when asked to", async () => {
+    await killBuildMidStaging();
+    expect(stagings()).toHaveLength(1);
+    const [left] = stagings();
+    const owner = readTemporaryOwner(join(dist(), left as string))?.owner;
+    expect(owner).toMatchObject({ kind: "build" });
+    // Not asked: dist/ is in the project, which a sandboxed agent may write,
+    // so the next build says what it found and removes nothing.
+    const said = await killBuildMidStaging();
+    expect(said).toMatch(/1 abandoned staging directory of killed runs in /);
+    expect(said).toContain("--reclaim-staging");
+    expect(said).not.toContain(left as string);
+    expect(stagings()).toHaveLength(2);
+    expect(existsSync(join(dist(), left as string, TEMPORARY_OWNER_FILE))).toBe(
+      true,
+    );
+    // Asked: what is abandoned goes, and leftovers do not grow however often.
     const counts: number[] = [];
     for (let run = 0; run < 3; run += 1) {
-      await killBuildMidStaging();
+      await killBuildMidStaging(["--reclaim-staging"]);
       counts.push(stagings().length);
-      const [left] = stagings();
-      const owner = readTemporaryOwner(join(dist(), left as string))?.owner;
-      expect(owner).toMatchObject({ kind: "build" });
     }
-    // Each killed build's start removed the one before it.
     expect(counts).toEqual([1, 1, 1]);
-    const output = build();
+    const result = spawnSync(
+      process.execPath,
+      [bin, "build", manifest, "--reclaim-staging"],
+      { cwd: temp, env, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    built = join(dist(), "stale-agent");
     expect(stagings()).toEqual([]);
     expect(readdirSync(dist())).toEqual(["stale-agent"]);
     // The payload is not marked: the marker lives beside it, not in it.
-    expect(existsSync(join(output, TEMPORARY_OWNER_FILE))).toBe(false);
+    expect(existsSync(join(built, TEMPORARY_OWNER_FILE))).toBe(false);
   }, 240_000);
 });
 

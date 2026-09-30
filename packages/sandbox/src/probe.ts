@@ -108,7 +108,12 @@ function outsideLocation(
     const real = realpathNearest(candidate);
     if (profile.writeAllow.some((path) => isWithin(real, path))) continue;
     try {
-      // A probe killed before it cleaned up left its directory here.
+      // A probe killed before it cleaned up left its directory here. This
+      // location is outside the write allowlist (checked above), so no
+      // contained command can have planted a directory in it for this sweep
+      // to remove. The probe directory inside `profile.tmpDir` is not swept:
+      // contained commands write there, and it dies with the session's temp
+      // directory, which the next sandbox activation reclaims.
       reclaimTemporaryDirectories(real, ["probe"]);
       return createTemporaryDirectory(real, "probe");
     } catch {
@@ -227,7 +232,6 @@ export async function probeSandbox(
 ): Promise<ProbeResult> {
   const secret = randomBytes(12).toString("hex");
   mkdirSync(profile.tmpDir, { recursive: true, mode: 0o700 });
-  reclaimTemporaryDirectories(profile.tmpDir, ["probe"]);
   const probe = createTemporaryDirectory(profile.tmpDir, "probe");
   const probeDir = probe.path;
   const outside = outsideLocation(profile);

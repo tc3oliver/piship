@@ -35,8 +35,8 @@ import {
   verifySbom,
 } from "../supply-chain.js";
 import {
-  reclaimBuildTemporaries,
   reclaimOsTemporaries,
+  sweepOutputStaging,
 } from "../temporary-directories.js";
 import {
   checkReleaseInputs,
@@ -196,8 +196,7 @@ export async function buildRelease(
   const directory = join(outputRoot, name);
   const archive = join(outputRoot, `${name}.tar.gz`);
   mkdirSync(outputRoot, { recursive: true });
-  // Staging that a killed release build left behind.
-  reclaimBuildTemporaries(outputRoot, "release");
+  sweepOutputStaging(outputRoot, "release", options);
   const temporary = createTemporaryDirectory(outputRoot, "release", name);
   const stage = temporary.path;
   try {

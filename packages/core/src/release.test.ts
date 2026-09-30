@@ -1431,9 +1431,7 @@ describe("evaluateVulnerabilities", () => {
 // ------------------------------------------------------------ build output
 
 describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
-  it("is removed by the next release build, and a live build's is kept", async () => {
-    const { dir, path } = project();
-    const releases = join(dir, "dist", "releases");
+  const staging = (releases: string) => {
     const name = `.piship-release-acmepi-1.0.0-${currentTarget()}-`;
     const stale = plantTemporary(
       releases,
@@ -1450,11 +1448,50 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
     const user = join(releases, `${name}notes`);
     mkdirSync(user);
     writeFileSync(join(user, "keep.txt"), "user data");
-    const built = await build(path);
-    expect(existsSync(stale)).toBe(false);
+    return { name, stale, live, user };
+  };
+
+  it("is reported, not removed: the output directory may be one sandboxed commands write", async () => {
+    const { dir, path } = project();
+    const releases = join(dir, "dist", "releases");
+    const { name, stale, live, user } = staging(releases);
+    const found: { directory: string; count: number; attempted: boolean }[] =
+      [];
+    const built = await build(path, {
+      abandonedStaging: (report) => found.push(report),
+    });
+    expect(found).toEqual([
+      { directory: releases, count: 1, attempted: false },
+    ]);
+    expect(existsSync(join(stale, "x", "output.txt"))).toBe(true);
     expect(existsSync(join(live, "x", "output.txt"))).toBe(true);
     expect(readFileSync(join(user, "keep.txt"), "utf8")).toBe("user data");
     // The build's own staging is gone, and it left no release-test state.
+    expect(readdirSync(releases).sort()).toEqual(
+      [
+        `${name}aaaaaa`,
+        `${name}bbbbbb`,
+        `${name}notes`,
+        built.name,
+        `${built.name}.tar.gz`,
+        `${built.name}.tar.gz.sha256`,
+      ].sort(),
+    );
+  });
+
+  it("is removed when the build is asked to, and a live build's is kept", async () => {
+    const { dir, path } = project();
+    const releases = join(dir, "dist", "releases");
+    const { name, stale, live, user } = staging(releases);
+    const found: unknown[] = [];
+    const built = await build(path, {
+      reclaimStaging: true,
+      abandonedStaging: (report) => found.push(report),
+    });
+    expect(found).toEqual([]);
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(join(live, "x", "output.txt"))).toBe(true);
+    expect(readFileSync(join(user, "keep.txt"), "utf8")).toBe("user data");
     expect(readdirSync(releases).sort()).toEqual(
       [
         `${name}bbbbbb`,
@@ -1466,7 +1503,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
     );
   });
 
-  it("is removed by the next build even when that build fails", async () => {
+  it("is removed on request even when that build fails", async () => {
     const { dir, path } = project();
     const releases = join(dir, "dist", "releases");
     const stale = plantTemporary(
@@ -1476,7 +1513,10 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
       deadPid(),
     );
     await rejection(
-      build(path, { runTest: () => ({ status: 1, stdout: "", stderr: "no" }) }),
+      build(path, {
+        reclaimStaging: true,
+        runTest: () => ({ status: 1, stdout: "", stderr: "no" }),
+      }),
     );
     expect(existsSync(stale)).toBe(false);
     expect(readdirSync(releases)).toEqual([]);

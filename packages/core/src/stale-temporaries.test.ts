@@ -35,10 +35,10 @@ import { lifecycleDoctor } from "./branded/index.js";
 import {
   abandonedTemporaryCount,
   readInstallReceipt,
-  reclaimBuildTemporaries,
   reclaimInstallTemporaries,
   reclaimOsTemporaries,
   rollbackDistribution,
+  sweepOutputStaging,
   updateDistribution,
   verifyPayload,
   verifyRelease,
@@ -140,7 +140,7 @@ describe("where each start reclaims", () => {
     expect(readFileSync(join(apps, "launch.mjs"), "utf8")).toBe("launcher");
   });
 
-  it("removes build and release staging beside an output, each by its own kind", () => {
+  it("reports build and release staging beside an output, and removes it only when asked, each by its own kind", () => {
     const dead = deadPid();
     const output = join(osTemp, "dist");
     const build = plant(output, ".piship-acmepi-aaaaaa", "build", dead);
@@ -151,12 +151,38 @@ describe("where each start reclaims", () => {
       "release",
       dead,
     );
-    expect(reclaimBuildTemporaries(output, "build").removed).toEqual([build]);
-    expect(existsSync(release)).toBe(true);
-    expect(reclaimBuildTemporaries(releases, "release").removed).toEqual([
-      release,
+    const told: { directory: string; count: number; attempted: boolean }[] = [];
+    const abandonedStaging = (found: (typeof told)[number]) => told.push(found);
+    // Not asked: a count, and nothing removed.
+    sweepOutputStaging(output, "build", { abandonedStaging });
+    sweepOutputStaging(releases, "release", { abandonedStaging });
+    expect(told).toEqual([
+      { directory: output, count: 1, attempted: false },
+      { directory: releases, count: 1, attempted: false },
     ]);
+    expect(existsSync(build)).toBe(true);
+    expect(existsSync(release)).toBe(true);
+    // Asked: each kind only in its own root.
+    told.length = 0;
+    sweepOutputStaging(output, "build", {
+      reclaimStaging: true,
+      abandonedStaging,
+    });
+    expect(told).toEqual([]);
+    expect(existsSync(build)).toBe(false);
+    expect(existsSync(release)).toBe(true);
+    sweepOutputStaging(releases, "release", { reclaimStaging: true });
     expect(readdirSync(output)).toEqual(["releases"]);
+    expect(readdirSync(releases)).toEqual([]);
+  });
+
+  it("never sweeps an output directory by itself", () => {
+    // The launcher's sweeps, the ones every start runs, leave it alone.
+    const output = join(osTemp, "dist");
+    const build = plant(output, ".piship-acmepi-aaaaaa", "build", deadPid());
+    reclaimOsTemporaries();
+    reclaimInstallTemporaries(ID);
+    expect(existsSync(build)).toBe(true);
   });
 
   it("counts, without removing, what a start could not remove", () => {

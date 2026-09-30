@@ -270,10 +270,13 @@ describe("an abandoned session", () => {
 });
 
 describe.runIf(posix)("probe directories", () => {
-  it("removes a killed probe's directory, and its own when the activation ends", async () => {
+  it("removes its own directory, and leaves one in the session temp alone, which a contained command can write", async () => {
     const tmpDir = join(root, "session-tmp");
     mkdirSync(tmpDir);
-    // What a probe killed mid-check left: a marked directory of a dead owner.
+    // What a probe killed mid-check left, or what a contained command planted:
+    // a marked directory of a dead owner, in a directory contained commands
+    // write. The probe does not sweep it; the session's temp directory goes
+    // with it when that is reclaimed.
     const host = createTemporaryDirectory(tmpDir, "staging");
     const { owner } = readTemporaryOwner(host.path) as {
       owner: TemporaryOwner;
@@ -295,7 +298,7 @@ describe.runIf(posix)("probe directories", () => {
     const unrelated = join(tmpDir, ".piship-probe-notes");
     mkdirSync(unrelated);
     // An uncontained "sandbox": the probe runs, finds nothing enforced, and
-    // the required activation fails, after the probe cleaned up.
+    // the required activation fails, after the probe removed its own.
     await expect(
       activateSandbox(policy, {
         workspace,
@@ -313,7 +316,12 @@ describe.runIf(posix)("probe directories", () => {
         settleMs: 50,
       }),
     ).rejects.toThrow(/sandbox/i);
-    expect(existsSync(stale)).toBe(false);
-    expect(readdirSync(tmpDir).sort()).toEqual([".piship-probe-notes"]);
+    expect(readFileSync(join(stale, "allowed", "write-probe"), "utf8")).toBe(
+      "probe",
+    );
+    expect(readdirSync(tmpDir).sort()).toEqual([
+      ".piship-probe-abc123",
+      ".piship-probe-notes",
+    ]);
   });
 });

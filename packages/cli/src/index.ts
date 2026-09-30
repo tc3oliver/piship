@@ -33,6 +33,7 @@ import {
   verifyPayload,
   verifyRelease,
   writePrivateKey,
+  type AbandonedStaging,
   type DistributionLock,
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
@@ -78,10 +79,11 @@ const lifecycleCommands: Record<
   }
 > = {
   release: {
-    usage: "release <manifest> [--out <dir>] [--channel <name>]",
+    usage:
+      "release <manifest> [--out <dir>] [--channel <name>] [--reclaim-staging]",
     positional: [1, 1],
     values: ["--out", "--channel"],
-    flags: [],
+    flags: ["--reclaim-staging"],
   },
   "verify-release": {
     usage: "verify-release <archive|release-dir> [--sha256 <hex>] [--json]",
@@ -185,6 +187,7 @@ async function lockFor(target: string): Promise<DistributionLock> {
   return verifyPayload(readInstallReceipt(target).payload);
 }
 const allowedOptions: Record<string, readonly string[]> = {
+  build: ["--reclaim-staging"],
   purge: ["--yes"],
   install: ["--use-existing-state"],
   init: ["--managed"],
@@ -195,6 +198,17 @@ const allowedOptions: Record<string, readonly string[]> = {
 export interface CliOutput {
   readonly stdout: (message: string) => void;
   readonly stderr: (message: string) => void;
+}
+/**
+ * What a build or release says about the staging directories of killed runs
+ * in its output directory. They are removed only on request: the output
+ * directory is usually inside a project that sandboxed commands can write.
+ */
+function stagingNotice(found: AbandonedStaging): string {
+  const what = `${found.count} abandoned staging ${found.count === 1 ? "directory" : "directories"} of killed runs in ${found.directory}`;
+  return found.attempted
+    ? `${what} could not be removed; check its permissions.`
+    : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; run again with --reclaim-staging to remove them.`;
 }
 function launcher(artifact: string, command: string): string {
   return join(
@@ -354,7 +368,12 @@ export async function runCli(
     } else if (command === "lock")
       output.stdout(`Wrote ${lockManifest(target)}`);
     else if (command === "build")
-      output.stdout(`Built ${buildDistribution(target)}`);
+      output.stdout(
+        `Built ${buildDistribution(target, undefined, {
+          reclaimStaging: rest[0] === "--reclaim-staging",
+          abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+        })}`,
+      );
     else if (command === "install") {
       const receipt = await installDistribution(
         target,
@@ -418,6 +437,7 @@ export async function runCli(
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,
+        abandonedStaging: (found) => output.stderr(stagingNotice(found)),
       });
       const lock = requireCurrentLock(target);
       // `dev --smoke` runs the same isolated launch headlessly, for scripts.
@@ -477,6 +497,8 @@ async function runLifecycle(
     const built = await buildRelease(first, {
       ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
       ...(options["--channel"] ? { channel: options["--channel"] } : {}),
+      reclaimStaging: flags.has("--reclaim-staging"),
+      abandonedStaging: (found) => output.stderr(stagingNotice(found)),
     });
     output.stdout(
       `Built release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,

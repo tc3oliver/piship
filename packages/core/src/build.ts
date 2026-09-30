@@ -19,27 +19,33 @@ import {
 } from "./payload.js";
 import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
-import { reclaimBuildTemporaries } from "./temporary-directories.js";
+import {
+  sweepOutputStaging,
+  type OutputStagingOptions,
+} from "./temporary-directories.js";
 
 /**
  * Assemble the portable payload from a current lock. By default the release
  * `source` and `install-script` gates run first (piship/v1alpha4 locks), so a
  * distributable build never installs an unapproved source or an unreviewed
  * npm lifecycle script; `dev` and `test` pass `supplyChainGates: false` to
- * stay lenient while iterating.
+ * stay lenient while iterating. The staging of builds that were killed is
+ * not removed from `outputRoot` unless `reclaimStaging` says it may be (see
+ * `sweepOutputStaging`).
  */
 export function buildDistribution(
   manifestPath: string,
   outputRoot = resolve("dist"),
-  options: { readonly supplyChainGates?: boolean } = {},
+  options: {
+    readonly supplyChainGates?: boolean;
+  } & OutputStagingOptions = {},
 ): string {
   const lock = requireCurrentLock(manifestPath);
   if (options.supplyChainGates !== false) checkPackageSources(lock, "Build");
   const output = join(outputRoot, lock.app.id);
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });
-  // Staging that a killed build left behind.
-  reclaimBuildTemporaries(outputRoot, "build");
+  sweepOutputStaging(outputRoot, "build", options);
   // The payload is assembled in `payload`, beside the staging directory's
   // ownership marker, so the marker never becomes part of the payload (its
   // inventory lists every file).
