@@ -22,6 +22,8 @@ A `ModelDefinition` has an ID, name, provider, capabilities (input, reasoning, t
 | `openai-compatible` | An explicit gateway or local server at `inference.baseUrl`, using `openai-completions` or `openai-responses`. Required in managed mode |
 | `pi-native` | Pi's own provider catalog and auth in isolated state. Personal only; `models.allowed` entries (`provider/model`) narrow it |
 
+These are the only two providers. A manifest can load identity, credential, sandbox, and policy adapters but has no field that loads an `InferenceProvider` adapter, so a gateway that is not OpenAI-compatible is not supported; the [status page](status.md#capability-matrix) lists it as not claimed.
+
 For `openai-compatible`, the Pi runtime gets one provider named after the app ID, so a model appears as `<app id>/<model id>`. Request authentication is resolved per request: PiShip refreshes the credential before expiry and passes the secret only to Pi's request path.
 
 ## Model catalog

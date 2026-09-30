@@ -1,6 +1,6 @@
 # Enterprise integration contract
 
-This page is for the infrastructure or platform team that connects a managed PiShip distribution to company services. It lists the endpoints you provide and exactly how PiShip calls them. It describes current `main`; the managed surface is a **candidate** verified only with the deterministic [local fixtures](../examples/demo-company/fixtures/local-services.mjs), and no live identity provider, broker, or gateway integration has been recorded ([status](status.md)).
+This page is for the infrastructure or platform team that connects a managed PiShip distribution to company services. It lists the endpoints you provide and exactly how PiShip calls them. It describes current `main`; the managed surface is a **candidate**. It is verified with the deterministic [local fixtures](../examples/demo-company/fixtures/local-services.mjs) and, on Ubuntu, against the [enterprise reference stack](../examples/enterprise-reference/README.md): a real Keycloak, a reference credential broker, and LiteLLM in front of a mock model, run by the nightly and manual Reference E2E. The reference stack stands in for a company's services and is not one: no production identity provider, broker, or gateway integration has been recorded ([status](status.md)).
 
 ## At a glance
 
@@ -440,7 +440,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | `logout` | Revoked at IdP (if advertised) | Revoked at broker (if configured) | Deleted |
 | `update`, `rollback` | Kept if the target release can read them; otherwise cleared without IdP revocation | Kept if readable; otherwise revoked best effort, then cleared | Cleared only when unreadable |
 | `uninstall` | Kept | Kept, not revoked | Kept |
-| `purge` | Not revoked | Not revoked | State directory deleted; secret-store entries its metadata references are deleted best effort (failures are warnings). Run `logout` first to revoke |
+| `purge` | Not revoked | Not revoked | State directory deleted; secret-store entries its metadata references are deleted first, each deletion confirmed, and a secret that cannot be deleted fails the purge with `SECRET_STORE_UNAVAILABLE` before any state is removed, so it can be run again. Run `logout` first to revoke |
 
 ## Responsibility boundary
 
@@ -457,7 +457,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 
 ## Connecting a LiteLLM gateway
 
-[LiteLLM](https://docs.litellm.ai/) proxy serves an OpenAI-compatible API, so it can be the gateway. The files in [`examples/enterprise-litellm`](../examples/enterprise-litellm/README.md) are a starting point; they are not tested against a live LiteLLM.
+[LiteLLM](https://docs.litellm.ai/) proxy serves an OpenAI-compatible API, so it can be the gateway. The files in [`examples/enterprise-litellm`](../examples/enterprise-litellm/README.md) are a starting point. The [enterprise reference stack](../examples/enterprise-reference/README.md) runs LiteLLM v1.103.0 with that proxy config unchanged and tests the broker flow, the key budgets, and the gateway's error answers against it; that is a reference, not a production gateway.
 
 - **Gateway fit.** Set `inference.baseUrl` to the proxy with `/v1` (for example `https://llm.corp.example/v1`) and `api: openai-completions`. LiteLLM's `GET /v1/models` returns `{"data": [{"id": ...}]}`, which is all PiShip reads. The IDs are the LiteLLM `model_name` values, and they must match `models.allowed`.
 - **Extra metadata is needed.** LiteLLM's model list does not supply the capability fields PiShip uses; declare them in `models.catalog`.
@@ -470,4 +470,4 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 
 ## Reference implementation
 
-[`examples/demo-company/fixtures/local-services.mjs`](../examples/demo-company/fixtures/local-services.mjs) implements this whole contract on loopback: discovery, PKCE, JWKS, token and revocation endpoints; `POST /broker/v1/llm-credential` and `/broker/v1/revoke`; and `GET /gateway/v1/models` and streaming `POST /gateway/v1/chat/completions`. Use it to see exact request and response shapes. It auto-approves every sign-in and is test infrastructure, not evidence of a live integration. The [demo company example](../examples/demo-company/README.md#authorized-live-path) shows the variables to set for a real deployment.
+[`examples/demo-company/fixtures/local-services.mjs`](../examples/demo-company/fixtures/local-services.mjs) implements this whole contract on loopback: discovery, PKCE, JWKS, token and revocation endpoints; `POST /broker/v1/llm-credential` and `/broker/v1/revoke`; and `GET /gateway/v1/models` and streaming `POST /gateway/v1/chat/completions`. Use it to see exact request and response shapes. It auto-approves every sign-in and is test infrastructure, not evidence of a live integration. For the same contract against real components, the [enterprise reference stack](../examples/enterprise-reference/README.md) runs Keycloak, a [reference broker](../examples/enterprise-reference/broker/README.md) (which shows what a production broker still needs, such as idempotency records that survive a restart), and LiteLLM in Docker Compose. The [demo company example](../examples/demo-company/README.md#authorized-live-path) shows the variables to set for a real deployment.

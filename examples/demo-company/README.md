@@ -2,7 +2,7 @@
 
 AcmeCode is a fictional managed distribution on `piship/v1alpha4`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. On top of that access layer it declares governance: a company policy, trust-classed resources, a governed MCP server, a Plan/Build workflow, a required OS sandbox, and audit. It also declares signed release channels and a release policy. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
 
-The managed surface, governance, and the release lifecycle are **candidates**: all are verified with the deterministic local fixtures below, not with a live identity provider or gateway. See [status](../../docs/status.md) for the current evidence and [compatibility](../../docs/compatibility.md) for the Pi contract.
+The managed surface, governance, and the release lifecycle are **candidates**: all are verified with the deterministic local fixtures below, not with a live identity provider or gateway. The [enterprise reference stack](../enterprise-reference/README.md) runs a distribution that follows this one section by section against a real Keycloak, a reference broker, and LiteLLM. See [status](../../docs/status.md) for the current evidence and [compatibility](../../docs/compatibility.md) for the Pi contract.
 
 ## What the demo shows
 
@@ -58,14 +58,14 @@ node dist/acmecode/piship.mjs uninstall acmecode
 
 What to look for:
 
-- `doctor` adds Policy, Project, Resources, Capabilities, Sandbox, and MCP and audit sections. On Linux with bubblewrap, the sandbox line reads `enforced (linux-bubblewrap: filesystem-read-deny, filesystem-write-allowlist, network-deny, environment-filter)`, proven by a live probe, and `mcp docs` is `healthy (stdio; 2 tool(s))`. The certified skill shows `integrity verified`.
+- `doctor` adds the Resources, Policy, Project, Capabilities, Sandbox, Workspace, MCP, and Audit groups ([doctor report](../../docs/manifest.md#doctor-report)). On Linux with bubblewrap, the sandbox line reads `enforced (linux-bubblewrap: filesystem-read-deny, filesystem-write-allowlist, network-deny, environment-filter)`, proven by a live probe, and `mcp docs` is `healthy (stdio; 2 tool(s))`. The certified skill shows `integrity verified`.
 - `capabilities` shows `permissions` and `workflow` effective through their builtin providers; `checkpoint`, `subagents`, `code-intel`, and `acp` are not supported in this release.
 - `policy explain mcp.tool.call docs:delete_document` prints `DENIED` by the enforced rule `acme.docs.destructive`, with the default `acme.docs.read` allow listed as another matching rule. `filesystem.read ~/.ssh/id_ed25519` is denied by `acme.secrets.read` with enforcement `sandbox` when the sandbox is enforced. `shell.execute "git status"` needs approval under `acme.shell`.
 - In the interactive TUI (`~/.local/bin/acmecode`), the session starts in Plan mode. Ask for a plan that searches the handbook; writes and commands are refused until you type `/build`. In Build mode, writes and commands ask for approval, and approved `!` commands run inside the sandbox: `!cat ~/.ssh/config` finds nothing to read and `!curl https://example.org` has no network.
 
 To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. This is a managed distribution, so both files are narrowing only: a user or project rule can tighten a default such as `acme.shell` from `ask` to `deny`, their `allow` rules are ignored and reported, and neither can relax the enforced rules. `policy explain` shows which layer decided.
 
-Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, and deletes the secret-store entries it references (best effort, without revoking) after uninstall.
+Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall, and deletes the secret-store entries it references first (each deletion confirmed, nothing revoked: a secret that cannot be deleted fails the purge before any state is removed). `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` does the uninstall and the purge in one command.
 
 ## Release, update, and rollback
 

@@ -260,13 +260,16 @@ node ./dist/my-agent/piship.mjs inspect my-agent
 node ./dist/my-agent/piship.mjs doctor my-agent
 node ./dist/my-agent/piship.mjs uninstall my-agent
 node ./dist/my-agent/piship.mjs purge my-agent --yes
+node ./dist/my-agent/piship.mjs uninstall my-agent --purge --yes   # both in one command
 ```
+
+`uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)).
 
 v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
 
 `validate` also runs the resource, certified-integrity, and provider-integrity checks of `lock` without writing a lock. `dev` builds and starts the interactive branded command with the same resource and state isolation; `dev --smoke` runs it headlessly with `--smoke` and prints the JSON result. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
 
-v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint.
+v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint. Every distribution's branded command also accepts `--new-session`, which starts a new Pi session instead of continuing the project's most recent one: the way to go on after a damaged or over-64 MiB session is refused ([sessions](architecture.md#sessions)).
 
 v1alpha3 and v1alpha4 branded commands add:
 
@@ -307,7 +310,7 @@ A v1alpha4 manifest produces `piship-lock/v1alpha4`, which keeps every v1alpha3 
 | --- | --- |
 | `runtime.packages[].resolved` | The npm lock's source URL for each package, checked against `release.sources` by `piship release` |
 | `runtime.packages[].installScript` | `true` when npm reports lifecycle scripts for the package; `piship release` stops unless PiShip reviewed that package and version |
-| `runtime.stateSchemas` | The local state schemas this PiShip version reads (`state`, `identity`, `credential`, `preferences`, `metrics`, `audit`), used by the migration check |
+| `runtime.stateSchemas` | The local state schemas this PiShip version reads (`state`, `identity`, `credential`, `preferences`, `metrics`, `audit`, `sandboxCredential`, `credentialIssuance`), used by the migration check. A release that lists no key for a class reads none of it, so an update or rollback to it clears the credential classes among them |
 | `digests` | `sha256-<hex>` of the canonical JSON (sorted keys) of `resources` (kind, path, and hash of each locked resource), `policy`, `capabilities` (capabilities, providers, and certified evidence), `mcp`, `sandbox`, `audit`, and `access` |
 | `updates` | The parsed `updates` section, including the pinned public keys |
 | `release` | The `release` section with defaults applied |

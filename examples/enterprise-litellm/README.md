@@ -1,6 +1,6 @@
 # Enterprise LiteLLM example
 
-Starting files for connecting a managed PiShip distribution to a [LiteLLM](https://docs.litellm.ai/) proxy through a company credential broker. The contract they implement is the [enterprise integration contract](../../docs/enterprise-integration.md). They are not tested against a live LiteLLM, identity provider, or broker, and this is not a buildable example: it has no lock or resources.
+Starting files for connecting a managed PiShip distribution to a [LiteLLM](https://docs.litellm.ai/) proxy through a company credential broker. The contract they implement is the [enterprise integration contract](../../docs/enterprise-integration.md). This is not a buildable example: it has no lock or resources. `litellm-config.yaml` is run unchanged by the [enterprise reference stack](../enterprise-reference/README.md), which tests it against LiteLLM v1.103.0 with a real Keycloak and a reference broker; the managed `piship.yaml` here is not run against any service, and nothing in this directory has been tested against a production LiteLLM, identity provider, or broker.
 
 | File | Purpose |
 | --- | --- |
