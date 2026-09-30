@@ -74,8 +74,9 @@ export const CREDENTIAL_ISSUANCE_FILE = "pending-issuance.json";
 /**
  * How long a pending issuance key is reused: the idempotency retention the
  * broker contract requires at least. Past it, the broker may have forgotten
- * the key, so reusing it no longer recovers an issued credential; the next
- * acquire starts a new key instead.
+ * the key, so reusing it no longer recovers an issued credential, and a new
+ * key could issue a second one: the next acquire or renewal fails closed
+ * (`CREDENTIAL_ACQUIRE_FAILED`) until logout removes the record.
  */
 export const ISSUANCE_RETENTION_MS = 24 * 60 * 60 * 1000;
 /** A pending issuance dated further ahead of the clock than this fails closed like an expired one. */
