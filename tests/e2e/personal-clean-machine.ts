@@ -435,7 +435,7 @@ export function myPiLocalFlow(): void {
       /Inference\n {2}✓ provider\s+openai-compatible/,
     );
     expect(doctor.stdout).toMatch(
-      /Gateway\n {2}✓ endpoint\s+http:\/\/127\.0\.0\.1:\d+\n {2}✓ gateway\s+reachable \(1 listed\)/,
+      /Gateway\n {2}✓ endpoint\s+http:\/\/127\.0\.0\.1:\d+\n {2}✓ gateway\s+reachable \(1 listed; model providers not contacted\)/,
     );
     expect(doctor.stdout).toMatch(
       /Secret Store\n {2}! backend\s+restricted plaintext file/,
