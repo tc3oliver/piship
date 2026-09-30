@@ -35,8 +35,10 @@ import {
   buildSandboxDistribution,
   distribution,
   type NetworkTarget,
+  nodeImage,
   type SandboxService,
   type SandboxUser,
+  sandboxPort,
   startNetworkTarget,
   startSandboxService,
 } from "./support/sandbox.js";
@@ -65,6 +67,22 @@ const PRINCIPAL = {
 const sha256 = (path: string) =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Collect what `console` is given until the returned function is called; it is still shown. */
+function captureConsole(into: string[]): () => void {
+  const methods = ["log", "info", "warn", "error", "debug"] as const;
+  const originals = methods.map((method) => console[method]);
+  methods.forEach((method, index) => {
+    console[method] = (...args: unknown[]) => {
+      into.push(args.map(String).join(" "));
+      (originals[index] as (...values: unknown[]) => void).apply(console, args);
+    };
+  });
+  return () =>
+    methods.forEach((method, index) => {
+      console[method] = originals[index] as (typeof console)[typeof method];
+    });
+}
 
 /** The network policy the reference manifest resolves to for a loopback stack. */
 const policy = {
@@ -224,8 +242,11 @@ describe.skipIf(process.platform === "win32")(
 
     describe("the service", () => {
       it("answers only a request that carries a credential it issued", async () => {
+        // It says which service answered, so this run can tell its own from
+        // one another run left on the port.
         expect((await service.request("/health")).json()).toEqual({
           status: "ok",
+          instance: service.instance,
         });
         for (const init of [
           {},
@@ -387,25 +408,139 @@ describe.skipIf(process.platform === "win32")(
         expect(service.containers()).toEqual([...before]);
       });
 
-      it("keeps a command's environment off this machine's process list", async () => {
+      it("keeps a command's environment off this machine's process list and out of every file", async () => {
         const project = makeProject(service.root, "environment");
         const made = await create(service, "alice", project);
         const marker = `ENV-MARKER-${Math.random().toString(16).slice(2)}`;
-        const running = run(service, "alice", made.id, "sleep 2; echo $LIVE", {
+        const running = run(service, "alice", made.id, "sleep 5; echo $LIVE", {
           env: { LIVE: marker },
         });
-        await pause(800);
-        const processes = spawnSync("ps", ["-axo", "args"], {
-          encoding: "utf8",
-        }).stdout;
-        expect(processes).toMatch(/docker exec .*--env-file/);
+        // Look while the command's `docker exec` runs: poll until it is
+        // there (a loaded machine is slow to start it), for up to three seconds.
+        const exec = /docker exec .*--env-file \/dev\/stdin .*sleep 5/;
+        let processes = "";
+        for (const deadline = Date.now() + 3000; Date.now() < deadline; ) {
+          processes = spawnSync("ps", ["-axo", "args"], {
+            encoding: "utf8",
+          }).stdout;
+          if (exec.test(processes)) break;
+          await pause(100);
+        }
+        expect(processes).toMatch(exec);
         expect(processes).not.toContain(marker);
+        // The environment goes to the CLI on its standard input: no file of
+        // the service's holds it (its TMPDIR is private to it, and empty),
+        // while the command runs or after.
+        expect(readdirSync(service.scratch)).toEqual([]);
+        // And the command has it.
         expect((await running).out).toBe(`${marker}\n`);
+        expect(readdirSync(service.scratch)).toEqual([]);
         await service.request(`/v1/sandboxes/${made.id}`, {
           method: "DELETE",
           user: "alice",
         });
       });
+
+      it("mounts a project only for the key bound to the user who owns it", async () => {
+        // Commands run as the project's owner: a key that could name any
+        // project under the service's roots could mount another user's.
+        // bob's key is bound to another user than the one running the tests.
+        const project = makeProject(service.root, "bound");
+        const outside = await create(service, "bob", tmpdir());
+        const before = service.containers();
+        const refused = await create(service, "bob", project);
+        expect(refused.status).toBe(422);
+        expect(refused.text).toBe(outside.text);
+        expect(service.containers()).toEqual(before);
+        // Nothing was made in a project the key may not use.
+        expect(existsSync(join(project, ".git", "piship-workspace"))).toBe(
+          false,
+        );
+        const own = await create(service, "alice", project);
+        expect(own.status, own.text).toBe(201);
+        await service.request(`/v1/sandboxes/${own.id}`, {
+          method: "DELETE",
+          user: "alice",
+        });
+      });
+
+      it("does not let a command outlive its cancellation by dropping its ID", async () => {
+        const project = makeProject(service.root, "strays");
+        const made = await create(service, "alice", project);
+        const controller = new AbortController();
+        const response = await fetch(
+          `${service.url}/v1/sandboxes/${made.id}/exec`,
+          {
+            method: "POST",
+            signal: controller.signal,
+            headers: {
+              authorization: `Bearer ${service.key("alice")}`,
+              "content-type": "application/json",
+              connection: "close",
+            },
+            // The command's own ID is the variable the cancel looks for;
+            // these two start a process without it, and without any variable.
+            body: JSON.stringify({
+              command:
+                "echo started; (env -u PISHIP_EXEC_ID bash -c 'sleep 3; echo late > stray-one' &); (env -i /bin/bash -c 'sleep 3; echo late > stray-two' &); sleep 30",
+            }),
+          },
+        );
+        await response.body?.getReader().read();
+        controller.abort();
+        await pause(5500);
+        expect(existsSync(join(project, "stray-one"))).toBe(false);
+        expect(existsSync(join(project, "stray-two"))).toBe(false);
+        // The sandbox is still there, and runs the next command.
+        expect((await run(service, "alice", made.id, "echo alive")).out).toBe(
+          "alive\n",
+        );
+        await service.request(`/v1/sandboxes/${made.id}`, {
+          method: "DELETE",
+          user: "alice",
+        });
+      });
+
+      it("runs from images pinned by digest", () => {
+        // The sandbox image, and the one the network target listens in.
+        for (const image of [service.image, nodeImage()])
+          expect(image).toMatch(/@sha256:[0-9a-f]{64}$/);
+      });
+
+      it("does not mistake another service on its port for its own", async () => {
+        await expect(startSandboxService({ portWaitMs: 0 })).rejects.toThrow(
+          /in use by another process/,
+        );
+        // The running service is untouched, and still the one that answers.
+        const health = await service.request("/health");
+        expect((health.json() as { instance: string }).instance).toBe(
+          service.instance,
+        );
+      });
+
+      it("exits by itself, removing its sandboxes, when the process that started it is gone", async () => {
+        // A run that is killed leaves nothing but the closed pipe on the
+        // service's input. A second service, on the next port, shows what
+        // that alone does: it removes its sandboxes and exits, and its port
+        // is free for the next run.
+        const second = await startSandboxService({ port: sandboxPort() + 1 });
+        try {
+          const project = makeProject(second.root, "orphaned");
+          const made = await create(second, "alice", project);
+          expect(made.status, made.text).toBe(201);
+          expect(second.containers()).toHaveLength(1);
+          const outcome = await second.orphan();
+          expect(outcome.exited).toBe(true);
+          expect(outcome.leftover).toEqual([]);
+          await expect(
+            fetch(`${second.url}/health`, { headers: { connection: "close" } }),
+          ).rejects.toThrow();
+        } finally {
+          await second.stop();
+        }
+        // The first service was not touched.
+        expect(await service.sandboxes("alice")).toBe(0);
+      }, 120_000);
     });
 
     describe("the sandbox conformance kit", () => {
@@ -432,28 +567,45 @@ describe.skipIf(process.platform === "win32")(
           return managed(url, { ...init, headers });
         };
         const started = Date.now();
-        const report = await testSandboxAdapter(adapter, {
-          context: {
-            endpoint: service.url,
-            fetch: asUser,
-            distributionId: distribution.id,
-          },
-          workspace: project,
-          sandboxes: () => service.sandboxes("alice"),
-          networkTarget: { host: listener.host, port: listener.port },
-          callTimeoutMs: 60_000,
-        });
+        const shown: string[] = [];
+        const release = captureConsole(shown);
+        let report: ConformanceReport;
+        try {
+          report = await testSandboxAdapter(adapter, {
+            context: {
+              endpoint: service.url,
+              fetch: asUser,
+              distributionId: distribution.id,
+            },
+            workspace: project,
+            sandboxes: () => service.sandboxes("alice"),
+            networkTarget: { host: listener.host, port: listener.port },
+            callTimeoutMs: 60_000,
+          });
+        } finally {
+          release();
+        }
         listener.remove();
         target = undefined;
-        console.info(
-          `sandbox conformance kit against the reference container sandbox (${Math.round((Date.now() - started) / 1000)} s):\n${report.results
-            .map(
-              (result) =>
-                `${result.status.padEnd(7)} ${result.behavior}${result.reason ? `: ${result.reason}` : ""}`,
-            )
-            .join("\n")}`,
-        );
+        const summary = `sandbox conformance kit against the reference container sandbox (${Math.round((Date.now() - started) / 1000)} s):\n${report.results
+          .map(
+            (result) =>
+              `${result.status.padEnd(7)} ${result.behavior}${result.reason ? `: ${result.reason}` : ""}`,
+          )
+          .join("\n")}`;
+        console.info(summary);
+        shown.push(summary);
         writeKitReport(report);
+        // The kit's own leak evidence (a behavior of the report) covers only
+        // its fake credential, the one it hands the backend to watch. The
+        // user's real key never passes through the kit: it is swapped in on
+        // the wire, in `asUser` above. So the report, and everything the run
+        // printed, are searched for that key here.
+        expect(
+          leaks(`${JSON.stringify(report)}\n${shown.join("\n")}`, [
+            service.key("alice"),
+          ]),
+        ).toEqual([]);
         expect(
           Object.fromEntries(
             report.results.map((result) => [result.behavior, result.status]),

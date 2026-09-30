@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,14 @@ import { keepLogs } from "./logs.js";
 // the directory. The suite's global setup does the same for a run that was
 // killed outright. Nothing is ever pruned, and no container the test did not
 // start is touched.
+//
+// A killed run leaves no service behind either: the service is started with a
+// pipe as its standard input and `SANDBOX_EXIT_ON_STDIN_END=1`, so it stops,
+// removing its containers, when the pipe's other end (this process) is gone.
+// It answers `/health` with its instance name and a start does not count an
+// answer that names another instance, so a service some other run left on the
+// port is never taken for this one (the start waits for the port and then
+// fails, naming the port).
 
 export const sandboxDirectory = fileURLToPath(
   new URL("../../sandbox/", import.meta.url),
@@ -51,6 +60,10 @@ export const distribution = (() => {
 
 /** Beside the stack's own ports (18xxx, 28xxx, 38xxx, 58xxx). */
 const DEFAULT_PORT = 48075;
+
+/** The port of the service a file starts, and of a second one beside it. */
+export const sandboxPort = () =>
+  Number(process.env.SANDBOX_PORT ?? DEFAULT_PORT);
 
 export type SandboxUser = "alice" | "bob";
 
@@ -107,6 +120,8 @@ export interface SandboxService {
   readonly image: string;
   /** The only directory tree the service may mount. */
   readonly root: string;
+  /** The service's TMPDIR: nothing of a command's may ever be written here. */
+  readonly scratch: string;
   /** A user's API key. A secret: never print or assert on it. */
   key(user: SandboxUser): string;
   /** A request to the service; `user` or `key` names the credential, if any. */
@@ -126,6 +141,15 @@ export interface SandboxService {
   containers(): string[];
   /** Stop the service; resolves with the containers it left behind. */
   stop(): Promise<{ readonly leftover: readonly string[] }>;
+  /**
+   * What the operating system does when this process is killed: close the
+   * service's standard input, and nothing else (no signal). Resolves with
+   * whether the service then exited by itself, and the containers it left.
+   */
+  orphan(): Promise<{
+    readonly exited: boolean;
+    readonly leftover: readonly string[];
+  }>;
 }
 
 const label = (instance: string) => `piship.sandbox.instance=${instance}`;
@@ -141,20 +165,58 @@ export function containersOf(instance: string): string[] {
   return listed.stdout.split("\n").filter(Boolean);
 }
 
+/** Whether nothing is listening on the loopback port (it can be bound now). */
+function portFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
+  });
+}
+
+export interface StartOptions {
+  /**
+   * How long to wait for the port to be free. A service a killed run left is
+   * stopping itself (it exits when its supervisor's pipe closes) and takes a
+   * moment to let go; another run's service keeps it, and the start then
+   * fails, saying so. Default 20 s.
+   */
+  readonly portWaitMs?: number;
+  /** A port of its own (a second service in one file); default SANDBOX_PORT. */
+  readonly port?: number;
+}
+
 /**
  * Issue the two users' keys with the administrator's script, start the
- * service on a loopback port, and return once it answers.
+ * service on a loopback port, and return once it answers as itself.
+ *
+ * alice's key is bound to the user running the tests, whose projects the tests
+ * make, and bob's to another user, so bob cannot mount alice's projects.
  */
-export async function startSandboxService(): Promise<SandboxService> {
+export async function startSandboxService(
+  options: StartOptions = {},
+): Promise<SandboxService> {
   const instance = `${PROJECT_PREFIX}${process.pid}-sandbox-${Math.random().toString(16).slice(2, 8)}`;
+  const port = options.port ?? sandboxPort();
+  // The port before anything else is made, so a refusal leaves nothing behind.
+  const waited = Date.now() + (options.portWaitMs ?? 20_000);
+  while (!(await portFree(port))) {
+    if (Date.now() > waited)
+      throw new Error(
+        `127.0.0.1:${port} is in use by another process, perhaps another run of these tests (set SANDBOX_PORT to use another port)`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   const temp = realpathSync(mkdtempSync(join(tmpdir(), `${instance}-`)));
   const root = join(temp, "workspaces");
   const keys = join(temp, "keys");
+  const scratch = join(temp, "tmp");
   mkdirSync(root, { mode: 0o700 });
-  const port = Number(process.env.SANDBOX_PORT ?? DEFAULT_PORT);
+  mkdirSync(scratch, { mode: 0o700 });
   const image = SANDBOX_IMAGE;
   ensureImage(image);
   const secrets = new Map<SandboxUser, string>();
+  const hostUser = process.getuid?.() ?? 1000;
   for (const user of ["alice", "bob"] as const) {
     const issued = spawnSync(
       process.execPath,
@@ -164,6 +226,8 @@ export async function startSandboxService(): Promise<SandboxService> {
         user,
         "--dir",
         keys,
+        "--uid",
+        String(user === "alice" ? hostUser : hostUser + 1),
       ],
       { encoding: "utf8" },
     );
@@ -192,17 +256,23 @@ export async function startSandboxService(): Promise<SandboxService> {
     ),
   );
   Object.assign(environment, {
+    // Where the service would write a file, if it ever did.
+    TMPDIR: scratch,
     SANDBOX_LISTEN_PORT: String(port),
     SANDBOX_INSTANCE: instance,
     SANDBOX_REGISTRY: join(keys, "registry.json"),
     SANDBOX_WORKSPACE_ROOTS: root,
     SANDBOX_IMAGE: image,
     SANDBOX_SHELL: "/bin/bash",
+    // The test owns the service: its standard input is a pipe that closes
+    // when this process is gone, even killed, and the service then removes
+    // its containers and exits, instead of keeping its port for the next run.
+    SANDBOX_EXIT_ON_STDIN_END: "1",
   });
   const child: ChildProcess = spawn(
     process.execPath,
     [join(sandboxDirectory, "service", "server.mjs")],
-    { env: environment, stdio: ["ignore", "ignore", "pipe"] },
+    { env: environment, stdio: ["pipe", "ignore", "pipe"] },
   );
   let logs = "";
   child.stderr?.on("data", (chunk) => {
@@ -269,7 +339,13 @@ export async function startSandboxService(): Promise<SandboxService> {
       );
     }
     try {
-      if ((await fetch(`${url}/health`)).ok) break;
+      // The instance name says whose answer it is: a service another run left
+      // on the port answers too, with keys this run does not know.
+      const health = await fetch(`${url}/health`, {
+        headers: { connection: "close" },
+      });
+      const answered = (await health.json()) as { instance?: unknown };
+      if (health.ok && answered.instance === instance) break;
     } catch {
       // not listening yet
     }
@@ -318,6 +394,7 @@ export async function startSandboxService(): Promise<SandboxService> {
     port,
     image,
     root,
+    scratch,
     key,
     request,
     async sandboxes(user = "alice") {
@@ -326,6 +403,19 @@ export async function startSandboxService(): Promise<SandboxService> {
     },
     containers: () => containersOf(instance),
     stop,
+    async orphan() {
+      const ended = new Promise<boolean>((resolve) => {
+        if (exited !== undefined) return resolve(true);
+        const timer = setTimeout(() => resolve(false), 30_000);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      child.stdin?.end();
+      const exitedByItself = await ended;
+      return { exited: exitedByItself, leftover: containersOf(instance) };
+    },
   };
 }
 
