@@ -380,6 +380,67 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       }
     });
 
+    it("keeps the user's own git config read-only where the sandbox may write the home directory", async () => {
+      // A distribution that lets commands write `~`: the global config git
+      // reads there must not take a hooks path from a sandboxed command.
+      const globalConfig = join(home, ".gitconfig");
+      const original = "[user]\n\tname = someone\n";
+      writeFileSync(globalConfig, original);
+      const writableHome: SandboxPolicy = {
+        ...config,
+        filesystem: {
+          ...config.filesystem,
+          write: { allow: ["workspace", "tmp", "~"] },
+        },
+      };
+      const context = (files: string[]) => ({
+        workspace: ws,
+        homeDir: home,
+        env: { ...process.env, HOME: home },
+        protectedPaths: { files, directories: [join(ws, ".git", "hooks")] },
+      });
+      const box = await activateSandbox(
+        writableHome,
+        context([join(ws, ".git", "config"), globalConfig]),
+      );
+      try {
+        const attempt = async (command: string) =>
+          (await box.exec(command, ws, { onData: () => {} })).exitCode;
+        expect(
+          await attempt(
+            `printf '[core]\\n\\thooksPath = /tmp/x\\n' >> "${globalConfig}"`,
+          ),
+        ).not.toBe(0);
+        expect(await attempt(`rm -f "${globalConfig}"`)).not.toBe(0);
+        expect(
+          await attempt(`mv "${globalConfig}" "${globalConfig}.old"`),
+        ).not.toBe(0);
+        expect(readFileSync(globalConfig, "utf8")).toBe(original);
+        expect(existsSync(`${globalConfig}.old`)).toBe(false);
+        // The rest of the home directory stays writable.
+        expect(await attempt(`echo ok > "${join(home, "notes")}"`)).toBe(0);
+        expect(box.report.planes).toContain("git-control-protection");
+        expect(box.report.workspace).toMatchObject({
+          gitControlProtection: "verified",
+        });
+      } finally {
+        await box.dispose();
+      }
+      // A global config nobody has created yet cannot be guarded on Linux, so
+      // git control is not verified for it, wherever the sandbox may write.
+      const missing = await activateSandbox(
+        writableHome,
+        context([join(home, ".config", "git", "config")]),
+      );
+      try {
+        expect(missing.report.workspace).toMatchObject({
+          gitControlProtection: "not-verified",
+        });
+      } finally {
+        await missing.dispose();
+      }
+    });
+
     it.runIf(process.platform === "darwin")(
       "cannot start processes outside the sandbox through launchd, open, or osascript",
       async (ctx) => {

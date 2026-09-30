@@ -49,7 +49,7 @@ import {
   describeWorkspace,
   gitControlUnproven,
   hooksInWorkingTree,
-  missingControlFileInWorkingTree,
+  missingControlFileInWritablePath,
   removeSentinelDirectory,
   WORKSPACE_VALIDITY_MS,
   type WorkspaceReport,
@@ -1475,7 +1475,7 @@ describe("hooksInWorkingTree", () => {
   });
 });
 
-describe("missingControlFileInWorkingTree", () => {
+describe("missingControlFileInWritablePath", () => {
   const paths = (...files: string[]): ProtectedPaths => ({
     files,
     directories: [],
@@ -1483,7 +1483,7 @@ describe("missingControlFileInWorkingTree", () => {
   it("is true only for a protected file that does not exist, in the working tree", () => {
     writeFileSync(join(workspace, ".gitconfig"), "[core]\n");
     const missing = (...files: string[]) =>
-      missingControlFileInWorkingTree(workspace, paths(...files));
+      missingControlFileInWritablePath(workspace, paths(...files));
     // An include the sandbox could create, and one that is there already.
     expect(missing(join(workspace, ".gitconfig.local"))).toBe(true);
     expect(missing(join(workspace, ".gitconfig"))).toBe(false);
@@ -1497,6 +1497,28 @@ describe("missingControlFileInWorkingTree", () => {
     );
     expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
     expect(missing()).toBe(false);
+  });
+
+  it("also counts a missing file in another path the sandbox may write, such as the home directory", () => {
+    const home = join(root, "home");
+    mkdirSync(home);
+    writeFileSync(join(home, ".gitconfig"), "[user]\n");
+    const missing = (...files: string[]) =>
+      missingControlFileInWritablePath(workspace, paths(...files), [home]);
+    // A global config nobody has created, which the sandbox could create.
+    expect(missing(join(home, ".config", "git", "config"))).toBe(true);
+    expect(missing(join(home, ".gitconfig"))).toBe(false);
+    // Outside every writable path it is read-only already, and the workspace's
+    // own .git is the guarded set's business.
+    expect(missing(join(root, "elsewhere", "cfg"))).toBe(false);
+    expect(missing(join(git, "commondir"))).toBe(false);
+    // Without the writable path the home directory is not the sandbox's.
+    expect(
+      missingControlFileInWritablePath(
+        workspace,
+        paths(join(home, ".config", "git", "config")),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -1525,6 +1547,13 @@ describe("gitControlUnproven", () => {
     const missing = paths({ files: [join(workspace, ".gitconfig.local")] });
     expect(gitControlUnproven(workspace, missing, "local")).toBe(true);
     expect(gitControlUnproven(workspace, missing, "remote")).toBe(false);
+    // The same for a global config that does not exist in a directory the
+    // sandbox may write: a remote check reaches only the workspace.
+    const home = join(root, "home");
+    const global = paths({ files: [join(home, ".gitconfig")] });
+    expect(gitControlUnproven(workspace, global, "local")).toBe(false);
+    expect(gitControlUnproven(workspace, global, "local", [home])).toBe(true);
+    expect(gitControlUnproven(workspace, global, "remote", [home])).toBe(false);
   });
 });
 

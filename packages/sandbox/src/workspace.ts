@@ -144,24 +144,27 @@ export function hooksInWorkingTree(
 }
 
 /**
- * Whether a protected file that does not exist yet lies in the working tree
- * instead of in the workspace's own `.git`: a config file the git config
- * includes and nobody has created. The live probe of a local backend covers
- * only files it makes itself, bubblewrap cannot guard a missing file (its
- * mount point would be an empty file left on the host), and git follows such
- * a file if it appears, so git control cannot be reported as protected. A
- * remote backend is not asked: its check tries to create the file.
+ * Whether a protected file that does not exist yet lies where the sandbox may
+ * write, instead of in the workspace's own `.git`: in the working tree, or in
+ * one of the `writable` paths beyond it (a config file the git config
+ * includes and nobody has created, or the global config in a writable home
+ * directory). The live probe of a local backend covers only files it makes
+ * itself, bubblewrap cannot guard a missing file (its mount point would be an
+ * empty file left on the host), and git follows such a file if it appears, so
+ * git control cannot be reported as protected. A remote backend is not asked:
+ * its check tries to create the file, and reaches only the workspace.
  */
-export function missingControlFileInWorkingTree(
+export function missingControlFileInWritablePath(
   workspace: string,
   protectedPaths: ProtectedPaths,
+  writable: readonly string[] = [],
 ): boolean {
   const dotGit = join(workspace, ".git");
+  const roots = [workspace, ...writable];
   return protectedPaths.files.some(
     (file) =>
-      file !== workspace &&
-      isWithin(file, workspace) &&
       !isWithin(file, dotGit) &&
+      roots.some((root) => file !== root && isWithin(file, root)) &&
       lstatOrUndefined(file) === undefined,
   );
 }
@@ -170,18 +173,20 @@ export function missingControlFileInWorkingTree(
  * Whether git control cannot be reported as protected whatever a probe finds:
  * the protected list is known to be incomplete (`unverified`, with its reason
  * a warning), a hooks directory lies in the working tree, or, for a local
- * backend, a config file git includes from the working tree does not exist.
+ * backend, a config file git includes does not exist in the working tree or
+ * in another path the sandbox may write (`writable`).
  */
 export function gitControlUnproven(
   workspace: string,
   protectedPaths: ProtectedPaths,
   backend: "local" | "remote",
+  writable: readonly string[] = [],
 ): boolean {
   return (
     protectedPaths.unverified !== undefined ||
     hooksInWorkingTree(workspace, protectedPaths) ||
     (backend === "local" &&
-      missingControlFileInWorkingTree(workspace, protectedPaths))
+      missingControlFileInWritablePath(workspace, protectedPaths, writable))
   );
 }
 

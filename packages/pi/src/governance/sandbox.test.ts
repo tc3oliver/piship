@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,10 +13,10 @@ import {
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
 import type { SandboxConfig } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GovernanceSession } from "../governance-session.js";
 import { gatePath } from "../governed-tools.js";
-import { policyContainment } from "./engine.js";
+import { gitProtection, policyContainment } from "./engine.js";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -401,4 +407,75 @@ describe("file-tool denial labels", () => {
       }
     },
   );
+});
+
+describe("the user's git config outside the project", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is protected from sandboxed commands but stays editable by the file tools", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "piship-git-home-")));
+    try {
+      const workspace = join(root, "ws");
+      const home = join(root, "home");
+      mkdirSync(join(workspace, ".git"), { recursive: true });
+      writeFileSync(join(workspace, ".git", "config"), "[core]\n");
+      mkdirSync(home);
+      const global = join(home, ".gitconfig");
+      writeFileSync(global, "[user]\n\tname = someone\n");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      for (const name of [
+        "XDG_CONFIG_HOME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_COUNT",
+      ])
+        vi.stubEnv(name, undefined);
+      const posix = (path: string) => path.split("\\").join("/");
+
+      // A sandbox that may write the home directory must not plant a hooks
+      // path in the file git reads there.
+      expect(gitProtection(workspace).files).toEqual(
+        expect.arrayContaining([
+          posix(global),
+          posix(join(workspace, ".git", "config")),
+        ]),
+      );
+
+      const events: { rule?: string }[] = [];
+      const gov = {
+        workflowMode: "build",
+        policyId: "acme@1",
+        metrics: { recordPolicyDenial: () => {} },
+        emit: (_event: string, fields: { rule?: string }) =>
+          events.push(fields),
+        engine: {
+          context: { workspaceRoot: workspace, homeDir: home, tmpDir: root },
+        },
+        options: { stateDir: join(root, "state") },
+        project: { root: workspace },
+        sandbox: { report: { level: "unavailable" } },
+        currentChannel: () => "interactive",
+        decide: async () => ({ outcome: "allow" }),
+      } as unknown as GovernanceSession;
+      // The edit tool still changes the user's own git configuration...
+      await expect(
+        gatePath(gov, "filesystem.write", global, "edit"),
+      ).resolves.toBe(global);
+      // ...and still refuses the project's.
+      await expect(
+        gatePath(
+          gov,
+          "filesystem.write",
+          join(workspace, ".git", "config"),
+          "edit",
+        ),
+      ).rejects.toThrow(/what git runs/);
+      expect(events.map((event) => event.rule)).toEqual([
+        "piship.project.git-config",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

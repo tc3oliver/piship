@@ -706,6 +706,47 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     expect(dirs(root)).toHaveLength(4);
   });
 
+  it("lists the config outside the project for sandboxed processes only, not for the file tools", () => {
+    const outside = dir("sandbox-scope");
+    write(
+      join(fakeHome, ".gitconfig"),
+      cfg(`[include]\n\tpath = ${posix(join(outside, "extra"))}`),
+    );
+    write(join(outside, "extra"), hooks("outside-hooks"));
+    write(join(outside, "system"), hooks("system-hooks"));
+    process.env.GIT_CONFIG_SYSTEM = join(outside, "system");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    setting(0, "include.path", posix(join(outside, "from-env")));
+    process.env.GIT_CONFIG_COUNT = "1";
+    const root = repo("sandbox-scope-repo");
+    // What the file tools refuse to write leaves the user's own git
+    // configuration editable.
+    const tools = files(root);
+    for (const path of [
+      at(fakeHome, ".gitconfig"),
+      at(fakeHome, ".config", "git", "config"),
+      at(outside, "extra"),
+      at(outside, "system"),
+      at(outside, "from-env"),
+    ])
+      expect(tools).not.toContain(path);
+    // A sandboxed command must not plant a hooks path there either, when the
+    // sandbox may write the directory that holds one.
+    const sandbox = projectGitControlFiles(root, { scope: "sandbox" });
+    expect(sandbox).toEqual(
+      expect.arrayContaining([
+        at(fakeHome, ".gitconfig"),
+        at(fakeHome, ".config", "git", "config"),
+        at(outside, "extra"),
+        at(outside, "system"),
+        at(outside, "from-env"),
+        ...tools,
+      ]),
+    );
+    // The default scope is the project's.
+    expect(projectGitControlFiles(root, { scope: "project" })).toEqual(tools);
+  });
+
   it("protects a GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM file only where it lies inside the project", () => {
     const root = repo("known-inside");
     const elsewhere = dir("known-outside");

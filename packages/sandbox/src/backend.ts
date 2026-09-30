@@ -39,8 +39,9 @@ export const HOST_FILESYSTEM_ISOLATION = "host-filesystem-isolation";
 export const WORKSPACE_CONFINEMENT = "workspace-confinement";
 
 /**
- * The paths in `profile.writeProtect` (the project's git control files and
- * the `hooks` and `info` trees) cannot be changed from inside the sandbox,
+ * The paths in `profile.writeProtect` (the project's git control files, the
+ * git config the user's machine adds to them, and the `hooks` and `info`
+ * trees) cannot be changed from inside the sandbox,
  * also not through a sync engine. Live-probed for local backends; checked
  * from outside for remote ones with a shared or synchronized workspace.
  */

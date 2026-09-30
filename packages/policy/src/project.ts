@@ -185,13 +185,24 @@ function gitConfigPath(gitDir: string): string {
  * `.git` entry itself (a `gitdir:` pointer when it is a file), the git
  * directory's `config`, `config.worktree`, and `commondir`, the shared
  * `config` a worktree points to, and the files those configs include
- * (`include.path`, `includeIf.*.path`), whether or not they exist yet. Also
- * the system, global, and environment config (see `knownConfigs`), and what
- * only they include, when they lie inside the project. Rewriting any of
- * them could change the origin remote a later launch reads or the commands
- * git runs. Paths are normalized (symlink-resolved, POSIX separators).
+ * (`include.path`, `includeIf.*.path`), whether or not they exist yet.
+ * Rewriting any of them could change the origin remote a later launch reads
+ * or the commands git runs. Paths are normalized (symlink-resolved, POSIX
+ * separators).
+ *
+ * The system, global, and environment config (see `knownConfigs`), and what
+ * only they include, are the user's or the machine's own. With the default
+ * `scope: "project"` they are listed only when they lie inside the project;
+ * this is the list PiShip's file tools refuse to write, and listing
+ * `~/.gitconfig` there would stop them editing the user's own git
+ * configuration. With `scope: "sandbox"` they are listed wherever they lie,
+ * for the paths a sandboxed process must not change: a sandbox that may
+ * write the home directory could otherwise plant a hooks path there.
  */
-export function projectGitControlFiles(root: string): string[] {
+export function projectGitControlFiles(
+  root: string,
+  options: { readonly scope?: "project" | "sandbox" } = {},
+): string[] {
   const dotGit = join(root, ".git");
   const files = [real(dotGit), real(join(dotGit, "config"))];
   const gitDir = gitDirectory(root);
@@ -205,11 +216,12 @@ export function projectGitControlFiles(root: string): string[] {
   }
   const scan = gitConfigScan(root, gitDir);
   files.push(...scan.repositoryIncludes);
-  // Those configs are the user's or the machine's, not the project's: only a
-  // file inside the project (the home directory holding a repository, an
-  // include into the working tree) is one the sandbox could write.
   const project = real(root);
-  files.push(...scan.otherFiles.filter((path) => isWithin(project, path)));
+  files.push(
+    ...(options.scope === "sandbox"
+      ? scan.otherFiles
+      : scan.otherFiles.filter((path) => isWithin(project, path))),
+  );
   return [...new Set(files)];
 }
 

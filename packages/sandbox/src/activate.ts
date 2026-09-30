@@ -1006,6 +1006,7 @@ export async function activateSandbox(
                     profile.workspace,
                     profile.writeProtect,
                     "local",
+                    profile.writeAllow,
                   ),
               )
             : initialWorkspaceReport(declaration),
