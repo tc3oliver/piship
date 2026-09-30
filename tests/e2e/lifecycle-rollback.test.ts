@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { lifecycleScenario, scan } from "../helpers/lifecycle.js";
+import {
+  lifecycleScenario,
+  scanDecoded as scan,
+} from "../helpers/lifecycle.js";
 
 // Lifecycle scenario: roll back while signed in. Sessions come back,
 // credentials are never restored: revoked ones cannot be used or renewed by

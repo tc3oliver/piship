@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSecretStore } from "@piship/credentials";
 import {
@@ -21,6 +21,7 @@ import {
 } from "./keycloak.js";
 import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
 import { type ReferenceUser, referenceDirectory, type Stack } from "./stack.js";
+import { type ChannelHost, serveChannel } from "./updates.js";
 
 // The AcmeCode reference distribution as a user has it: built from the
 // committed manifest, installed with the manager the build ships, and driven
@@ -88,6 +89,12 @@ export interface StoredSecrets {
 export interface Installed {
   readonly store: StoreMode;
   readonly temp: string;
+  /**
+   * The throwaway home directory the commands run with, which is their
+   * `HOME` except with the platform store on macOS, where the keychain needs
+   * the real one.
+   */
+  readonly home: string;
   /** `PISHIP_STATE_HOME`. */
   readonly state: string;
   /** The distribution's own state directory inside it. */
@@ -101,7 +108,11 @@ export interface Installed {
   /** The PiShip CLI (`piship <args>`) in this scenario's environment. */
   cli(...args: string[]): Result;
   /** Run the installed command. */
-  run(args: readonly string[], env?: NodeJS.ProcessEnv): Promise<Result>;
+  run(
+    args: readonly string[],
+    env?: NodeJS.ProcessEnv,
+    options?: RunOptions,
+  ): Promise<Result>;
   /** Run `login` and complete the sign-in on Keycloak as `user`. */
   login(user: ReferenceUser): Promise<Login>;
   /** Run `--smoke` and parse its JSON. */
@@ -110,11 +121,26 @@ export interface Installed {
   secrets(): Promise<StoredSecrets | undefined>;
   /** Everything the installed command printed so far. */
   output(): string;
+  /**
+   * Offer the signed 1.1.0 release on the update channel, so `update` finds
+   * it. Needs `updates: true`; the release itself was built at install time.
+   */
+  publishUpdate(): void;
+  /** Paths the update host was asked for, in order. Needs `updates: true`. */
+  updateRequests(): readonly string[];
   remove(): void;
+}
+
+export interface RunOptions {
+  /** The directory to run in; the sandbox's workspace is the launching one. */
+  readonly cwd?: string;
+  /** Kill the command after this long (default 100 s). */
+  readonly timeoutMs?: number;
 }
 
 export interface Smoke {
   readonly resumed: boolean;
+  readonly sessionId: string;
   readonly sessionDir: string;
   readonly access: {
     readonly identity: { readonly subject: string; readonly issuer: string };
@@ -138,6 +164,14 @@ export interface Smoke {
     readonly text: string;
     readonly stopReason: string;
     readonly toolResults: number;
+  };
+  readonly governance?: {
+    readonly workflowMode: string;
+    readonly sandbox: {
+      readonly level: string;
+      readonly adapter: string;
+      readonly network: string;
+    };
   };
 }
 
@@ -174,6 +208,10 @@ function baseEnvironment(): NodeJS.ProcessEnv {
 interface ManifestPatch {
   readonly store: StoreMode;
   readonly allowedModels?: readonly string[];
+  /** Shell commands allowed, in Build mode: what the sandbox step needs. */
+  readonly commands?: boolean;
+  /** The owner's release key, for a distribution that can update. */
+  readonly releaseKey?: { readonly id: string; readonly publicKey: string };
 }
 
 /** The committed manifest with the edits a scenario needs, each checked. */
@@ -205,14 +243,52 @@ function patchManifest(source: string, patch: ManifestPatch): string {
     if (pruned === next) throw new Error("models.catalog was not patched");
     text = pruned;
   }
+  if (patch.commands) {
+    const shell =
+      ' - id: acme.shell\n      action: shell.execute\n      resource: "**"\n      effect:';
+    const next = text
+      .replace("defaultMode: plan", "defaultMode: build")
+      .replace(`${shell} ask`, `${shell} allow`);
+    if (
+      !next.includes("defaultMode: build") ||
+      !next.includes(`${shell} allow`)
+    )
+      throw new Error("the command policy was not patched");
+    text = next;
+  }
+  if (patch.releaseKey) {
+    const next = text.replace(
+      "    keys: []",
+      `    keys:\n      - id: ${patch.releaseKey.id}\n        publicKey: ${patch.releaseKey.publicKey}`,
+    );
+    if (next === text) throw new Error("the release key was not pinned");
+    text = next;
+  }
   return text;
 }
+
+/** The ID of the release key a distribution that can update pins. */
+const KEY_ID = "acme-reference-e2e";
 
 export interface InstallOptions {
   /** A name for the temporary directory. */
   readonly name: string;
   /** Narrow `models.allowed`, for the entitlement-intersection scenario. */
   readonly allowedModels?: readonly string[];
+  /**
+   * Let the manifest run the agent's shell commands, in Build mode, inside
+   * the required sandbox. As committed it asks before each one, which a
+   * headless run resolves to a denial.
+   */
+  readonly commands?: boolean;
+  /**
+   * Make the distribution updatable: pin a release key, build a 1.1.0 release
+   * signed onto a channel, and serve that channel over loopback HTTP as
+   * `ACMECODE_UPDATE_SOURCE`, empty until `publishUpdate()`. The second
+   * release is built with `piship release`, so this takes about as long again
+   * as the install.
+   */
+  readonly updates?: boolean;
 }
 
 /**
@@ -252,12 +328,6 @@ async function assemble(
     });
   const manifest = join(directory, "piship.yaml");
   const committed = readFileSync(manifest, "utf8");
-  const patched = patchManifest(committed, {
-    store,
-    ...(options.allowedModels ? { allowedModels: options.allowedModels } : {}),
-  });
-  const edited = patched !== committed;
-  writeFileSync(manifest, patched);
 
   const state = join(temp, "state");
   const install = join(temp, "install");
@@ -296,29 +366,121 @@ async function assemble(
       );
     return result;
   };
-  if (edited) must(cli("lock", manifest), "piship lock");
-  must(cli("build", manifest), "piship build");
+
+  // An updatable distribution pins the owner's release key and offers its
+  // update on a channel of its own, served over loopback HTTP.
+  let releaseKey: { id: string; publicKey: string } | undefined;
+  let channel: ChannelHost | undefined;
+  const channelDirectory = join(temp, "channel");
+  const staged = join(temp, "channel-staged");
+  const keyFile = join(temp, "keys", "release.pem");
+  if (options.updates) {
+    mkdirSync(join(temp, "keys"));
+    mkdirSync(channelDirectory);
+    mkdirSync(staged);
+    const keygen = must(
+      cli("keygen", keyFile, "--id", KEY_ID),
+      "piship keygen",
+    );
+    const publicKey = /publicKey: (\S+)/.exec(keygen.stdout)?.[1];
+    if (!publicKey) throw new Error("keygen printed no public key");
+    releaseKey = { id: KEY_ID, publicKey };
+    channel = await serveChannel(channelDirectory);
+    env.ACMECODE_UPDATE_SOURCE = channel.url;
+  }
+
+  try {
+    const patched = patchManifest(committed, {
+      store,
+      ...(options.allowedModels
+        ? { allowedModels: options.allowedModels }
+        : {}),
+      ...(options.commands ? { commands: true } : {}),
+      ...(releaseKey ? { releaseKey } : {}),
+    });
+    writeFileSync(manifest, patched);
+    if (patched !== committed) must(cli("lock", manifest), "piship lock");
+    must(cli("build", manifest), "piship build");
+    if (releaseKey) stageUpdate(patched);
+  } catch (error) {
+    channel?.close();
+    throw error;
+  }
   const artifact = join(temp, "dist", "acmecode-reference");
   const installed = spawnSync(
     process.execPath,
     [join(artifact, "piship.mjs"), "install", artifact],
     { cwd: temp, env, encoding: "utf8" },
   );
-  if (installed.status !== 0)
+  if (installed.status !== 0) {
+    channel?.close();
     throw new Error(
       `install failed (exit ${installed.status}):\n${installed.stderr}`,
     );
+  }
   const command = join(binHome, "acmecode");
   const stateRoot = join(state, "acmecode-reference");
+
+  /**
+   * Build the 1.1.0 release from the manifest just installed and sign a
+   * channel that offers it, without putting it on the served channel yet.
+   */
+  function stageUpdate(installedManifest: string): void {
+    const next = join(temp, "next");
+    mkdirSync(next);
+    cpSync(join(directory, "resources"), join(next, "resources"), {
+      recursive: true,
+    });
+    const bumped = installedManifest.replace(
+      /^ {2}version: 1\.0\.0$/m,
+      "  version: 1.1.0",
+    );
+    if (bumped === installedManifest)
+      throw new Error("the version was not bumped");
+    const nextManifest = join(next, "piship.yaml");
+    writeFileSync(nextManifest, bumped);
+    must(cli("lock", nextManifest), "piship lock (1.1.0)");
+    must(
+      cli("release", nextManifest, "--out", join(next, "out")),
+      "piship release (1.1.0)",
+    );
+    const archive = join(
+      next,
+      "out",
+      "releases",
+      `acmecode-reference-1.1.0-${process.platform}-${process.arch}.tar.gz`,
+    );
+    if (!existsSync(archive))
+      throw new Error(`piship release built no ${basename(archive)}`);
+    const copy = join(staged, basename(archive));
+    cpSync(archive, copy);
+    must(
+      cli(
+        "sign-channel",
+        staged,
+        copy,
+        "--channel",
+        "stable",
+        "--key",
+        keyFile,
+        "--key-id",
+        KEY_ID,
+        "--sequence",
+        "1",
+      ),
+      "piship sign-channel",
+    );
+  }
 
   function run(
     args: readonly string[],
     extra: NodeJS.ProcessEnv = {},
     signIn?: (url: string) => Promise<void>,
+    options: RunOptions = {},
   ): Promise<Result & { authorizeUrl?: string }> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, [...args], {
-        cwd: temp,
+        cwd: options.cwd ?? temp,
         env: { ...env, ...extra },
       });
       let stdout = "";
@@ -328,7 +490,7 @@ async function assemble(
       const timer = setTimeout(() => {
         failure = new Error(`${args.join(" ")} did not finish in time`);
         child.kill("SIGKILL");
-      }, RUN_TIMEOUT_MS);
+      }, options.timeoutMs ?? RUN_TIMEOUT_MS);
       child.stdout.on("data", (chunk) => {
         stdout += chunk;
       });
@@ -367,6 +529,7 @@ async function assemble(
   return {
     store,
     temp,
+    home,
     state,
     stateRoot,
     install,
@@ -374,7 +537,7 @@ async function assemble(
     command,
     env,
     cli,
-    run: (args, extra) => run(args, extra),
+    run: (args, extra, options) => run(args, extra, undefined, options),
     async login(user) {
       const done = await run(["login"], {}, (url) =>
         signInAtKeycloak(url, user, stack.password(user)),
@@ -428,7 +591,17 @@ async function assemble(
       };
     },
     output: () => outputs.join("\n"),
+    publishUpdate() {
+      if (!channel) throw new Error("no update channel: install with updates");
+      for (const name of readdirSync(staged))
+        cpSync(join(staged, name), join(channelDirectory, name));
+    },
+    updateRequests() {
+      if (!channel) throw new Error("no update channel: install with updates");
+      return channel.requests;
+    },
     remove() {
+      channel?.close();
       rmSync(temp, { recursive: true, force: true });
     },
   };

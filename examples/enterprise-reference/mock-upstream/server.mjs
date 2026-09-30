@@ -7,7 +7,7 @@
 //   GET  /health                   liveness, no authentication
 //   GET  /v1/models                the upstream model IDs
 //   POST /v1/chat/completions      streaming (SSE) and non-streaming
-//   POST /__mock/faults            queue failures or cut streams for the next completions
+//   POST /__mock/faults            queue failures, cut streams or tool calls for the next completions
 //   DELETE /__mock/faults          clear queued failures
 //   GET  /__mock/requests          metadata of recent completion requests
 //
@@ -24,6 +24,15 @@
 // the same for the next `count` streamed requests. A request that is not
 // streamed is answered normally.
 //
+// `POST /__mock/faults` with `{"toolCall": {"name": "bash", "arguments":
+// {"command": "ls"}}}` queues a tool call: the next `count` streamed requests
+// are answered with that call (finish reason `tool_calls`) instead of text,
+// in the order queued, so a client that runs tools sends the result back as
+// its next request and gets the plain reply once the queue is empty. Queue
+// several calls to script several turns. No message reaches the mock from a
+// client that only sends its own prompt, so a queued call is the only way to
+// make it ask for a tool. A request that is not streamed is answered normally.
+//
 // A user message containing `[mock:delay=MS]` (0 to 10000) holds that
 // request for MS milliseconds before it is answered, so a test can keep a
 // gateway's concurrency slot occupied.
@@ -34,6 +43,9 @@
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.MOCK_UPSTREAM_LISTEN_PORT ?? 8080);
+// All interfaces inside the container, whose published port is loopback only;
+// a test that runs the server on the host sets 127.0.0.1.
+const HOST = process.env.MOCK_UPSTREAM_LISTEN_HOST ?? "0.0.0.0";
 const API_KEY = process.env.MOCK_UPSTREAM_API_KEY ?? "";
 const MODELS = (process.env.MOCK_UPSTREAM_MODELS ?? "gpt-4.1,gpt-4.1-mini")
   .split(",")
@@ -138,6 +150,16 @@ const CUT_DELAY_MS = 200;
 const isCut = (value) =>
   Number.isInteger(value) && value >= 1 && value <= MAX_CUT;
 
+const isToolCall = (value) =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof value.name === "string" &&
+  /^[A-Za-z0-9_.-]{1,64}$/.test(value.name) &&
+  (value.arguments === undefined ||
+    (typeof value.arguments === "object" &&
+      value.arguments !== null &&
+      !Array.isArray(value.arguments)));
+
 function requestedCut(messages) {
   for (const message of messages) {
     if (message?.role !== "user") continue;
@@ -172,7 +194,7 @@ function chunk(id, model, delta, finish = null) {
   };
 }
 
-function complete(response, payload, cut) {
+function complete(response, payload, cut, toolCall) {
   const model = String(payload.model ?? "");
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const id = `chatcmpl-mock-${++sequence}`;
@@ -206,10 +228,36 @@ function complete(response, payload, cut) {
     });
   }
 
-  const events = [chunk(id, model, { role: "assistant", content: "" })];
-  for (const [index, word] of reply.split(" ").entries())
-    events.push(chunk(id, model, { content: index ? ` ${word}` : word }));
-  events.push(chunk(id, model, {}, "stop"));
+  const events = toolCall
+    ? [
+        chunk(id, model, {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              index: 0,
+              id: `call_mock_${sequence}`,
+              type: "function",
+              function: { name: toolCall.name, arguments: "" },
+            },
+          ],
+        }),
+        chunk(id, model, {
+          tool_calls: [
+            {
+              index: 0,
+              function: { arguments: JSON.stringify(toolCall.arguments ?? {}) },
+            },
+          ],
+        }),
+        chunk(id, model, {}, "tool_calls"),
+      ]
+    : [chunk(id, model, { role: "assistant", content: "" })];
+  if (!toolCall) {
+    for (const [index, word] of reply.split(" ").entries())
+      events.push(chunk(id, model, { content: index ? ` ${word}` : word }));
+    events.push(chunk(id, model, {}, "stop"));
+  }
   if (payload.stream_options?.include_usage === true)
     events.push({ ...chunk(id, model, {}), choices: [], usage });
 
@@ -238,18 +286,36 @@ async function handle(request, response) {
     return send(response, 200, { status: "ok" });
 
   if (path === "/__mock/faults" && request.method === "POST") {
-    const { status, cut, count = 1, retryAfter } = await readJson(request);
+    const {
+      status,
+      cut,
+      toolCall,
+      count = 1,
+      retryAfter,
+    } = await readJson(request);
+    const given = [status, cut, toolCall].filter(
+      (value) => value !== undefined,
+    );
     const valid =
-      cut === undefined
-        ? isFailureStatus(status)
-        : status === undefined && isCut(cut);
+      given.length === 1 &&
+      (toolCall !== undefined
+        ? isToolCall(toolCall)
+        : cut !== undefined
+          ? isCut(cut)
+          : isFailureStatus(status));
     if (!valid || !Number.isInteger(count) || count < 1)
       return send(response, 400, {
         error:
-          "give status (401, 403, 429 or 5xx) or cut (1 to 50); count a positive integer",
+          "give one of status (401, 403, 429 or 5xx), cut (1 to 50) or toolCall ({name, arguments}); count a positive integer",
       });
     for (let index = 0; index < count; index += 1)
-      faults.push(cut === undefined ? { status, retryAfter } : { cut });
+      faults.push(
+        toolCall !== undefined
+          ? { toolCall }
+          : cut === undefined
+            ? { status, retryAfter }
+            : { cut },
+      );
     return send(response, 200, { queued: faults.length });
   }
   if (path === "/__mock/faults" && request.method === "DELETE") {
@@ -279,26 +345,30 @@ async function handle(request, response) {
     const payload = await readJson(request);
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
     const stream = payload.stream === true;
-    // A queued cut waits for a streamed request; a queued failure takes any.
+    // A queued cut or tool call waits for a streamed request; a queued
+    // failure takes any.
     const queued = faults.findIndex(
-      (fault) => fault.cut === undefined || stream,
+      (fault) =>
+        (fault.cut === undefined && fault.toolCall === undefined) || stream,
     );
     const fault = queued === -1 ? undefined : faults.splice(queued, 1)[0];
     const status = fault?.status ?? requestedFailure(messages);
     const cut = stream
       ? (fault?.cut ?? (status ? undefined : requestedCut(messages)))
       : undefined;
+    const toolCall = stream && !status ? fault?.toolCall : undefined;
     record({
       time: new Date().toISOString(),
       model: payload.model ?? null,
       stream,
       status: status ?? 200,
       ...(cut === undefined ? {} : { cut }),
+      ...(toolCall === undefined ? {} : { toolCall: toolCall.name }),
     });
     const delay = requestedDelay(messages);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     if (status) return sendError(response, status, fault?.retryAfter);
-    return complete(response, payload, cut);
+    return complete(response, payload, cut, toolCall);
   }
 
   return sendError(response, 404);
@@ -314,6 +384,6 @@ createServer((request, response) => {
     if (!response.headersSent) sendError(response, 400);
     else response.destroy();
   });
-}).listen(PORT, "0.0.0.0", () => {
+}).listen(PORT, HOST, () => {
   process.stdout.write(`mock upstream listening on ${PORT}\n`);
 });

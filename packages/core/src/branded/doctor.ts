@@ -1,7 +1,7 @@
 // The doctor groups that need no Pi runtime or governed session.
 import { LocalMetrics } from "@piship/audit";
 import { resolveTemplate } from "@piship/schema";
-import { lifecycleStatus } from "../index.js";
+import { abandonedTemporaryCount, lifecycleStatus } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
 import { installedHere } from "./lifecycle.js";
 
@@ -55,6 +55,14 @@ function updateDoctor(
   warn: DoctorLine,
 ): void {
   const { metadata } = ctx;
+  // The launch removed every abandoned temporary directory it could, so any
+  // that remain resisted removal. Only a count: the paths are not reported.
+  const abandoned = abandonedTemporaryCount(metadata.app.id);
+  if (abandoned > 0)
+    warn(
+      "temporaries",
+      `${abandoned} abandoned PiShip temporary director${abandoned === 1 ? "y" : "ies"} could not be removed; check the permissions of the OS temp directory and the install home`,
+    );
   const here = installedHere(ctx);
   if (!here) {
     warn("installation", "not installed; running from a build directory");

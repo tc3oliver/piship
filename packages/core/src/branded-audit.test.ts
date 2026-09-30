@@ -12,7 +12,7 @@ import type { AuditConfig } from "@piship/audit";
 import type { AuditEvent } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
 import type { AccessManifest, Manifest } from "@piship/schema";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { type AccessEvent, DistributionAccess } from "./access/index.js";
@@ -76,8 +76,13 @@ beforeEach(async () => {
   temp = mkdtempSync(join(tmpdir(), "piship-branded-audit-"));
   services = await startLocalServices();
   collector = await startCollector();
+  // update and rollback resolve the runtime variables from the process
+  // environment, as a launch does: the collector's host is the gateway's.
+  for (const [name, value] of Object.entries(services.env()))
+    vi.stubEnv(name, value as string);
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await collector.close();
   await services.close();
   rmSync(temp, { recursive: true, force: true });

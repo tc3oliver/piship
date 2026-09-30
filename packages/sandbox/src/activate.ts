@@ -3,19 +3,16 @@
 // check for the others), and expose wrap/exec for tool subprocesses. PiShip
 // owns the environment, timeout, and cancellation of every command. A
 // required sandbox never falls back.
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { constants as osConstants, homedir, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import {
+  createTemporaryDirectory,
   PiShipError,
   processNetworkEnvironment,
+  reclaimTemporaryDirectories,
   redact,
+  type TemporaryDirectory,
 } from "@piship/contracts";
 import type { SandboxAdapter, WrappedCommand } from "./adapter.js";
 import {
@@ -370,7 +367,7 @@ interface Session {
   readonly capabilities: SandboxCapabilities | undefined;
   readonly sourceEnv: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
-  readonly ownedTmp: string | undefined;
+  readonly ownedTmp: TemporaryDirectory | undefined;
   readonly settleMs: number;
   /** The validated workspace declaration; set when enforced. */
   readonly declaration?: SandboxWorkspaceDeclaration;
@@ -651,11 +648,21 @@ function createActiveSandbox(session: Session): ActiveSandbox {
   };
 }
 
-const sessionTmpDirs = new Set<string>();
+const sessionTmpDirs = new Set<TemporaryDirectory>();
 let tmpExitHookInstalled = false;
 
-function createSessionTmp(): string {
-  const dir = mkdtempSync(join(tmpdir(), "piship-sandbox-"));
+/**
+ * The session's temp directory: `piship-sandbox-*` holding the ownership
+ * marker and, beside it, the `tmp` directory the sandbox gets as its TMPDIR.
+ * The marker stays outside `tmp`, where contained commands can write, so
+ * they can neither remove it (which would make the directory unrecoverable)
+ * nor forge one. The exit hook removes the directory when the process ends
+ * normally; a session killed by SIGKILL or a machine reset leaves it, and the
+ * next activation reclaims it once its process is gone.
+ */
+function createSessionTmp(): TemporaryDirectory {
+  reclaimTemporaryDirectories(tmpdir(), ["sandbox"]);
+  const dir = createTemporaryDirectory(tmpdir(), "sandbox");
   sessionTmpDirs.add(dir);
   if (!tmpExitHookInstalled) {
     tmpExitHookInstalled = true;
@@ -666,11 +673,11 @@ function createSessionTmp(): string {
   return dir;
 }
 
-function removeSessionTmp(dir: string | undefined): void {
+function removeSessionTmp(dir: TemporaryDirectory | undefined): void {
   if (!dir) return;
   sessionTmpDirs.delete(dir);
   try {
-    rmSync(dir, { recursive: true, force: true });
+    dir.remove();
   } catch {
     // best effort
   }
@@ -873,7 +880,8 @@ export async function activateSandbox(
   const active = config.required || ctx.enable === true;
   const ownedTmp = active && !ctx.tmpDir ? createSessionTmp() : undefined;
   // Without activation nothing is contained, so no session directory is made.
-  const tmpDir = ctx.tmpDir ?? ownedTmp ?? tmpdir();
+  const tmpDir =
+    ctx.tmpDir ?? (ownedTmp ? join(ownedTmp.path, "tmp") : tmpdir());
   if (active) mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
   const settleMs = ctx.settleMs ?? DEFAULT_SETTLE_MS;
   let instance: SandboxInstance | undefined;

@@ -5,7 +5,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   renameSync,
   rmSync,
   statSync,
@@ -22,6 +21,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { createStagingDirectory } from "../temporary-directories.js";
 import {
   RECEIPT_SCHEMA,
   VERSION_NAME,
@@ -191,7 +191,8 @@ export async function installDistribution(
   const isArchive = statSync(source).isFile();
   const isRelease = isArchive || existsSync(join(source, "release.json"));
   mkdirSync(installHome(), { recursive: true });
-  const staging = mkdtempSync(join(installHome(), ".staging-"));
+  const temporary = createStagingDirectory(installHome());
+  const staging = temporary.path;
   try {
     let payload = source;
     let lock: DistributionLock;
@@ -343,6 +344,6 @@ export async function installDistribution(
       commandHold.release();
     }
   } finally {
-    rmSync(staging, { recursive: true, force: true });
+    temporary.remove();
   }
 }

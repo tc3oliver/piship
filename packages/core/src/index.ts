@@ -61,4 +61,12 @@ export {
   runtimeStateDirectory,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
+export {
+  abandonedTemporaryCount,
+  reclaimInstallTemporaries,
+  reclaimOsTemporaries,
+  sweepOutputStaging,
+  type AbandonedStaging,
+  type OutputStagingOptions,
+} from "./temporary-directories.js";
 export * from "./trust.js";

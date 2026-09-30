@@ -16,7 +16,7 @@ The flow for a distribution owner:
 npm exec -- piship migrate ./acmecode/piship.yaml --write
 npm exec -- piship keygen ~/keys/acme-release.pem --id acme-release-2026
 npm exec -- piship lock ./acmecode/piship.yaml
-npm exec -- piship release ./acmecode/piship.yaml [--out <dir>] [--channel <name>]
+npm exec -- piship release ./acmecode/piship.yaml [--out <dir>] [--channel <name>] [--reclaim-staging]
 npm exec -- piship verify-release dist/releases/acmecode-1.1.0-linux-x64.tar.gz [--sha256 <hex>] [--json]
 npm exec -- piship reproducibility <release-a> <release-b> [--out report.json]
 npm exec -- piship diff <before> <after> [--json]
@@ -48,7 +48,7 @@ PiShip then assembles the canonical payload with the same code as `piship build`
 - `offline-smoke`: the branded `--smoke`, only when the distribution needs no sign-in (personal Pi-native or `none` credentials).
 - `governance-inspection`: the branded `capabilities --json`, when the distribution is governed.
 
-A managed distribution that requires sign-in is therefore not smoke-tested by `piship release`; the lifecycle E2E covers login, model use, and session resume against local fixtures. After the tests come the vulnerability gate, the registry signature gate (`npm audit signatures`: an invalid signature or attestation fails the build, missing signatures are recorded, a check that cannot run, for example without access to the Sigstore TUF repository, is recorded as `unavailable`, and unreadable output fails closed), SBOM, notices, metadata, checksums, and a deterministic archive. Any failure removes the partial output. On success the release lands in `<out>/releases/` (default `dist/releases/`). The build is unsigned: its output says so, and it is a development artifact until it is published through a signed channel or carries verified build provenance.
+A managed distribution that requires sign-in is therefore not smoke-tested by `piship release`; the lifecycle E2E covers login, model use, and session resume against local fixtures. After the tests come the vulnerability gate, the registry signature gate (`npm audit signatures`: an invalid signature or attestation fails the build, missing signatures are recorded, a check that cannot run, for example without access to the Sigstore TUF repository, is recorded as `unavailable`, and unreadable output fails closed), SBOM, notices, metadata, checksums, and a deterministic archive. Any failure removes the partial output. On success the release lands in `<out>/releases/` (default `dist/releases/`). The build stages in `<out>/releases/.piship-release-<name>-*` with an owner marker. A build killed with SIGKILL, or a machine that loses power, leaves that directory; the next `piship release` (and `piship build`, `dev`, and `test` for their own staging in `dist/`) says how many abandoned ones it found and removes nothing, because the output directory usually lies inside a project that sandboxed commands can write. Pass `--reclaim-staging` to `piship build` or `piship release` to remove the abandoned staging of dead processes there ([temporary directories](../architecture.md#temporary-directories)). The build is unsigned: its output says so, and it is a development artifact until it is published through a signed channel or carries verified build provenance.
 
 Set `SOURCE_DATE_EPOCH` to record a creation time. Without it the recorded time is the Unix epoch, so two builds of the same inputs still produce identical metadata.
 

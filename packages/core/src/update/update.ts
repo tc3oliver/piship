@@ -1,5 +1,5 @@
 // Verified update of an installed distribution from its signed channel.
-import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { existsSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
@@ -28,6 +28,7 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import { storageOf } from "../storage-transition.js";
+import { createStagingDirectory } from "../temporary-directories.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -217,7 +218,8 @@ export async function updateDistribution(
         `Channel ${channel} offers ${entry.version}, older than the active ${receipt.active}; downgrades are refused (use rollback to return to a retained release)`,
       );
     const apps = appDirectory(id);
-    const staging = mkdtempSync(join(apps, ".staging-"));
+    const temporary = createStagingDirectory(apps);
+    const staging = temporary.path;
     try {
       const archive = join(staging, entry.archive);
       await downloadArchive(source, entry, archive, options.fetcher);
@@ -380,7 +382,7 @@ export async function updateDistribution(
       };
     } finally {
       try {
-        rmSync(staging, { recursive: true, force: true });
+        temporary.remove();
         // An operation that took the lock over owns what is on disk now.
         if (lifecycle.stillHeld()) recoverInstallation(id);
         options.faults?.("cleaned");
