@@ -1,0 +1,169 @@
+# Reference container sandbox
+
+The custom sandbox of the [AcmeCode reference distribution](../README.md#reference-container-sandbox): what a company that runs its own sandbox service writes for PiShip. The [service](service/server.mjs) runs each user's commands in a container with the user's project bind-mounted, and the [adapter](acme-container-sandbox.mjs) is the single file that lets PiShip use it (`sandbox.provider: custom`). The workspace is `shared`: the agent's file tools and its shell touch the same files, which PiShip verifies before the first command of a session.
+
+It is example code for tests and local exploration, not a package and not a production service. It uses Node 22 built-ins and the `docker` command line only, and has no dependencies to install. PiShip ships no sandbox service; the [sandbox contract](../../../docs/sandbox.md#the-contract) and the [adapter SDK](../../../docs/adapter-sdk.md) are what an organization builds against.
+
+| File | Contents |
+| --- | --- |
+| [`service/server.mjs`](service/server.mjs) | Entry point: configuration from the environment, HTTP server, shutdown |
+| [`service/src/app.mjs`](service/src/app.mjs) | Routes, the Host and credential checks, request bodies, the streamed answer of a command |
+| [`service/src/sandboxes.mjs`](service/src/sandboxes.mjs) | What may be mounted, the container lifecycle, commands and their cancellation, idle and lifetime limits |
+| [`service/src/docker.mjs`](service/src/docker.mjs) | Every `docker` argument list: what a sandbox container is allowed to be is read here |
+| [`service/src/auth.mjs`](service/src/auth.mjs), [`config.mjs`](service/src/config.mjs), [`log.mjs`](service/src/log.mjs) | The key registry, the settings, the allowlisting logger |
+| [`scripts/generate-key.mjs`](scripts/generate-key.mjs) | The administrator's script: issues a user's key, records only its hash |
+| [`acme-container-sandbox.mjs`](acme-container-sandbox.mjs) | The custom adapter: one file, imports only `@piship/adapter-sdk` |
+| [`piship.yaml`](piship.yaml), [`piship.lock`](piship.lock), [`resources/`](resources) | The reference distribution with this sandbox (below) |
+| [`test/`](test) | Contract tests for the service and the adapter, with a fake `docker`; no Docker needed |
+
+## Run it
+
+Needs Docker and Node 22.19 or later. The project must be a git repository with a `.git` directory, under a directory the service is configured to mount.
+
+```sh
+cd examples/enterprise-reference/sandbox
+
+# The administrator issues a key. Only its SHA-256 goes into registry.json;
+# the key file is 0600 and its content is never printed.
+node scripts/generate-key.mjs --user alice --dir "$HOME/.acme-sandbox"
+
+# The service. Loopback only; one instance name per running service.
+SANDBOX_REGISTRY="$HOME/.acme-sandbox/registry.json" \
+SANDBOX_WORKSPACE_ROOTS="$HOME/Developer/src" \
+SANDBOX_IMAGE='ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3' \
+SANDBOX_SHELL=/bin/bash \
+node service/server.mjs
+```
+
+The distribution is the reference distribution built from [`piship.yaml`](piship.yaml) in this directory, with the [reference stack](../README.md) running for sign-in. `COMMAND` is the launcher's name, `app.command` in the manifest:
+
+```sh
+COMMAND=acmecode
+export ACMECODE_SANDBOX_URL=http://127.0.0.1:18075
+# ...and the stack's variables, as in the reference README ("Try it")
+npm exec -- piship build examples/enterprise-reference/sandbox/piship.yaml
+node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
+"$COMMAND" login                                      # sign in on Keycloak
+"$COMMAND" sandbox login < "$HOME/.acme-sandbox/alice.key"   # the key never reaches argv or history
+cd ~/Developer/src/some-repository && "$COMMAND" doctor
+```
+
+`sandbox login` needs a signed-in user: the key is bound to that user and to the origin of `ACMECODE_SANDBOX_URL`. `doctor` then shows the sandbox (`acme-container`, remote, its guarantees), the stored credential (`valid (stored, api_key)`), and the workspace as `pending`: it is verified before the first command the agent runs, never by `doctor`. This build and the reference build have the same ID, command, and state: install one or the other.
+
+## What the service does
+
+| Request | Answer |
+| --- | --- |
+| `GET /health` | `{"status": "ok"}`; the only route without a credential |
+| `GET /v1/status`, `Authorization: Bearer <key>` | `{"runtime": "ok" \| "unavailable", "sandboxes": <this user's>, "limit"}`; the adapter's availability check |
+| `POST /v1/sandboxes`, body `{"workspace": "<absolute host path>", "network": "deny" \| "allow", "writeProtect": {"files": [...], "directories": [...]}}` | Starts a container; `201 {"id": "sbx_..."}` |
+| `POST /v1/sandboxes/{id}/exec`, body `{"command", "cwd": "<workspace-relative>", "env": {...}}` | A stream of JSON lines: `{"stream": "stdout" \| "stderr", "data": "<base64>"}` as output arrives, then `{"exit": <code or null>, "signal": <name or null>}` |
+| `DELETE /v1/sandboxes/{id}` | Removes the container; `204` |
+
+Every answer is JSON (an exec's is newline-delimited JSON) with `cache-control: no-store` and no cross-origin permission. An error body is only `{"error": {"code", "message"}}`, with a fixed message: never the caller's input, a path, or the runtime's own text.
+
+| Status | When |
+| --- | --- |
+| 400, 413, 415 | A body that is not a JSON object of the shape above, over 512 KiB, or not `application/json`; a command over 100000 bytes; an environment name that is not `[A-Za-z_][A-Za-z0-9_]*`, a value with a line break, or the reserved `PISHIP_EXEC_ID`; a `cwd` outside the workspace; a path with a comma or a quote |
+| 401 | No credential, or one the registry does not hold: one answer for both, with `www-authenticate: Bearer`. PiShip reads a 401 or 403 as "the credential was rejected", so this service uses 401 for nothing else |
+| 404 | An unknown sandbox, or another user's: the same answer |
+| 409 | The workspace is not a git repository with a real `.git` directory, or belongs to root; or a git control path that must be read-only does not exist and so cannot be protected (`workspace_unsupported`, `protected_path_missing`) |
+| 421 | A `Host` header that is not this service's own loopback name |
+| 422 | A workspace outside `SANDBOX_WORKSPACE_ROOTS`, or that does not exist, after links are resolved: one answer for both |
+| 429 + `Retry-After` | The user, or the service, is at its number of sandboxes or of concurrent commands |
+| 502, 503 | The container runtime failed or is unavailable; the service is shutting down |
+
+The Host check keeps a web page from reaching a loopback service through a name it controls; with the credential and the content type, which a browser must ask permission for, it is what protects a service on `127.0.0.1` from the browser of the person who runs it.
+
+## The container
+
+A sandbox is `docker run` with exactly the arguments of [`runArguments`](service/src/docker.mjs), and the contract test pins each one:
+
+| Property | How |
+| --- | --- |
+| Not root | `--user <uid>:<gid>` of the workspace's owner; a workspace owned by root is refused |
+| No privilege | `--cap-drop ALL`, `--security-opt no-new-privileges`; the runtime's default seccomp and AppArmor profiles stay on; no `--privileged`, device, host PID, IPC, UTS, user, or network namespace, published port, or docker socket |
+| Only the workspace is mounted | `/workspace` is the project, read-write; that is the `workspace-confinement` guarantee. A read-only root filesystem, and a 256 MB tmpfs at `/tmp` (also `HOME`), are the only other writable places |
+| Git control files | `.git` is mounted read-only over the workspace, with only `.git/piship-workspace` writable again (the service makes it, mode 0700, when it is missing): the git config, hooks, `info`, `modules`, `worktrees`, and files git follows cannot be changed, created, or renamed away, whether they exist or not. Each further path PiShip names that exists in the working tree (a `core.hooksPath` directory, a config file the git config includes) is mounted read-only too, and one that does not exist is refused at creation, since it could not be protected. That is `git-control-protection` |
+| Network | `--network none` when the profile denies it; the Docker network `SANDBOX_ALLOW_NETWORK` (default `bridge`) when it allows it |
+| Environment | A command gets the environment PiShip approved and nothing else of the caller's, plus the image's own. It reaches the container through a `--env-file` (mode 0600, removed when the command ends), so no value is on this machine's process list; the command line itself is |
+| Limits | 1 GB of memory and no swap, 512 processes, 2 CPUs (`SANDBOX_MEMORY`, `SANDBOX_PIDS`, `SANDBOX_CPUS`) |
+| Lifetime | A sandbox idle for an hour (`SANDBOX_IDLE_SECONDS`) is removed, none lives past 12 hours (`SANDBOX_MAX_LIFETIME_SECONDS`), a command past an hour or past 64 MB of output is stopped, and the container ends itself at its maximum lifetime even if this service died. On `SIGTERM` the service removes every sandbox it holds, and at start it removes those an earlier run of the same `SANDBOX_INSTANCE` left: give each running service its own name |
+
+**Commands and cancellation.** A command runs as `<shell> -c <command>` in `/workspace/<cwd>`. Its answer is tied to the caller's connection: when PiShip times a command out or the user cancels it, PiShip closes the connection, and the service stops the command and everything it started. `docker exec` does not do this by itself (killing the client leaves the process running), so a second `docker exec` runs [a script](service/src/docker.mjs) in the sandbox that first leaves a cancel token, so a command that has not begun will not, then stops and kills every process whose environment carries the command's random ID; children inherit it, so background processes and processes that started their own session are reached. Deleting the sandbox removes the container, which ends whatever is left.
+
+**The image.** Any image with a POSIX `sh`, `cat`, `mkdir`, `mv`, `printf`, `sleep`, `env`, `tr`, `grep`, `kill`, and `/proc`, and `bash` with `timeout` (or `nc`) for the network check. The tests use `ubuntu:24.04`, pinned by its index digest, with `bash` as the shell. Prefer a glibc image to Alpine here: PiShip decides that a read-only `.git` cannot be renamed with `[ -w .git ]`, and BusyBox's `test` reads the mode bits and calls a read-only mount writable, so on Alpine PiShip reports the git control files as `not-verified` (a warning in `doctor`; the commands still run). Put the project's toolchain in the image; nothing else of the host is there.
+
+## The credential
+
+The distribution declares `sandbox.credential: stored`. A person runs `sandbox login` and enters the key the organization issued; PiShip keeps it in the secret store, bound to the signed-in user and to the origin of the endpoint, and hands it to the adapter one request at a time.
+
+| Rule | Where it is kept |
+| --- | --- |
+| Never in a tracked or locked file, argv, the environment, the model context, or a Pi session file | PiShip's `sandbox login` reads it from a prompt or the first line of standard input; `generate-key.mjs` never prints it and writes it `0600` (`*.key` is git-ignored) |
+| Refused without it | The service answers 401 to a request with none, a wrong one, or a malformed header, with one answer for all, comparing a hash against every registered key so timing does not say which |
+| Only for the user's own sandboxes | A sandbox belongs to the key that created it; another key gets 404 |
+| Bound to the origin | PiShip records the endpoint's origin at `sandbox login` and refuses to read the secret when the resolved endpoint is another one. The adapter also sends the key only to an origin in `credentialOrigins`, only to the endpoint it was given, never to a URL an answer names (the service returns none), and never follows a redirect |
+| Rejection | A 401 makes the adapter tell PiShip (`credentialRejected`), which marks the stored credential rejected: the next launch asks for `sandbox login` instead of sending it again. The adapter never repeats a request that creates a sandbox or runs a command |
+| Never logged | The service's log has a fixed set of fields (no command, environment value, path, or key) and scrubs the key shape; the adapter builds no message from a transport error or an answer body |
+| Gone with the user | `logout`, `sandbox logout`, a different user signing in, `purge`, and a rollback to a release that cannot read it delete it ([sandbox credentials](../../../docs/sandbox.md#credentials)) |
+
+Why the stored source, and not the adapter's own credential: it shows the parts of the contract PiShip owns (the input path, the secret store, the binding to the user and to the origin, rejection, clearing on logout, purge, and rollback), which an adapter-sourced credential leaves to the adapter. An adapter-sourced one would exchange the user's identity token for a short-lived token at the service, and so make the service validate Keycloak's tokens, which the reference keeps out of it. The trade is the one [docs/sandbox.md](../../../docs/sandbox.md#credentials) names: a key a person enters is often shared. Here the service issues one key per user and scopes every sandbox to it, which is the least a stored key needs; a managed deployment that can exchange the identity should do that instead, with the same adapter minus `sandbox.credential` and plus a `sandboxCredential` export.
+
+## What it does and does not isolate
+
+It gives the container's isolation, and what is listed above. It does not give:
+
+- **A VM.** The container shares the host's kernel. On Docker Desktop or OrbStack that kernel is a VM's, and a container escape reaches the VM; on a Linux host it reaches the host. A company that needs more runs the same service over gVisor, Kata, or a VM per session.
+- **A trusted-service boundary.** The service starts containers by calling Docker, so whoever can run it can run anything. It is a process of the user or an administrator, not a boundary against them.
+- **Network control when the network is allowed.** `allow` is the Docker network `SANDBOX_ALLOW_NETWORK`: full outbound access, and reach to other containers on it.
+- **PiShip's path rules.** `sandbox.filesystem` keeps governing PiShip's own file tools. Inside, every file of the project is readable and writable (`.env` files, `package.json` scripts the user runs later), except the git control paths above.
+- **Git writes.** `.git` is read-only, so with a git in the image, `git commit`, `add`, `checkout`, and `stash` fail inside the sandbox; run them outside. Reading works (`git diff`, `git log`); git cannot refresh its index, and says so.
+- **TLS.** PiShip allows plain HTTP only to loopback, and the service binds nothing else. Reaching it from other machines is a TLS-terminating proxy the organization runs in front of it; the bearer key must never cross a network in the clear.
+- **Concealing the command line.** `docker exec` puts the command on this machine's process list, visible to its users; the environment is not. A service that cannot accept that uses the container runtime's API.
+- **More than one background process's output.** A command that leaves a process holding its output open keeps `docker exec`, and so the command, running until that process ends or PiShip times it out.
+
+Also: paths with a comma or a quote are refused (a mount option is a comma-separated list), a command over 100000 bytes is refused (the operating system's argument limit), a linked worktree (a `.git` file) is not supported, an SELinux host needs the mounts relabelled, which this service does not do, and rootless Docker and Podman, which map the user's ID to another one inside the container, are not supported: the service passes the workspace owner's numeric user and group and expects the runtime to keep them. It has been run on macOS under OrbStack; a Linux Docker Engine is what the Reference E2E workflow runs it on.
+
+## Settings
+
+The service reads its environment only, and refuses to start on a bad value, naming the variable and never its value.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SANDBOX_REGISTRY` | required | The key registry `generate-key.mjs` writes (`piship-reference-sandbox-registry/v1`: user IDs and SHA-256 hashes) |
+| `SANDBOX_WORKSPACE_ROOTS` | required | Directories the service may mount from, separated as `PATH` is; a workspace must lie inside one after links are resolved |
+| `SANDBOX_IMAGE` | required | The sandbox image, by digest |
+| `SANDBOX_SHELL` | `/bin/sh` | The shell that runs each command, an absolute path in the image |
+| `SANDBOX_LISTEN_PORT` | `18075` | The port on `127.0.0.1` (or `::1` with `SANDBOX_LISTEN_HOST`). Nothing wider is accepted |
+| `SANDBOX_INSTANCE` | `reference` | This service's name: the label `piship.sandbox.instance` on every container it starts, and what its start-up sweep removes |
+| `SANDBOX_ALLOW_NETWORK` | `bridge` | The Docker network of a sandbox whose network is allowed; `host` and `none` are refused |
+| `SANDBOX_MEMORY`, `SANDBOX_CPUS`, `SANDBOX_PIDS`, `SANDBOX_TMP_SIZE` | `1g`, `2`, `512`, `256m` | Per-sandbox limits |
+| `SANDBOX_IDLE_SECONDS`, `SANDBOX_MAX_LIFETIME_SECONDS`, `SANDBOX_MAX_EXEC_SECONDS`, `SANDBOX_MAX_OUTPUT_BYTES` | 3600, 43200, 3600, 64 MiB | Time and size limits |
+| `SANDBOX_MAX_PER_KEY`, `SANDBOX_MAX_TOTAL`, `SANDBOX_MAX_EXECS` | 8, 32, 8 | Sandboxes per key, in all, and commands at once in one sandbox |
+| `SANDBOX_ALLOWED_HOSTS` | none | More `Host` values to answer to, such as a proxy's, comma-separated |
+| `SANDBOX_DOCKER` | `docker` | The docker command (the contract tests point it at a fake) |
+
+## Tests
+
+| Where | What it runs |
+| --- | --- |
+| [`test/service.test.mjs`](test/service.test.mjs), [`test/adapter.test.mjs`](test/adapter.test.mjs): `node --test test/*.test.mjs` here | The service against a [fake docker](test/fake-docker.mjs) that runs commands with `/bin/sh` on this machine: configuration, the registry and `generate-key`, credential and Host checks, refusals, every argument of `docker run` and `docker exec` (no privilege, the mounts, no value on the command line), ownership, streaming, cancellation when the caller goes away, delete, idle, lifetime, and size limits, shutdown and the start-up sweep, and what the log holds. The adapter against a stub `fetch`: what it declares (and that PiShip accepts it), what it sends and to whom, that it never repeats a create, and that no credential, body, or transport message reaches an error |
+| [`tests/sandbox.test.ts`](../tests/sandbox.test.ts), with the reference tests (`npm run test:reference`) | The service as a user starts it, with real containers: its boundary, the container as `docker inspect` shows it, the sandbox conformance kit, and a governed session built from the committed manifest and lock (below) |
+| [`tests/reference-sandbox-variant.test.ts`](../../../tests/reference-sandbox-variant.test.ts), with the unit tests | The variant differs from the reference manifest only in its sandbox and one runtime variable, has the same resources, and its adapter is one file that imports only the SDK; the committed lock is kept current by the example-lock test |
+
+The live test starts the service on `127.0.0.1:48075` (`SANDBOX_PORT` changes it), as instance `piship-reftest-<pid>-sandbox-<random>`, with keys made by `generate-key.mjs` in a temporary directory. Every container it starts carries that instance's label. The service removes its own on `SIGTERM`; the test then removes anything still carrying the label, by ID, and its directory, and checks that the service left none. A run killed outright is cleaned by the reference suite's global setup at the next start, which removes only containers whose instance name has that shape and whose process is gone. Nothing is pruned and no container the test did not start is touched.
+
+### Conformance
+
+`testSandboxAdapter` from `@piship/adapter-conformance` against the service, with real containers: 16 behaviors passed, 0 failed, 0 skipped (about 25 s on macOS 27 with OrbStack and Docker 29). `network claims` needs a listener the sandbox can reach with the network allowed, which the test starts in a container of its own on the default bridge. The kit gives the adapter a fake credential of its own; the test swaps that one header for the user's real key on its way out, after the kit has watched where it goes, because the service knows only the keys it issued. Defects seeded by hand while the service was written (no test keeps them) failed exactly the behaviors they should: a writable `.git` mount failed `git control protection`; a network that stayed on with the profile denying it failed `network claims`; a cancel that only killed the `docker exec` client failed `timeout` and `cancellation`.
+
+### The workspace check in a governed session
+
+The test builds the distribution from a copy of the committed `piship.yaml`, lock, adapter, and resources (`piship build` refuses a lock that no longer matches), and opens a `GovernanceSession` on the built payload as `launch` does: the lock it carries, the managed fetch under the reference manifest's private-only network policy, the endpoint from `ACMECODE_SANDBOX_URL`, and the sandbox credential stored for a principal and checked against the endpoint's origin. Then:
+
+- Activation creates the sandbox and runs PiShip's outside check in it (`verification: backend-attested`, `isolation: remote`); the workspace is `pending` and nothing has been written into the project.
+- The first command is preceded by the check, in both directions: the sandbox reads the file the host wrote and the host reads the file the sandbox wrote, both immediate, and no protected git path could be written or created (`effective: shared`, `verification: verified`, `complete: true`, git control `attested-renames`). The containment line reads `Workspace: shared (verified <time>, both directions immediate).`
+- The next commands do not check again; the check leaves nothing in `.git/piship-workspace`; ending the session removes the sandbox; the key is in no state file, audit log, lock, or built file.
+- A `core.hooksPath` directory in the working tree is read-only in the sandbox (PiShip reports git control `not-verified`, as it does for any hooks directory in the working tree), and one that does not exist stops the session before any container starts.
+- A key the service never issued fails activation and marks the stored credential rejected; the next launch asks for `sandbox login`. A runtime variable that names another host sends nothing there.
