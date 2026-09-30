@@ -82,8 +82,36 @@ export const providerErrorRedaction: InlineExtension = {
   factory: (pi) => {
     pi.on("session_start", () => installCrashRedaction());
     pi.on("message_end", (event) => {
-      const message = redactProviderError(event.message);
+      const message = redactProviderErrorOrDrop(event.message);
       return message ? { message: message as typeof event.message } : undefined;
     });
   },
 };
+
+export const REDACTION_FAILED_TEXT = "[REDACTED error text]";
+
+/**
+ * `redactProviderError` that fails closed. Pi reports a handler that throws
+ * and persists the original message, so when redaction itself fails the
+ * provider text is replaced whole: the error text by a fixed marker, and the
+ * diagnostics by none.
+ */
+export function redactProviderErrorOrDrop(message: unknown): unknown {
+  try {
+    return redactProviderError(message);
+  } catch {
+    const value = message as {
+      role?: string;
+      errorMessage?: unknown;
+      diagnostics?: unknown;
+    };
+    if (value?.role !== "assistant") return undefined;
+    return {
+      ...value,
+      ...(value.errorMessage === undefined
+        ? {}
+        : { errorMessage: REDACTION_FAILED_TEXT }),
+      ...(value.diagnostics === undefined ? {} : { diagnostics: [] }),
+    };
+  }
+}
