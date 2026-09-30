@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,18 +39,37 @@ import { defaultProjectTrust } from "./trust.js";
  * The stat the scan cache sees in place of a file's real one, and a count of
  * the reads of config files: a cache test needs a file that changes without
  * its time, size, or inode changing, which only a file system with a coarse
- * clock does, and needs to see whether a scan read the file again.
+ * clock does, and needs to see whether a scan read the file again. Also files
+ * that exist only for the scan, at paths a test cannot write (`/opt/homebrew`).
  */
 const frozenStats = vi.hoisted(() => new Map<string, unknown>());
+const virtualFiles = vi.hoisted(() => new Map<string, string>());
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const statSync = ((path: string, ...rest: unknown[]) =>
-    frozenStats.get(String(path)) ??
-    (actual.statSync as (...args: unknown[]) => unknown)(
-      path,
-      ...rest,
-    )) as typeof actual.statSync;
-  const readFileSync = vi.fn(actual.readFileSync);
+  const statSync = ((path: string, ...rest: unknown[]) => {
+    const virtual = virtualFiles.get(String(path));
+    if (virtual !== undefined)
+      return {
+        isFile: () => true,
+        isDirectory: () => false,
+        size: virtual.length,
+        mtimeMs: 1,
+        ctimeMs: 1,
+        ino: 1,
+      };
+    return (
+      frozenStats.get(String(path)) ??
+      (actual.statSync as (...args: unknown[]) => unknown)(path, ...rest)
+    );
+  }) as typeof actual.statSync;
+  const readFileSync = vi.fn(
+    ((path: string, ...rest: unknown[]) =>
+      virtualFiles.get(String(path)) ??
+      (actual.readFileSync as (...args: unknown[]) => unknown)(
+        path,
+        ...rest,
+      )) as typeof actual.readFileSync,
+  );
   return {
     ...actual,
     statSync,
@@ -84,6 +103,7 @@ const savedEnv = Object.fromEntries(
 );
 beforeEach(() => {
   frozenStats.clear();
+  virtualFiles.clear();
   rmSync(fakeHome, { recursive: true, force: true });
   mkdirSync(fakeHome, { recursive: true });
   for (const name of CONFIG_VARIABLES) delete process.env[name];
@@ -132,6 +152,21 @@ function trySymlink(
   }
 }
 const posix = (path: string) => toPosixPath(path);
+/** `path` with the links of its existing part resolved, as the policy package names a protected path. */
+function realNearest(path: string): string {
+  const rest: string[] = [];
+  let current = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(path);
+      rest.push(basename(current));
+      current = parent;
+    }
+  }
+}
 
 const trust: ProjectTrustPolicy = {
   ...defaultProjectTrust("managed"),
@@ -699,6 +734,43 @@ describe("system, GIT_CONFIG_GLOBAL, and environment config", () => {
     }
     delete process.env.GIT_CONFIG_NOSYSTEM;
     expect(dirs(root)).toContain(system);
+  });
+
+  it("reads the system config of a Homebrew, Xcode, or Command Line Tools git too, since its path is fixed when git is built", () => {
+    const root = repo("system-prefixes");
+    delete process.env.GIT_CONFIG_NOSYSTEM;
+    const prefixes = [
+      "/opt/homebrew/etc/gitconfig",
+      "/usr/local/etc/gitconfig",
+      "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+      "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
+      "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
+    ];
+    const listed = () => projectGitControlFiles(root, { scope: "sandbox" });
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).toContain(posix(realNearest(path)));
+    // What such a git sets applies: the hooks path of a Homebrew system config.
+    virtualFiles.set(resolve(prefixes[0] as string), hooks(".homebrew-hooks"));
+    expect(dirs(root)).toContain(at(root, ".homebrew-hooks"));
+    // The file tools' list is the project's: a system file is not on it.
+    for (const path of prefixes)
+      expect(files(root)).not.toContain(posix(realNearest(path)));
+    // GIT_CONFIG_SYSTEM names the one file, and empty, none.
+    const elsewhere = dir("system-named");
+    process.env.GIT_CONFIG_SYSTEM = join(elsewhere, "gitconfig");
+    expect(dirs(root)).not.toContain(at(root, ".homebrew-hooks"));
+    expect(listed()).toContain(at(elsewhere, "gitconfig"));
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
+    process.env.GIT_CONFIG_SYSTEM = "";
+    for (const path of [...prefixes, "/etc/gitconfig"])
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
+    // And GIT_CONFIG_NOSYSTEM turns them all off.
+    delete process.env.GIT_CONFIG_SYSTEM;
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    expect(dirs(root)).not.toContain(at(root, ".homebrew-hooks"));
+    for (const path of prefixes)
+      expect(listed(), path).not.toContain(posix(realNearest(path)));
   });
 
   it("takes core.hooksPath and include.path from GIT_CONFIG_COUNT settings", () => {

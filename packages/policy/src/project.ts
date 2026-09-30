@@ -364,7 +364,8 @@ interface EnvironmentSetting {
 
 /**
  * What git reads besides the repository, from the process environment PiShip
- * itself has: the system config (`GIT_CONFIG_SYSTEM`, or `/etc/gitconfig`,
+ * itself has: the system config (`GIT_CONFIG_SYSTEM`, or `/etc/gitconfig` and
+ * the other places a git installation keeps it (`SYSTEM_CONFIG_PATHS`),
  * unless `GIT_CONFIG_NOSYSTEM` is true), the global config (`GIT_CONFIG_GLOBAL`
  * alone when it is set, else `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`,
  * `~/.config/git/config` by default), the `GIT_CONFIG_COUNT` settings, and
@@ -388,14 +389,37 @@ function environmentTrue(value: string | undefined): boolean {
   return text !== "" && Number.isFinite(number) && number !== 0;
 }
 
+/**
+ * Where git reads its system config when `GIT_CONFIG_SYSTEM` does not say. The
+ * path is fixed when git is built, so `/etc/gitconfig` (a distribution's git)
+ * is only one of them: Homebrew's git reads its own `etc` (Apple silicon,
+ * Intel, and Linux), and the git of Xcode and the Command Line Tools reads the
+ * `etc` of its toolchain. PiShip cannot tell which git a user's next command
+ * runs, so it reads and protects all of them; a file git does not read only
+ * adds a protected path. A git built with another prefix (Nix, a source build)
+ * reads a file PiShip does not know, which `GIT_CONFIG_SYSTEM` has to name.
+ */
+const SYSTEM_CONFIG_PATHS = [
+  "/etc/gitconfig",
+  "/opt/homebrew/etc/gitconfig",
+  "/usr/local/etc/gitconfig",
+  "/home/linuxbrew/.linuxbrew/etc/gitconfig",
+  "/Library/Developer/CommandLineTools/usr/etc/gitconfig",
+  "/Applications/Xcode.app/Contents/Developer/usr/etc/gitconfig",
+];
+
 function knownConfigs(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
 ): KnownConfigs {
   const files: string[] = [];
   if (!environmentTrue(env.GIT_CONFIG_NOSYSTEM)) {
-    const system = env.GIT_CONFIG_SYSTEM ?? "/etc/gitconfig";
-    if (system !== "") files.push(resolve(system));
+    // Set, it names the one file (an empty value, none); unset, every place a
+    // git installation keeps it.
+    if (env.GIT_CONFIG_SYSTEM === undefined)
+      files.push(...SYSTEM_CONFIG_PATHS.map((path) => resolve(path)));
+    else if (env.GIT_CONFIG_SYSTEM !== "")
+      files.push(resolve(env.GIT_CONFIG_SYSTEM));
   }
   if (env.GIT_CONFIG_GLOBAL !== undefined) {
     if (env.GIT_CONFIG_GLOBAL !== "")
