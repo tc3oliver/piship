@@ -7,6 +7,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
@@ -23,7 +24,7 @@ import { LocalMetrics } from "@piship/audit";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askUserExtension,
   DEFAULT_PLAN_PROMPT,
@@ -33,8 +34,10 @@ import {
 import { GovernanceSession, inspectGovernance } from "./governance-session.js";
 import {
   GOVERNED_READ_LIMIT_BYTES,
+  governedBashOperations,
   governedTools,
   pathClass,
+  SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
 
 const roots: string[] = [];
@@ -703,6 +706,126 @@ describe("governed read resource bounds", () => {
       );
     },
   );
+});
+
+describe("governed shell output bounds", () => {
+  const node = process.execPath.replaceAll("\\", "/");
+  // Writes its pid, then 64 KiB chunks forever. The trailing `echo` keeps the
+  // shell from exec'ing node, so node is a grandchild of the spawned shell.
+  const runaway = `"${node}" -e "require('fs').writeFileSync('runaway.pid', String(process.pid)); const b = Buffer.alloc(65536, 120); const w = () => process.stdout.write(b, w); w()"; echo after`;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const allowShell = {
+    userRules: [{ id: "me.shell", action: "shell.execute", effect: "allow" }],
+  };
+
+  it("stops a runaway command at the output limit, reports the cap, bounds the full-output file, and kills the process tree", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const bash = tool(governedTools(session, workspace), "bash");
+    // The timeout only stops the command if the output bound does not.
+    const message = await run(bash, { command: runaway, timeout: 30 }).then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    expect(message).toContain(
+      "[output exceeded the 64 MiB shell output limit; PiShip stopped the command.",
+    );
+    expect(message).not.toContain("after");
+    const fullOutput = /Full output: (\S+?)\]/.exec(message)?.[1];
+    expect(fullOutput).toBeDefined();
+    try {
+      expect(statSync(fullOutput as string).size).toBeLessThanOrEqual(
+        SHELL_OUTPUT_LIMIT_BYTES + 1024,
+      );
+    } finally {
+      rmSync(fullOutput as string, { force: true });
+    }
+    const pid = Number(readFileSync(join(workspace, "runaway.pid"), "utf8"));
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 10_000,
+    });
+  }, 60_000);
+
+  it("stops a runaway sandboxed command through the same bound", async () => {
+    let chunks = 0;
+    let aborted = false;
+    const gov = {
+      workflowMode: "build",
+      currentChannel: () => undefined,
+      decide: async () => ({ outcome: "allow" }),
+      sandbox: {
+        report: { level: "enforced" },
+        exec: async (
+          _command: string,
+          _cwd: string,
+          io: { onData: (data: Buffer) => void; signal?: AbortSignal },
+        ) => {
+          const chunk = Buffer.alloc(1024 * 1024, 120);
+          while (!io.signal?.aborted) {
+            io.onData(chunk);
+            chunks += 1;
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          aborted = true;
+          throw new Error("aborted");
+        },
+      },
+    } as unknown as GovernanceSession;
+    let received = 0;
+    let last = "";
+    const result = await governedBashOperations(gov, "user-bash").exec(
+      "yes",
+      tmpdir(),
+      {
+        onData: (data) => {
+          received += data.length;
+          last = data.toString("utf8");
+        },
+      },
+    );
+    expect(aborted).toBe(true);
+    expect(chunks).toBeLessThanOrEqual(65);
+    expect(result).toEqual({ exitCode: null });
+    expect(last).toContain("64 MiB shell output limit");
+    expect(received).toBeLessThanOrEqual(SHELL_OUTPUT_LIMIT_BYTES + 1024);
+  });
+
+  it("keeps normal output truncation unchanged below the limit", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const bash = tool(governedTools(session, workspace), "bash");
+    const result = await run(bash, {
+      command: `"${node}" -e "for (let i = 1; i <= 3000; i++) console.log('line ' + i)"`,
+    });
+    const output = text(result);
+    expect(output).toContain("line 3000");
+    expect(output).toMatch(/\[Showing lines 1001-3000 of 3000\. Full output: /);
+    expect(output).not.toContain("shell output limit");
+    const fullOutput = (result.details as { fullOutputPath?: string })
+      .fullOutputPath;
+    if (fullOutput) rmSync(fullOutput, { force: true });
+  });
+
+  it("still reports a caller's abort as an abort", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const operations = governedBashOperations(session, "user-bash");
+    const controller = new AbortController();
+    const running = operations.exec(
+      `"${node}" -e "setTimeout(() => {}, 60000)"`,
+      workspace,
+      {
+        onData: () => {},
+        signal: controller.signal,
+      },
+    );
+    setTimeout(() => controller.abort(), 200);
+    await expect(running).rejects.toThrow(/aborted/);
+  });
 });
 
 describe("piship-ask-user", () => {
