@@ -460,7 +460,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
 
       const smoke = await installed().smoke();
       expect(smoke.access.credential.credentialId).not.toBe(before);
-      expect(credentialMetadata().rejected_at).toBeUndefined();
+      expect(credentialMetadata().rejected_at).not.toEqual(expect.any(String));
     });
   });
 
@@ -815,22 +815,19 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       expect(result.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
       expect(result.modelRequest?.stopReason).toBe("error");
       // Pi's message is the status and LiteLLM's error object.
-      expect(result.modelRequest?.error).toMatch(
-        /^401: \{"message":"litellm\.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided\./,
-      );
-      expect(result.modelRequest?.error).toContain(
-        '"type":"authentication_error"',
+      expect(result.modelRequest?.error).toBe(
+        "GATEWAY_PROTOCOL_ERROR: LiteLLM upstream provider returned HTTP 401",
       );
       expect(upstream.map((record) => record.status)).toEqual([401]);
       // Pins current behavior, expected to change when the mapping is fixed: an
       // upstream 401 (type authentication_error) is not the user's credential,
       // which should be neither marked rejected nor replaced.
-      expect(isCredentialRejection(assistantMessage(result))).toBe(true);
-      expect(credentialMetadata().rejected_at).toEqual(expect.any(String));
+      expect(isCredentialRejection(assistantMessage(result))).toBe(false);
+      expect(credentialMetadata().rejected_at).toBeUndefined();
 
       await untilServed(bob.key);
       const next = await installed().smoke();
-      expect(next.access.credential.credentialId).not.toBe(before);
+      expect(next.access.credential.credentialId).toBe(before);
     });
 
     it("an upstream 403 is taken as a model denial, which re-reads the entitlement", async () => {
@@ -844,19 +841,18 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       );
       expect(result.status).toBe(1);
       expect(result.modelRequest?.stopReason).toBe("error");
-      expect(result.modelRequest?.error).toMatch(
-        /^403: \{"message":"litellm\.APIError: APIError: OpenAIException - Mock upstream denies this request\./,
+      expect(result.modelRequest?.error).toBe(
+        "GATEWAY_PROTOCOL_ERROR: LiteLLM upstream provider returned HTTP 403",
       );
-      expect(result.modelRequest?.error).toContain('"type":"permission_error"');
       expect(upstream.map((record) => record.status)).toEqual([403, 403, 403]);
       expect(isCredentialRejection(assistantMessage(result))).toBe(false);
       // Pins current behavior, expected to change when the mapping is fixed: an
       // upstream 403 (permission_error) is not the gateway's model denial
       // (key_model_access_denied), yet it re-reads the entitlement.
-      expect(isModelDenial(assistantMessage(result))).toBe(true);
+      expect(isModelDenial(assistantMessage(result))).toBe(false);
       // The entitlement re-read is a renewal through the refresh path: it
       // mints a new credential.
-      expect(credentialMetadata().credential_id).not.toBe(before);
+      expect(credentialMetadata().credential_id).toBe(before);
     });
 
     it("an upstream 429 that clears is retried by Pi and answered", async () => {

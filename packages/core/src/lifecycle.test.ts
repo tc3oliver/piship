@@ -478,6 +478,41 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     });
   });
 
+  it("recovers a marked first install interrupted before its receipt", async () => {
+    const a = await release("1.0.0");
+    mkdirSync(appsDir(), { recursive: true });
+    writeFileSync(
+      join(appsDir(), ".initial-install.json"),
+      JSON.stringify({
+        schema: "piship-initial-install/v1",
+        id: ID,
+        command: ID,
+      }),
+    );
+    writeFileSync(join(appsDir(), "launch.mjs"), "partial launcher");
+    const receipt = await installDistribution(a.archive);
+    expect(receipt.active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("repairs a committed first install whose shim was not written", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    rmSync(receipt.commandPath);
+    writeFileSync(
+      join(appsDir(), ".initial-install.json"),
+      JSON.stringify({
+        schema: "piship-initial-install/v1",
+        id: ID,
+        command: ID,
+      }),
+    );
+    const repaired = await installDistribution(a.archive);
+    expect(repaired).toEqual(receipt);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
   it("refuses a tampered release before installing", async () => {
     const a = await release("1.0.0");
     flipByte(a.archive);

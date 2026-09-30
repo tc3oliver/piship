@@ -15,6 +15,7 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   governModelRuntime,
   isCredentialRejection,
+  isLiteLLMUpstreamFailure,
   isModelDenial,
 } from "./governance.js";
 
@@ -396,5 +397,26 @@ describe("personal Pi-native governance", () => {
       }),
     ).toBe(false);
     expect(isModelDenial(undefined)).toBe(false);
+    for (const [status, type] of [
+      ["401", "authentication_error"],
+      ["403", "permission_error"],
+    ]) {
+      const upstream = failed(
+        `${status}: ${JSON.stringify({ message: "litellm.AuthenticationError: provider secret xyz", type })}`,
+      );
+      expect(isLiteLLMUpstreamFailure(upstream)).toBe(true);
+      expect(isCredentialRejection(upstream)).toBe(false);
+      expect(isModelDenial(upstream)).toBe(false);
+    }
+    expect(
+      isCredentialRejection(
+        failed('401: {"message":"virtual key blocked","type":"auth_error"}'),
+      ),
+    ).toBe(true);
+    expect(
+      isModelDenial(
+        failed('403: {"message":"denied","type":"key_model_access_denied"}'),
+      ),
+    ).toBe(true);
   });
 });

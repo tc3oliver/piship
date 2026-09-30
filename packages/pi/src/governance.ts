@@ -234,6 +234,7 @@ export function isCredentialRejection(message: unknown): boolean {
   return (
     value?.role === "assistant" &&
     value.stopReason === "error" &&
+    !isLiteLLMUpstreamFailure(message) &&
     /(^|\D)401(\D|$)|unauthori[sz]ed|invalid api key|authentication failed/i.test(
       value.errorMessage ?? "",
     )
@@ -252,6 +253,28 @@ export function isModelDenial(message: unknown): boolean {
   return (
     value?.role === "assistant" &&
     value.stopReason === "error" &&
+    !isLiteLLMUpstreamFailure(message) &&
     /(^|\D)403(\D|$)|forbidden/i.test(value.errorMessage ?? "")
   );
+}
+
+/** Only LiteLLM's structured upstream error is evidence that the virtual key was accepted. */
+export function isLiteLLMUpstreamFailure(message: unknown): boolean {
+  const value = message as
+    | { role?: string; stopReason?: string; errorMessage?: string }
+    | undefined;
+  if (value?.role !== "assistant" || value.stopReason !== "error") return false;
+  const match = /^(401|403):\s*(\{.*\})$/s.exec(value.errorMessage ?? "");
+  if (!match) return false;
+  try {
+    const body = JSON.parse(match[2] ?? "") as Record<string, unknown>;
+    return (
+      typeof body.message === "string" &&
+      /^litellm\.[A-Za-z]+Error:/.test(body.message) &&
+      body.type ===
+        (match[1] === "401" ? "authentication_error" : "permission_error")
+    );
+  } catch {
+    return false;
+  }
 }
