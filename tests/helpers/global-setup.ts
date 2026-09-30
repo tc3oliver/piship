@@ -12,9 +12,10 @@ declare module "vitest" {
 // Only reserves a per-run directory: each example distribution's lifecycle
 // releases are built lazily, in a subdirectory of their own, by the first
 // scenario that needs them (tests/helpers/lifecycle.ts), so runs without
-// lifecycle scenarios pay nothing.
+// lifecycle scenarios pay nothing. The name is short for the same reason as
+// the subdirectories' (`Distribution.fixture`): Windows path length.
 export default function setup(project: TestProject) {
-  const directory = mkdtempSync(join(tmpdir(), "piship-lifecycle-fixtures-"));
+  const directory = mkdtempSync(join(tmpdir(), "piship-e2e-"));
   project.provide("lifecycleFixtures", directory);
   return () => rmSync(directory, { recursive: true, force: true });
 }
