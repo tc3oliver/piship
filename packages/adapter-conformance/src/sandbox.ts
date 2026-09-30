@@ -1202,9 +1202,11 @@ class Harness {
         };
         if (read()) sandboxToHost = "immediate";
         else {
-          const deadline = Date.now() + windowMs;
-          while (Date.now() < deadline) {
-            await sleep(Math.min(POLL_MS, deadline - Date.now()));
+          // Elapsed time, not the wall clock: a clock set back must not
+          // stretch the window (#80).
+          const deadline = performance.now() + windowMs;
+          while (performance.now() < deadline) {
+            await sleep(Math.min(POLL_MS, deadline - performance.now()));
             if (read()) {
               sandboxToHost = "delayed";
               break;
