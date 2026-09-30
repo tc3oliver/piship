@@ -2,6 +2,7 @@
 // renewal is recorded before it is sent and reused until the request is
 // resolved, across a lost answer, a failed attempt, and a process restart.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -45,6 +46,10 @@ const ctx = { distributionId: "acmecode" };
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ISSUER = "https://idp.example.test";
+const ENDPOINT = "https://broker.example.test/v1/credential";
+const targetOf = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+const BROKER_TARGET = targetOf(`http-broker ${ENDPOINT}`);
 
 function session(subject: string): IdentitySession {
   return {
@@ -165,12 +170,13 @@ function brokerManager(
     timeoutMs?: number;
     events?: CredentialEvent[];
     onPhase?: (phase: string) => void;
+    endpoint?: string;
   } = {},
 ): CredentialManager {
   return new CredentialManager({
     distributionId: "acmecode",
     provider: new HttpBrokerCredentialProvider({
-      endpoint: "https://broker.example.test/v1/credential",
+      endpoint: extra.endpoint ?? ENDPOINT,
       fetch: broker.fetch,
       ...(extra.timeoutMs ? { timeoutMs: extra.timeoutMs } : {}),
     }),
@@ -483,6 +489,127 @@ describe("durable credential issuance", () => {
     expect(broker.keys[3]).not.toBe(committed);
   });
 
+  it("never sends a pending key to another broker endpoint", async () => {
+    const broker = new FakeBroker();
+    broker.plan.push("drop-after-create");
+    await failure(
+      brokerManager(broker).ensure(alice, ctx, { allowAcquire: true }),
+    );
+    const key = broker.keys[0];
+    // An update moved the broker: the key is dropped, not sent there.
+    const moved = brokerManager(broker, {
+      endpoint: "https://broker-2.example.test/v1/credential",
+    });
+    await moved.ensure(alice, ctx, { allowAcquire: true });
+    expect(broker.keys[1]).not.toBe(key);
+    expect(pending()).toBeNull();
+    // An adapter's destination is what the manager is told decides it.
+    const adapter = (target: string) =>
+      new CredentialManager({
+        distributionId: "acmecode",
+        provider: {
+          mode: "adapter",
+          requiresIdentity: true,
+          acquire: (identity, keyed) =>
+            new HttpBrokerCredentialProvider({
+              endpoint: ENDPOINT,
+              fetch: broker.fetch,
+            }).acquire(identity, keyed),
+        },
+        store: new MemorySecretStore(),
+        metadataPath: join(temp, "adapter", "inference.json"),
+        beforeExpirySeconds: 300,
+        issuanceTarget: target,
+      });
+    broker.plan.push("drop-after-create");
+    await failure(
+      adapter("adapter one").ensure(alice, ctx, { allowAcquire: true }),
+    );
+    const adapterKey = broker.keys[2];
+    await adapter("adapter one").ensure(bob, ctx, { allowAcquire: true });
+    expect(broker.keys[3]).not.toBe(adapterKey);
+    await adapter("adapter one").logout(ctx);
+    broker.plan.push("drop-after-create");
+    await failure(
+      adapter("adapter one").ensure(alice, ctx, { allowAcquire: true }),
+    );
+    await adapter("adapter two").ensure(alice, ctx, { allowAcquire: true });
+    expect(broker.keys[5]).not.toBe(broker.keys[4]);
+  });
+
+  it("never repeats another request's key for a rejection renewal or an entitlement re-read", async () => {
+    const broker = new FakeBroker();
+    const credentials = brokerManager(broker);
+    await credentials.ensure(alice, ctx, { allowAcquire: true });
+    // An entitlement re-read whose answer was lost...
+    broker.plan.push("drop-after-create");
+    await failure(
+      credentials.ensure(alice, ctx, {
+        allowAcquire: false,
+        forceRefresh: "entitlement",
+      }),
+    );
+    const reread = broker.keys[1];
+    expect(pending()).toMatchObject({ request: "entitlement" });
+    // ...is not what a renewal after a gateway rejection repeats: a new key,
+    // and that renewal's own retry repeats it.
+    broker.plan.push("drop-after-create");
+    await failure(
+      credentials.ensure(alice, ctx, {
+        allowAcquire: false,
+        forceRefresh: true,
+      }),
+    );
+    const rejected = broker.keys[2];
+    expect(rejected).not.toBe(reread);
+    expect(pending()).toMatchObject({ request: "rejected" });
+    // Nor does an entitlement re-read repeat the rejection renewal's key.
+    broker.plan.push("drop-after-create");
+    await failure(
+      credentials.ensure(alice, ctx, {
+        allowAcquire: false,
+        forceRefresh: "entitlement",
+      }),
+    );
+    expect(broker.keys[3]).not.toBe(rejected);
+    // A retry of the same kind of request repeats its key.
+    await credentials.ensure(alice, ctx, {
+      allowAcquire: false,
+      forceRefresh: "entitlement",
+    });
+    expect(broker.keys[4]).toBe(broker.keys[3]);
+    expect(pending()).toBeNull();
+  });
+
+  it("keeps a pending key over a different key the caller passes", async () => {
+    const broker = new FakeBroker();
+    broker.plan.push("drop-after-create");
+    const credentials = brokerManager(broker);
+    await failure(credentials.ensure(alice, ctx, { allowAcquire: true }));
+    const key = broker.keys[0];
+    // An older key from an earlier failure would lose the one that may
+    // already have issued a credential.
+    await credentials.ensure(
+      alice,
+      { ...ctx, idempotencyKey: "older-caller-key-0001" },
+      { allowAcquire: true },
+    );
+    expect(broker.keys).toEqual([key, key]);
+    expect(broker.issued).toHaveLength(1);
+    // Without a pending key, the caller's key is used and recorded.
+    await credentials.logout(ctx);
+    broker.plan.push("drop-after-create");
+    await failure(
+      credentials.ensure(
+        alice,
+        { ...ctx, idempotencyKey: "caller-key-0002" },
+        { allowAcquire: true },
+      ),
+    );
+    expect(broker.keys[2]).toBe("caller-key-0002");
+    expect(pending()?.idempotency_key).toBe("caller-key-0002");
+  });
+
   it("sends nothing when the key cannot be recorded", async () => {
     const broker = new FakeBroker();
     // A file where the record's directory goes: the write cannot complete.
@@ -523,6 +650,8 @@ describe("durable credential issuance", () => {
       schema: CREDENTIAL_ISSUANCE_SCHEMA,
       idempotency_key: "kept-key-0001",
       mode: "http-broker",
+      request: "acquire",
+      target: BROKER_TARGET,
       principal: { issuer: ISSUER, subject: "alice" },
       created_at: new Date().toISOString(),
     };
@@ -531,6 +660,11 @@ describe("durable credential issuance", () => {
       { ...base, schema: "piship-credential-issuance/v9" },
       { ...base, mode: "adapter" },
       { ...base, idempotency_key: "has space" },
+      { ...base, request: "other" },
+      // Recorded for another broker endpoint, or before endpoints were
+      // recorded: never sent to this one.
+      { ...base, target: targetOf("http-broker https://other.example.test/") },
+      { ...base, target: undefined },
       {
         ...base,
         created_at: new Date(Date.now() + 3_600_000).toISOString(),
@@ -563,9 +697,13 @@ describe("durable credential issuance", () => {
       "idempotency_key",
       "mode",
       "principal",
+      "request",
       "schema",
+      "target",
     ]);
     expect(record.idempotency_key).toMatch(UUID);
+    // The destination only as a hash of the endpoint.
+    expect(record.target).toBe(BROKER_TARGET);
     if (process.platform !== "win32")
       expect(statSync(issuancePath()).mode & 0o777).toBe(0o600);
     const token = alice.accessToken?.reveal() ?? "";
@@ -682,11 +820,16 @@ await manager.ensure(
     const child = spawn(process.execPath, [script, url, metadataPath()], {
       stdio: "ignore",
     });
-    const exited = new Promise<NodeJS.Signals | null>((resolve) =>
-      child.on("exit", (_code, signal) => resolve(signal)),
+    const exited = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) =>
+      child.on("exit", (code, signal) => resolve({ code, signal })),
     );
     onIssued = () => child.kill("SIGKILL");
-    expect(await exited).toBe("SIGKILL");
+    // Killed, not a clean exit (Windows reports an exit code instead).
+    const { code, signal } = await exited;
+    expect(signal === "SIGKILL" || code !== 0).toBe(true);
     expect(issued).toHaveLength(1);
     const key = pending()?.idempotency_key;
     expect(key).toBe(keys[0]);
