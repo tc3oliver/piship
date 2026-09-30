@@ -881,6 +881,13 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
 
     it("an upstream 503 that persists ends the request as an error, never as an answer", async () => {
       await queueFaults({ status: 503, count: 60 });
+      // The launch check cannot see it: the model list never reaches the
+      // upstream, so it answers in full while every request fails.
+      const { value: listed, upstream: unseen } = await upstreamDuring(
+        async () => inferenceClient((await heldKey()).key).probe(),
+      );
+      expect(listed).toEqual(["acme/coder", "acme/general"]);
+      expect(unseen).toEqual([]);
       const { value: result, upstream } = await upstreamDuring(() =>
         smokeModel(),
       );

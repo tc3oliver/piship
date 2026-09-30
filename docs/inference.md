@@ -51,7 +51,7 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 
 ## Gateway status
 
-`GET {baseUrl}/models` (the live catalog at launch, and `doctor`) is classified as:
+`GET {baseUrl}/models` (the live catalog at launch, and `doctor`) shows that the gateway is reachable, that it accepts the runtime credential, and which models it lists for it. It does not reach a model provider behind the gateway: a gateway such as LiteLLM answers it from its own configuration, so a provider that is down, refuses the gateway's own provider key, or rate limits it shows only when a request is sent (in a session, or with `--smoke-model`). `doctor` says `model providers not contacted` for this reason. An answer is classified as:
 
 | Status | Code |
 | --- | --- |
