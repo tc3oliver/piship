@@ -248,6 +248,7 @@ type Fault =
   | "ignores cancellation"
   | "starts a timed-out command late and leaves it running"
   | "starts a cancelled command late and leaves it running"
+  | "starts a cancelled command after the kit's window and leaves it running"
   | "starts a command late and ignores dispose()"
   | "dispose leaves the sandbox running"
   | "dispose throws the second time"
@@ -294,6 +295,13 @@ const LATE_FAULTS: Partial<
   "starts a cancelled command late and leaves it running": {
     marker: "cancel-early",
     delayMs: 1_000,
+  },
+  // Its first line comes after the marker window that counts from the abort
+  // (1.8 s) has passed, so only a kit that watches a silent command longer
+  // than that sees it.
+  "starts a cancelled command after the kit's window and leaves it running": {
+    marker: "cancel-early",
+    delayMs: 2_400,
   },
   "starts a command late and ignores dispose()": {
     marker: "dispose",
@@ -1180,6 +1188,12 @@ describeIsolated(isolator)(
       ],
       [
         "starts a cancelled command late and leaves it running",
+        "shared",
+        "cancellation",
+        /cancelled before it started ran on and wrote its marker/,
+      ],
+      [
+        "starts a cancelled command after the kit's window and leaves it running",
         "shared",
         "cancellation",
         /cancelled before it started ran on and wrote its marker/,

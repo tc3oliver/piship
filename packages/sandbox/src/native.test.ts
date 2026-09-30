@@ -91,11 +91,16 @@ describe.skipIf(!posix)("the native backend's dispose", () => {
       identity,
       process.platform,
     ).prepare({ profile: profile() });
-    const running = instance.exec(
-      request("sleep 30"),
-      io(new AbortController().signal),
-    );
+    let ended = false;
+    const running = instance
+      .exec(request("sleep 30"), io(new AbortController().signal))
+      .finally(() => {
+        ended = true;
+      });
     await instance.dispose();
+    // A dispose that does not wait for a command started in the same tick
+    // (one that returns after aborting) comes back while it is still dying.
+    expect(ended).toBe(true);
     expect(await running).toMatchObject({ signal: "SIGTERM" });
     await expect(
       instance.exec(request("true"), io(new AbortController().signal)),
