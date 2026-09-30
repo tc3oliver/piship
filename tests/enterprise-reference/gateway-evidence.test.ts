@@ -815,7 +815,10 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         `upstream 401 in a session (${result.seconds} s): ${JSON.stringify(result.modelRequest)}`,
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
+      // Reported with the code of the gateway's answer: the provider refused.
+      expect(result.stderr).toContain(
+        "GATEWAY_UNREACHABLE: The acceptance model request failed: 401: ",
+      );
       expect(result.modelRequest?.stopReason).toBe("error");
       // Pi's message is the status and LiteLLM's error object.
       expect(result.modelRequest?.error).toMatch(
@@ -888,7 +891,9 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         `upstream 503 in a session (${result.seconds} s, ${upstream.length} upstream attempts): ${JSON.stringify(result.modelRequest)}`,
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
+      expect(result.stderr).toContain(
+        "GATEWAY_UNREACHABLE: The acceptance model request failed: 503: ",
+      );
       expect(result.modelRequest?.stopReason).toBe("error");
       expect(result.modelRequest?.text).not.toBe(REPLY);
       expect(result.modelRequest?.error).toMatch(
@@ -931,7 +936,10 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         `cut stream in a session (${result.seconds} s, ${upstream.length} upstream attempts): ${JSON.stringify(result.modelRequest)}`,
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
+      // A stream cut after it started carries no status: a protocol error.
+      expect(result.stderr).toContain(
+        "GATEWAY_PROTOCOL_ERROR: The acceptance model request failed: litellm.APIConnectionError",
+      );
       expect(result.modelRequest?.stopReason).toBe("error");
       expect(result.modelRequest?.text).not.toBe(REPLY);
       // LiteLLM's error event carries no status, so Pi's message has none.

@@ -17,6 +17,7 @@ import {
   isCredentialRejection,
   isModelDenial,
   requestFailure,
+  acceptanceFailure,
 } from "./governance.js";
 
 const model = (id: string) => ({
@@ -439,5 +440,53 @@ describe("personal Pi-native governance", () => {
     expect(
       requestFailure(failed("Stream ended without finish_reason")),
     ).toEqual({ message: "Stream ended without finish_reason" });
+  });
+  it("reports a failed acceptance request with the code of the gateway's status", () => {
+    const failed = (errorMessage: string) => ({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage,
+    });
+    const code = (errorMessage: string) =>
+      acceptanceFailure(failed(errorMessage));
+    expect(
+      code(
+        '503: {"message":"litellm.ServiceUnavailableError: ...","type":"internal_server_error","param":null,"code":"503"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
+    expect(
+      code(
+        '429: {"message":"litellm.RateLimitError: ...","type":"throttling_error","param":null,"code":"429"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_RATE_LIMITED", retryable: true });
+    expect(
+      code(
+        '401: {"message":"Authentication Error, Key is blocked.","type":"auth_error","param":"None","code":"401"}',
+      ).code,
+    ).toBe("CREDENTIAL_REVOKED");
+    expect(
+      code(
+        '401: {"message":"litellm.AuthenticationError: ...","type":"authentication_error","param":null,"code":"401"}',
+      ),
+    ).toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: false });
+    expect(
+      code(
+        `403: {"message":"The requested model 'acme/general' is not available for this API key","type":"key_model_access_denied","param":"model","code":"403"}`,
+      ).code,
+    ).toBe("MODEL_DENIED");
+    // A stream cut after it started carries no status: a protocol error.
+    const cut = code(
+      "litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
+    );
+    expect(cut).toMatchObject({
+      code: "GATEWAY_PROTOCOL_ERROR",
+      retryable: false,
+    });
+    expect(cut.message).toBe(
+      "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
+    );
+    expect(
+      acceptanceFailure({ role: "assistant", stopReason: "aborted" }).code,
+    ).toBe("GATEWAY_PROTOCOL_ERROR");
   });
 });

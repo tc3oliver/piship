@@ -145,7 +145,7 @@ Gateway authentication and upstream failures, observed the same way (`gateway-ev
 | Upstream 500, 502, 503, 504 | That status, `internal_server_error`, `litellm.InternalServerError`, `BadGatewayError`, `ServiceUnavailableError`, `Timeout`, after 3 attempts (4 to 5 s); no cooldown | `GATEWAY_UNREACHABLE`, retryable; Pi retries 3 times |
 | Stream cut by the upstream | 200, the chunks sent so far, then `data: {"error": {"message": "litellm.APIConnectionError: ... Response payload is not completed ...", "type": null, "code": "500"}}` and no `[DONE]`; not retried | Pi retries; if it persists, the request ends as an error with the partial text, never as an answer |
 
-In a session Pi sends the request, and its error message is the status and LiteLLM's error object (`503: {"message": ...}`), or the message alone for a stream error event. `--smoke-model` reports any failed request as `GATEWAY_PROTOCOL_ERROR`. `GET /v1/models` never reaches the upstream, so an upstream failure is not seen at launch.
+In a session Pi sends the request, and its error message is the status and LiteLLM's error object (`503: {"message": ...}`), or the message alone for a stream error event. `--smoke-model` reports a failed request with the code of that status and body (an upstream 503 or 401 is `GATEWAY_UNREACHABLE`), and a stream error event, which has no status, as `GATEWAY_PROTOCOL_ERROR`. `GET /v1/models` never reaches the upstream, so an upstream failure is not seen at launch.
 
 Also observed:
 

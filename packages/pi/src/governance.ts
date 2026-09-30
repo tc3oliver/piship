@@ -1,6 +1,6 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { PiShipError } from "@piship/contracts";
-import { isUpstreamProviderError } from "@piship/core";
+import { PiShipError, redact } from "@piship/contracts";
+import { classifyGatewayStatus, isUpstreamProviderError } from "@piship/core";
 
 type Model = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 type AuthResult = Awaited<ReturnType<ModelRuntime["getAuth"]>>;
@@ -288,5 +288,36 @@ export function isModelDenial(message: unknown): boolean {
     failure !== undefined &&
     /(^|\D)403(\D|$)|forbidden/i.test(failure.message) &&
     !isUpstreamProviderError(failure.body)
+  );
+}
+
+/**
+ * The error a failed acceptance request (`--smoke-model`) is reported with.
+ * When Pi's message carries the gateway's status, it is classified as the
+ * model list check classifies that status (with the error body, so a
+ * provider's refusal relayed by the gateway reads as such); an interrupted
+ * stream, an abort, or a message without a status is a protocol error.
+ */
+export function acceptanceFailure(message: unknown): PiShipError {
+  const value = message as
+    | { stopReason?: string; errorMessage?: string }
+    | undefined;
+  const detail = redact(value?.errorMessage ?? value?.stopReason ?? "unknown");
+  const failure = requestFailure(message);
+  const classified =
+    failure?.status === undefined
+      ? null
+      : classifyGatewayStatus(failure.status, {}, failure.body);
+  return new PiShipError(
+    classified?.code ?? "GATEWAY_PROTOCOL_ERROR",
+    `The acceptance model request failed: ${detail}`,
+    {
+      component: "inference",
+      retryable: classified?.retryable ?? false,
+      ...(classified?.retryAfterMs === undefined
+        ? {}
+        : { retryAfterMs: classified.retryAfterMs }),
+      ...(classified?.userAction ? { userAction: classified.userAction } : {}),
+    },
   );
 }
