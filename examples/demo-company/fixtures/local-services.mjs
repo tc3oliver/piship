@@ -125,6 +125,11 @@ function respond(response, result) {
   return json(response, result.status, result.body, result.headers);
 }
 
+// The signing key, generated once per process: an RSA key costs tens of
+// milliseconds (several times that on a loaded CI runner), and a test file
+// starts the services once per test. Each service still has its own issuer.
+let processSigningKey;
+
 /**
  * Start all fixture services on one loopback port.
  *
@@ -168,7 +173,8 @@ function respond(response, result) {
  */
 export async function startLocalServices(options = {}) {
   const clientId = options.clientId ?? "demo-company-cli";
-  const signingKey = keyPair("demo-signing-key");
+  processSigningKey ??= keyPair("demo-signing-key");
+  const signingKey = processSigningKey;
   // Same key id, other key material. Generated on first use: most services
   // never sign with it, and an RSA key costs tens of milliseconds.
   let rogue;
