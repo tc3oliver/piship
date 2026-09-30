@@ -578,6 +578,13 @@ export class DistributionAccess {
       metadataPath: this.paths.credential,
       revocationRetryPath: this.paths.revocationRetry,
       issuancePath: this.paths.credentialIssuance,
+      // An adapter's requests go where its module and the resolved
+      // endpoints send them; a broker's to its endpoint (the default).
+      ...(mode === "adapter"
+        ? {
+            issuanceTarget: `adapter ${access?.credential.adapter ?? ""} ${JSON.stringify(this.endpoints)}`,
+          }
+        : {}),
       storeProvider: this.storeProvider,
       storeFor: this.#storeFor,
       ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),

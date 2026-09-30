@@ -327,12 +327,14 @@ await new CredentialManager({
       { stdio: ["ignore", "pipe", "inherit"] },
     );
     const exited = new Promise((done) =>
-      child.on("exit", (_code, signal) => done(signal)),
+      child.on("exit", (code, signal) => done({ code, signal })),
     );
     child.stdout.on("data", (chunk) => {
       if (String(chunk).includes("answered")) child.kill("SIGKILL");
     });
-    assert.equal(await exited, "SIGKILL");
+    // Killed, not a clean exit (Windows reports an exit code instead).
+    const { code, signal } = await exited;
+    assert.ok(signal === "SIGKILL" || code !== 0);
     assert.equal(h.litellm.keys.size, 1);
     assert.ok(pendingKey());
     assert.equal(existsSync(metadataPath()), false);
