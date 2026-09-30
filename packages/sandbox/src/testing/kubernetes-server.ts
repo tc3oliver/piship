@@ -13,6 +13,8 @@ export interface Cluster {
   deleteStatus?: number;
   /** Claims the cluster already removed (their shutdownTime passed). */
   expired?: Set<string>;
+  /** Claims never report Ready. */
+  neverReady?: boolean;
   /** Holds PATCH responses until it resolves. */
   patchGate?: Promise<void>;
   /**
@@ -73,7 +75,7 @@ export async function kubernetesServer(
       return void response.end(
         JSON.stringify({
           status:
-            seen < 2
+            seen < 2 || cluster.neverReady
               ? { conditions: [{ type: "Ready", status: "False" }] }
               : {
                   conditions: [{ type: "Ready", status: "True" }],
