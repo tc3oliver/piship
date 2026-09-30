@@ -5,8 +5,9 @@
 // name; anything shaped like a LiteLLM key (`sk-...`), a JWT, or an
 // `Authorization: Bearer` or `Basic` value; and the value of an OAuth `code`,
 // `state`, or `session_state` where it is a parameter of a URL (after `?`,
-// `&`, or `#`, also with the URL percent-encoded inside another one:
-// `%3Fcode%3D...`) or a token-shaped string of a JSON object (`"code":"..."`,
+// `&`, `#`, or `&amp;`, also with the URL percent-encoded once or twice inside
+// another one: `%3Fcode%3D...`, `%253Fcode%253D...`, and the whole value, `/`
+// and `+` included) or a token-shaped string of a JSON object (`"code":"..."`,
 // 16 characters or more, also when the JSON is itself a quoted string).
 // Words in ordinary log text (`exit code=137`, `state=running`) and short
 // JSON values (`"state":"running"`, `"code":"401"`) are kept; a form-encoded
@@ -44,12 +45,20 @@ const values = secrets
   .sort(([, a], [, b]) => b.length - a.length);
 
 // An OAuth parameter of a URL: `code`, `state`, or `session_state` straight
-// after `?`, `&`, or `#`, or after their percent-encoded forms (`%3F`, `%26`)
-// when the URL is a parameter of another one, with `=` or `%3D`. The value
-// runs to the next `&` or `%26`. The same words in log text, with no URL
-// separator before them, are not parameters.
-const OAUTH_URL_PARAMETER =
-  /(?<=[?&#]|%3[Ff]|%26)(code|state|session_state)(=|%3[Dd])(?:(?!%26)[\w.~%-])+/g;
+// after `?`, `&`, `#`, or `&amp;` (a URL in HTML), or after their percent-
+// encoded forms (`%3F`, `%26`, `%23`) when the URL is a parameter of another
+// one, once or twice encoded (`%253F`), with `=` or `%3D`. The value is
+// everything up to white space, a quote, `<`, `>`, `&`, or an encoded `&`:
+// a code from an identity provider can hold `/` and `+` (`4/0Ab...`). The
+// same words in log text, with no URL separator before them, are not
+// parameters. Every part is bounded, so the scan stays linear.
+const encoded = (hex) => `%(?:25){0,2}${hex}`;
+const OAUTH_URL_PARAMETER = new RegExp(
+  `(?<=[?&#]|&amp;|${encoded("3[Ff]")}|${encoded("26")}|${encoded("23")})` +
+    `(code|state|session_state)(=|${encoded("3[Dd]")})` +
+    `(?:(?!${encoded("26")})[^\\s&"'<>])+`,
+  "g",
+);
 
 // A member of a JSON object whose name is one of those and whose value is a
 // string shaped like a token: 16 or more characters that a code, a state, or
