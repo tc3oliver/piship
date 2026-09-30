@@ -17,11 +17,19 @@ import { Sandboxes } from "./src/sandboxes.mjs";
 export { loadConfig };
 
 /** Build the server and its dependencies from a config; `start()` listens. */
-export function createSandboxServer(config, { write, env = process.env } = {}) {
+export function createSandboxServer(
+  config,
+  { write, env = process.env, owner } = {},
+) {
   const log = createLogger(write ? { write } : {});
   const keys = loadRegistry(config.registry);
   const docker = createDocker({ command: config.docker, env });
-  const sandboxes = new Sandboxes({ config, docker, log });
+  const sandboxes = new Sandboxes({
+    config,
+    docker,
+    log,
+    ...(owner ? { owner } : {}),
+  });
   const server = createServer(createApp({ config, keys, sandboxes, log }));
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
@@ -30,9 +38,12 @@ export function createSandboxServer(config, { write, env = process.env } = {}) {
     server,
     sandboxes,
     log,
-    /** Remove the previous run's sandboxes, then listen. Resolves with the port. */
+    /**
+     * Listen, then remove the previous run's sandboxes. It listens first: a
+     * service that cannot have the port (another one holds it) must not have
+     * removed that one's sandboxes. Resolves with the port.
+     */
     async start() {
-      await sandboxes.start();
       await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
         server.listen(config.listenPort, config.listenHost, () => {
@@ -43,6 +54,7 @@ export function createSandboxServer(config, { write, env = process.env } = {}) {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       log("service.listening", { listen: `${config.listenHost}:${port}` });
+      await sandboxes.start();
       return port;
     },
     /**
@@ -84,6 +96,15 @@ if (
     service.log("service.crashed", { reason: error?.code ?? "error" });
     stop(1);
   });
+  // A supervisor that starts the service with SANDBOX_EXIT_ON_STDIN_END=1 and
+  // a pipe for its standard input owns it: when the supervisor is gone, even
+  // killed outright, the pipe closes and the service removes its sandboxes and
+  // exits, instead of holding its port and its containers.
+  if (process.env.SANDBOX_EXIT_ON_STDIN_END === "1") {
+    process.stdin.on("end", () => stop(0));
+    process.stdin.on("error", () => stop(0));
+    process.stdin.resume();
+  }
   service.start().catch((error) => {
     process.stderr.write(`sandbox: cannot start (${error?.code ?? "error"})\n`);
     stop(1);

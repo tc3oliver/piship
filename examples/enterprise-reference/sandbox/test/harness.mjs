@@ -1,4 +1,4 @@
-// The service under test with a fake docker CLI, two users' keys, and a
+// The service under test with a fake docker CLI, five users' keys, and a
 // directory of workspaces it may mount. Everything lives in one temporary
 // directory that `stop()` removes.
 import { randomBytes } from "node:crypto";
@@ -18,9 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createSandboxServer, loadConfig } from "../service/server.mjs";
 import { REGISTRY_SCHEMA, sha256Hex } from "../service/src/auth.mjs";
 
-const FAKE_DOCKER = fileURLToPath(
-  new URL("./fake-docker.mjs", import.meta.url),
-);
+const FAKE_DOCKER = fileURLToPath(new URL("./fake-docker", import.meta.url));
 export const IMAGE = "example.invalid/sandbox-image:1";
 
 export const newKey = () => `sbxk_${randomBytes(32).toString("base64url")}`;
@@ -34,10 +32,19 @@ export function makeRepository(path) {
   return path;
 }
 
+/** The host user of the tests: the owner of every workspace they make. */
+export const HOST_UID = process.getuid?.() ?? 1000;
+
 /**
  * @param {Record<string, string>} [extraEnv] service settings for the test
+ * @param {{owner?: (path: string) => {uid: number, gid: number}}} [options]
+ *   `owner` replaces how a workspace's owner is read
+ *
+ * Five keys: alice and bob are bound to the host user of the tests, carol to
+ * another user, dave to the host user and to one directory (`dave`), and erin
+ * is unbound.
  */
-export async function startService(extraEnv = {}) {
+export async function startService(extraEnv = {}, options = {}) {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), "piship-sandbox-contract-")),
   );
@@ -46,7 +53,17 @@ export async function startService(extraEnv = {}) {
   const keysDirectory = join(root, "keys");
   for (const path of [docker, workspaces, keysDirectory])
     mkdirSync(path, { mode: 0o700 });
-  const keys = { alice: newKey(), bob: newKey() };
+  mkdirSync(join(workspaces, "dave"));
+  const bindings = {
+    alice: { uid: HOST_UID },
+    bob: { uid: HOST_UID },
+    carol: { uid: HOST_UID + 1 },
+    dave: { uid: HOST_UID, roots: [join(workspaces, "dave")] },
+    erin: { unbound: true },
+  };
+  const keys = Object.fromEntries(
+    Object.keys(bindings).map((id) => [id, newKey()]),
+  );
   const registry = join(keysDirectory, "registry.json");
   writeFileSync(
     registry,
@@ -55,6 +72,7 @@ export async function startService(extraEnv = {}) {
       keys: Object.entries(keys).map(([id, key]) => ({
         id,
         sha256: sha256Hex(key),
+        ...bindings[id],
       })),
     }),
     { mode: 0o600 },
@@ -78,6 +96,7 @@ export async function startService(extraEnv = {}) {
   const service = createSandboxServer(config, {
     write: (line) => lines.push(line),
     env,
+    ...(options.owner ? { owner: options.owner } : {}),
   });
   const port = await service.start();
   config.allowedHosts.add(`127.0.0.1:${port}`);
@@ -105,19 +124,28 @@ export async function startService(extraEnv = {}) {
       readdirSync(join(docker, "containers")).map((file) =>
         file.replace(/\.json$/, ""),
       ),
-    /** Make the fake docker fail (`DOWN`, `RUN_FAIL`) or work again. */
-    fault(name, on = true) {
+    /**
+     * Turn a fault of the fake docker on or off: `DOWN`, `RUN_FAIL`, `NO_MAIN`,
+     * or `CANCEL_DELAY` (its `content` is the milliseconds).
+     */
+    fault(name, on = true, content = "") {
       const file = join(docker, name);
-      if (on) writeFileSync(file, "");
+      if (on) writeFileSync(file, content);
       else rmSync(file, { force: true });
     },
-    /** A leftover container from an earlier run of `instance`. */
-    leftover(name, instance) {
+    /**
+     * A leftover container of `instance` started by the service user `owner`
+     * (the host user of the tests by default; none, with `null`).
+     */
+    leftover(name, instance, owner = HOST_UID) {
       writeFileSync(
         join(docker, "containers", `${name}.json`),
         JSON.stringify({
           name,
-          labels: [`piship.sandbox.instance=${instance}`],
+          labels: [
+            `piship.sandbox.instance=${instance}`,
+            ...(owner === null ? [] : [`piship.sandbox.owner=${owner}`]),
+          ],
           args: [],
         }),
       );

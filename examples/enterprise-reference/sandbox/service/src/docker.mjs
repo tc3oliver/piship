@@ -66,6 +66,8 @@ export function runArguments(config, spec) {
     "--label",
     `piship.sandbox.instance=${config.instance}`,
     "--label",
+    `piship.sandbox.owner=${config.uid}`,
+    "--label",
     `piship.sandbox.session=${spec.session}`,
     "--user",
     `${spec.uid}:${spec.gid}`,
@@ -105,10 +107,12 @@ export function runArguments(config, spec) {
 }
 
 /**
- * Arguments of `docker exec` for one command. The environment is read from a
- * file the caller made (mode 0600), so no value is on this process's command
- * line. The command itself is: an organization that cannot accept that runs
- * the container runtime through its API instead of this CLI.
+ * Arguments of `docker exec` for one command. The environment is read from
+ * the CLI's standard input (`--env-file /dev/stdin`, which the CLI reads at
+ * start): no value is on this process's command line, and no file holds one,
+ * so nothing survives a crash of this service. The command itself is on the
+ * command line: an organization that cannot accept that runs the container
+ * runtime through its API instead of this CLI.
  *
  * The wrapper gives up at once if the command was cancelled before it began:
  * `docker exec` returns before the process exists in the container, so a
@@ -119,7 +123,7 @@ export function execArguments(config, exec) {
   return [
     "exec",
     "--env-file",
-    exec.envFile,
+    "/dev/stdin",
     "--workdir",
     exec.workdir,
     exec.container,
@@ -131,31 +135,58 @@ export function execArguments(config, exec) {
   ];
 }
 
+/** The environment file of one command, as `--env-file /dev/stdin` reads it. */
+export function environmentInput(id, variables) {
+  const lines = [[EXEC_ID_VARIABLE, id], ...variables].map(
+    ([name, value]) => `${name}=${value}`,
+  );
+  return `${lines.join("\n")}\n`;
+}
+
 /**
- * Stops every process of one command, run inside the sandbox by a second
- * `docker exec`: it leaves the cancel token first (a command that has not
- * begun will not), then stops (SIGSTOP, so nothing forks any more) and kills
- * every process whose environment carries the command's ID. A command's
- * children inherit its environment, so this reaches a background process
- * and a process that started its own session, which a process group would
- * not. The ID is random and never leaves this service.
+ * Stops a command. Run inside the sandbox by a second `docker exec`, with the
+ * command's ID, a mode, and the process ID of the sandbox's own main process.
+ * It leaves the cancel token first (a command that has not begun will not),
+ * then stops the processes it is to end (SIGSTOP, so nothing forks any more)
+ * and kills them.
+ *
+ * - `marked`: every process whose environment carries the command's ID. A
+ *   command's children inherit it, so this reaches a background process and a
+ *   process that started its own session, which a process group would not.
+ *   It cannot reach one that dropped the variable (`env -u`), so it is used
+ *   only while another command runs in the sandbox, whose processes a sweep
+ *   would kill too.
+ * - `sweep`: every process of the sandbox except its init and its main
+ *   process, which the service found at creation. Nothing else runs in the
+ *   sandbox but the cancelled command and what it left, so a process that
+ *   dropped the ID, or every variable, goes as well.
+ *
+ * The ID is random and never leaves this service.
  */
 export const CANCEL_SCRIPT = `
-: > "${CANCEL_DIRECTORY}/.piship-cancel-$1"
-marked() { tr '\\0' '\\n' < "/proc/$1/environ" 2>/dev/null | grep -qx "${EXEC_ID_VARIABLE}=$2"; }
+ID=$1; MODE=$2; MAIN=$3
+: > "${CANCEL_DIRECTORY}/.piship-cancel-$ID"
+marked() { tr '\\0' '\\n' < "/proc/$1/environ" 2>/dev/null | grep -qx "${EXEC_ID_VARIABLE}=$ID"; }
 signal() {
   for d in /proc/[0-9]*; do
     p=\${d##*/}
     [ "$p" = "$$" ] && continue
-    marked "$p" "$1" && kill -"$2" "$p" 2>/dev/null
+    if [ "$MODE" = sweep ]; then
+      [ "$p" = 1 ] && continue
+      [ "$p" = "$MAIN" ] && continue
+      kill -"$1" "$p" 2>/dev/null
+    else
+      marked "$p" && kill -"$1" "$p" 2>/dev/null
+    fi
   done
 }
-signal "$1" STOP; signal "$1" STOP; signal "$1" STOP
-signal "$1" KILL; signal "$1" KILL
+signal STOP; signal STOP; signal STOP
+signal KILL; signal KILL
 exit 0
 `;
 
-export function cancelArguments(config, container, id) {
+/** `mode` is "sweep" or "marked"; `main` is the sandbox's main process, for a sweep. */
+export function cancelArguments(config, container, id, mode, main) {
   return [
     "exec",
     container,
@@ -164,6 +195,34 @@ export function cancelArguments(config, container, id) {
     CANCEL_SCRIPT,
     "piship-cancel",
     id,
+    mode,
+    String(main ?? ""),
+  ];
+}
+
+/**
+ * Prints the process ID of the sandbox's main process: right after creation,
+ * the only process whose parent is the init (process 1), since nothing else
+ * runs yet. The service asks once, before any command.
+ */
+export const MAIN_PROCESS_SCRIPT = `
+for d in /proc/[0-9]*; do
+  p=\${d##*/}
+  [ "$p" = "$$" ] && continue
+  set -- $(sed 's/^.*) //' "$d/stat" 2>/dev/null)
+  [ "$2" = 1 ] && { echo "$p"; exit 0; }
+done
+exit 1
+`;
+
+export function mainProcessArguments(config, container) {
+  return [
+    "exec",
+    container,
+    config.shell,
+    "-c",
+    MAIN_PROCESS_SCRIPT,
+    "piship-main",
   ];
 }
 
@@ -210,11 +269,19 @@ export function createDocker({ command = "docker", env = process.env } = {}) {
         });
       });
     },
-    start(args) {
-      return spawn(command, args, {
+    /**
+     * A long command's child. `input` is written to its standard input, which
+     * is then closed.
+     */
+    start(args, { input = "" } = {}) {
+      const child = spawn(command, args, {
         env: environment,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
+      // The CLI may end before it reads all of it; its exit says so.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(input);
+      return child;
     },
   };
 }

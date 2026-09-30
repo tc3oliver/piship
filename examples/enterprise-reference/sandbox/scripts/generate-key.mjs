@@ -7,7 +7,15 @@
 //   <command> sandbox login < <user>.key
 // so it never reaches shell history or argv.
 //
-//   node scripts/generate-key.mjs --user alice --dir ./sandbox-keys [--force]
+// A key is bound to the host user whose projects it may mount, because the
+// service runs commands as the owner of the project: --uid names that user
+// (default: the user running this script). --root narrows the directories
+// further (repeatable). --unbound is the explicit opt-in for a single-user
+// setup, where the key may mount any project of any non-root owner under the
+// service's roots.
+//
+//   node scripts/generate-key.mjs --user alice --dir ./sandbox-keys \
+//     [--uid 501 | --unbound] [--root /srv/src/alice ...] [--force]
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -17,7 +25,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const REGISTRY_SCHEMA = "piship-reference-sandbox-registry/v1";
@@ -26,19 +34,33 @@ const { values } = parseArgs({
   options: {
     user: { type: "string" },
     dir: { type: "string" },
+    uid: { type: "string" },
+    unbound: { type: "boolean", default: false },
+    root: { type: "string", multiple: true },
     force: { type: "boolean", default: false },
   },
 });
-if (
-  !values.user ||
-  !/^[a-z0-9][a-z0-9_.-]{0,40}$/.test(values.user) ||
-  !values.dir
-) {
+const usage = (problem) => {
   process.stderr.write(
-    "usage: generate-key.mjs --user <lowercase name> --dir <directory> [--force]\n",
+    `${problem}\nusage: generate-key.mjs --user <lowercase name> --dir <directory> [--uid <host user ID> | --unbound] [--root <directory> ...] [--force]\n`,
   );
   process.exit(2);
+};
+if (!values.user || !/^[a-z0-9][a-z0-9_.-]{0,40}$/.test(values.user))
+  usage("--user must be a short lowercase name");
+if (!values.dir) usage("--dir is required");
+if (values.unbound && values.uid !== undefined)
+  usage("--uid and --unbound are exclusive");
+let uid;
+if (!values.unbound) {
+  uid = values.uid === undefined ? process.getuid?.() : Number(values.uid);
+  if (!(Number.isInteger(uid) && uid >= 1 && uid <= 4_294_967_294))
+    usage(
+      "--uid must be a non-root host user ID (run as that user, or pass --uid, or --unbound)",
+    );
 }
+for (const root of values.root ?? [])
+  if (!isAbsolute(root)) usage("--root must be an absolute path");
 
 const directory = resolve(values.dir);
 mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -57,7 +79,14 @@ const registry = existsSync(registryFile)
   : { schema: REGISTRY_SCHEMA, keys: [] };
 registry.keys = [
   ...registry.keys.filter((entry) => entry.id !== values.user),
-  { id: values.user, sha256 },
+  {
+    id: values.user,
+    sha256,
+    ...(values.unbound ? { unbound: true } : { uid }),
+    ...(values.root?.length
+      ? { roots: values.root.map((r) => resolve(r)) }
+      : {}),
+  },
 ];
 writeFileSync(keyFile, `${key}\n`, { mode: 0o600 });
 chmodSync(keyFile, 0o600);

@@ -3,21 +3,14 @@
 // bind-mounted at /workspace. This module decides what may be mounted and
 // runs the container lifecycle; it never sees a credential.
 import { randomBytes } from "node:crypto";
-import {
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import {
   cancelArguments,
   EXEC_ID_VARIABLE,
+  environmentInput,
   execArguments,
+  mainProcessArguments,
   runArguments,
   WORKSPACE_MOUNT,
 } from "./docker.mjs";
@@ -167,23 +160,36 @@ export class Sandboxes {
   #log;
   #now;
   #sessions = new Map();
+  #owner;
   #reserved = 0;
   #closed = false;
-  #directory;
   #timer;
   #runtime = { ok: false, at: 0 };
 
-  constructor({ config, docker, log, now = Date.now }) {
+  /**
+   * `owner` reads a workspace's owner and group (a test seam: the tests
+   * cannot make a directory of another user's or of root's).
+   */
+  constructor({
+    config,
+    docker,
+    log,
+    now = Date.now,
+    owner = (path) => statSync(path),
+  }) {
     this.#config = config;
     this.#docker = docker;
     this.#log = log;
     this.#now = now;
-    // Owner-only (mkdtemp makes it 0700): the env files of running commands
-    // are written here.
-    this.#directory = mkdtempSync(join(tmpdir(), "piship-sandbox-service-"));
+    this.#owner = owner;
   }
 
-  /** Remove what an earlier run of this instance left behind, then start the sweep. */
+  /**
+   * Remove what an earlier run of this service left behind, then start the
+   * sweep. "This service" is the containers that carry both its instance name
+   * and its user's ID, so another service's containers, or anyone else's,
+   * are never touched.
+   */
   async start() {
     const listed = await this.#docker.run([
       "ps",
@@ -191,6 +197,8 @@ export class Sandboxes {
       "--quiet",
       "--filter",
       `label=piship.sandbox.instance=${this.#config.instance}`,
+      "--filter",
+      `label=piship.sandbox.owner=${this.#config.uid}`,
     ]);
     const stale = listed.stdout.split("\n").filter(Boolean);
     if (stale.length > 0)
@@ -202,7 +210,7 @@ export class Sandboxes {
     this.#timer.unref();
   }
 
-  /** Remove every sandbox and the env directory. */
+  /** Remove every sandbox. */
   async close() {
     this.#closed = true;
     clearInterval(this.#timer);
@@ -211,7 +219,6 @@ export class Sandboxes {
         this.#destroy(session, "shutdown").catch(() => undefined),
       ),
     );
-    rmSync(this.#directory, { recursive: true, force: true });
   }
 
   count(owner) {
@@ -254,27 +261,37 @@ export class Sandboxes {
 
   /**
    * What the workspace mounts look like, or a refusal. The workspace must be
-   * inside a root the operator configured; it must be a git repository with
-   * a real `.git` directory, since that is how the git control files are
-   * kept unchangeable; and it must not belong to root, since commands run as
-   * its owner.
+   * inside a root the operator configured (and one of the key's own roots, if
+   * its registry entry names any); it must belong to the host user the key is
+   * bound to, and never to root or to group 0, since commands run as its
+   * owner and group, and a key must not run commands as someone else's user;
+   * and it must be a git repository with a real `.git` directory, since that
+   * is how the git control files are kept unchangeable. What the caller may
+   * not mount is one answer, whether it is outside the roots, someone else's,
+   * or root's, so a caller learns nothing about directories it may not use.
    */
-  #plan(request) {
+  #plan(user, request) {
     const refused = new SandboxError(
       422,
       "workspace_not_allowed",
       "The workspace is not a directory this service may mount",
     );
     let real;
+    let ownership;
     try {
       real = realpathSync(request.workspace);
+      ownership = this.#owner(real);
       if (!statSync(real).isDirectory()) throw refused;
     } catch {
       throw refused;
     }
     if (!this.#config.workspaceRoots.some((root) => within(root, real)))
       throw refused;
+    if (user.roots && !user.roots.some((root) => within(root, real)))
+      throw refused;
     if (UNSAFE_PATH.test(real)) throw refused;
+    if (ownership.uid === 0 || ownership.gid === 0) throw refused;
+    if (!user.unbound && ownership.uid !== user.uid) throw refused;
     const unsupported = (message) =>
       new SandboxError(409, "workspace_unsupported", message);
     const dotGit = join(real, ".git");
@@ -283,11 +300,7 @@ export class Sandboxes {
       throw unsupported(
         "The workspace must be a git repository with a .git directory",
       );
-    const { uid, gid } = statSync(real);
-    if (uid === 0)
-      throw unsupported(
-        "The workspace belongs to root; commands do not run as root",
-      );
+    const { uid, gid } = ownership;
     // The one place under the read-only .git that stays writable: where
     // PiShip's workspace check puts its files.
     const location = join(dotGit, "piship-workspace");
@@ -365,7 +378,9 @@ export class Sandboxes {
       );
   }
 
-  async create(owner, request) {
+  /** `user` is the registry entry the request's key belongs to. */
+  async create(user, request) {
+    const owner = user.id;
     this.#assertOpen();
     if (this.#sessions.size + this.#reserved >= this.#config.maxTotal)
       throw new SandboxError(429, "limit_reached", "The service is full", {
@@ -384,7 +399,7 @@ export class Sandboxes {
         "runtime_unavailable",
         "The container runtime is not available",
       );
-    const plan = this.#plan(request);
+    const plan = this.#plan(user, request);
     const id = `sbx_${randomBytes(12).toString("hex")}`;
     const name = `piship-sbx-${this.#config.instance}-${id.slice(4, 16)}`;
     this.#reserved++;
@@ -422,15 +437,31 @@ export class Sandboxes {
         "The container runtime could not start the sandbox",
       );
     }
+    // The sandbox's main process, found now, before any command has run: a
+    // cancel that sweeps the sandbox must leave it alone. If it cannot be
+    // found (a runtime without /proc/<pid>/stat), a cancel stays with the
+    // processes that carry the command's ID.
+    const found = await this.#docker.run(
+      mainProcessArguments(this.#config, name),
+      { timeoutMs: 15_000 },
+    );
+    const main =
+      found.code === 0 && /^[1-9]\d{0,9}$/.test(found.stdout.trim())
+        ? Number(found.stdout.trim())
+        : undefined;
     const now = this.#now();
     const session = {
       id,
       owner,
       name,
+      main,
       createdAt: now,
       lastActivity: now,
       execs: new Map(),
       closing: undefined,
+      // Set while a cancel is sweeping the sandbox: no command starts in it
+      // until the sweep is over, or the sweep would kill it.
+      sweeping: undefined,
     };
     this.#sessions.set(id, session);
     this.#log("sandbox.create", { owner, session: id });
@@ -442,9 +473,17 @@ export class Sandboxes {
    * caller can attach to its output before any arrives, and a `done` promise
    * that settles with the exit. Nothing here rejects after this returns.
    */
-  startExec(owner, id, request) {
+  async startExec(owner, id, request) {
     this.#assertOpen();
-    const session = this.#find(owner, id);
+    let session = this.#find(owner, id);
+    // A sweep of the sandbox by a cancel would kill a command that started
+    // during it. Everything from here to the registration below is
+    // synchronous, so no sweep can begin in between.
+    while (session.sweeping) {
+      await session.sweeping;
+      this.#assertOpen();
+      session = this.#find(owner, id);
+    }
     if (session.execs.size >= this.#config.maxExecsPerSandbox)
       throw new SandboxError(
         429,
@@ -453,26 +492,14 @@ export class Sandboxes {
         { "retry-after": "1" },
       );
     const execId = randomBytes(16).toString("hex");
-    const envFile = join(this.#directory, `${execId}.env`);
-    writeFileSync(
-      envFile,
-      `${[[EXEC_ID_VARIABLE, execId], ...request.env].map(([name, value]) => `${name}=${value}`).join("\n")}\n`,
-      { mode: 0o600, flag: "wx" },
+    const child = this.#docker.start(
+      execArguments(this.#config, {
+        workdir: request.workdir,
+        container: session.name,
+        command: request.command,
+      }),
+      { input: environmentInput(execId, request.env) },
     );
-    let child;
-    try {
-      child = this.#docker.start(
-        execArguments(this.#config, {
-          envFile,
-          workdir: request.workdir,
-          container: session.name,
-          command: request.command,
-        }),
-      );
-    } catch (error) {
-      rmSync(envFile, { force: true });
-      throw error;
-    }
     const started = this.#now();
     const exec = {
       id: execId,
@@ -492,7 +519,6 @@ export class Sandboxes {
         if (exec.finished) return;
         exec.finished = true;
         clearTimeout(timer);
-        rmSync(envFile, { force: true });
         session.execs.delete(execId);
         this.#touch(session);
         this.#log("sandbox.exec", {
@@ -520,23 +546,45 @@ export class Sandboxes {
   }
 
   /**
-   * Stop a command and every process it started. The docker CLI is killed
-   * (it would otherwise leave the command running in the container), then the
-   * cancel script runs in the sandbox; see `CANCEL_SCRIPT`.
+   * Stop a command and everything it started. The docker CLI is killed (it
+   * would otherwise leave the command running in the container), then the
+   * cancel script runs in the sandbox; see `CANCEL_SCRIPT`. When this is the
+   * only command running in the sandbox, the script sweeps every process of
+   * the sandbox but its init and main process, so a process that dropped the
+   * command's ID (`env -u PISHIP_EXEC_ID sleep 1e9 &`) does not outlive the
+   * command's timeout or cancellation; no command starts in the sandbox until
+   * the sweep is done. With another command running, the script can only
+   * end the processes that carry this command's ID: one that dropped it
+   * lives until the sandbox ends, which the docs name as the limit.
    */
   cancelExec(exec, reason) {
     if (exec.cancelling) return exec.cancelling;
     if (exec.finished) return Promise.resolve();
+    const { session } = exec;
+    const alone = [...session.execs.values()].every((other) => other === exec);
+    const sweep = alone && session.main !== undefined;
     exec.cancelled = true;
     exec.reason = reason;
     exec.cancelling = (async () => {
       exec.child.kill("SIGKILL");
-      if (!exec.session.closing)
-        await this.#docker.run(
-          cancelArguments(this.#config, exec.session.name, exec.id),
-          { timeoutMs: 15_000 },
-        );
+      if (session.closing) return;
+      await this.#docker.run(
+        cancelArguments(
+          this.#config,
+          session.name,
+          exec.id,
+          sweep ? "sweep" : "marked",
+          session.main,
+        ),
+        { timeoutMs: 15_000 },
+      );
     })();
+    if (sweep) {
+      const sweeping = exec.cancelling.finally(() => {
+        if (session.sweeping === sweeping) session.sweeping = undefined;
+      });
+      session.sweeping = sweeping;
+    }
     return exec.cancelling;
   }
 

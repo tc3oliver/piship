@@ -3,16 +3,19 @@
 // and what it never lets out; the live test (tests/sandbox.test.ts) runs the
 // same service against real containers.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { createServer as createNetServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -20,7 +23,7 @@ import { createSandboxServer } from "../service/server.mjs";
 import { authenticate, loadRegistry } from "../service/src/auth.mjs";
 import { loadConfig } from "../service/src/config.mjs";
 import { createLogger } from "../service/src/log.mjs";
-import { IMAGE, startService, until } from "./harness.mjs";
+import { HOST_UID, IMAGE, startService, until, wait } from "./harness.mjs";
 
 const generateKey = fileURLToPath(
   new URL("../scripts/generate-key.mjs", import.meta.url),
@@ -89,6 +92,25 @@ describe("configuration", () => {
     );
   });
 
+  it("names the service by its user and its port unless the operator names it", () => {
+    // Two services on one Docker daemon must not share an instance name, or
+    // each start-up removes the other's sandboxes.
+    assert.equal(loadConfig(base()).instance, `reference-${HOST_UID}-18075`);
+    assert.equal(loadConfig(base()).uid, HOST_UID);
+    assert.equal(
+      loadConfig({ ...base(), SANDBOX_LISTEN_PORT: "18099" }).instance,
+      `reference-${HOST_UID}-18099`,
+    );
+    assert.equal(
+      loadConfig({ ...base(), SANDBOX_INSTANCE: "team-a" }).instance,
+      "team-a",
+    );
+    assert.ok(
+      loadConfig({ ...base(), SANDBOX_LISTEN_PORT: "65535" }).instance.length <=
+        41,
+    );
+  });
+
   it("names a bad variable and never repeats its value", () => {
     for (const [name, value] of [
       ["SANDBOX_IMAGE", "bad image with spaces"],
@@ -144,7 +166,7 @@ describe("the key registry", () => {
         return path;
       };
       const schema = "piship-reference-sandbox-registry/v1";
-      const entry = { id: "alice", sha256: "0".repeat(64) };
+      const entry = { id: "alice", sha256: "0".repeat(64), uid: 1000 };
       for (const content of [
         "{ not json",
         JSON.stringify({ schema: "other", keys: [entry] }),
@@ -152,11 +174,11 @@ describe("the key registry", () => {
         JSON.stringify({ schema, keys: [entry, entry] }),
         JSON.stringify({
           schema,
-          keys: [{ id: "Alice", sha256: "0".repeat(64) }],
+          keys: [{ id: "Alice", sha256: "0".repeat(64), uid: 1000 }],
         }),
         JSON.stringify({
           schema,
-          keys: [{ id: "alice", sha256: "not-a-hash" }],
+          keys: [{ id: "alice", sha256: "not-a-hash", uid: 1000 }],
         }),
       ])
         assert.throws(
@@ -169,8 +191,11 @@ describe("the key registry", () => {
       for (const key of Object.values(service.keys))
         assert.equal(registry.includes(key), false, "the registry holds a key");
       const keys = loadRegistry(service.config.registry);
-      assert.equal(authenticate(keys, `Bearer ${service.keys.alice}`), "alice");
-      assert.equal(authenticate(keys, `bearer ${service.keys.bob}`), "bob");
+      assert.equal(
+        authenticate(keys, `Bearer ${service.keys.alice}`)?.id,
+        "alice",
+      );
+      assert.equal(authenticate(keys, `bearer ${service.keys.bob}`)?.id, "bob");
       for (const header of [
         undefined,
         "",
@@ -212,7 +237,11 @@ describe("the key registry", () => {
         "alice",
         "bob",
       ]);
-      assert.equal(authenticate(registry, `Bearer ${key}`), "alice");
+      const entry = authenticate(registry, `Bearer ${key}`);
+      assert.equal(entry?.id, "alice");
+      // Bound to the user who ran the script, unless told otherwise.
+      assert.equal(entry?.uid, HOST_UID);
+      assert.equal(entry?.unbound, false);
       assert.equal(run("--user", "alice").status, 1, "overwrote a key");
       assert.equal(
         readFileSync(join(directory, "alice.key"), "utf8").trim(),
@@ -224,6 +253,91 @@ describe("the key registry", () => {
         key,
       );
       assert.equal(run("--user", "Bad Name").status, 2);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("binds every key to a host user, or says plainly that it is not", async () => {
+    const service = await startService();
+    try {
+      const directory = join(service.root, "bound");
+      const run = (...extra) =>
+        spawnSync(
+          process.execPath,
+          [generateKey, "--dir", directory, ...extra],
+          { encoding: "utf8" },
+        );
+      mkdirSync(join(service.root, "shared"));
+      for (const args of [
+        ["--user", "uid", "--uid", "4242"],
+        ["--user", "open", "--unbound"],
+        ["--user", "narrow", "--root", join(service.root, "shared")],
+      ])
+        assert.equal(run(...args).status, 0, args.join(" "));
+      const registry = JSON.parse(
+        readFileSync(join(directory, "registry.json"), "utf8"),
+      );
+      const entry = (id) => registry.keys.find((item) => item.id === id);
+      assert.equal(entry("uid").uid, 4242);
+      assert.equal("unbound" in entry("uid"), false);
+      assert.equal(entry("open").unbound, true);
+      assert.equal("uid" in entry("open"), false);
+      assert.equal(entry("narrow").uid, HOST_UID);
+      assert.deepEqual(entry("narrow").roots, [join(service.root, "shared")]);
+      const loaded = loadRegistry(join(directory, "registry.json"));
+      assert.equal(loaded.find((item) => item.id === "open")?.unbound, true);
+      // What the script refuses to write.
+      for (const args of [
+        ["--user", "both", "--uid", "1", "--unbound"],
+        ["--user", "root", "--uid", "0"],
+        ["--user", "text", "--uid", "alice"],
+        ["--user", "relative", "--root", "shared"],
+      ])
+        assert.equal(run(...args).status, 2, args.join(" "));
+      assert.equal(entry("both"), undefined);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("refuses an entry that names no host user, unless it says unbound", async () => {
+    const service = await startService();
+    try {
+      const write = (entry) => {
+        const path = join(service.root, "binding-registry.json");
+        writeFileSync(
+          path,
+          JSON.stringify({
+            schema: "piship-reference-sandbox-registry/v1",
+            keys: [{ id: "alice", sha256: "0".repeat(64), ...entry }],
+          }),
+        );
+        return path;
+      };
+      const refused = (entry, pattern) =>
+        assert.throws(() => loadRegistry(write(entry)), pattern);
+      refused({}, /entry alice: name the host user .* or say unbound: true/);
+      refused({ uid: 1000, unbound: true }, /exclusive/);
+      refused({ unbound: false }, /unbound must be true/);
+      refused({ unbound: "yes" }, /unbound must be true/);
+      refused({ uid: 0 }, /non-root/);
+      refused({ uid: -1 }, /non-root/);
+      refused({ uid: "1000" }, /non-root/);
+      refused({ uid: 1.5 }, /non-root/);
+      refused({ uid: 1000, roots: [] }, /absolute paths/);
+      refused({ uid: 1000, roots: ["relative"] }, /absolute paths/);
+      refused({ uid: 1000, roots: ["/"] }, /does not exist/);
+      refused(
+        { uid: 1000, roots: [join(service.root, "missing")] },
+        /does not exist/,
+      );
+      const [bound] = loadRegistry(write({ uid: 1000 }));
+      assert.equal(bound?.uid, 1000);
+      assert.equal(bound?.unbound, false);
+      const [unbound] = loadRegistry(write({ unbound: true }));
+      assert.equal(unbound?.uid, undefined);
+      assert.equal(unbound?.unbound, true);
     } finally {
       await service.stop();
     }
@@ -240,7 +354,9 @@ describe("the HTTP surface", () => {
   it("answers /health to anyone, and nothing else without the credential", async () => {
     const health = await service.call("/health");
     assert.equal(health.status, 200);
-    assert.deepEqual(health.json(), { status: "ok" });
+    // It says which service answered, so a caller can tell its own from
+    // another on the same port.
+    assert.deepEqual(health.json(), { status: "ok", instance: "contract" });
     const refusals = [];
     for (const key of [undefined, "wrong-credential-value", "sbxk_short"])
       refusals.push(await service.call("/v1/status", { key }));
@@ -486,6 +602,7 @@ describe("creating a sandbox", () => {
     assert.match(name, /^piship-sbx-contract-[0-9a-f]{12}$/);
     assert.deepEqual(flagValues(args, "--label").sort(), [
       "piship.sandbox.instance=contract",
+      `piship.sandbox.owner=${HOST_UID}`,
       `piship.sandbox.session=${answer.id}`,
     ]);
     assert.equal(
@@ -493,6 +610,65 @@ describe("creating a sandbox", () => {
       0o700,
     );
     assert.ok(service.containers().includes(name));
+  });
+
+  it("mounts a workspace only for a key bound to the user who owns it", async () => {
+    // Commands run as the workspace's owner, so a key that could name any
+    // workspace under the roots could mount another user's project as that
+    // user. carol's key is bound to another user than the tests', so it is
+    // refused the tests' user's workspace with the answer of a directory
+    // outside the roots.
+    const workspace = service.workspace("bound");
+    const before = runCalls(service).length;
+    const outside = await service.create("carol", service.root);
+    const carol = await service.create("carol", workspace);
+    assert.equal(carol.status, 422);
+    assert.equal(carol.json().error.code, "workspace_not_allowed");
+    assert.equal(carol.text, outside.text);
+    assert.equal(carol.text.includes(workspace), false);
+    assert.equal(runCalls(service).length, before, "docker was asked to run");
+    // No `.git/piship-workspace` was made in a project the key may not use.
+    assert.equal(
+      existsSync(join(workspace, ".git", "piship-workspace")),
+      false,
+    );
+    // The key's own user's workspace works, under either key of that user.
+    for (const user of ["alice", "bob"]) {
+      const made = await service.create(user, workspace);
+      assert.equal(made.status, 201, `${user}: ${made.text}`);
+      await service.call(`/v1/sandboxes/${made.id}`, {
+        method: "DELETE",
+        key: user,
+      });
+    }
+    // An entry that says unbound may mount any non-root owner's workspace.
+    const open = await service.create("erin", workspace);
+    assert.equal(open.status, 201, open.text);
+    await service.call(`/v1/sandboxes/${open.id}`, {
+      method: "DELETE",
+      key: "erin",
+    });
+  });
+
+  it("holds a key with its own roots to them, and inside the service's roots", async () => {
+    const inside = service.workspace("dave/project");
+    const beside = service.workspace("beside");
+    const allowed = await service.create("dave", inside);
+    assert.equal(allowed.status, 201, allowed.text);
+    await service.call(`/v1/sandboxes/${allowed.id}`, {
+      method: "DELETE",
+      key: "dave",
+    });
+    const refused = await service.create("dave", beside);
+    assert.equal(refused.status, 422);
+    assert.equal(refused.json().error.code, "workspace_not_allowed");
+    // Someone else's key is not narrowed by dave's roots.
+    const other = await service.create("alice", beside);
+    assert.equal(other.status, 201, other.text);
+    await service.call(`/v1/sandboxes/${other.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
   });
 
   it("gives an allowed network the configured Docker network", async () => {
@@ -572,6 +748,93 @@ describe("creating a sandbox", () => {
   });
 });
 
+describe("a workspace that belongs to root", () => {
+  // The tests cannot make a directory of root's, so the reading of a
+  // workspace's owner is replaced: the answer is what a stat would say.
+  async function withOwner(owner, check) {
+    const service = await startService({}, { owner });
+    try {
+      await check(service);
+    } finally {
+      await service.stop();
+    }
+  }
+
+  it("is refused to every key, as a directory outside the roots is", async () => {
+    for (const owner of [
+      { uid: 0, gid: 0 },
+      { uid: 0, gid: 100 },
+    ])
+      await withOwner(
+        () => owner,
+        async (service) => {
+          const workspace = service.workspace("root-owned");
+          const outside = await service.create("alice", service.root);
+          for (const user of ["alice", "erin"]) {
+            const answer = await service.create(user, workspace);
+            assert.equal(answer.status, 422, `${user} uid ${owner.uid}`);
+            assert.equal(answer.text, outside.text);
+          }
+          assert.equal(runCalls(service).length, 0);
+        },
+      );
+  });
+
+  it("is refused when its group is root's, whoever owns it", async () => {
+    // --user 1000:0 would run commands in the root group.
+    await withOwner(
+      () => ({ uid: HOST_UID, gid: 0 }),
+      async (service) => {
+        const workspace = service.workspace("root-group");
+        for (const user of ["alice", "erin"]) {
+          const answer = await service.create(user, workspace);
+          assert.equal(answer.status, 422, user);
+          assert.equal(answer.json().error.code, "workspace_not_allowed");
+        }
+        assert.equal(runCalls(service).length, 0);
+        assert.equal(
+          existsSync(join(workspace, ".git", "piship-workspace")),
+          false,
+        );
+      },
+    );
+  });
+
+  it("runs commands as the owner's user and group when neither is root's", async () => {
+    await withOwner(
+      () => ({ uid: HOST_UID, gid: 4711 }),
+      async (service) => {
+        const answer = await service.create(
+          "alice",
+          service.workspace("group-4711"),
+        );
+        assert.equal(answer.status, 201, answer.text);
+        assert.deepEqual(flagValues(runCalls(service)[0].args, "--user"), [
+          `${HOST_UID}:4711`,
+        ]);
+      },
+    );
+  });
+
+  it("is checked against the key before anything is made in it", async () => {
+    // Another user's uid: a bound key is refused before the service makes
+    // .git/piship-workspace in a project that is not its user's.
+    await withOwner(
+      () => ({ uid: HOST_UID + 5, gid: 4711 }),
+      async (service) => {
+        const workspace = service.workspace("someone-elses");
+        assert.equal((await service.create("alice", workspace)).status, 422);
+        assert.equal(
+          existsSync(join(workspace, ".git", "piship-workspace")),
+          false,
+        );
+        // An unbound key may, since it says it is not bound.
+        assert.equal((await service.create("erin", workspace)).status, 201);
+      },
+    );
+  });
+});
+
 describe("a runtime that is down", () => {
   it("says so, and starts nothing", async () => {
     const service = await startService();
@@ -625,26 +888,37 @@ describe("commands", () => {
     );
   });
 
-  it("passes the environment through a file only its owner can read, never through the command line", async () => {
+  it("passes the environment on the CLI's standard input, never on its command line or in a file", async () => {
     const value =
       "a value with 'quotes' and \"more\" and $dollar and \\slash and ü";
-    const run = await service.exec("alice", id, 'printf "%s" "$FOO"', {
+    const before = new Set(readdirSync(tmpdir()));
+    // Long enough to look at the machine while the command runs.
+    const running = service.exec("alice", id, 'sleep 1; printf "%s" "$FOO"', {
       env: { FOO: value, EMPTY: "" },
     });
+    const call = await until(
+      () =>
+        execCalls(service).find(
+          (entry) => entry.environment?.variables.FOO === value,
+        ),
+      "the command to start",
+    );
+    // While it runs, nothing of the service is in the temporary directory.
+    const made = readdirSync(tmpdir()).filter((name) => !before.has(name));
+    assert.deepEqual(
+      made.filter((name) => /piship-sandbox-service/.test(name)),
+      [],
+    );
+    const run = await running;
+    // The command got its environment, exactly.
     assert.equal(run.out, value);
-    const call = execCalls(service)
-      .filter((entry) => entry.envFile?.variables.FOO === value)
-      .at(-1);
-    assert.equal(call.envFile.mode, "600");
-    assert.match(call.envFile.variables.PISHIP_EXEC_ID, /^[0-9a-f]{32}$/);
-    assert.equal(call.envFile.variables.EMPTY, "");
+    assert.equal(call.environment.from, "/dev/stdin");
+    assert.match(call.environment.variables.PISHIP_EXEC_ID, /^[0-9a-f]{32}$/);
+    assert.equal(call.environment.variables.EMPTY, "");
+    // No value is on the command line, and none is named there.
     assert.equal(JSON.stringify(call.args).includes(value), false);
     assert.equal(call.args.includes("FOO"), false);
-    // The file is gone once the command has ended.
-    assert.equal(
-      existsSync(call.args[call.args.indexOf("--env-file") + 1]),
-      false,
-    );
+    assert.deepEqual(flagValues(call.args, "--env-file"), ["/dev/stdin"]);
   });
 
   it("runs at the workspace path it is given and refuses a path outside", async () => {
@@ -718,6 +992,144 @@ describe("commands", () => {
       (await service.exec("alice", id, "printf still-here")).out,
       "still-here",
     );
+  });
+
+  /** Start `command` and return how to abort it; resolves once it has begun. */
+  async function begin(command, sandbox = id) {
+    const controller = new AbortController();
+    const response = await fetch(
+      `${service.base}/v1/sandboxes/${sandbox}/exec`,
+      {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          authorization: `Bearer ${service.keys.alice}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ command: `echo started; ${command}` }),
+      },
+    );
+    const reader = response.body.getReader();
+    await reader.read();
+    const call = execCalls(service).find((entry) =>
+      entry.args.includes(`echo started; ${command}`),
+    );
+    assert.ok(call, "the command did not start");
+    return {
+      execId: call.environment.variables.PISHIP_EXEC_ID,
+      abort: () => controller.abort(),
+    };
+  }
+
+  const cancels = (execId, phase) =>
+    service
+      .calls()
+      .filter(
+        (entry) =>
+          entry.command === "cancel" &&
+          entry.id === execId &&
+          entry.phase === phase,
+      );
+
+  it("sweeps the sandbox when the only command is cancelled, and marks its own processes when another runs", async () => {
+    // Alone: everything but the sandbox's init and its main process, whose ID
+    // the service found at creation, so a process that dropped the command's
+    // ID (env -u) does not survive the cancel.
+    const alone = await begin("sleep 31");
+    alone.abort();
+    const sweep = await until(
+      () => cancels(alone.execId, "done")[0],
+      "the sweep",
+    );
+    assert.equal(sweep.mode, "sweep");
+    assert.equal(sweep.main, "4242");
+
+    // With another command running, a sweep would kill that one's processes
+    // too: only the processes that carry the cancelled command's ID.
+    const first = await begin("sleep 32");
+    const second = await begin("sleep 33");
+    first.abort();
+    const marked = await until(
+      () => cancels(first.execId, "done")[0],
+      "the marked cancel",
+    );
+    assert.equal(marked.mode, "marked");
+    assert.ok(
+      alive(service.commandPid(second.execId)),
+      "the other command was killed",
+    );
+    await wait(150);
+    second.abort();
+    const last = await until(
+      () => cancels(second.execId, "done")[0],
+      "the second cancel",
+    );
+    // The first is over by now, so the second is alone.
+    assert.equal(last.mode, "sweep");
+  });
+
+  it("starts no command in a sandbox while a cancel is sweeping it", async () => {
+    service.fault("CANCEL_DELAY", true, "700");
+    try {
+      const running = await begin("sleep 34");
+      running.abort();
+      await until(
+        () => cancels(running.execId, "start")[0],
+        "the sweep to begin",
+      );
+      // A command that arrives now waits for the sweep, or the sweep would kill it.
+      const next = await service.exec("alice", id, "printf after-the-sweep");
+      assert.equal(next.out, "after-the-sweep");
+      const done = cancels(running.execId, "done")[0];
+      assert.ok(done, "the sweep did not finish");
+      const call = execCalls(service).find((entry) =>
+        entry.args.includes("printf after-the-sweep"),
+      );
+      assert.ok(call.t >= done.t, "the command started during the sweep");
+    } finally {
+      service.fault("CANCEL_DELAY", false);
+    }
+  });
+
+  it("falls back to the command's own processes when it cannot find the sandbox's main process", async () => {
+    service.fault("NO_MAIN");
+    let unmapped;
+    try {
+      unmapped = (await service.create("alice", workspace)).id;
+    } finally {
+      service.fault("NO_MAIN", false);
+    }
+    const running = await begin("sleep 35", unmapped);
+    running.abort();
+    const cancel = await until(
+      () => cancels(running.execId, "done")[0],
+      "the cancel",
+    );
+    // Alone in its sandbox, and still not a sweep: there is no main process
+    // to leave alone.
+    assert.equal(cancel.mode, "marked");
+    assert.equal(cancel.main, "");
+    await service.call(`/v1/sandboxes/${unmapped}`, {
+      method: "DELETE",
+      key: "alice",
+    });
+  });
+
+  it("asks for the sandbox's main process once, before any command runs", async () => {
+    const before = service.calls().length;
+    const made = await service.create("alice", workspace);
+    await service.exec("alice", made.id, "true");
+    const after = service.calls().slice(before);
+    // (The service asks the runtime's version at most every five seconds.)
+    const order = after
+      .map((entry) => entry.command)
+      .filter((command) => command !== "version");
+    assert.deepEqual(order.slice(0, 3), ["run", "main", "exec"]);
+    assert.equal(order.filter((command) => command === "main").length, 1);
+    await service.call(`/v1/sandboxes/${made.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
   });
 
   it("gives another user's sandbox the answer of one that does not exist", async () => {
@@ -846,7 +1258,28 @@ describe("the life of the service", () => {
     assert.equal((await running).exit.signal, "SIGKILL");
   });
 
-  it("removes what an earlier run of its instance left, and nothing else", async () => {
+  /** A second run of the first service's instance, with the same fake docker. */
+  function again(first, port = 0) {
+    const env = {
+      PATH: process.env.PATH ?? "",
+      SANDBOX_INSTANCE: "contract",
+      SANDBOX_REGISTRY: first.config.registry,
+      SANDBOX_WORKSPACE_ROOTS: first.workspaces,
+      SANDBOX_IMAGE: IMAGE,
+      SANDBOX_DOCKER: first.config.docker,
+      DOCKER_FAKE_DIR: join(first.root, "docker"),
+    };
+    const config = loadConfig(env);
+    config.listenPort = port;
+    const lines = [];
+    const second = createSandboxServer(config, {
+      write: (line) => lines.push(line),
+      env,
+    });
+    return { second, lines };
+  }
+
+  it("removes what an earlier run of this service left, and nothing else", async () => {
     const first = await startService();
     try {
       const { id } = await first.create("alice", first.workspace("restart"));
@@ -854,36 +1287,146 @@ describe("the life of the service", () => {
       const abandoned = first.containers()[0];
       first.leftover("someone-elses", "other-instance");
       first.leftover("unlabelled-project", "");
-      // A second run of the same instance, with the same fake docker.
-      const env = {
-        PATH: process.env.PATH ?? "",
-        SANDBOX_INSTANCE: "contract",
-        SANDBOX_REGISTRY: first.config.registry,
-        SANDBOX_WORKSPACE_ROOTS: first.workspaces,
-        SANDBOX_IMAGE: IMAGE,
-        SANDBOX_DOCKER: first.config.docker,
-        DOCKER_FAKE_DIR: join(first.root, "docker"),
-      };
-      const config = loadConfig(env);
-      config.listenPort = 0;
-      const lines = [];
-      const second = createSandboxServer(config, {
-        write: (line) => lines.push(line),
-        env,
-      });
+      // Same instance name, another user's service (or none): not this one's.
+      first.leftover("other-users-service", "contract", HOST_UID + 1);
+      first.leftover("unowned-same-name", "contract", null);
+      const { second, lines } = again(first);
       await second.start();
       try {
         assert.equal(first.containers().includes(abandoned), false);
         assert.deepEqual(first.containers().sort(), [
+          "other-users-service",
           "someone-elses",
           "unlabelled-project",
+          "unowned-same-name",
         ]);
         assert.match(lines.join(""), /"event":"service.started","removed":1/);
+        // Both labels are what it asked for.
+        const listing = first
+          .calls()
+          .filter((call) => call.command === "ps")
+          .at(-1);
+        assert.deepEqual(flagValues(listing.args, "--filter"), [
+          "label=piship.sandbox.instance=contract",
+          `label=piship.sandbox.owner=${HOST_UID}`,
+        ]);
       } finally {
         await second.stop();
       }
     } finally {
       await first.stop();
+    }
+  });
+
+  it("removes nothing when it cannot have its port, because another service holds it", async () => {
+    const first = await startService();
+    try {
+      const { id } = await first.create("alice", first.workspace("held"));
+      assert.match(id, /^sbx_/);
+      const before = first.calls().length;
+      const { second } = again(first, first.port);
+      await assert.rejects(second.start(), /EADDRINUSE/);
+      // It did not look for containers to remove, let alone remove the
+      // running service's sandbox.
+      assert.deepEqual(
+        first
+          .calls()
+          .slice(before)
+          .filter((call) => call.command === "ps" || call.command === "rm"),
+        [],
+      );
+      assert.equal(first.containers().length, 1);
+      assert.equal(
+        (await first.call("/v1/status", { key: "alice" })).json().sandboxes,
+        1,
+      );
+      await second.stop();
+    } finally {
+      await first.stop();
+    }
+  });
+
+  /** A real service process on a free port, with the flag of a supervised one or not. */
+  async function spawnService(fixture, instance, { supervised }) {
+    const probe = createNetServer();
+    await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address();
+    await new Promise((resolve) => probe.close(resolve));
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(new URL("../service/server.mjs", import.meta.url))],
+      {
+        env: {
+          PATH: process.env.PATH ?? "",
+          SANDBOX_LISTEN_PORT: String(port),
+          SANDBOX_INSTANCE: instance,
+          SANDBOX_REGISTRY: fixture.config.registry,
+          SANDBOX_WORKSPACE_ROOTS: fixture.workspaces,
+          SANDBOX_IMAGE: IMAGE,
+          SANDBOX_DOCKER: fixture.config.docker,
+          DOCKER_FAKE_DIR: join(fixture.root, "docker"),
+          ...(supervised ? { SANDBOX_EXIT_ON_STDIN_END: "1" } : {}),
+        },
+        stdio: ["pipe", "ignore", "ignore"],
+      },
+    );
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    const base = `http://127.0.0.1:${port}`;
+    await until(async () => {
+      try {
+        const health = await fetch(`${base}/health`);
+        return (await health.json()).instance === instance;
+      } catch {
+        return false;
+      }
+    }, "the service to answer as itself");
+    return { child, exited, base };
+  }
+
+  it("exits, removing its sandboxes, when the supervisor that owns it is gone", async () => {
+    const fixture = await startService();
+    let held;
+    try {
+      held = await spawnService(fixture, "stdin-owned", { supervised: true });
+      const made = await fetch(`${held.base}/v1/sandboxes`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${fixture.keys.alice}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          workspace: fixture.workspace("owned"),
+          network: "deny",
+        }),
+      });
+      assert.equal(made.status, 201);
+      const ours = () =>
+        fixture.containers().filter((name) => name.includes("-stdin-owned-"));
+      assert.equal(ours().length, 1);
+      // The supervisor is gone: its end of the pipe closes.
+      held.child.stdin.end();
+      assert.equal(await held.exited, 0);
+      assert.deepEqual(ours(), []);
+    } finally {
+      held?.child.kill("SIGKILL");
+      await fixture.stop();
+    }
+  });
+
+  it("keeps running when its standard input closes, unless it was started by a supervisor", async () => {
+    const fixture = await startService();
+    let loose;
+    try {
+      loose = await spawnService(fixture, "stdin-loose", { supervised: false });
+      loose.child.stdin.end();
+      await wait(800);
+      assert.equal(loose.child.exitCode, null);
+      const health = await fetch(`${loose.base}/health`);
+      assert.equal((await health.json()).instance, "stdin-loose");
+    } finally {
+      loose?.child.kill("SIGTERM");
+      await loose?.exited;
+      await fixture.stop();
     }
   });
 });

@@ -114,13 +114,21 @@ export function loadConfig(env) {
       .filter(Boolean),
   ]);
 
+  // The service's own user: it labels every container it starts, and the
+  // start-up sweep removes only containers that carry both this and the
+  // instance name.
+  const uid = process.getuid?.() ?? 0;
   return {
     listenHost,
     listenPort,
     allowedHosts,
+    uid,
+    // One name per service on a Docker daemon: the default is this user's and
+    // this port's, so two services with no name set do not share one. A name
+    // set by the operator must be unique to the service the same way.
     instance: text(
       "SANDBOX_INSTANCE",
-      "reference",
+      `reference-${uid}-${listenPort}`,
       NAME,
       "a short lowercase name",
     ),

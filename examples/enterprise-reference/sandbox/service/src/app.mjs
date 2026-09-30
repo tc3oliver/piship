@@ -153,22 +153,26 @@ export function createApp({ config, keys, sandboxes, log }) {
       if (!matched)
         throw new SandboxError(404, "not_found", "There is no such route");
       route = matched.name;
-      if (matched.public) return send(res, 200, { status: "ok" });
-      owner = authenticate(keys, req.headers.authorization);
-      if (owner === undefined)
+      // The instance name says which service answered: a caller that started
+      // one (a test, a supervisor) can tell its own from another on the port.
+      if (matched.public)
+        return send(res, 200, { status: "ok", instance: config.instance });
+      const user = authenticate(keys, req.headers.authorization);
+      if (user === undefined)
         throw new SandboxError(
           401,
           "unauthorized",
           "A valid sandbox credential is required",
           { "www-authenticate": "Bearer" },
         );
+      owner = user.id;
       const id = match?.[1] ?? "";
       switch (matched.name) {
         case "status":
           return send(res, 200, await sandboxes.status(owner));
         case "create": {
           const created = await sandboxes.create(
-            owner,
+            user,
             parseCreate(await readJson(req)),
           );
           return send(res, 201, created);
@@ -178,13 +182,15 @@ export function createApp({ config, keys, sandboxes, log }) {
           return send(res, 204);
         case "exec": {
           const request = parseExec(await readJson(req));
-          const exec = sandboxes.startExec(owner, id, request);
+          const exec = await sandboxes.startExec(owner, id, request);
           // The caller going away, by cancellation, timeout, or a crash,
-          // is what stops the command: this is the only cancel signal.
+          // is what stops the command: this is the only cancel signal. One
+          // that went while the command waited to start is cancelled now.
           res.once("close", () => {
             if (!res.writableFinished)
               void sandboxes.cancelExec(exec, "disconnected");
           });
+          if (res.destroyed) void sandboxes.cancelExec(exec, "disconnected");
           try {
             await exec.spawned;
           } catch {
