@@ -742,6 +742,9 @@ describe.skipIf(process.platform === "win32")(
           isolation: "remote",
           network: "deny",
           verification: "backend-attested",
+          // No network probe: denial is the service's word, and no
+          // allow-mode container was created to contrast it.
+          networkDenial: { evidence: "attested", probe: false },
         });
         expect(session.sandbox.report.planes).toEqual(
           expect.arrayContaining([
