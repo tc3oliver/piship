@@ -21,8 +21,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   # The stack as a user starts it (README, "Run it"), with the broker's happy
-  # path against it, and the contract tests that need no stack. Node built-ins
-  # only: no npm ci, no build.
+  # path against it, and the contract tests that need no stack. Starting the
+  # stack needs Node built-ins only; the broker and sandbox contract tests
+  # import PiShip's built packages, so npm ci and the build run here too.
   stack:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -36,6 +37,8 @@ jobs:
         with:
           node-version: 22.19.x
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
+      - run: npm ci
+      - run: npm run build
       - run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
 
       # Every secret of the stack lives in an env file outside the workspace,
