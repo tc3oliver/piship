@@ -297,11 +297,12 @@ const LATE_FAULTS: Partial<
     delayMs: 1_000,
   },
   // Its first line comes after the marker window that counts from the abort
-  // (1.8 s) has passed, so only a kit that watches a silent command longer
-  // than that sees it.
+  // (1.8 s) and before the one a silent command gets (2.8 s), so only a kit
+  // that watches a silent command longer sees it. 2.3 s is the middle: half a
+  // second of margin to either side for a loaded machine.
   "starts a cancelled command after the kit's window and leaves it running": {
     marker: "cancel-early",
-    delayMs: 2_400,
+    delayMs: 2_300,
   },
   "starts a command late and ignores dispose()": {
     marker: "dispose",
