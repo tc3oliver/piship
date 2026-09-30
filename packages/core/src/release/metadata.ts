@@ -1,6 +1,7 @@
 // Release, vulnerability, and reproducibility schemas and the release metadata
 // and option types shared by the release modules.
 import type { StateSchemaSupport } from "../migration.js";
+import type { OutputStagingOptions } from "../temporary-directories.js";
 
 export const RELEASE_SCHEMA = "piship-release/v1";
 export const CHANNEL_SCHEMA = "piship-channel/v1";
@@ -135,8 +136,12 @@ export type ReleaseTestRunner = (
   env: NodeJS.ProcessEnv,
 ) => CommandResult;
 
-export interface ReleaseOptions {
-  /** Output root; the release lands in `<outputRoot>/releases/`. */
+export interface ReleaseOptions extends OutputStagingOptions {
+  /**
+   * Output root; the release lands in `<outputRoot>/releases/`, where the
+   * staging of killed release builds is found (and removed only when
+   * `reclaimStaging` says so).
+   */
   readonly outputRoot?: string;
   readonly channel?: string;
   /** Build target; defaults to this machine. Cross-target builds are refused. */

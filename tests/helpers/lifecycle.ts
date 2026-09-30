@@ -287,7 +287,7 @@ async function buildReleases(
       `${id}-${version}-${target}.tar.gz`,
     );
   // Both releases and the plain build are independent: build them together.
-  await Promise.all([
+  await settledAll([
     ...["1.0.0", "1.1.0"].map(async (version) => {
       const built = await succeed(
         [
@@ -439,6 +439,18 @@ export function personalLocalReleases(): Promise<ReleaseFixtures> {
 }
 
 /**
+ * `Promise.all` that waits for every promise before it rejects with the first
+ * failure. The caller removes the fixture directory next, which fails (on
+ * Windows a directory a running process holds cannot be removed) while a
+ * sibling build is still running in it, and that failure hid the build's own.
+ */
+async function settledAll(promises: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(promises);
+  for (const result of results)
+    if (result.status === "rejected") throw result.reason;
+}
+
+/**
  * Build every distribution's fixtures into `fixtures` before any scenario
  * starts, through the same election the scenarios use, so they find them
  * ready instead of building while other E2E files compete for the CPU. The
@@ -447,7 +459,7 @@ export function personalLocalReleases(): Promise<ReleaseFixtures> {
 export async function prebuildLifecycleFixtures(
   fixtures: string,
 ): Promise<void> {
-  await Promise.all([
+  await settledAll([
     sharedReleases(demo("file", fixtures), fixtures),
     sharedReleases(PERSONAL, fixtures),
     ...(LIVE_SECRET_STORE

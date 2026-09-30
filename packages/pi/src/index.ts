@@ -13,6 +13,8 @@ import {
   runLogout,
   runRollback,
   runSandbox,
+  reclaimInstallTemporaries,
+  reclaimOsTemporaries,
   runUpdate,
   runtimeStateDirectory,
   sweepStateTemporaries,
@@ -75,6 +77,11 @@ export async function launchPiDistribution(
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   // Temporaries of state writers killed before their rename.
   sweepStateTemporaries(stateDir);
+  // Directories of PiShip operations killed before they cleaned up: session
+  // sandbox temp, verification and launch-check scratch, install and update
+  // staging. Only those whose owner is gone are removed.
+  reclaimOsTemporaries();
+  reclaimInstallTemporaries(metadata.app.id);
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),

@@ -4,12 +4,12 @@ import {
   copyFileSync,
   cpSync,
   mkdirSync,
-  mkdtempSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createTemporaryDirectory } from "@piship/contracts";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
 import {
@@ -19,25 +19,39 @@ import {
 } from "./payload.js";
 import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
+import {
+  sweepOutputStaging,
+  type OutputStagingOptions,
+} from "./temporary-directories.js";
 
 /**
  * Assemble the portable payload from a current lock. By default the release
  * `source` and `install-script` gates run first (piship/v1alpha4 locks), so a
  * distributable build never installs an unapproved source or an unreviewed
  * npm lifecycle script; `dev` and `test` pass `supplyChainGates: false` to
- * stay lenient while iterating.
+ * stay lenient while iterating. The staging of builds that were killed is
+ * not removed from `outputRoot` unless `reclaimStaging` says it may be (see
+ * `sweepOutputStaging`).
  */
 export function buildDistribution(
   manifestPath: string,
   outputRoot = resolve("dist"),
-  options: { readonly supplyChainGates?: boolean } = {},
+  options: {
+    readonly supplyChainGates?: boolean;
+  } & OutputStagingOptions = {},
 ): string {
   const lock = requireCurrentLock(manifestPath);
   if (options.supplyChainGates !== false) checkPackageSources(lock, "Build");
   const output = join(outputRoot, lock.app.id);
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });
-  const stage = mkdtempSync(join(outputRoot, `.piship-${lock.app.id}-`));
+  sweepOutputStaging(outputRoot, "build", options);
+  // The payload is assembled in `payload`, beside the staging directory's
+  // ownership marker, so the marker never becomes part of the payload (its
+  // inventory lists every file).
+  const temporary = createTemporaryDirectory(outputRoot, "build", lock.app.id);
+  const stage = join(temporary.path, "payload");
+  mkdirSync(stage);
   try {
     let phase = process.hrtime.bigint();
     copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
@@ -123,8 +137,7 @@ export function buildDistribution(
     rmSync(output, { recursive: true, force: true });
     renameSync(stage, output);
     return output;
-  } catch (error) {
-    rmSync(stage, { recursive: true, force: true });
-    throw error;
+  } finally {
+    temporary.remove();
   }
 }

@@ -4,6 +4,7 @@
 // deleted. A temporary a live writer is still filling is kept.
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { processAlive } from "@piship/contracts";
 import { withFileLock } from "@piship/credentials";
 import { accessStatePaths } from "../access/state.js";
 import { STATE_MARKER_FILE } from "../migration.js";
@@ -14,16 +15,6 @@ import { STATE_MARKER_FILE } from "../migration.js";
  * was reused by an unrelated process.
  */
 export const STALE_TEMPORARY_MS = 10 * 60_000;
-
-/** Whether a process with this ID exists (EPERM: it exists, not ours). */
-export function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
 
 /**
  * Whether work of `owner` (a process ID, or null when unknown), last changed
