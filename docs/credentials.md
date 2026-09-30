@@ -47,7 +47,7 @@ Idempotency-Key: <random UUID, one per logical acquire>
 {"distribution": "<app id>", "purpose": "inference"}
 ```
 
-`Idempotency-Key` comes from `CredentialContext.idempotencyKey`. `CredentialManager` generates a random UUID for each acquire or renewal it sends, unless the caller passes a key; a caller retrying the same acquire passes the key from the failure's `detail.idempotencyKey`. A key must be 1 to 255 visible ASCII characters without spaces, or the acquire fails with `reason: contract` before anything is sent. A provider called directly without a key sends no header. What a broker does with the key, and which failures are safe to retry, is in the [enterprise integration contract](enterprise-integration.md#idempotency-and-retries).
+`Idempotency-Key` comes from `CredentialContext.idempotencyKey`. For an `http-broker` or `adapter` runtime credential, `CredentialManager` generates a random UUID for each logical acquire or renewal (or takes the caller's key), records it as the pending issuance before the request is sent, and sends the same key on every later attempt until the request is resolved, including from another process after a crash; see [pending issuance](#pending-issuance). A key must be 1 to 255 visible ASCII characters without spaces, or the acquire fails with `reason: contract` before anything is sent. A provider called directly without a key sends no header. What a broker does with the key, and which failures are safe to retry, is in the [enterprise integration contract](enterprise-integration.md#idempotency-and-retries).
 
 A 2xx response must be JSON:
 
@@ -89,7 +89,7 @@ Acquire and revoke share one transport. Each call has a 30 s timeout (`timeoutMs
 | Cancelled by the caller's signal | `CREDENTIAL_ACQUIRE_FAILED` | `CREDENTIAL_REVOKED` | no | `cancelled` |
 | Network or TLS policy refusal | `NETWORK_DENIED` or `TLS_POLICY_VIOLATION` | same | no | none |
 
-`Retry-After` (seconds or HTTP date) becomes `retryAfterMs` and is shown as `Retry after: <n> s`. The error's `detail` holds only non-secret fields: `operation` (`acquire` or `revoke`), `reason`, `status` when the broker answered, `idempotencyKey` on an acquire that sent one, and, for `timeout`, `unreachable`, and `cancelled`, `outcome`: `not-sent` when the request never left PiShip (connection refused, DNS failure, connect timeout, an already cancelled signal), `unknown` when the broker may have received it and issued a credential. Nothing is re-sent after an `unknown` outcome; retry the same acquire with the same key. Error messages, actions, and details never contain the identity token, the runtime credential, or the broker's response body. A revoke failure is reported as a warning and never keeps the local secret.
+`Retry-After` (seconds or HTTP date) becomes `retryAfterMs` and is shown as `Retry after: <n> s`. The error's `detail` holds only non-secret fields: `operation` (`acquire` or `revoke`), `reason`, `status` when the broker answered, `idempotencyKey` on an acquire that sent one, and, for `timeout`, `unreachable`, and `cancelled`, `outcome`: `not-sent` when the request never left PiShip (connection refused, DNS failure, connect timeout, an already cancelled signal), `unknown` when the broker may have received it and issued a credential. Nothing is re-sent within the attempt; the next attempt sends the same key. Error messages, actions, and details never contain the identity token, the runtime credential, or the broker's response body. A revoke failure is reported as a warning and never keeps the local secret.
 
 ## Secret stores
 
@@ -141,6 +141,24 @@ There is no memory-only option yet: a headless Linux runner without a Secret Ser
 - A credential adapter that requires an identity is rejected with `CONFIG_INVALID` under `identity.mode: none`.
 
 Launches acquire a broker or adapter credential automatically after `login`. `local-secret` is captured only by `login`; without it a launch fails with `CREDENTIAL_REQUIRED`. `login` always replaces the current runtime credential.
+
+### Pending issuance
+
+A broker (or adapter) may issue a credential and lose the answer, or PiShip may stop before it stores it. So that the next attempt recovers that credential instead of issuing another, the idempotency key of an `http-broker` or `adapter` acquire or renewal is recorded in `credentials-metadata/pending-issuance.json` (`piship-credential-issuance/v1`) before the request is sent, and reused until the request is resolved. The record holds the key, the provider mode, the principal (issuer and subject) it was sent for, the credential it renews (reference and acquisition time, absent for a first acquire), and when it was created; never a secret. It is written with the shared atomic writer, owner-only (0600), under the credential lock, so concurrent launches and logins take turns and the second one sends the first one's key. When it cannot be written, nothing is sent (`CREDENTIAL_ACQUIRE_FAILED`, `detail.outcome: not-sent`). `CredentialManager.pendingIssuance()` returns the key and its age for diagnostics.
+
+Before any operation under the lock changes the stored credential, the record is kept only when it still names an unresolved request: recorded for the configured provider mode, less than 24 hours old (and not more than a minute in the future), for the signed-in principal, and with no credential committed since (the stored credential is absent or still the one it renews). Otherwise it is dropped and the next request gets a new key. It is also dropped when the provider gives a final answer (403, 409 or 422, another 4xx except 401, a contract violation, an unusable or already expired credential); kept after a failure that may have come after the request took effect or invites a retry (`outcome` set, `retryable`, a 401 or other identity failure, a network or TLS policy refusal, or an error that is not a `PiShipError`); removed by `logout` (also without the runtime variables), by `login` of another principal (a `login` of the same principal keeps it), by purge, by an update or rollback to a release that cannot read it, and whenever an update or rollback clears the runtime credential. A credential adapter should report an ambiguous failure with `retryable: true` or `detail.outcome`; any other `PiShipError` it throws ends the request.
+
+Committing a credential and removing the record are two steps, because they are two files. Each crash window is safe:
+
+| Process stops | Left on disk | Next attempt |
+| --- | --- | --- |
+| After recording the key, before or while sending | The record; nothing or something issued | Sends the same key: the broker issues once, or replays what it issued |
+| After the broker issued, before the answer is read (lost answer, kill) | The record | Sends the same key; the broker replays the credential |
+| After the secret is written, before metadata switches to it | The record; the new secret under the next generation (a first generation is named by a discarded marker) | The unused secret is deleted as before; the same key is sent, the replayed credential committed |
+| After metadata switches, before the record is removed | The record, and metadata of a credential committed after it | The record is recognized as resolved (the stored credential is no longer the one it renews) and dropped before anything else, including a `login` that clears the credential, so its key is never sent again |
+| After the record is removed | Nothing pending | A later renewal is a new request with a new key |
+
+The age uses the wall clock. A clock set forward retires a key early (at worst a duplicate credential); one set back makes a record look younger, so its key can be sent after more than 24 hours of real time, which a broker that already forgot it answers with a new credential. A record dated more than a minute ahead of the clock is dropped.
 
 ## Sandbox credential
 
