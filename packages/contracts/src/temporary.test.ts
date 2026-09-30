@@ -64,6 +64,10 @@ function create(kind: TemporaryKind, label?: string): TemporaryDirectory {
   return item;
 }
 
+/** The paths `findAbandonedTemporaryDirectories` judges abandoned. */
+const found = (...args: Parameters<typeof findAbandonedTemporaryDirectories>) =>
+  findAbandonedTemporaryDirectories(...args).map((item) => item.path);
+
 /** The host token of this machine, as a marker records it. */
 function localHost(): string {
   if (host === undefined) {
@@ -252,9 +256,7 @@ describe("reclaimTemporaryDirectories", () => {
   it("finds without removing, for a diagnostic", () => {
     const stale = plant("piship-verify-abc123");
     plant("piship-verify-def456", { pid: livePid() });
-    expect(findAbandonedTemporaryDirectories(root, ["verify"])).toEqual([
-      stale,
-    ]);
+    expect(found(root, ["verify"])).toEqual([stale]);
     expect(existsSync(stale)).toBe(true);
   });
 
@@ -263,9 +265,7 @@ describe("reclaimTemporaryDirectories", () => {
       reclaimTemporaryDirectories(join(root, "missing"), ["verify"]),
     ).toEqual({ removed: [], failed: [] });
     writeFileSync(join(root, "file"), "x");
-    expect(
-      findAbandonedTemporaryDirectories(join(root, "file"), ["verify"]),
-    ).toEqual([]);
+    expect(found(join(root, "file"), ["verify"])).toEqual([]);
   });
 
   describe("never touches what is not a marked directory of the kind", () => {
@@ -408,13 +408,11 @@ describe("reclaimTemporaryDirectories", () => {
         { pid: livePid() },
         { ageMs: 3 * DAY },
       );
-      expect(findAbandonedTemporaryDirectories(root, ["verify"])).toEqual([
-        path,
-      ]);
+      expect(found(root, ["verify"])).toEqual([path]);
       // What the owner's heartbeat does.
       const now = new Date();
       utimesSync(join(path, TEMPORARY_OWNER_FILE), now, now);
-      expect(findAbandonedTemporaryDirectories(root, ["verify"])).toEqual([]);
+      expect(found(root, ["verify"])).toEqual([]);
     });
 
     it("does not treat a marker dated in the future as expired", () => {
@@ -509,9 +507,7 @@ describe("reclaimTemporaryDirectories", () => {
           const first = reclaimTemporaryDirectories(root, ["verify"]);
           expect(first).toEqual({ removed: [], failed: [stale] });
           // Its marker is still there, so it is still found.
-          expect(findAbandonedTemporaryDirectories(root, ["verify"])).toEqual([
-            stale,
-          ]);
+          expect(found(root, ["verify"])).toEqual([stale]);
         } finally {
           chmodSync(locked, 0o700);
         }
@@ -629,9 +625,7 @@ describe("hard termination", () => {
       expect(readFileSync(join(path, "tool-output.txt"), "utf8")).toBe(
         "private output",
       );
-    expect(findAbandonedTemporaryDirectories(root, ALL).sort()).toEqual(
-      left.slice().sort(),
-    );
+    expect(found(root, ALL).sort()).toEqual(left.slice().sort());
     const result = reclaimTemporaryDirectories(root, ALL);
     expect(result.failed).toEqual([]);
     expect(result.removed.sort()).toEqual(left.slice().sort());

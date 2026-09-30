@@ -32,7 +32,7 @@ vi.mock("node:fs", async (importOriginal) => {
         path,
         ...rest,
       ) as { dev: number } | undefined;
-      if (stat && mounts.paths.includes(String(path)))
+      if (stat && mounts.paths.some((mount) => String(path).endsWith(mount)))
         return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
           dev: stat.dev + 1,
         });
@@ -77,24 +77,30 @@ function stale(name: string): string {
 describe("mount points", () => {
   it("does not descend into a mount point inside an abandoned directory", () => {
     const path = stale("piship-verify-abc123");
-    mounts.paths.push(join(path, "x", "mounted"));
-    const result = reclaimTemporaryDirectories(root, ["verify"]);
+    // The directory is moved aside before it is removed: match by ending.
+    mounts.paths.push(join("x", "mounted"));
+    const result = reclaimTemporaryDirectories(root, ["verify"], {
+      remover: "portable",
+    });
     expect(result).toEqual({ removed: [], failed: [path] });
     expect(readFileSync(join(path, "x", "mounted", "user-file"), "utf8")).toBe(
       "on another device",
     );
     // Still recognised, so it is reported and retried, not forgotten.
     expect(existsSync(join(path, TEMPORARY_OWNER_FILE))).toBe(true);
-    expect(findAbandonedTemporaryDirectories(root, ["verify"])).toEqual([path]);
+    expect(
+      findAbandonedTemporaryDirectories(root, ["verify"]).map(
+        (item) => item.path,
+      ),
+    ).toEqual([path]);
   });
 
   it("does not remove a directory that is itself a mount point", () => {
     const path = stale("piship-verify-abc123");
     mounts.paths.push(path);
-    expect(reclaimTemporaryDirectories(root, ["verify"])).toEqual({
-      removed: [],
-      failed: [],
-    });
+    expect(
+      reclaimTemporaryDirectories(root, ["verify"], { remover: "portable" }),
+    ).toEqual({ removed: [], failed: [] });
     expect(existsSync(join(path, "x", "payload"))).toBe(true);
   });
 

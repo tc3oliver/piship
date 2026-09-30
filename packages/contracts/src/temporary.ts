@@ -31,6 +31,20 @@
 // - A directory this process itself holds is never reclaimed, whatever the
 //   marker says.
 //
+// Trust. The marker is not authenticated: a process that can write a
+// directory can write a marker into it, for a dead owner or an old date,
+// including a sandboxed command in any directory the sandbox lets it write.
+// So a marker only selects a directory of PiShip's own name shape for
+// removal, and two things keep that from reaching anything outside it:
+// callers sweep only roots such a command cannot write (the OS temp
+// directory, the install home, `apps/<id>`; build and release output roots,
+// which lie in the workspace, are swept only when the user asks), and the
+// removal verifies identity, not names (`removeAbandoned`): the directory
+// is moved to a fresh name, found to be the same real directory (device and
+// inode) it was judged to be, and removed by `rm` (or, where there is none,
+// by a walk that never reads a path it has not just examined), never by a
+// path that can be swapped for a link after it was checked.
+//
 // Directories made before markers existed have none and are never removed,
 // however old: nothing tells them from a live older PiShip's session (a
 // sandbox session can run for days) or from a user's directory that happens
@@ -41,27 +55,34 @@
 // its marker leaves an empty directory, which is not reclaimed for the same
 // reason. A marker that cannot be read, parsed, or that names another
 // directory keeps the directory too.
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
   fstatSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   readSync,
+  renameSync,
   rmdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   utimesSync,
+  writeFileSync,
   writeSync,
   type Stats,
 } from "node:fs";
-import { hostname } from "node:os";
-import { basename, join } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 
 export const TEMPORARY_OWNER_FILE = ".piship-owner";
 export const TEMPORARY_OWNER_SCHEMA = "piship-temporary-owner/v1";
@@ -346,7 +367,7 @@ function parseOwner(text: string): TemporaryOwner | undefined {
  */
 function readMarker(
   path: string,
-): { owner: TemporaryOwner; mtimeMs: number } | undefined {
+): { owner: TemporaryOwner; mtimeMs: number; text: string } | undefined {
   let fd: number | undefined;
   try {
     const entry = lstatSync(path);
@@ -368,8 +389,9 @@ function readMarker(
       if (count === 0) break;
       read += count;
     }
-    const owner = parseOwner(buffer.subarray(0, read).toString("utf8"));
-    return owner ? { owner, mtimeMs: stat.mtimeMs } : undefined;
+    const text = buffer.subarray(0, read).toString("utf8");
+    const owner = parseOwner(text);
+    return owner ? { owner, mtimeMs: stat.mtimeMs, text } : undefined;
   } catch {
     return undefined;
   } finally {
@@ -386,7 +408,8 @@ function readMarker(
 export function readTemporaryOwner(
   directory: string,
 ): { owner: TemporaryOwner; mtimeMs: number } | undefined {
-  return readMarker(join(directory, TEMPORARY_OWNER_FILE));
+  const marker = readMarker(join(directory, TEMPORARY_OWNER_FILE));
+  return marker && { owner: marker.owner, mtimeMs: marker.mtimeMs };
 }
 
 /** Whether the owner of a directory last refreshed at `mtimeMs` is gone. */
@@ -396,20 +419,65 @@ function abandoned(owner: TemporaryOwner, mtimeMs: number, now: number) {
   return now - mtimeMs > TEMPORARY_LEASE_MS;
 }
 
-export interface ReclaimOptions {
-  /** The clock, for tests. */
-  readonly now?: number;
+/** What a directory keeps when its name is swapped for another entry. */
+export interface DirectoryIdentity {
+  readonly dev: number;
+  readonly ino: number;
 }
 
 /**
+ * A directory judged abandoned, with the identity it had then. Removal acts
+ * only on an entry that still has it.
+ */
+export interface AbandonedDirectory extends DirectoryIdentity {
+  readonly path: string;
+  /** Undefined for a directory a removal that was killed left half done. */
+  readonly kind: TemporaryKind | undefined;
+  /** The marker as read, written back when a removal stops half way; empty when there is none. */
+  readonly marker: string;
+}
+
+/** The steps of a removal a test can act between (see `ReclaimOptions`). */
+export type ReclaimStep = "found" | "renamed" | "walk";
+
+export interface ReclaimOptions {
+  /** The clock, for tests. */
+  readonly now?: number;
+  /**
+   * Test seam: called before each step of a removal that acts on the file
+   * system, with the path it is about to act on (`found`: the judged
+   * directory; `renamed`: where it was moved to; `walk`: a directory the
+   * portable walk is about to list), so a test can swap an entry for a link
+   * at exactly that moment.
+   */
+  readonly onStep?: (step: ReclaimStep, path: string) => void;
+  /** Test seam: `portable` uses the portable walk where `rm` would be used. */
+  readonly remover?: "portable";
+}
+
+/** A name nothing else looks for, in the directory that held the original. */
+const QUARANTINE = ".piship-reclaim-";
+const QUARANTINE_NAME = /^\.piship-reclaim-[0-9a-f]{16}$/;
+/**
+ * A quarantined directory not changed for this long belongs to a removal that
+ * was killed after it moved the directory and before it finished: its marker
+ * may be gone (`rm` removes in any order), so it is recognised by the name
+ * PiShip gave it, its owner, and its age, and removed the same way. One a
+ * running removal is working on changes (its entries are being deleted) and
+ * is left until it stops.
+ */
+const QUARANTINE_IDLE_MS = 10 * 60_000;
+
+/**
  * The directories in `root` that are PiShip-owned, of one of `kinds`, and
- * abandoned (see the rules above), without touching them. Never throws.
+ * abandoned (see the rules above), without touching them, and the
+ * quarantined leftovers of removals that were killed. Never throws.
  */
 export function findAbandonedTemporaryDirectories(
   root: string,
   kinds: readonly TemporaryKind[],
   options: ReclaimOptions = {},
-): string[] {
+): AbandonedDirectory[] {
   let names: string[];
   let rootDevice: number;
   try {
@@ -419,9 +487,11 @@ export function findAbandonedTemporaryDirectories(
     return [];
   }
   const now = options.now ?? Date.now();
-  const found: string[] = [];
+  const found: AbandonedDirectory[] = [];
   for (const name of names) {
-    if (!kinds.some((kind) => SHAPES[kind].name.test(name))) continue;
+    const quarantined = QUARANTINE_NAME.test(name);
+    if (!quarantined && !kinds.some((kind) => SHAPES[kind].name.test(name)))
+      continue;
     const path = join(root, name);
     try {
       const entry = lstatSync(path);
@@ -432,7 +502,18 @@ export function findAbandonedTemporaryDirectories(
         entry.dev !== rootDevice
       )
         continue;
-      const marker = readTemporaryOwner(path);
+      if (quarantined) {
+        if (now - Math.max(entry.mtimeMs, entry.ctimeMs) > QUARANTINE_IDLE_MS)
+          found.push({
+            path,
+            kind: undefined,
+            dev: entry.dev,
+            ino: entry.ino,
+            marker: "",
+          });
+        continue;
+      }
+      const marker = readMarker(join(path, TEMPORARY_OWNER_FILE));
       if (
         !marker ||
         marker.owner.name !== name ||
@@ -440,7 +521,14 @@ export function findAbandonedTemporaryDirectories(
         !SHAPES[marker.owner.kind].name.test(name)
       )
         continue;
-      if (abandoned(marker.owner, marker.mtimeMs, now)) found.push(path);
+      if (abandoned(marker.owner, marker.mtimeMs, now))
+        found.push({
+          path,
+          kind: marker.owner.kind,
+          dev: entry.dev,
+          ino: entry.ino,
+          marker: marker.text,
+        });
     } catch {
       // Gone already, or unreadable: not this sweep's.
     }
@@ -448,59 +536,276 @@ export function findAbandonedTemporaryDirectories(
   return found;
 }
 
-/** The same directory as `before`: neither swapped for a link nor replaced. */
-function unchanged(path: string, before: Stats): boolean {
-  const now = lstatSync(path);
-  return now.isDirectory() && now.dev === before.dev && now.ino === before.ino;
+function missing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function changed(): Error {
+  return new Error(
+    "an entry is not the directory that was judged abandoned: it was replaced",
+  );
+}
+
+/** Whether `path` is, right now, a real directory with this identity. */
+function isDirectoryWith(path: string, identity: DirectoryIdentity): boolean {
+  const stat = lstatSync(path);
+  return (
+    stat.isDirectory() && stat.dev === identity.dev && stat.ino === identity.ino
+  );
+}
+
+/** How the system removes a tree without following links, if it can. */
+interface Remover {
+  readonly file: string;
+  readonly args: readonly string[];
+}
+const REMOVERS: readonly Remover[] = [
+  // GNU coreutils: fts with descriptor-relative removal, `--one-file-system`.
+  { file: "/bin/rm", args: ["-rf", "--one-file-system", "--"] },
+  // macOS and the BSDs: fts, `-x` does not cross mount points.
+  { file: "/bin/rm", args: ["-rfx", "--"] },
+];
+let remover: Remover | null | undefined;
+
+/**
+ * The system `rm` that removes a whole tree safely, or null. `rm` walks with
+ * descriptor-relative calls (fts), so a directory swapped for a link while it
+ * runs is never followed, and it cannot be given a path that is resolved
+ * after a check, which a walk in this process cannot avoid. It is used only
+ * after it proved on a throwaway tree, once per process, that it removes a
+ * tree, leaves what a link inside it points to, and accepts the flags that
+ * keep it on one filesystem (BusyBox `rm` does not, and is left out). Windows
+ * has none: the portable walk is used there.
+ */
+function systemRemover(): Remover | null {
+  if (remover !== undefined) return remover;
+  remover = null;
+  if (process.platform === "win32") return remover;
+  for (const candidate of REMOVERS) {
+    let scratch: string | undefined;
+    try {
+      scratch = mkdtempSync(join(tmpdir(), "piship-rm-probe-"));
+      mkdirSync(join(scratch, "victim"));
+      writeFileSync(join(scratch, "victim", "kept"), "kept");
+      mkdirSync(join(scratch, "tree", "deep"), { recursive: true });
+      symlinkSync(join(scratch, "victim"), join(scratch, "tree", "link"));
+      symlinkSync(join(scratch, "victim"), join(scratch, "link"));
+      const run = (target: string) =>
+        spawnSync(candidate.file, [...candidate.args, target], {
+          stdio: "ignore",
+          env: {},
+          timeout: 30_000,
+        });
+      if (
+        run(join(scratch, "tree")).status === 0 &&
+        !existsSync(join(scratch, "tree")) &&
+        // A link given as the operand is removed, not followed.
+        run(join(scratch, "link")).status === 0 &&
+        !existsSync(join(scratch, "link")) &&
+        readFileSync(join(scratch, "victim", "kept"), "utf8") === "kept"
+      ) {
+        remover = candidate;
+        break;
+      }
+    } catch {
+      // Not usable here; the next candidate, or the portable walk.
+    } finally {
+      if (scratch)
+        try {
+          rmSync(scratch, { recursive: true, force: true });
+        } catch {
+          // A throwaway directory in the OS temp directory.
+        }
+    }
+  }
+  return remover;
+}
+
+/** Whether removal uses the system's `rm` here (it does not on Windows). */
+export function usesSystemRemover(): boolean {
+  return systemRemover() !== null;
 }
 
 /**
- * Remove `path` and everything under it without following a link and without
- * leaving the filesystem `device`: a link is unlinked, a directory on another
- * device (a mount) fails the removal. Descriptor-relative removal is not
- * available in Node, so this walk is path based; the owner of what it removes
- * is gone, and it checks a directory is still the one it listed before it
- * removes what it listed.
+ * Remove `path` and everything under it with the portable walk, which has
+ * Node's path-based calls only. It never reads a path it has not just
+ * `lstat`ed as a real directory, checks that directory is still the one it
+ * listed (same device and inode) before it acts on the names it listed, and
+ * never leaves the device `device`. A directory swapped for a link between
+ * its `lstat` and its listing is caught by that second look, before anything
+ * is removed. What remains is the gap between that look and the removal of
+ * each entry, which no path-based call can close: it is the fallback for
+ * Windows, where no sandbox backend runs local processes, and for systems
+ * without a usable `rm`.
  */
-function removeTree(path: string, device: number): void {
-  let entry: Stats;
-  try {
-    entry = lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  if (entry.dev !== device)
-    throw new Error("a mount point inside a temporary directory");
-  if (!entry.isDirectory()) {
+function removeContents(
+  path: string,
+  entry: Stats,
+  device: number,
+  options: ReclaimOptions,
+  keep?: string,
+): void {
+  options.onStep?.("walk", path);
+  const names = readdirSync(path);
+  const after = lstatSync(path);
+  if (
+    !after.isDirectory() ||
+    after.dev !== entry.dev ||
+    after.ino !== entry.ino
+  )
+    throw changed();
+  for (const name of names) {
+    if (name === keep) continue;
+    const child = join(path, name);
+    let stat: Stats;
     try {
-      unlinkSync(path);
+      stat = lstatSync(child);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if (missing(error)) continue;
       throw error;
     }
-    return;
+    if (stat.dev !== device)
+      throw new Error("a mount point inside a temporary directory");
+    try {
+      if (stat.isDirectory()) {
+        removeContents(child, stat, device, options);
+        rmdirSync(child);
+      } else unlinkSync(child);
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
   }
-  const names = readdirSync(path);
-  if (!unchanged(path, entry))
-    throw new Error("a directory changed while it was removed");
-  for (const name of names) removeTree(join(path, name), device);
+}
+
+/** Contents first, the marker last: a stop half way stays recognised. */
+function removePortable(
+  path: string,
+  identity: DirectoryIdentity,
+  options: ReclaimOptions,
+): void {
+  const top = lstatSync(path);
+  if (!isDirectoryWith(path, identity)) throw changed();
+  removeContents(path, top, top.dev, options, TEMPORARY_OWNER_FILE);
+  if (!isDirectoryWith(path, identity)) throw changed();
+  rmSync(join(path, TEMPORARY_OWNER_FILE), { force: true });
   rmdirSync(path);
 }
 
+/** One `rm` of the moved directory itself, as the only operand. */
+function removeWithSystem(tool: Remover, path: string): void {
+  const result = spawnSync(tool.file, [...tool.args, path], {
+    stdio: "ignore",
+    env: {},
+    timeout: 10 * 60_000,
+  });
+  if (result.error || result.status !== 0)
+    throw new Error("the system remover could not remove the directory");
+  if (existsSync(path)) throw new Error("the directory is still there");
+}
+
 /**
- * Remove one abandoned directory. The marker goes last, so a removal that
- * stops half way (a mount point, a file that cannot be deleted) leaves a
- * directory that is still recognised and retried.
+ * Put a directory that could not be removed back under its own name and
+ * marker, so the next sweep finds and retries it and a diagnostic can count
+ * it. Best effort: a directory that cannot be put back keeps its quarantine
+ * name and is left for the user.
  */
-function removeAbandoned(path: string): void {
-  const entry = lstatSync(path);
-  for (const name of readdirSync(path))
-    if (name !== TEMPORARY_OWNER_FILE) removeTree(join(path, name), entry.dev);
-  if (!unchanged(path, entry))
-    throw new Error("a directory changed while it was removed");
-  rmSync(join(path, TEMPORARY_OWNER_FILE), { force: true });
-  rmdirSync(path);
+function restore(
+  quarantine: string,
+  path: string,
+  found: AbandonedDirectory,
+  ours: boolean,
+): void {
+  try {
+    if (ours && found.marker) {
+      const marker = join(quarantine, TEMPORARY_OWNER_FILE);
+      if (!existsSync(marker)) {
+        const fd = openSync(marker, "wx", 0o600);
+        try {
+          writeSync(fd, found.marker);
+        } finally {
+          closeSync(fd);
+        }
+      }
+    }
+    renameSync(quarantine, path);
+  } catch {
+    // Left under its quarantine name.
+  }
+}
+
+/**
+ * Remove one abandoned directory without trusting its name, which a
+ * process that can write its parent can swap for a link at any moment:
+ * 1. it is still the real directory with the identity it was judged with;
+ * 2. for a sandbox session, its `tmp` (where contained commands write) is
+ *    renamed first, cutting every path a surviving command has into it;
+ * 3. the directory is renamed to a fresh name nothing is looking for, which
+ *    is no longer reachable by the paths a survivor knows, and the entry
+ *    under that name must be the same real directory (same device and
+ *    inode), else the removal stops and nothing is removed;
+ * 4. the moved directory, as the single operand, is removed by `rm` (which
+ *    never follows a link, not even as its operand), or, where there is no
+ *    usable `rm`, by the portable walk.
+ * A removal that fails puts the directory back under its name and marker.
+ */
+function removeAbandoned(
+  found: AbandonedDirectory,
+  options: ReclaimOptions,
+): "removed" | "gone" {
+  const { path } = found;
+  options.onStep?.("found", path);
+  try {
+    if (!isDirectoryWith(path, found)) throw changed();
+  } catch (error) {
+    if (missing(error)) return "gone";
+    throw error;
+  }
+  if (found.kind === "sandbox")
+    try {
+      if (lstatSync(join(path, "tmp")).isDirectory())
+        renameSync(
+          join(path, "tmp"),
+          join(path, `tmp-${randomBytes(8).toString("hex")}`),
+        );
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+  const quarantine = join(
+    dirname(path),
+    `${QUARANTINE}${randomBytes(8).toString("hex")}`,
+  );
+  try {
+    renameSync(path, quarantine);
+  } catch (error) {
+    if (missing(error)) return "gone";
+    throw error;
+  }
+  options.onStep?.("renamed", quarantine);
+  let verified = false;
+  try {
+    verified = isDirectoryWith(quarantine, found);
+  } catch {
+    // Not there, or not a directory: not verified.
+  }
+  if (!verified) {
+    restore(quarantine, path, found, false);
+    throw changed();
+  }
+  try {
+    const tool = options.remover === "portable" ? null : systemRemover();
+    if (tool) removeWithSystem(tool, quarantine);
+    else removePortable(quarantine, found, options);
+  } catch (error) {
+    let ours = false;
+    try {
+      ours = isDirectoryWith(quarantine, found);
+    } catch {
+      // Gone or replaced: nothing to put back.
+    }
+    if (ours) restore(quarantine, path, found, true);
+    throw error;
+  }
+  return "removed";
 }
 
 export interface ReclaimResult {
@@ -512,7 +817,11 @@ export interface ReclaimResult {
 /**
  * Remove the abandoned PiShip temporary directories of `kinds` in `root`.
  * Best effort, never throws; what cannot be removed is reported in `failed`
- * and tried again by the next call.
+ * and tried again by the next call. Call it only for a root no sandboxed
+ * command can write (docs/architecture.md, "Temporary directories"):
+ * the removal does not follow a link a swapped directory leaves, but a root
+ * that a contained process writes is a root where it can plant directories
+ * with forged markers for PiShip to remove.
  */
 export function reclaimTemporaryDirectories(
   root: string,
@@ -521,12 +830,12 @@ export function reclaimTemporaryDirectories(
 ): ReclaimResult {
   const removed: string[] = [];
   const failed: string[] = [];
-  for (const path of findAbandonedTemporaryDirectories(root, kinds, options))
+  for (const found of findAbandonedTemporaryDirectories(root, kinds, options))
     try {
-      removeAbandoned(path);
-      removed.push(path);
+      if (removeAbandoned(found, options) === "removed")
+        removed.push(found.path);
     } catch {
-      failed.push(path);
+      failed.push(found.path);
     }
   return { removed, failed };
 }
