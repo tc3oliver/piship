@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnManaged } from "./process.js";
 
@@ -123,24 +124,46 @@ describe("spawnManaged", () => {
     expect((await child.exited).cancelled).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "kills leftover group members when the leader exits",
+  it("kills leftover group members when the leader exits", async () => {
+    const heartbeat = join(dir, "hb");
+    const token = `piship-orphan-${Date.now()}`;
+    const leader = TREE.replace(
+      "setInterval(() => {}, 1000);",
+      "setTimeout(() => process.exit(0), 300);",
+    );
+    const exit = await spawnManaged({
+      file: node,
+      args: ["-e", leader, heartbeat, token],
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+    }).exited;
+    expect(exit.code).toBe(0);
+    expect(await heartbeatStopped(heartbeat)).toBe(true);
+    expect(running(token)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "kills a live governed tree when PiShip exits",
     async () => {
-      const heartbeat = join(dir, "hb");
-      const token = `piship-orphan-${Date.now()}`;
-      const leader = TREE.replace(
-        "setInterval(() => {}, 1000);",
-        "setTimeout(() => process.exit(0), 300);",
+      const heartbeat = join(dir, "shutdown-hb");
+      const token = `piship-shutdown-${Date.now()}`;
+      const modulePath = fileURLToPath(
+        new URL("../dist/index.js", import.meta.url),
       );
-      const exit = await spawnManaged({
-        file: node,
-        args: ["-e", leader, heartbeat, token],
-        cwd: dir,
-        env: { PATH: process.env.PATH ?? "" },
-      }).exited;
-      expect(exit.code).toBe(0);
+      const source = `
+      const { spawnManaged } = await import(process.argv[1]);
+      const child = spawnManaged({ file: process.execPath, args: ["-e", ${JSON.stringify(TREE)}, process.argv[2], process.argv[3]], cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" } });
+      child.stdout.on("data", () => process.exit(0));
+    `;
+      execFileSync(
+        node,
+        ["--input-type=module", "-e", source, modulePath, heartbeat, token],
+        {
+          cwd: dir,
+          timeout: 20_000,
+        },
+      );
       expect(await heartbeatStopped(heartbeat)).toBe(true);
-      expect(running(token)).toBe(false);
     },
   );
 

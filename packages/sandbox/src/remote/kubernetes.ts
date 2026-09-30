@@ -70,8 +70,10 @@ const TERMINAL_REASONS = new Set([
 // pool whose volumes PiShip does not know, so its workspace is a snapshot.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
-  planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
-  network: ["deny", "allow"],
+  // A claim selects one preconfigured warm pool. This adapter has no way to
+  // prove the pool's NetworkPolicy or create a corresponding allow-mode peer.
+  planes: [HOST_FILESYSTEM_ISOLATION, "environment-filter"],
+  network: ["allow"],
   localProcesses: false,
   workspace: { mode: "snapshot" },
 };
@@ -320,7 +322,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       throw new ClaimGone("the SandboxClaim no longer exists");
     }
     if (!response.ok)
-      throw new Error(`checking the SandboxClaim failed: ${await describeFailure(response)}`);
+      throw new Error(
+        `checking the SandboxClaim failed: ${await describeFailure(response)}`,
+      );
     await response.body?.cancel().catch(() => undefined);
   }
 

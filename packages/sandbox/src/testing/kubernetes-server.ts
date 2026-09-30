@@ -84,7 +84,10 @@ export async function kubernetesServer(
     }
     if (request.method === "POST" && path === "/execute") {
       const sandbox = request.headers["x-sandbox-id"];
-      if (typeof sandbox === "string" && cluster.expired?.has(sandbox.slice(5))) {
+      if (
+        typeof sandbox === "string" &&
+        cluster.expired?.has(sandbox.slice(5))
+      ) {
         response.statusCode = 404;
         return void response.end("{}");
       }
@@ -96,6 +99,7 @@ export async function kubernetesServer(
           JSON.stringify({
             stdout: checkAnswer(
               command.includes("'PISHIP_PROBE_UNLISTED=") ? "1" : undefined,
+              command,
             ),
             stderr: "",
             exit_code: 0,

@@ -7,6 +7,7 @@ import {
   readInstallReceipt,
   receiptPath,
 } from "./receipt.js";
+import { runtimeLeases } from "./runtime-lease.js";
 
 /**
  * Remove the shim, launcher, every retained release, leftovers of an
@@ -16,9 +17,18 @@ import {
 export function uninstallDistribution(id: string): string {
   const receipt = readInstallReceipt(id);
   const apps = appDirectory(id);
-  if (existsSync(apps)) acquireLock(id);
-  rmSync(receipt.commandPath, { force: true });
-  rmSync(apps, { recursive: true, force: true });
-  rmSync(receiptPath(id), { force: true });
-  return runtimeStateDirectory({ value: id });
+  const hold = existsSync(apps) ? acquireLock(id) : undefined;
+  try {
+    const live = runtimeLeases(id, true).filter((lease) => lease.live);
+    if (live.length)
+      throw new Error(
+        `Cannot uninstall ${id} while ${live.length} runtime session(s) still use its payload; close them and retry`,
+      );
+    rmSync(receipt.commandPath, { force: true });
+    rmSync(apps, { recursive: true, force: true });
+    rmSync(receiptPath(id), { force: true });
+    return runtimeStateDirectory({ value: id });
+  } finally {
+    hold?.release();
+  }
 }

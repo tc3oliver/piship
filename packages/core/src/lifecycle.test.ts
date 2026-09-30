@@ -33,10 +33,12 @@ import {
 import {
   RECEIPT_SCHEMA,
   installDistribution,
+  holdRuntimeLease,
   lifecycleStatus,
   purgeDistributionState,
   readInstallReceipt,
   recoverInstallation,
+  runtimeLeases,
   uninstallDistribution,
 } from "./install/index.js";
 import { readStateMarker } from "./migration.js";
@@ -511,6 +513,49 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(repaired).toEqual(receipt);
     expect(existsSync(receipt.commandPath)).toBe(true);
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("keeps a leased payload after it leaves the receipt and reclaims it when the runtime exits", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const old = receipt.payload;
+    const next = join(appsDir(), "1.1.0");
+    mkdirSync(next);
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      writeFileSync(
+        join(
+          process.env.PISHIP_INSTALL_HOME as string,
+          "receipts",
+          `${ID}.json`,
+        ),
+        JSON.stringify({
+          ...receipt,
+          active: "1.1.0",
+          payload: next,
+          releases: [
+            {
+              version: "1.1.0",
+              payload: next,
+              installedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      );
+      expect(
+        runtimeLeases(ID)
+          .filter((item) => item.live)
+          .map((item) => item.version),
+      ).toContain("1.0.0");
+      recoverInstallation(ID);
+      expect(existsSync(old)).toBe(true);
+      expect(() => uninstallDistribution(ID)).toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    recoverInstallation(ID);
+    expect(existsSync(old)).toBe(false);
+    expect(() => uninstallDistribution(ID)).not.toThrow();
   });
 
   it("refuses a tampered release before installing", async () => {

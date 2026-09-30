@@ -715,15 +715,24 @@ export const SANDBOX_READY_MARKER = "piship-sandbox-ready";
 /** Set in the check command's source environment; it must never arrive. */
 const UNLISTED_MARKER = "PISHIP_PROBE_UNLISTED";
 
-function checkCommand(network: "deny" | "allow", externalHost: string): string {
+function connectionCheck(host: string, port: number, label: string): string {
+  return `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${host}/${port}' >/dev/null 2>&1; then echo ${label}-reachable; else echo ${label}-blocked; fi; elif command -v nc >/dev/null 2>&1; then if nc -z -w 5 ${host} ${port} >/dev/null 2>&1; then echo ${label}-reachable; else echo ${label}-blocked; fi; else echo ${label}-unchecked; fi`;
+}
+
+function checkCommand(
+  network: "deny" | "allow",
+  externalHost: string,
+  verifyNetwork: boolean,
+): string {
   const lines = [
     `printf '%s %s\\n' ${SANDBOX_READY_MARKER} "\${${UNLISTED_MARKER}:-unset}"`,
   ];
+  if (network === "deny" || verifyNetwork) {
+    lines.push(`# piship-network-${network}-check`);
+    lines.push(connectionCheck(externalHost, 443, "piship-network"));
+  }
   if (network === "deny")
-    lines.push(
-      // bash's /dev/tcp, else nc: whichever the image has decides.
-      `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${externalHost}/443' >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; elif command -v nc >/dev/null 2>&1; then if nc -z -w 5 ${externalHost} 443 >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; else echo piship-network-unchecked; fi`,
-    );
+    lines.push(connectionCheck("169.254.169.254", 80, "piship-metadata"));
   return lines.join("\n");
 }
 
@@ -736,13 +745,26 @@ async function checkAttested(
   instance: SandboxInstance,
   session: Pick<Session, "profile" | "platform" | "capabilities">,
   sourceEnv: NodeJS.ProcessEnv,
-  options: { timeoutMs: number; settleMs: number; externalHost: string },
-): Promise<{ failure?: string; warnings: string[] }> {
+  options: {
+    timeoutMs: number;
+    settleMs: number;
+    externalHost: string;
+    verifyNetwork?: boolean;
+  },
+): Promise<{
+  failure?: string;
+  warnings: string[];
+  network?: "reachable" | "blocked";
+}> {
   let output = "";
   const outcome = await runGoverned(
     instance,
     {
-      command: checkCommand(session.profile.network, options.externalHost),
+      command: checkCommand(
+        session.profile.network,
+        options.externalHost,
+        options.verifyNetwork === true,
+      ),
       cwd: session.profile.workspace,
       workspacePath: ".",
       env: commandEnvironment(session, {
@@ -781,14 +803,33 @@ async function checkAttested(
         "an unapproved environment variable reached the sandboxed command",
       warnings: [],
     };
-  if (session.profile.network !== "deny") return { warnings: [] };
+  if (session.profile.network !== "deny")
+    return {
+      warnings: [],
+      ...(options.verifyNetwork
+        ? {
+            network: lines.includes("piship-network-reachable")
+              ? ("reachable" as const)
+              : ("blocked" as const),
+          }
+        : {}),
+    };
   if (lines.includes("piship-network-reachable"))
     return {
       failure:
         "an outbound network connection succeeded although the network is denied",
       warnings: [],
     };
-  if (lines.includes("piship-network-blocked")) return { warnings: [] };
+  if (lines.includes("piship-metadata-reachable"))
+    return {
+      failure: "cloud metadata remained reachable despite network deny",
+      warnings: [],
+    };
+  if (
+    lines.includes("piship-network-blocked") &&
+    lines.includes("piship-metadata-blocked")
+  )
+    return { warnings: [], network: "blocked" };
   // Network denial is a required plane: a check that cannot run proves nothing.
   return {
     failure:
@@ -976,6 +1017,34 @@ export async function activateSandbox(
         return await fail(
           `the ${backend.id} sandbox backend failed its check: ${check.failure}`,
         );
+      if (profile.network === "deny") {
+        let allowed: SandboxInstance | undefined;
+        try {
+          const allowProfile = { ...profile, network: "allow" as const };
+          allowed = await backend.prepare({ profile: allowProfile });
+          const contrast = await checkAttested(
+            allowed,
+            { ...session, profile: allowProfile },
+            sourceEnv,
+            {
+              timeoutMs: ctx.probeTimeoutMs ?? 60_000,
+              settleMs,
+              externalHost: "1.1.1.1",
+              verifyNetwork: true,
+            },
+          );
+          if (contrast.failure || contrast.network !== "reachable")
+            return await fail(
+              "network denial cannot be verified: the same target was not reachable in an allow-mode sandbox",
+            );
+        } catch (error) {
+          return await fail(
+            `network denial cannot be verified against an allow-mode sandbox: ${message(error)}`,
+          );
+        } finally {
+          await allowed?.dispose().catch(() => undefined);
+        }
+      }
       warnings.push(...check.warnings);
       verification = "backend-attested";
       planes = claimedGuarantees(capabilities, config.network.mode);

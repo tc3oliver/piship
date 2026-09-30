@@ -29,6 +29,7 @@ import {
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
 import { acquireLifecycleLock, type LifecycleHold } from "./lifecycle-lock.js";
 import { removeStaleTemporaries } from "./temporaries.js";
+import { runtimeLeases } from "./runtime-lease.js";
 
 export const RECEIPT_SCHEMA = "piship-install/v1";
 
@@ -302,7 +303,15 @@ export function recoverInstallation(id: string): string[] {
     ...receipt.releases.map((item) => item.version),
     "launch.mjs",
     ".lifecycle.lock",
+    ".runtime-leases",
   ]);
+  for (const lease of runtimeLeases(id, true)) {
+    if (!lease.live) continue;
+    if (lease.version === "*") {
+      for (const name of readdirSync(apps))
+        if (VERSION_NAME.test(name)) keep.add(name);
+    } else keep.add(lease.version);
+  }
   const removed: string[] = [];
   for (const name of readdirSync(apps))
     if (!keep.has(name)) {

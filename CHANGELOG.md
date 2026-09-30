@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. Each section is
 
 Preview milestone; not published to npm.
 
+- **Behavior change:** installed launchers now hold version-specific runtime leases. Updates retain payloads still used by live sessions, recovery reclaims them after the session exits, and uninstall refuses while a runtime remains active. Doctor reports live and stale leases.
+- **Behavior change:** remote network-deny activation requires a reachable allow-mode counterpart for the same target and checks cloud metadata reachability. The Kubernetes warm-pool adapter no longer claims network denial because it cannot verify the pool's NetworkPolicy; required deny mode fails closed.
+- **Behavior change:** Windows governed processes run inside a kill-on-close Job Object so descendants terminate when their leader or PiShip exits.
+
 ### Added
 
 - The HTTP audit sink wire contract, `piship-audit-batch/v1`, is published with a JSON Schema in the [enterprise integration contract](docs/enterprise-integration.md#audit-collector-piship-audit-batchv1): request, readiness probe, batching, retries, de-duplication, and privacy. A unit test validates every batch the sink sends, with every field at its limit, against the schema in the doc, and fails if either names a property the other lacks.

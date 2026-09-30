@@ -49,7 +49,13 @@ export function answerCheck(
     ),
   );
   if (request.command.includes("piship-network"))
-    io.onStdout(Buffer.from("piship-network-blocked\n"));
+    io.onStdout(
+      Buffer.from(
+        request.command.includes("piship-network-allow-check")
+          ? "piship-network-reachable\n"
+          : "piship-network-blocked\npiship-metadata-blocked\n",
+      ),
+    );
 }
 
 export interface FakeBackendOptions {

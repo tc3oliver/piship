@@ -480,6 +480,42 @@ describe("capability mismatch", () => {
   });
 });
 
+describe("remote network denial evidence", () => {
+  const marker = (io: SandboxExecIO, answer: string) => {
+    io.onStdout(Buffer.from(`${SANDBOX_READY_MARKER} unset\n${answer}`));
+  };
+
+  it("rejects a target unreachable in both allow and deny mode", async () => {
+    const { backend } = fakeBackend({
+      check: (_request, io) =>
+        marker(io, "piship-network-blocked\npiship-metadata-blocked\npiship-other-reachable\n"),
+    });
+    await expect(activate(backend)).rejects.toThrow(
+      /same target was not reachable/,
+    );
+  });
+
+  it("accepts a deny transition when the same target works in allow mode", async () => {
+    const { backend } = fakeBackend();
+    const sandbox = await activate(backend);
+    expect(sandbox.report.planes).toContain("network-deny");
+    await sandbox.dispose();
+  });
+
+  it("rejects cloud metadata reachability with public network blocked", async () => {
+    const { backend } = fakeBackend({
+      check: (request, io) =>
+        marker(
+          io,
+          request.command.includes("piship-network-allow-check")
+            ? "piship-network-reachable\n"
+            : "piship-network-blocked\npiship-metadata-reachable\n",
+        ),
+    });
+    await expect(activate(backend)).rejects.toThrow(/cloud metadata/);
+  });
+});
+
 describe("the environment a backend receives", () => {
   const env = {
     PATH: "/opt/host/bin",

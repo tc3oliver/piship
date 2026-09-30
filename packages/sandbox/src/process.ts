@@ -1,10 +1,11 @@
 // Governed child processes: approved environment only, process-group
 // lifetime, timeout with grace, AbortSignal cancellation, orphan cleanup.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { redact } from "@piship/contracts";
 import type { WrappedCommand } from "./adapter.js";
 import { stripCredentials } from "./environment.js";
+import { windowsJobCommand } from "./windows-job.js";
 
 /** Anything that can place a command inside a sandbox (an ActiveSandbox). */
 export interface SandboxWrapper {
@@ -73,10 +74,11 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 function killTree(pid: number, platform: NodeJS.Platform): void {
   if (platform === "win32") {
     try {
-      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
-      }).on("error", () => {});
+        timeout: 5000,
+      });
     } catch {
       // best effort
     }
@@ -180,9 +182,10 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   const target = options.sandbox
     ? options.sandbox.wrap(options.file, args, options.cwd, env)
     : { file: options.file, args, cwd: options.cwd, env };
-  const child = spawn(target.file, [...target.args], {
+  const launched = platform === "win32" ? windowsJobCommand(target) : target;
+  const child = spawn(launched.file, [...launched.args], {
     cwd: target.cwd,
-    env: { ...target.env },
+    env: { ...launched.env },
     detached: platform !== "win32",
     stdio: [options.stdin ?? "ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -193,7 +196,15 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
     live.set(pid, platform);
   }
   if (options.onStdout) child.stdout?.on("data", options.onStdout);
-  if (options.onStderr) child.stderr?.on("data", options.onStderr);
+  let jobError = false;
+  child.stderr?.on("data", (chunk: Buffer) => {
+    if (
+      platform === "win32" &&
+      chunk.toString("utf8").includes("PISHIP_WINDOWS_JOB_ERROR")
+    )
+      jobError = true;
+    else options.onStderr?.(chunk);
+  });
   child.stdin?.on("error", () => {});
 
   let done = false;
@@ -240,6 +251,9 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   };
   const exited = waitForExit(child, cleanup).then((result) => ({
     ...result,
+    ...(jobError
+      ? { error: "ENOENT or Windows Job Object startup failed" }
+      : {}),
     timedOut,
     cancelled,
   }));

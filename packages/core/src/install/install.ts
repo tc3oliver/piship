@@ -64,16 +64,24 @@ function ownedIncompleteInstall(
 
 function launcherSource(id: string): string {
   return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // Node resolves this module to its real path, while the receipt records the
 // install path as configured (on macOS /var is a symlink to /private/var).
 // Both sides are canonicalized before comparing; a missing payload or one
 // outside this directory still fails closed.
 const home = dirname(fileURLToPath(import.meta.url));
+const launchingDir = join(home, ".runtime-leases", ".launching");
+mkdirSync(launchingDir, { recursive: true, mode: 0o700 });
+const launching = join(launchingDir, randomUUID() + ".json");
+writeFileSync(launching, JSON.stringify({ schema: "piship-launching-lease/v1", pid: process.pid }) + "\\n", { flag: "wx", mode: 0o600 });
+const clearLaunching = () => { try { rmSync(launching, { force: true }); } catch {} };
+process.on("exit", clearLaunching);
 let payload;
 let command;
+let version;
 try {
   const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
   const release = receipt.releases.find((item) => item.version === receipt.active);
@@ -84,12 +92,16 @@ try {
     /^[a-z][a-z0-9-]*$/.test(command) &&
     realpathSync(release.payload) === realpathSync(join(home, release.version))
   )
-    payload = realpathSync(release.payload);
+    { payload = realpathSync(release.payload); version = release.version; }
 } catch {}
 if (!payload) {
   console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
   process.exit(1);
 }
+const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
+core.holdRuntimeLease(${JSON.stringify(id)}, version);
+clearLaunching();
+process.removeListener("exit", clearLaunching);
 await import(pathToFileURL(join(payload, "bin", command)).href);
 `;
 }
