@@ -107,40 +107,48 @@ export function runArguments(config, spec) {
 }
 
 /**
- * Arguments of `docker exec` for one command. The environment is read from
- * the CLI's standard input (`--env-file /dev/stdin`, which the CLI reads at
- * start): no value is on this process's command line, and no file holds one,
- * so nothing survives a crash of this service. The command itself is on the
- * command line: an organization that cannot accept that runs the container
- * runtime through its API instead of this CLI.
+ * Arguments of `docker exec` for one command. The environment is written to
+ * the CLI's standard input, which `--interactive` forwards to the reader in
+ * the container: no value is on this process's command line, none is in the
+ * exec's configuration at the daemon, and no file holds one, so nothing
+ * survives a crash of this service. (`--env-file /dev/stdin` cannot be used:
+ * on Linux the CLI's standard input is a socket, which cannot be opened by
+ * path.) The command itself is on the command line: an organization that
+ * cannot accept that runs the container runtime through its API instead of
+ * this CLI.
  *
- * The wrapper gives up at once if the command was cancelled before it began:
- * `docker exec` returns before the process exists in the container, so a
- * cancel can arrive first.
+ * The reader exports each `NAME=value` line and, at the empty line that ends
+ * them, replaces itself with the wrapper, whose environment then carries the
+ * command's ID from its start, with the standard input closed. An environment
+ * cut short (the CLI killed while it forwarded it) runs nothing. The wrapper
+ * gives up at once if the command was cancelled before it began: `docker
+ * exec` returns before the process exists in the container, so a cancel can
+ * arrive first.
  */
 export function execArguments(config, exec) {
+  const reader = `while IFS= read -r variable; do [ -z "$variable" ] && exec ${config.shell} -c "$2" piship-exec "$1" < /dev/null; export "$variable" || exit 125; done; exit 125`;
   const wrapper = `[ -e "${CANCEL_DIRECTORY}/.piship-cancel-$${EXEC_ID_VARIABLE}" ] && exit 143; exec ${config.shell} -c "$1"`;
   return [
     "exec",
-    "--env-file",
-    "/dev/stdin",
+    "--interactive",
     "--workdir",
     exec.workdir,
     exec.container,
     config.shell,
     "-c",
-    wrapper,
+    reader,
     "piship-exec",
     exec.command,
+    wrapper,
   ];
 }
 
-/** The environment file of one command, as `--env-file /dev/stdin` reads it. */
+/** The environment of one command as the reader takes it: a `NAME=value` line each, then an empty line. */
 export function environmentInput(id, variables) {
   const lines = [[EXEC_ID_VARIABLE, id], ...variables].map(
     ([name, value]) => `${name}=${value}`,
   );
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n")}\n\n`;
 }
 
 /**

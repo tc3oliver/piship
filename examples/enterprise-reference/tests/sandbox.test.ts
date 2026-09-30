@@ -417,7 +417,7 @@ describe.skipIf(process.platform === "win32")(
         });
         // Look while the command's `docker exec` runs: poll until it is
         // there (a loaded machine is slow to start it), for up to three seconds.
-        const exec = /docker exec .*--env-file \/dev\/stdin .*sleep 5/;
+        const exec = /docker exec --interactive .*sleep 5/;
         let processes = "";
         for (const deadline = Date.now() + 3000; Date.now() < deadline; ) {
           processes = spawnSync("ps", ["-axo", "args"], {
