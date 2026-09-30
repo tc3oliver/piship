@@ -38,24 +38,57 @@ const LOCAL_CAPABILITIES: SandboxCapabilities = {
   localProcesses: true,
 };
 
+/**
+ * A network probe the fakes' allow-mode sandboxes reach. `.test` is
+ * reserved, so it names nothing real.
+ */
+export const TEST_PROBE = { host: "probe.sandbox.test", port: 8443 } as const;
+
+/** REMOTE_CAPABILITIES with TEST_PROBE declared as the network probe. */
+export const PROBED_CAPABILITIES: SandboxCapabilities = {
+  ...REMOTE_CAPABILITIES,
+  networkProbe: TEST_PROBE,
+};
+
+/**
+ * How the fakes' network behaves: with the network allowed, a connection
+ * reaches exactly the `reachable` targets (`host:port`); with it denied,
+ * none. A check that asks about another target, or answers regardless of
+ * the mode, cannot come out verified.
+ */
+export interface FakeNetwork {
+  readonly reachable: readonly string[];
+}
+
+const DEFAULT_NETWORK: FakeNetwork = {
+  reachable: [`${TEST_PROBE.host}:${TEST_PROBE.port}`],
+};
+
+/** The line a contained shell prints for PiShip's connection check, if any. */
+export function connectionAnswer(
+  command: string,
+  mode: "deny" | "allow",
+  network: FakeNetwork = DEFAULT_NETWORK,
+): string {
+  const target = /\/dev\/tcp\/([^/']+)\/(\d+)'/.exec(command);
+  if (!target) return "";
+  const reached =
+    mode === "allow" && network.reachable.includes(`${target[1]}:${target[2]}`);
+  return `piship-network-${reached ? "reachable" : "blocked"}\n`;
+}
+
 /** Answer PiShip's check command the way a contained shell would. */
 export function answerCheck(
   request: SandboxExecRequest,
   io: SandboxExecIO,
+  mode: "deny" | "allow",
+  network?: FakeNetwork,
 ): void {
   io.onStdout(
     Buffer.from(
-      `${SANDBOX_READY_MARKER} ${request.env.PISHIP_PROBE_UNLISTED ?? "unset"}\n`,
+      `${SANDBOX_READY_MARKER} ${request.env.PISHIP_PROBE_UNLISTED ?? "unset"}\n${connectionAnswer(request.command, mode, network)}`,
     ),
   );
-  if (request.command.includes("piship-network"))
-    io.onStdout(
-      Buffer.from(
-        request.command.includes("piship-network-allow-check")
-          ? "piship-network-reachable\n"
-          : "piship-network-blocked\npiship-metadata-blocked\n",
-      ),
-    );
 }
 
 export interface FakeBackendOptions {
@@ -68,7 +101,15 @@ export interface FakeBackendOptions {
     request: SandboxExecRequest,
     io: SandboxExecIO,
   ) => Promise<SandboxExecResult>;
-  check?: (request: SandboxExecRequest, io: SandboxExecIO) => void;
+  /** Answers the check command; default `answerCheck` with `network`. */
+  check?: (
+    request: SandboxExecRequest,
+    io: SandboxExecIO,
+    mode: "deny" | "allow",
+  ) => void;
+  network?: FakeNetwork;
+  /** Called with the profile's network mode on each `prepare`. */
+  onPrepare?: (mode: "deny" | "allow") => void;
 }
 
 export interface FakeBackend {
@@ -95,15 +136,21 @@ export function fakeBackend(options: FakeBackendOptions = {}): FakeBackend {
       events.push("capabilities");
       return options.capabilities ?? REMOTE_CAPABILITIES;
     },
-    prepare: async (): Promise<SandboxInstance> => {
+    prepare: async ({
+      profile,
+    }: {
+      profile: SandboxProfile;
+    }): Promise<SandboxInstance> => {
       events.push("prepare");
+      options.onPrepare?.(profile.network);
       await options.prepare?.();
       return {
         exec: async (request, io) => {
           requests.push(request);
           if (request.command.includes(SANDBOX_READY_MARKER)) {
             events.push("check");
-            (options.check ?? answerCheck)(request, io);
+            if (options.check) options.check(request, io, profile.network);
+            else answerCheck(request, io, profile.network, options.network);
             return { exitCode: 0 };
           }
           events.push("exec");

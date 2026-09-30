@@ -21,6 +21,7 @@ import {
   enforcesPathPolicy,
   GIT_CONTROL_PROTECTION,
   HOST_FILESYSTEM_ISOLATION,
+  networkProbe,
   PATH_POLICY_PLANES,
   type SandboxGuarantee,
   type SandboxBackend,
@@ -28,6 +29,7 @@ import {
   type SandboxExecRequest,
   type SandboxExecResult,
   type SandboxInstance,
+  type SandboxNetworkProbe,
   type SandboxProvider,
   type SandboxWorkspaceDeclaration,
   WORKSPACE_CONFINEMENT,
@@ -69,10 +71,26 @@ export type ContainmentLevel = "enforced" | "unavailable" | "not-required";
  * How the enforced planes are known. `live-probe`: a real child inside the
  * backend failed to cross each plane. `backend-attested`: the backend
  * declares them; PiShip checked what it can from outside (the command
- * round trip, the environment it sends, and a failed outbound connection in
- * deny mode).
+ * round trip and the environment it sends, and in deny mode the backend's
+ * network probe when it declares one: see `NetworkDenialReport`).
  */
 export type ContainmentVerification = "live-probe" | "backend-attested";
+
+/**
+ * How network denial is known, in deny mode. `verified`: the live probe
+ * proved it (local backends), or a connection to the backend's network
+ * probe succeeded from a temporary allow-mode sandbox of the same backend
+ * and failed from the session's sandbox. `attested`: the backend's word;
+ * PiShip could not show that the same target is reachable with the network
+ * allowed, so a failed connection proves nothing and none is claimed.
+ */
+export interface NetworkDenialReport {
+  readonly evidence: "verified" | "attested";
+  /** Whether the backend declared a network probe. */
+  readonly probe: boolean;
+  /** Why it is attested: a fixed sentence, never an address. */
+  readonly reason?: string;
+}
 
 export interface ContainmentReport {
   readonly level: ContainmentLevel;
@@ -90,6 +108,8 @@ export interface ContainmentReport {
   readonly network: "deny" | "allow";
   /** Set when enforced. */
   readonly verification?: ContainmentVerification;
+  /** Set when enforced in deny mode. */
+  readonly networkDenial?: NetworkDenialReport;
   /** Whether local processes (MCP stdio servers) can be contained. */
   readonly localProcesses: boolean;
   readonly reason?: string;
@@ -724,31 +744,26 @@ export const SANDBOX_READY_MARKER = "piship-sandbox-ready";
 /** Set in the check command's source environment; it must never arrive. */
 const UNLISTED_MARKER = "PISHIP_PROBE_UNLISTED";
 
-function connectionCheck(host: string, port: number, label: string): string {
-  return `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${host}/${port}' >/dev/null 2>&1; then echo ${label}-reachable; else echo ${label}-blocked; fi; elif command -v nc >/dev/null 2>&1; then if nc -z -w 5 ${host} ${port} >/dev/null 2>&1; then echo ${label}-reachable; else echo ${label}-blocked; fi; else echo ${label}-unchecked; fi`;
+function connectionCheck(host: string, port: number): string {
+  // bash's /dev/tcp, else nc: whichever the image has decides.
+  return `if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then if timeout 5 bash -c 'exec 3<>/dev/tcp/${host}/${port}' >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; elif command -v nc >/dev/null 2>&1; then if nc -z -w 5 ${host} ${port} >/dev/null 2>&1; then echo piship-network-reachable; else echo piship-network-blocked; fi; else echo piship-network-unchecked; fi`;
 }
 
-function checkCommand(
-  network: "deny" | "allow",
-  externalHost: string,
-  verifyNetwork: boolean,
-): string {
+function checkCommand(target: SandboxNetworkProbe | undefined): string {
   const lines = [
     `printf '%s %s\\n' ${SANDBOX_READY_MARKER} "\${${UNLISTED_MARKER}:-unset}"`,
   ];
-  if (network === "deny" || verifyNetwork) {
-    lines.push(`# piship-network-${network}-check`);
-    lines.push(connectionCheck(externalHost, 443, "piship-network"));
-  }
-  if (network === "deny")
-    lines.push(connectionCheck("169.254.169.254", 80, "piship-metadata"));
+  if (target) lines.push(connectionCheck(target.host, target.port));
   return lines.join("\n");
 }
 
+type NetworkCheck = "reachable" | "blocked" | "unchecked";
+
 /**
  * The outside check for a backend PiShip cannot live-probe: a command must
- * run and report back, the unlisted marker must not arrive, and in deny mode
- * an outbound connection must fail. Returns a failure reason and warnings.
+ * run and report back, and the unlisted marker must not arrive. With a
+ * `target`, the command also tries to connect to it and the result says
+ * whether it could. Returns a failure reason and warnings.
  */
 async function checkAttested(
   instance: SandboxInstance,
@@ -757,23 +772,14 @@ async function checkAttested(
   options: {
     timeoutMs: number;
     settleMs: number;
-    externalHost: string;
-    verifyNetwork?: boolean;
+    target?: SandboxNetworkProbe;
   },
-): Promise<{
-  failure?: string;
-  warnings: string[];
-  network?: "reachable" | "blocked";
-}> {
+): Promise<{ failure?: string; warnings: string[]; network?: NetworkCheck }> {
   let output = "";
   const outcome = await runGoverned(
     instance,
     {
-      command: checkCommand(
-        session.profile.network,
-        options.externalHost,
-        options.verifyNetwork === true,
-      ),
+      command: checkCommand(options.target),
       cwd: session.profile.workspace,
       workspacePath: ".",
       env: commandEnvironment(session, {
@@ -812,39 +818,64 @@ async function checkAttested(
         "an unapproved environment variable reached the sandboxed command",
       warnings: [],
     };
-  if (session.profile.network !== "deny")
-    return {
-      warnings: [],
-      ...(options.verifyNetwork
-        ? {
-            network: lines.includes("piship-network-reachable")
-              ? ("reachable" as const)
-              : ("blocked" as const),
-          }
-        : {}),
-    };
-  if (lines.includes("piship-network-reachable"))
+  if (!options.target) return { warnings: [] };
+  // A connection that succeeded counts whatever else the output says.
+  const network: NetworkCheck = lines.includes("piship-network-reachable")
+    ? "reachable"
+    : lines.includes("piship-network-blocked")
+      ? "blocked"
+      : "unchecked";
+  return { warnings: [], network };
+}
+
+/**
+ * How network denial is known for a backend PiShip cannot live-probe, given
+ * the session sandbox's check (`denied`). A connection to the probe from the
+ * denied sandbox fails the activation. A blocked connection proves denial
+ * only when the same probe is reachable from an allow-mode sandbox of the
+ * same backend, which is created only then and only when the backend can
+ * allow the network; anything else leaves the backend's word.
+ */
+async function networkDenial(
+  backend: SandboxBackend,
+  capabilities: SandboxCapabilities,
+  probe: SandboxNetworkProbe | undefined,
+  denied: NetworkCheck | undefined,
+  contrast: (profile: SandboxProfile) => Promise<NetworkCheck | undefined>,
+  profile: SandboxProfile,
+): Promise<{ failure: string } | { report: NetworkDenialReport }> {
+  const attested = (reason: string): { report: NetworkDenialReport } => ({
+    report: { evidence: "attested", probe: probe !== undefined, reason },
+  });
+  if (!probe)
+    return attested("the backend declares no network probe to check it with");
+  if (denied === "reachable")
     return {
       failure:
-        "an outbound network connection succeeded although the network is denied",
-      warnings: [],
+        "a connection to the backend's network probe succeeded although the network is denied",
     };
-  if (lines.includes("piship-metadata-reachable"))
-    return {
-      failure: "cloud metadata remained reachable despite network deny",
-      warnings: [],
-    };
-  if (
-    lines.includes("piship-network-blocked") &&
-    lines.includes("piship-metadata-blocked")
-  )
-    return { warnings: [], network: "blocked" };
-  // Network denial is a required plane: a check that cannot run proves nothing.
-  return {
-    failure:
-      "the outbound connection check could not run inside the sandbox (it needs bash and timeout, or nc), so network denial cannot be confirmed",
-    warnings: [],
-  };
+  if (denied !== "blocked")
+    return attested(
+      "the connection check could not run inside the sandbox (it needs bash and timeout, or nc)",
+    );
+  const modes = Array.isArray(capabilities.network) ? capabilities.network : [];
+  if (!modes.includes("allow"))
+    return attested(
+      "the backend cannot allow the network, so PiShip cannot show that its network probe is reachable at all",
+    );
+  let allowed: NetworkCheck | undefined;
+  try {
+    allowed = await contrast({ ...profile, network: "allow" });
+  } catch {
+    return attested(
+      `the ${backend.id} sandbox backend could not prepare an allow-mode sandbox to reach its network probe from`,
+    );
+  }
+  if (allowed !== "reachable")
+    return attested(
+      "the backend's network probe was not reachable from an allow-mode sandbox either, so a blocked connection proves nothing",
+    );
+  return { report: { evidence: "verified", probe: true } };
 }
 
 /** A probe target that prepares a separate wrapping instance per probe. */
@@ -985,6 +1016,7 @@ export async function activateSandbox(
       capabilities.isolation === "local" && typeof instance.wrap === "function";
     let verification: ContainmentVerification;
     let planes: readonly SandboxGuarantee[];
+    let networkReport: NetworkDenialReport | undefined;
     const warnings = [...profile.warnings];
     if (live) {
       const env = sessionEnvironment(
@@ -1016,44 +1048,63 @@ export async function activateSandbox(
       if (!probe.ok) return await fail(probe.reason);
       verification = "live-probe";
       planes = probe.planes;
+      if (profile.network === "deny")
+        networkReport = { evidence: "verified", probe: false };
       warnings.push(...(probe.warnings ?? []));
     } else {
-      const check = await checkAttested(instance, session, sourceEnv, {
+      const declaredProbe = networkProbe(capabilities);
+      // Valid here: capabilityMismatch rejects a malformed probe.
+      const probe =
+        profile.network === "deny" && declaredProbe && "probe" in declaredProbe
+          ? declaredProbe.probe
+          : undefined;
+      const checkOptions = {
         timeoutMs: ctx.probeTimeoutMs ?? 60_000,
         settleMs,
-        externalHost: "1.1.1.1",
-      });
+        ...(probe ? { target: probe } : {}),
+      };
+      const check = await checkAttested(
+        instance,
+        session,
+        sourceEnv,
+        checkOptions,
+      );
       if (check.failure)
         return await fail(
           `the ${backend.id} sandbox backend failed its check: ${check.failure}`,
         );
       if (profile.network === "deny") {
-        let allowed: SandboxInstance | undefined;
-        try {
-          const allowProfile = { ...profile, network: "allow" as const };
-          allowed = await backend.prepare({ profile: allowProfile });
-          const contrast = await checkAttested(
-            allowed,
-            { ...session, profile: allowProfile },
-            sourceEnv,
-            {
-              timeoutMs: ctx.probeTimeoutMs ?? 60_000,
-              settleMs,
-              externalHost: "1.1.1.1",
-              verifyNetwork: true,
-            },
-          );
-          if (contrast.failure || contrast.network !== "reachable")
-            return await fail(
-              "network denial cannot be verified: the same target was not reachable in an allow-mode sandbox",
-            );
-        } catch (error) {
+        const denial = await networkDenial(
+          backend,
+          capabilities,
+          probe,
+          check.network,
+          async (allowProfile) => {
+            const allowed = await backend.prepare({ profile: allowProfile });
+            try {
+              const contrast = await checkAttested(
+                allowed,
+                { ...session, profile: allowProfile },
+                sourceEnv,
+                checkOptions,
+              );
+              return contrast.failure ? undefined : contrast.network;
+            } finally {
+              await allowed.dispose().catch(() => undefined);
+            }
+          },
+          profile,
+        );
+        if ("failure" in denial)
           return await fail(
-            `network denial cannot be verified against an allow-mode sandbox: ${message(error)}`,
+            `the ${backend.id} sandbox backend failed its check: ${denial.failure}`,
           );
-        } finally {
-          await allowed?.dispose().catch(() => undefined);
-        }
+        networkReport = denial.report;
+        // Lower than the backend declared: it named a probe that proved nothing.
+        if (denial.report.evidence === "attested" && denial.report.probe)
+          warnings.push(
+            `network denial is attested by the backend, not verified: ${denial.report.reason}`,
+          );
       }
       warnings.push(...check.warnings);
       verification = "backend-attested";
@@ -1089,6 +1140,7 @@ export async function activateSandbox(
         planes,
         network: config.network.mode,
         verification,
+        ...(networkReport ? { networkDenial: networkReport } : {}),
         localProcesses:
           capabilities.localProcesses &&
           capabilities.isolation === "local" &&
@@ -1147,7 +1199,13 @@ export function describeContainment(
             : report.planes.includes(WORKSPACE_CONFINEMENT)
               ? " The sandbox reaches this host's files only through the workspace, where it does not enforce sandbox.filesystem path rules: a read-denied path inside the workspace is readable by sandboxed commands."
               : " sandbox.filesystem path rules are not enforced by the backend.";
-      const line = `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
+      const network =
+        report.networkDenial?.evidence === "verified"
+          ? " (verified)"
+          : report.networkDenial
+            ? " (attested by the backend, not verified)"
+            : "";
+      const line = `enforced by ${report.adapter} (${how}): ${report.planes.join(", ")}; network ${report.network}${network}. ${scope}, not the agent process or in-process extensions${paths ? `.${paths}` : ""}`;
       if (report.isolation !== "remote" || !workspace) return line;
       return `${line}${line.endsWith(".") ? "" : "."} ${describeWorkspace(workspace)}`;
     }

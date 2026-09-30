@@ -88,6 +88,21 @@ export interface SandboxWorkspaceDeclaration {
   readonly sentinelDir?: string;
 }
 
+/**
+ * A TCP endpoint for PiShip's network denial check. The backend or its
+ * operator controls it (the operator's own endpoint on the execution
+ * network, for example) and guarantees that a sandbox of this backend with
+ * the network allowed can connect to it; with the network denied it must
+ * not. Never a public address the operator does not control, and never a
+ * secret: it is sent to the sandbox inside the check command.
+ */
+export interface SandboxNetworkProbe {
+  /** A hostname, IPv4, or IPv6 address, without brackets or a port. */
+  readonly host: string;
+  /** 1 to 65535. */
+  readonly port: number;
+}
+
 /** What a backend declares it can enforce. PiShip checks it before use. */
 export interface SandboxCapabilities {
   /**
@@ -129,6 +144,18 @@ export interface SandboxCapabilities {
    * its workspace is `shared` by construction and this field is ignored.
    */
   readonly workspace?: SandboxWorkspaceDeclaration;
+  /**
+   * Remote backends only, optional: the target of the network denial check.
+   * With the network denied, PiShip connects to it from the session's
+   * sandbox (it must fail; a connection fails the activation closed) and,
+   * when `network` also lists `allow`, from a temporary allow-mode sandbox
+   * of this backend (it must succeed). Only when the same target is
+   * reachable with the network allowed and blocked with it denied is
+   * network denial reported `verified`; otherwise, and without a probe, it
+   * is attested by the backend. A local backend is live-probed and this
+   * field is ignored.
+   */
+  readonly networkProbe?: SandboxNetworkProbe;
 }
 
 export interface SandboxPrepareRequest {
@@ -269,6 +296,42 @@ export function workspaceDeclaration(
   };
 }
 
+// Letters, digits, dots, hyphens, and colons only: the host is placed in a
+// shell command, so nothing else may reach it.
+const PROBE_HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
+
+/**
+ * The network probe after validation: undefined when none applies (none
+ * declared, or a local backend), or the reason a declared one is malformed.
+ */
+export function networkProbe(
+  capabilities: SandboxCapabilities,
+):
+  | { readonly probe: SandboxNetworkProbe }
+  | { readonly invalid: string }
+  | undefined {
+  if (capabilities?.isolation !== "remote") return undefined;
+  const raw: unknown = capabilities.networkProbe;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return { invalid: "the network probe is not an object" };
+  const { host, port } = raw as Partial<SandboxNetworkProbe>;
+  if (typeof host !== "string" || !PROBE_HOST.test(host))
+    return {
+      invalid:
+        "the network probe host must be a hostname or an IP address without brackets or a port",
+    };
+  if (
+    !Number.isInteger(port) ||
+    (port as number) < 1 ||
+    (port as number) > 65535
+  )
+    return {
+      invalid: "the network probe port must be an integer from 1 to 65535",
+    };
+  return { probe: { host, port: port as number } };
+}
+
 /** The declared workspace mode; malformed counts as snapshot here. */
 function declaredMode(capabilities: SandboxCapabilities): WorkspaceMode {
   const result = workspaceDeclaration(capabilities);
@@ -364,6 +427,9 @@ export function capabilityMismatch(
   const workspace = workspaceDeclaration(capabilities);
   if ("invalid" in workspace)
     return `it declares a malformed workspace: ${workspace.invalid}`;
+  const probe = networkProbe(capabilities);
+  if (probe && "invalid" in probe)
+    return `it declares a malformed network probe: ${probe.invalid}`;
   const mode = workspace.declaration.mode;
   if (
     capabilities.isolation === "remote" &&

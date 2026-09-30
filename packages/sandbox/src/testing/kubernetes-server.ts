@@ -99,7 +99,6 @@ export async function kubernetesServer(
           JSON.stringify({
             stdout: checkAnswer(
               command.includes("'PISHIP_PROBE_UNLISTED=") ? "1" : undefined,
-              command,
             ),
             stderr: "",
             exit_code: 0,
