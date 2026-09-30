@@ -247,14 +247,10 @@ describe("a rule that names less or more than the distribution's does not widen 
         expect(combinations).toBe(SLOTS.length ** 3);
       });
 
-  // KNOWN GAP (V07-82 finding 3), not yet fixed in the product: the team rules
-  // and the project rules are one layer, and a layer decides by its first
-  // matching rule, so a team `ask` hides a project `deny` for the same
-  // request. It never widens past the distribution (the matrix above holds),
-  // but the project's restriction is lost. This asserts the decision as it is,
-  // so only the behaviour decides it; when the fix that takes the strictest of
-  // the team and the project rule lands, change the expectation to "deny".
-  it("lets a team ask hide a project deny for the same request (known gap; invert when the fix lands)", () => {
+  // The team rules and the project rules are one layer, and a layer takes the
+  // strictest of its matching rules, so a team `ask` does not hide a project
+  // `deny` for the same request.
+  it("does not let a team ask hide a project deny for the same request", () => {
     const request = { action: "shell.execute", resource: "git push" } as const;
     const engine = new PolicyEngine({
       policy: policy("allow", [], []),
@@ -263,8 +259,8 @@ describe("a rule that names less or more than the distribution's does not widen 
       userRuleMode: "narrowing",
       context,
     });
-    expect(engine.evaluate(request).effect).toBe("ask");
-    // The control: the project's deny does apply when no team rule matches.
+    expect(engine.evaluate(request).effect).toBe("deny");
+    // The control: the project's deny applies on its own too.
     const alone = new PolicyEngine({
       policy: policy("allow", [], []),
       projectRules: rules("project", request.action, "deny"),

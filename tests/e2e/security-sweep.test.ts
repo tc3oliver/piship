@@ -488,7 +488,7 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
   /**
    * A gateway that rejects a request and echoes the Authorization header into
    * its error, as a careless proxy does. What PiShip prints, logs and sends to
-   * the audit sink is clean; the Pi session file is not (see the next test).
+   * the audit sink is clean, and so is the Pi session file (the next tests).
    */
   async function echoingGateway() {
     const run = await start();
@@ -510,36 +510,31 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
       "the gateway was asked for a completion",
     ).toBeGreaterThan(0);
     expect(echoed.status).toBe(1);
-    expect(echoed.stderr).toContain("GATEWAY_PROTOCOL_ERROR");
+    expect(echoed.stderr).toContain("GATEWAY_UNREACHABLE");
     return { ...run, sessions: join(dist.state, "sessions") };
   }
 
-  it("keeps what a gateway echoes of the credential out of the launcher's output, the audit log and the audit sink", async () => {
+  it("keeps what a gateway echoes of the credential out of the launcher's output, the audit log, the audit sink and the Pi session file", async () => {
     const { ledger, sweep, sessions } = await echoingGateway();
     expect(ledger.size).toBeGreaterThanOrEqual(4);
-    expect(sweep(["state/acmecode/sessions"])).toEqual([]);
+    expect(sweep()).toEqual([]);
     expect(existsSync(sessions)).toBe(true);
   }, 900000);
 
-  // KNOWN GAP (V07-82 finding 1), not yet fixed in the product: Pi stores the
-  // provider's error text in the session file it writes under the state
-  // directory, and PiShip redacts that text only where it prints it. A
-  // gateway that echoes the credential leaves it in `sessions/` in plain text.
-  //
-  // This test asserts the known-bad state, so only the leak itself decides it:
-  // a broken setup (the build, the sign-in, the gateway not being asked, a
-  // changed error code) fails it, and so does the fix. When #108 (branch
-  // v0.7/security-findings), which redacts the provider's error text before
-  // Pi persists it, lands, invert this test: the scan of `sessions/` must
-  // then find nothing.
-  it("still leaves what a gateway echoes of the credential in the Pi session file (known gap; invert when the fix lands)", async () => {
+  // Pi stores the provider's error text in the session file it writes under
+  // the state directory; PiShip redacts it before Pi records it. The scan
+  // covers `sessions/` on its own, and that the directory holds a session
+  // file keeps it from passing on an empty tree.
+  it("keeps what a gateway echoes of the credential out of the Pi session file", async () => {
     const { dist, ledger } = await echoingGateway();
     const sessions = join(dist.state, "sessions");
-    const found = scanTree(sessions, ledger.all());
-    expect(found.length).toBeGreaterThan(0);
-    expect(found.map((hit) => hit.form)).toContain("plain");
-    // It is the session file, under sessions/, that holds it.
-    for (const hit of found)
-      expect(hit.where.startsWith(`${sessions}/`)).toBe(true);
+    const files = readdirSync(sessions, {
+      recursive: true,
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name);
+    expect(files.length).toBeGreaterThan(0);
+    expect(scanTree(sessions, ledger.all())).toEqual([]);
   }, 900000);
 });

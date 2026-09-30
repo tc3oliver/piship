@@ -222,7 +222,12 @@ describe("stored sandbox credential across users, rejection, and outage (local f
     // shell, such as a Windows runner, cannot run it, so it cannot have run it
     // in place of the sandbox either.)
     const control = join(dist.temp, "host-control");
-    const onHost = spawnSync("bash", ["-c", agentCommand(control)]);
+    const onHost = spawnSync("bash", [
+      "-c",
+      'echo remote-ok; touch "$1"',
+      "bash",
+      control,
+    ]);
     if (onHost.status === 0) expect(existsSync(control)).toBe(true);
     const sandboxMetadata = join(
       dist.state,
