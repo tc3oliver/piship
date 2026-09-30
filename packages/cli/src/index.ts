@@ -29,12 +29,14 @@ import {
   resolveResources,
   runtimeStateDirectory,
   signChannel,
+  uninstallAndPurgeDistribution,
   uninstallDistribution,
   verifyPayload,
   verifyRelease,
   writePrivateKey,
   type AbandonedStaging,
   type DistributionLock,
+  type PurgeResult,
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
 import {
@@ -103,6 +105,12 @@ const lifecycleCommands: Record<
     positional: [1, 1],
     values: ["--channel", "--from"],
     flags: ["--check", "--accept-review"],
+  },
+  uninstall: {
+    usage: "uninstall <id> [--purge --yes]",
+    positional: [1, 1],
+    values: [],
+    flags: ["--purge", "--yes"],
   },
   rollback: {
     usage: "rollback <id>",
@@ -209,6 +217,10 @@ function stagingNotice(found: AbandonedStaging): string {
   return found.attempted
     ? `${what} could not be removed; check its permissions.`
     : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; run again with --reclaim-staging to remove them.`;
+}
+function purgeReport(purged: PurgeResult): string {
+  const count = purged.deletedSecrets.length;
+  return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`;
 }
 function runLauncher(
   artifact: string,
@@ -371,19 +383,12 @@ export async function runCli(
       output.stdout(
         `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}\nAdd ${binHome()} to PATH if needed.`,
       );
-    } else if (command === "uninstall") {
-      output.stdout(
-        `Uninstalled ${target}. State preserved: ${uninstallDistribution(target)}`,
-      );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
         throw new Error(
           "Purge deletes this distribution's state; repeat with --yes after checking the id",
         );
-      const purged = await purgeDistributionState(target);
-      output.stdout(
-        `Purged ${purged.state}${purged.deletedSecrets.length ? `\nDeleted ${purged.deletedSecrets.length} secret-store entr${purged.deletedSecrets.length === 1 ? "y" : "ies"}` : ""}`,
-      );
+      output.stdout(purgeReport(await purgeDistributionState(target)));
     } else if (command === "inspect") {
       if (existsSync(resolve(target)) && statSync(resolve(target)).isFile()) {
         const lock = requireCurrentLock(target);
@@ -513,6 +518,26 @@ async function runLifecycle(
         ? JSON.stringify(report, null, 2)
         : formatDiff(report).trimEnd(),
     );
+  } else if (command === "uninstall") {
+    if (flags.has("--yes") && !flags.has("--purge")) {
+      output.stderr(`Usage: piship ${lifecycleCommands.uninstall?.usage}`);
+      return 2;
+    }
+    if (!flags.has("--purge"))
+      output.stdout(
+        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first)}`,
+      );
+    else {
+      if (!flags.has("--yes"))
+        throw new Error(
+          "Uninstall with --purge also deletes this distribution's state; repeat with --yes after checking the id",
+        );
+      // The installed release is often the only PiShip the user has, so the
+      // purge happens here rather than after it is gone.
+      output.stdout(
+        `Uninstalled ${first}. ${purgeReport(await uninstallAndPurgeDistribution(first))}`,
+      );
+    }
   } else if (command === "update" || command === "rollback") {
     // The active release performs the switch so its audit and credential
     // handling apply.

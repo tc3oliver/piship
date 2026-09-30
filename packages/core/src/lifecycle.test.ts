@@ -41,6 +41,7 @@ import {
   readInstallReceipt,
   recoverInstallation,
   runtimeLeases,
+  uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
 import { deadPid } from "../../../tests/helpers/processes.js";
@@ -1975,6 +1976,60 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       state,
       deletedSecrets: deleted,
     });
+    expect(existsSync(state)).toBe(false);
+  });
+
+  it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const state = stateDir();
+    write(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#1`,
+      }),
+    );
+    write(join(state, "sessions", "s1.jsonl"), '{"type":"message"}\n');
+    const lock = { on: true };
+    const { store, memory } = testStore(
+      (ref) => lock.on && ref.endsWith("inference#1"),
+    );
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    await memory.put("piship:other:inference#1", new SecretValue(SENTINEL));
+    // A live runtime refuses it before any secret is touched.
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      await expect(
+        uninstallAndPurgeDistribution(ID, { secretStore: store }),
+      ).rejects.toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    // A secret that cannot be deleted leaves the installed manager, the
+    // receipt, and the state in place, so the same command can be retried.
+    const before = treeHash(state);
+    const error = await rejection(
+      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+    );
+    expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(existsSync(receipt.payload)).toBe(true);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    expect(treeHash(state)).toEqual(before);
+    expect(memory.refs()).toContain(`piship:${ID}:inference#1`);
+    lock.on = false;
+    const result = await uninstallAndPurgeDistribution(ID, {
+      secretStore: store,
+    });
+    expect(result.state).toBe(state);
+    expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
+    expect(memory.refs()).toEqual(["piship:other:inference#1"]);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(existsSync(appsDir())).toBe(false);
+    expect(() => readInstallReceipt(ID)).toThrow(
+      /No PiShip installation recorded/,
+    );
     expect(existsSync(state)).toBe(false);
   });
 });

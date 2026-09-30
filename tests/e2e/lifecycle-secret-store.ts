@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -183,18 +184,27 @@ export function secretStoreLifecycle(storage: Storage): void {
         const signedOut = await run(["--smoke"], 1);
         expect(signedOut.stderr).toContain("IDENTITY_REQUIRED");
 
-        // Purge after uninstall deletes the secrets of a signed-in user.
+        // A user who installed from the release, whose download is gone
+        // (installFirst deletes it), removes everything with the manager
+        // the install ships, including the secrets of a signed-in user.
         await run(["login"]);
         await credentialId();
         expectStored(Object.values(refs()));
-        const uninstall = s.cli("uninstall", s.id);
-        expect(uninstall.status, uninstall.stderr).toBe(0);
-        const purge = s.cli("purge", s.id, "--yes");
+        const receiptFile = join(s.install, "receipts", `${s.id}.json`);
+        const { payload } = read(receiptFile) as { payload: string };
+        const purge = spawnSync(
+          process.execPath,
+          [join(payload, "piship.mjs"), "uninstall", s.id, "--purge", "--yes"],
+          { cwd: s.temp, env: s.env, encoding: "utf8" },
+        );
         expect(purge.status, purge.stderr).toBe(0);
         // Purge deletes every reference the metadata can name, which is more
         // than the two it holds (the next generation, for one).
         if (storage === "system")
           expect(purge.stdout).toMatch(/Deleted \d+ secret-store entries/);
+        expect(existsSync(s.command)).toBe(false);
+        expect(existsSync(join(s.install, "apps", s.id))).toBe(false);
+        expect(existsSync(receiptFile)).toBe(false);
         expect(existsSync(state)).toBe(false);
         if (storage === "system") expect(s.storeRefs()).toEqual([]);
         expect(scan(s.temp, issued())).toEqual([]);

@@ -34,6 +34,7 @@ function installRecorder(): { received: string; payload: string } {
   writeFileSync(`${command}.cmd`, `@echo off\r\nnode "%~dp0\\${ID}" %*\r\n`);
   mkdirSync(join(install, "receipts"), { recursive: true });
   const bin = join(temp, "bin");
+  mkdirSync(bin);
   writeFileSync(
     join(install, "receipts", `${ID}.json`),
     JSON.stringify({
@@ -90,5 +91,59 @@ describe("forwarding update and rollback to the installed release", () => {
     const { received } = installRecorder();
     expect(await cli(["rollback", ID])).toBe(0);
     expect(JSON.parse(readFileSync(received, "utf8"))).toEqual(["rollback"]);
+  });
+});
+
+describe("uninstall --purge", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-uninstall-"));
+    process.env.PISHIP_STATE_HOME = join(temp, "state");
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_INSTALL_HOME;
+    delete process.env.PISHIP_BIN_HOME;
+    delete process.env.PISHIP_STATE_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  function seedState(): string {
+    const state = join(temp, "state", ID);
+    mkdirSync(join(state, "sessions"), { recursive: true });
+    writeFileSync(join(state, "sessions", "s1.jsonl"), "{}\n");
+    return state;
+  }
+
+  it("needs --yes, and --yes alone is not an option of uninstall", async () => {
+    const { payload } = installRecorder();
+    const state = seedState();
+    const errors: string[] = [];
+    const output = {
+      stdout: () => {},
+      stderr: (message: string) => errors.push(message),
+    };
+    expect(await runCli(["uninstall", ID, "--purge"], output)).toBe(1);
+    expect(errors.join("\n")).toContain("repeat with --yes");
+    expect(await runCli(["uninstall", ID, "--yes"], output)).toBe(2);
+    expect(existsSync(payload)).toBe(true);
+    expect(existsSync(state)).toBe(true);
+  });
+
+  it("removes the install and the state in one command", async () => {
+    const { payload } = installRecorder();
+    const state = seedState();
+    const lines: string[] = [];
+    expect(
+      await runCli(["uninstall", ID, "--purge", "--yes"], {
+        stdout: (message) => lines.push(message),
+        stderr: (message) => lines.push(message),
+      }),
+      lines.join("\n"),
+    ).toBe(0);
+    expect(lines.join("\n")).toBe(`Uninstalled ${ID}. Purged ${state}`);
+    expect(existsSync(payload)).toBe(false);
+    expect(
+      existsSync(join(temp, "install home", "receipts", `${ID}.json`)),
+    ).toBe(false);
+    expect(existsSync(state)).toBe(false);
   });
 });
