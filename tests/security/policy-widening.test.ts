@@ -253,8 +253,7 @@ describe("a rule that names less or more than the distribution's does not widen 
   // request. It never widens past the distribution (the matrix above holds),
   // but the project's restriction is lost. This asserts the decision as it is,
   // so only the behaviour decides it; when the fix that takes the strictest of
-  // the team and the project rule lands (branch v0.7/security-findings),
-  // change the expectation to "deny".
+  // the team and the project rule lands, change the expectation to "deny".
   it("lets a team ask hide a project deny for the same request (known gap; invert when the fix lands)", () => {
     const request = { action: "shell.execute", resource: "git push" } as const;
     const engine = new PolicyEngine({

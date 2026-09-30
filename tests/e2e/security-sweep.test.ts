@@ -528,10 +528,10 @@ describe("credential and audit leakage sweep (local fixtures, real launcher)", (
   //
   // This test asserts the known-bad state, so only the leak itself decides it:
   // a broken setup (the build, the sign-in, the gateway not being asked, a
-  // changed error code) fails it, and so does the fix. When the pull request
-  // that redacts the provider's error text before Pi persists it lands
-  // (branch v0.7/security-findings), invert the last assertion: the scan of
-  // `sessions/` must then find nothing.
+  // changed error code) fails it, and so does the fix. When #108 (branch
+  // v0.7/security-findings), which redacts the provider's error text before
+  // Pi persists it, lands, invert this test: the scan of `sessions/` must
+  // then find nothing.
   it("still leaves what a gateway echoes of the credential in the Pi session file (known gap; invert when the fix lands)", async () => {
     const { dist, ledger } = await echoingGateway();
     const sessions = join(dist.state, "sessions");
