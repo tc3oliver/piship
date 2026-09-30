@@ -2344,6 +2344,133 @@ describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
       }
     });
 
+  // A release whose command is a long-running session: it reports that it
+  // started, waits for a signal, then reads a packaged resource of its own
+  // release on demand, as Pi reads a skill file, and exits.
+  const SESSION = `#!/usr/bin/env node
+const { existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const dir = process.env.ACMEPI_SESSION;
+const root = join(__dirname, "..");
+writeFileSync(join(dir, "ready"), "");
+const lock = JSON.parse(readFileSync(join(root, "piship.lock"), "utf8"));
+const wait = () => {
+  if (!existsSync(join(dir, "go"))) return setTimeout(wait, 20);
+  writeFileSync(join(dir, "read"), readFileSync(join(root, "resources", lock.resources[0].path), "utf8"));
+};
+wait();
+`;
+  const sessionAssemble = (manifest: string, outputRoot: string) => {
+    const out = fakeAssemble(manifest, outputRoot);
+    const lock = JSON.parse(readFileSync(join(out, "piship.lock"), "utf8")) as {
+      app: { command: string };
+    };
+    writeFileSync(join(out, "bin", lock.app.command), SESSION);
+    const inventory = join(out, "metadata", "inventory.json");
+    rmSync(inventory);
+    writeFileSync(
+      inventory,
+      `${JSON.stringify(payloadInventory(out), null, 2)}\n`,
+    );
+    return out;
+  };
+  const sessionRelease = (version: string, rollback = true) =>
+    buildRelease(project(version, rollback), {
+      outputRoot: temp("piship-session-dist-"),
+      assemble: sessionAssemble,
+      runTest: fakeRun,
+      scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+      signatureAuditor,
+    });
+  const startSession = async (launcher: string) => {
+    const dir = temp("piship-session-");
+    const child = spawn(process.execPath, [launcher], {
+      env: { ...process.env, ACMEPI_SESSION: dir },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const exited = new Promise<number | null>((done) =>
+      child.once("exit", done),
+    );
+    await Promise.race([
+      waitForFile(join(dir, "ready")),
+      exited.then(() => {
+        throw new Error(`The session exited early: ${stderr}`);
+      }),
+    ]);
+    return {
+      child,
+      /** Ask the session for its resource and wait for it to exit. */
+      async finish(): Promise<string> {
+        writeFileSync(join(dir, "go"), "");
+        expect(await exited, stderr).toBe(0);
+        return readFileSync(join(dir, "read"), "utf8");
+      },
+    };
+  };
+  const releaseDirs = () => apps().filter((name) => /^\d/.test(name));
+
+  it("keeps a running session's release through two updates, then reclaims it after the session exits", async () => {
+    const [v1, v2, v3] = [
+      await sessionRelease("1.0.0"),
+      await sessionRelease("1.1.0"),
+      await sessionRelease("1.2.0"),
+    ];
+    const channel = temp("piship-channel-");
+    const options: UpdateOptions = { source: channel, runCheck: fakeRun };
+    const receipt = await installDistribution(v1.archive);
+    const session = await startSession(receipt.launcher as string);
+    try {
+      await sign(channel, [v2.archive]);
+      await updateDistribution(ID, options);
+      await sign(channel, [v3.archive]);
+      await updateDistribution(ID, options);
+      const current = readInstallReceipt(ID);
+      expect(current.active).toBe("1.2.0");
+      expect(current.releases.map((item) => item.version)).not.toContain(
+        "1.0.0",
+      );
+      // The receipt no longer names 1.0.0, but its session still runs it.
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0", "1.2.0"]);
+      recoverInstallation(ID);
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0", "1.2.0"]);
+      expect(() => uninstallDistribution(ID)).toThrow(
+        /while 1 runtime session\(s\) still use its payload/,
+      );
+      expect(await session.finish()).toBe("# AcmePi 1.0.0\n");
+    } finally {
+      session.child.kill();
+    }
+    recoverInstallation(ID);
+    expect(releaseDirs()).toEqual(["1.1.0", "1.2.0"]);
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
+  }, 60_000);
+
+  it("keeps a running session's release through an update that disables rollback", async () => {
+    const v1 = await sessionRelease("1.0.0");
+    const v2 = await sessionRelease("1.1.0", false);
+    const channel = temp("piship-channel-");
+    const receipt = await installDistribution(v1.archive);
+    const session = await startSession(receipt.launcher as string);
+    try {
+      await sign(channel, [v2.archive]);
+      await updateDistribution(ID, { source: channel, runCheck: fakeRun });
+      expect(
+        readInstallReceipt(ID).releases.map((item) => item.version),
+      ).toEqual(["1.1.0"]);
+      expect(releaseDirs()).toEqual(["1.0.0", "1.1.0"]);
+      expect(await session.finish()).toBe("# AcmePi 1.0.0\n");
+    } finally {
+      session.child.kill();
+    }
+    recoverInstallation(ID);
+    expect(releaseDirs()).toEqual(["1.1.0"]);
+  }, 60_000);
+
   it("holds launcher registration against uninstall through core import", async () => {
     const { a } = await fixture();
     const receipt = await installDistribution(a.archive);
