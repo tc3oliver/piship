@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -34,6 +35,30 @@ import {
 } from "./project.js";
 import { defaultProjectTrust } from "./trust.js";
 
+/**
+ * The stat the scan cache sees in place of a file's real one, and a count of
+ * the reads of config files: a cache test needs a file that changes without
+ * its time, size, or inode changing, which only a file system with a coarse
+ * clock does, and needs to see whether a scan read the file again.
+ */
+const frozenStats = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const statSync = ((path: string, ...rest: unknown[]) =>
+    frozenStats.get(String(path)) ??
+    (actual.statSync as (...args: unknown[]) => unknown)(
+      path,
+      ...rest,
+    )) as typeof actual.statSync;
+  const readFileSync = vi.fn(actual.readFileSync);
+  return {
+    ...actual,
+    statSync,
+    readFileSync,
+    default: { ...actual, statSync, readFileSync },
+  };
+});
+
 const base = realpathSync(
   mkdtempSync(join(tmpdir(), "piship-policy-project-")),
 );
@@ -58,6 +83,7 @@ const savedEnv = Object.fromEntries(
   CONFIG_VARIABLES.map((name) => [name, process.env[name]]),
 );
 beforeEach(() => {
+  frozenStats.clear();
   rmSync(fakeHome, { recursive: true, force: true });
   mkdirSync(fakeHome, { recursive: true });
   for (const name of CONFIG_VARIABLES) delete process.env[name];
@@ -1063,19 +1089,52 @@ describe("the limit on what the git config lists, and the scan cache", () => {
     const T = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
     const stamp = (path: string, time = T) => utimesSync(path, time, time);
 
+    /** A file system with a coarse clock: the file reads back with the stat it had. */
+    const freeze = (path: string) => frozenStats.set(path, statSync(path));
+    const readsOf = (path: string) =>
+      vi.mocked(readFileSync).mock.calls.filter(([read]) => read === path)
+        .length;
+    /** Long enough for the clock of the file system to move on. */
+    const tick = () => new Promise((done) => setTimeout(done, 50));
+
     it("reuses a scan while nothing it read changed, and sees a change at the next access", () => {
       const root = repo("cache");
       const config = join(root, ".git", "config");
       write(config, hooks("aaaa"));
       stamp(config);
       expect(dirs(root)).toContain(at(root, "aaaa"));
-      // Same size, time, and inode: the scan is not repeated, so this is not seen.
+      // Nothing changed: the file is not read again.
+      const reads = readsOf(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      expect(files(root)).toContain(posix(config));
+      expect(readsOf(config)).toBe(reads);
+      // A new modification time is a change.
       writeFileSync(config, hooks("bbbb"));
+      stamp(config, new Date(T.getTime() + 5000));
+      expect(dirs(root)).toContain(at(root, "bbbb"));
+      expect(dirs(root)).not.toContain(at(root, "aaaa"));
+      expect(readsOf(config)).toBe(reads + 1);
+    });
+
+    it("sees a rewrite that puts the modification time back, though size and inode are kept", async () => {
+      const root = repo("cache-ctime");
+      const config = join(root, ".git", "config");
+      write(config, hooks("aaaa"));
       stamp(config);
       expect(dirs(root)).toContain(at(root, "aaaa"));
-      expect(dirs(root)).not.toContain(at(root, "bbbb"));
-      // A new modification time is a change.
-      stamp(config, new Date(T.getTime() + 5000));
+      await tick();
+      // Same length, same inode, same modification time: only the change
+      // time, which the kernel sets, shows it.
+      const before = statSync(config);
+      writeFileSync(config, hooks("bbbb"));
+      stamp(config);
+      const after = statSync(config);
+      expect([after.mtimeMs, after.size, after.ino]).toEqual([
+        before.mtimeMs,
+        before.size,
+        before.ino,
+      ]);
+      expect(after.ctimeMs).toBeGreaterThan(before.ctimeMs);
       expect(dirs(root)).toContain(at(root, "bbbb"));
       expect(dirs(root)).not.toContain(at(root, "aaaa"));
     });
@@ -1113,7 +1172,9 @@ describe("the limit on what the git config lists, and the scan cache", () => {
         const config = join(root, ".git", "config");
         write(config, hooks("aaaa"));
         stamp(config);
+        freeze(config);
         expect(dirs(root)).toContain(at(root, "aaaa"));
+        // Nothing in the file's stat shows this change.
         writeFileSync(config, hooks("bbbb"));
         stamp(config);
         vi.setSystemTime(new Date("2026-01-01T00:00:09Z"));

@@ -540,11 +540,16 @@ function readConfig(path: string): string | undefined | "too-large" {
   }
 }
 
-/** What identifies a config file's state: changed, replaced, created, or removed makes it differ. */
+/**
+ * What identifies a config file's state: changed, replaced, created, or removed
+ * makes it differ. The change time is part of it because a writer can put the
+ * modification time back (`utimes`, `cp -p`, `touch -r`), but only the kernel
+ * sets the change time.
+ */
 function stampOf(path: string): string {
   try {
     const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
+    return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}:${stat.isFile()}`;
   } catch (error) {
     return `absent:${(error as NodeJS.ErrnoException)?.code ?? ""}`;
   }
@@ -670,9 +675,11 @@ const scanCache = new Map<string, CachedScan>();
  * is the repository's config paths and the environment inputs (the home
  * directory, the `GIT_CONFIG_*` and `XDG_CONFIG_HOME` variables); an entry
  * stays valid while every file the scan tried, an include that did not exist
- * included, has the same modification time, size, and inode, and for at most
- * `SCAN_CACHE_MAX_AGE_MS`. A change to any of those files shows at the next
- * access, and one that keeps time, size, and inode within ten seconds.
+ * included, has the same modification time, change time, size, and inode, and
+ * for at most `SCAN_CACHE_MAX_AGE_MS`. A change to any of those files shows at
+ * the next access, and one that keeps all four (the kernel sets the change
+ * time, so only a file system with a coarse clock lets one through) within
+ * ten seconds.
  */
 function gitConfigScan(
   root: string,
