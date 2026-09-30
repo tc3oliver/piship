@@ -306,7 +306,7 @@ describe("renderDoctor", () => {
     );
     expect(group(output, "Gateway")).toEqual([
       `  ✓ ${"endpoint".padEnd(20)} https://gateway.acme.example`,
-      `  ✓ ${"gateway".padEnd(20)} reachable (3 listed)`,
+      `  ✓ ${"gateway".padEnd(20)} reachable (3 listed; model providers not contacted)`,
     ]);
     expect(group(output, "Secret Store")).toEqual([
       `  ✓ ${"backend".padEnd(20)} macOS Keychain`,
