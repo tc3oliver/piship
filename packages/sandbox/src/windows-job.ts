@@ -118,7 +118,9 @@ public static class PiShipJob {
         outputRead = IntPtr.Zero;
         using (var error = new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read)) {
           errorRead = IntPtr.Zero;
-          using (var input = new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write)) {
+          // Buffer size 1 disables FileStream buffering: a request/response
+          // child (an MCP server) must see each message before stdin closes.
+          using (var input = new FileStream(new SafeFileHandle(inputWrite, true), FileAccess.Write, 1)) {
             inputWrite = IntPtr.Zero;
             var outputTask = Task.Run(() => output.CopyTo(Console.OpenStandardOutput()));
             var errorTask = Task.Run(() => error.CopyTo(Console.OpenStandardError()));

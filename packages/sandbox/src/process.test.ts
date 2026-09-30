@@ -242,6 +242,23 @@ describe("spawnManaged", () => {
     child.stdin?.end("ping");
     expect((await child.exited).code).toBe(0);
     expect(output).toBe("ping");
+    // A request/response child must see each message while stdin stays open.
+    const echo = spawnManaged({
+      file: node,
+      args: ["-e", "process.stdin.pipe(process.stdout)"],
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+      stdin: "pipe",
+    });
+    const reply = new Promise<string>((resolveReply) =>
+      echo.stdout?.once("data", (chunk: Buffer) =>
+        resolveReply(chunk.toString()),
+      ),
+    );
+    echo.stdin?.write("request\n");
+    expect(await reply).toBe("request\n");
+    echo.stdin?.end();
+    expect((await echo.exited).code).toBe(0);
     const missing = await spawnManaged({
       file: join(dir, "does-not-exist"),
       cwd: dir,
