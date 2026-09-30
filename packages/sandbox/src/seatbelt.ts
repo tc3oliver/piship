@@ -136,6 +136,9 @@ export function seatbeltProfile(
 
 export class SeatbeltAdapter implements SandboxAdapter {
   readonly id = "macos-seatbelt" as const;
+  // The profile denies a missing protected file as a subpath, so it cannot be
+  // created.
+  readonly guardsMissingFiles = true;
   #availability: Promise<AdapterAvailability> | undefined;
 
   available(): Promise<AdapterAvailability> {

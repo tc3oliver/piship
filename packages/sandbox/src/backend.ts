@@ -39,8 +39,9 @@ export const HOST_FILESYSTEM_ISOLATION = "host-filesystem-isolation";
 export const WORKSPACE_CONFINEMENT = "workspace-confinement";
 
 /**
- * The paths in `profile.writeProtect` (the project's git control files and
- * the `hooks` and `info` trees) cannot be changed from inside the sandbox,
+ * The paths in `profile.writeProtect` (the project's git control files, the
+ * git config the user's machine adds to them, and the `hooks` and `info`
+ * trees) cannot be changed from inside the sandbox,
  * also not through a sync engine. Live-probed for local backends; checked
  * from outside for remote ones with a shared or synchronized workspace.
  */
@@ -109,6 +110,19 @@ export interface SandboxCapabilities {
    * such as MCP stdio servers. Requires `isolation: "local"`.
    */
   readonly localProcesses: boolean;
+  /**
+   * Local backends only: whether the isolator keeps a protected file that
+   * does not exist yet (`.git/commondir`, `.git/config.worktree`) from being
+   * created or renamed into place. Omitted or false means it cannot, which is
+   * true of bubblewrap (a mount needs a path that exists): git control is
+   * then reported not verified while such a file lies where the sandbox may
+   * write, because a command could create one and redirect the next git
+   * command. True (Seatbelt) still leaves a file whose directory can be
+   * swapped (neither a writable root nor holding an existing protected path)
+   * not verified, since the rule covers the path and not the directory. PiShip
+   * does not create placeholder files in the project instead.
+   */
+  readonly guardsMissingFiles?: boolean;
   /**
    * Remote backends only: how the sandbox sees the workspace. Omitted means
    * `snapshot`. A local backend runs commands against this host's files, so

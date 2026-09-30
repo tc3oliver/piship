@@ -557,12 +557,23 @@ async function whileRunning(execution: Execution): Promise<boolean> {
  * command started when its first output arrives: a backend under load can
  * start it long after the kit asked, so the wait counts from the output and
  * grows if the output arrives while the kit waits. A command that has
- * printed nothing is counted from `from`, when the kit aborted or disposed.
+ * printed nothing is counted from `from`, when the kit aborted or disposed,
+ * plus `silentMs`: a command aborted before it started may be started by a
+ * backend that ignored the abort later than the window, and a silent command
+ * cannot say so. The extra wait is spent only while nothing has printed, so
+ * it stays bounded, and output that arrives in it is counted as above.
  */
-async function markerWindow(execution: Execution, from: number): Promise<void> {
+async function markerWindow(
+  execution: Execution,
+  from: number,
+  silentMs = 0,
+): Promise<void> {
   for (;;) {
     const remaining =
-      (execution.firstOutputAt() ?? from) + LATE_MS + MARGIN_MS - Date.now();
+      (execution.firstOutputAt() ?? from + silentMs) +
+      LATE_MS +
+      MARGIN_MS -
+      Date.now();
     if (remaining <= 0) return;
     await sleep(remaining);
   }
@@ -1672,7 +1683,14 @@ const checks: Record<SandboxBehavior, Check> = {
           `a command cancelled ${when} did not stop, and exec() did not settle even after dispose()`,
         );
       }
-      await markerWindow(execution, aborted);
+      // A command aborted before it started prints nothing if the backend
+      // honored the abort; one that ignored it may start later than the
+      // marker window, so a silent command is watched LATE_MS longer.
+      await markerWindow(
+        execution,
+        aborted,
+        when === "before it started" ? LATE_MS : 0,
+      );
       const present = await h.marker(retired ? undefined : instance, marker);
       if (present === undefined)
         return `skipped: the backend did not stop a command cancelled ${when}, so the kit retired the instance, and it cannot see inside a disposed sandbox whether dispose() stopped it`;
