@@ -50,23 +50,29 @@ export const ATTACKS: readonly Attack[] = [
     name: "a callback naming another issuer (mix-up)",
     callback: (parameters) => parameters.set("iss", "https://evil.example/idp"),
     code: "IDENTITY_INVALID",
-    message: /iss/,
+    // The parameter or the word, never a substring of another word.
+    message: /\biss\b|issuer/,
   },
 ];
 
 export interface HostileBrowser {
   /** The `openUrl` a login takes. */
   readonly openUrl: (url: string) => void;
-  /** Rejects with what went wrong in the browser itself, so a broken harness never passes as a rejection. */
-  readonly failure: () => Error | undefined;
+  /**
+   * Waits for the browser to finish, the delivery of the callback included,
+   * and returns what went wrong in it, if anything. A caller awaits this
+   * before it trusts a rejection, so a broken harness is never read as one.
+   */
+  readonly finished: () => Promise<Error | undefined>;
 }
 
 /** A browser that applies `attack` (or none) and delivers the callback. */
 export function browser(follow: Follow, attack?: Attack): HostileBrowser {
   let failure: Error | undefined;
+  let running: Promise<void> = Promise.resolve();
   return {
     openUrl(url) {
-      void (async () => {
+      running = (async () => {
         const authorization = new URL(url);
         attack?.authorize?.(authorization.searchParams);
         const callback = await follow(authorization);
@@ -77,7 +83,10 @@ export function browser(follow: Follow, attack?: Attack): HostileBrowser {
         failure = error as Error;
       });
     },
-    failure: () => failure,
+    finished: async () => {
+      await running;
+      return failure;
+    },
   };
 }
 

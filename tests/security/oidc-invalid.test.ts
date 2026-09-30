@@ -93,10 +93,31 @@ const rejection = (promise: Promise<unknown>) =>
 describe("hostile browser against the OIDC client (fixture provider)", () => {
   it("completes when nothing is changed, so a rejection below is the attack's", async () => {
     const honest = browser(followFixture);
-    const session = await provider().login({ openUrl: honest.openUrl });
-    expect(honest.failure()).toBeUndefined();
+    const session = await provider().login({
+      openUrl: honest.openUrl,
+      timeoutMs: 15_000,
+    });
+    expect(await honest.finished()).toBeUndefined();
     expect(session.subject).toBe("demo-user-1");
     expect(session.issuer).toBe(services.issuer);
+  });
+
+  it("reports a browser that failed, in the authorization or in the delivery of the callback", async () => {
+    // A rejection below only counts when the browser did what it was told, so
+    // `finished()` waits for all of it, the delivery included, and hands back
+    // what went wrong.
+    const refused = new Error("the browser's own failure");
+    const failing = browser(async () => {
+      throw refused;
+    });
+    failing.openUrl("http://127.0.0.1:1/authorize");
+    expect(await failing.finished()).toBe(refused);
+    // The callback goes to a port nobody listens on.
+    const undelivered = browser(
+      async () => new URL("http://127.0.0.1:1/callback"),
+    );
+    undelivered.openUrl("http://127.0.0.1:1/authorize");
+    expect(await undelivered.finished()).toBeInstanceOf(Error);
   });
 
   it.each(ATTACKS)("rejects $name", async (attack) => {
@@ -104,7 +125,7 @@ describe("hostile browser against the OIDC client (fixture provider)", () => {
     const error = await rejection(
       provider().login({ openUrl: hostile.openUrl, timeoutMs: 15_000 }),
     );
-    expect(hostile.failure()).toBeUndefined();
+    expect(await hostile.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
     expect(error).toMatchObject({ code: attack.code });
     expect(error.message).toMatch(attack.message);
@@ -125,10 +146,14 @@ describe("hostile browser against the OIDC client (fixture provider)", () => {
     const error = await rejection(
       provider().login({ openUrl: injected.openUrl, timeoutMs: 15_000 }),
     );
-    expect(injected.failure()).toBeUndefined();
+    expect(await injected.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
-    expect(error.code).toMatch(/^IDENTITY_/);
-    expect(error.code).not.toBe("IDENTITY_REQUIRED");
+    // The token endpoint refuses the code: it is bound to another PKCE
+    // challenge. (PiShip files every invalid_grant under IDENTITY_EXPIRED.)
+    expect(error.code).toBe("IDENTITY_EXPIRED");
+    expect(error.message).toBe(
+      "Sign-in failed: token endpoint returned invalid_grant",
+    );
   });
 
   it("does not take a second callback for the same sign-in (state replay)", async () => {
@@ -138,7 +163,7 @@ describe("hostile browser against the OIDC client (fixture provider)", () => {
       delivered.push(callback);
       return callback;
     });
-    await provider().login({ openUrl: replaying.openUrl });
+    await provider().login({ openUrl: replaying.openUrl, timeoutMs: 15_000 });
     const [callback] = delivered;
     // The listener closed with the first callback: nothing answers a replay.
     await expect(fetch(callback as URL)).rejects.toThrow();
@@ -231,7 +256,12 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const distribution = open(store);
       as(BOB);
       services.knobs[fault.knob] = fault.value;
-      const error = await rejection(distribution.login({ openUrl: approve }));
+      const error = await rejection(
+        distribution.login({
+          openUrl: approve,
+          signal: AbortSignal.timeout(15_000),
+        }),
+      );
       expect(error).toBeInstanceOf(PiShipError);
       expect(error.code).toBe(fault.code ?? "IDENTITY_INVALID");
       expect(error.message).toMatch(fault.message);
@@ -269,7 +299,10 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const store = new MemorySecretStore();
       const distribution = open(store);
       as(ALICE);
-      await distribution.login({ openUrl: approve });
+      await distribution.login({
+        openUrl: approve,
+        signal: AbortSignal.timeout(15_000),
+      });
       const alice = await open(store).activate();
       expect(alice.identity?.subject).toBe(ALICE.subject);
       const metadata = readFileSync(
@@ -281,7 +314,12 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
 
       as(BOB);
       services.knobs[fault.knob] = fault.value;
-      const error = await rejection(distribution.login({ openUrl: approve }));
+      const error = await rejection(
+        distribution.login({
+          openUrl: approve,
+          signal: AbortSignal.timeout(15_000),
+        }),
+      );
       expect(error.code).toBe(fault.code ?? "IDENTITY_INVALID");
 
       // Nothing was asked of the broker or the gateway for Bob, and Alice's
@@ -320,16 +358,22 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const store = new MemorySecretStore();
       const distribution = open(store);
       as(ALICE);
-      await distribution.login({ openUrl: approve });
+      await distribution.login({
+        openUrl: approve,
+        signal: AbortSignal.timeout(15_000),
+      });
       const calls = brokerCalls();
       const revoked = services.state.revokedCredentials.length;
 
       as(BOB);
       const hostile = browser(followFixture, attack);
       const error = await rejection(
-        distribution.login({ openUrl: hostile.openUrl }),
+        distribution.login({
+          openUrl: hostile.openUrl,
+          signal: AbortSignal.timeout(15_000),
+        }),
       );
-      expect(hostile.failure()).toBeUndefined();
+      expect(await hostile.finished()).toBeUndefined();
       expect(error).toMatchObject({ code: attack.code });
       expect(error.message).toMatch(attack.message);
       expect(brokerCalls()).toBe(calls);

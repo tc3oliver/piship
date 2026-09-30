@@ -76,7 +76,7 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
       openUrl: honest.openUrl,
       timeoutMs: 60_000,
     });
-    expect(honest.failure()).toBeUndefined();
+    expect(await honest.finished()).toBeUndefined();
     expect(session.issuer).toBe(issuer);
     expect(session.displayName).toBe("Alice Engineer");
   });
@@ -86,7 +86,7 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
     const error = await rejection(
       provider().login({ openUrl: hostile.openUrl, timeoutMs: 60_000 }),
     );
-    expect(hostile.failure()).toBeUndefined();
+    expect(await hostile.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
     expect(error).toMatchObject({ code: attack.code });
     expect(error.message).toMatch(attack.message);
@@ -107,10 +107,30 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
     const error = await rejection(
       provider().login({ openUrl: injected.openUrl, timeoutMs: 60_000 }),
     );
-    expect(injected.failure()).toBeUndefined();
+    expect(await injected.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
-    expect(error.code).toMatch(/^IDENTITY_(INVALID|EXPIRED)$/);
-    expect(error.message).toMatch(/invalid_grant/);
+    // Keycloak refuses the code at the token endpoint: it is bound to another
+    // PKCE challenge. (PiShip files every invalid_grant under IDENTITY_EXPIRED.)
+    expect(error.code).toBe("IDENTITY_EXPIRED");
+    expect(error.message).toBe(
+      "Sign-in failed: token endpoint returned invalid_grant",
+    );
+  });
+
+  it("does not take a second callback for the same sign-in (state replay)", async () => {
+    const delivered: URL[] = [];
+    const replaying = browser(async (url) => {
+      const callback = await at("alice")(url);
+      delivered.push(callback);
+      return callback;
+    });
+    await provider().login({
+      openUrl: replaying.openUrl,
+      timeoutMs: 60_000,
+    });
+    expect(await replaying.finished()).toBeUndefined();
+    // The listener closed with the first callback: nothing answers a replay.
+    await expect(fetch(delivered[0] as URL)).rejects.toThrow();
   });
 
   it("advertises the issuer response parameter, so a callback without it is refused too", async () => {
@@ -123,14 +143,14 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
       name: "a callback with no issuer parameter",
       callback: (parameters) => parameters.delete("iss"),
       code: "IDENTITY_INVALID",
-      message: /iss/,
+      message: /\biss\b|issuer/,
     });
     const error = await rejection(
       provider().login({ openUrl: hostile.openUrl, timeoutMs: 60_000 }),
     );
-    expect(hostile.failure()).toBeUndefined();
+    expect(await hostile.finished()).toBeUndefined();
     expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
-    expect(error.message).toMatch(/iss/);
+    expect(error.message).toMatch(/\biss\b|issuer/);
   });
 
   it("refuses an issuer whose discovery document names another issuer", async () => {
@@ -146,11 +166,12 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
         openUrl: () => {
           throw new Error("no browser may be opened for a distrusted issuer");
         },
+        timeoutMs: 15_000,
       }),
     );
     expect(error).toBeInstanceOf(PiShipError);
     expect(error).toMatchObject({ code: "IDENTITY_INVALID" });
-    expect(error.message).toMatch(/discovery failed/);
+    expect(error.message).toMatch(/^OIDC discovery failed/);
   });
 });
 
