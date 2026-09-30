@@ -34,6 +34,7 @@ export interface StateSchemaSupport {
   readonly metrics: readonly string[];
   readonly audit: readonly string[];
   readonly sandboxCredential?: readonly string[];
+  readonly credentialIssuance?: readonly string[];
 }
 
 /** What this PiShip version reads and writes. */
@@ -45,6 +46,7 @@ export const STATE_SCHEMAS: StateSchemaSupport = Object.freeze({
   metrics: ["piship-metrics/v1"],
   audit: ["piship-audit/v1"],
   sandboxCredential: ["piship-sandbox-credential-metadata/v1"],
+  credentialIssuance: ["piship-credential-issuance/v1"],
 });
 
 /**
@@ -141,6 +143,26 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     migration:
       "never copied; when the target cannot read it (every release before it, and always for a discarded marker), its secrets are deleted and the deletion confirmed before the switch, and the user runs sandbox login again. A secret that cannot be deleted stops the switch",
     schema: "sandboxCredential",
+    credential: true,
+  },
+  {
+    // Only the idempotency key of an acquire or renewal whose answer was
+    // lost, bound to the principal and to the credential it renews. A
+    // credential class, so a release that does not know it (every release
+    // before it) has it cleared at the switch instead of leaving a file its
+    // logout would not remove.
+    name: "pending credential issuance",
+    path: "credentials-metadata/pending-issuance.json",
+    kind: "file",
+    scope: "user, bound to the principal that sent the request",
+    sensitivity: "metadata",
+    retention:
+      "from before an acquire or renewal is sent until it is resolved: its credential committed, the broker's final refusal, 24 hours, or a change of principal",
+    clear:
+      "commit of the credential, logout (also without the runtime variables), change of principal, purge; a login of the same principal keeps it",
+    migration:
+      "never copied or snapshotted; cleared when the target cannot read it (every release before it) or when the runtime credential is cleared",
+    schema: "credentialIssuance",
     credential: true,
   },
   {

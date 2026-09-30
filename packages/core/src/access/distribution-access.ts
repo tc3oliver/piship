@@ -577,6 +577,7 @@ export class DistributionAccess {
       store: this.store,
       metadataPath: this.paths.credential,
       revocationRetryPath: this.paths.revocationRetry,
+      issuancePath: this.paths.credentialIssuance,
       storeProvider: this.storeProvider,
       storeFor: this.#storeFor,
       ...(this.options.onPhase ? { onPhase: this.options.onPhase } : {}),
@@ -1277,10 +1278,13 @@ export class DistributionAccess {
           );
         }
         // A fresh login always replaces the runtime credential, revoking the
-        // previous one where supported (audited as credential.revoke).
+        // previous one where supported (audited as credential.revoke). A
+        // request of the signing-in principal whose answer was lost stays
+        // pending, so the acquire below repeats its idempotency key.
         const problems = (
           await manager.logout(this.#credentialContext(), {
             reason: "replace",
+            keepIssuanceFor: principal,
           })
         ).map((problem) => redact(problem));
         if (manager.hasStoredCredential())

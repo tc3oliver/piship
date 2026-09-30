@@ -10,6 +10,8 @@ export interface AccessStatePaths {
   readonly sandboxCredential: string;
   /** Failed remote revocations, non-secret. */
   readonly revocationRetry: string;
+  /** The runtime credential's unresolved acquire or renewal, non-secret. */
+  readonly credentialIssuance: string;
   readonly preferences: string;
   readonly secrets: string;
 }
@@ -24,6 +26,11 @@ export function accessStatePaths(stateDir: string): AccessStatePaths {
       stateDir,
       "credentials-metadata",
       "revocation-retry.json",
+    ),
+    credentialIssuance: join(
+      stateDir,
+      "credentials-metadata",
+      "pending-issuance.json",
     ),
     preferences: join(stateDir, "config", "preferences.json"),
     secrets: join(stateDir, "secrets"),

@@ -214,6 +214,7 @@ async function logoutLocally(
     store,
     metadataPath: paths.credential,
     revocationRetryPath: paths.revocationRetry,
+    issuancePath: paths.credentialIssuance,
     beforeExpirySeconds: 0,
     onEvent,
   });

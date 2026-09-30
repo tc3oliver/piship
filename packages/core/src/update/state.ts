@@ -439,6 +439,16 @@ async function clearItems(
         : `${item.name} was cleared because the target cannot read it; sign in again`,
     );
   }
+  // A pending issuance is judged against the stored credential: without it,
+  // one whose credential was committed could no longer be told from one
+  // still unresolved, and its key could be sent again.
+  const paths = accessStatePaths(stateDir);
+  if (
+    items.some(
+      (item) => join(stateDir, ...item.path.split("/")) === paths.credential,
+    )
+  )
+    rmSync(paths.credentialIssuance, { force: true });
   rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
 }
 
