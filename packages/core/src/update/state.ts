@@ -435,6 +435,17 @@ async function clearItems(
         sanitizedDetail: { refs: failed.map((item) => item.ref) },
       },
     );
+  // Whether every class that names file-store secrets goes: only then does
+  // the whole store go. A class that is kept (the runtime credential and the
+  // identity when only the sandbox credential is cleared) still needs its
+  // secrets; the cleared classes' own secrets were deleted one by one above.
+  const cleared = new Set(items.map((item) => item.path));
+  const wholeStore = STATE_DATA_CLASSES.filter(
+    (entry) =>
+      entry.kind === "file" &&
+      entry.sensitivity === "secret-reference" &&
+      existsSync(join(stateDir, ...entry.path.split("/"))),
+  ).every((entry) => cleared.has(entry.path));
   for (const item of items) {
     rmSync(join(stateDir, ...item.path.split("/")), {
       recursive: true,
@@ -456,10 +467,10 @@ async function clearItems(
     )
   )
     rmSync(paths.credentialIssuance, { force: true });
-  // The file store's secrets go with a class that holds secrets, never with
-  // one that only records metadata (the pending issuance): the credential
-  // and identity kept in place still need theirs.
-  if (items.some((item) => !metadataOnly(item.path)))
+  // The file store's directory goes only with every class that holds
+  // secrets (a change of storage provider clears them all), never with one
+  // that only records metadata (the pending issuance) alone.
+  if (wholeStore && items.some((item) => !metadataOnly(item.path)))
     rmSync(join(stateDir, "secrets"), { recursive: true, force: true });
 }
 
