@@ -449,14 +449,12 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       }
       expect(refused.status).toBe(1);
       console.info(`failed renewal, as the user sees it:\n${refused.stderr}`);
-      // The broker's transport failure keeps the managed fetch's code in
-      // parentheses: it names the gateway although the broker is down, and
-      // it now adds the system error behind it (which one depends on how the
-      // container runtime closes a published port). Pins current behavior,
-      // expected to change when the mapping is fixed.
+      // The broker is named with the system code of its transport failure,
+      // never the gateway's code.
       expect(refused.stderr).toMatch(
-        /CREDENTIAL_REVOKED: The runtime credential was rejected and could not be renewed: The credential broker is unreachable \(GATEWAY_UNREACHABLE(: [A-Z][A-Z0-9_]+)?\)\nAction: Try again later; if it keeps failing, run the branded login command/,
+        /CREDENTIAL_REVOKED: The runtime credential was rejected and could not be renewed: The credential broker is unreachable \((ECONNREFUSED|ECONNRESET|UND_ERR_SOCKET|network error)\)\nAction: Try again later; if it keeps failing, run the branded login command/,
       );
+      expect(refused.stderr).not.toContain("GATEWAY_UNREACHABLE");
       // The rejection is recorded, so the next start renews first.
       expect(credentialMetadata()).toMatchObject({ credential_id: before });
       expect(credentialMetadata().rejected_at).toEqual(expect.any(String));

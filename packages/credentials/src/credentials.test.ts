@@ -308,10 +308,19 @@ describe("http-broker credential provider", () => {
   it("reports an unreachable broker as a retryable acquisition failure", async () => {
     const provider = broker();
     await services.close();
-    await expect(provider.acquire(identity, ctx)).rejects.toMatchObject({
+    const error = (await provider.acquire(identity, ctx).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    )) as Error;
+    expect(error).toMatchObject({
       code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    // The broker is named with the system code, never the gateway's code
+    // the managed fetch reports a transport failure with.
+    expect(error.message).toBe(
+      "The credential broker is unreachable (ECONNREFUSED)",
+    );
     services = await startLocalServices();
   });
 
