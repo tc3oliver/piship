@@ -32,6 +32,7 @@ import {
   shareKeychainSearchList,
 } from "./secret-store.js";
 import { acquireLease, runAll, storeScenarioTeardown } from "./teardown.js";
+import { describeSightings, scanTree } from "./security.js";
 
 // Shared, immutable release fixtures for the production lifecycle scenarios.
 // For each example distribution (the managed demo company and the personal
@@ -472,6 +473,19 @@ export function scan(directory: string, secrets: readonly string[]): string[] {
   };
   visit(directory);
   return hits;
+}
+
+/**
+ * Like `scan`, but a secret also counts when it sits in a base64 or base64url
+ * run, the form the restricted file store keeps every value in. Use it where a
+ * secret must be gone from everything, the file store included: a plain scan
+ * cannot see a value the store still holds.
+ */
+export function scanDecoded(
+  directory: string,
+  secrets: readonly string[],
+): string[] {
+  return describeSightings(scanTree(directory, secrets));
 }
 
 /** A lifecycle environment over one distribution's shared releases. */
