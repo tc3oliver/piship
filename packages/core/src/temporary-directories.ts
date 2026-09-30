@@ -36,9 +36,11 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createTemporaryDirectory,
   findAbandonedTemporaryDirectories,
   reclaimTemporaryDirectories,
   type ReclaimResult,
+  type TemporaryDirectory,
   type TemporaryKind,
 } from "@piship/contracts";
 import { installHome } from "./state-paths.js";
@@ -85,6 +87,17 @@ export function reclaimInstallTemporaries(id?: string): ReclaimResult {
       reclaimTemporaryDirectories(root, ["staging"]),
     ),
   );
+}
+
+/**
+ * A staging directory for an install (in the install home) or an update (in
+ * `apps/<id>`): what a killed install or update left in the install home is
+ * removed first, and the new one carries its owner's marker. The one call
+ * both make.
+ */
+export function createStagingDirectory(parent: string): TemporaryDirectory {
+  reclaimInstallTemporaries();
+  return createTemporaryDirectory(parent, "staging");
 }
 
 /** What a build or release found in its output directory and left or failed to remove. */
