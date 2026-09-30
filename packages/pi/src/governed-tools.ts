@@ -21,6 +21,7 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
   type ExtensionContext,
+  formatSize,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -238,6 +239,24 @@ export async function gatePath(
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
+/**
+ * The largest file the governed read and edit tools load. Pi's read tool
+ * takes the whole file as one buffer, then a string and an array of its
+ * lines, before it truncates the output to about 50 KB; without a bound an
+ * authorized read of a huge log or sparse file exhausts memory. 16 MiB is
+ * more than 300 pages of Pi's output; past it, bash reads parts of a file.
+ */
+export const GOVERNED_READ_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The most output one governed shell command may produce. Pi keeps only a
+ * bounded tail in memory but copies the complete output to a temp file with
+ * no limit, so a runaway command would write until the disk is full. Past
+ * this budget the command is stopped and its process tree killed.
+ */
+export const SHELL_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
+const OUTPUT_LIMIT_NOTICE = `\n[output exceeded the ${SHELL_OUTPUT_LIMIT_BYTES / 1024 / 1024} MiB shell output limit; PiShip stopped the command. Redirect large output to a file and inspect it with head, tail, or grep.]\n`;
+
 /** The path the kernel reports for an open file, where the platform has one. */
 async function openedPath(handle: FileHandle): Promise<string | undefined> {
   if (process.platform !== "linux") return undefined;
@@ -301,6 +320,47 @@ async function openDecided(
   }
 }
 
+function tooLarge(path: string, size: string, tool: string): Error {
+  return new Error(
+    `${path} is ${size}, over the ${formatSize(GOVERNED_READ_LIMIT_BYTES)} limit of the governed ${tool} tool. Use bash to work on part of it, for example sed -n '1,200p', head -c 50000 or grep -n.`,
+  );
+}
+
+/**
+ * Read the opened file, refusing it once it exceeds the read limit. The size
+ * is checked on the handle, and the read itself stops one byte past the
+ * limit, so neither an earlier path lookup nor a file that grows while it is
+ * read gets past the bound.
+ */
+async function readBounded(
+  handle: FileHandle,
+  path: string,
+  tool: string,
+): Promise<Buffer> {
+  const { size } = await handle.stat();
+  if (size > GOVERNED_READ_LIMIT_BYTES)
+    throw tooLarge(path, formatSize(size), tool);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const room = GOVERNED_READ_LIMIT_BYTES + 1 - total;
+    const chunk = Buffer.allocUnsafe(
+      Math.min(room, Math.max(size + 1 - total, 64 * 1024)),
+    );
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    total += bytesRead;
+    if (total > GOVERNED_READ_LIMIT_BYTES)
+      throw tooLarge(
+        path,
+        `more than ${formatSize(GOVERNED_READ_LIMIT_BYTES)}`,
+        tool,
+      );
+  }
+  return Buffer.concat(chunks, total);
+}
+
 /** Open for writing without following a final symlink; create only when absent. */
 async function openFile(path: string, flags: number): Promise<FileHandle> {
   if (!(flags & constants.O_WRONLY)) return open(path, flags | NOFOLLOW);
@@ -347,16 +407,76 @@ async function gateCommand(
   return `This command is not allowed by ${decision.policyId} rule ${decision.ruleId}${decision.reason ? `: ${decision.reason}` : ""}${decision.approval === "unavailable" ? " (approval needs an interactive session)" : ""}.`;
 }
 
+type ExecOptions = Parameters<BashOperations["exec"]>[2];
+
+/**
+ * Pass at most SHELL_OUTPUT_LIMIT_BYTES of output through, then one notice,
+ * and abort the returned signal so the runner kills the process tree.
+ */
+function boundedOutput(options: ExecOptions) {
+  const limit = new AbortController();
+  let passed = 0;
+  let exceeded = false;
+  const onData = (data: Buffer) => {
+    if (exceeded) return;
+    const room = SHELL_OUTPUT_LIMIT_BYTES - passed;
+    if (data.length <= room) {
+      passed += data.length;
+      options.onData(data);
+      return;
+    }
+    exceeded = true;
+    if (room > 0) options.onData(data.subarray(0, room));
+    options.onData(Buffer.from(OUTPUT_LIMIT_NOTICE));
+    limit.abort();
+  };
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, limit.signal])
+    : limit.signal;
+  return { onData, signal, exceeded: () => exceeded };
+}
+
 /**
  * Shell operations: policy first, then the OS sandbox when it is enforced.
  * Without an enforced sandbox the command runs as Pi would run it, and the
- * decision was control-plane only.
+ * decision was control-plane only. Either way the command's output is
+ * bounded by SHELL_OUTPUT_LIMIT_BYTES.
  */
 export function governedBashOperations(
   gov: GovernanceSession,
   source: "bash" | "user-bash",
 ): BashOperations {
   const local = createLocalBashOperations();
+  const run = (
+    command: string,
+    cwd: string,
+    options: ExecOptions,
+  ): Promise<{ exitCode: number | null }> => {
+    if (gov.sandbox.report.level === "enforced")
+      return gov.sandbox.exec(command, cwd, {
+        onData: options.onData,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+        ...(options.env ? { env: options.env } : {}),
+      });
+    // In a managed distribution an uncontained command still gets only the
+    // approved network settings. Pi passes the agent's commands an
+    // environment; if a Pi version stops doing so, the process environment
+    // is the base, so the agent's command is never left unrestricted. A
+    // personal distribution has no approved settings, and a user's `!`
+    // command carries no environment from Pi: both keep the process
+    // environment.
+    const network = processNetworkEnvironment();
+    const base =
+      options.env ?? (source === "bash" ? { ...process.env } : undefined);
+    return local.exec(
+      command,
+      cwd,
+      base && network
+        ? { ...options, env: withApprovedNetwork(base, network) }
+        : options,
+    );
+  };
   return {
     exec: async (command, cwd, options) => {
       const refusal = await gateCommand(gov, command, source);
@@ -365,32 +485,21 @@ export function governedBashOperations(
         options.onData(Buffer.from(`${refusal}\n`));
         return { exitCode: 126 };
       }
-      if (gov.sandbox.report.level === "enforced")
-        return gov.sandbox.exec(command, cwd, {
-          onData: options.onData,
-          ...(options.signal ? { signal: options.signal } : {}),
-          ...(options.timeout !== undefined
-            ? { timeout: options.timeout }
-            : {}),
-          ...(options.env ? { env: options.env } : {}),
+      const output = boundedOutput(options);
+      try {
+        const result = await run(command, cwd, {
+          ...options,
+          onData: output.onData,
+          signal: output.signal,
         });
-      // In a managed distribution an uncontained command still gets only the
-      // approved network settings. Pi passes the agent's commands an
-      // environment; if a Pi version stops doing so, the process environment
-      // is the base, so the agent's command is never left unrestricted. A
-      // personal distribution has no approved settings, and a user's `!`
-      // command carries no environment from Pi: both keep the process
-      // environment.
-      const network = processNetworkEnvironment();
-      const base =
-        options.env ?? (source === "bash" ? { ...process.env } : undefined);
-      return local.exec(
-        command,
-        cwd,
-        base && network
-          ? { ...options, env: withApprovedNetwork(base, network) }
-          : options,
-      );
+        return output.exceeded() ? { exitCode: null } : result;
+      } catch (error) {
+        // Stopped at the limit: the notice is in the output, and no exit
+        // code is reported. A caller's own abort stays an abort.
+        if (output.exceeded() && !options.signal?.aborted)
+          return { exitCode: null };
+        throw error;
+      }
     },
   };
 }
@@ -455,7 +564,7 @@ export function governedTools(
       constants.O_RDONLY,
     );
     try {
-      return await handle.readFile();
+      return await readBounded(handle, path, tool);
     } finally {
       await handle.close();
     }
