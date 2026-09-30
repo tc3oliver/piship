@@ -666,6 +666,42 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(() => readInstallReceipt(ID)).toThrow(/Unsafe installation receipt/);
   });
 
+  it("uninstalls a legacy receipt whose shim runs the payload's command script", async () => {
+    const a = await release("1.0.0");
+    const payload = join(appsDir(), "1.0.0");
+    cpSync(join(a.directory, "payload"), payload, { recursive: true });
+    const lock = verifyPayload(payload);
+    const commandPath = join(
+      process.env.PISHIP_BIN_HOME as string,
+      process.platform === "win32"
+        ? `${lock.app.command}.cmd`
+        : lock.app.command,
+    );
+    const script = join(payload, "bin", lock.app.command);
+    // The shim an earlier PiShip wrote, without a launcher.
+    write(
+      commandPath,
+      process.platform === "win32"
+        ? `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${script}" %*\r\n`
+        : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${script.replaceAll("'", "'\"'\"'")}' "$@"\n`,
+    );
+    const receiptFile = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `${ID}.json`,
+    );
+    write(receiptFile, JSON.stringify({ app: lock.app, payload, commandPath }));
+    // A shim that runs something else is not this distribution's.
+    const owned = readFileSync(commandPath, "utf8");
+    writeFileSync(commandPath, owned.replace(script, `${script}-other`));
+    expect(() => uninstallDistribution(ID)).toThrow(/not owned/);
+    writeFileSync(commandPath, owned);
+    uninstallDistribution(ID);
+    expect(existsSync(commandPath)).toBe(false);
+    expect(existsSync(payload)).toBe(false);
+    expect(existsSync(receiptFile)).toBe(false);
+  });
+
   it("rejects receipts from a newer PiShip and receipts with foreign paths", async () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);

@@ -1,5 +1,6 @@
 // Uninstall: remove the owned install files and keep state.
 import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { runtimeStateDirectory } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { ownsCommandShim } from "./install.js";
@@ -48,10 +49,12 @@ export function uninstallDistribution(id: string): string {
         )
           throw new Error(`Install ownership lock for ${id} was lost`);
         if (existsSync(receipt.commandPath)) {
-          if (
-            !receipt.launcher ||
-            !ownsCommandShim(receipt.commandPath, receipt.launcher)
-          )
+          // A receipt written before v1 has no launcher: its shim runs the
+          // payload's command script directly.
+          const target =
+            receipt.launcher ??
+            join(receipt.payload, "bin", receipt.app.command);
+          if (!ownsCommandShim(receipt.commandPath, target))
             throw new Error(
               `Command shim ${receipt.commandPath} is not owned by ${id}`,
             );
