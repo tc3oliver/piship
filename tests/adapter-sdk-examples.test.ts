@@ -111,7 +111,7 @@ beforeEach(async () => {
       const env = (parsed.env ?? {}) as Record<string, string>;
       return json({
         exitCode: 0,
-        stdout: `piship-sandbox-ready ${env.PISHIP_PROBE_UNLISTED ?? "unset"}\npiship-network-blocked\n`,
+        stdout: `piship-sandbox-ready ${env.PISHIP_PROBE_UNLISTED ?? "unset"}\n${String(parsed.command).includes("piship-network-allow-check") ? "piship-network-reachable" : "piship-network-blocked\npiship-metadata-blocked"}\n`,
       });
     }
     if (path === "/sandbox/sessions/session-1") {
@@ -294,6 +294,9 @@ describe("the SDK example adapters", () => {
       "GET /sandbox/health",
       "POST /sandbox/sessions",
       "POST /sandbox/sessions/session-1/exec",
+      "POST /sandbox/sessions",
+      "POST /sandbox/sessions/session-1/exec",
+      "DELETE /sandbox/sessions/session-1",
       "DELETE /sandbox/sessions/session-1",
     ]);
     expect(seen[1]?.body).toEqual({ network: "deny" });

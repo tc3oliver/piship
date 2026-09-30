@@ -65,7 +65,10 @@ export default () => ({
       (globalThis.__pishipWorkspaceRequests ??= []).push(request.command);
       if (request.command.includes("piship-sandbox-ready")) {
         io.onStdout(Buffer.from("piship-sandbox-ready " + (request.env.PISHIP_PROBE_UNLISTED ?? "unset") + "\\n"));
-        if (request.command.includes("piship-network")) io.onStdout(Buffer.from("piship-network-blocked\\n"));
+        if (request.command.includes("piship-network"))
+          io.onStdout(Buffer.from(request.command.includes("piship-network-allow-check")
+            ? "piship-network-reachable\\n"
+            : "piship-network-blocked\\npiship-metadata-blocked\\n"));
         return Promise.resolve({ exitCode: 0 });
       }
       const cwd = request.workspacePath && request.workspacePath !== "."

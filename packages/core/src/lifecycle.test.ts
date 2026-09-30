@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  watch,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { type SecretStore, SecretValue } from "@piship/contracts";
 import {
   MemorySecretStore,
@@ -33,12 +35,15 @@ import {
 import {
   RECEIPT_SCHEMA,
   installDistribution,
+  holdRuntimeLease,
   lifecycleStatus,
   purgeDistributionState,
   readInstallReceipt,
   recoverInstallation,
+  runtimeLeases,
   uninstallDistribution,
 } from "./install/index.js";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import { readStateMarker } from "./migration.js";
 import {
   type CommandResult,
@@ -194,6 +199,14 @@ function fakeAssemble(manifestPath: string, outputRoot: string): string {
   write(
     join(out, "node_modules", "alpha", "package.json"),
     JSON.stringify({ name: "alpha", version: "1.0.0", license: "MIT" }),
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "dist", "index.js"),
+    `export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};\n`,
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "package.json"),
+    '{"type":"module"}\n',
   );
   write(
     join(out, "metadata", "inventory.json"),
@@ -478,6 +491,122 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     });
   });
 
+  it("recovers a marked first install interrupted before its receipt", async () => {
+    const a = await release("1.0.0");
+    mkdirSync(appsDir(), { recursive: true });
+    writeFileSync(
+      join(appsDir(), ".initial-install.json"),
+      JSON.stringify({
+        schema: "piship-initial-install/v1",
+        id: ID,
+        command: ID,
+      }),
+    );
+    writeFileSync(join(appsDir(), "launch.mjs"), "partial launcher");
+    const receipt = await installDistribution(a.archive);
+    expect(receipt.active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("repairs a committed first install whose shim was not written", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    rmSync(receipt.commandPath);
+    writeFileSync(
+      join(appsDir(), ".initial-install.json"),
+      JSON.stringify({
+        schema: "piship-initial-install/v1",
+        id: ID,
+        command: ID,
+      }),
+    );
+    const repaired = await installDistribution(a.archive);
+    expect(repaired).toEqual(receipt);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("serializes different distributions claiming the same command", async () => {
+    const first = fakeAssemble(project("1.0.0"), temp("piship-first-"));
+    const otherProject = temp("piship-other-project-");
+    const otherManifest = join(otherProject, "piship.yaml");
+    write(join(otherProject, "resources", "AGENTS.md"), "# other\n");
+    writeFileSync(
+      otherManifest,
+      manifestSource("1.0.0", true).replace("id: acmepi", "id: otherpi"),
+    );
+    lockManifest(otherManifest);
+    const second = fakeAssemble(otherManifest, temp("piship-second-"));
+    const outcomes = await Promise.allSettled([
+      installDistribution(first),
+      installDistribution(second),
+    ]);
+    expect(
+      outcomes.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const winner = outcomes.find((result) => result.status === "fulfilled");
+    if (winner?.status !== "fulfilled") throw new Error("No winner");
+    const loser = winner.value.app.id === ID ? "otherpi" : ID;
+    expect(
+      existsSync(
+        join(
+          process.env.PISHIP_INSTALL_HOME as string,
+          "receipts",
+          `${loser}.json`,
+        ),
+      ),
+    ).toBe(false);
+    const shim = readFileSync(winner.value.commandPath, "utf8");
+    expect(() => uninstallDistribution(loser)).toThrow(
+      /No PiShip installation/,
+    );
+    expect(readFileSync(winner.value.commandPath, "utf8")).toBe(shim);
+    uninstallDistribution(winner.value.app.id);
+  });
+
+  it("keeps a leased payload after it leaves the receipt and reclaims it when the runtime exits", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const old = receipt.payload;
+    const next = join(appsDir(), "1.1.0");
+    mkdirSync(next);
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      writeFileSync(
+        join(
+          process.env.PISHIP_INSTALL_HOME as string,
+          "receipts",
+          `${ID}.json`,
+        ),
+        JSON.stringify({
+          ...receipt,
+          active: "1.1.0",
+          payload: next,
+          releases: [
+            {
+              version: "1.1.0",
+              payload: next,
+              installedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      );
+      expect(
+        runtimeLeases(ID)
+          .filter((item) => item.live)
+          .map((item) => item.version),
+      ).toContain("1.0.0");
+      recoverInstallation(ID);
+      expect(existsSync(old)).toBe(true);
+      expect(() => uninstallDistribution(ID)).toThrow(/runtime session/);
+    } finally {
+      releaseLease();
+    }
+    recoverInstallation(ID);
+    expect(existsSync(old)).toBe(false);
+    expect(() => uninstallDistribution(ID)).not.toThrow();
+  });
+
   it("refuses a tampered release before installing", async () => {
     const a = await release("1.0.0");
     flipByte(a.archive);
@@ -535,6 +664,42 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       JSON.stringify({ app: lock.app, payload: temp(), commandPath }),
     );
     expect(() => readInstallReceipt(ID)).toThrow(/Unsafe installation receipt/);
+  });
+
+  it("uninstalls a legacy receipt whose shim runs the payload's command script", async () => {
+    const a = await release("1.0.0");
+    const payload = join(appsDir(), "1.0.0");
+    cpSync(join(a.directory, "payload"), payload, { recursive: true });
+    const lock = verifyPayload(payload);
+    const commandPath = join(
+      process.env.PISHIP_BIN_HOME as string,
+      process.platform === "win32"
+        ? `${lock.app.command}.cmd`
+        : lock.app.command,
+    );
+    const script = join(payload, "bin", lock.app.command);
+    // The shim an earlier PiShip wrote, without a launcher.
+    write(
+      commandPath,
+      process.platform === "win32"
+        ? `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${script}" %*\r\n`
+        : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${script.replaceAll("'", "'\"'\"'")}' "$@"\n`,
+    );
+    const receiptFile = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `${ID}.json`,
+    );
+    write(receiptFile, JSON.stringify({ app: lock.app, payload, commandPath }));
+    // A shim that runs something else is not this distribution's.
+    const owned = readFileSync(commandPath, "utf8");
+    writeFileSync(commandPath, owned.replace(script, `${script}-other`));
+    expect(() => uninstallDistribution(ID)).toThrow(/not owned/);
+    writeFileSync(commandPath, owned);
+    uninstallDistribution(ID);
+    expect(existsSync(commandPath)).toBe(false);
+    expect(existsSync(payload)).toBe(false);
+    expect(existsSync(receiptFile)).toBe(false);
   });
 
   it("rejects receipts from a newer PiShip and receipts with foreign paths", async () => {
@@ -1961,6 +2126,115 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
 describe.runIf(HOST_EVIDENCED)("installed launcher", () => {
   const launch = (launcher: string) =>
     spawnSync(process.execPath, [launcher], { encoding: "utf8" });
+  const waitForFile = (path: string): Promise<void> =>
+    new Promise((resolvePromise) => {
+      if (existsSync(path)) return resolvePromise();
+      const watcher = watch(dirname(path), () => {
+        if (existsSync(path)) {
+          watcher.close();
+          resolvePromise();
+        }
+      });
+      if (existsSync(path)) {
+        watcher.close();
+        resolvePromise();
+      }
+    });
+
+  it("holds launcher registration against uninstall through core import", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    const ready = join(temp("piship-launch-race-"), "ready");
+    const release = join(dirname(ready), "release");
+    const core = join(
+      receipt.payload,
+      "node_modules",
+      "@piship",
+      "core",
+      "dist",
+      "index.js",
+    );
+    writeFileSync(
+      core,
+      `import { writeFileSync, watch, existsSync } from "node:fs";
+import { dirname } from "node:path";
+writeFileSync(${JSON.stringify(ready)}, "ready");
+await new Promise((resolve) => {
+  const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+    if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+  });
+  if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+});
+export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};
+`,
+    );
+    const child = spawn(process.execPath, [receipt.launcher as string], {
+      stdio: "ignore",
+    });
+    try {
+      await waitForFile(ready);
+      expect(() => uninstallDistribution(ID)).toThrow(/registering/);
+      expect(existsSync(receipt.payload)).toBe(true);
+      writeFileSync(release, "continue");
+      const code = await new Promise<number | null>((resolvePromise) =>
+        child.once("exit", resolvePromise),
+      );
+      expect(code).toBe(0);
+      uninstallDistribution(ID);
+    } finally {
+      child.kill();
+    }
+  }, 30_000);
+
+  it("reclaims a registration gate a killed launcher left, and waits only briefly for a live one", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    const gate = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `.${ID}.launch.lock`,
+    );
+    const holder = (pid: number) =>
+      `${JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid, instance: "left-behind" })}\n`;
+    writeFileSync(gate, holder(deadPid()));
+    const launched = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(launched.status, launched.stderr).toBe(0);
+    expect(launched.stdout).toContain("payload");
+    expect(existsSync(gate)).toBe(false);
+    // A live holder (this process) is waited for, then reported.
+    writeFileSync(gate, holder(process.pid));
+    const started = Date.now();
+    const busy = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(busy.status).toBe(1);
+    expect(busy.stderr).toMatch(/registering; retry/);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    rmSync(gate);
+  }, 30_000);
+
+  it("launches a release whose PiShip predates runtime leases", async () => {
+    const { a } = await fixture();
+    const receipt = await installDistribution(a.archive);
+    writeFileSync(
+      join(
+        receipt.payload,
+        "node_modules",
+        "@piship",
+        "core",
+        "dist",
+        "index.js",
+      ),
+      "export {};\n",
+    );
+    const launched = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(launched.status, launched.stderr).toBe(0);
+    expect(launched.stdout).toContain("payload");
+  });
 
   it.runIf(process.platform !== "win32")(
     "launches when the receipt records a symlinked install path",

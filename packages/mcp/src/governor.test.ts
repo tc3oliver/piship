@@ -545,7 +545,8 @@ describe("McpGovernor over stdio", () => {
       runtime: defaultProcessRuntime(),
       servers: [stdioServer("docs", { args: ["--record", record] })],
     });
-    await governor.start();
+    const [report] = await governor.start();
+    expect(report?.state, report?.reason).toBe("healthy");
     const pid = readRecord(record).find((r) => r.type === "start")
       ?.pid as number;
     expect(alive(pid)).toBe(true);
@@ -575,7 +576,8 @@ describe("McpGovernor with the sandbox process runtime", () => {
         }),
       ],
     });
-    await governor.start();
+    const [report] = await governor.start();
+    expect(report?.state, report?.reason).toBe("healthy");
     const echo = governor.tools().find((t) => t.tool === "echo_env");
     const names = JSON.parse((await echo?.call({}))?.text ?? "[]") as string[];
     expect(names).toContain("LANG");

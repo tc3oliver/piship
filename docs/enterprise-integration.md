@@ -178,9 +178,10 @@ A lost answer can hide an issued credential: the broker may create a gateway key
 
 - the credential is committed locally (after a commit, a later renewal is a new request with a new key);
 - the broker gives a final answer: 403, 409 or 422, another non-2xx that is not 401, 429 or 5xx, or a 2xx that breaks this contract;
-- 24 hours have passed since it was recorded: PiShip assumes the broker keeps a key at least that long ([below](#what-a-broker-must-do)), and past it a repeated key may no longer recover anything;
 - the principal changes, the user runs `logout` (also without the runtime variables), the state is purged, or an update or rollback moves to a release that cannot read the record or clears the runtime credential;
 - the destination changes: the record holds a hash of the broker endpoint (or of an adapter's module and endpoints), and a key is never sent to another broker than the one it was recorded for.
+
+A key recorded 24 hours ago or more by PiShip's clock, or dated more than a minute ahead of it, is not released and not sent: PiShip assumes the broker keeps a key at least 24 hours ([below](#what-a-broker-must-do)), past which a repeated key may no longer recover anything while a new key could issue a second credential. The acquire or renewal fails with `CREDENTIAL_ACQUIRE_FAILED` until the user reconciles the pending key with the broker and runs `logout`, which releases it.
 
 A renewal after a gateway rejection and an entitlement re-read after a model denial are requests of their own: they repeat only a key recorded by the same kind of request, never an older request's key, whose credential the broker would replay. A `login` of the same principal repeats whatever key is pending. A caller that passes its own `CredentialContext.idempotencyKey` has it recorded and sent only when no key is pending; a pending key is never replaced by a different caller key. Details are in [pending issuance](credentials.md#pending-issuance).
 

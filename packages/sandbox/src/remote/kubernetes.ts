@@ -70,8 +70,10 @@ const TERMINAL_REASONS = new Set([
 // pool whose volumes PiShip does not know, so its workspace is a snapshot.
 const CAPABILITIES: SandboxCapabilities = {
   isolation: "remote",
-  planes: [HOST_FILESYSTEM_ISOLATION, "network-deny", "environment-filter"],
-  network: ["deny", "allow"],
+  // A claim selects one preconfigured warm pool. This adapter has no way to
+  // prove the pool's NetworkPolicy or create a corresponding allow-mode peer.
+  planes: [HOST_FILESYSTEM_ISOLATION, "environment-filter"],
+  network: ["allow"],
   localProcesses: false,
   workspace: { mode: "snapshot" },
 };
@@ -230,6 +232,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         }
         try {
           await this.#renewIfDue(claim, io.signal);
+          await this.#assertClaimExists(claim, io.signal);
         } catch (error) {
           // An expired claim is replaced once; any other renewal failure
           // fails the command rather than run it in a sandbox about to go.
@@ -263,6 +266,9 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         io.signal.addEventListener("abort", onAbort, { once: true });
         try {
           return await this.#execute(claim, request, io);
+        } catch (error) {
+          if (error instanceof ClaimGone) retire(entry);
+          throw error;
         } finally {
           io.signal.removeEventListener("abort", onAbort);
           entry.users--;
@@ -306,6 +312,22 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     await this.#renew(claim, signal);
   }
 
+  async #assertClaimExists(claim: Claim, signal: AbortSignal): Promise<void> {
+    const response = await this.#request(`${this.#claims()}/${claim.claim}`, {
+      method: "GET",
+      signal,
+    });
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new ClaimGone("the SandboxClaim no longer exists");
+    }
+    if (!response.ok)
+      throw new Error(
+        `checking the SandboxClaim failed: ${await describeFailure(response)}`,
+      );
+    await response.body?.cancel().catch(() => undefined);
+  }
+
   /** Move the claim's shutdownTime one lifetime ahead. */
   async #renew(claim: Claim, signal?: AbortSignal): Promise<void> {
     const expiresAt = this.#now() + this.#lifetimeMs();
@@ -338,13 +360,18 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
    * credential as a bearer token. A POST (a claim or a command) may have
    * created something and is never sent twice.
    */
-  #request(url: string, init: RequestInit): Promise<Response> {
+  #request(
+    url: string,
+    init: RequestInit,
+    timeoutMs = 30_000,
+  ): Promise<Response> {
     return credentialedFetch(
       this.#options,
       url,
       init,
       (credential) => ["Authorization", `Bearer ${credential}`],
       init.method !== "POST",
+      timeoutMs,
     );
   }
 
@@ -440,19 +467,27 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     request: SandboxExecRequest,
     io: SandboxExecIO,
   ): Promise<SandboxExecResult> {
-    const response = await this.#request(`${this.#router}/execute`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Sandbox-ID": claim.sandbox,
-        "X-Sandbox-Namespace": this.#namespace,
-        "X-Sandbox-Port": String(this.#options.port ?? 8888),
+    const response = await this.#request(
+      `${this.#router}/execute`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Sandbox-ID": claim.sandbox,
+          "X-Sandbox-Namespace": this.#namespace,
+          "X-Sandbox-Port": String(this.#options.port ?? 8888),
+        },
+        body: JSON.stringify({
+          command: runtimeCommand(request, this.#options.workdir),
+        }),
+        signal: io.signal,
       },
-      body: JSON.stringify({
-        command: runtimeCommand(request, this.#options.workdir),
-      }),
-      signal: io.signal,
-    });
+      0,
+    );
+    if (response.status === 404) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new ClaimGone("the sandbox router no longer knows this sandbox");
+    }
     if (!response.ok)
       throw new Error(
         `running the command failed: ${await describeFailure(response)}`,

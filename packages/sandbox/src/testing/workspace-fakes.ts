@@ -126,6 +126,7 @@ function fake(
 ): WorkspaceFake {
   const requests: SandboxExecRequest[] = [];
   let remote: string | undefined;
+  const remoteRoots = new Set<string>();
   let prepared = 0;
   const backend = customBackend({
     id,
@@ -134,7 +135,8 @@ function fake(
     prepare: async ({ profile }: { profile: SandboxProfile }) => {
       prepared++;
       const side = start(profile);
-      remote = side.root === profile.workspace ? undefined : side.root;
+      if (side.root !== profile.workspace) remoteRoots.add(side.root);
+      remote = [...remoteRoots].at(-1);
       return {
         exec: async (request: SandboxExecRequest, io: SandboxExecIO) => {
           requests.push(request);
@@ -150,7 +152,11 @@ function fake(
         ...(options.epoch ? { epoch: options.epoch } : {}),
         dispose: async () => {
           side.stop?.();
-          if (remote) rmSync(remote, { recursive: true, force: true });
+          if (side.root !== profile.workspace) {
+            remoteRoots.delete(side.root);
+            rmSync(side.root, { recursive: true, force: true });
+            remote = [...remoteRoots].at(-1);
+          }
         },
       };
     },

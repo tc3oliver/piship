@@ -473,7 +473,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
 
       const smoke = await installed().smoke();
       expect(smoke.access.credential.credentialId).not.toBe(before);
-      expect(credentialMetadata().rejected_at).toBeUndefined();
+      expect(credentialMetadata().rejected_at).not.toEqual(expect.any(String));
     });
   });
 

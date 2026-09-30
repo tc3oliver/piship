@@ -49,7 +49,7 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
-import { generateSigningKey } from "./signing.js";
+import { generateSigningKey, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -1880,6 +1880,77 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       /not valid JSON/,
     );
   });
+
+  it.each([
+    [
+      "null releases",
+      (doc: Record<string, unknown>) => ({ ...doc, releases: null }),
+    ],
+    [
+      "negative bytes",
+      (doc: Record<string, unknown>) => ({
+        ...doc,
+        releases: [
+          { ...(doc.releases as Record<string, unknown>[])[0], bytes: -1 },
+        ],
+      }),
+    ],
+    [
+      "fractional bytes",
+      (doc: Record<string, unknown>) => ({
+        ...doc,
+        releases: [
+          { ...(doc.releases as Record<string, unknown>[])[0], bytes: 1.5 },
+        ],
+      }),
+    ],
+    [
+      "bad hash",
+      (doc: Record<string, unknown>) => ({
+        ...doc,
+        releases: [
+          { ...(doc.releases as Record<string, unknown>[])[0], sha256: "bad" },
+        ],
+      }),
+    ],
+    [
+      "missing release field",
+      (doc: Record<string, unknown>) => ({
+        ...doc,
+        releases: [{ version: "1.0.0" }],
+      }),
+    ],
+    [
+      "unsafe archive",
+      (doc: Record<string, unknown>) => ({
+        ...doc,
+        releases: [
+          {
+            ...(doc.releases as Record<string, unknown>[])[0],
+            archive: "../escape.tar.gz",
+          },
+        ],
+      }),
+    ],
+  ])(
+    "rejects correctly signed malformed channel metadata: %s",
+    async (_label, mutate) => {
+      const { channelDir } = await channel();
+      const path = join(channelDir, "stable.json");
+      const original = JSON.parse(readFileSync(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const bytes = Buffer.from(`${JSON.stringify(mutate(original))}\n`);
+      writeFileSync(path, bytes);
+      writeFileSync(
+        `${path}.sig`,
+        JSON.stringify(signBytes(bytes, KEY.privateKeyPem, KEY.id)),
+      );
+      const error = await rejection(readChannel(channelDir, "stable", options));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+    },
+  );
 
   it("rejects expired metadata", async () => {
     const { channelDir } = await channel();

@@ -95,7 +95,12 @@ export async function e2bServer(script: E2bScript = {}): Promise<MockServer> {
       const start = frame?.message as StartRequest;
       const script_ = start.process.args[2] ?? "";
       const answer = script_.includes(SANDBOX_READY_MARKER)
-        ? { stdout: checkAnswer(start.process.envs.PISHIP_PROBE_UNLISTED) }
+        ? {
+            stdout: checkAnswer(
+              start.process.envs.PISHIP_PROBE_UNLISTED,
+              script_,
+            ),
+          }
         : (script.command?.(start) ?? { stdout: "", exitCode: 0 });
       response.setHeader("Content-Type", "application/connect+json");
       response.write(connectEnvelope({ event: { start: { pid: 42 } } }));

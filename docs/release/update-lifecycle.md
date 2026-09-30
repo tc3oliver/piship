@@ -46,7 +46,7 @@ npm exec -- piship migrate-check acmecode <archive|release-dir|payload>
 8. With `--check`, stops here and reports the available version, signing key, and migration report. The archive has been downloaded and verified, but nothing is activated.
 9. Snapshots non-secret state, moves the verified payload into place, verifies it again, clears credential data the target cannot read, and switches the active release in one atomic step.
 
-After an update, the previous active release is retained for rollback when `updates.rollback` is true in both the old and the new release. At most two releases are kept: the active one and one retained release; older ones are removed.
+After an update, the previous active release is retained for rollback when `updates.rollback` is true in both the old and the new release. The receipt tracks at most two releases: the active one and one retained release. A running launcher holds a version-specific runtime lease, so an older payload stays on disk while a live session still uses its resources. Recovery removes it after the last session exits. Uninstall refuses while a runtime lease is live; doctor reports live and stale leases.
 
 `rollback` switches back to the retained release. It re-verifies that payload against its inventory and runs its launch check, requires the same command name, and refuses a retained release newer than the active one (use `update` to move forward again). It runs the same migration check: `unsupported` stops it, and review notices are printed. Sessions, preferences, and user policy stay in place. The release rolled back from is kept as the retained release, but a second rollback is refused because it is newer; `update` downloads it again.
 
@@ -88,7 +88,8 @@ Credentials are never snapshotted, copied into a release, or restored. Rollback 
 <install-home>/                           ~/.local/share/piship or PISHIP_INSTALL_HOME
   receipts/<id>.json                      piship-install/v1 receipt: the only record of the active release
   apps/<id>/launch.mjs                    reads the receipt and starts the active release
-  apps/<id>/<version>/                    immutable payloads: the active one and at most one retained
+  apps/<id>/<version>/                    immutable payloads: active, retained, or leased by a live runtime
+  apps/<id>/.runtime-leases/              version-specific runtime process leases
   apps/<id>/.staging-*                    in-progress downloads; marked with their owner, removed by the next operation
   apps/<id>/.lifecycle.lock               one update, rollback, or uninstall at a time (piship-lifecycle-lock/v1)
 <bin-home>/<command>                      shim that runs launch.mjs; <command>.cmd on Windows

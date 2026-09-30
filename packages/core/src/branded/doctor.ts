@@ -98,6 +98,15 @@ function updateDoctor(
       "interrupted",
       `${status.leftovers.length} leftover item(s); cleaned by the next update or rollback`,
     );
+  if (status.runtimeLeases) {
+    if (status.runtimeLeases.live)
+      ok("runtime leases", `${status.runtimeLeases.live} live session(s)`);
+    if (status.runtimeLeases.stale)
+      warn(
+        "runtime leases",
+        `${status.runtimeLeases.stale} stale lease(s); cleaned by the next update or rollback`,
+      );
+  }
   const counts = LocalMetrics.load(ctx.stateDir).snapshot().lifecycle ?? {};
   if (Object.keys(counts).length)
     ok(

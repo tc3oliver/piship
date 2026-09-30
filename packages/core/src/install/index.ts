@@ -14,3 +14,8 @@ export {
 export { lifecycleStatus, type LifecycleStatus } from "./status.js";
 export { sweepStateTemporaries } from "./temporaries.js";
 export { uninstallDistribution } from "./uninstall.js";
+export {
+  holdRuntimeLease,
+  runtimeLeases,
+  type RuntimeLeaseStatus,
+} from "./runtime-lease.js";

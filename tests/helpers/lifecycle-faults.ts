@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect } from "vitest";
 import {
   type CommandResult,
@@ -184,6 +185,14 @@ function fakeAssemble(manifestPath: string, outputRoot: string): string {
   write(
     join(out, "node_modules", "alpha", "package.json"),
     JSON.stringify({ name: "alpha", version: "1.0.0", license: "MIT" }),
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "dist", "index.js"),
+    `export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};\n`,
+  );
+  write(
+    join(out, "node_modules", "@piship", "core", "package.json"),
+    '{"type":"module"}\n',
   );
   write(
     join(out, "metadata", "inventory.json"),

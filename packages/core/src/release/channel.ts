@@ -45,6 +45,50 @@ export interface ChannelMetadata {
   readonly releases: readonly ChannelRelease[];
 }
 
+const SHA256 = /^[a-f0-9]{64}$/;
+const VERSION =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const TARGET = /^(?:linux|darwin|win32)-(?:x64|arm64)$/;
+const ARCHIVE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$/;
+
+function validChannel(value: unknown): value is ChannelMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const doc = value as Record<string, unknown>;
+  if (
+    doc.schema !== CHANNEL_SCHEMA ||
+    typeof doc.distribution !== "string" ||
+    typeof doc.channel !== "string" ||
+    typeof doc.expires !== "string" ||
+    !Number.isSafeInteger(doc.sequence) ||
+    (doc.sequence as number) < 1 ||
+    !Array.isArray(doc.releases)
+  )
+    return false;
+  return doc.releases.every((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry))
+      return false;
+    const release = entry as Record<string, unknown>;
+    return (
+      typeof release.version === "string" &&
+      VERSION.test(release.version) &&
+      typeof release.target === "string" &&
+      TARGET.test(release.target) &&
+      typeof release.archive === "string" &&
+      ARCHIVE.test(release.archive) &&
+      typeof release.sha256 === "string" &&
+      SHA256.test(release.sha256) &&
+      Number.isSafeInteger(release.bytes) &&
+      (release.bytes as number) > 0 &&
+      typeof release.pi === "string" &&
+      VERSION.test(release.pi) &&
+      typeof release.piship === "string" &&
+      VERSION.test(release.piship) &&
+      typeof release.lockSha256 === "string" &&
+      SHA256.test(release.lockSha256)
+    );
+  });
+}
+
 export interface SignChannelOptions {
   readonly directory: string;
   readonly channel: string;
@@ -172,11 +216,29 @@ export async function readChannel(
     );
   }
   const keyId = verifySignature(bytes, envelope, options.trusted);
-  const metadata = JSON.parse(bytes.toString("utf8")) as ChannelMetadata;
-  if (metadata.schema !== CHANNEL_SCHEMA)
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(bytes.toString("utf8")) as unknown;
+  } catch {
     throw new PiShipError(
       "INTEGRITY_FAILED",
-      `Unsupported channel metadata ${String(metadata.schema)}`,
+      "Channel metadata is not valid JSON",
+    );
+  }
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata))
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      "Channel metadata is not an object",
+    );
+  if ((metadata as Record<string, unknown>).schema !== CHANNEL_SCHEMA)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `Unsupported channel metadata ${String((metadata as Record<string, unknown>).schema)}`,
+    );
+  if (!validChannel(metadata))
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      "Channel metadata has invalid fields or releases",
     );
   if (
     metadata.distribution !== options.distribution ||

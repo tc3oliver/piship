@@ -80,7 +80,11 @@ function e2b(url: string, options: Partial<E2bCompatibleOptions> = {}) {
 
 const activate = (
   backend: E2bCompatibleBackend | KubernetesAgentSandboxBackend,
-  config: SandboxPolicy = policy(),
+  config: SandboxPolicy = policy(
+    backend instanceof KubernetesAgentSandboxBackend
+      ? { network: { mode: "allow" } }
+      : {},
+  ),
 ) =>
   activateSandbox(config, {
     workspace,
@@ -123,11 +127,11 @@ describe("remote capability reporting", () => {
     for (const backend of backends()) {
       const capabilities = backend.capabilities();
       expect(capabilities.isolation).toBe("remote");
-      expect(capabilities.planes).toEqual([
-        "host-filesystem-isolation",
-        "network-deny",
-        "environment-filter",
-      ]);
+      expect(capabilities.planes).toEqual(
+        backend instanceof KubernetesAgentSandboxBackend
+          ? ["host-filesystem-isolation", "environment-filter"]
+          : ["host-filesystem-isolation", "network-deny", "environment-filter"],
+      );
       expect(capabilities.planes).not.toContain("filesystem-read-deny");
       expect(capabilities.planes).not.toContain("filesystem-write-allowlist");
       expect(capabilities.localProcesses).toBe(false);
@@ -135,6 +139,20 @@ describe("remote capability reporting", () => {
       // warm-pool pod holds a copy of the code at best.
       expect(capabilities.workspace).toEqual({ mode: "snapshot" });
     }
+  });
+
+  it("refuses Kubernetes network deny without authoritative NetworkPolicy evidence", async () => {
+    const mock = await kubernetesServer();
+    await expect(
+      activate(kubernetes(mock.url), policy()),
+    ).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
+    expect(
+      mock.requests.filter(
+        (request) => request.method === "POST" && request.path === CLAIMS,
+      ),
+    ).toHaveLength(0);
   });
 
   it("reports only enforced guarantees in the containment report and doctor line", async () => {
@@ -210,7 +228,7 @@ describe("e2b-compatible backend against a mock server", () => {
       mock.requests.filter(
         (request) => request.path === "/sandboxes/sbx1/timeout",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(mock.requests.at(-1)).toMatchObject({
       method: "DELETE",
       path: "/sandboxes/sbx1",
@@ -817,6 +835,19 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
           request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
       ),
     ).toBe(true);
+    await sandbox.dispose();
+  });
+
+  it("replaces a claim removed early by the cluster before a command", async () => {
+    const cluster: Cluster = { expired: new Set() };
+    const mock = await kubernetesServer(undefined, cluster);
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 3600 }),
+    );
+    const [first] = claimNames(mock.requests);
+    cluster.expired?.add(first ?? "");
+    expect((await run(sandbox, "echo fresh")).exitCode).toBe(0);
+    expect(claimNames(mock.requests)).toHaveLength(2);
     await sandbox.dispose();
   });
 

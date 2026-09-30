@@ -6,6 +6,7 @@ import {
   readInstallReceipt,
   type InstallReceipt,
 } from "./receipt.js";
+import { runtimeLeases } from "./runtime-lease.js";
 
 export interface LifecycleStatus {
   readonly installed: boolean;
@@ -20,6 +21,7 @@ export interface LifecycleStatus {
   readonly fromRelease?: boolean;
   readonly lastCheck?: InstallReceipt["lastCheck"];
   readonly leftovers: readonly string[];
+  readonly runtimeLeases?: { readonly live: number; readonly stale: number };
 }
 
 /** Update status for doctor; never fetches anything. */
@@ -38,6 +40,7 @@ export function lifecycleStatus(
     ...receipt.releases.map((item) => item.version),
     "launch.mjs",
     ".lifecycle.lock",
+    ".runtime-leases",
   ]);
   const leftovers = existsSync(apps)
     ? readdirSync(apps).filter((name) => !known.has(name))
@@ -45,6 +48,9 @@ export function lifecycleStatus(
   const active = receipt.releases.find(
     (item) => item.version === receipt.active,
   );
+  const leases = runtimeLeases(id);
+  const live = leases.filter((lease) => lease.live).length;
+  const stale = leases.length - live;
   return {
     installed: true,
     tracked: !!receipt.launcher,
@@ -68,5 +74,6 @@ export function lifecycleStatus(
     fromRelease: !!active?.release,
     ...(receipt.lastCheck ? { lastCheck: receipt.lastCheck } : {}),
     leftovers,
+    ...(leases.length ? { runtimeLeases: { live, stale } } : {}),
   };
 }

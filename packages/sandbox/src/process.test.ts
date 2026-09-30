@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnManaged } from "./process.js";
 
@@ -123,24 +124,83 @@ describe("spawnManaged", () => {
     expect((await child.exited).cancelled).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "kills leftover group members when the leader exits",
+  it("kills leftover group members when the leader exits", async () => {
+    const heartbeat = join(dir, "hb");
+    const token = `piship-orphan-${Date.now()}`;
+    const leader = TREE.replace(
+      "setInterval(() => {}, 1000);",
+      "setTimeout(() => process.exit(0), 300);",
+    );
+    const exit = await spawnManaged({
+      file: node,
+      args: ["-e", leader, heartbeat, token],
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+    }).exited;
+    expect(exit.code).toBe(0);
+    expect(await heartbeatStopped(heartbeat)).toBe(true);
+    expect(running(token)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "returns the governed child's exit code after draining its output",
     async () => {
-      const heartbeat = join(dir, "hb");
-      const token = `piship-orphan-${Date.now()}`;
-      const leader = TREE.replace(
-        "setInterval(() => {}, 1000);",
-        "setTimeout(() => process.exit(0), 300);",
-      );
-      const exit = await spawnManaged({
+      let stdout = "";
+      let stderr = "";
+      const result = await spawnManaged({
         file: node,
-        args: ["-e", leader, heartbeat, token],
+        args: [
+          "-e",
+          "process.stdout.write('out'); process.stderr.write('err'); process.exit(37)",
+        ],
         cwd: dir,
         env: { PATH: process.env.PATH ?? "" },
+        onStdout: (chunk) => {
+          stdout += chunk.toString();
+        },
+        onStderr: (chunk) => {
+          stderr += chunk.toString();
+        },
       }).exited;
-      expect(exit.code).toBe(0);
+      expect(result).toMatchObject({
+        code: 37,
+        timedOut: false,
+        cancelled: false,
+      });
+      expect(stdout).toBe("out");
+      expect(stderr).toBe("err");
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "kills a live governed tree when PiShip exits",
+    async () => {
+      const heartbeat = join(dir, "shutdown-hb");
+      const token = `piship-shutdown-${Date.now()}`;
+      const modulePath = fileURLToPath(
+        new URL("../dist/index.js", import.meta.url),
+      );
+      const source = `
+      const { spawnManaged } = await import(process.argv[1]);
+      const child = spawnManaged({ file: process.execPath, args: ["-e", ${JSON.stringify(TREE)}, process.argv[2], process.argv[3]], cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" } });
+      child.stdout.on("data", () => process.exit(0));
+    `;
+      execFileSync(
+        node,
+        [
+          "--input-type=module",
+          "-e",
+          source,
+          pathToFileURL(modulePath).href,
+          heartbeat,
+          token,
+        ],
+        {
+          cwd: dir,
+          timeout: 20_000,
+        },
+      );
       expect(await heartbeatStopped(heartbeat)).toBe(true);
-      expect(running(token)).toBe(false);
     },
   );
 
@@ -182,6 +242,23 @@ describe("spawnManaged", () => {
     child.stdin?.end("ping");
     expect((await child.exited).code).toBe(0);
     expect(output).toBe("ping");
+    // A request/response child must see each message while stdin stays open.
+    const echo = spawnManaged({
+      file: node,
+      args: ["-e", "process.stdin.pipe(process.stdout)"],
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+      stdin: "pipe",
+    });
+    const reply = new Promise<string>((resolveReply) =>
+      echo.stdout?.once("data", (chunk: Buffer) =>
+        resolveReply(chunk.toString()),
+      ),
+    );
+    echo.stdin?.write("request\n");
+    expect(await reply).toBe("request\n");
+    echo.stdin?.end();
+    expect((await echo.exited).code).toBe(0);
     const missing = await spawnManaged({
       file: join(dir, "does-not-exist"),
       cwd: dir,

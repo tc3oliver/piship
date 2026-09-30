@@ -64,6 +64,10 @@ export async function kubernetesServer(
           response.statusCode = cluster.expired?.has(name) ? 404 : 200;
           response.end("{}");
         });
+      if (request.method === "GET" && cluster.expired?.has(name)) {
+        response.statusCode = 404;
+        return void response.end("{}");
+      }
       const seen = (polls.get(name) ?? 0) + 1;
       polls.set(name, seen);
       return void response.end(
@@ -79,6 +83,14 @@ export async function kubernetesServer(
       );
     }
     if (request.method === "POST" && path === "/execute") {
+      const sandbox = request.headers["x-sandbox-id"];
+      if (
+        typeof sandbox === "string" &&
+        cluster.expired?.has(sandbox.slice(5))
+      ) {
+        response.statusCode = 404;
+        return void response.end("{}");
+      }
       const { command } = JSON.parse(request.body.toString()) as {
         command: string;
       };
@@ -87,6 +99,7 @@ export async function kubernetesServer(
           JSON.stringify({
             stdout: checkAnswer(
               command.includes("'PISHIP_PROBE_UNLISTED=") ? "1" : undefined,
+              command,
             ),
             stderr: "",
             exit_code: 0,
