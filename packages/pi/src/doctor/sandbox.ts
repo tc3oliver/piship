@@ -14,6 +14,7 @@ import {
   openSandboxCredential,
   type SandboxCredentialStatus,
 } from "@piship/core";
+import type { ContainmentReport } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import { resolveTemplate } from "@piship/schema";
 import type { LaunchContext } from "../launch/context.js";
@@ -191,6 +192,14 @@ function sandboxCredentialLines(
     );
 }
 
+/** The network mode, and in deny mode how the denial is known. */
+function networkText(report: ContainmentReport): string {
+  const denial = report.networkDenial;
+  if (!denial) return report.network;
+  if (denial.evidence === "verified") return `${report.network} (verified)`;
+  return `${report.network} (attested by the backend, not verified${denial.reason ? `: ${denial.reason}` : ""})`;
+}
+
 export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
   const governance = data.governance;
   const inspection = governance?.inspection;
@@ -216,7 +225,7 @@ export function sandboxGroup(data: DoctorData, out: DoctorSection): void {
       out.ok("isolation", REMOTE_WORKSPACE_TEXT);
     else if (governance.isolation)
       out.ok("isolation", ISOLATION_TEXT[governance.isolation]);
-    out.ok("network", report.network);
+    out.ok("network", networkText(report));
     out.ok(
       "scope",
       "tool subprocesses and MCP stdio servers; Pi and in-process extensions are not contained",

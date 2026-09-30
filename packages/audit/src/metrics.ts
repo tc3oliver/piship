@@ -14,6 +14,8 @@ export const METRICS_FILE = join("logs", "metrics.json");
 
 export type McpHealthState = "healthy" | "degraded" | "failed";
 export type SandboxContainment = "enforced" | "unavailable" | "not-required";
+/** How network denial was known: verified, or attested by the backend. */
+export type NetworkDenialMetric = "verified" | "attested";
 
 export interface McpHealthMetric {
   readonly state: McpHealthState;
@@ -27,6 +29,8 @@ export interface SandboxMetric {
   readonly level: SandboxContainment;
   /** Adapter identifier such as `linux-bubblewrap`; never a path. */
   readonly adapter?: string;
+  /** Deny mode only: how the enforced network denial was known. */
+  readonly networkDenial?: NetworkDenialMetric;
   readonly updatedAt: string;
 }
 
@@ -152,6 +156,7 @@ const CONTAINMENT = new Set<string>([
   "unavailable",
   "not-required",
 ]);
+const NETWORK_DENIALS = new Set<string>(["verified", "attested"]);
 const WORKSPACE_MODES = new Set<string>(["shared", "synchronized", "snapshot"]);
 const WORKSPACE_VERIFICATIONS = new Set<string>([
   "not-required",
@@ -310,11 +315,18 @@ export class LocalMetrics {
     };
   }
 
-  recordSandbox(level: SandboxContainment, adapter?: string): void {
+  recordSandbox(
+    level: SandboxContainment,
+    adapter?: string,
+    networkDenial?: NetworkDenialMetric,
+  ): void {
     if (!CONTAINMENT.has(level)) return;
     this.#sandbox = {
       level,
       ...(isIdentifier(adapter) ? { adapter } : {}),
+      ...(networkDenial !== undefined && NETWORK_DENIALS.has(networkDenial)
+        ? { networkDenial }
+        : {}),
       updatedAt: this.#touch(),
     };
   }
@@ -560,6 +572,9 @@ export class LocalMetrics {
       this.#sandbox = {
         level: sandbox.level as SandboxContainment,
         ...(isIdentifier(sandbox.adapter) ? { adapter: sandbox.adapter } : {}),
+        ...(NETWORK_DENIALS.has(sandbox.networkDenial as string)
+          ? { networkDenial: sandbox.networkDenial as NetworkDenialMetric }
+          : {}),
         updatedAt: sandbox.updatedAt,
       };
     this.#startupLatency = durationStat(value.startupLatency);

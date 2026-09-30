@@ -150,8 +150,10 @@ export class GovernanceSession {
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,
       });
-      const { level, adapter } = sandbox.report;
-      bestEffort(() => metrics.recordSandbox(level, adapter));
+      const { level, adapter, networkDenial } = sandbox.report;
+      bestEffort(() =>
+        metrics.recordSandbox(level, adapter, networkDenial?.evidence),
+      );
       const engine = await buildEngine(
         options,
         project,
@@ -171,6 +173,16 @@ export class GovernanceSession {
         `${Date.now().toString(36)}-${process.pid}`,
       );
       sandbox.onWorkspaceReport((report) => session.#workspaceReport(report));
+      // Lower than declared: the backend named a network probe, and it did
+      // not prove denial. The sentence is fixed text; never an address.
+      if (
+        networkDenial?.evidence === "attested" &&
+        networkDenial.probe &&
+        networkDenial.reason
+      )
+        session.#notice(
+          `Network denial in the sandbox is attested by the ${adapter} backend, not verified: ${networkDenial.reason}.`,
+        );
       const workspace = sandbox.report.workspace;
       session.emit("session.start", {
         detail: {

@@ -650,6 +650,45 @@ describe("Sandbox and Workspace groups", () => {
     );
   });
 
+  it("shows how network denial is known", () => {
+    const networkLine = (inspected: GovernanceInspection) =>
+      group(
+        renderDoctor(
+          doctorData("managed", {
+            governance: governanceData({
+              inspection: inspected,
+              isolation: sandboxIsolation(inspected.sandbox),
+              workspace: workspaceData(inspected),
+            }),
+          }),
+        ).render(),
+        "Sandbox",
+      ).find((line) => line.includes("network".padEnd(20)));
+    expect(
+      networkLine(
+        inspection({ networkDenial: { evidence: "verified", probe: false } }),
+      ),
+    ).toBe(`  ✓ ${"network".padEnd(20)} deny (verified)`);
+    expect(
+      networkLine(
+        inspection({
+          verification: "backend-attested",
+          isolation: "remote",
+          networkDenial: {
+            evidence: "attested",
+            probe: false,
+            reason: "the backend declares no network probe to check it with",
+          },
+        }),
+      ),
+    ).toBe(
+      `  ✓ ${"network".padEnd(20)} deny (attested by the backend, not verified: the backend declares no network probe to check it with)`,
+    );
+    expect(networkLine(inspection({ network: "allow" }))).toBe(
+      `  ✓ ${"network".padEnd(20)} allow`,
+    );
+  });
+
   it("says host files are reachable through a shared or synchronized remote workspace", () => {
     const pending = (declared: "shared" | "synchronized"): WorkspaceReport => ({
       declared,
