@@ -13,6 +13,7 @@ import {
   principalKey,
   redact,
 } from "@piship/contracts";
+import { acceptanceFailure } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
 import {
@@ -239,10 +240,7 @@ export async function runSmoke(
       (modelRequest.stopReason === "error" ||
         modelRequest.stopReason === "aborted")
     )
-      throw new PiShipError(
-        "GATEWAY_PROTOCOL_ERROR",
-        `The acceptance model request failed: ${String(modelRequest.error ?? modelRequest.stopReason)}`,
-      );
+      throw acceptanceFailure(runtime.session.messages.at(-1));
   } catch (error) {
     sessionFailed = true;
     throw error;
