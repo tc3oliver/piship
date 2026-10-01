@@ -169,17 +169,23 @@ sandbox:
   required: true
   filesystem:
     read:
-      # Credential stores an agent has no reason to read. Extend it with your
-      # organization's own (cloud CLIs, package registries, VPN profiles).
+      # Credential stores an agent has no reason to read. A declared list
+      # replaces PiShip's default list rather than adding to it, so this one
+      # restates every default (the first ten) before adding its own. Extend
+      # it with your organization's own (cloud CLIs, package registries, VPN
+      # profiles).
       deny:
         - ~/.ssh
         - ~/.aws
         - ~/.gnupg
-        - ~/.netrc
-        - ~/.git-credentials
-        - ~/.docker/config.json
+        - ~/.config/gcloud
+        - ~/.azure
         - ~/.kube
+        - ~/.docker
+        - ~/.netrc
         - ~/.npmrc
+        - ~/.pi
+        - ~/.git-credentials
         - ~/.config/gh
         - ~/.local/share/keyrings
         - ~/Library/Keychains

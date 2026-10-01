@@ -15,7 +15,11 @@ import {
   capabilityMismatch,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
-import { readManifest } from "@piship/schema";
+import {
+  DEFAULT_SANDBOX_ENVIRONMENT,
+  DEFAULT_SANDBOX_READ_DENY,
+  readManifest,
+} from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -119,5 +123,23 @@ describe("documented examples", () => {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
     }
+  });
+
+  // A declared `sandbox.filesystem.read.deny` or `sandbox.environment.allow`
+  // replaces the default list, so an example that declares one must still
+  // carry every default it does not mean to drop.
+  it.each([
+    "examples/demo-company/piship.yaml",
+    "examples/enterprise-reference/piship.yaml",
+    "examples/enterprise-reference/sandbox/piship.yaml",
+  ])("%s keeps every default sandbox read denial", (file) => {
+    const sandbox = readManifest(join(root, file)).governance?.sandbox;
+    expect(sandbox?.required).toBe(true);
+    expect(sandbox?.filesystem.read.deny).toEqual(
+      expect.arrayContaining([...DEFAULT_SANDBOX_READ_DENY]),
+    );
+    expect(sandbox?.environment.allow).toEqual(
+      expect.arrayContaining([...DEFAULT_SANDBOX_ENVIRONMENT]),
+    );
   });
 });

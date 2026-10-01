@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "467abaea26c9678d9f9d87969467e385122e818b2be10da979d2fc3f9661a4e1"
+    "sha256": "43963c4adf32599f335190d8b5f8d1afd5dfa82df38676e10286ae5b8cec5fc4"
   },
   "app": {
     "id": "acmecode",
@@ -1395,7 +1395,14 @@
             "deny": [
               "~/.ssh",
               "~/.aws",
-              "~/.gnupg"
+              "~/.gnupg",
+              "~/.config/gcloud",
+              "~/.azure",
+              "~/.kube",
+              "~/.docker",
+              "~/.netrc",
+              "~/.npmrc",
+              "~/.pi"
             ]
           },
           "write": {
@@ -1489,7 +1496,7 @@
     "policy": "sha256-d7b6a9ec4404a324971547ffaef557e8d3614c63cce7ade35f5c0d867b2cb7e1",
     "capabilities": "sha256-212e5e46ae9e89c4a49394f78609e0a4d9c2d46d0899a28859fb41dadce2c97a",
     "mcp": "sha256-a0831046aa070dc1b2d306d8d593ad03cf2cbe8e58bde8d0de627f1117ec9c5f",
-    "sandbox": "sha256-71471e2d35df62ee3f87be257a8600d9a380a9f9aac440b9184c16a20da9bd64",
+    "sandbox": "sha256-a2e206c220b291bada5380fbf7ce351fd1728ff4505d59c7b159e176c834c26d",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
     "access": "sha256-168bdc2fc25e02aad6f72655c9851671d113386b8c9dced41322194942e7e847"
   },

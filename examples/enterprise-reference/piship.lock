@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "d07b412f338e6f9c2f33625f002de3e76e6b7dfbd44fdb1e45115212af6356cc"
+    "sha256": "822f33a6253e5ff082404e2bccc4412fb337ce70d7e4005024a9570b7df1d388"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1292,11 +1292,14 @@
               "~/.ssh",
               "~/.aws",
               "~/.gnupg",
-              "~/.netrc",
-              "~/.git-credentials",
-              "~/.docker/config.json",
+              "~/.config/gcloud",
+              "~/.azure",
               "~/.kube",
+              "~/.docker",
+              "~/.netrc",
               "~/.npmrc",
+              "~/.pi",
+              "~/.git-credentials",
               "~/.config/gh",
               "~/.local/share/keyrings",
               "~/Library/Keychains"
@@ -1376,7 +1379,7 @@
     "policy": "sha256-46875264b4f021e64b701d5b047032cebaa18a7a23bf5380d7420cc8e324393e",
     "capabilities": "sha256-450c6743f13115d89bb983b8261bf76b858b2d42e8c6a07dae219ffb0da2eb65",
     "mcp": "sha256-3d8074beef5b926b7129159603105141bdc5203db9c9cbecd7a353973a84ddea",
-    "sandbox": "sha256-21769510398546dd1f3e6e21b5439fde07c432a8d5e2f74c23fbdb4fbfd4b5d1",
+    "sandbox": "sha256-92de7059c6fc8cec514738016f8df98e67cc1f236df82c9f1fb625122c24d385",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
     "access": "sha256-6a8a373c132d67da6a5ef19b63c8050901fe45a048f5af37c9e1128ab1d2a81d"
   },

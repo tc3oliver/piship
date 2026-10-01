@@ -51,6 +51,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - The abandoned-temporary sweep at launch is bounded to a short budget and continues on the next start (#158).
 - An edited command shim can be removed with `piship uninstall <id> --remove-edited-shim`; a foreign file is never removed (#158).
 - The adapter conformance kits no longer hang on an adapter factory or `available()` that never settles (#145).
+- `examples/demo-company` and the enterprise reference distribution (and its sandbox variant) declared a `sandbox.filesystem.read.deny` list that replaced the defaults and silently left `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, and `~/.pi` (and, in the demo, `~/.netrc` and `~/.npmrc`) readable in the sandbox. They now restate every default, a test keeps them doing so, and the manifest reference says that a declared list replaces its default (#162).
 
 ## v0.7.0
 
