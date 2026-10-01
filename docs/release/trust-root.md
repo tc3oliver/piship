@@ -1,0 +1,172 @@
+# Release trust root and signed channels
+
+This page covers the key that signs a distribution's update channel: where it comes from, how clients pin it, how it is rotated, revoked, and recovered, and how a channel is hosted. It is part of the [release guide](../release.md). The signing commands are in the [owner workflow](owner-workflow.md#signing-a-channel), and what a client checks when it reads a channel is in the [update lifecycle](update-lifecycle.md#channels-and-signed-metadata).
+
+Each section separates what PiShip does today from what the distribution owner has to do, and lists the gaps. The gaps are collected under [Gaps and follow-ups](#gaps-and-follow-ups). The [examples decision](#examples) is a recommendation that the maintainer has to confirm.
+
+## Model in one paragraph
+
+Each distribution has its own trust root. The owner generates Ed25519 release keys and pins their public keys in `updates.trust.keys` of `piship.yaml`. `piship lock` copies them into `piship.lock`, and every release payload carries that lock. An installed client trusts exactly the keys in the lock of its **active** release. It accepts channel metadata only when the metadata verifies with one of those keys. The signed metadata binds the next release's archive digest and lock digest, so the next release's trust keys are authenticated by the keys the client trusts now. The trust root therefore moves forward one verified release at a time. It is never fetched from the channel and never accepted on first use.
+
+## What the code implements today
+
+| Property | Where | Status |
+| --- | --- | --- |
+| Ed25519 keys; PKCS#8 PEM private key; 44-byte SPKI DER public key, base64 | `packages/core/src/signing.ts` | Implemented |
+| `piship keygen` writes the private key with mode 0600 and never overwrites one. It refuses a path inside a git work tree that is not git-ignored, unless `--force-in-worktree` is given | `writePrivateKey`, `privateKeyLocation` | Implemented |
+| Key IDs: `[a-z0-9][a-z0-9.-]*`, unique within `updates.trust.keys`; a `sha256:` fingerprint of the public key DER | `checkKeyId`, schema `parseUpdates`, `keyFingerprint` | Implemented |
+| Public keys pinned in the manifest and lock (`updates.trust.keys`); no private key or secret-named field accepted in the manifest | `packages/schema/src/lifecycle.ts` | Implemented |
+| The client's trusted set is the active release's locked keys | `updateDistribution` (`activeLock(receipt).updates.trust.keys`) | Implemented |
+| No keys pinned: update fails; there is no unsigned or trust-on-first-use mode | `updateDistribution`, `verifySignature` | Implemented |
+| A signature envelope (`piship-signature/v1`) covers the exact metadata bytes. It names one key ID, and only a pinned key with that ID can verify it | `verifySignature` | Implemented |
+| Channel metadata (`piship-channel/v1`) is bound to its distribution and channel, has an expiry, and carries a monotonic sequence. The client keeps a sequence floor per channel in its install receipt | `readChannel`, receipt `channelSequences` | Implemented |
+| Archive size and SHA-256 must match the signed entry before extraction. The release's distribution, command, version, Pi version, and lock digest must match it after extraction | `downloadArchive`, `updateDistribution` | Implemented |
+| Downgrades offered by a channel are refused | `updateDistribution` | Implemented |
+| `piship diff` reports any added, removed, or replaced trust key as `high` risk ("Changes who can publish updates") | `packages/core/src/diff/areas/updates.ts` | Implemented |
+| Rotation with an overlap of releases that pin both keys | Release-bound, no client clock | Implemented (see [Rotation](#rotation)) |
+| Rotation with a time-bounded window, or keys with `notBefore`/`notAfter` | | Not implemented |
+| A revocation list, or a key a client refuses before it activates a release that drops it | | Not implemented |
+| More than one signature on the channel metadata (old and new key at once) | | Not implemented |
+| Signing with a key held in a hardware token, KMS, or agent, or with an encrypted PEM | | Not implemented: `sign-channel` reads an unencrypted PEM file |
+| A first install that verifies the installed archive against a pinned key | | Not implemented (see [Bootstrap](#distribution-bootstrap)) |
+| An official channel or a pinned production key operated by the PiShip project | | None exists. Every example pins `keys: []` |
+
+## Key lifecycle and custody
+
+**Generation.** `piship keygen <file> --id <key-id>` generates the key. Generate it on the machine that will sign, and write it to a path outside every repository. The command prints the `updates.trust.keys` entry and the fingerprint. Publish the fingerprint out of band so that operators and users can compare it later (see [Bootstrap](#distribution-bootstrap)).
+
+**Storage.** The private key never enters the repository, the manifest, the lock, a release archive, CI logs, or CI artifacts:
+
+- Repository: `keygen` refuses a tracked work tree path. The manifest parser rejects secret-named fields, and only the public key is ever pinned.
+- Archive: a release is assembled from the manifest, lock, and resources, none of which holds the private key.
+- CI: no PiShip workflow signs a channel. `Release qualification` and `Release candidate` build, attest, and verify; they do not sign. The CI and E2E tests generate throwaway keys at run time in temporary directories (`tests/helpers/lifecycle.ts`, `packages/core/src/*.test.ts`), and no test key is committed.
+- Owner: keep the key in a file with mode 0600 on encrypted storage, offline when not in use. Sign on a machine the owner controls.
+
+If an owner later signs from CI, keep the key in a protected deployment environment secret that only the signing job reads. Never echo the key or pass it as a command argument: `sign-channel --key` takes a file path, so write the secret to a 0600 file and delete it after the job. Never upload the channel directory's parent as an artifact if the key file sits there. That setup is the owner's decision and is outside PiShip.
+
+**Custody.** One named person or role holds each key and is the only one allowed to sign. For the PiShip project itself, generating and holding any official key is a maintainer action; no agent or automation generates or pins a production key.
+
+**Two keys from the start (recommended).** Pin a primary key and a backup key from the first release. Store the backup separately, offline, and never use it for routine signing. Today this is the only way a client can recover from a lost or compromised key without a reinstall (see below). It needs no new code, because `updates.trust.keys` already accepts several keys.
+
+**Key IDs.** An ID is a label, not a fingerprint. Use an ID that names the distribution and generation, such as `acmecode-release-2026` and `acmecode-backup-2026`, and never reuse an ID for a different public key. The schema refuses duplicate IDs within one lock. Reusing an ID across releases for a new key still shows in `piship diff` as a changed key with `high` risk, but it makes logs and audit events, which record only the ID, ambiguous.
+
+## Distribution bootstrap
+
+A client must pin a key before it can accept a signed channel. Its first trust root is the `updates.trust.keys` of the **first release it installs**: `piship install` (or `install.sh` / `install.ps1` from an extracted release) runs `verify-release` and records the release's lock, and from then on that lock is the trust root.
+
+`verify-release` proves that an archive is internally consistent: checksums, payload inventory, lock digest, SBOM, and recorded gates. It does not prove who built the archive. The first install is therefore the bootstrap point, and its authenticity comes from how the archive reached the machine:
+
+- Managed distributions: the organization delivers the first archive through a channel it already trusts, such as device management, an internal software catalog, or an internal HTTPS host. Operators compare the archive SHA-256 with the value the owner publishes, and the pinned key fingerprints with the ones the owner publishes. When the owner builds with PiShip's `Release candidate` workflow, they also verify the GitHub artifact attestation. This is not trust on first use: the key comes inside an archive the operator verified out of band, never from the update channel.
+- Personal distributions: the user does the same comparison by hand, or accepts the risk of the place they downloaded from.
+
+TOFU (accept whatever key the first channel read presents) is not a mode PiShip offers, and it must not become the managed default. `readChannel` has no code path that adds a key, and a release with no pinned keys can never update.
+
+Gaps: `install` does not take an expected archive digest or key fingerprint on the command line, and `doctor` reports how many keys are trusted, not their IDs or fingerprints. Operators therefore compare by hand: `sha256sum` for the archive, and the `updates` section of the release's `piship.lock` for the keys.
+
+## Rotation
+
+Rotation is **release-bound**. The trusted set changes only when a client activates a release whose lock pins a different set, so the overlap window is the run of releases that pin both keys. It has no wall-clock bound: a client that stays on an overlap release keeps trusting both keys until it updates.
+
+1. Release N pins `[old]`, and the channel is signed with `old`.
+2. Release N+1 pins `[old, new]`, and the channel is still signed with `old`. Clients on N accept it because `old` is trusted, and once they activate N+1 they trust both keys.
+3. Switch signing to `new` only after clients have moved to N+1 or later. A client still on N refuses metadata signed by `new` (`Signature key <new> is not trusted`). It stays on N, which is safe, and it needs a reinstall or a channel signed with `old` to move on.
+4. Release N+2 pins `[new]`, and the channel is signed with `new`. Once a client activates N+2, `old` is retired: metadata signed by `old` is refused even with a higher sequence.
+
+A channel envelope holds one signature, so during step 3 the owner chooses which clients to serve: sign with `old` to reach stragglers on N, or with `new` once they are gone. A client on N may jump straight to N+2 when the channel is still signed with `old`. That is safe, because `old` signs N+2's lock digest and N+2's keys are authenticated by it.
+
+Covered by `packages/core/src/channel-trust.test.ts` (fast, every target) and by the update test "rotates the release key through an overlap release and then refuses the retired key" in `packages/core/src/lifecycle.test.ts`.
+
+## Compromised-key recovery
+
+There is no revocation list. A client refuses a compromised key only after it activates a release whose lock no longer pins that key. Until then, whoever holds the key and can serve the client's `updates.source` (the owner's host, or a host the user names with `--from`) can sign a channel the client accepts. That includes a malicious release whose lock pins the attacker's keys. Channel signatures do not protect against a holder of the private key. Only HTTPS to the declared source limits who can serve one, and a user who runs `update --from` chooses another source themselves.
+
+Recovery, in order:
+
+1. Stop signing with the compromised key, and secure the channel host and the `updates.source` DNS.
+2. If the clients also pin an uncompromised key (the recommended backup), sign the channel with it and offer a fixed release that pins a new key set without the compromised key. Use a sequence above every sequence ever published, including any the attacker may have published, for example by jumping far ahead with `sign-channel --sequence`. Once clients activate that release, metadata signed by the compromised key is refused.
+3. If the compromised key was the only pinned key, the owner cannot sign anything an attacker cannot also sign. Announce the compromise out of band and have users reinstall from an archive verified out of band that pins the new keys (`uninstall`, then `install --use-existing-state`).
+4. Check the archives the compromised key signed against the owner's records, and tell users which versions to distrust.
+
+Rollback caveat: `rollback` switches to the retained release and its lock, so a client that rolls back to a release that still pinned the revoked key trusts it again until it updates. The per-channel sequence floor survives a rollback, so the client still refuses older metadata, but not newer metadata signed with the revoked key. After a revocation, tell users not to roll back past the revoking release.
+
+## Lost-key recovery
+
+- **Another pinned key remains** (the backup): sign the channel with it and ship a release that drops the lost key and pins a fresh pair. Clients continue without intervention.
+- **No pinned key remains:** no installed client can verify any update again, and nothing in PiShip can re-establish trust remotely; that is the point of pinning. Each installation is re-bootstrapped: publish a new release pinning new keys, distribute it out of band as in [Bootstrap](#distribution-bootstrap), and have users reinstall it (`uninstall`, then `install --use-existing-state`, which keeps state). Start the new channel's sequence above the old one, so the old metadata can never compete.
+
+## Channel hosting
+
+**Layout.** One update source per distribution: a directory, served as static files over HTTPS or read locally. It holds all three channels side by side, and the archives they list:
+
+```text
+<updates.source>/
+  stable.json       stable.json.sig
+  candidate.json    candidate.json.sig
+  dev.json          dev.json.sig
+  <id>-<version>-<target>.tar.gz   (archives listed by any channel)
+```
+
+The channel names are fixed: `stable`, `candidate`, and `dev` (`RELEASE_CHANNELS`). Each channel's metadata is signed separately. A client keeps a separate sequence floor per channel, and only reads the channels its lock's `updates.channels` allows. Metadata copied from one channel to another is refused, because it names its own channel. Promotion means adding the same archive to another channel with `sign-channel --channel <name>`; the archive is not rebuilt. What each channel carries is the owner's policy. A typical policy is that `dev` takes every build, `candidate` takes qualified builds, and `stable` takes approved releases.
+
+**Atomic publish.** A client reads `<channel>.json`, then `<channel>.json.sig`, in two requests, and verifies the signature over the exact bytes it received. A mixed or half-written pair therefore never verifies. A new metadata file with the old signature, a truncated file, or a signature without its metadata is refused with `INTEGRITY_FAILED` or `UPDATE_FAILED`. The refused read does not advance the sequence floor or change the installation, and the next `update` retries. An archive is checked against the signed size and digest, so an archive that is missing, partly uploaded, or replaced is refused before extraction. No half-published channel is ever accepted. A publish that is not atomic costs availability during the swap, not integrity.
+
+To keep that availability window short, publish in this order:
+
+1. Run `piship sign-channel` in a local staging copy of the source directory. It verifies each archive, copies it in, and writes the metadata and signature.
+2. Upload new archives first. Archive names include version and target, so they are new files; never overwrite an existing archive with different bytes.
+3. Upload `<channel>.json.sig` and `<channel>.json` together. Where the host supports it, use one atomic operation: an object-store batch, or a directory rename or symlink swap on a web server.
+4. Remove an archive only after no published channel lists it.
+
+Re-sign every channel before `expires` (30 days by default). Expired metadata stops updates. That bounds how long a host can freeze clients on old metadata, but it also stops updates if the owner forgets.
+
+`sign-channel` itself writes the metadata and then the signature in place, and it extends the existing metadata without verifying its signature first. That is acceptable for a local staging directory the owner controls, and both are listed as follow-ups.
+
+## GitHub Releases and signed channels
+
+These are separate things:
+
+| | GitHub Release (for example v0.7.0) | Signed update channel |
+| --- | --- | --- |
+| Proves | A GitHub artifact attestation proves which workflow, repository, and ref built an archive. A `.sha256` file proves which bytes were uploaded | The distribution owner offers this release on this channel now |
+| Checked by | A person, with `gh attestation verify` and `sha256sum` | Every installed client, automatically, on `update` |
+| Key | Sigstore keyless signature bound to the GitHub Actions identity | The owner's Ed25519 key, pinned in the lock |
+| Freshness and rollback | None | Expiry and a monotonic sequence |
+
+An installed client never consults GitHub, attestations, or checksum files when it updates. An attestation or asset checksum is therefore not channel trust and must not be described as one. A GitHub Release archive is at most a bootstrap input: something an operator verifies before a first install. The v0.7.0 pre-release archives pin no keys (`keys: []`), so an installation of them cannot update through any channel. That is intended.
+
+## Examples
+
+**Recommendation (maintainer to confirm):** the example distributions (`examples/demo-company`, `examples/personal`, `examples/enterprise-*`) only **demonstrate a distribution owner's own channel**. The PiShip project does not operate an official update channel for them and does not pin a project key in them.
+
+Reasons, from the current code and repository:
+
+- Every example manifest pins `updates.trust.keys: []`, and none sets `updates.source`, so nothing implies a project-operated channel.
+- The E2E suites already demonstrate the full owner flow with throwaway keys generated at run time and a loopback channel (`tests/helpers/lifecycle.ts`). That covers `keygen`, pinning, `sign-channel`, update, and rollback, without any key that outlives the test.
+- An official channel would make the project the update publisher for distributions whose IDs and commands (`acmecode`, `mypi`) are fictional. It would also require key custody, hosting, and re-signing every 30 days, for no user who needs it.
+- A throwaway "production" key committed only to make a demo look complete would be a key whose custody nobody owns. It must not be added.
+
+If the maintainer later decides to operate an official channel, key generation, custody, and the first pin are maintainer actions, and this page and the example manifests change in that same decision.
+
+## Test coverage
+
+| Requirement | Test |
+| --- | --- |
+| Signed metadata verification | `channel-trust.test.ts` "accepts metadata signed by any pinned key"; build-backed: `release.test.ts` "signed channels" |
+| Rotation: overlap accepted, retired key refused after it | `channel-trust.test.ts` "rotation"; build-backed through real updates: `lifecycle.test.ts` "rotates the release key through an overlap release and then refuses the retired key" |
+| Revoked and unknown key refusal | `channel-trust.test.ts` "refuses a revoked key however the signature names it", "refuses unknown keys and an empty trust root"; `signing.test.ts` |
+| Tamper rejection | Metadata byte change, half-published pairs, another channel's metadata, and archive digest or size mismatch: `channel-trust.test.ts`. Tampered archive in a channel: `lifecycle.test.ts`. Release contents: `release.test.ts` |
+| Rollback compatibility (replay, downgrade) | `channel-trust.test.ts` "rollback protection" (sequence floor, also across a key change); `lifecycle.test.ts` "refuses replayed older channel metadata", "refuses a downgrade offered by the channel" |
+
+The `channel-trust.test.ts` cases build no release and run on every target in the pull request gate. The build-backed cases run where the host target has lifecycle evidence.
+
+## Gaps and follow-ups
+
+None of these weakens the current guarantees. Each one is a separate change that needs maintainer review:
+
+1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
+2. **Revocation that survives rollback.** Record revoked key IDs, or a trust generation, in the install receipt when a release drops a key, and refuse those keys after a `rollback`.
+3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
+4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
+5. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
+6. **`sign-channel` writes.** Write the metadata and signature through a temporary file and rename, and verify the existing metadata's signature against the signing key before extending it.
+7. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).

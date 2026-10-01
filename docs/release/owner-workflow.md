@@ -68,6 +68,8 @@ Channel names, the channel directory layout, and how clients accept signed metad
 - `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id>` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution. `sign-channel` does not check that the key is pinned by the distribution; an update with an unpinned key fails.
 - Rotation: pin the new key next to the old one, ship a release with both, then sign with the new key and remove the old key in a later release. Key IDs are unique within `updates.trust.keys`.
 
+Key custody, a backup key, the first trust root a client installs, rotation timing, compromised and lost keys, channel hosting and atomic publish, and why a GitHub Release is not a signed channel are covered in [release trust root](trust-root.md).
+
 ## Release checklist
 
 Nothing is published automatically: there is no npm publication or publish automation, and CI keeps artifacts only as workflow artifacts. A GitHub Release, such as the v0.7.0 pre-release, is created by hand from a qualified run's artifacts. The maintainer, Oliver, is the sole release approver. Before any publish step:
