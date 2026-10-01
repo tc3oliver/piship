@@ -79,6 +79,14 @@ export interface AccessData {
     AccessStatus["credential"],
     "state" | "remainingSeconds"
   >;
+  /**
+   * The runtime credential's unresolved acquire or renewal, when one is
+   * recorded; `stale` once it is past the broker's idempotency retention.
+   */
+  readonly pendingIssuance?: {
+    readonly idempotencyKey: string;
+    readonly stale: boolean;
+  };
   readonly activation?: {
     readonly runtime: ActivatedAccess["runtime"]["kind"];
     /** Origin of the managed endpoint, when there is one. */
@@ -267,6 +275,12 @@ async function collectAccess(
   const status = opened
     ? await opened.status().catch(() => undefined)
     : undefined;
+  const pending = opened
+    ? await opened
+        .credentialManager()
+        .then((manager) => manager.pendingIssuance())
+        .catch(() => null)
+    : null;
   let pendingRevocations: AccessData["pendingRevocations"];
   if (opened?.store)
     try {
@@ -316,6 +330,14 @@ async function collectAccess(
     ...(workload ? { workload } : {}),
     ...(identityError ? { identityError } : {}),
     ...(pendingRevocations ? { pendingRevocations } : {}),
+    ...(pending
+      ? {
+          pendingIssuance: {
+            idempotencyKey: pending.idempotencyKey,
+            stale: pending.stale,
+          },
+        }
+      : {}),
     ...(opened?.endpoints.issuer ? { issuer: opened.endpoints.issuer } : {}),
     ...(opened?.store
       ? {

@@ -288,9 +288,17 @@ describe("durable credential issuance", () => {
           allowAcquire: true,
         }),
       );
-      expect(error.message).toMatch(/reconcile/);
+      expect(error.message).toMatch(/older than broker idempotency retention/);
+      expect(error.message).toContain(String(key));
       expect(error.component).toBe("credential");
-      expect(error.userAction).toMatch(/logout command and the branded login/);
+      expect(error.userAction).toMatch(
+        /logout command, then the branded login/,
+      );
+      expect(error.sanitizedDetail).toMatchObject({
+        outcome: "not-sent",
+        reason: "issuance-retention",
+        idempotencyKey: key,
+      });
       expect(pending()?.idempotency_key).toBe(key);
       expect(broker.keys).toEqual([key, key]);
       expect(broker.issued).toHaveLength(1);
@@ -410,7 +418,7 @@ describe("durable credential issuance", () => {
     const error = await failure(
       credentials.ensure(alice, ctx, { allowAcquire: true }),
     );
-    expect(error.message).toMatch(/reconcile/);
+    expect(error.message).toMatch(/older than broker idempotency retention/);
     expect(broker.keys).toHaveLength(2);
     expect(broker.issued).toHaveLength(1);
     expect(pending()?.idempotency_key).toBe(first);
@@ -426,6 +434,80 @@ describe("durable credential issuance", () => {
     expect(broker.keys[3]).toBe(broker.keys[2]);
     expect(broker.issued).toHaveLength(3);
   });
+
+  it.each([
+    ["older than retention", -(ISSUANCE_RETENTION_MS + 60 * 60_000)],
+    ["dated ahead of the clock", 4 * 60 * 60_000],
+  ])(
+    "launches on the valid credential with a pending request %s, and fails with a user step only when a new credential is needed",
+    async (_name, offset) => {
+      let now = Date.now();
+      const broker = new FakeBroker();
+      const store = new MemorySecretStore();
+      const credentials = brokerManager(broker, { store, now: () => now });
+      await credentials.ensure(alice, ctx, { allowAcquire: true });
+      // An early renewal the broker could not answer keeps its record.
+      broker.plan.push("unavailable");
+      await failure(
+        credentials.ensure(alice, ctx, {
+          allowAcquire: false,
+          forceRefresh: true,
+        }),
+      );
+      const key = pending()?.idempotency_key;
+      expect(key).toMatch(UUID);
+      writeFileSync(
+        issuancePath(),
+        JSON.stringify({
+          ...JSON.parse(readFileSync(issuancePath(), "utf8")),
+          created_at: new Date(now + offset).toISOString(),
+        }),
+      );
+      expect(credentials.pendingIssuance()).toMatchObject({
+        idempotencyKey: key,
+        stale: true,
+      });
+      // The current credential is valid: launches use it and send nothing.
+      for (const allowAcquire of [false, true]) {
+        const active = await credentials.ensure(alice, ctx, { allowAcquire });
+        expect(active.secret?.reveal()).toBe(broker.issued[0]);
+      }
+      expect(broker.keys).toHaveLength(2);
+      expect(pending()?.idempotency_key).toBe(key);
+      // A new credential is needed: nothing is sent, and the user is told
+      // what to run, not to reconcile with the broker.
+      const forced = await failure(
+        credentials.ensure(alice, ctx, {
+          allowAcquire: false,
+          forceRefresh: true,
+        }),
+      );
+      now += 2 * 60 * 60_000;
+      const expired = await failure(
+        credentials.ensure(alice, ctx, { allowAcquire: false }),
+      );
+      for (const error of [forced, expired]) {
+        expect(error.code).toBe("CREDENTIAL_ACQUIRE_FAILED");
+        expect(error.message).toContain(String(key));
+        expect(error.userAction).toMatch(
+          /^Run the branded logout command, then the branded login command/,
+        );
+        expect(error.sanitizedDetail).toMatchObject({
+          outcome: "not-sent",
+          reason: "issuance-retention",
+        });
+      }
+      expect(broker.keys).toHaveLength(2);
+      expect(broker.issued).toHaveLength(1);
+      expect(pending()?.idempotency_key).toBe(key);
+      // Logout then login recovers with a new key.
+      await credentials.logout(ctx);
+      expect(pending()).toBeNull();
+      await credentials.ensure(alice, ctx, { allowAcquire: true });
+      expect(broker.keys[2]).not.toBe(key);
+      expect(broker.issued).toHaveLength(2);
+    },
+  );
 
   it("starts a new key after the broker's final answer to it", async () => {
     for (const step of ["denied", "conflict", "malformed"] as const) {
@@ -723,7 +805,7 @@ describe("durable credential issuance", () => {
     expect(
       (await failure(credentials.ensure(alice, ctx, { allowAcquire: true })))
         .message,
-    ).toMatch(/reconcile/);
+    ).toMatch(/older than broker idempotency retention/);
     expect(broker.keys).toHaveLength(sent);
     await credentials.logout(ctx);
     // A valid record is repeated as it is.
