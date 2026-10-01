@@ -24,6 +24,7 @@ Each distribution has its own trust root. The owner generates Ed25519 release ke
 | Archive size and SHA-256 must match the signed entry before extraction. The release's distribution, command, version, Pi version, and lock digest must match it after extraction | `downloadArchive`, `updateDistribution` | Implemented |
 | Downgrades offered by a channel are refused | `updateDistribution` | Implemented |
 | `piship diff` reports any added, removed, or replaced trust key as `high` risk ("Changes who can publish updates") | `packages/core/src/diff/areas/updates.ts` | Implemented |
+| `piship install --sha256 <hex>` refuses an archive whose SHA-256 differs; `--expect-key sha256:<fingerprint>` (repeatable) refuses a release whose lock does not pin each given key. Either refusal installs nothing. `piship inspect` shows the pinned key IDs and fingerprints | `installDistribution` checks, `inspection` `trust` | Implemented (see [Distribution bootstrap](#distribution-bootstrap)) |
 | Rotation with an overlap of releases that pin both keys | Release-bound, no client clock | Implemented (see [Rotation](#rotation)) |
 | Rotation with a time-bounded window, or keys with `notBefore`/`notAfter` | | Not implemented |
 | A revocation list, or a key a client refuses before it activates a release that drops it | | Not implemented |
@@ -62,7 +63,22 @@ A client must pin a key before it can accept a signed channel. Its first trust r
 
 TOFU (accept whatever key the first channel read presents) is not a mode PiShip offers, and it must not become the managed default. `readChannel` has no code path that adds a key, and a release with no pinned keys can never update.
 
-`doctor` lists the active release's trusted key IDs and `sha256:` fingerprints, and any pinned key this installation retired, so an operator can compare them with the fingerprints the owner published. Gap: `install` does not take an expected archive digest or key fingerprint on the command line, so operators compare by hand before installing: `sha256sum` for the archive, and the `updates` section of the release's `piship.lock` for the keys.
+`doctor` lists the active release's trusted key IDs and `sha256:` fingerprints, and any pinned key this installation retired, so an operator can compare them with the fingerprints the owner published. `piship inspect` shows the same key IDs and fingerprints for a manifest, a payload directory (in an extracted release, `<release-dir>/payload`), or an installed ID (the `trust` field with `--json`).
+
+`install` takes the published values on the command line, so the comparison is not done by hand:
+
+```sh
+piship install acmecode-1.0.0-linux-x64.tar.gz \
+  --sha256 <archive-sha256> \
+  --expect-key sha256:<release-key-fingerprint> \
+  --expect-key sha256:<backup-key-fingerprint>
+```
+
+- `--sha256 <hex>` is the archive's SHA-256, 64 hexadecimal characters. It is checked before the archive is extracted. It applies only to an archive: a release or payload directory has no archive digest, and `--sha256` with a directory is refused.
+- `--expect-key sha256:<fingerprint>` can be given more than once. Each given fingerprint must be pinned in the release lock's `updates.trust.keys`. The check is "each given key is pinned", not "exactly these keys": the lock may pin further keys, such as a rotation overlap. To see the whole set, compare `inspect` with the published list.
+- A mismatch fails before anything is installed or activated: no app directory, receipt, or command shim is written. A digest mismatch is `INTEGRITY_FAILED` from release verification; an unpinned key is `INTEGRITY_FAILED` naming the missing fingerprints; a malformed value or `--sha256` with a directory is `CONFIG_INVALID`.
+
+`install.sh` and `install.ps1` do not take these options; run `piship install` with them, or compare by hand (`sha256sum` and `inspect`) before running the script.
 
 ## Rotation
 
@@ -181,6 +197,5 @@ None of these weakens the current guarantees. Each one is a separate change that
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
 2. **Revocation before activation.** Retired keys are recorded per installation, only once it activates the release that drops a key. A client that never activated that release still trusts the key, as in [Compromised-key recovery](#compromised-key-recovery). Refusing a key earlier needs a revocation list the client can authenticate.
 3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
-4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `inspect` (`doctor` shows them for an installed release).
-5. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
-6. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).
+4. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
+5. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).
