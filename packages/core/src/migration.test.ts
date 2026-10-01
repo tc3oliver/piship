@@ -273,10 +273,28 @@ describe("checkStateMigration", () => {
 
   it("refuses unreadable preferences and a newer audit log", () => {
     const dir = populated();
-    write(dir, "config/preferences.json", "{not json");
-    expect(
-      item(checkStateMigration(dir, target(), current), "preferences").current,
-    ).toBe("unreadable");
+    // Damaged preferences cannot be rebuilt: refused, naming the file and
+    // the way out, and never touched.
+    const preferences = join(dir, "config", "preferences.json");
+    for (const damaged of ["{not json", "", '{"schema":"piship-pref', "{}"]) {
+      write(dir, "config/preferences.json", damaged);
+      const refused = item(
+        checkStateMigration(dir, target(), current),
+        "preferences",
+      );
+      expect(refused).toMatchObject({
+        current: "unreadable",
+        verdict: "unsupported",
+        action: "refuse",
+      });
+      expect(refused.reason).toContain(
+        `${preferences} is empty, cut short, or not a preferences file`,
+      );
+      expect(refused.reason).toContain(
+        `move it aside (for example to ${preferences}.damaged)`,
+      );
+      expect(readFileSync(preferences, "utf8")).toBe(damaged);
+    }
     write(dir, "config/preferences.json", { schema: "piship-preferences/v1" });
     write(
       dir,

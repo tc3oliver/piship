@@ -567,7 +567,12 @@ export function checkStateMigration(
       current: schema,
       verdict: "unsupported",
       action: "refuse",
-      reason: `The target reads ${supported.join(", ") || "no version"} of this file, not ${schema}; it would be reinterpreted`,
+      // Damaged user data is never rebuilt or deleted here: the user moves
+      // it aside, and the target then starts without it.
+      reason:
+        schema === "unreadable"
+          ? `${path} is empty, cut short, or not a ${dataClass.name} file, so no release can read it; move it aside (for example to ${path}.damaged) and run the command again, which then starts without it`
+          : `The target reads ${supported.join(", ") || "no version"} of this file, not ${schema}; it would be reinterpreted`,
     });
   }
   const checked = applyStorageTransition(
