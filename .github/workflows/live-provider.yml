@@ -29,6 +29,13 @@ on:
         description: Provider name for the job summary
         type: string
         default: ""
+      model:
+        description: >-
+          Optional LiteLLM model string for this run only (for example
+          openai/gpt-4.1-mini). Overrides the LIVE_PROVIDER_MODEL secret
+          without changing it. Visible on the run page
+        type: string
+        default: ""
       redact-provider:
         description: >-
           Show the provider name as "redacted" in the job summary, the only
@@ -88,7 +95,7 @@ jobs:
           PISHIP_LIVE_PROVIDER_RESULT: ${{ runner.temp }}/live-provider.json
           LIVE_PROVIDER_API_KEY: ${{ secrets.LIVE_PROVIDER_API_KEY }}
           LIVE_PROVIDER_BASE_URL: ${{ secrets.LIVE_PROVIDER_BASE_URL }}
-          LIVE_PROVIDER_MODEL: ${{ secrets.LIVE_PROVIDER_MODEL }}
+          LIVE_PROVIDER_MODEL: ${{ inputs.model || secrets.LIVE_PROVIDER_MODEL }}
         run: |
           if [ -z "$LIVE_PROVIDER_API_KEY" ]; then
             echo "::error::The LIVE_PROVIDER_API_KEY secret is not set"
