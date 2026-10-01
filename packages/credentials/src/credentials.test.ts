@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -243,6 +244,48 @@ describe("platform secret stores", () => {
       code: "CONFIG_INVALID",
     });
   });
+  // A store that exists but cannot be read is unavailable, never absent.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports an unreadable file store or entry as SECRET_STORE_UNAVAILABLE naming the path",
+    async () => {
+      const directory = join(temp, "secrets");
+      const store = new RestrictedFileSecretStore(directory);
+      expect(await store.get("piship:x:absent#1")).toBeNull();
+      await store.put("piship:x:inference#1", secret);
+      const file = join(directory, readdirSync(directory)[0] ?? "");
+      const expectUnavailable = async (path: string) => {
+        const error = await store.get("piship:x:inference#1").then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+        expect(error).toMatchObject({
+          code: "SECRET_STORE_UNAVAILABLE",
+          userAction: expect.stringContaining(directory),
+        });
+        expect((error as PiShipError).message).toContain(path);
+        expect((error as PiShipError).userAction).not.toMatch(/opt in/);
+      };
+      chmodSync(directory, 0o000);
+      try {
+        await expectUnavailable(file);
+      } finally {
+        chmodSync(directory, 0o700);
+      }
+      chmodSync(file, 0o000);
+      try {
+        await expectUnavailable(file);
+      } finally {
+        chmodSync(file, 0o600);
+      }
+      rmSync(file);
+      mkdirSync(file);
+      await expectUnavailable(file);
+      rmSync(file, { recursive: true });
+      writeFileSync(file, "not json", { mode: 0o600 });
+      await expectUnavailable(file);
+      expect(await store.get("piship:x:absent#1")).toBeNull();
+    },
+  );
 });
 
 describe("http-broker credential provider", () => {

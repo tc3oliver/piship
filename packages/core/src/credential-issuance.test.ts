@@ -3,6 +3,7 @@
 // repeats its key, and no logout, change of principal, or switch to a
 // release that cannot read it leaves the key behind.
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -431,4 +432,31 @@ describe("the pending issuance never names a secret to delete", () => {
       await store.delete(planted);
     }
   });
+});
+
+describe("an unreadable file secret store at launch", () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports SECRET_STORE_UNAVAILABLE naming the path, not IDENTITY_REQUIRED",
+    async () => {
+      await login();
+      const secrets = path("secrets");
+      chmodSync(secrets, 0o000);
+      try {
+        const error = await open()
+          .activate()
+          .then(
+            () => null,
+            (caught: unknown) => caught,
+          );
+        expect(error).toMatchObject({
+          code: "SECRET_STORE_UNAVAILABLE",
+          message: expect.stringContaining(secrets),
+          userAction: expect.stringContaining(secrets),
+        });
+      } finally {
+        chmodSync(secrets, 0o700);
+      }
+      await expect(open().activate()).resolves.toBeTruthy();
+    },
+  );
 });

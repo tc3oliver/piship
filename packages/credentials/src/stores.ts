@@ -1,13 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
 import { writeFileAtomic } from "./atomic.js";
@@ -53,15 +46,15 @@ function checkRef(ref: string): void {
       },
     );
 }
-function unavailable(kind: string, detail: string): PiShipError {
+function unavailable(
+  kind: string,
+  detail: string,
+  userAction = "Unlock or install the platform secret store, or explicitly opt in to the restricted file fallback",
+): PiShipError {
   return new PiShipError(
     "SECRET_STORE_UNAVAILABLE",
     `${kind} secret store failed: ${detail.trim().split("\n")[0] || "unknown error"}`,
-    {
-      component: "secret-store",
-      userAction:
-        "Unlock or install the platform secret store, or explicitly opt in to the restricted file fallback",
-    },
+    { component: "secret-store", userAction },
   );
 }
 // Secrets are stored base64url-encoded so every backend handles them as
@@ -572,22 +565,34 @@ export class RestrictedFileSecretStore implements SecretStore {
   }
   async get(ref: string): Promise<SecretValue | null> {
     const path = this.#path(ref);
-    if (!existsSync(path)) return null;
+    // Only a missing entry is absent. An entry or directory that exists but
+    // cannot be read is an unavailable store, never "not signed in".
+    const unreadable = (detail: string) =>
+      unavailable(
+        this.description,
+        `cannot read ${path}: ${detail}`,
+        `Give your user owner-only access to ${this.directory} and its files (chmod 700 on the directory, 600 on the files), or remove an entry that is not a valid secret file and sign in again`,
+      );
+    const code = (error: unknown) =>
+      (error as NodeJS.ErrnoException).code ?? (error as Error).message;
+    let mode: number;
+    try {
+      mode = statSync(path).mode;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw unreadable(code(error));
+    }
     if (this.#platform === "win32") this.#secureWindows();
-    else if (statSync(path).mode & 0o077)
-      throw unavailable(
-        this.description,
-        "secret file permissions are not owner-only",
-      );
-    const record = JSON.parse(readFileSync(path, "utf8")) as {
-      ref?: string;
-      value?: string;
-    };
-    if (record.ref !== ref || typeof record.value !== "string")
-      throw unavailable(
-        this.description,
-        "secret file does not match its reference",
-      );
+    else if (mode & 0o077)
+      throw unreadable("secret file permissions are not owner-only");
+    let record: { ref?: string; value?: string };
+    try {
+      record = JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      throw unreadable(code(error));
+    }
+    if (record?.ref !== ref || typeof record.value !== "string")
+      throw unreadable("secret file does not match its reference");
     return decode(record.value);
   }
   async delete(ref: string): Promise<void> {
