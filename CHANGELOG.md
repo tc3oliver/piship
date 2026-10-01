@@ -12,6 +12,7 @@ Preview milestone, to be published as a GitHub pre-release from tag `v0.7.1` aft
 
 ### Behavior and contract changes
 
+- A required Streamable HTTP MCP server that can never start (a runtime credential it cannot receive, or a host the private-only network refuses) now fails `validate`, `lock`, and `build` when every URL involved is plain; with a variable involved, or for an optional server, `validate` warns (#168).
 - `piship inspect` prints a summary by default; its JSON now needs `--json`. `piship test` and `piship doctor` print human summaries and take `--json` (#161).
 - Update sources: redirects are followed only within the same origin (at most 5), HTTP 429 is retryable with `Retry-After`, and a local clock that is ahead is named (#161).
 - Broker requests (acquire, renewal, revoke) and gateway requests carry an additive `PiShip-Client` header with the distribution, its version, the PiShip version, and the protocol version, so a broker or gateway can refuse releases it no longer supports; PiShip itself never decides anything from it (decision 31, #162).
@@ -38,6 +39,7 @@ Preview milestone, to be published as a GitHub pre-release from tag `v0.7.1` aft
 
 ### Fixed
 
+- An unset `${VAR}` in `network.tls.additionalCA` stops `update` with the same named-variable `CONFIG_UNAVAILABLE` launch gives, before any request; the declared CA is never silently dropped (#169).
 - Every command takes `--help`; raw EISDIR, ENOENT, and EEXIST failures become PiShip errors with actions; `config explain` shows the manifest schema and governance rows; `doctor` no longer reports an unusable session, a dead issuer, or itself as healthy; `update`, `rollback`, and `build` show progress on a terminal; an invalid user policy names its file; `init`, `build`, and `install` end with the next step and a PATH line (#161).
 - `@piship/adapter-conformance` adds `testCredentialBroker` and `testAuditCollector`, to check a company's own broker and audit collector against what PiShip sends (#162).
 - Documentation: a key rotation and compromised-key runbook, a separate maintainer release checklist, one migration table, exact `network.allowHosts` semantics, one `AuditSink` definition, an onboarding path in the README, and the reference README's services and prerequisites (#162).
