@@ -306,10 +306,12 @@ export async function readChannel(
     readonly fetcher?: typeof fetch;
   },
 ): Promise<{ readonly metadata: ChannelMetadata; readonly keyId: string }> {
+  const answer: { date?: number } = {};
   const bytes = await readSourceFile(
     source,
     `${channel}.json`,
     options.fetcher,
+    answer,
   );
   const signature = await readSourceFile(
     source,
@@ -380,11 +382,28 @@ export async function readChannel(
       `Channel metadata is for ${metadata.distribution}/${metadata.channel}, not ${options.distribution}/${channel}`,
     );
   const now = (options.now ?? (() => new Date()))();
-  if (!(Date.parse(metadata.expires) > now.getTime()))
+  const expires = Date.parse(metadata.expires);
+  if (!(expires > now.getTime())) {
+    // By the source's own clock the metadata is still valid: this
+    // computer's clock is ahead, and re-signing would not help.
+    if (answer.date !== undefined && expires > answer.date)
+      throw new PiShipError(
+        "UPDATE_FAILED",
+        `This computer's clock (${now.toISOString()}) is ahead of the update source's (${new Date(answer.date).toISOString()}): the channel metadata is valid until ${metadata.expires}`,
+        {
+          userAction:
+            "Correct this computer's date and time (turn on automatic time), then run update again",
+        },
+      );
     throw new PiShipError(
       "INTEGRITY_FAILED",
-      `Channel metadata expired at ${metadata.expires}; the source must re-sign it`,
+      `Channel metadata expired at ${metadata.expires} (this computer's clock reads ${now.toISOString()})`,
+      {
+        userAction:
+          "If this computer's clock is wrong, correct it; otherwise the publisher must re-sign the channel (piship sign-channel)",
+      },
     );
+  }
   if (
     !Number.isSafeInteger(metadata.sequence) ||
     metadata.sequence < (options.minSequence ?? 0)

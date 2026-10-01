@@ -2,7 +2,7 @@
 // files and release archives from it with size and time limits.
 import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import { PiShipError, redact } from "@piship/contracts";
+import { PiShipError, parseRetryAfter, redact } from "@piship/contracts";
 import { sha256File } from "../archive.js";
 import type { ChannelRelease } from "./channel.js";
 
@@ -55,6 +55,15 @@ async function saveBody(
   }
 }
 
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+
+/**
+ * GET `url` from the update source. A redirect is followed only within the
+ * source's origin (same scheme, host, and port), at most five times: another
+ * origin is never contacted, because only the declared source host is let
+ * through a private-only network and the channel's trust is pinned to it.
+ */
 async function fetchSource(
   url: URL,
   name: string,
@@ -62,39 +71,90 @@ async function fetchSource(
   timeout: number,
 ): Promise<Response> {
   checkSourceUrl(url);
-  let response: Response;
-  try {
-    response = await fetcher(url, {
-      redirect: "error",
-      signal: AbortSignal.timeout(timeout),
-    });
-  } catch (error) {
-    if ((error as Error).name === "TimeoutError")
+  const signal = AbortSignal.timeout(timeout);
+  let target = url;
+  for (let hop = 0; ; hop += 1) {
+    let response: Response;
+    try {
+      response = await fetcher(target, { redirect: "manual", signal });
+    } catch (error) {
+      if ((error as Error).name === "TimeoutError")
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `Update source did not answer for ${name} within ${timeout / 1000} s`,
+          { retryable: true },
+        );
+      throw error;
+    }
+    if (REDIRECTS.has(response.status)) {
+      await response.body?.cancel().catch(() => {});
+      const location = response.headers.get("location");
+      let next: URL | undefined;
+      try {
+        next = location ? new URL(location, target) : undefined;
+      } catch {
+        next = undefined;
+      }
+      if (!next)
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `Update source answered HTTP ${response.status} for ${name} without a valid Location`,
+        );
+      if (next.origin !== url.origin)
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `Update source redirected ${name} to another origin (${next.origin}); PiShip follows redirects only within ${url.origin}`,
+          {
+            userAction:
+              "Serve the channel files and archives from the update source's own origin, or set updates.source (or --from) to the URL they are served from",
+          },
+        );
+      if (hop + 1 > MAX_REDIRECTS)
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `Update source redirected ${name} more than ${MAX_REDIRECTS} times`,
+        );
+      checkSourceUrl(next);
+      target = next;
+      continue;
+    }
+    if (!response.ok || !response.body) {
+      await response.body?.cancel().catch(() => {});
+      const retryAfterMs =
+        response.status === 429 || response.status === 503
+          ? parseRetryAfter(response.headers.get("retry-after"))
+          : undefined;
       throw new PiShipError(
         "UPDATE_FAILED",
-        `Update source did not answer for ${name} within ${timeout / 1000} s`,
-        { retryable: true },
+        `Update source returned HTTP ${response.status} for ${name}${response.status === 429 ? " (rate limited)" : ""}`,
+        {
+          retryable: response.status >= 500 || response.status === 429,
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+          ...(response.status === 429
+            ? { userAction: "Wait, then run update again" }
+            : {}),
+        },
       );
-    throw error;
+    }
+    return response;
   }
-  if (!response.ok || !response.body)
-    throw new PiShipError(
-      "UPDATE_FAILED",
-      `Update source returned HTTP ${response.status} for ${name}`,
-      { retryable: response.status >= 500 },
-    );
-  return response;
 }
 
-/** Reads a small file from a directory or an https (or loopback http) source. */
+/**
+ * Reads a small file from a directory or an https (or loopback http) source.
+ * `answer.date` receives the source's HTTP `Date`, when it sent one.
+ */
 export async function readSourceFile(
   source: string,
   name: string,
   fetcher: typeof fetch = fetch,
+  answer?: { date?: number },
 ): Promise<Buffer> {
   if (isUrlSource(source)) {
     const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
     const response = await fetchSource(url, name, fetcher, METADATA_TIMEOUT_MS);
+    const date = Date.parse(response.headers.get("date") ?? "");
+    if (answer && !Number.isNaN(date)) answer.date = date;
     const declared = Number(response.headers.get("content-length"));
     if (declared > MAX_METADATA_BYTES) throw tooLarge(name, MAX_METADATA_BYTES);
     const chunks: Buffer[] = [];

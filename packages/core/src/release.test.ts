@@ -2340,6 +2340,86 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     expect(readFileSync(out).length).toBe(entry.bytes);
   });
 
+  it("follows redirects only within the source origin, honors 429 Retry-After, and names a clock that is ahead", async () => {
+    const { channelDir } = await channel();
+    const serve = (url: URL, headers: Record<string, string> = {}) => {
+      const file = join(channelDir, url.pathname.split("/").pop() as string);
+      return new Response(readFileSync(file), { headers });
+    };
+    const base = "https://updates.example.test/acmepi";
+    const requested: string[] = [];
+    // Same origin: /acmepi/x -> /mirror/x is followed.
+    const sameOrigin = (async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requested.push(url.href);
+      expect(init?.redirect).toBe("manual");
+      return url.pathname.startsWith("/acmepi/")
+        ? new Response(null, {
+            status: 302,
+            headers: { location: `/mirror/${url.pathname.split("/").pop()}` },
+          })
+        : serve(url);
+    }) as typeof fetch;
+    await expect(
+      readChannel(base, "stable", { ...options, fetcher: sameOrigin }),
+    ).resolves.toBeTruthy();
+    expect(requested).toContain(
+      "https://updates.example.test/mirror/stable.json",
+    );
+    // Another origin is never contacted.
+    const contacted: string[] = [];
+    const crossOrigin = (async (input: URL | string) => {
+      const url = new URL(String(input));
+      contacted.push(url.host);
+      return url.host === "updates.example.test"
+        ? new Response(null, {
+            status: 301,
+            headers: { location: "https://cdn.example.test/stable.json" },
+          })
+        : serve(url);
+    }) as typeof fetch;
+    const redirected = await rejection(
+      readChannel(base, "stable", { ...options, fetcher: crossOrigin }),
+    );
+    expect(redirected.code).toBe("UPDATE_FAILED");
+    expect(redirected.message).toContain(
+      "redirected stable.json to another origin (https://cdn.example.test)",
+    );
+    expect(contacted).toEqual(["updates.example.test"]);
+    // 429 is retryable and carries Retry-After.
+    const limited = (async () =>
+      new Response("slow down", {
+        status: 429,
+        headers: { "retry-after": "120" },
+      })) as unknown as typeof fetch;
+    const rateLimited = await rejection(
+      readChannel(base, "stable", { ...options, fetcher: limited }),
+    );
+    expect(rateLimited).toMatchObject({
+      code: "UPDATE_FAILED",
+      retryable: true,
+      retryAfterMs: 120_000,
+    });
+    // The source's clock says the metadata is still valid: this computer's
+    // clock is ahead, and the publisher is not blamed.
+    const dated = (async (input: URL | string) =>
+      serve(new URL(String(input)), {
+        date: "Tue, 02 Jun 2026 00:00:00 GMT",
+      })) as typeof fetch;
+    const ahead = await rejection(
+      readChannel(base, "stable", {
+        ...options,
+        fetcher: dated,
+        now: () => new Date("2026-08-01T00:00:00Z"),
+      }),
+    );
+    expect(ahead.code).toBe("UPDATE_FAILED");
+    expect(ahead.message).toContain(
+      "This computer's clock (2026-08-01T00:00:00.000Z) is ahead of the update source's (2026-06-02T00:00:00.000Z)",
+    );
+    expect(ahead.userAction).toContain("Correct this computer's date and time");
+  });
+
   it("downloadArchive refuses unsafe names and digest mismatches", async () => {
     const { channelDir, signed } = await channel();
     const entry = signed.metadata
