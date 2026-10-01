@@ -86,6 +86,12 @@ export interface AccessOptions {
    * holds it there (with its locks). Never set in production.
    */
   readonly onPhase?: (phase: AccessPhase) => void | Promise<void>;
+  /**
+   * How long one call into an identity or credential adapter may take,
+   * interactive ones included. Tests shorten it; production leaves it unset
+   * for `ADAPTER_CALL_TIMEOUT_MS` and `ADAPTER_INTERACTIVE_TIMEOUT_MS`.
+   */
+  readonly adapterTimeoutMs?: number;
 }
 
 export interface ActivatedAccess {

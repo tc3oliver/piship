@@ -38,6 +38,7 @@ export {
   type CredentialMode,
   type CredentialProvider,
   formatError,
+  type IdentityCallContext,
   type IdentityProvider,
   type IdentitySession,
   isPiShipError,

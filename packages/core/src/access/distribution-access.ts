@@ -323,6 +323,7 @@ export class DistributionAccess {
         path,
         kind,
         this.#context(),
+        this.options.adapterTimeoutMs,
       );
     } catch (error) {
       this.#metric((metrics) =>
@@ -555,6 +556,15 @@ export class DistributionAccess {
     else if (identity.mode === "adapter")
       this.#identity = normalizedIdentityProvider(
         await this.#loadAdapter<IdentityProvider>(identity.adapter, "identity"),
+        {
+          name: identity.adapter,
+          ...(this.options.adapterTimeoutMs
+            ? {
+                timeoutMs: this.options.adapterTimeoutMs,
+                loginTimeoutMs: this.options.adapterTimeoutMs,
+              }
+            : {}),
+        },
       );
     else
       this.#identity = new OidcPkceIdentityProvider({

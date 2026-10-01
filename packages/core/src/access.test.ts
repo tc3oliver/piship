@@ -736,6 +736,30 @@ describe("credential adapters", () => {
       },
     );
   });
+
+  it("stops waiting for an adapter module or factory that never settles", {
+    timeout: 5_000,
+  }, async () => {
+    write("factory.mjs", "export default () => new Promise(() => {});");
+    await expect(
+      DistributionAccess.open({
+        ...open("./adapters/factory.mjs").options,
+        adapterTimeoutMs: 50,
+      }).activate(),
+    ).rejects.toMatchObject({
+      code: "CONFIG_UNAVAILABLE",
+      retryable: true,
+      message:
+        "The credential adapter ./adapters/factory.mjs did not load within 1 s",
+    });
+    write("top-level.mjs", "await new Promise(() => {});");
+    await expect(
+      DistributionAccess.open({
+        ...open("./adapters/top-level.mjs").options,
+        adapterTimeoutMs: 50,
+      }).activate(),
+    ).rejects.toMatchObject({ code: "CONFIG_UNAVAILABLE", retryable: true });
+  });
 });
 
 describe("access lifecycle events and identity refresh (fixtures)", () => {

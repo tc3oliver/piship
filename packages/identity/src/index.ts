@@ -1,4 +1,7 @@
 import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_INTERACTIVE_TIMEOUT_MS,
+  callWithDeadline,
   type IdentityProvider,
   type IdentitySession,
   PiShipError,
@@ -164,13 +167,31 @@ export function isWorkloadIdentityProvider(
   return (provider as { interactive?: unknown }).interactive === false;
 }
 
+/** The deadlines `normalizedIdentityProvider` applies (tests shorten them). */
+export interface IdentityAdapterDeadlines {
+  /** Names the adapter in a timeout, such as its path in the manifest. */
+  readonly name?: string;
+  /** `refresh()`, `logout()`, and a workload's `login()`. */
+  readonly timeoutMs?: number;
+  /** An interactive `login()`, unless the caller passed `timeoutMs`. */
+  readonly loginTimeoutMs?: number;
+}
+
 /**
  * Wrap an adapter so every session it returns is normalized and a refresh
  * keeps the signed-in principal. An `interactive` declaration other than a
  * boolean is refused, so a typo never changes how a session is obtained.
+ *
+ * Every call has a deadline and receives a signal that aborts at it: a
+ * workload `login()`, `refresh()`, and `logout()` have
+ * `ADAPTER_CALL_TIMEOUT_MS`, an interactive `login()` the caller's
+ * `timeoutMs` or `ADAPTER_INTERACTIVE_TIMEOUT_MS`. A call that runs past it
+ * fails retryably with `GATEWAY_UNREACHABLE` naming the adapter and the
+ * call, even if the adapter never settles.
  */
 export function normalizedIdentityProvider(
   provider: IdentityProvider,
+  deadlines: IdentityAdapterDeadlines = {},
 ): IdentityProvider {
   const interactive = (provider as { interactive?: unknown }).interactive;
   if (interactive !== undefined && typeof interactive !== "boolean")
@@ -179,22 +200,92 @@ export function normalizedIdentityProvider(
       "The identity adapter's interactive declaration must be true or false",
       { component: "identity" },
     );
+  const name = deadlines.name ?? "";
+  const subject = `The identity adapter${name ? ` ${name}` : ""}`;
+  const bounded = <T>(
+    phase: "login" | "refresh" | "logout",
+    timeoutMs: number,
+    signal: AbortSignal | undefined,
+    call: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> =>
+    callWithDeadline(call, {
+      timeoutMs,
+      ...(signal ? { signal } : {}),
+      timedOut: () =>
+        new PiShipError(
+          "GATEWAY_UNREACHABLE",
+          `${subject} did not answer ${phase}() within ${Math.ceil(timeoutMs / 1000)} s`,
+          {
+            component: "identity",
+            retryable: true,
+            userAction:
+              "Check the service the identity adapter signs in with, then try again",
+            sanitizedDetail: {
+              ...(name ? { adapter: name } : {}),
+              phase,
+              reason: "timeout",
+              timeoutMs,
+            },
+          },
+        ),
+      cancelled: () =>
+        phase === "login"
+          ? new PiShipError("IDENTITY_REQUIRED", "Sign-in was cancelled", {
+              component: "identity",
+            })
+          : new PiShipError(
+              "GATEWAY_UNREACHABLE",
+              `${subject}'s ${phase}() was cancelled`,
+              {
+                component: "identity",
+                sanitizedDetail: {
+                  ...(name ? { adapter: name } : {}),
+                  phase,
+                  reason: "cancelled",
+                },
+              },
+            ),
+    });
+  const callTimeoutMs = deadlines.timeoutMs ?? ADAPTER_CALL_TIMEOUT_MS;
   const refresh = provider.refresh?.bind(provider);
   const logout = provider.logout?.bind(provider);
   return {
     kind: provider.kind,
     ...(interactive === false ? { interactive } : {}),
-    login: async (ctx) => normalizeIdentitySession(await provider.login(ctx)),
+    login: async (ctx) =>
+      normalizeIdentitySession(
+        await bounded(
+          "login",
+          interactive === false
+            ? callTimeoutMs
+            : (ctx.timeoutMs ??
+                deadlines.loginTimeoutMs ??
+                ADAPTER_INTERACTIVE_TIMEOUT_MS),
+          ctx.signal,
+          (signal) => provider.login({ ...ctx, signal }),
+        ),
+      ),
     ...(refresh
       ? {
-          refresh: async (session: IdentitySession) =>
+          refresh: async (session: IdentitySession, ctx) =>
             assertSamePrincipal(
-              normalizeIdentitySession(await refresh(session)),
+              normalizeIdentitySession(
+                await bounded("refresh", callTimeoutMs, ctx?.signal, (signal) =>
+                  refresh(session, { signal }),
+                ),
+              ),
               session,
             ),
         }
       : {}),
-    ...(logout ? { logout } : {}),
+    ...(logout
+      ? {
+          logout: (session: IdentitySession, ctx) =>
+            bounded("logout", callTimeoutMs, ctx?.signal, (signal) =>
+              logout(session, { signal }),
+            ),
+        }
+      : {}),
   };
 }
 

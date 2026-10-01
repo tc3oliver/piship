@@ -707,4 +707,29 @@ describe("workload identity (fixtures)", () => {
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     expect(brokerRequests()).toEqual([]);
   });
+
+  it("stops waiting for an interactive adapter's login that never answers and names the adapter", {
+    timeout: 5_000,
+  }, async () => {
+    writeFileSync(
+      join(temp, "resources", "adapters", "interactive.mjs"),
+      WORKLOAD_ADAPTER.replace("interactive: false,", ""),
+    );
+    source().hang = true;
+    const access = DistributionAccess.open({
+      ...open(new MemorySecretStore(), {
+        mode: "adapter",
+        adapter: "./adapters/interactive.mjs",
+      }).options,
+      adapterTimeoutMs: 50,
+    });
+    await expect(access.login({ openUrl: () => {} })).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      message:
+        "The identity adapter ./adapters/interactive.mjs did not answer login() within 1 s",
+    });
+    expect(source().calls).toBe(1);
+    expect(brokerRequests()).toEqual([]);
+  });
 });

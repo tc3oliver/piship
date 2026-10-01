@@ -166,3 +166,102 @@ describe("workload identity adapters", () => {
       );
   });
 });
+
+describe("identity adapter deadlines", () => {
+  const signedIn = { subject: "user-1", issuer: "https://idp.example" };
+  // An adapter whose every call never settles, recording the signal it got.
+  const hanging = (signals: AbortSignal[]): IdentityProvider => ({
+    kind: "adapter",
+    login: (ctx) => {
+      if (ctx.signal) signals.push(ctx.signal);
+      return new Promise(() => undefined);
+    },
+    refresh: (_session, ctx) => {
+      if (ctx?.signal) signals.push(ctx.signal);
+      return new Promise(() => undefined);
+    },
+    logout: (_session, ctx) => {
+      if (ctx?.signal) signals.push(ctx.signal);
+      return new Promise(() => undefined);
+    },
+  });
+  const timedOut = (phase: string) => ({
+    code: "GATEWAY_UNREACHABLE",
+    retryable: true,
+    message: `The identity adapter ./adapters/sso.mjs did not answer ${phase}() within 1 s`,
+    sanitizedDetail: expect.objectContaining({
+      adapter: "./adapters/sso.mjs",
+      phase,
+      reason: "timeout",
+    }),
+  });
+
+  it("ends login, refresh, and logout of an adapter that never answers, and aborts its signal", {
+    timeout: 2_000,
+  }, async () => {
+    const signals: AbortSignal[] = [];
+    const provider = normalizedIdentityProvider(hanging(signals), {
+      name: "./adapters/sso.mjs",
+      timeoutMs: 20,
+      loginTimeoutMs: 30,
+    });
+    await expect(provider.login({ openUrl: () => {} })).rejects.toMatchObject(
+      timedOut("login"),
+    );
+    await expect(provider.refresh?.(signedIn)).rejects.toMatchObject(
+      timedOut("refresh"),
+    );
+    await expect(provider.logout?.(signedIn)).rejects.toMatchObject(
+      timedOut("logout"),
+    );
+    expect(signals).toHaveLength(3);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("gives an interactive login the caller's timeout, and a workload login the call deadline", {
+    timeout: 2_000,
+  }, async () => {
+    const interactive = normalizedIdentityProvider(hanging([]), {
+      timeoutMs: 60_000,
+      loginTimeoutMs: 60_000,
+    });
+    await expect(
+      interactive.login({ openUrl: () => {}, timeoutMs: 20 }),
+    ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE", retryable: true });
+    const workload = normalizedIdentityProvider(
+      { ...hanging([]), interactive: false } as IdentityProvider,
+      { timeoutMs: 20, loginTimeoutMs: 60_000 },
+    );
+    await expect(workload.login({ openUrl: () => {} })).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+    });
+  });
+
+  it("ends a login the caller cancels even when the adapter ignores the signal", {
+    timeout: 2_000,
+  }, async () => {
+    const provider = normalizedIdentityProvider(hanging([]));
+    const controller = new AbortController();
+    const login = provider.login({
+      openUrl: () => {},
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(login).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      retryable: false,
+    });
+  });
+
+  it("keeps working with an adapter's refresh and logout that ignore the signal", async () => {
+    const provider = normalizedIdentityProvider({
+      kind: "adapter",
+      login: async () => signedIn,
+      refresh: async (session) => session,
+      logout: async () => {},
+    });
+    await expect(provider.refresh?.(signedIn)).resolves.toMatchObject(signedIn);
+    await expect(provider.logout?.(signedIn)).resolves.toBeUndefined();
+  });
+});
