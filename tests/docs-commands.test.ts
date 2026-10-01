@@ -31,4 +31,29 @@ describe("documented CLI commands", () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  // `piship test` runs the acceptance launch against the real state home, so
+  // a documented install after it fails unless it adopts that state.
+  it("adopt the state that piship test created when installing after it", () => {
+    const files = execFileSync("git", ["ls-files", "-z", "*.md"], {
+      cwd: root,
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean);
+    const offenders = files.flatMap((file) => {
+      const lines = readFileSync(join(root, file), "utf8").split("\n");
+      const tested = lines.findIndex((line) => /\bbin\.js test\b/.test(line));
+      if (tested < 0) return [];
+      return lines.flatMap((line, index) =>
+        index > tested &&
+        /piship\.mjs install\b|install\.sh\b/.test(line) &&
+        /^\s*(?:node|sh)\s/.test(line) &&
+        !line.includes("--use-existing-state")
+          ? [`${file}:${index + 1}: ${line.trim()}`]
+          : [],
+      );
+    });
+    expect(offenders).toEqual([]);
+  });
 });

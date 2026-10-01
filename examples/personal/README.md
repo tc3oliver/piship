@@ -21,7 +21,7 @@ node packages/cli/dist/bin.js validate examples/personal/piship.yaml
 node packages/cli/dist/bin.js lock examples/personal/piship.yaml
 node packages/cli/dist/bin.js test examples/personal/piship.yaml
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
-node dist/mypi/piship.mjs install dist/mypi
+node dist/mypi/piship.mjs install dist/mypi --use-existing-state
 ~/.local/bin/mypi --version
 ~/.local/bin/mypi --smoke
 ~/.local/bin/mypi doctor
@@ -31,9 +31,9 @@ node dist/mypi/piship.mjs inspect mypi
 node dist/mypi/piship.mjs uninstall mypi
 ```
 
-On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages.
+`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state. Install refuses existing state unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages.
 
-`--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. Repeating it reports the same session ID with `resumed: true`. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
+`--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. It reports the same session ID with `resumed: true` on every run after the first, and the first `mypi --smoke` here already resumes the session that `piship test` created. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
 
 ## Release, update, and rollback
 
@@ -47,13 +47,13 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    node packages/cli/dist/bin.js keygen ~/mypi-keys/release.pem --id mypi-release
    ```
 
-2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release:
+2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release. Uninstall any earlier `mypi` install first; uninstall keeps state, so pass `--use-existing-state` to adopt it:
 
    ```bash
    node packages/cli/dist/bin.js lock /tmp/mypi/piship.yaml
    node packages/cli/dist/bin.js release /tmp/mypi/piship.yaml
    tar -xzf dist/releases/mypi-1.0.0-<target>.tar.gz -C /tmp
-   sh /tmp/mypi-1.0.0-<target>/install.sh
+   sh /tmp/mypi-1.0.0-<target>/install.sh --use-existing-state
    ```
 
 3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
