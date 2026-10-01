@@ -138,6 +138,9 @@ const WINDOWS_REQUIRED = [
   "LOGONSERVER",
   "SYSTEMDRIVE",
   "SYSTEMROOT",
+  // Windows reports this one with its own casing, and the probe compares
+  // names exactly.
+  "SystemRoot",
   "TEMP",
   "USERDOMAIN",
   "USERNAME",

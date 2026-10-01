@@ -215,15 +215,17 @@ describe("networkChecks", () => {
     const dead = createServer();
     const deadPort = await listen(dead);
     dead.close();
+    // Lower-case names first: on Windows they are the same variables, so
+    // clearing them after setting HTTPS_PROXY would clear it too.
+    vi.stubEnv("https_proxy", undefined);
+    vi.stubEnv("http_proxy", undefined);
+    vi.stubEnv("no_proxy", undefined);
+    vi.stubEnv("HTTP_PROXY", undefined);
+    vi.stubEnv("NO_PROXY", undefined);
     vi.stubEnv(
       "HTTPS_PROXY",
       `http://proxyuser:proxy-pass-8812@127.0.0.1:${deadPort}`,
     );
-    vi.stubEnv("https_proxy", undefined);
-    vi.stubEnv("HTTP_PROXY", undefined);
-    vi.stubEnv("http_proxy", undefined);
-    vi.stubEnv("NO_PROXY", undefined);
-    vi.stubEnv("no_proxy", undefined);
     const checks = await networkChecks(policy, [
       { label: "gateway", url: `https://127.0.0.1:${tlsPort}/v1` },
       { label: "broker", url: `http://127.0.0.1:${plainPort}/broker` },

@@ -196,11 +196,21 @@ export function pathHint(
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
   const windows = platform === "win32";
+  // Trailing separators are dropped by a scan, not a regular expression, so
+  // a PATH entry of many slashes costs linear time.
+  const trim = (value: string) => {
+    let end = value.length;
+    while (
+      end > 0 &&
+      (value[end - 1] === "/" || (windows && value[end - 1] === "\\"))
+    )
+      end -= 1;
+    return value.slice(0, end);
+  };
   const same = (a: string, b: string) =>
     windows
-      ? a.replace(/[\\/]+$/, "").toLowerCase() ===
-        b.replace(/[\\/]+$/, "").toLowerCase()
-      : a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+      ? trim(a).toLowerCase() === trim(b).toLowerCase()
+      : trim(a) === trim(b);
   const path = env.PATH ?? env.Path ?? "";
   if (
     path.split(windows ? ";" : ":").some((entry) => entry && same(entry, bin))
