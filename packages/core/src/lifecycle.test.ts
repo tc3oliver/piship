@@ -104,10 +104,13 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
+type Key = { readonly id: string; readonly publicKey: string };
+
 function manifestSource(
   version: string,
   rollback: boolean,
   storage?: "file" | "system",
+  keys: readonly Key[] = [KEY],
 ): string {
   // With a storage provider, a personal access section whose runtime
   // credential (a local secret) lives in that store.
@@ -153,20 +156,19 @@ updates:
   rollback: ${rollback}
   trust:
     keys:
-      - id: ${KEY.id}
-        publicKey: ${KEY.publicKey}
-`;
+${keys.map((key) => `      - id: ${key.id}\n        publicKey: ${key.publicKey}\n`).join("")}`;
 }
 
 function project(
   version: string,
   rollback = true,
   storage?: "file" | "system",
+  keys?: readonly Key[],
 ): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version, rollback, storage));
+  writeFileSync(path, manifestSource(version, rollback, storage, keys));
   lockManifest(path);
   return path;
 }
@@ -259,8 +261,9 @@ async function release(
   version: string,
   rollback = true,
   storage?: "file" | "system",
+  keys?: readonly Key[],
 ) {
-  const path = project(version, rollback, storage);
+  const path = project(version, rollback, storage, keys);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -270,13 +273,18 @@ async function release(
   });
 }
 
-function sign(directory: string, archives: string[], channel = "stable") {
+function sign(
+  directory: string,
+  archives: string[],
+  channel = "stable",
+  key: typeof KEY = KEY,
+) {
   return signChannel({
     directory,
     channel,
     archives,
-    privateKeyPem: KEY.privateKeyPem,
-    keyId: KEY.id,
+    privateKeyPem: key.privateKeyPem,
+    keyId: key.id,
   });
 }
 
@@ -1153,6 +1161,52 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       /sequence 1 is older than the 2 already seen/,
     );
     expect(readInstallReceipt(ID).channelSequences).toEqual({ stable: 2 });
+  });
+
+  // The trusted keys are the active release's locked updates.trust.keys, so
+  // a rotation's overlap window is the releases that pin both keys.
+  it("rotates the release key through an overlap release and then refuses the retired key", async () => {
+    const next = generateSigningKey("test-release-next");
+    const a = await release("1.0.0", true, undefined, [KEY]);
+    const b = await release("1.1.0", true, undefined, [KEY, next]);
+    const c = await release("1.2.0", true, undefined, [next]);
+    const channelDir = temp("piship-channel-");
+    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    await installDistribution(a.archive);
+    // A trusts only the current key: the next key is not yet trusted.
+    await sign(channelDir, [b.archive], "stable", next);
+    const early = await rejection(updateDistribution(ID, opts));
+    expect(early.code).toBe("INTEGRITY_FAILED");
+    expect(early.message).toMatch(
+      /Signature key test-release-next is not trusted; trusted keys: test-release$/,
+    );
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // The overlap release B, signed with the current key.
+    await sign(channelDir, [b.archive]);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: KEY.id,
+    });
+    // B pins both keys and accepts the next one.
+    await sign(channelDir, [c.archive], "stable", next);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.2.0",
+      keyId: next.id,
+    });
+    // C pins only the next key: the retired key is refused, even with a
+    // higher sequence.
+    await sign(channelDir, [c.archive]);
+    const retired = await rejection(updateDistribution(ID, opts));
+    expect(retired.code).toBe("INTEGRITY_FAILED");
+    expect(retired.message).toMatch(
+      /Signature key test-release is not trusted; trusted keys: test-release-next$/,
+    );
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.2.0",
+      channelSequences: { stable: 3 },
+    });
   });
 
   it("refuses a release whose launch check fails", async () => {
