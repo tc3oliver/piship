@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { processHostToken } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   age,
@@ -29,6 +30,7 @@ import {
   LIFECYCLE_LOCK_SCHEMA,
   acquireLifecycleLock,
 } from "./lifecycle-lock.js";
+import { processIdentity } from "../process-identity.js";
 
 // Stops the live processes `livePid` starts.
 useLifecycleHomes();
@@ -51,14 +53,17 @@ afterEach(() => {
 });
 
 class Busy extends Error {
-  constructor(readonly pid: number | null) {
+  constructor(
+    readonly pid: number | null,
+    readonly holder?: string,
+  ) {
     super(`busy ${pid}`);
   }
 }
 const acquire = () =>
   acquireLifecycleLock(
     lock,
-    (pid) => new Busy(pid),
+    (pid, holder) => new Busy(pid, holder),
     () => new Error("unavailable"),
   );
 
@@ -144,6 +149,100 @@ describe("lifecycle lock", () => {
     expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(60_000);
     expect(busy().pid).toBe(process.pid);
     hold.release();
+    expect(existsSync(lock)).toBe(false);
+  });
+});
+
+/** A record in the current format, which names its holder's process fully. */
+function identified(fields: {
+  pid: number;
+  identity?: string | null;
+  host?: string;
+  started?: number | null;
+}): string {
+  return JSON.stringify({
+    schema: LIFECYCLE_LOCK_SCHEMA,
+    instance: "instance-x",
+    identity: null,
+    host: processHostToken(),
+    started: null,
+    acquiredAt: new Date().toISOString(),
+    ...fields,
+  });
+}
+
+describe("lifecycle lock holder identity", () => {
+  it("records its holder's start identity, start time, and host", () => {
+    const hold = acquire();
+    const held = JSON.parse(readFileSync(lock, "utf8"));
+    expect(held).toMatchObject({
+      pid: process.pid,
+      identity: processIdentity(process.pid) ?? null,
+      host: processHostToken(),
+      started: Math.round(performance.timeOrigin),
+    });
+    hold.release();
+  });
+
+  it("recovers at once a fresh lock whose process ID now belongs to a process with another start identity", () => {
+    // The holder crashed (or the machine rebooted) and an unrelated process
+    // took its ID; the record's start identity tells them apart.
+    writeFileSync(lock, identified({ pid: livePid(), identity: "1" }));
+    acquire().release();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("waits for a live holder whose start identity matches", () => {
+    const holder = livePid();
+    writeFileSync(
+      lock,
+      identified({ pid: holder, identity: processIdentity(holder) ?? null }),
+    );
+    const error = busy();
+    expect(error.pid).toBe(holder);
+    expect(error.holder).toBe(`process ${holder}`);
+  });
+
+  // Linux records the start identity itself; elsewhere a writer that cannot
+  // read it cheaply (the launcher) records its start time instead.
+  it.runIf(process.platform !== "linux")(
+    "recovers at once a fresh lock whose recorded start time is not the start of the process with its ID",
+    () => {
+      writeFileSync(
+        lock,
+        identified({ pid: livePid(), started: Date.now() - 3_600_000 }),
+      );
+      acquire().release();
+      expect(existsSync(lock)).toBe(false);
+    },
+  );
+
+  it("never judges another host's holder gone by this host's processes, and recovers it only after the lease", () => {
+    const gone = deadPid();
+    writeFileSync(
+      lock,
+      identified({ pid: gone, identity: "1", host: "0123456789ab" }),
+    );
+    const error = busy();
+    expect(error.pid).toBe(gone);
+    expect(error.holder).toBe(`process ${gone} on another host`);
+    age(lock, LIFECYCLE_LOCK_REUSE_MS + 1_000);
+    acquire().release();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("judges a record of an earlier PiShip by its process ID and lease", () => {
+    // Recovered at once when its process is gone, waited for while a process
+    // has its ID (it cannot tell which), and recovered after the lease.
+    writeFileSync(lock, record(deadPid(), "earlier"));
+    acquire().release();
+    const holder = livePid();
+    writeFileSync(lock, record(holder, "earlier"));
+    expect(busy().holder).toBe(`process ${holder}`);
+    writeFileSync(lock, String(holder));
+    expect(busy().holder).toBe(`process ${holder}`);
+    age(lock, LIFECYCLE_LOCK_REUSE_MS + 1_000);
+    acquire().release();
     expect(existsSync(lock)).toBe(false);
   });
 });

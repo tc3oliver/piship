@@ -206,9 +206,12 @@ let cachedHost: string | undefined;
 /**
  * A token for this machine's process IDs: the host name (the convention the
  * audit rotation lock uses) and, on Linux, the PID namespace, since a
- * container sharing a bind mount and a host name still has other IDs.
+ * container sharing a bind mount and a host name still has other IDs. Twelve
+ * hexadecimal characters. Records that name a process (temporary-directory
+ * markers, the lifecycle lock, the launch gate) carry it, so a process ID
+ * from another machine or container is never judged by this one's processes.
  */
-function hostToken(): string {
+export function processHostToken(): string {
   if (cachedHost === undefined) {
     let namespace = "";
     try {
@@ -313,7 +316,7 @@ export function createTemporaryDirectory(
       name: basename(path),
       pid: process.pid,
       instance,
-      host: hostToken(),
+      host: processHostToken(),
       created: new Date().toISOString(),
     };
     // `wx` never follows or replaces an existing entry; the record is one
@@ -433,7 +436,8 @@ export function readTemporaryOwner(
 /** Whether the owner of a directory last refreshed at `mtimeMs` is gone. */
 function abandoned(owner: TemporaryOwner, mtimeMs: number, now: number) {
   if (registry().held.has(owner.instance)) return false;
-  if (owner.host === hostToken() && !processAlive(owner.pid)) return true;
+  if (owner.host === processHostToken() && !processAlive(owner.pid))
+    return true;
   return now - mtimeMs > TEMPORARY_LEASE_MS;
 }
 

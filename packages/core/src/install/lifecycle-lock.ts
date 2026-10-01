@@ -1,19 +1,26 @@
 // The lifecycle lock: one update, rollback, or uninstall per distribution at
-// a time. A lock names its holder's process ID and a random instance ID, and
-// the holder refreshes the lock's mtime while it runs (a lease).
+// a time. A lock names its holder as a runtime lease does: its process ID,
+// its start identity (`processIdentity`) and start time, its host
+// (`processHostToken`), and a random instance ID. The holder refreshes the
+// lock's mtime while it runs (a lease).
 //
-// Who is judged how: a lock whose holder process is gone is stale at once. A
-// lock whose process exists is stale only when the lease ran out, which means
-// the ID belongs to a later, unrelated process that reused it after the
-// holder crashed. Every lifecycle command is one attempt in a fresh process,
-// so unlike the credential lock's waiters it has no earlier observation of
-// the lock to compare with, and the lock's mtime against the wall clock is
-// all it has. That reading is wrong when the clock jumps forward (NTP, a
-// resumed VM) or the machine slept while the holder was alive, and a holder
-// blocked in a synchronous step (a launch check, up to 300 s) cannot
-// refresh. So the bound is far above any step or ordinary correction
-// (LIFECYCLE_LOCK_REUSE_MS), and a holder that loses its lock anyway finds
-// out before it commits (`stillHeld`).
+// Who is judged how (`recordedProcessGone`): a lock of this host whose
+// process is gone, or whose process ID now belongs to a process that started
+// at another time (the holder crashed, or the machine rebooted, and an
+// unrelated process took the ID), is stale at once. A lock whose holder is
+// that same running process is never stale. A lock that cannot be judged so
+// is stale only when the lease ran out: a lock from another host (its process
+// ID means nothing here, so it is never judged by this host's processes), a
+// lock of an earlier PiShip that records only a process ID, or one whose
+// process start cannot be read. Every lifecycle command is one attempt in a
+// fresh process, so unlike the credential lock's waiters it has no earlier
+// observation of the lock to compare with, and the lock's mtime against the
+// wall clock is all it has then. That reading is wrong when the clock jumps
+// forward (NTP, a resumed VM) or the machine slept while the holder was
+// alive, and a holder blocked in a synchronous step (a launch check, up to
+// 300 s) cannot refresh. So the bound is far above any step or ordinary
+// correction (LIFECYCLE_LOCK_REUSE_MS), and a holder that loses its lock
+// anyway finds out before it commits (`stillHeld`).
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
@@ -26,7 +33,12 @@ import {
   utimesSync,
   writeSync,
 } from "node:fs";
-import { abandoned } from "./temporaries.js";
+import { processHostToken } from "@piship/contracts";
+import {
+  type ProcessRecord,
+  processIdentity,
+  recordedProcessGone,
+} from "../process-identity.js";
 
 export const LIFECYCLE_LOCK_SCHEMA = "piship-lifecycle-lock/v1";
 /** A held lock is refreshed this often. */
@@ -43,7 +55,7 @@ const LOCK_HEARTBEAT_MS = 15_000;
  */
 export const LIFECYCLE_LOCK_REUSE_MS = 24 * 60 * 60_000;
 
-interface Holder {
+interface Holder extends Omit<ProcessRecord, "pid"> {
   /** Null when the record names no process (unreadable or foreign). */
   readonly pid: number | null;
   /** Null for a record without one (written before instance IDs). */
@@ -54,6 +66,8 @@ interface Holder {
   /** False for a directory or symlink at the lock's path. */
   readonly regular: boolean;
 }
+
+const UNKNOWN = { identity: null, host: null, started: null } as const;
 
 function readHolder(path: string): Holder | undefined {
   let raw: string;
@@ -70,26 +84,31 @@ function readHolder(path: string): Holder | undefined {
     raw = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    return { pid: null, instance: null, mtimeMs, raw: null, regular };
+    return {
+      pid: null,
+      instance: null,
+      ...UNKNOWN,
+      mtimeMs,
+      raw: null,
+      regular,
+    };
   }
   const pid = (value: unknown) =>
     Number.isSafeInteger(value) && (value as number) > 0
       ? (value as number)
       : null;
+  // A lock written before instance IDs: a bare process ID.
   if (/^\d+$/.test(raw.trim()))
     return {
       pid: pid(Number(raw.trim())),
       instance: null,
+      ...UNKNOWN,
       mtimeMs,
       raw,
       regular,
     };
   try {
-    const record = JSON.parse(raw) as {
-      schema?: unknown;
-      pid?: unknown;
-      instance?: unknown;
-    };
+    const record = JSON.parse(raw) as Record<string, unknown>;
     if (
       record.schema === LIFECYCLE_LOCK_SCHEMA &&
       typeof record.instance === "string"
@@ -97,6 +116,19 @@ function readHolder(path: string): Holder | undefined {
       return {
         pid: pid(record.pid),
         instance: record.instance,
+        // Absent in a record of an earlier PiShip (and of a launcher it
+        // installed): judged by the process ID and the lease alone.
+        identity:
+          typeof record.identity === "string" && record.identity.length <= 128
+            ? record.identity
+            : null,
+        host:
+          typeof record.host === "string" && /^[0-9a-f]{12}$/.test(record.host)
+            ? record.host
+            : null,
+        started: Number.isSafeInteger(record.started)
+          ? (record.started as number)
+          : null,
         mtimeMs,
         raw,
         regular,
@@ -104,7 +136,7 @@ function readHolder(path: string): Holder | undefined {
   } catch {
     // Not a lock record.
   }
-  return { pid: null, instance: null, mtimeMs, raw, regular };
+  return { pid: null, instance: null, ...UNKNOWN, mtimeMs, raw, regular };
 }
 
 /**
@@ -114,13 +146,23 @@ function readHolder(path: string): Holder | undefined {
 function stale(holder: Holder, now = Date.now()): boolean {
   // Not a file this module made: never moved aside or deleted.
   if (!holder.regular) return false;
+  const expired = now - holder.mtimeMs > LIFECYCLE_LOCK_REUSE_MS;
   // Content that cannot be read (a root-owned lock a crashed `sudo` command
   // left) names no process; only the lease can tell.
-  if (holder.raw === null)
-    return now - holder.mtimeMs > LIFECYCLE_LOCK_REUSE_MS;
+  if (holder.raw === null) return expired;
   if (holder.raw === "") return now - holder.mtimeMs > 5_000;
   if (holder.pid === null) return true;
-  return abandoned(holder.pid, holder.mtimeMs, now, LIFECYCLE_LOCK_REUSE_MS);
+  return recordedProcessGone({ ...holder, pid: holder.pid }) ?? expired;
+}
+
+/** Who holds a lock, for an error message. */
+function describeHolder(holder: Holder): string {
+  if (holder.raw === null) return "a holder whose record cannot be read";
+  if (holder.raw === "") return "a holder still writing its record";
+  if (holder.pid === null) return "an unknown holder";
+  return holder.host !== null && holder.host !== processHostToken()
+    ? `process ${holder.pid} on another host`
+    : `process ${holder.pid}`;
 }
 
 /** Create the lock with its whole record, failing with EEXIST if held. */
@@ -184,17 +226,23 @@ export interface LifecycleHold {
 }
 
 /**
- * Take the lock at `path`, or throw `busy(pid)` while a live holder has it.
+ * Take the lock at `path`, or throw `busy(pid, holder)` while a live holder
+ * has it; `holder` describes it for a message ("process 123", "process 123 on
+ * another host"). An error other than an existing lock (EACCES, ENOSPC,
+ * EROFS) is thrown as it is.
  */
 export function acquireLifecycleLock(
   path: string,
-  busy: (pid: number | null) => Error,
+  busy: (pid: number | null, holder: string) => Error,
   unavailable: () => Error,
 ): LifecycleHold {
   const instance = randomBytes(8).toString("hex");
   const record = `${JSON.stringify({
     schema: LIFECYCLE_LOCK_SCHEMA,
     pid: process.pid,
+    identity: processIdentity(process.pid) ?? null,
+    host: processHostToken(),
+    started: Math.round(performance.timeOrigin),
     instance,
     acquiredAt: new Date().toISOString(),
   })}\n`;
@@ -206,7 +254,7 @@ export function acquireLifecycleLock(
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const holder = readHolder(path);
       if (!holder) continue;
-      if (!stale(holder)) throw busy(holder.pid);
+      if (!stale(holder)) throw busy(holder.pid, describeHolder(holder));
       breakStale(path, holder);
     }
   throw unavailable();
