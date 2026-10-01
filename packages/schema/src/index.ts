@@ -114,9 +114,12 @@ export class ManifestError extends Error {
 /** Field names that indicate secret material; never valid manifest keys. */
 const SECRET_FIELD_NAME =
   /(secret|token|password|passwd|api_?key|private_?key|client_?key|bearer|authorization|cookie|credentials)/i;
-/** Key endings that diagnostic redaction treats as a secret assignment. */
+/**
+ * Key endings that diagnostic redaction treats as a secret assignment or a
+ * credential header (`redact` in `@piship/contracts`).
+ */
 const REDACTION_KEY =
-  /(?:access_token|refresh_token|id_token|credential|api_?key|client_secret|password|secret)"?$/i;
+  /(?:token|secret|passw(?:or)?d|credentials?|(?:api|access|secret|private)[-_]?key|authorization|cookie)"?$/i;
 function lastSegment(field: string): string {
   return field.slice(
     Math.max(field.lastIndexOf("."), field.lastIndexOf("]")) + 1,
