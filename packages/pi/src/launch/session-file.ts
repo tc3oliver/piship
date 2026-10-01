@@ -16,6 +16,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   readSync,
   rmSync,
   statSync,
@@ -330,13 +331,6 @@ export function inspectSession(
 const OWNER_SCHEMA = "piship-session-owner/v1";
 /** Beside the session files; Pi only reads `*.jsonl` there. */
 export const OWNER_DIRECTORY = ".piship-owners";
-/**
- * An owner record whose process cannot be verified (another host, or no
- * start identity on this platform) counts as live until it has not been
- * refreshed for this long. Wrongly live only starts a new session; wrongly
- * stale would let two processes write one file.
- */
-const UNVERIFIED_OWNER_MS = 24 * 60 * 60_000;
 /** A record another process is still writing is not stale yet. */
 const PARTIAL_OWNER_MS = 60_000;
 const OWNER_HEARTBEAT_MS = 60_000;
@@ -349,10 +343,48 @@ interface OwnerRecord {
   readonly identity: string | null;
   readonly host: string;
   readonly instance: string;
+  /**
+   * The Linux boot ID and PID namespace the process ID belongs to; null on
+   * other platforms. Absent in records written before v0.7.1.
+   */
+  readonly boot?: string | null;
+  readonly pidNamespace?: string | null;
 }
 
 function selfIdentity(): string | null {
   return processIdentity(process.pid) ?? null;
+}
+
+interface ProcessScope {
+  readonly boot: string | null;
+  readonly pidNamespace: string | null;
+}
+
+let scope: ProcessScope | undefined;
+/**
+ * Where this process's IDs mean something: on Linux the kernel boot and the
+ * PID namespace (a container sharing `$HOME`, and even the host name, sees
+ * other processes under the same IDs). Other platforms have neither.
+ */
+function processScope(): ProcessScope {
+  if (scope) return scope;
+  let boot: string | null = null;
+  let pidNamespace: string | null = null;
+  if (process.platform === "linux") {
+    try {
+      boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    } catch {
+      // No /proc: the start identity still names the boot.
+    }
+    try {
+      pidNamespace = readlinkSync("/proc/self/ns/pid");
+    } catch {
+      // Unknown here, so every record of this host reads as another one.
+      pidNamespace = "unknown";
+    }
+  }
+  scope = { boot, pidNamespace };
+  return scope;
 }
 
 function recentlyModified(path: string, withinMs: number): boolean {
@@ -374,7 +406,9 @@ function parseOwner(path: string, session: string): OwnerRecord | undefined {
       typeof value.host !== "string" ||
       typeof value.instance !== "string" ||
       !INSTANCE.test(value.instance) ||
-      (value.identity !== null && typeof value.identity !== "string")
+      (value.identity !== null && typeof value.identity !== "string") ||
+      (value.boot != null && typeof value.boot !== "string") ||
+      (value.pidNamespace != null && typeof value.pidNamespace !== "string")
     )
       return undefined;
     return value;
@@ -383,26 +417,65 @@ function parseOwner(path: string, session: string): OwnerRecord | undefined {
   }
 }
 
-function ownerAlive(record: OwnerRecord, path: string): boolean {
-  if (record.host === hostname()) {
-    if (!processAlive(record.pid)) return false;
-    // A process with the ID exists; the start identity tells whether it is
-    // the owner or a later process that was given the same ID.
-    const same = processIdentityMatches(record.identity, record.pid);
-    if (same !== undefined) return same;
-  }
-  return recentlyModified(path, UNVERIFIED_OWNER_MS);
+type OwnerState =
+  | { readonly state: "live" | "gone" }
+  | { readonly state: "unverifiable"; readonly reason: string };
+
+/**
+ * Whether the owner a record names still runs. A record this process cannot
+ * check (another host, another PID namespace, or no start identity) is
+ * neither live nor gone: it is never taken over, and the user is told how to
+ * release it. Wrongly live only starts a new session; wrongly gone would let
+ * two processes write one file.
+ */
+function ownerState(record: OwnerRecord): OwnerState {
+  if (record.host !== hostname())
+    return {
+      state: "unverifiable",
+      reason: `it was written on another host (${printable(record.host, 64)}), whose processes this one cannot see`,
+    };
+  const here = processScope();
+  // Linux start identities of earlier records begin with the boot ID.
+  const boot =
+    record.boot ?? /^([0-9a-f-]{36}):\d+$/.exec(record.identity ?? "")?.[1];
+  // The host name is the machine's: this one has restarted since.
+  if (here.boot && boot && boot !== here.boot) return { state: "gone" };
+  if ((record.pidNamespace ?? null) !== here.pidNamespace)
+    return {
+      state: "unverifiable",
+      reason:
+        "it was written in another PID namespace (a container sharing this home directory, or an earlier PiShip that did not record one), whose processes this one cannot see",
+    };
+  if (!processAlive(record.pid)) return { state: "gone" };
+  // A process with the ID exists; the start identity tells whether it is
+  // the owner or a later process that was given the same ID.
+  const same = processIdentityMatches(record.identity, record.pid);
+  if (same !== undefined) return { state: same ? "live" : "gone" };
+  return {
+    state: "unverifiable",
+    reason: `a process ${record.pid} runs, but this system cannot tell whether it is the owner`,
+  };
+}
+
+/** Another owner of a session file. */
+export interface SessionOwner {
+  /** Its process ID, `0` for a record still being written. */
+  readonly pid: number;
+  /** The owner record. */
+  readonly record: string;
+  /** Set when this process cannot tell whether the owner still runs. */
+  readonly unverifiable?: string;
 }
 
 /**
- * The process ID of another live owner of the session file, `0` for an owner
- * record still being written, or undefined when there is none. Records of
- * owners that are gone are removed on the way.
+ * Another owner of the session file that is live, or that cannot be verified
+ * (a live one first), or undefined when there is none. Records of owners
+ * that are gone are removed on the way.
  */
 export function liveOwner(
   sessionFile: string,
   exceptInstance?: string,
-): number | undefined {
+): SessionOwner | undefined {
   const directory = join(dirname(sessionFile), OWNER_DIRECTORY);
   const session = basename(sessionFile);
   let names: string[];
@@ -411,20 +484,40 @@ export function liveOwner(
   } catch {
     return undefined;
   }
-  let live: number | undefined;
+  let live: SessionOwner | undefined;
+  let unverified: SessionOwner | undefined;
   for (const name of names) {
     if (!name.startsWith(`${session}.`) || !name.endsWith(".json")) continue;
     const instance = name.slice(session.length + 1, -".json".length);
     if (!INSTANCE.test(instance) || instance === exceptInstance) continue;
     const path = join(directory, name);
     const record = parseOwner(path, session);
-    const alive = record
-      ? ownerAlive(record, path)
-      : recentlyModified(path, PARTIAL_OWNER_MS);
-    if (alive) live ??= record?.pid ?? 0;
+    if (!record) {
+      if (recentlyModified(path, PARTIAL_OWNER_MS))
+        live ??= { pid: 0, record: path };
+      else rmSync(path, { force: true });
+      continue;
+    }
+    const owner = ownerState(record);
+    if (owner.state === "live") live ??= { pid: record.pid, record: path };
+    else if (owner.state === "unverifiable")
+      unverified ??= {
+        pid: record.pid,
+        record: path,
+        unverifiable: owner.reason,
+      };
     else rmSync(path, { force: true });
   }
-  return live;
+  return live ?? unverified;
+}
+
+/** The notice for a session whose owner cannot be verified. */
+function unverifiedOwner(
+  owner: SessionOwner,
+  command: string,
+  file: string,
+): string {
+  return `PiShip cannot verify whether process ${owner.pid} named in its owner record still uses it: ${owner.unverifiable}. If no ${command} process is using ${file}, delete the owner record ${owner.record} and continue it again.`;
 }
 
 /**
@@ -445,9 +538,14 @@ export class SessionOwnership {
     return this.held?.file;
   }
 
-  /** Whether another live process owns the session file. */
+  /** Whether another live, or unverifiable, process owns the session file. */
   heldByOther(sessionFile: string): boolean {
-    return liveOwner(resolve(sessionFile), this.instance) !== undefined;
+    return this.otherOwner(sessionFile) !== undefined;
+  }
+
+  /** Another live, or unverifiable, owner of the session file. */
+  otherOwner(sessionFile: string): SessionOwner | undefined {
+    return liveOwner(resolve(sessionFile), this.instance);
   }
 
   /**
@@ -468,6 +566,7 @@ export class SessionOwnership {
       identity: selfIdentity(),
       host: hostname(),
       instance: this.instance,
+      ...processScope(),
     };
     const path = join(directory, `${session}.${this.instance}.json`);
     const bytes = `${JSON.stringify(record)}\n`;
@@ -551,7 +650,10 @@ export function resumeRefusal(
   target: string,
   command: string,
 ): string | undefined {
-  if (ownership.heldByOther(target))
+  const owner = ownership.otherOwner(target);
+  if (owner?.unverifiable)
+    return `That session is not resumed: ${unverifiedOwner(owner, command, resolve(target))}`;
+  if (owner)
     return `That session is open in another ${command} process. Continue it there, or start a new session here.`;
   let problem: SessionProblem | undefined;
   try {
@@ -599,12 +701,16 @@ export function openSession(
     ? undefined
     : mostRecentSession(sessionDir, cwd);
   if (!recent) return { sessionManager: fresh(), ownership };
-  if (!ownership.claim(recent))
+  if (!ownership.claim(recent)) {
+    const owner = ownership.otherOwner(recent);
     return {
       sessionManager: fresh(),
       ownership,
-      notice: `The most recent session of this project is open in another ${options.command} process, so this one starts a new session. The other session is not changed: ${recent}`,
+      notice: owner?.unverifiable
+        ? `This launch starts a new session instead of the most recent one, which is not changed. ${unverifiedOwner(owner, options.command, recent)}`
+        : `The most recent session of this project is open in another ${options.command} process, so this one starts a new session. The other session is not changed: ${recent}`,
     };
+  }
   try {
     const problem = inspectSession(recent);
     if (problem && options.disposable)
