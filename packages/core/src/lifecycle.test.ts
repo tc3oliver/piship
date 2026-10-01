@@ -1014,6 +1014,28 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
   });
 
+  it("reports each long step of update and rollback to a progress callback", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    const steps: string[] = [];
+    await updateDistribution(ID, {
+      ...opts,
+      progress: (step) => steps.push(step),
+    });
+    await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      progress: (step) => steps.push(step),
+    });
+    expect(steps.map((step) => step.replace(/\(.*\)/, "(size)"))).toEqual([
+      "Checking the stable channel",
+      "Downloading 1.1.0 (size)",
+      "Verifying the 1.1.0 release",
+      "Switching to 1.1.0",
+      "Verifying the retained 1.0.0 release",
+      "Switching to 1.0.0",
+    ]);
+  });
+
   it("does not replace a retained release that a running session still uses", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive, true);

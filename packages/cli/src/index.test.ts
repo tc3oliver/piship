@@ -88,6 +88,36 @@ describe("forwarding update and rollback to the installed release", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("shows the release's progress as it comes when someone watches", async () => {
+    const { payload } = installRecorder();
+    const command = join(payload, "bin", ID);
+    writeFileSync(
+      command,
+      `#!/usr/bin/env node\nprocess.stderr.write("Downloading 1.1.0...\\n" + "progress=" + process.env.PISHIP_PROGRESS + "\\n");\nprocess.stdout.write("Updated\\n");\n`,
+    );
+    const lines: string[] = [];
+    const output = {
+      stdout: (message: string) => lines.push(`out:${message}`),
+      stderr: (message: string) => lines.push(`err:${message}`),
+    };
+    process.env.PISHIP_PROGRESS = "1";
+    try {
+      expect(await runCli(["rollback", ID], output)).toBe(0);
+    } finally {
+      delete process.env.PISHIP_PROGRESS;
+    }
+    // stderr lines arrive before the result, each once.
+    expect(lines).toEqual([
+      "err:Downloading 1.1.0...",
+      "err:progress=1",
+      "out:Updated",
+    ]);
+    // Without a terminal the release is not asked for progress.
+    lines.length = 0;
+    expect(await runCli(["rollback", ID], output)).toBe(0);
+    expect(lines).toContain("err:Downloading 1.1.0...\nprogress=undefined");
+  });
+
   it("forwards rollback unchanged", async () => {
     const { received } = installRecorder();
     expect(await cli(["rollback", ID])).toBe(0);

@@ -58,6 +58,7 @@ export {
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
 export * from "./signing.js";
+export * from "./progress.js";
 export * from "./summary.js";
 export {
   assertDisjointRoots,

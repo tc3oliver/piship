@@ -22,6 +22,7 @@ import {
 import {
   type AccessEvent,
   formatMigrationSummary,
+  progressReporter,
   readInstallReceipt,
   rollbackDistribution,
   updateDistribution,
@@ -243,8 +244,10 @@ export async function runUpdate(
   ) as typeof fetch;
   let result: Awaited<ReturnType<typeof updateDistribution>>;
   try {
+    const progress = progressReporter(ctx.err);
     result = await updateDistribution(app.id, {
       ...options,
+      ...(progress ? { progress } : {}),
       check,
       acceptReview: flags.has("--accept-review"),
       fetcher,
@@ -291,7 +294,9 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
   const revokeCredential = credentialRevoker(ctx);
   let result: Awaited<ReturnType<typeof rollbackDistribution>>;
   try {
+    const progress = progressReporter(ctx.err);
     result = await rollbackDistribution(app.id, {
+      ...(progress ? { progress } : {}),
       secretStore: secretStore(ctx),
       secretStoreFor: (provider) => storeOf(ctx, provider),
       ...(revokeCredential ? { revokeCredential } : {}),

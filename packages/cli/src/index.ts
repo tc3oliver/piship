@@ -1,4 +1,9 @@
-import { spawnSync } from "node:child_process";
+import {
+  type ChildProcess,
+  type SpawnOptions,
+  spawn,
+  spawnSync,
+} from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -26,6 +31,7 @@ import {
   payloadApp,
   payloadStateSchemas,
   PISHIP_VERSION,
+  progressReporter,
   purgeDistributionState,
   readInstallReceipt,
   repairDistribution,
@@ -296,6 +302,46 @@ function runLauncher(
     stderr: result.stderr ?? result.error?.message ?? "",
   };
 }
+/**
+ * Run the installed release's command while showing its stderr (progress
+ * and notices) as it arrives; stdout is collected. Used only when someone
+ * watches a terminal; it tells the release so with PISHIP_PROGRESS=1.
+ */
+function runLauncherLive(
+  artifact: string,
+  command: string,
+  args: string[],
+  stderr: (message: string) => void,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const target = join(artifact, "bin", command);
+  const options: SpawnOptions = {
+    stdio: ["inherit", "pipe", "pipe"],
+    env: { ...process.env, PISHIP_PROGRESS: "1" },
+  };
+  const child: ChildProcess =
+    process.platform === "win32"
+      ? spawn(process.execPath, [target, ...args], options)
+      : spawn(target, args, options);
+  let stdout = "";
+  let pending = "";
+  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) stderr(line);
+  });
+  return new Promise((done) => {
+    child.on("error", (error: Error) =>
+      done({ status: null, stdout, stderr: error.message }),
+    );
+    child.on("close", (status: number | null) => {
+      if (pending) stderr(pending);
+      done({ status, stdout, stderr: "" });
+    });
+  });
+}
 function artifactFor(target: string): string {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isDirectory()) return path;
@@ -454,14 +500,16 @@ export async function runCli(
       }
     } else if (command === "lock")
       output.stdout(`Wrote ${lockManifest(target)}`);
-    else if (command === "build")
+    else if (command === "build") {
+      const progress = progressReporter(output.stderr);
       output.stdout(
         `Built ${buildDistribution(target, undefined, {
           reclaimStaging: rest[0] === "--reclaim-staging",
           abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+          ...(progress ? { progress } : {}),
         })}`,
       );
-    else if (command === "install") {
+    } else if (command === "install") {
       const receipt = await installDistribution(
         target,
         rest[0] === "--use-existing-state",
@@ -665,10 +713,22 @@ async function runLifecycle(
     // handling apply.
     const receipt = readInstallReceipt(first);
     const args = [command, ...Object.entries(options).flat(), ...[...flags]];
-    const result = runLauncher(receipt.payload, receipt.app.command, args);
+    // From a terminal, the release's progress and notices are shown as
+    // they come; otherwise its stderr is printed once it is done.
+    const live = !!progressReporter(output.stderr);
+    const result = live
+      ? await runLauncherLive(
+          receipt.payload,
+          receipt.app.command,
+          args,
+          output.stderr,
+        )
+      : runLauncher(receipt.payload, receipt.app.command, args);
     if (result.stdout.trim()) output.stdout(result.stdout.trimEnd());
     if (result.status !== 0) {
-      output.stderr(result.stderr.trim() || `${command} failed`);
+      // Shown live already, unless the release did not start.
+      if (!live || result.stderr.trim())
+        output.stderr(result.stderr.trim() || `${command} failed`);
       return 1;
     }
     if (result.stderr.trim()) output.stderr(result.stderr.trimEnd());

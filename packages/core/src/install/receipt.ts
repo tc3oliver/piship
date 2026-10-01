@@ -101,6 +101,8 @@ export type LifecyclePhase =
   | "cleaned";
 
 export interface LifecycleOptions {
+  /** Receives a short line as each long step starts (see `progressReporter`). */
+  readonly progress?: (step: string) => void;
   /** Test seam: throw at a phase to simulate interruption. */
   readonly faults?: (phase: LifecyclePhase) => void;
   /** Runs a candidate payload's launcher check; defaults to Node. */

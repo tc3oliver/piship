@@ -176,6 +176,7 @@ export async function updateDistribution(
     const notices = [...selection.notices];
     const source = resolveSource(lock, options.source, env);
     const minSequence = receipt.channelSequences?.[channel] ?? 0;
+    options.progress?.(`Checking the ${channel} channel`);
     const { metadata, keyId } = await readChannel(source, channel, {
       distribution: id,
       trusted: updates.trust.keys,
@@ -226,8 +227,12 @@ export async function updateDistribution(
     const staging = temporary.path;
     try {
       const archive = join(staging, entry.archive);
+      options.progress?.(
+        `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
+      );
       await downloadArchive(source, entry, archive, options.fetcher);
       options.faults?.("staged");
+      options.progress?.(`Verifying the ${entry.version} release`);
       const verified = await verifyRelease(archive, {
         requireTarget: true,
         expectedSha256: entry.sha256,
@@ -330,6 +335,7 @@ export async function updateDistribution(
             `Cannot update ${id} to ${entry.version} while ${live.length} runtime session(s) still use its retained payload; close them and retry`,
           );
       }
+      options.progress?.(`Switching to ${entry.version}`);
       const snapshot = snapshotState(
         stateDir,
         receipt.active,
