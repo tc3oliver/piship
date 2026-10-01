@@ -12,6 +12,11 @@ Changes on `main` after v0.7.0. Not released.
 
 ### Behavior and contract changes
 
+- A login callback without this sign-in's `state` (a stray request, a stale tab) is answered 400 and ignored; the login keeps waiting instead of failing (#149).
+- A required HTTP audit sink whose host the private-only network refuses, and a `sandbox.credential: runtime` that can never be sent, now fail `validate` and `lock` when every URL involved is plain; with a variable involved they warn (#142).
+- Managed request failures name the hop: a dead, blackholed, or 407/403 proxy is reported as the proxy's failure with a proxy action, and an untrusted, expired, or mismatched TLS chain is a non-retryable `TLS_POLICY_VIOLATION` with an `additionalCA` action (#148).
+- A Kubernetes sandbox command is no longer cut off by undici's 300-second timeouts. A command whose outcome is unknown (the router connection drops or a 5xx after it was sent) fails as non-retryable `SANDBOX_UNAVAILABLE` and is never sent again (#146).
+- The reference credential broker never replays a revoked or out-of-entitlement credential; the reference Keycloak realm has brute-force detection and a password policy (#159).
 - A broker `409` to an acquire or renewal that sent an idempotency key is a final key conflict only when its JSON body is `{"error":"idempotency_key_reused"}`. Any other `409` now means the request is still in progress: the key is kept, `Retry-After` is honored, and the failure is retryable, so PiShip never issues a second credential for it (#157).
 - A renewal that fails with a retryable broker or network error keeps `CREDENTIAL_ACQUIRE_FAILED`, its `retryAfterMs`, and the action "try again later"; it is no longer reported as `CREDENTIAL_REVOKED` with "run login" (#157).
 - The lifecycle lock, the launch gate, and the `.launching` marker record the holder's process ID, start identity, host, and instance. A holder from this host whose process is gone or was replaced is reclaimed at once; a live matching holder is never reclaimed; a holder from another host is kept until its 24-hour lease ends. `update` and `rollback` wait up to 3 seconds for the launch gate, then fail as retryable (#144).
@@ -20,6 +25,14 @@ Changes on `main` after v0.7.0. Not released.
 
 ### Fixed
 
+- `piship repair <id> <release archive>` restores a damaged installed release from a verified copy without running it; `INTEGRITY_FAILED` names each unexpected, modified, or missing path. Integrity checking is unchanged: no file is exempt (#136).
+- A PiShip identity or credential failure inside the TUI shows a PiShip action (`<command> login` in a terminal, or restart for a changed principal), and managed `/login` names the distribution's sign-in instead of upstream provider logins (#139).
+- `validate` warns about a relative `additionalCA`, an ignored `network: deny` on an optional sandbox, and lists the variables needed at launch separately from those only `update` needs (#142).
+- `network.tls.additionalCA` is trusted for hosts reached through a proxy tunnel (#148).
+- `doctor` checks that each proxy accepts connections, that each CA bundle loads, and, when activation fails, which endpoint path fails (#148).
+- Login names a busy callback port and how to free it, fails at once on a provider client error, says what it waits for, cancels on Ctrl-C, and prints SSH port-forward guidance (#149).
+- The reference sandbox service compares each mount with the file it checked before running a command (#159).
+- `docs/security.md` states exactly which session-file content PiShip scrubs (#159).
 - An empty or cut-short `state.json` is rebuilt; a torn final audit line is skipped; a damaged `preferences.json` is refused with its path and how to recover (#143).
 - The audit sink starts a new event on its own line after a torn final line, so the event is not lost (#143).
 - A failed credential lock write no longer leaves an empty lock file behind (#157).
