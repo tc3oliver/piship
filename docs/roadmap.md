@@ -29,7 +29,7 @@ v0.7 connects PiShip to the identity, credential, gateway, sandbox, and audit in
 4. **Reference deployment.** A neutral, runnable reference stack of open-source components, exercised on Ubuntu by the Reference E2E, which runs nightly, on demand, and inside Release qualification.
 5. **Qualification.** Live Linux secret store coverage, and clean-machine managed and personal flows on all three targets.
 
-Everything on this list is implemented on `main`. What evidence backs each item, and that no Release qualification is recorded for a v0.7 commit, is on the [status page](status.md#recorded-evidence); nothing here is claimed beyond it.
+Everything on this list is implemented on `main`. What evidence backs each item, including the Release qualification of the candidate `ee8b4a9`, is on the [status page](status.md#recorded-evidence); nothing here is claimed beyond it.
 
 ## Next
 
