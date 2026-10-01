@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { PiShipError } from "@piship/contracts";
 import { installHome } from "../index.js";
 import {
   type ProcessRecord,
@@ -38,16 +39,35 @@ function leaseRoot(id: string): string {
   return join(appDirectory(id), ".runtime-leases");
 }
 
-/** Shared by launcher registration and every destructive payload operation. */
-export function acquireLaunchGate(id: string) {
+/**
+ * How long a lifecycle operation waits for the launch gate: a launcher holds
+ * it only while it registers, which takes well under a second.
+ */
+const LAUNCH_GATE_WAIT_MS = 3_000;
+
+/**
+ * Shared by launcher registration and every destructive payload operation. A
+ * holder that keeps the gate past the wait fails the operation with `code`,
+ * as retryable.
+ */
+export function acquireLaunchGate(
+  id: string,
+  code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
+) {
   const path = join(installHome(), "receipts", `.${id}.launch.lock`);
   return acquireLifecycleLock(
     path,
     (_pid, holder) =>
-      new Error(
-        `A launcher or lifecycle operation for ${id} is registering: ${path} is held by ${holder}; retry when it finishes, and if no launcher or PiShip command is running, remove that file`,
+      new PiShipError(
+        code,
+        `A launcher or lifecycle operation for ${id} is registering: ${path} is held by ${holder}`,
+        {
+          retryable: true,
+          userAction: `Try again in a moment; if no launcher or PiShip command of ${id} is running, remove ${path}`,
+        },
       ),
     () => new Error(`Could not lock launcher registration for ${id}`),
+    LAUNCH_GATE_WAIT_MS,
   );
 }
 

@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   writeFileSync,
   watch,
 } from "node:fs";
@@ -22,13 +23,16 @@ import {
   age,
   appsDir,
   deadPid,
+  fakeRun,
   installed,
   livePid,
+  rejection,
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
 import { readInstallReceipt, uninstallDistribution } from "./install/index.js";
 import { LIFECYCLE_LOCK_REUSE_MS } from "./install/lifecycle-lock.js";
 import { processIdentity, recordedProcessGone } from "./process-identity.js";
+import { rollbackDistribution, updateDistribution } from "./update/index.js";
 
 useLifecycleHomes();
 
@@ -262,3 +266,59 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     60_000,
   );
 });
+
+describe.runIf(HOST_EVIDENCED)(
+  "update and rollback against a held launch gate",
+  () => {
+    it("waits for a launcher that registers briefly, then updates", async () => {
+      const { opts } = await installed();
+      // A launcher that holds the gate for a moment, then releases it.
+      const holder = spawn(
+        process.execPath,
+        [
+          "-e",
+          'setTimeout(() => require("node:fs").rmSync(process.argv[1], { force: true }), 1000)',
+          gatePath(),
+        ],
+        { stdio: "ignore" },
+      );
+      const exited = new Promise((resolvePromise) =>
+        holder.once("exit", resolvePromise),
+      );
+      try {
+        const pid = holder.pid as number;
+        gate({ pid, identity: processIdentity(pid) ?? null });
+        await expect(updateDistribution(ID, opts)).resolves.toMatchObject({
+          status: "updated",
+          to: "1.1.0",
+        });
+      } finally {
+        holder.kill();
+        await exited;
+      }
+    }, 60_000);
+
+    it("fails as retryable, naming the gate and its holder, while a launcher keeps it", async () => {
+      const { opts } = await installed();
+      const holder = livePid();
+      gate({ pid: holder, identity: processIdentity(holder) ?? null });
+      const update = await rejection(updateDistribution(ID, opts));
+      expect(update).toMatchObject({ code: "UPDATE_FAILED", retryable: true });
+      expect(update.message).toContain(gatePath());
+      expect(update.message).toContain(`held by process ${holder}`);
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+      rmSync(gatePath());
+      await updateDistribution(ID, opts);
+      gate({ pid: holder, identity: processIdentity(holder) ?? null });
+      const rollback = await rejection(
+        rollbackDistribution(ID, { runCheck: fakeRun }),
+      );
+      expect(rollback).toMatchObject({
+        code: "ROLLBACK_FAILED",
+        retryable: true,
+      });
+      expect(rollback.message).toContain(`held by process ${holder}`);
+      expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    }, 60_000);
+  },
+);

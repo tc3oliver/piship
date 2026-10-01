@@ -225,16 +225,21 @@ export interface LifecycleHold {
   stillHeld(): boolean;
 }
 
+/** How often a waiting caller looks at a held lock again. */
+const LOCK_POLL_MS = 100;
+
 /**
  * Take the lock at `path`, or throw `busy(pid, holder)` while a live holder
  * has it; `holder` describes it for a message ("process 123", "process 123 on
- * another host"). An error other than an existing lock (EACCES, ENOSPC,
- * EROFS) is thrown as it is.
+ * another host"). With `waitMs`, a live holder is waited for that long
+ * first, blocking this thread (for locks held only briefly). An error other
+ * than an existing lock (EACCES, ENOSPC, EROFS) is thrown as it is.
  */
 export function acquireLifecycleLock(
   path: string,
   busy: (pid: number | null, holder: string) => Error,
   unavailable: () => Error,
+  waitMs = 0,
 ): LifecycleHold {
   const instance = randomBytes(8).toString("hex");
   const record = `${JSON.stringify({
@@ -246,16 +251,27 @@ export function acquireLifecycleLock(
     instance,
     acquiredAt: new Date().toISOString(),
   })}\n`;
-  for (let attempt = 0; attempt < 3; attempt += 1)
+  const deadline = Date.now() + waitMs;
+  for (let attempt = 0; attempt < 3; )
     try {
       create(path, record);
       return hold(path, instance);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const holder = readHolder(path);
-      if (!holder) continue;
-      if (!stale(holder)) throw busy(holder.pid, describeHolder(holder));
-      breakStale(path, holder);
+      if (!holder || stale(holder)) {
+        if (holder) breakStale(path, holder);
+        attempt += 1;
+        continue;
+      }
+      if (Date.now() >= deadline)
+        throw busy(holder.pid, describeHolder(holder));
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        LOCK_POLL_MS,
+      );
     }
   throw unavailable();
 }
