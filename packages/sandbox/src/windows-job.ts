@@ -165,6 +165,37 @@ ${SOURCE}
 }`;
 
 /**
+ * Variables Windows sets for every user session (no credentials): what the
+ * supervisor's PowerShell and its C# compile read while they start.
+ */
+const SUPERVISOR_SYSTEM_VARIABLES = [
+  "TEMP",
+  "TMP",
+  "SystemDrive",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ALLUSERSPROFILE",
+  "PUBLIC",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "ProgramW6432",
+  "CommonProgramFiles",
+  "CommonProgramFiles(x86)",
+  "CommonProgramW6432",
+  "PATHEXT",
+  "COMPUTERNAME",
+  "USERNAME",
+  "USERDOMAIN",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
+  "OS",
+] as const;
+
+/**
  * The Windows directory from `SystemRoot` (or `WINDIR`), only when it is an
  * absolute drive path. Anything else fails closed: a bare `powershell.exe`
  * would be looked up in the workspace before `PATH`.
@@ -197,17 +228,23 @@ export function windowsJobCommand(
   const request = Buffer.from(
     JSON.stringify({ ...target, env: childEnv }),
   ).toString("base64");
-  // The supervisor runs outside the Job Object, so it gets only what
-  // PowerShell and Add-Type need, never the launcher's environment. Its PATH
-  // is the child's approved one: CreateProcess resolves a bare child file
-  // name through the supervisor's PATH.
+  // The supervisor runs outside the Job Object, so it gets the variables
+  // Windows itself sets for a user session, which PowerShell 5.1 and the
+  // Add-Type compile need to start, and never the rest of the launcher's
+  // environment. Its PATH is the child's approved one: CreateProcess
+  // resolves a bare child file name through the supervisor's PATH.
   const env: NodeJS.ProcessEnv = {
     SystemRoot: root,
     WINDIR: root,
     PISHIP_JOB_REQUEST: request,
   };
-  for (const name of ["TEMP", "TMP"] as const)
-    if (host[name]) env[name] = host[name];
+  for (const name of SUPERVISOR_SYSTEM_VARIABLES) {
+    const key = Object.keys(host).find(
+      (candidate) => candidate.toUpperCase() === name.toUpperCase(),
+    );
+    const value = key === undefined ? undefined : host[key];
+    if (value) env[name] = value;
+  }
   const path = Object.keys(childEnv).find(
     (name) => name.toUpperCase() === "PATH",
   );

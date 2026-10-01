@@ -14,6 +14,8 @@ const host = {
   WINDIR: "C:\\Windows",
   TEMP: "C:\\Users\\dev\\AppData\\Local\\Temp",
   TMP: "C:\\Users\\dev\\AppData\\Local\\Temp",
+  USERPROFILE: "C:\\Users\\dev",
+  appdata: "C:\\Users\\dev\\AppData\\Roaming",
   PATH: "C:\\launcher\\bin",
   ComSpec: "C:\\Windows\\System32\\cmd.exe",
   ACMECODE_API_KEY: "fixture-launcher-key",
@@ -44,13 +46,17 @@ describe("windowsJobCommand", () => {
   it("gives the supervisor only the variables it needs", () => {
     const { env } = windowsJobCommand(target, host);
     expect(Object.keys(env).sort()).toEqual([
+      "APPDATA",
       "PATH",
       "PISHIP_JOB_REQUEST",
       "SystemRoot",
       "TEMP",
       "TMP",
+      "USERPROFILE",
       "WINDIR",
     ]);
+    // Windows names match case-insensitively.
+    expect(env.APPDATA).toBe("C:\\Users\\dev\\AppData\\Roaming");
     expect(env.PATH).toBe("C:\\tools\\bin");
     expect(JSON.stringify(env)).not.toContain("fixture-launcher");
     expect(env.ComSpec).toBeUndefined();
