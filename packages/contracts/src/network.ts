@@ -34,9 +34,19 @@ export const DEFAULT_NETWORK_POLICY: NetworkPolicy = {
   allowHosts: [],
 };
 
+export interface ManagedRequestInit extends RequestInit {
+  /**
+   * The request lasts as long as the work it starts, such as a remote
+   * sandbox command whose response comes when the command ends: undici's
+   * header and body timeouts (300 s each) do not apply, and the caller's
+   * `signal` alone ends it. Every other request keeps them.
+   */
+  readonly longRunning?: boolean;
+}
+
 export type ManagedFetch = (
   url: string | URL,
-  init?: RequestInit,
+  init?: ManagedRequestInit,
 ) => Promise<Response>;
 
 const PROXY_VARIABLES = [
@@ -167,6 +177,11 @@ export interface DispatcherOptions {
    * pooled connection.
    */
   readonly keepAlive?: boolean;
+  /**
+   * Apply undici's header and body timeouts (the default). Without them a
+   * request ends only when its response does or its signal aborts.
+   */
+  readonly inactivityTimeouts?: boolean;
 }
 
 export function createDispatcher(
@@ -182,18 +197,27 @@ export function createDispatcher(
   // `pipelining`, so it is turned off too. The factory carries both to every
   // pool the agents create, including a proxy agent's pool to the proxy,
   // which does not receive the agent's own options.
+  const timeouts =
+    options.inactivityTimeouts === false
+      ? { headersTimeout: 0, bodyTimeout: 0 }
+      : {};
   const pooling =
     options.keepAlive === false
       ? {
           pipelining: 0,
           allowH2: false,
           factory: (origin: string | URL, opts: object) =>
-            new Pool(origin, { ...opts, pipelining: 0, allowH2: false }),
+            new Pool(origin, {
+              ...opts,
+              pipelining: 0,
+              allowH2: false,
+              ...timeouts,
+            }),
         }
       : {};
   const base = policy.inheritProxyEnvironment
-    ? new EnvHttpProxyAgent({ connect, ...pooling })
-    : new Agent({ connect, ...pooling });
+    ? new EnvHttpProxyAgent({ connect, ...pooling, ...timeouts })
+    : new Agent({ connect, ...pooling, ...timeouts });
   if (!policy.privateOnly) return base;
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
@@ -262,7 +286,17 @@ export function createManagedFetch(
   // the audit sinks and update downloads) are few and small, so each opens its
   // own connection.
   const dispatcher = createDispatcher(policy, { keepAlive: false });
-  return async (url, init = {}) => {
+  // A long-running request has a dispatcher of its own, without undici's
+  // header and body timeouts, created on first use.
+  let untimed: Dispatcher | undefined;
+  const longRunningDispatcher = () => {
+    untimed ??= createDispatcher(policy, {
+      keepAlive: false,
+      inactivityTimeouts: false,
+    });
+    return untimed;
+  };
+  return async (url, { longRunning, ...init } = {}) => {
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());
     checkDestination(target, policy, component);
@@ -270,7 +304,7 @@ export function createManagedFetch(
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),
         redirect: "manual",
-        dispatcher,
+        dispatcher: longRunning ? longRunningDispatcher() : dispatcher,
       } as Parameters<typeof undiciFetch>[1]);
       return response as unknown as Response;
     } catch (error) {

@@ -46,10 +46,14 @@ describe("remote control request deadlines", () => {
 
   it("leaves command data-plane requests governed by the caller", async () => {
     const caller = new AbortController();
-    const fetcher = vi.fn((_url: string | URL, init?: RequestInit) => {
-      expect(init?.signal).toBe(caller.signal);
-      return Promise.resolve(new Response("ok"));
-    });
+    const fetcher = vi.fn(
+      (_url: string | URL, init?: RequestInit & { longRunning?: boolean }) => {
+        expect(init?.signal).toBe(caller.signal);
+        // It lasts as long as the command: no transport timeout ends it.
+        expect(init?.longRunning).toBe(true);
+        return Promise.resolve(new Response("ok"));
+      },
+    );
     await credentialedFetch(
       { fetch: fetcher },
       "https://example.test",
@@ -57,6 +61,23 @@ describe("remote control request deadlines", () => {
       () => ["X-Key", "value"],
       false,
       0,
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the transport timeouts on control requests", async () => {
+    const fetcher = vi.fn(
+      (_url: string | URL, init?: RequestInit & { longRunning?: boolean }) => {
+        expect(init?.longRunning).toBeUndefined();
+        return Promise.resolve(new Response("ok"));
+      },
+    );
+    await credentialedFetch(
+      { fetch: fetcher },
+      "https://example.test",
+      {},
+      () => ["X-Key", "value"],
+      true,
     );
     expect(fetcher).toHaveBeenCalledOnce();
   });

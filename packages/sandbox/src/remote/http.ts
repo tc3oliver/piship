@@ -68,6 +68,9 @@ export async function credentialedFetch(
       ...init,
       headers,
       signal: signal ?? null,
+      // Its response comes when the command ends: no transport timeout may
+      // end it first and leave the command running unseen.
+      ...(timeoutMs > 0 ? {} : { longRunning: true }),
     });
     return { response, sent: !!credential };
   };
