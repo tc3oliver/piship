@@ -43,6 +43,14 @@ export interface GovernedRuntime {
   isAllowed(provider: string, id: string): boolean;
   /** Mark the current credential as rejected so the next request re-acquires. */
   markCredentialRejected(): void;
+  /**
+   * The failed request message with the PiShip action appended, when the
+   * request failed on the managed credential: PiShip refused to issue it
+   * (identity or credential failure, changed principal) or the gateway
+   * rejected it. Undefined for any other message. Pi shows only the error
+   * text in the TUI, so without it the user gets no instruction.
+   */
+  withAccessAction(message: unknown): unknown;
 }
 
 function denied(provider: string, id: string): PiShipError {
@@ -85,6 +93,8 @@ export function governModelRuntime(
     completeSimple: runtime.completeSimple.bind(runtime),
   };
   let force = false;
+  /** The PiShip error the last managed key request failed with. */
+  let accessFailure: PiShipError | undefined;
   const managed =
     governance.kind === "managed-endpoint" ? governance : undefined;
   const unrestricted =
@@ -189,7 +199,13 @@ export function governModelRuntime(
       return undefined;
     if (!providerHasAllowed(provider)) return undefined;
     if (managed) {
-      const apiKey = await managed.apiKey({ force });
+      let apiKey: string;
+      try {
+        apiKey = await managed.apiKey({ force });
+      } catch (error) {
+        if (error instanceof PiShipError) accessFailure = error;
+        throw error;
+      }
       force = false;
       return {
         auth: { apiKey },
@@ -247,6 +263,31 @@ export function governModelRuntime(
     isAllowed,
     markCredentialRejected: () => {
       force = true;
+    },
+    withAccessAction: (message) => {
+      const pending = accessFailure;
+      accessFailure = undefined;
+      const failure = requestFailure(message);
+      const command = managed?.command;
+      if (!failure || !command) return undefined;
+      let action: string | undefined;
+      if (pending && failure.message.includes(pending.message)) {
+        // PiShip's actions say "run login"; in the TUI that reads as Pi's
+        // `/login`, so the action names the command and where to run it.
+        const named = (pending.userAction ?? "Run login").replace(
+          /\b(run) login\b/gi,
+          `$1 ${command} login`,
+        );
+        action = named.includes(`${command} login`)
+          ? `In a terminal, ${named[0]?.toLowerCase()}${named.slice(1)}`
+          : named;
+      } else if (isCredentialRejection(message))
+        action = `Send the message again; if it fails again, run ${command} login in a terminal`;
+      if (!action) return undefined;
+      return {
+        ...(message as object),
+        errorMessage: `${failure.message}\nAction: ${action}`,
+      };
     },
   };
 }

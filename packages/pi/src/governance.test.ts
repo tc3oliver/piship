@@ -64,7 +64,9 @@ afterEach(async () => {
 });
 
 async function managedSession(
-  options: { keys: string[]; tools?: boolean } = { keys: [] },
+  options: { keys: string[]; tools?: boolean; fail?: () => Error } = {
+    keys: [],
+  },
 ) {
   const runtime = await ModelRuntime.create({
     credentials: memoryCredentials() as never,
@@ -87,6 +89,7 @@ async function managedSession(
     command: "acme",
     apiKey: async ({ force }) => {
       calls += 1;
+      if (options.fail) throw options.fail();
       const key =
         options.keys[
           force
@@ -118,6 +121,10 @@ async function managedSession(
           pi.on("message_end", (event) => {
             if (isCredentialRejection(event.message))
               governed.markCredentialRejected();
+            const message = governed.withAccessAction(event.message);
+            return message
+              ? { message: message as typeof event.message }
+              : undefined;
           });
         },
       },
@@ -255,6 +262,70 @@ describe("managed model governance on the pinned Pi runtime", () => {
     expect(providers[0]?.auth.apiKey?.login).toBeUndefined();
     expect(providers[0]?.auth.apiKey?.name).toBe(
       "AcmeCode sign-in (run acme login in a terminal)",
+    );
+    session.dispose();
+  });
+
+  it.each([
+    [
+      "an expired refresh token",
+      new PiShipError(
+        "IDENTITY_EXPIRED",
+        "Identity refresh failed: token endpoint returned invalid_grant",
+        { component: "identity", userAction: "Run login again" },
+      ),
+      "Identity refresh failed: token endpoint returned invalid_grant\nAction: In a terminal, run acme login again",
+    ],
+    [
+      "a changed principal",
+      new PiShipError(
+        "IDENTITY_REQUIRED",
+        "The signed-in user changed; restart the session",
+        {
+          component: "identity",
+          userAction: "Start acme again to continue as the signed-in user",
+        },
+      ),
+      "The signed-in user changed; restart the session\nAction: Start acme again to continue as the signed-in user",
+    ],
+    [
+      "a missing credential",
+      new PiShipError("CREDENTIAL_REQUIRED", "No runtime credential"),
+      "No runtime credential\nAction: In a terminal, run acme login",
+    ],
+  ])(
+    "shows the PiShip action for %s mid-session",
+    async (_name, error, text) => {
+      const { session } = await managedSession({
+        keys: [],
+        fail: () => error,
+      });
+      await session.prompt("hello");
+      expect(last(session)).toMatchObject({
+        stopReason: "error",
+        errorMessage: text,
+      });
+      session.dispose();
+    },
+  );
+
+  it("does not attach an access action to an ordinary failure", async () => {
+    services.knobs.acceptedKeys = ["sk-managed-credential-1"];
+    services.knobs.gatewayMode = "malformed";
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+    });
+    await session.prompt("hello");
+    expect(last(session)?.errorMessage).not.toContain("Action:");
+    session.dispose();
+  });
+
+  it("shows the PiShip action after a gateway 401", async () => {
+    services.knobs.acceptedKeys = [];
+    const { session } = await managedSession({ keys: ["sk-revoked-1"] });
+    await session.prompt("hello");
+    expect(last(session)?.errorMessage).toMatch(
+      /\nAction: Send the message again; if it fails again, run acme login in a terminal$/,
     );
     session.dispose();
   });
