@@ -154,14 +154,14 @@ Re-sign every channel before `expires` (30 days by default). Expired metadata st
 
 These are separate things:
 
-| | GitHub Release (for example v0.7.0) | Signed update channel |
+| | GitHub Release (for example v0.7.1) | Signed update channel |
 | --- | --- | --- |
 | Proves | A GitHub artifact attestation proves which workflow, repository, and ref built an archive. A `.sha256` file proves which bytes were uploaded | The distribution owner offers this release on this channel now |
 | Checked by | A person, with `gh attestation verify` and `sha256sum` | Every installed client, automatically, on `update` |
 | Key | Sigstore keyless signature bound to the GitHub Actions identity | The owner's Ed25519 key, pinned in the lock |
 | Freshness and rollback | None | Expiry and a monotonic sequence |
 
-An installed client never consults GitHub, attestations, or checksum files when it updates. An attestation or asset checksum is therefore not channel trust and must not be described as one. A GitHub Release archive is at most a bootstrap input: something an operator verifies before a first install. The v0.7.0 pre-release archives pin no keys (`keys: []`), so an installation of them cannot update through any channel. That is intended.
+An installed client never consults GitHub, attestations, or checksum files when it updates. An attestation or asset checksum is therefore not channel trust and must not be described as one. A GitHub Release archive is at most a bootstrap input: something an operator verifies before a first install. The v0.7.0 and v0.7.1 pre-release archives pin no keys (`keys: []`), so an installation of them cannot update through any channel. That is intended.
 
 ## Examples
 
