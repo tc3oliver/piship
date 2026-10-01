@@ -59,6 +59,10 @@ The realm is imported from [`keycloak/piship-reference-realm.json`](keycloak/pis
 | Access token | RS256, 5 minutes. `aud` includes `piship-reference-broker` for the broker to check; `groups` lists the user's groups |
 | Refresh | `offline_access` is allowed; refresh tokens rotate (`revokeRefreshToken`) |
 | Users | `alice` (group `/engineering`) and `bob` (group `/support`). The groups are the input for model entitlement |
+| Brute-force detection | On, temporary lockout only: after 5 failed sign-ins (within 12 hours) a user is locked for 60 seconds, and for 60 seconds more each time another 5 fail, up to 15 minutes; a failure less than a second after the previous one locks for 60 seconds at once. Never permanent, so guessing cannot lock a user out for good |
+| Password policy | At least 12 characters, at most 128, not the username or email, not one of the last 3. `generate-env.mjs` makes 36-character random passwords, which [`tests/reference-keycloak-realm.test.ts`](../../tests/reference-keycloak-realm.test.ts) checks against the policy on every pull request (Keycloak refuses to import a user whose password breaks it) |
+
+These settings keep the reference from inviting password guessing on a developer machine. They do not make it a production identity provider: it runs in development mode, over plain HTTP, with a built-in database, fixed users, and no MFA, e-mail verification, or account recovery. The reference E2E never signs in with a wrong password, so the lockout does not affect it.
 
 Keycloak runs in development mode (`start-dev`, plain HTTP, its built-in database). A service in the compose network reaches the back channel (token, JWKS) at `http://keycloak:8080/realms/piship-reference`; discovery requested there lists `jwks_uri` on that host, while the issuer stays the loopback URL above. The admin console is at `http://127.0.0.1:<KEYCLOAK_PORT>/admin` as `admin`.
 
