@@ -492,6 +492,16 @@ describe("lock piship-lock/v1alpha4", () => {
 
 // ------------------------------------------------------------------- gates
 
+// The release and lifecycle suites run only on an evidenced target. Every CI
+// runner (ubuntu-latest, macos-latest, windows-latest) is one, so there a
+// target that is not must fail rather than silently skip those suites.
+it.runIf(process.env.CI === "true")(
+  "runs the evidenced-target suites on every CI runner",
+  () => {
+    expect(EVIDENCED_TARGETS, currentTarget()).toContain(currentTarget());
+  },
+);
+
 describe.runIf(HOST_EVIDENCED)("release gates", () => {
   it("accepts a current v1alpha4 lock with only reviewed install scripts", () => {
     const { path } = project();

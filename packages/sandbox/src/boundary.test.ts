@@ -618,6 +618,14 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
         ]);
         const controlRan = await waitFor(control, 15_000);
         remove("control");
+        // CI requires the sandbox (PISHIP_REQUIRE_SANDBOX=1 on macOS), and its
+        // runners do run submitted launchd jobs: there a control that did not
+        // run fails the test rather than skipping the escape checks.
+        if (requireSandbox)
+          expect(
+            controlRan,
+            "launchd did not run a submitted job outside the sandbox",
+          ).toBe(true);
         if (!controlRan)
           ctx.skip("launchd did not run a submitted job on this host");
 

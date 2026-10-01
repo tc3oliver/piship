@@ -282,6 +282,13 @@ describe.skipIf(process.platform === "win32")(
               ? [address.address]
               : [],
           );
+        // A CI runner always has a non-loopback IPv4 address, so there the
+        // check must run rather than skip.
+        if (process.env.CI === "true")
+          expect(
+            external,
+            "no external IPv4 address on a CI runner",
+          ).not.toEqual([]);
         if (external.length === 0) {
           console.info(
             "no external IPv4 address: the loopback-only check is skipped",
