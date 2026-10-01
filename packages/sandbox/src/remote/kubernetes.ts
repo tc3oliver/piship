@@ -131,6 +131,28 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * The shared value, or this command's own cancellation: a command that gives
+ * up waiting never cancels the work other commands wait on too.
+ */
+function untilAborted<T>(value: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("aborted"));
+  return new Promise<T>((resolvePromise, reject) => {
+    const onAbort = () => reject(new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    value.then(
+      (result) => {
+        signal.removeEventListener("abort", onAbort);
+        resolvePromise(result);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     if (signal?.aborted) return reject(new Error("aborted"));
@@ -217,13 +239,25 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     interface Lease {
       readonly claim: Promise<Claim>;
       users: number;
+      /** No new command uses it; it is deleted once no command does. */
       retired: boolean;
+      /** The cluster removed it: renewing it is pointless. */
+      gone: boolean;
       keepalive: NodeJS.Timeout | undefined;
     }
     const lease = (claim: Promise<Claim>): Lease => {
       claim.catch(() => undefined);
-      return { claim, users: 0, retired: false, keepalive: undefined };
+      return {
+        claim,
+        users: 0,
+        retired: false,
+        gone: false,
+        keepalive: undefined,
+      };
     };
+    // Every command that waits for a claim shares it, so creating one is
+    // cancelled only by the session ending, never by one command's signal.
+    const session = new AbortController();
     let current: Lease | undefined = lease(
       Promise.resolve(await this.#claim(signal)),
     );
@@ -250,14 +284,15 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         // Never create a claim once the session is disposed: nothing would
         // delete it before its shutdownTime.
         if (disposed) throw new Error("the sandbox was disposed");
-        current ??= lease(this.#claim(io.signal));
+        current ??= lease(this.#claim(session.signal));
         const entry = current;
         let claim: Claim;
         try {
-          claim = await entry.claim;
+          claim = await untilAborted(entry.claim, io.signal);
         } catch (error) {
-          // A claim that failed to become ready is not reused.
-          if (current === entry) current = undefined;
+          // A claim that failed to become ready is not reused; one this
+          // command stopped waiting for still serves the others.
+          if (current === entry && !io.signal.aborted) current = undefined;
           throw error;
         }
         try {
@@ -267,6 +302,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
           // An expired claim is replaced once; any other renewal failure
           // fails the command rather than run it in a sandbox about to go.
           if (!(error instanceof ClaimGone) || attempt > 0) throw error;
+          entry.gone = true;
           retire(entry);
           void release(entry);
           continue;
@@ -281,23 +317,32 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         const [entry, claim] = await acquire(io);
         lastClaim = claim.claim;
         entry.users++;
+        // Renewed while any command runs in it, retired or not: a command
+        // cancelled beside it must not let the claim expire under it.
         entry.keepalive ??= setInterval(() => {
-          if (entry.retired) return;
+          if (entry.gone) return;
           void this.#renew(claim).catch((error: unknown) => {
             // Gone mid-command: the next command must not reuse it.
-            if (error instanceof ClaimGone) retire(entry);
+            if (error instanceof ClaimGone) {
+              entry.gone = true;
+              retire(entry);
+            }
           });
         }, this.#renewEveryMs());
         entry.keepalive.unref?.();
         // The runtime cannot stop a running command. A cancelled command
         // retires its claim: the next command gets a fresh sandbox, and the
-        // retired claim is deleted once no command uses it any more.
+        // retired claim is deleted once no command uses it any more, so the
+        // commands still running in it finish there.
         const onAbort = () => retire(entry);
         io.signal.addEventListener("abort", onAbort, { once: true });
         try {
           return await this.#execute(claim, request, io);
         } catch (error) {
-          if (error instanceof ClaimGone) retire(entry);
+          if (error instanceof ClaimGone) {
+            entry.gone = true;
+            retire(entry);
+          }
           throw error;
         } finally {
           io.signal.removeEventListener("abort", onAbort);
@@ -309,6 +354,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
       dispose: async () => {
         if (disposed) return;
         disposed = true;
+        session.abort();
         const entry = current;
         current = undefined;
         if (entry) {
