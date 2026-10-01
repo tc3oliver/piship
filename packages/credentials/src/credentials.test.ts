@@ -31,22 +31,22 @@ import {
   CREDENTIAL_METADATA_SCHEMA,
   type CredentialEvent,
   CredentialManager,
+  createSecretStore,
   HttpBrokerCredentialProvider,
+  isLockTimeout,
   LocalSecretCredentialProvider,
   MacKeychainSecretStore,
   MemorySecretStore,
+  metadataSecretRefs,
   NoCredentialProvider,
   PiNativeCredentialProvider,
   REVOCATION_RETRY_SCHEMA,
+  RestrictedFileSecretStore,
   readPendingRevocations,
   SANDBOX_CREDENTIAL_METADATA_SCHEMA,
-  RestrictedFileSecretStore,
   SecretServiceSecretStore,
-  WindowsCredentialSecretStore,
-  createSecretStore,
-  metadataSecretRefs,
   toSecretValue,
-  isLockTimeout,
+  WindowsCredentialSecretStore,
   withFileLock,
 } from "./index.js";
 import { touchHeldLocks } from "./lock-heartbeat.js";
@@ -1098,6 +1098,83 @@ describe("http-broker failure and retry contract", () => {
     );
     expect(error.sanitizedDetail).not.toHaveProperty("transport");
     expect(error.sanitizedDetail).toMatchObject({ outcome: "unknown" });
+  });
+
+  // What the managed fetch raises when the proxy, not the broker, failed.
+  const proxyFailure = (transport: string) =>
+    new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `credential request to broker.acme.example:8443 failed at the proxy http://proxy.corp.example:3128: ${transport}`,
+      {
+        retryable: true,
+        component: "credential",
+        sanitizedDetail: {
+          hop: "proxy",
+          proxy: "http://proxy.corp.example:3128",
+          transport,
+        },
+        userAction:
+          "Check that the proxy http://proxy.corp.example:3128 is running",
+      },
+    );
+
+  it("names the proxy, with its action, when the proxy failed", async () => {
+    const error = await failure(
+      broker({
+        fetch: async () => {
+          throw proxyFailure("ECONNREFUSED");
+        },
+      }).acquire(identity, ctx),
+    );
+    expect(error.message).toBe(
+      "The credential broker is unreachable through the proxy http://proxy.corp.example:3128 (ECONNREFUSED)",
+    );
+    expect(error.userAction).toBe(
+      "Check that the proxy http://proxy.corp.example:3128 is running",
+    );
+    expect(error.sanitizedDetail).toMatchObject({
+      reason: "unreachable",
+      outcome: "not-sent",
+      transport: "ECONNREFUSED",
+      proxy: "http://proxy.corp.example:3128",
+    });
+  });
+
+  it("names the proxy when its tunnel was still opening at the deadline", async () => {
+    const error = await failure(
+      broker({
+        timeoutMs: 50,
+        fetch: (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) =>
+            init.signal?.addEventListener("abort", () =>
+              reject(
+                new PiShipError(
+                  "GATEWAY_UNREACHABLE",
+                  "credential request to broker.acme.example:8443 failed: the proxy http://proxy.corp.example:3128 did not open a tunnel in time",
+                  {
+                    retryable: true,
+                    component: "credential",
+                    sanitizedDetail: {
+                      hop: "proxy",
+                      proxy: "http://proxy.corp.example:3128",
+                      transport: "timeout",
+                    },
+                    userAction: "Check the proxy",
+                  },
+                ),
+              ),
+            ),
+          ),
+      }).acquire(identity, ctx),
+    );
+    expect(error.message).toBe(
+      "The credential broker is unreachable through the proxy http://proxy.corp.example:3128 (timeout)",
+    );
+    expect(error.userAction).toBe("Check the proxy");
+    expect(error.sanitizedDetail).toMatchObject({
+      reason: "unreachable",
+      outcome: "unknown",
+    });
   });
 
   // Regression: revoke used to call fetch directly, so a transport failure
