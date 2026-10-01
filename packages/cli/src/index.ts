@@ -42,6 +42,7 @@ import {
 import { formatError, redact } from "@piship/contracts";
 import {
   launchWarnings,
+  runtimeVariableUse,
   readManifest,
   ManifestError,
   migrateManifestSource,
@@ -327,16 +328,41 @@ export async function runCli(
       checkPiVersion(manifest);
       // The same resource and governance checks as lock, without writing it.
       checkGovernance(manifest, target, resolveResources(manifest, target));
-      const variables = manifest.access?.variables ?? [];
-      const missing = variables.filter((name) => !process.env[name]);
+      // updates.source is read only by update; launch never needs it.
+      const variables = runtimeVariableUse(manifest);
+      const unset = (names: readonly string[]) =>
+        names.filter((name) => !process.env[name]);
+      const missingLaunch = unset(variables.launch);
+      const missingUpdate = unset(variables.update);
       output.stdout(
-        `Manifest is valid.\nSchema ${manifest.schema}, mode ${manifest.deployment.mode}.${variables.length ? `\nRuntime variables (resolved at launch, never locked): ${variables.join(", ")}` : ""}`,
+        [
+          "Manifest is valid.",
+          `Schema ${manifest.schema}, mode ${manifest.deployment.mode}.`,
+          ...(variables.launch.length
+            ? [
+                `Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ${variables.launch.join(", ")}`,
+              ]
+            : []),
+          ...(variables.update.length
+            ? [
+                `Runtime variables needed only by update: ${variables.update.join(", ")}`,
+              ]
+            : []),
+        ].join("\n"),
       );
       for (const warning of launchWarnings(manifest))
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
-      if (missing.length)
+      const theyAre = (names: readonly string[]) =>
+        names.length > 1 ? "they are" : "it is";
+      const them = (names: readonly string[]) =>
+        names.length > 1 ? "them" : "it";
+      if (missingLaunch.length)
         output.stderr(
-          `Note: ${missing.join(", ")} not set in this shell; the branded command fails visibly until they are set at launch.`,
+          `Note: ${missingLaunch.join(", ")} not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until ${theyAre(missingLaunch)} set in the environment it is started from. An IDE or desktop launcher does not read your shell profile; a plain https URL in piship.yaml needs no variable.`,
+        );
+      if (missingUpdate.length)
+        output.stderr(
+          `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
         );
     } else if (command === "migrate") {
       const plan = migrateManifestSource(readFileSync(target, "utf8"));

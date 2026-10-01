@@ -4,6 +4,7 @@ import {
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA4,
   parseManifest,
+  runtimeVariableUse,
 } from "./index.js";
 
 type Json = Record<string, unknown>;
@@ -282,5 +283,32 @@ describe("sandbox.network.mode", () => {
       {},
     ])
       expect(warnings(managed({ sandbox }))).toEqual([]);
+  });
+});
+
+describe("runtimeVariableUse", () => {
+  it("separates launch variables from those only update reads", () => {
+    const manifest = parseManifest(
+      managed({
+        variables: ["ACME_SIEM_URL", "ACME_HOST", "ACME_UPDATES"],
+        audit: {
+          enabled: true,
+          sinks: [{ id: "siem", type: "http", url: `\${ACME_SIEM_URL}` }],
+        },
+        inference: {
+          provider: "openai-compatible",
+          baseUrl: `https://\${ACME_HOST}/v1`,
+        },
+        updates: {
+          channel: "stable",
+          channels: ["stable"],
+          source: `https://\${ACME_HOST}/\${ACME_UPDATES}`,
+        },
+      }),
+    );
+    expect(runtimeVariableUse(manifest)).toEqual({
+      launch: ["ACME_SIEM_URL", "ACME_HOST"],
+      update: ["ACME_UPDATES"],
+    });
   });
 });

@@ -324,4 +324,43 @@ describe("validate", () => {
       "Warning: network.tls.additionalCA[0]: A relative CA bundle path",
     );
   });
+
+  it("separates the variables launch needs from the ones only update reads", async () => {
+    delete process.env.ACME_GATEWAY_URL;
+    delete process.env.ACME_UPDATE_URL;
+    const result = await validate({
+      variables: ["ACME_GATEWAY_URL", "ACME_UPDATE_URL"],
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: `\${ACME_GATEWAY_URL}`,
+      },
+      updates: {
+        channel: "stable",
+        channels: ["stable"],
+        source: `\${ACME_UPDATE_URL}`,
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ACME_GATEWAY_URL",
+    );
+    expect(result.stdout).toContain(
+      "Runtime variables needed only by update: ACME_UPDATE_URL",
+    );
+    const [launch, update] = result.stderr.split("\n");
+    expect(launch).toContain(
+      "Note: ACME_GATEWAY_URL not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until it is set",
+    );
+    expect(launch).not.toContain("ACME_UPDATE_URL");
+    expect(launch).toContain("a plain https URL");
+    expect(update).toBe(
+      "Note: ACME_UPDATE_URL not set in this shell; only update reads it, and update fails until it is set. Launch does not need it.",
+    );
+  });
+
+  it("prints no variable lines for plain URLs", async () => {
+    const result = await validate({});
+    expect(result.stdout).not.toContain("Runtime variables");
+    expect(result.stderr).toBe("");
+  });
 });

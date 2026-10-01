@@ -9,8 +9,10 @@ import {
   type DeploymentMode,
 } from "./access.js";
 import type { GovernanceManifest } from "./governance.js";
+import { governanceReferences } from "./governance-parse.js";
 import type { Manifest, ValidationDiagnostic } from "./index.js";
-import { hasRuntimeReference } from "./variables.js";
+import { lifecycleReferences } from "./lifecycle.js";
+import { hasRuntimeReference, referencedVariables } from "./variables.js";
 
 interface LaunchSections {
   readonly mode: DeploymentMode;
@@ -188,6 +190,44 @@ export function assertLaunchable(sections: LaunchSections): void {
   const failure = findings(sections).find((finding) => finding.certain);
   if (failure)
     throw new AccessFieldError("conflict", failure.path, failure.message);
+}
+
+/**
+ * Declared runtime variables by when they are read: `launch` by the branded
+ * command (access endpoints, CA bundles, MCP, audit, and sandbox URLs),
+ * `update` only by `<command> update` (`updates.source`).
+ */
+export function runtimeVariableUse(manifest: Manifest): {
+  readonly launch: readonly string[];
+  readonly update: readonly string[];
+} {
+  const updateOnly = new Set(
+    manifest.lifecycle ? lifecycleReferences(manifest.lifecycle) : [],
+  );
+  const access = manifest.access;
+  if (access) {
+    const launch = [
+      ...(access.identity.mode === "oidc"
+        ? [
+            access.identity.oidc.issuer,
+            access.identity.oidc.clientId,
+            access.identity.oidc.audience,
+          ]
+        : []),
+      access.credential.broker?.endpoint,
+      access.credential.broker?.revokeEndpoint,
+      access.inference.baseUrl,
+      ...access.network.tls.additionalCA,
+    ].flatMap((text) => (text ? referencedVariables(text) : []));
+    if (manifest.governance)
+      launch.push(...governanceReferences(manifest.governance));
+    for (const name of launch) updateOnly.delete(name);
+  }
+  const variables = access?.variables ?? [];
+  return {
+    launch: variables.filter((name) => !updateOnly.has(name)),
+    update: variables.filter((name) => updateOnly.has(name)),
+  };
 }
 
 /**
