@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm or as a GitHub Release, and every package is still versioned `0.1.0`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0 is the first milestone published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0); every package is versioned `0.7.0`.
 
 ## v0.7.0
 
-Preview milestone; not published to npm. v0.7 connects a managed distribution to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and adds the adapter SDK, the conformance kits, and the reference stack that test those connections. The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`. The [status page](docs/status.md#recorded-evidence) records what evidence exists for this milestone; this section does not claim release qualification.
+Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0) from tag `v0.7.0` (commit `4994eee`, the squash of #165); not published to npm. v0.7 connects a managed distribution to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and adds the adapter SDK, the conformance kits, and the reference stack that test those connections. The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`. Release qualification passed on that exact commit ([status](docs/status.md#v070-release-candidate)).
 
 Behavior and contract changes come first, by topic, because they change what an existing command, type, or wire contract does. Added, changed, fixed, and test infrastructure entries follow.
 

@@ -2,7 +2,7 @@
 
 This page is the single source of truth for what current `main` supports and what evidence backs each claim. Other documents describe how things work and link here for status. When this page and another document disagree, this page wins; please report the mismatch.
 
-Nothing is published. There is no npm release, GitHub Release, or signed channel operated by the project; release archives exist only as CI workflow artifacts. Every milestone below is a preview milestone.
+v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. Every milestone below is a preview milestone.
 
 ## Status terms
 
@@ -142,7 +142,7 @@ Consequence: the `personal` surface stays `supported` in `compatibility/pi.json`
 
 ### v0.7.0 release candidate
 
-The release blockers found after `ee8b4a9` (#122, #123, #124) were fixed in pull request #163, and the selected hardening items of #157, #158, and #159 in pull request #164, which also sets the PiShip version to `0.7.0`. The squash commit of #164 that carries this page is the v0.7.0 candidate. Its Release qualification (CI, CodeQL, Portable E2E, Reference E2E, and Release candidate on that exact commit) is recorded in [#121](https://github.com/tc3oliver/piship/issues/121), and the `v0.7.0` tag is set only on that commit. The `ee8b4a9` evidence below is kept for its own commit.
+The release blockers found after `ee8b4a9` (#122, #123, #124) were fixed in pull request #163, and the selected hardening items of #157, #158, and #159 in pull request #164, which also sets the PiShip version to `0.7.0`. Its Release qualification found three test and example gaps, fixed in pull request #165. The squash commit of #165, `4994eee`, is v0.7.0: [Release qualification](https://github.com/tc3oliver/piship/actions/runs/36818652078) (CI, CodeQL, Portable E2E, Reference E2E, and Release candidate) passed on that exact commit, it is recorded in [#121](https://github.com/tc3oliver/piship/issues/121), the `v0.7.0` tag is set on it, and its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0) carries that run's archives. The `ee8b4a9` evidence below is kept for its own commit.
 
 Pi stays at 0.87.1 for v0.7.0. The latest stable Pi when the candidate was frozen, 0.99.2 (2026-09-30), still pins `brace-expansion` 5.0.9 in its `npm-shrinkwrap.json`, so it would not clear the advisory below, and its 0.99.0 adds built-in MCP, codemode, and tool search extensions that run tools outside the paths PiShip governs, which needs a compatibility review of its own. Upstream tracking: [earendil-works/pi#10273](https://github.com/earendil-works/pi/issues/10273).
 
