@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file. Each section is
 
 Changes on `main` after v0.7.0. Not released.
 
+### Security
+
+- The reference sandbox container service in `examples/enterprise-reference` pins every directory above a nested protected path, so a sandboxed command can no longer move a protected path aside and bypass the protected git path enforcement ([GHSA-w3j6-fv7v-wwr4](https://github.com/tc3oliver/piship/security/advisories/GHSA-w3j6-fv7v-wwr4), #170). Affected: that reference service in the v0.7.0 source. Not affected: the v0.7.0 release archives, the PiShip packages, and the bubblewrap and Seatbelt sandboxes.
+
 ### Behavior and contract changes
 
 - A broker `409` to an acquire or renewal that sent an idempotency key is a final key conflict only when its JSON body is `{"error":"idempotency_key_reused"}`. Any other `409` now means the request is still in progress: the key is kept, `Retry-After` is honored, and the failure is retryable, so PiShip never issues a second credential for it (#157).
