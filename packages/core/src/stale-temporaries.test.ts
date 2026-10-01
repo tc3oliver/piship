@@ -110,7 +110,7 @@ describe("where each start reclaims", () => {
     );
     const result = reclaimOsTemporaries();
     expect(result.failed).toEqual([]);
-    expect(result.removed.sort()).toEqual(stale.sort());
+    expect([...result.removed].sort()).toEqual(stale.sort());
     for (const path of kept) expect(existsSync(path)).toBe(true);
     for (const path of users)
       expect(readFileSync(path, "utf8")).toBe("user data");

@@ -15,7 +15,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "test": "vitest run --exclude 'tests/e2e/**' --exclude 'tests/compatibility/**' --exclude 'tests/enterprise-reference/**' --exclude 'examples/enterprise-reference/tests/**' --exclude 'packages/pi/src/compatibility.test.ts'",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:reference": "vitest run --config vitest.reference.config.ts",

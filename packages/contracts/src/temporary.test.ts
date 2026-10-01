@@ -249,7 +249,9 @@ describe("reclaimTemporaryDirectories", () => {
     expect(existsSync(verify)).toBe(true);
     expect(existsSync(staging)).toBe(true);
     expect(
-      reclaimTemporaryDirectories(root, ["verify", "staging"]).removed.sort(),
+      [
+        ...reclaimTemporaryDirectories(root, ["verify", "staging"]).removed,
+      ].sort(),
     ).toEqual([staging, verify].sort());
   });
 
@@ -278,7 +280,7 @@ describe("reclaimTemporaryDirectories", () => {
       for (const path of [first, second, live])
         expect(existsSync(join(path, TEMPORARY_OWNER_FILE))).toBe(true);
       expect(
-        reclaimTemporaryDirectories(root, ["verify"]).removed.sort(),
+        [...reclaimTemporaryDirectories(root, ["verify"]).removed].sort(),
       ).toEqual([first, second].sort());
       expect(existsSync(live)).toBe(true);
     });
@@ -756,7 +758,7 @@ describe("hard termination", () => {
     expect(found(root, ALL).sort()).toEqual(left.slice().sort());
     const result = reclaimTemporaryDirectories(root, ALL);
     expect(result.failed).toEqual([]);
-    expect(result.removed.sort()).toEqual(left.slice().sort());
+    expect([...result.removed].sort()).toEqual(left.slice().sort());
     expect(readdirSync(root)).toEqual([]);
   });
 
@@ -794,7 +796,7 @@ describe("hard termination", () => {
         child.on("error", reject);
       });
       const result = reclaimTemporaryDirectories(root, ALL);
-      expect(result.removed.sort()).toEqual(killed.slice().sort());
+      expect([...result.removed].sort()).toEqual(killed.slice().sort());
       for (const path of live)
         expect(readFileSync(join(path, "tool-output.txt"), "utf8")).toBe(
           "private output",

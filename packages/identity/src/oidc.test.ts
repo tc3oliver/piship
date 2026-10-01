@@ -217,7 +217,7 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
         const session = await identity.login({ openUrl: approve });
         services.knobs.tokenFaults.push({
           ...fault,
-          ...(fault.retryAfter === "date"
+          ...("retryAfter" in fault && fault.retryAfter === "date"
             ? { retryAfter: inThirtySeconds() }
             : {}),
         });

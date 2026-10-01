@@ -43,7 +43,8 @@ function terms(policy: string): [string, number | undefined][] {
   return policy.split(/\s+and\s+/).map((term) => {
     const match = /^([A-Za-z]+)(?:\((\d+)\))?$/.exec(term.trim());
     if (!match) throw new Error(`unreadable password policy term: ${term}`);
-    return [match[1], match[2] === undefined ? undefined : Number(match[2])];
+    const [, name = "", count] = match;
+    return [name, count === undefined ? undefined : Number(count)];
   });
 }
 
@@ -131,7 +132,10 @@ describe("the reference Keycloak realm", () => {
         const password =
           env[`REFERENCE_${user.username.toUpperCase()}_PASSWORD`];
         expect(password, user.username).toBeTruthy();
-        expect(breaks(policy, password, user), user.username).toBeUndefined();
+        expect(
+          breaks(policy, password ?? "", user),
+          user.username,
+        ).toBeUndefined();
       }
     }
   });

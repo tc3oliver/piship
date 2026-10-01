@@ -48,7 +48,7 @@ describe("signing", () => {
   it("rejects tampered bytes and the wrong key", () => {
     const envelope = signBytes(bytes, key.privateKeyPem, key.id);
     const tampered = Uint8Array.from(bytes);
-    tampered[0] ^= 1;
+    tampered[0] = (tampered[0] ?? 0) ^ 1;
     expect(() => verifySignature(tampered, envelope, trusted)).toThrow(
       /does not verify/,
     );

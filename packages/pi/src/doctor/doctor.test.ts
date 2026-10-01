@@ -162,11 +162,14 @@ const okStatus: AuditStatus = {
   ],
 };
 
+/** Overrides of the defaults below; a field set to undefined is left out. */
 function governanceData(
-  overrides: Partial<GovernanceData> = {},
+  overrides: {
+    readonly [K in keyof GovernanceData]?: GovernanceData[K] | undefined;
+  } = {},
 ): GovernanceData {
   const inspected = inspection();
-  return {
+  const defaults: GovernanceData = {
     manifest: {
       policy: { default: "deny", enforced: [], defaults: [], adapter: null },
       capabilities: [],
@@ -181,8 +184,11 @@ function governanceData(
       status: okStatus,
       targets: [{ id: "local", target: "local file" }],
     },
-    ...overrides,
   };
+  const data = { ...defaults, ...overrides };
+  for (const key of Object.keys(data) as (keyof GovernanceData)[])
+    if (data[key] === undefined) delete data[key];
+  return data as GovernanceData;
 }
 
 function doctorData(
@@ -1274,7 +1280,7 @@ describe("Audit group", () => {
       state: "failed",
       rejected: 1,
       sinks: [
-        okStatus.sinks[0],
+        ...okStatus.sinks,
         {
           id: "siem",
           type: "http",
@@ -1449,7 +1455,7 @@ describe("doctor secret scan", () => {
               required: false,
               reason: `401 for token ${opaque}`,
             },
-          ] as unknown as GovernanceData["mcp"],
+          ] as unknown as NonNullable<GovernanceData["mcp"]>,
           audit: {
             status,
             targets: [{ id: "siem", target: "host audit.acme.example" }],

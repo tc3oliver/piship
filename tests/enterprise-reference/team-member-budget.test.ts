@@ -41,7 +41,10 @@ afterAll(() => stack?.stop());
 describe("D-01: team-member budgets in the pinned LiteLLM (live reference stack)", () => {
   it("enforces max_budget_in_team on every team key of the member, and not the member's personal budget", async () => {
     const suffix = randomBytes(4).toString("hex");
-    const members = [`oidc-member-a-${suffix}`, `oidc-member-b-${suffix}`];
+    const members = [
+      `oidc-member-a-${suffix}`,
+      `oidc-member-b-${suffix}`,
+    ] as const;
     for (const userId of members) {
       const created = await stack.admin("/user/new", {
         user_id: userId,
@@ -75,7 +78,7 @@ describe("D-01: team-member budgets in the pinned LiteLLM (live reference stack)
       return String((generated.body as { key: string }).key);
     };
     const [memberA, memberB] = members;
-    const keysA = [await teamKey(memberA), await teamKey(memberA)];
+    const keysA = [await teamKey(memberA), await teamKey(memberA)] as const;
     const keyB = await teamKey(memberB);
 
     // Member A alternates two keys (200 words, about $0.00044 a request)
@@ -83,7 +86,9 @@ describe("D-01: team-member budgets in the pinned LiteLLM (live reference stack)
     let passed = 0;
     let refusal: Awaited<ReturnType<ReferenceStack["chat"]>> | undefined;
     for (; passed < 20; passed += 1) {
-      const response = await stack.chat(keysA[passed % 2], { words: 200 });
+      const response = await stack.chat(keysA[passed % 2 === 0 ? 0 : 1], {
+        words: 200,
+      });
       if (response.status !== 200) {
         refusal = response;
         break;

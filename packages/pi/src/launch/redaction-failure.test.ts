@@ -1,3 +1,4 @@
+import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { providerErrorRedaction, REDACTION_FAILED_TEXT } from "./redaction.js";
 
@@ -10,13 +11,17 @@ vi.mock("@piship/contracts", async (original) => ({
   },
 }));
 
+/** The factory of an inline extension, in either of its public shapes. */
+const factoryOf = (extension: InlineExtension) =>
+  typeof extension === "function" ? extension : extension.factory;
+
 function messageEnd() {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const pi = {
     on: (name: string, handler: (event: unknown) => unknown) =>
       handlers.set(name, handler),
   };
-  (providerErrorRedaction.factory as (api: unknown) => void)(pi);
+  (factoryOf(providerErrorRedaction) as (api: unknown) => void)(pi);
   const handler = handlers.get("message_end");
   if (!handler) throw new Error("no message_end handler");
   return handler;

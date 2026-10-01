@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import {
+  type CredentialContext,
   type CredentialProvider,
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
@@ -451,10 +452,14 @@ describe("http-broker failure and retry contract", () => {
       expect(renderings).not.toContain(secret);
   }
   const call = {
-    acquire: (provider: HttpBrokerCredentialProvider, context = ctx) =>
-      provider.acquire(identity, context),
-    revoke: (provider: HttpBrokerCredentialProvider, context = ctx) =>
-      provider.revoke(issued, context),
+    acquire: (
+      provider: HttpBrokerCredentialProvider,
+      context: CredentialContext = ctx,
+    ) => provider.acquire(identity, context),
+    revoke: (
+      provider: HttpBrokerCredentialProvider,
+      context: CredentialContext = ctx,
+    ) => provider.revoke(issued, context),
   } as const;
   const inThirtySeconds = () => new Date(Date.now() + 30_000);
 
@@ -908,7 +913,7 @@ describe("http-broker failure and retry contract", () => {
       knobs[`${operation === "acquire" ? "broker" : "revoke"}Faults`]?.push({
         body: { error: "failure", credential: BODY_SENTINEL },
         ...fault,
-        ...(fault.retryAfter === "date"
+        ...("retryAfter" in fault && fault.retryAfter === "date"
           ? { retryAfter: inThirtySeconds() }
           : {}),
       });
@@ -1697,7 +1702,12 @@ describe("credential lifecycle", () => {
     expect(credentials.status().state).toBe("expired");
     const error = await credentials
       .ensure(null, ctx, { allowAcquire: false })
-      .catch((caught: Error) => caught);
+      .then(
+        () => {
+          throw new Error("expected a failure");
+        },
+        (caught: unknown) => caught as Error,
+      );
     expect(error).toMatchObject({ code: "CREDENTIAL_EXPIRED" });
     expect(String(error)).not.toContain("sk-generation");
   });
@@ -2409,7 +2419,12 @@ describe("credential lifecycle events", () => {
       services.knobs.brokerFaults.push({ status: 503, retryAfter: 11 });
       const error = await credentials
         .ensure(identity, ctx, { allowAcquire: false, forceRefresh: true })
-        .catch((caught: unknown) => caught as PiShipError);
+        .then(
+          () => {
+            throw new Error("expected a failure");
+          },
+          (caught: unknown) => caught as PiShipError,
+        );
       expect(error).toMatchObject({
         code: "CREDENTIAL_ACQUIRE_FAILED",
         retryable: true,
@@ -2428,7 +2443,12 @@ describe("credential lifecycle events", () => {
           allowAcquire: false,
           forceRefresh: true,
         })
-        .catch((caught: unknown) => caught as PiShipError);
+        .then(
+          () => {
+            throw new Error("expected a failure");
+          },
+          (caught: unknown) => caught as PiShipError,
+        );
       expect(timeout).toMatchObject({
         code: "CREDENTIAL_ACQUIRE_FAILED",
         retryable: true,
@@ -3128,9 +3148,12 @@ describe("principal binding and verified deletion", () => {
     });
     await manager.ensure(null, ctx, { allowAcquire: true });
     now += 5_000;
-    const error = await manager
-      .ensure(null, ctx, { allowAcquire: false })
-      .catch((caught: Error) => caught);
+    const error = await manager.ensure(null, ctx, { allowAcquire: false }).then(
+      () => {
+        throw new Error("expected a failure");
+      },
+      (caught: unknown) => caught as Error,
+    );
     expect(error).toMatchObject({ code: "CREDENTIAL_EXPIRED" });
     expect(error.message).toContain("could not be renewed");
     expect(error.message).not.toContain("abc.def.ghijkl");

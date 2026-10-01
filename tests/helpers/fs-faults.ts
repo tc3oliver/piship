@@ -76,7 +76,7 @@ function systemError(code: string, syscall: string, path: string): Error {
 type Fs = typeof fs;
 
 /** node:fs with `openSync`, `writeSync`, `fsyncSync`, and `renameSync` faultable. */
-export function faultyFs(actual: Fs): Fs {
+export function faultyFs(actual: Fs): Fs & { default: Fs } {
   const paths = new Map<number, string>();
   const openSync = ((path: fs.PathLike, ...rest: unknown[]) => {
     const fault = take("open", String(path));

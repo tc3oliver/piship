@@ -64,7 +64,7 @@ function shard(value: string | undefined) {
   }
   return index === count
     ? { include: INCLUDE, exclude: named }
-    : { include: [...SHARDS[index - 1]], exclude: [] };
+    : { include: [...(SHARDS[index - 1] ?? [])], exclude: [] };
 }
 
 const files = shard(process.env.PISHIP_REFERENCE_SHARD);

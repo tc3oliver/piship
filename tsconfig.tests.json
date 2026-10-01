@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "sourceMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.tests.tsbuildinfo"
+  },
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "tests/**/*.ts",
+    "examples/enterprise-reference/tests/**/*.ts",
+    "*.config.ts"
+  ]
+}

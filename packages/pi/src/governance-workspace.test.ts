@@ -18,7 +18,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ExtensionFactory,
+  InlineExtension,
+} from "@earendil-works/pi-coding-agent";
 import type { ManagedFetch } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -218,6 +222,10 @@ function context(notices: string[] = [], hasUI = true): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
+/** The factory of an inline extension, in either of its public shapes. */
+const factoryOf = (extension: InlineExtension): ExtensionFactory =>
+  typeof extension === "function" ? extension : extension.factory;
+
 /** The governance hooks and workflow commands, as Pi would register them. */
 function load(session: GovernanceSession, workflow: boolean) {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -233,8 +241,8 @@ function load(session: GovernanceSession, workflow: boolean) {
       options: { handler: (args: string, ctx: unknown) => Promise<void> },
     ) => commands.set(name, options),
   } as never;
-  governanceHooks(session).factory(api);
-  if (workflow) workflowExtension(session, {}).factory(api);
+  factoryOf(governanceHooks(session))(api);
+  if (workflow) factoryOf(workflowExtension(session, {}))(api);
   return { handlers, commands };
 }
 

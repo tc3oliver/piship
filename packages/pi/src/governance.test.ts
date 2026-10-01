@@ -147,7 +147,7 @@ async function managedSession(
     settingsManager,
     sessionManager: SessionManager.inMemory(temp),
     resourceLoader,
-    ...(options.tools === false ? { noTools: true } : {}),
+    ...(options.tools === false ? { noTools: "all" as const } : {}),
   });
   return { runtime, session, governed, calls: () => calls, issued };
 }

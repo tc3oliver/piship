@@ -20,6 +20,7 @@ import { dirname, join, parse } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import {
   type ExtensionContext,
+  type ExtensionFactory,
   type InlineExtension,
   SessionManager,
   type ToolDefinition,
@@ -180,6 +181,10 @@ function text(result: { content: { type: string; text?: string }[] }) {
   return result.content.map((item) => item.text ?? "").join("");
 }
 
+/** The factory of an inline extension, in either of its public shapes. */
+const factoryOf = (extension: InlineExtension): ExtensionFactory =>
+  typeof extension === "function" ? extension : extension.factory;
+
 /** Collect what an inline extension registers through the public API shape. */
 function load(extension: InlineExtension) {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -188,7 +193,7 @@ function load(extension: InlineExtension) {
     string,
     { handler: (args: string, ctx: unknown) => Promise<void> }
   >();
-  extension.factory({
+  factoryOf(extension)({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, handler),
     registerTool: (definition: ToolDefinition) => tools.push(definition),

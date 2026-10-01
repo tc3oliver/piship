@@ -86,7 +86,7 @@ function readEnvFile(path: string): Record<string, string> {
   const values: Record<string, string> = {};
   for (const line of readFileSync(path, "utf8").split("\n")) {
     const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match) values[match[1]] = match[2];
+    if (match?.[1] !== undefined) values[match[1]] = match[2] ?? "";
   }
   return values;
 }
@@ -104,7 +104,7 @@ export async function request(
         ? {}
         : { "content-type": "application/json" }),
     },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
   const text = await response.text();
   let body: unknown = text;
@@ -346,7 +346,10 @@ export function startReferenceStack({
     JSON.parse(getToken(user, ["--response"]));
 
   const admin = (path: string, body?: unknown) =>
-    request(`${url("LITELLM_PORT")}${path}`, { bearer: masterKey, body });
+    request(`${url("LITELLM_PORT")}${path}`, {
+      ...(masterKey === undefined ? {} : { bearer: masterKey }),
+      body,
+    });
 
   return {
     project,

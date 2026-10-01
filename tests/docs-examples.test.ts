@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
@@ -76,6 +77,7 @@ describe("documented examples", () => {
       router: "http://127.0.0.1:9",
       namespace: config?.namespace ?? "default",
       template: config?.template ?? "",
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox"),
     });
     expect(
       capabilityMismatch(

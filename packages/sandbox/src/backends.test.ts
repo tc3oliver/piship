@@ -375,9 +375,9 @@ describe("capability mismatch", () => {
       const { backend, events } = fakeBackend({
         capabilities: {
           isolation: "local",
-          planes: [...PATH_PLANES, "network-deny", "environment-filter"].filter(
-            (item) => item !== plane,
-          ),
+          planes: (
+            [...PATH_PLANES, "network-deny", "environment-filter"] as const
+          ).filter((item) => item !== plane),
           network: ["deny", "allow"],
           localProcesses: false,
         },

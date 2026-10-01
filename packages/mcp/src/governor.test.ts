@@ -669,9 +669,7 @@ describe("McpGovernor over Streamable HTTP", () => {
       servers: [httpServer("tickets", fixture.url, { credential: "runtime" })],
     });
     expect((await good.governor.start())[0]?.state).toBe("healthy");
-    expect(
-      fixture.requests.every((r: { authorized: boolean }) => r.authorized),
-    ).toBe(true);
+    expect(fixture.requests.every((r) => r.authorized === true)).toBe(true);
 
     const wrong = "wrong-bearer-0a1b2c3d4e";
     const bad = harness({

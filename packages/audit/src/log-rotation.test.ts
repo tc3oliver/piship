@@ -20,7 +20,7 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  const sameInode = <T extends { ino: number }>(stats: T): T =>
+  const sameInode = <T extends { ino: number | bigint }>(stats: T): T =>
     Object.assign(stats, { ino: 1 });
   const open = async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args);

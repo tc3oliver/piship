@@ -98,7 +98,7 @@ describe("usage continuity across credential rotation (live reference stack)", (
     const infos = await Promise.all(
       [a, b, c].map((key) => stack.keyInfo(key.hash)),
     );
-    alice = String(infos[0].user_id);
+    alice = String(infos[0]?.user_id);
     expect(alice).toMatch(/^oidc-[0-9a-f]{40}$/);
     for (const info of infos) {
       // One LiteLLM user, no team (a team key ignores the user's budget), and
