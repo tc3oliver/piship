@@ -4,6 +4,8 @@
 
 `compatibility/pi.json` reports status per surface. The current status of each surface, and the CI runs that back it, are kept in one place: [project status](status.md). This page defines the terms and the Pi integration contract. `candidate` means local public-API and artifact checks pass while the complete target matrix or live evidence remains pending. `supported` requires a branded install, real Pi startup, declared TypeScript extension, safe tool path, session resume, inspection, diagnostics, and uninstall on each advertised OS/CPU target.
 
+The production-validation baseline is v0.7.1: tag `v0.7.1` at commit `bd4bc09`, with Pi 0.87.1, Node.js 22.19.0 or newer, and the targets `linux-x64`, `darwin-arm64`, and `win32-x64`. [Release qualification run 36857734987](https://github.com/tc3oliver/piship/actions/runs/36857734987) passed on that exact commit, and its six attested archives are the [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1). Details are on the [status page](status.md#v071-production-validation-baseline).
+
 ## Personal surface
 
 `compatibility/pi.json` marks Pi 0.87.1 **supported for the portable personal surface** on Ubuntu x64, macOS arm64, and Windows x64 with Node 22.19.0. The surface was first qualified by a [three-target run](https://github.com/tc3oliver/piship/actions/runs/36345041538) of build, installed E2E, and public-API compatibility for the v0.1 `piship/v1alpha1` personal example; a local macOS arm64 PTY run also opened the real interactive TUI. The personal example has since moved to `piship/v1alpha4`, and its installed E2E is now part of the nightly and manual Portable E2E rather than a pull request gate; the [status page](status.md#recorded-evidence) records the latest result for the current commit. This status does not claim a live authenticated model request or other CPU architectures.
@@ -15,8 +17,8 @@ Managed access (`piship/v1alpha2`) is a **candidate** on Pi 0.87.1. It is verifi
 Still pending:
 
 - Sign-in at a production identity provider and inference through a production gateway; the reference stack stands in for both.
-- A model request that reaches a real model provider. The gateway's upstream in Reference E2E is a mock, and the personal flows send their request to a stand-in model server. The manual `Live provider` workflow sends one request through LiteLLM to a real provider; no run of it is recorded.
-- Installed E2E for the managed surface on all three targets is recorded for the v0.7 candidate `ee8b4a9` ([status](status.md#v07-candidate)), not for any later commit; it must be re-run on each candidate.
+- A model request to a real model provider in any automated tier. The gateway's upstream in Reference E2E is a mock, and the personal flows send their request to a stand-in model server. The manual `Live provider` workflow sends one request from AcmeCode through the reference LiteLLM to a real provider; [run 36877709332](https://github.com/tc3oliver/piship/actions/runs/36877709332) passed on `main` at `9e458f0` ([status](status.md#after-v071-on-main)). That is manual evidence for the reference stack, not for a company's identity provider or gateway.
+- Installed E2E for the managed surface on all three targets is recorded for v0.7.1, tag `v0.7.1` at commit `bd4bc09`, in [Release qualification run 36857734987](https://github.com/tc3oliver/piship/actions/runs/36857734987) ([status](status.md#v071)), not for any later commit; it must be re-run on each release candidate.
 
 ## Governance surface
 
