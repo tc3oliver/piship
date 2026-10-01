@@ -13,6 +13,7 @@ import { PiShipError } from "@piship/contracts";
 import { RELEASE_CHANNELS } from "@piship/schema";
 import { sha256File } from "../archive.js";
 import {
+  keyFingerprint,
   signBytes,
   verifySignature,
   type SignatureEnvelope,
@@ -182,8 +183,9 @@ export async function signChannel(
 }
 
 /**
- * Fetch and verify signed channel metadata: a trusted key, the expected
- * distribution and channel, not expired, and no older than `minSequence`.
+ * Fetch and verify signed channel metadata: a trusted key that is not
+ * `retired`, the expected distribution and channel, not expired, and no older
+ * than `minSequence`.
  */
 export async function readChannel(
   source: string,
@@ -191,6 +193,15 @@ export async function readChannel(
   options: {
     readonly distribution: string;
     readonly trusted: readonly TrustedKey[];
+    /**
+     * Keys a release activated on this installation stopped pinning, matched
+     * by public key fingerprint; refused even when `trusted` pins them.
+     */
+    readonly retired?: readonly {
+      readonly id: string;
+      readonly fingerprint: string;
+      readonly release: string;
+    }[];
     readonly minSequence?: number;
     readonly now?: () => Date;
     readonly fetcher?: typeof fetch;
@@ -215,7 +226,28 @@ export async function readChannel(
       "Channel signature is not valid JSON",
     );
   }
-  const keyId = verifySignature(bytes, envelope, options.trusted);
+  const retired = new Map(
+    (options.retired ?? []).map((key) => [key.fingerprint, key]),
+  );
+  const trusted = options.trusted.filter(
+    (key) => !retired.has(keyFingerprint(key.publicKey)),
+  );
+  const named = (envelope as { keyId?: unknown } | null)?.keyId;
+  if (!trusted.some((key) => key.id === named)) {
+    const pinned = options.trusted.find((key) => key.id === named);
+    const retirement = pinned && retired.get(keyFingerprint(pinned.publicKey));
+    if (retirement)
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `Signature key ${retirement.id} was retired by the ${retirement.release} release of this installation; a rollback does not restore trust in it`,
+        {
+          component: "signing",
+          userAction:
+            "Ask the distribution owner to sign the channel with a current key, or reinstall from a release verified out of band",
+        },
+      );
+  }
+  const keyId = verifySignature(bytes, envelope, trusted);
   let metadata: unknown;
   try {
     metadata = JSON.parse(bytes.toString("utf8")) as unknown;

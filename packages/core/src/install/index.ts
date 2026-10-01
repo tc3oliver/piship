@@ -10,6 +10,7 @@ export {
   type InstalledRelease,
   type LifecycleOptions,
   type LifecyclePhase,
+  type RetiredKey,
 } from "./receipt.js";
 export { lifecycleStatus, type LifecycleStatus } from "./status.js";
 export { sweepStateTemporaries } from "./temporaries.js";

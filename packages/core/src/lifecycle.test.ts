@@ -51,7 +51,7 @@ import {
   type CommandResult,
   signChannel,
 } from "./release/index.js";
-import { generateSigningKey } from "./signing.js";
+import { generateSigningKey, keyFingerprint } from "./signing.js";
 import {
   repairDistribution,
   rollbackDistribution,
@@ -1207,6 +1207,77 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       active: "1.2.0",
       channelSequences: { stable: 3 },
     });
+  });
+
+  it("keeps a key retired by an update retired after a rollback", async () => {
+    const backup = generateSigningKey("test-release-backup");
+    const a = await release("1.0.0", true, undefined, [KEY, backup]);
+    const b = await release("1.1.0", true, undefined, [backup]);
+    const channelDir = temp("piship-channel-");
+    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    await installDistribution(a.archive);
+    // A fresh install of A has no history: both of its keys are trusted.
+    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
+    await sign(channelDir, [b.archive], "stable", backup);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: backup.id,
+    });
+    // B dropped KEY: the installation records it as retired.
+    expect(readInstallReceipt(ID).retiredKeys).toEqual([
+      {
+        id: KEY.id,
+        fingerprint: keyFingerprint(KEY.publicKey),
+        release: "1.1.0",
+      },
+    ]);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // A still pins KEY, but metadata signed by it is refused, even newer.
+    await sign(channelDir, [b.archive]);
+    const retired = await rejection(updateDistribution(ID, opts));
+    expect(retired.code).toBe("INTEGRITY_FAILED");
+    expect(retired.message).toMatch(
+      /Signature key test-release was retired by the 1\.1\.0 release of this installation/,
+    );
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.0.0",
+      channelSequences: { stable: 1 },
+    });
+    // The key A shares with B is still trusted.
+    await sign(channelDir, [b.archive], "stable", backup);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: backup.id,
+    });
+    // A fresh install of A starts without history and trusts KEY again.
+    uninstallDistribution(ID);
+    await installDistribution(a.archive, true);
+    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
+    await sign(channelDir, [b.archive]);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: KEY.id,
+    });
+    // A damaged retired-key record is refused, not read as "none retired".
+    const receiptFile = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `${ID}.json`,
+    );
+    writeFileSync(
+      receiptFile,
+      JSON.stringify({
+        ...readInstallReceipt(ID),
+        retiredKeys: [{ id: KEY.id, fingerprint: "sha256:x", release: "1" }],
+      }),
+    );
+    expect(() => readInstallReceipt(ID)).toThrow(
+      /records invalid retired release keys/,
+    );
   });
 
   it("refuses a release whose launch check fails", async () => {

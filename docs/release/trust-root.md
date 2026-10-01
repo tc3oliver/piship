@@ -17,6 +17,7 @@ Each distribution has its own trust root. The owner generates Ed25519 release ke
 | Key IDs: `[a-z0-9][a-z0-9.-]*`, unique within `updates.trust.keys`; a `sha256:` fingerprint of the public key DER | `checkKeyId`, schema `parseUpdates`, `keyFingerprint` | Implemented |
 | Public keys pinned in the manifest and lock (`updates.trust.keys`); no private key or secret-named field accepted in the manifest | `packages/schema/src/lifecycle.ts` | Implemented |
 | The client's trusted set is the active release's locked keys | `updateDistribution` (`activeLock(receipt).updates.trust.keys`) | Implemented |
+| A key that an activated release stopped pinning stays refused after a rollback to a release that still pins it | receipt `retiredKeys`, `readChannel` `retired` | Implemented (see [Rollback and retired keys](#rollback-and-retired-keys)) |
 | No keys pinned: update fails; there is no unsigned or trust-on-first-use mode | `updateDistribution`, `verifySignature` | Implemented |
 | A signature envelope (`piship-signature/v1`) covers the exact metadata bytes. It names one key ID, and only a pinned key with that ID can verify it | `verifySignature` | Implemented |
 | Channel metadata (`piship-channel/v1`) is bound to its distribution and channel, has an expiry, and carries a monotonic sequence. The client keeps a sequence floor per channel in its install receipt | `readChannel`, receipt `channelSequences` | Implemented |
@@ -70,7 +71,7 @@ Rotation is **release-bound**. The trusted set changes only when a client activa
 1. Release N pins `[old]`, and the channel is signed with `old`.
 2. Release N+1 pins `[old, new]`, and the channel is still signed with `old`. Clients on N accept it because `old` is trusted, and once they activate N+1 they trust both keys.
 3. Switch signing to `new` only after clients have moved to N+1 or later. A client still on N refuses metadata signed by `new` (`Signature key <new> is not trusted`). It stays on N, which is safe, and it needs a reinstall or a channel signed with `old` to move on.
-4. Release N+2 pins `[new]`, and the channel is signed with `new`. Once a client activates N+2, `old` is retired: metadata signed by `old` is refused even with a higher sequence.
+4. Release N+2 pins `[new]`, and the channel is signed with `new`. Once a client activates N+2, `old` is retired: metadata signed by `old` is refused even with a higher sequence, and even after a rollback to a release that still pins it.
 
 A channel envelope holds one signature, so during step 3 the owner chooses which clients to serve: sign with `old` to reach stragglers on N, or with `new` once they are gone. A client on N may jump straight to N+2 when the channel is still signed with `old`. That is safe, because `old` signs N+2's lock digest and N+2's keys are authenticated by it.
 
@@ -87,7 +88,19 @@ Recovery, in order:
 3. If the compromised key was the only pinned key, the owner cannot sign anything an attacker cannot also sign. Announce the compromise out of band and have users reinstall from an archive verified out of band that pins the new keys (`uninstall`, then `install --use-existing-state`).
 4. Check the archives the compromised key signed against the owner's records, and tell users which versions to distrust.
 
-Rollback caveat: `rollback` switches to the retained release and its lock, so a client that rolls back to a release that still pinned the revoked key trusts it again until it updates. The per-channel sequence floor survives a rollback, so the client still refuses older metadata, but not newer metadata signed with the revoked key. After a revocation, tell users not to roll back past the revoking release.
+A rollback past the revoking release does not re-trust the compromised key (see below).
+
+## Rollback and retired keys
+
+`rollback` switches to the retained release and its lock, and that lock may still pin a key that the newer release dropped. Without more, the client would trust that key again. The install receipt therefore records every key retired by an update on this installation:
+
+- When `update` activates a release, each key the active release pins and the new release does not pin is added to `retiredKeys` in the receipt, with its ID, its `sha256:` public key fingerprint, and the version that retired it.
+- `readChannel` refuses metadata signed by a retired key even when the active lock pins it: `Signature key <id> was retired by the <version> release of this installation; a rollback does not restore trust in it` (`INTEGRITY_FAILED`). The other pinned keys are still accepted, so a channel signed with the key that replaced it still updates the rolled-back client.
+- Retirement matches the public key, not the ID. A new key pinned under a retired ID is trusted. A release that pins a retired public key again lifts its retirement when it is activated, because the owner chose to trust it again in a release signed by a key the client trusts.
+- `rollback` itself retires nothing, and the per-channel sequence floor survives it, so older metadata stays refused as well.
+- A receipt written before this field has retired nothing. A fresh `install` writes a new receipt with no retired keys: the installed release's lock is the whole trust root, as in [Bootstrap](#distribution-bootstrap). The documented re-bootstrap (`uninstall`, then `install --use-existing-state`) therefore starts over from the archive the operator verified.
+
+Retirement is per installation and happens only when that installation activates the release that drops the key. A client that never activated it does not know about it; that is the revocation-list gap below.
 
 ## Lost-key recovery
 
@@ -155,6 +168,7 @@ If the maintainer later decides to operate an official channel, key generation, 
 | Rotation: overlap accepted, retired key refused after it | `channel-trust.test.ts` "rotation"; build-backed through real updates: `lifecycle.test.ts` "rotates the release key through an overlap release and then refuses the retired key" |
 | Revoked and unknown key refusal | `channel-trust.test.ts` "refuses a revoked key however the signature names it", "refuses unknown keys and an empty trust root"; `signing.test.ts` |
 | Tamper rejection | Metadata byte change, half-published pairs, another channel's metadata, and archive digest or size mismatch: `channel-trust.test.ts`. Tampered archive in a channel: `lifecycle.test.ts`. Release contents: `release.test.ts` |
+| Retired key refused after a rollback; fresh install has no history | `channel-trust.test.ts` "refuses a retired key that the active lock still pins"; build-backed: `lifecycle.test.ts` "keeps a key retired by an update retired after a rollback" |
 | Rollback compatibility (replay, downgrade) | `channel-trust.test.ts` "rollback protection" (sequence floor, also across a key change); `lifecycle.test.ts` "refuses replayed older channel metadata", "refuses a downgrade offered by the channel" |
 
 The `channel-trust.test.ts` cases build no release and run on every target in the pull request gate. The build-backed cases run where the host target has lifecycle evidence.
@@ -164,9 +178,8 @@ The `channel-trust.test.ts` cases build no release and run on every target in th
 None of these weakens the current guarantees. Each one is a separate change that needs maintainer review:
 
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
-2. **Revocation that survives rollback.** Record revoked key IDs, or a trust generation, in the install receipt when a release drops a key, and refuse those keys after a `rollback`.
-3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
-4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
-5. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
-6. **`sign-channel` writes.** Write the metadata and signature through a temporary file and rename, and verify the existing metadata's signature against the signing key before extending it.
-7. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).
+2. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
+3. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
+4. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
+5. **`sign-channel` writes.** Write the metadata and signature through a temporary file and rename, and verify the existing metadata's signature against the signing key before extending it.
+6. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).

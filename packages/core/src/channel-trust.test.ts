@@ -14,7 +14,12 @@ import {
   downloadArchive,
   readChannel,
 } from "./release/index.js";
-import { generateSigningKey, signBytes, type TrustedKey } from "./signing.js";
+import {
+  generateSigningKey,
+  keyFingerprint,
+  signBytes,
+  type TrustedKey,
+} from "./signing.js";
 
 const OLD = generateSigningKey("acme-release-2026");
 const NEW = generateSigningKey("acme-release-2027");
@@ -138,6 +143,73 @@ describe("channel trust root", () => {
     await expect(
       read(dir, [{ id: OLD.id, publicKey: NEW.publicKey }], 1),
     ).rejects.toThrow(/does not verify with trusted key acme-release-2026/);
+  });
+
+  // A rollback re-activates a lock that may still pin a key a newer release
+  // dropped; the installation's retired keys stay refused.
+  it("refuses a retired key that the active lock still pins", async () => {
+    const dir = temp();
+    const retired = [
+      {
+        id: OLD.id,
+        fingerprint: keyFingerprint(OLD.publicKey),
+        release: "2.0.0",
+      },
+    ];
+    publish(dir, OLD, 2);
+    await expect(
+      readChannel(dir, "stable", {
+        distribution: "acmepi",
+        trusted: trust(OLD, NEW),
+        retired,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({
+      code: "INTEGRITY_FAILED",
+      message: expect.stringMatching(
+        /Signature key acme-release-2026 was retired by the 2\.0\.0 release of this installation/,
+      ),
+    });
+    // Signed under another pinned key's id, it still does not verify.
+    publish(dir, OLD, 2, { keyId: NEW.id });
+    await expect(
+      readChannel(dir, "stable", {
+        distribution: "acmepi",
+        trusted: trust(OLD, NEW),
+        retired,
+        now: NOW,
+      }),
+    ).rejects.toThrow(/does not verify with trusted key acme-release-2027/);
+    // A pinned key that was not retired is accepted.
+    publish(dir, NEW, 3);
+    const accepted = await readChannel(dir, "stable", {
+      distribution: "acmepi",
+      trusted: trust(OLD, NEW),
+      retired,
+      now: NOW,
+    });
+    expect(accepted.keyId).toBe(NEW.id);
+    // Retirement follows the public key, not the id: a new key pinned under
+    // the retired id is trusted.
+    const reused = generateSigningKey(OLD.id);
+    publish(dir, reused, 4);
+    const fresh = await readChannel(dir, "stable", {
+      distribution: "acmepi",
+      trusted: trust(reused),
+      retired,
+      now: NOW,
+    });
+    expect(fresh.keyId).toBe(OLD.id);
+    // Only retired keys pinned: nothing can verify.
+    publish(dir, OLD, 5);
+    await expect(
+      readChannel(dir, "stable", {
+        distribution: "acmepi",
+        trusted: trust(OLD),
+        retired,
+        now: NOW,
+      }),
+    ).rejects.toThrow(/was retired by the 2\.0\.0 release/);
   });
 
   it("refuses unknown keys and an empty trust root (no trust on first use)", async () => {

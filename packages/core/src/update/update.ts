@@ -21,6 +21,7 @@ import {
   syncTree,
   type InstallReceipt,
   type LifecycleOptions,
+  type RetiredKey,
 } from "../install/receipt.js";
 import {
   checkStateMigration,
@@ -29,6 +30,7 @@ import {
 } from "../migration.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
+import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
   checkUpdateSource,
@@ -177,6 +179,7 @@ export async function updateDistribution(
     const { metadata, keyId } = await readChannel(source, channel, {
       distribution: id,
       trusted: updates.trust.keys,
+      retired: receipt.retiredKeys ?? [],
       minSequence,
       now,
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
@@ -346,6 +349,24 @@ export async function updateDistribution(
       const keepPrevious =
         updates.rollback && verified.lock.updates?.rollback !== false;
       const current = readInstallReceipt(id);
+      // Keys the active release pins and the new one drops are retired for
+      // good on this installation, so a rollback cannot trust them again; a
+      // key the new release pins (again) is not retired.
+      const pinned = new Set(
+        (verified.lock.updates?.trust.keys ?? []).map((key) =>
+          keyFingerprint(key.publicKey),
+        ),
+      );
+      const retiredKeys: RetiredKey[] = [...(current.retiredKeys ?? [])];
+      for (const key of updates.trust.keys) {
+        const fingerprint = keyFingerprint(key.publicKey);
+        if (!retiredKeys.some((item) => item.fingerprint === fingerprint))
+          retiredKeys.push({
+            id: key.id,
+            fingerprint,
+            release: entry.version,
+          });
+      }
       const next: InstallReceipt = {
         ...current,
         app: verified.lock.app,
@@ -368,6 +389,7 @@ export async function updateDistribution(
           ...(current.channelSequences ?? {}),
           [channel]: metadata.sequence,
         },
+        retiredKeys: retiredKeys.filter((key) => !pinned.has(key.fingerprint)),
         lastCheck: {
           time: now().toISOString(),
           channel,
@@ -375,6 +397,8 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
+      if (!next.retiredKeys?.length)
+        delete (next as { retiredKeys?: unknown }).retiredKeys;
       lifecycle.commit(next);
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
