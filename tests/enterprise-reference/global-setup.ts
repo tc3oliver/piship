@@ -6,7 +6,7 @@ import { PROJECT_PREFIX } from "./stack.js";
 
 // Before `npm run test:reference` starts a stack, remove what an earlier run
 // could not: a worker killed outright (SIGKILL, a crash) never reaches its
-// afterAll or its exit handler, and its stack would hold the fixed ports.
+// afterAll or its exit handler, and its stack would keep running.
 //
 // Only Compose projects and temporary directories named
 // `piship-reftest-<pid>-...` whose process <pid> is gone are touched, so a

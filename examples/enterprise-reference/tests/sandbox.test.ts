@@ -38,7 +38,6 @@ import {
   nodeImage,
   type SandboxService,
   type SandboxUser,
-  sandboxPort,
   startNetworkTarget,
   startSandboxService,
 } from "./support/sandbox.js";
@@ -508,9 +507,12 @@ describe.skipIf(process.platform === "win32")(
       });
 
       it("does not mistake another service on its port for its own", async () => {
-        await expect(startSandboxService({ portWaitMs: 0 })).rejects.toThrow(
-          /in use by another process/,
-        );
+        // Asked for the running service's port, a second service cannot
+        // listen and exits; the running one answers /health meanwhile, as
+        // another instance, and is never taken for it.
+        await expect(
+          startSandboxService({ port: service.port }),
+        ).rejects.toThrow(/exited \(1\) at start[\s\S]*EADDRINUSE/);
         // The running service is untouched, and still the one that answers.
         const health = await service.request("/health");
         expect((health.json() as { instance: string }).instance).toBe(
@@ -520,10 +522,10 @@ describe.skipIf(process.platform === "win32")(
 
       it("exits by itself, removing its sandboxes, when the process that started it is gone", async () => {
         // A run that is killed leaves nothing but the closed pipe on the
-        // service's input. A second service, on the next port, shows what
-        // that alone does: it removes its sandboxes and exits, and its port
-        // is free for the next run.
-        const second = await startSandboxService({ port: sandboxPort() + 1 });
+        // service's input. A second service, on a port of its own, shows
+        // what that alone does: it removes its sandboxes and exits, and its
+        // port is free again.
+        const second = await startSandboxService();
         try {
           const project = makeProject(second.root, "orphaned");
           const made = await create(second, "alice", project);

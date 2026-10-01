@@ -55,15 +55,6 @@ import {
 
 const LITELLM_VERSION = "1.103.0";
 const REPLY = "Reference mock reply from gpt-4.1.";
-// Its own ports, so it can run beside a stack on any other set. 55432, the
-// planned PostgreSQL port, is often taken by a local database.
-const PORTS = {
-  KEYCLOAK_PORT: 58080,
-  LITELLM_PORT: 54000,
-  MOCK_UPSTREAM_PORT: 58090,
-  POSTGRES_PORT: 55433,
-  BROKER_PORT: 58070,
-};
 
 const CATALOG: CatalogEntry[] = [
   "acme/coder",
@@ -117,7 +108,7 @@ function distributionStack(reference: ReferenceStack): Stack {
 }
 
 beforeAll(async () => {
-  stack = startReferenceStack({ name: "gateway", ports: PORTS });
+  stack = startReferenceStack({ name: "gateway" });
   console.info(
     `reference stack ${stack.project} up in ${stack.startupSeconds} s`,
   );
@@ -458,6 +449,9 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
         refused = await installed().run(["--smoke"]);
       } finally {
         stack.service("start", "broker");
+        // Started again, the broker has a new host port: the installed
+        // distribution reads its URLs from its runtime variables.
+        Object.assign(installed().env, distributionStack(stack).variables);
       }
       expect(refused.status).toBe(1);
       console.info(`failed renewal, as the user sees it:\n${refused.stderr}`);

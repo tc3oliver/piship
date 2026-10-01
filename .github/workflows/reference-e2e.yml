@@ -134,8 +134,9 @@ jobs:
   # and its own containers, runs the sandbox conformance kit against it,
   # and checks the workspace in a governed session.
   # vitest.reference.config.ts names the files of each group, balanced by
-  # their measured durations; one runner per group gives each its own Docker
-  # and its own fixed test ports.
+  # their measured durations; one runner per group gives each its own Docker.
+  # The test stacks publish on ports Docker chooses, so the groups could
+  # also share one host; the runners are for time, not isolation.
   reference:
     runs-on: ubuntu-latest
     timeout-minutes: 45
