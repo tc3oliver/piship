@@ -23,6 +23,8 @@ import { withFileLock } from "./index.js";
  * counter is the hard limit: past it the create fails the test at once.
  */
 const attempts = vi.hoisted(() => ({ count: 0, limit: 2_000 }));
+/** Writes that fail as a full disk would, while above zero. */
+const failingWrites = vi.hoisted(() => ({ remaining: 0 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const openSync = ((path: string, ...rest: unknown[]) => {
@@ -30,7 +32,21 @@ vi.mock("node:fs", async (importOriginal) => {
       throw new Error(`the lock loop spun: ${attempts.count} attempts`);
     return (actual.openSync as (...args: unknown[]) => number)(path, ...rest);
   }) as typeof actual.openSync;
-  return { ...actual, openSync, default: { ...actual, openSync } };
+  const writeSync = ((...args: unknown[]) => {
+    if (failingWrites.remaining > 0) {
+      failingWrites.remaining--;
+      throw Object.assign(new Error("ENOSPC: no space left on device"), {
+        code: "ENOSPC",
+      });
+    }
+    return (actual.writeSync as (...args: unknown[]) => number)(...args);
+  }) as typeof actual.writeSync;
+  return {
+    ...actual,
+    openSync,
+    writeSync,
+    default: { ...actual, openSync, writeSync },
+  };
 });
 
 let temp: string;
@@ -43,6 +59,7 @@ beforeEach(() => {
   temp = mkdtempSync(join(tmpdir(), "piship-file-lock-"));
   offset = 0;
   attempts.count = 0;
+  failingWrites.remaining = 0;
   vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
 });
 afterEach(() => {
@@ -302,6 +319,44 @@ describe.runIf(posixUser)("a lock path whose content cannot be read", () => {
     } finally {
       clearInterval(heartbeat);
     }
+  });
+});
+
+describe("file lock creation that fails part way", () => {
+  it("leaves no empty lock behind when writing the token fails", async () => {
+    const path = join(temp, "inference.json");
+    failingWrites.remaining = 1;
+    const error = await withFileLock(path, async () => "ran").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({ code: "ENOSPC" });
+    expect(readdirSync(temp)).toEqual([]);
+    // The next process is not held up by a phantom lock.
+    const started = performance.now();
+    const result = await within(
+      withFileLock(path, async () => "next", { waitMs: 5_000 }),
+      2_000,
+    );
+    expect(result).toBe("next");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("recovers an empty lock a holder left when it died before writing its token", async () => {
+    const path = join(temp, "inference.json");
+    writeFileSync(`${path}.lock`, "");
+    const started = performance.now();
+    // The default stale interval (75 s) would outlast this wait: only the
+    // lock being provably unwritten lets it through.
+    const result = await within(
+      withFileLock(path, async () => "recovered", {
+        waitMs: 5_000,
+        notify: () => {},
+      }),
+      4_000,
+    );
+    expect(result).toBe("recovered");
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(readdirSync(temp)).toEqual([]);
   });
 });
 

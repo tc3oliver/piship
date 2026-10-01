@@ -679,6 +679,79 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
     expect(deletes()).toBe(2);
   });
 
+  it("does not fail a parallel command that waits for the claim a cancelled one started (#158)", async () => {
+    const mock = await kubernetesServer((command) =>
+      command.includes("sleep") ? { hang: true } : { stdout: "ok\n" },
+    );
+    // Readiness takes one 300 ms poll, so both commands wait on the claim.
+    const sandbox = await activate(kubernetes(mock.url, { pollMs: 300 }));
+    // A cancelled command retires the first claim: the next ones share a new one.
+    const first = new AbortController();
+    const retired = sandbox.exec("sleep 600", workspace, {
+      onData: () => {},
+      signal: first.signal,
+    });
+    setTimeout(() => first.abort(), 50);
+    await expect(retired).rejects.toThrow("aborted");
+    const a = new AbortController();
+    const cancelled = sandbox.exec("echo a", workspace, {
+      onData: () => {},
+      signal: a.signal,
+    });
+    const parallel = run(sandbox, "echo b");
+    setTimeout(() => a.abort(), 50);
+    await expect(cancelled).rejects.toThrow("aborted");
+    expect((await parallel).output).toBe("ok\n");
+    await sandbox.dispose();
+  });
+
+  it("keeps renewing a claim a parallel command still runs in after another is cancelled (#158)", async () => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const mock = await kubernetesServer((command) =>
+      command.includes("sleep")
+        ? { hang: true }
+        : command.includes("long")
+          ? { stdout: "long\n", after: done }
+          : { stdout: "ok\n" },
+    );
+    // A one-second lifetime renews a running command every 250 ms.
+    const sandbox = await activate(
+      kubernetes(mock.url, { lifetimeSeconds: 1 }),
+    );
+    const [first] = claimNames(mock.requests);
+    const renewals = () =>
+      mock.requests.filter(
+        (request) =>
+          request.method === "PATCH" && request.path === `${CLAIMS}/${first}`,
+      ).length;
+    const controller = new AbortController();
+    const cancelled = sandbox.exec("sleep 600", workspace, {
+      onData: () => {},
+      signal: controller.signal,
+    });
+    const parallel = run(sandbox, "long job");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    await expect(cancelled).rejects.toThrow("aborted");
+    const atCancel = renewals();
+    // The parallel command still runs in the claim: it must not expire under it.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(renewals()).toBeGreaterThan(atCancel);
+    finish();
+    expect((await parallel).output).toBe("long\n");
+    // Retired by the cancellation: deleted once the parallel command ends.
+    expect(
+      mock.requests.some(
+        (request) =>
+          request.method === "DELETE" && request.path === `${CLAIMS}/${first}`,
+      ),
+    ).toBe(true);
+    await sandbox.dispose();
+  });
+
   const claimNames = (requests: Recorded[]) =>
     requests
       .filter((request) => request.method === "POST" && request.path === CLAIMS)

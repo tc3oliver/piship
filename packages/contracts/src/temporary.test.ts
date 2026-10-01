@@ -260,6 +260,71 @@ describe("reclaimTemporaryDirectories", () => {
     expect(existsSync(stale)).toBe(true);
   });
 
+  describe("within a time budget (#158)", () => {
+    it("starts no removal past the deadline and leaves the rest for the next sweep", () => {
+      const first = plant("piship-verify-abc123");
+      const second = plant("piship-verify-def456");
+      const live = plant("piship-verify-aaa111", { pid: livePid() });
+      const result = reclaimTemporaryDirectories(root, ["verify"], {
+        deadline: 0,
+        monotonic: () => 1,
+      });
+      expect(result.removed).toEqual([]);
+      expect(result.failed).toEqual([]);
+      // Only what is judged abandoned is deferred: the rules are the same.
+      expect([...(result.deferred ?? [])].sort()).toEqual(
+        [first, second].sort(),
+      );
+      for (const path of [first, second, live])
+        expect(existsSync(join(path, TEMPORARY_OWNER_FILE))).toBe(true);
+      expect(
+        reclaimTemporaryDirectories(root, ["verify"]).removed.sort(),
+      ).toEqual([first, second].sort());
+      expect(existsSync(live)).toBe(true);
+    });
+
+    it("stops between directories once the budget is spent", () => {
+      plant("piship-verify-abc123");
+      plant("piship-verify-def456");
+      let clock = 0;
+      const result = reclaimTemporaryDirectories(root, ["verify"], {
+        deadline: 10,
+        monotonic: () => clock,
+        onStep: (step) => {
+          if (step === "found") clock += 20;
+        },
+      });
+      expect(result.removed).toHaveLength(1);
+      expect(result.deferred).toHaveLength(1);
+      expect(found(root, ["verify"])).toEqual(result.deferred);
+    });
+
+    it("puts a directory back under its name and marker when the budget runs out in the walk", () => {
+      const stale = plant("piship-verify-abc123");
+      let clock = 0;
+      const result = reclaimTemporaryDirectories(root, ["verify"], {
+        remover: "portable",
+        deadline: 10,
+        monotonic: () => clock,
+        onStep: (step) => {
+          if (step === "walk") clock += 2000;
+        },
+      });
+      expect(result).toMatchObject({
+        removed: [],
+        failed: [],
+        deferred: [stale],
+      });
+      expect(found(root, ["verify"])).toEqual([stale]);
+      expect(
+        readdirSync(root).filter((name) => name.startsWith(".piship-reclaim-")),
+      ).toEqual([]);
+      expect(reclaimTemporaryDirectories(root, ["verify"]).removed).toEqual([
+        stale,
+      ]);
+    });
+  });
+
   it("returns nothing for a root that is missing or not a directory", () => {
     expect(
       reclaimTemporaryDirectories(join(root, "missing"), ["verify"]),

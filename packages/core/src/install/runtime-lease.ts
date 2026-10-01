@@ -14,10 +14,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { PiShipError } from "@piship/contracts";
 import { installHome } from "../index.js";
 import {
+  type ProcessRecord,
   processIdentity,
-  processIdentityMatches,
+  recordedProcessGone,
 } from "../process-identity.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { appDirectory, syncDirectory, VERSION_NAME } from "./receipt.js";
@@ -37,16 +39,35 @@ function leaseRoot(id: string): string {
   return join(appDirectory(id), ".runtime-leases");
 }
 
-/** Shared by launcher registration and every destructive payload operation. */
-export function acquireLaunchGate(id: string) {
+/**
+ * How long a lifecycle operation waits for the launch gate: a launcher holds
+ * it only while it registers, which takes well under a second.
+ */
+const LAUNCH_GATE_WAIT_MS = 3_000;
+
+/**
+ * Shared by launcher registration and every destructive payload operation. A
+ * holder that keeps the gate past the wait fails the operation with `code`,
+ * as retryable.
+ */
+export function acquireLaunchGate(
+  id: string,
+  code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
+) {
   const path = join(installHome(), "receipts", `.${id}.launch.lock`);
   return acquireLifecycleLock(
     path,
-    () =>
-      new Error(
-        `A launcher or lifecycle operation for ${id} is registering; retry`,
+    (_pid, holder) =>
+      new PiShipError(
+        code,
+        `A launcher or lifecycle operation for ${id} is registering: ${path} is held by ${holder}`,
+        {
+          retryable: true,
+          userAction: `Try again in a moment; if no launcher or PiShip command of ${id} is running, remove ${path}`,
+        },
       ),
     () => new Error(`Could not lock launcher registration for ${id}`),
+    LAUNCH_GATE_WAIT_MS,
   );
 }
 
@@ -69,16 +90,19 @@ function parseLease(path: string, version: string): Lease | undefined {
   }
 }
 
-function alive(lease: Pick<Lease, "pid" | "identity">, path: string): boolean {
-  try {
-    process.kill(lease.pid, 0);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") return false;
-  }
-  const same = processIdentityMatches(lease.identity, lease.pid);
-  if (same !== undefined) return same;
-  // A platform unable to query a process start time is conservative while
-  // the lease is recent, then reclaims it after an extended stale interval.
+function alive(
+  lease: Pick<ProcessRecord, "pid" | "identity"> & Partial<ProcessRecord>,
+  path: string,
+): boolean {
+  const gone = recordedProcessGone({
+    host: null,
+    started: null,
+    ...lease,
+  });
+  if (gone !== undefined) return !gone;
+  // A record that cannot be judged (another host's, or one whose process
+  // start cannot be read) is conservative while it is recent, then reclaimed
+  // after an extended stale interval.
   try {
     return Date.now() - statSync(path).mtimeMs < UNKNOWN_IDENTITY_STALE_MS;
   } catch {
@@ -117,18 +141,34 @@ export function runtimeLeases(id: string, sweep = false): RuntimeLeaseStatus[] {
       for (const name of names) {
         if (!/^[0-9a-f-]{36}\.json$/.test(name)) continue;
         const path = join(directory, name);
-        let record: { pid: number; identity: null } | undefined;
+        let record: ProcessRecord | undefined;
         try {
           const value = JSON.parse(readFileSync(path, "utf8")) as Record<
             string,
             unknown
           >;
+          // A marker of an earlier launcher names only its process ID.
           if (
             value.schema === "piship-launching-lease/v1" &&
             Number.isSafeInteger(value.pid) &&
             (value.pid as number) > 0
           )
-            record = { pid: value.pid as number, identity: null };
+            record = {
+              pid: value.pid as number,
+              identity:
+                typeof value.identity === "string" &&
+                value.identity.length <= 128
+                  ? value.identity
+                  : null,
+              host:
+                typeof value.host === "string" &&
+                /^[0-9a-f]{12}$/.test(value.host)
+                  ? value.host
+                  : null,
+              started: Number.isSafeInteger(value.started)
+                ? (value.started as number)
+                : null,
+            };
         } catch {
           /* stale */
         }

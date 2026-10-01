@@ -1,6 +1,12 @@
 // Uninstall: remove the owned install files and keep state, or, on request,
 // purge the state as part of the same operation.
-import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
@@ -25,6 +31,15 @@ import {
 } from "./receipt.js";
 import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
 
+export interface UninstallOptions {
+  /**
+   * Remove the command shim although it was changed after it was installed,
+   * as long as it still runs this install's launcher. A file that does not
+   * is never removed.
+   */
+  readonly removeEditedShim?: boolean;
+}
+
 /**
  * Take every lock an uninstall needs (the command, the lifecycle lock, and
  * the launch gate) and refuse while a runtime session is live. `verify`
@@ -32,7 +47,10 @@ import { acquireLaunchGate, runtimeLeases } from "./runtime-lease.js";
  * anything; `remove` deletes the shim, the launcher, every retained
  * release, and the receipt.
  */
-function holdForUninstall(id: string): {
+function holdForUninstall(
+  id: string,
+  options: UninstallOptions = {},
+): {
   readonly verify: () => void;
   readonly remove: () => void;
   readonly release: () => void;
@@ -82,7 +100,7 @@ function holdForUninstall(id: string): {
         (hold && !hold.stillHeld())
       )
         throw new Error(`Install ownership lock for ${id} was lost`);
-      assertOwnedShim(id, receipt);
+      assertOwnedShim(id, receipt, options);
     };
     const remove = () => {
       verify();
@@ -197,17 +215,48 @@ function holdDamagedForUninstall(id: string): {
   }
 }
 
-/** Refuses a command path that holds something other than this install's shim. */
-function assertOwnedShim(id: string, receipt: InstallReceipt): void {
-  if (!existsSync(receipt.commandPath)) return;
+/**
+ * Whether a regular file at the command path is the shim PiShip wrote for
+ * `target`, changed since: it still runs `target`, quoted as the shim quotes
+ * it. Anything else there (no such reference, a link, a large file) is not
+ * PiShip's.
+ */
+function editedCommandShim(commandPath: string, target: string): boolean {
+  const stat = lstatSync(commandPath, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.size > 64 * 1024) return false;
+  const quoted =
+    process.platform === "win32"
+      ? `"${target}"`
+      : `'${target.replaceAll("'", "'\"'\"'")}'`;
+  return readFileSync(commandPath, "utf8").includes(quoted);
+}
+
+/**
+ * Refuses a command path that holds something other than this install's
+ * shim. One that was changed after install, but still runs this install's
+ * launcher, is removed only with `removeEditedShim`.
+ */
+function assertOwnedShim(
+  id: string,
+  receipt: InstallReceipt,
+  options: UninstallOptions,
+): void {
+  const path = receipt.commandPath;
+  if (!existsSync(path)) return;
   // A receipt written before v1 has no launcher: its shim runs the
   // payload's command script directly.
   const target =
     receipt.launcher ?? join(receipt.payload, "bin", receipt.app.command);
-  if (!ownsCommandShim(receipt.commandPath, target))
+  if (ownsCommandShim(path, target)) return;
+  if (editedCommandShim(path, target)) {
+    if (options.removeEditedShim) return;
     throw new Error(
-      `Command shim ${receipt.commandPath} is not owned by ${id}`,
+      `Command shim ${path} was changed after ${id} installed it. It still runs this install's launcher, so it is PiShip's shim with edits, but uninstall does not delete a changed file on its own. If you no longer need the changes, run piship uninstall ${id} --remove-edited-shim (with --purge --yes too, if you were purging); otherwise restore the original shim or move the file aside, then run uninstall again. Nothing was removed.`,
     );
+  }
+  throw new Error(
+    `Command shim ${path} is not owned by ${id}: it does not run this install's launcher, so it is not PiShip's and uninstall never removes it. Move it aside if it is not in use, then run uninstall again. Nothing was removed.`,
+  );
 }
 
 function removeInstall(id: string, receipt: InstallReceipt): void {
@@ -222,8 +271,11 @@ function removeInstall(id: string, receipt: InstallReceipt): void {
  * interrupted operation, and the receipt; keep state. Refuses while an
  * update or rollback holds the lifecycle lock.
  */
-export function uninstallDistribution(id: string): string {
-  const hold = holdForUninstall(id);
+export function uninstallDistribution(
+  id: string,
+  options: UninstallOptions = {},
+): string {
+  const hold = holdForUninstall(id, options);
   try {
     hold.remove();
     return runtimeStateDirectory({ value: id });
@@ -245,9 +297,9 @@ export function uninstallDistribution(id: string): string {
  */
 export async function uninstallAndPurgeDistribution(
   id: string,
-  options: PurgeOptions = {},
+  options: PurgeOptions & UninstallOptions = {},
 ): Promise<PurgeResult> {
-  const hold = holdForUninstall(id);
+  const hold = holdForUninstall(id, options);
   try {
     const state = runtimeStateDirectory({ value: id });
     // Everything that can refuse the uninstall is checked before the first

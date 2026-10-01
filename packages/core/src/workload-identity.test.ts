@@ -423,15 +423,25 @@ describe("workload identity (fixtures)", () => {
     expect(JSON.parse(readFileSync(credentialFile(), "utf8"))).toMatchObject({
       principal: { subject: "svc-build-1" },
     });
-    // Past its expiry, with the broker down: the launch fails closed.
+    // Past its expiry, with the broker down: the launch fails closed, as a
+    // retryable broker outage rather than a revoked or expired credential.
     clock += 3 * 3600_000;
     // The platform has issued the workload a current token by then.
     source().expiresAt = new Date(clock + 3600_000).toISOString();
     services.knobs.brokerStatus = 503;
-    await expect(open(store).activate()).rejects.toMatchObject({
-      code: "CREDENTIAL_EXPIRED",
+    const outage = await open(store)
+      .activate()
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(outage).toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    expect(String((outage as { action?: string }).action)).not.toMatch(
+      /login/i,
+    );
   });
 
   it("gives a new workload principal nothing of the previous one between runs", async () => {
@@ -695,6 +705,31 @@ describe("workload identity (fixtures)", () => {
         adapter: "./adapters/typo.mjs",
       }).activate(),
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(brokerRequests()).toEqual([]);
+  });
+
+  it("stops waiting for an interactive adapter's login that never answers and names the adapter", {
+    timeout: 5_000,
+  }, async () => {
+    writeFileSync(
+      join(temp, "resources", "adapters", "interactive.mjs"),
+      WORKLOAD_ADAPTER.replace("interactive: false,", ""),
+    );
+    source().hang = true;
+    const access = DistributionAccess.open({
+      ...open(new MemorySecretStore(), {
+        mode: "adapter",
+        adapter: "./adapters/interactive.mjs",
+      }).options,
+      adapterTimeoutMs: 50,
+    });
+    await expect(access.login({ openUrl: () => {} })).rejects.toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      message:
+        "The identity adapter ./adapters/interactive.mjs did not answer login() within 1 s",
+    });
+    expect(source().calls).toBe(1);
     expect(brokerRequests()).toEqual([]);
   });
 });

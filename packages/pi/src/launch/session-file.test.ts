@@ -12,6 +12,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -522,14 +523,28 @@ describe("a /resume checks its target like a launch does (#57, #62, #65)", () =>
     expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
   });
 
-  it("leaves a file that cannot be read to Pi", () => {
+  it("refuses a session it could not check, whatever the error (#158)", () => {
+    // Missing, and a read that fails after the open succeeds (EISDIR here,
+    // EMFILE or EIO elsewhere): neither proves the file safe to resume.
     expect(
       resumeRefusal(
         new SessionOwnership(),
         join(sessionDir, "gone.jsonl"),
         "mypi",
       ),
-    ).toBeUndefined();
+    ).toMatch(/not resumed: PiShip could not check it \(ENOENT\)/);
+    const directory = join(sessionDir, "unreadable.jsonl");
+    mkdirSync(directory);
+    const message = resumeRefusal(new SessionOwnership(), directory, "mypi");
+    // Windows opens a directory and reads it as empty, so there it is refused
+    // as damaged rather than as a failed read; either way it is not resumed.
+    expect(message).toMatch(
+      process.platform === "win32"
+        ? /not resumed: /
+        : /not resumed: PiShip could not check it \(E[A-Z]+\)/,
+    );
+    expect(message).toMatch(/not loaded or changed/);
+    expect(message).toMatch(/start a new session here/i);
   });
 
   it("shows an entry ID from the file escaped and bounded, never raw", () => {
@@ -677,6 +692,15 @@ async function turn(launched: Launch, text: string) {
   expect(await launched.next()).toBe("appended");
 }
 
+/** The boot and PID namespace an owner record of this process names. */
+function hereScope(): { boot: string | null; pidNamespace: string | null } {
+  if (process.platform !== "linux") return { boot: null, pidNamespace: null };
+  return {
+    boot: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+    pidNamespace: readlinkSync("/proc/self/ns/pid"),
+  };
+}
+
 function ownerRecords(): string[] {
   const directory = join(sessionDir, OWNER_DIRECTORY);
   return existsSync(directory) ? readdirSync(directory) : [];
@@ -757,6 +781,7 @@ describe("one owner per session file (#57)", () => {
           identity: "1",
           host: hostname(),
           instance,
+          ...hereScope(),
         }),
       );
     // A live process that is not the recorded owner, and an exited one.
@@ -819,6 +844,86 @@ describe("one owner per session file (#57)", () => {
     first.release();
     second.release();
     expect(ownerRecords()).toEqual([]);
+  });
+
+  describe("an owner this process cannot verify (#158)", () => {
+    const foreign = "00000000-0000-4000-8000-000000000004";
+    function record(
+      file: string,
+      fields: Record<string, unknown>,
+      ageMs = 0,
+    ): string {
+      const directory = join(sessionDir, OWNER_DIRECTORY);
+      mkdirSync(directory, { recursive: true });
+      const session = file.slice(sessionDir.length + 1);
+      const path = join(directory, `${session}.${foreign}.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schema: "piship-session-owner/v1",
+          session,
+          pid: deadPid(),
+          identity: "1",
+          host: hostname(),
+          instance: foreign,
+          ...hereScope(),
+          ...fields,
+        }),
+      );
+      const then = new Date(Date.now() - ageMs);
+      utimesSync(path, then, then);
+      return path;
+    }
+
+    function expectUnverified(file: string, path: string, why: RegExp) {
+      const opened = open();
+      // Neither taken over nor appended to, and the record is kept.
+      expect(opened.sessionManager.getSessionFile()).not.toBe(file);
+      expect(opened.notice).toMatch(/cannot verify/);
+      expect(opened.notice).toMatch(why);
+      expect(opened.notice).toContain(path);
+      expect(existsSync(path)).toBe(true);
+      opened.ownership.release();
+      const refusal = resumeRefusal(new SessionOwnership(), file, "mypi");
+      expect(refusal).toMatch(/cannot verify/);
+      expect(refusal).toContain(path);
+      expect(existsSync(path)).toBe(true);
+    }
+
+    it("never declares an owner on another host gone, however old its record", () => {
+      const { file } = persistedSession();
+      const path = record(file, { host: "elsewhere" }, 3 * 24 * 60 * 60_000);
+      expectUnverified(file, path, /another host \(elsewhere\)/);
+    });
+
+    it("does not count a fresh record from another host as a verified owner", () => {
+      const { file } = persistedSession();
+      const path = record(file, { host: "elsewhere" });
+      expectUnverified(file, path, /another host/);
+    });
+
+    it("does not judge an owner in another PID namespace by this one's processes", () => {
+      // A container that shares $HOME and the host name: its process IDs
+      // name other processes here, so an ID that is free here proves nothing.
+      const { file } = persistedSession();
+      const path = record(file, { pidNamespace: "pid:[1]" });
+      expectUnverified(file, path, /another PID namespace/);
+    });
+
+    it.runIf(process.platform === "linux")(
+      "takes over a record written before this host last started",
+      () => {
+        const { file, id } = persistedSession();
+        const path = record(file, {
+          boot: "00000000-0000-4000-8000-0000000000ff",
+        });
+        const opened = open();
+        expect(opened.notice).toBeUndefined();
+        expect(opened.sessionManager.getSessionId()).toBe(id);
+        expect(existsSync(path)).toBe(false);
+        opened.ownership.release();
+      },
+    );
   });
 
   it("keeps a record that is still being written", () => {

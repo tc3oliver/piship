@@ -273,10 +273,28 @@ describe("checkStateMigration", () => {
 
   it("refuses unreadable preferences and a newer audit log", () => {
     const dir = populated();
-    write(dir, "config/preferences.json", "{not json");
-    expect(
-      item(checkStateMigration(dir, target(), current), "preferences").current,
-    ).toBe("unreadable");
+    // Damaged preferences cannot be rebuilt: refused, naming the file and
+    // the way out, and never touched.
+    const preferences = join(dir, "config", "preferences.json");
+    for (const damaged of ["{not json", "", '{"schema":"piship-pref', "{}"]) {
+      write(dir, "config/preferences.json", damaged);
+      const refused = item(
+        checkStateMigration(dir, target(), current),
+        "preferences",
+      );
+      expect(refused).toMatchObject({
+        current: "unreadable",
+        verdict: "unsupported",
+        action: "refuse",
+      });
+      expect(refused.reason).toContain(
+        `${preferences} is empty, cut short, or not a preferences file`,
+      );
+      expect(refused.reason).toContain(
+        `move it aside (for example to ${preferences}.damaged)`,
+      );
+      expect(readFileSync(preferences, "utf8")).toBe(damaged);
+    }
     write(dir, "config/preferences.json", { schema: "piship-preferences/v1" });
     write(
       dir,
@@ -301,6 +319,39 @@ describe("checkStateMigration", () => {
       current: "piship-audit/v2",
       verdict: "unsupported",
     });
+  });
+
+  it("keeps an audit log whose newest line was cut short, and reads the event before it", () => {
+    const dir = populated();
+    const event = '{"schema":"piship-audit/v1","type":"launch"}';
+    // A torn final append, after an event and on its own.
+    write(dir, "logs/audit.jsonl", `${event}\n{"schema":"piship-au`);
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "audit and metrics logs",
+      ),
+    ).toMatchObject({
+      current: "piship-audit/v1",
+      verdict: "safe",
+      action: "keep",
+    });
+    write(dir, "logs/audit.jsonl", '{"schema":"piship-au');
+    const torn = item(
+      checkStateMigration(dir, target(), current),
+      "audit and metrics logs",
+    );
+    expect(torn).toMatchObject({ current: null, verdict: "safe" });
+    expect(torn.reason).toContain(join(dir, "logs", "audit.jsonl"));
+    // The newest complete event decides, also across a rotation.
+    write(dir, "logs/audit.jsonl", "{\n");
+    write(dir, "logs/audit.jsonl.1", '{"schema":"piship-audit/v2"}\n');
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "audit and metrics logs",
+      ).verdict,
+    ).toBe("unsupported");
   });
 
   it("clears and reacquires credential classes the target cannot read", () => {
@@ -412,11 +463,24 @@ describe("checkStateMigration", () => {
       verdict: "safe",
       reason: "The target does not read the state marker",
     });
-    write(dir, "state.json", "{broken");
-    expect(readStateMarker(dir)).toBeNull();
-    expect(
-      item(checkStateMigration(dir, target(), current), "state marker").current,
-    ).toBe("unreadable");
+    // A damaged marker counts as absent: the active release is the source.
+    for (const damaged of ["{broken", "", '{"schema":"piship-st', "null"]) {
+      write(dir, "state.json", damaged);
+      expect(readStateMarker(dir)).toBeNull();
+      const report = checkStateMigration(dir, target(), current);
+      expect(item(report, "state marker")).toMatchObject({
+        current: "unreadable",
+        verdict: "safe",
+        action: "keep",
+      });
+      expect(item(report, "state marker").reason).toContain(
+        join(dir, "state.json"),
+      );
+      expect(report.from).toEqual({
+        version: current.version,
+        pi: current.pi,
+      });
+    }
   });
 });
 

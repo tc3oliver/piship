@@ -878,11 +878,19 @@ class Harness {
     this.#fetchMode = mode;
     let value: unknown;
     try {
-      value =
-        typeof this.adapter === "function"
-          ? await this.adapter(this.context())
-          : this.adapter;
+      const adapter = this.adapter;
+      const made =
+        typeof adapter === "function"
+          ? await settle(() => adapter(this.context()), this.boundMs)
+          : ({ kind: "resolved", value: adapter } as const);
+      check(
+        made.kind !== "hung",
+        "the adapter factory did not end within the kit's bound",
+      );
+      if (made.kind === "rejected") throw made.error;
+      value = made.value;
     } catch (error) {
+      if (error instanceof Finding) throw error;
       throw new Finding(`the adapter factory failed (${this.describe(error)})`);
     } finally {
       this.#fetchMode = "normal";
@@ -1468,16 +1476,17 @@ const checks: Record<SandboxBehavior, Check> = {
     const unwatch = watchLogs(h.credential, () => logged.push("x"));
     try {
       const backend = await h.backend();
-      let availability: unknown;
-      try {
-        availability = await backend.available();
-      } catch (error) {
-        availability = error;
-      }
-      check(
-        !h.leaks(availability),
-        "the credential appeared in available()'s result",
-      );
+      // Bounded like every call: a hung available() fails below, at prepare.
+      const availability = await settle(() => backend.available(), h.boundMs);
+      if (availability.kind !== "hung")
+        check(
+          !h.leaks(
+            availability.kind === "resolved"
+              ? availability.value
+              : availability.error,
+          ),
+          "the credential appeared in available()'s result",
+        );
       check(
         !h.leaks(backend.capabilities()),
         "the credential appeared in capabilities()",

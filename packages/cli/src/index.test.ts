@@ -128,6 +128,36 @@ describe("uninstall --purge", () => {
     expect(existsSync(state)).toBe(true);
   });
 
+  it("removes an edited command shim only with --remove-edited-shim (#158)", async () => {
+    const { payload } = installRecorder();
+    const launcher = join(temp, "install home", "apps", ID, "launch.mjs");
+    const shim = join(
+      temp,
+      "bin",
+      process.platform === "win32" ? `${ID}.cmd` : ID,
+    );
+    writeFileSync(
+      shim,
+      process.platform === "win32"
+        ? `@echo off\r\nset FOO=1\r\nnode "${launcher}" %*\r\n`
+        : `#!/bin/sh\nexport FOO=1\nexec node '${launcher}' "$@"\n`,
+    );
+    const errors: string[] = [];
+    const output = {
+      stdout: () => {},
+      stderr: (message: string) => errors.push(message),
+    };
+    expect(await runCli(["uninstall", ID], output)).toBe(1);
+    expect(errors.join("\n")).toContain("--remove-edited-shim");
+    expect(existsSync(shim)).toBe(true);
+    expect(existsSync(payload)).toBe(true);
+    expect(
+      await runCli(["uninstall", ID, "--remove-edited-shim"], output),
+    ).toBe(0);
+    expect(existsSync(shim)).toBe(false);
+    expect(existsSync(payload)).toBe(false);
+  });
+
   it("removes the install and the state in one command", async () => {
     const { payload } = installRecorder();
     const state = seedState();

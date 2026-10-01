@@ -670,6 +670,65 @@ describe("http-broker failure and retry contract", () => {
       }
     });
 
+    // Regression: an already expired credential said nothing about clocks, so
+    // the only visible action was signing in again, which issues another
+    // credential that this computer's wrong clock refuses just the same.
+    it("refuses an already expired credential with a clock check, comparing the broker's clock when it sent one", async () => {
+      const answer = await realAnswer();
+      const expiresAt = new Date(Date.now() - 30_000);
+      // The broker's Date: one minute before the expiry, so by its clock the
+      // credential was valid and this computer runs about 90 s ahead.
+      const brokerNow = new Date(expiresAt.getTime() - 60_000);
+      const skewed = await failure(
+        call.acquire(
+          broker({
+            fetch: async () =>
+              Response.json(
+                { ...answer, expires_at: expiresAt.toISOString() },
+                { headers: { date: brokerNow.toUTCString() } },
+              ),
+          }),
+        ),
+      );
+      expect(skewed).toMatchObject({
+        code: "CREDENTIAL_EXPIRED",
+        retryable: false,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "contract",
+          expiresAt: expiresAt.toISOString(),
+          brokerTime: new Date(
+            Math.floor(brokerNow.getTime() / 1000) * 1000,
+          ).toISOString(),
+        },
+      });
+      const skew = skewed.sanitizedDetail?.clockSkewSeconds as number;
+      expect(skew).toBeGreaterThanOrEqual(85);
+      expect(skew).toBeLessThanOrEqual(100);
+      expect(skewed.message).toContain("ahead of the credential broker");
+      expect(skewed.userAction).toMatch(/clock/);
+      expect(skewed.userAction).not.toMatch(/login/i);
+      expectNoSecret(skewed);
+
+      // Without a broker Date, the action still names both clocks.
+      const unknown = await failure(
+        call.acquire(
+          broker({
+            fetch: async () =>
+              json({ ...answer, expires_at: expiresAt.toISOString() }),
+          }),
+        ),
+      );
+      expect(unknown).toMatchObject({
+        code: "CREDENTIAL_EXPIRED",
+        retryable: false,
+        sanitizedDetail: { expiresAt: expiresAt.toISOString() },
+      });
+      expect(unknown.sanitizedDetail).not.toHaveProperty("clockSkewSeconds");
+      expect(unknown.userAction).toMatch(/clock/);
+      expect(unknown.userAction).toMatch(/broker/);
+    });
+
     it("reads null in an optional answer field as absent, and names a field of the wrong type", async () => {
       const answer = await realAnswer();
       const optional = {
@@ -1315,8 +1374,11 @@ describe("http-broker idempotency and retry", () => {
   });
 
   it("reads 409 and 422 as a key conflict only when the acquire sent a key", async () => {
-    for (const status of [409, 422]) {
-      services.knobs.brokerFaults.push({ status }, { status });
+    for (const [status, body] of [
+      [409, { error: "idempotency_key_reused" }],
+      [422, undefined],
+    ] as const) {
+      services.knobs.brokerFaults.push({ status, body }, { status, body });
       await expect(
         broker().acquire(identity, { ...ctx, idempotencyKey: "retry-key-3" }),
       ).rejects.toMatchObject({
@@ -1327,6 +1389,37 @@ describe("http-broker idempotency and retry", () => {
         retryable: false,
         sanitizedDetail: { reason: "rejected", status },
       });
+    }
+  });
+
+  it("reads any other 409 to a keyed acquire as the key's request still in progress, and keeps the key", async () => {
+    for (const [body, retryAfter] of [
+      [{ error: "request_in_progress" }, 3],
+      [{ error: "conflict", detail: "sk-broker-body-secret-0001" }, undefined],
+      ["<html>409 sk-broker-body-secret-0001</html>", undefined],
+      [undefined, undefined],
+    ] as const) {
+      services.knobs.brokerFaults.push({ status: 409, body, retryAfter });
+      const error = await failure(
+        broker().acquire(identity, { ...ctx, idempotencyKey: "retry-key-4" }),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "idempotency-in-progress",
+          status: 409,
+          idempotencyKey: "retry-key-4",
+        },
+      });
+      expect(error.retryAfterMs).toBe(
+        retryAfter === undefined ? undefined : retryAfter * 1000,
+      );
+      expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(
+        "sk-broker-body-secret",
+      );
+      expectNoSecret(error);
     }
   });
 
@@ -2124,8 +2217,9 @@ describe("credential lifecycle events", () => {
     ).rejects.toMatchObject({ code: "CREDENTIAL_DENIED", retryable: false });
   });
 
-  // Regression: a failed renewal used to drop retryable and retryAfterMs, so
-  // a broker outage or rate limit read as "sign in again".
+  // Regression: a failed renewal used to drop retryable and retryAfterMs, and
+  // then still named the outage CREDENTIAL_REVOKED or CREDENTIAL_EXPIRED with
+  // "run login": a broker outage or rate limit read as "sign in again".
   it("keeps the retry contract when a renewal fails", async () => {
     let failure: unknown = new Error("unused");
     const provider = {
@@ -2168,20 +2262,25 @@ describe("credential lifecycle events", () => {
     failure = limited;
     const rejected = await renew(true);
     expect(rejected).toMatchObject({
-      code: "CREDENTIAL_REVOKED",
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
       retryAfterMs: 7_000,
       sanitizedDetail: { reason: "rate-limited", status: 429 },
       userAction: expect.stringContaining("Try again later"),
     });
+    expect(rejected.message).toContain("was rejected and could not be renewed");
     now += 120_000;
     expect(credentials.status().state).toBe("expired");
     const expired = await renew(false);
     expect(expired).toMatchObject({
-      code: "CREDENTIAL_EXPIRED",
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
       retryAfterMs: 7_000,
     });
+    expect(expired.message).toContain("expired and could not be renewed");
+    // An outage asks for a retry, never for a new sign-in.
+    for (const error of [rejected, expired])
+      expect(error.userAction).not.toMatch(/login/i);
     // Without a retry signal the renewal failure stays fail-closed.
     failure = new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "contract");
     expect(await renew(false)).toMatchObject({
@@ -2235,7 +2334,7 @@ describe("credential lifecycle events", () => {
         .ensure(identity, ctx, { allowAcquire: false, forceRefresh: true })
         .catch((caught: unknown) => caught as PiShipError);
       expect(error).toMatchObject({
-        code: "CREDENTIAL_REVOKED",
+        code: "CREDENTIAL_ACQUIRE_FAILED",
         retryable: true,
         retryAfterMs: 11_000,
         sanitizedDetail: {
@@ -2244,6 +2343,20 @@ describe("credential lifecycle events", () => {
           status: 503,
         },
       });
+      expect(error.userAction).not.toMatch(/login/i);
+      // An unreachable broker is the same outage, with the key kept.
+      services.knobs.brokerFaults.push({ timeoutMs: 2_000 });
+      const timeout = await credentials
+        .ensure(identity, ctx, {
+          allowAcquire: false,
+          forceRefresh: true,
+        })
+        .catch((caught: unknown) => caught as PiShipError);
+      expect(timeout).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+      });
+      expect(timeout.userAction).not.toMatch(/login/i);
       const rendered = inspect(error, { depth: 10, showHidden: true });
       expect(rendered).not.toContain(token);
       expect(rendered).not.toContain(active.secret?.reveal() ?? "missing");

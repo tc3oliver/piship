@@ -4,6 +4,7 @@
 // live after a crash and a reuse of the ID.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { processAlive, processHostToken } from "@piship/contracts";
 
 /**
  * The start identity of the process with this ID: the boot ID and start time
@@ -63,6 +64,64 @@ export function processIdentityMatches(
   )
     return undefined;
   return false;
+}
+
+/**
+ * How far a recorded start time (the writer's `performance.timeOrigin`) may
+ * lie from the start time the system reports for the same process: `ps`
+ * reports whole seconds, and Node takes its time origin after the process
+ * (or the shell a command shim replaces with `exec`) began.
+ */
+const START_TOLERANCE_MS = 5_000;
+
+/** A record that names the process holding something. */
+export interface ProcessRecord {
+  readonly pid: number;
+  /** Its start identity (`processIdentity`); null when not recorded. */
+  readonly identity: string | null;
+  /** Its host (`processHostToken`); null in a record written before hosts were. */
+  readonly host: string | null;
+  /** Its start time in ms since the epoch (`performance.timeOrigin`); null when not recorded. */
+  readonly started: number | null;
+}
+
+/**
+ * Whether the process a record names is gone: true when that is proven (no
+ * process has its ID on this host, or the process that has it now started at
+ * another time), false when it is the same running process, and undefined
+ * when that cannot be told. A record from another host is always undefined:
+ * its process ID means nothing here, so the absence of a local process with
+ * that ID proves nothing. So is a record with no start identity or time to
+ * compare (a record of an earlier PiShip) whose ID a process has. The caller
+ * then needs another rule, such as the age of the record. A record without a
+ * host is judged as this host's, as it was before hosts were recorded.
+ */
+export function recordedProcessGone(
+  record: ProcessRecord,
+): boolean | undefined {
+  if (record.host !== null && record.host !== processHostToken())
+    return undefined;
+  if (!processAlive(record.pid)) return true;
+  const same = processIdentityMatches(record.identity, record.pid);
+  if (same !== undefined) return !same;
+  if (record.started === null) return undefined;
+  const current = processIdentity(record.pid);
+  const start = current === undefined ? undefined : startMs(current);
+  if (start === undefined) return undefined;
+  return Math.abs(start - record.started) > START_TOLERANCE_MS;
+}
+
+/**
+ * The start time in ms since the epoch of a start identity read on this
+ * platform; undefined on Linux, whose identity counts clock ticks from boot
+ * (a Linux writer records the identity itself, which is cheap there).
+ */
+function startMs(identity: string): number | undefined {
+  if (!/^\d+$/.test(identity) || process.platform === "linux") return undefined;
+  // .NET ticks: 100 ns units since 0001-01-01.
+  if (process.platform === "win32")
+    return Number(BigInt(identity) / 10_000n) - 62_135_596_800_000;
+  return Number(identity) * 1000;
 }
 
 function lookup(pid: number): string | undefined {

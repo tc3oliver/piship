@@ -15,6 +15,10 @@ import type { SecretValue } from "./secret.js";
 export interface LoginContext {
   /** Present the authorization URL to the user (open a browser or print it). */
   readonly openUrl: (url: string) => void | Promise<void>;
+  /**
+   * Cancels the sign-in. An identity adapter's `login()` receives one that
+   * also aborts at PiShip's deadline for the call.
+   */
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
 }
@@ -103,11 +107,23 @@ export function principalDigest(key: PrincipalKey): string {
     .slice(0, 32);
 }
 
+/** What PiShip passes to an identity adapter's `refresh` and `logout`. */
+export interface IdentityCallContext {
+  /**
+   * Aborts when PiShip stops waiting for the call: at its deadline or on
+   * cancellation. Optional to honor; PiShip stops waiting either way.
+   */
+  readonly signal?: AbortSignal;
+}
+
 export interface IdentityProvider {
   readonly kind: string;
   login(ctx: LoginContext): Promise<IdentitySession>;
-  refresh?(session: IdentitySession): Promise<IdentitySession>;
-  logout?(session: IdentitySession): Promise<void>;
+  refresh?(
+    session: IdentitySession,
+    ctx?: IdentityCallContext,
+  ): Promise<IdentitySession>;
+  logout?(session: IdentitySession, ctx?: IdentityCallContext): Promise<void>;
 }
 
 // -------------------------------------------------------------- credentials

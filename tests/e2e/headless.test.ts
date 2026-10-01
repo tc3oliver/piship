@@ -412,7 +412,10 @@ describe("headless workload distribution (local fixtures)", () => {
     services.knobs.brokerStatus = 503;
     const brokerDown = await run(["--smoke"]);
     expect(brokerDown.status).toBe(1);
-    expect(brokerDown.stderr).toContain("CREDENTIAL_EXPIRED");
+    // A broker outage is retryable, not an expired or revoked credential.
+    expect(brokerDown.stderr).toContain("CREDENTIAL_ACQUIRE_FAILED");
+    expect(brokerDown.stderr).toContain("expired and could not be renewed");
+    expect(brokerDown.stderr).not.toMatch(/run \S+ login/i);
     services.knobs.brokerStatus = undefined;
     const deadToken = issue("svc-build-1");
     services.state.accessTokens.delete(deadToken);

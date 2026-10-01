@@ -664,6 +664,54 @@ export class AdapterSandboxCredential {
     });
   }
 
+  /**
+   * An adapter's failure to provide its credential. Its message and free-form
+   * detail may quote its token source, so only its code and the fields of
+   * the credential failure contract (`reason`, `status`, `outcome`) are kept,
+   * each in a bounded shape, with its retry contract: an outage or a rate
+   * limit stays retryable, with the adapter's wait, instead of reading as a
+   * broken credential source.
+   */
+  #adapterFailure(error: unknown): PiShipError {
+    const failure = error instanceof PiShipError ? error : undefined;
+    const detail = failure?.sanitizedDetail ?? {};
+    const retryable = failure?.retryable === true;
+    const retryAfterMs =
+      retryable &&
+      typeof failure?.retryAfterMs === "number" &&
+      Number.isFinite(failure.retryAfterMs) &&
+      failure.retryAfterMs >= 0
+        ? failure.retryAfterMs
+        : undefined;
+    return new PiShipError(
+      "SANDBOX_UNAVAILABLE",
+      `The custom sandbox adapter could not provide its credential (${failure ? failure.code : "adapter error"})`,
+      {
+        component: "sandbox",
+        retryable,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        userAction: retryable
+          ? "Try again later; the custom sandbox adapter's credential source is temporarily unavailable"
+          : `Check the custom sandbox adapter's credential source, then start ${this.#options.command} again`,
+        sanitizedDetail: {
+          adapterCode: failure ? failure.code : "adapter-error",
+          ...(typeof detail.reason === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(detail.reason)
+            ? { reason: detail.reason }
+            : {}),
+          ...(Number.isInteger(detail.status) &&
+          (detail.status as number) >= 100 &&
+          (detail.status as number) <= 599
+            ? { status: detail.status }
+            : {}),
+          ...(detail.outcome === "not-sent" || detail.outcome === "unknown"
+            ? { outcome: detail.outcome }
+            : {}),
+        },
+      },
+    );
+  }
+
   #emit(
     event: CredentialEvent["event"],
     detail: Record<string, string | number | boolean | null>,
@@ -703,9 +751,7 @@ export class AdapterSandboxCredential {
           : await this.#provider.acquire(identity, ctx);
     } catch (error) {
       // The adapter's own text may quote its token source: only a code.
-      throw this.#unavailable(
-        `The custom sandbox adapter could not provide its credential (${error instanceof PiShipError ? error.code : "adapter error"})`,
-      );
+      throw this.#adapterFailure(error);
     }
     let credential: RuntimeCredential;
     try {

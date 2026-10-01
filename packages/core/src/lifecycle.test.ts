@@ -819,6 +819,54 @@ await installDistribution(artifact);
     expect(existsSync(receiptFile)).toBe(false);
   });
 
+  it("recovers an edited command shim only when asked, and never removes a foreign file (#158)", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const shim = readFileSync(receipt.commandPath, "utf8");
+    // The user added a line to the shim PiShip wrote: it still runs this
+    // install's launcher, so it is recognized as PiShip's, edited.
+    const edited =
+      process.platform === "win32"
+        ? shim.replace("@echo off\r\n", "@echo off\r\nset FOO=1\r\n")
+        : shim.replace("#!/bin/sh\n", "#!/bin/sh\nexport FOO=1\n");
+    writeFileSync(receipt.commandPath, edited);
+    const refusal = (() => {
+      try {
+        uninstallDistribution(ID);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return undefined;
+    })();
+    expect(refusal).toMatch(/was changed after/);
+    expect(refusal).toContain("--remove-edited-shim");
+    // Refused before anything was removed.
+    expect(readFileSync(receipt.commandPath, "utf8")).toBe(edited);
+    expect(existsSync(receipt.payload)).toBe(true);
+    uninstallDistribution(ID, { removeEditedShim: true });
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(existsSync(receipt.payload)).toBe(false);
+    // And it installs again.
+    const again = await installDistribution(a.archive, true);
+    expect(readFileSync(again.commandPath, "utf8")).toBe(shim);
+    // A file that does not run this install's launcher is not PiShip's: the
+    // flag does not remove it, and the error says how to proceed.
+    const foreign =
+      process.platform === "win32"
+        ? "@echo off\r\necho mine\r\n"
+        : "#!/bin/sh\necho mine\n";
+    writeFileSync(again.commandPath, foreign);
+    expect(() => uninstallDistribution(ID, { removeEditedShim: true })).toThrow(
+      /does not run .*launcher.*move it aside/i,
+    );
+    expect(readFileSync(again.commandPath, "utf8")).toBe(foreign);
+    expect(existsSync(again.payload)).toBe(true);
+    // Moved aside by the user: the uninstall goes through and leaves it.
+    rmSync(again.commandPath);
+    uninstallDistribution(ID);
+    expect(existsSync(again.payload)).toBe(false);
+  });
+
   it("rejects receipts from a newer PiShip and receipts with foreign paths", async () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);
@@ -2297,7 +2345,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
         secretStore: store,
         withoutLogout: true,
       }),
-    ).rejects.toThrow(/not owned/);
+    ).rejects.toThrow(/was changed after/);
     expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
     expect(existsSync(state)).toBe(true);
     expect(existsSync(receipt.payload)).toBe(true);
@@ -2829,7 +2877,10 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
       encoding: "utf8",
     });
     expect(busy.status).toBe(1);
-    expect(busy.stderr).toMatch(/registering; retry/);
+    // The launcher names the gate by its real path, which can differ from
+    // the configured one (/private/var on macOS).
+    expect(busy.stderr).toContain(join("receipts", `.${ID}.launch.lock`));
+    expect(busy.stderr).toContain(`is held by process ${process.pid}. Retry`);
     expect(Date.now() - started).toBeLessThan(10_000);
     rmSync(gate);
   }, 30_000);

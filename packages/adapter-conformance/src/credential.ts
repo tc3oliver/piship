@@ -357,7 +357,15 @@ class Harness {
         ...this.options.endpoints,
       },
     };
-    const provider = await this.factory(context);
+    // Bounded like every call into the adapter: a hung factory fails the
+    // check instead of hanging the kit.
+    const made = await settle(() => this.factory(context), this.boundMs);
+    check(
+      made.kind !== "hung",
+      "the adapter factory did not end within the kit's bound",
+    );
+    if (made.kind === "rejected") throw made.error;
+    const provider = made.value;
     check(
       provider && typeof provider.acquire === "function",
       "the adapter factory returned no credential provider",

@@ -387,8 +387,11 @@ export function acquireLock(
  * temporaries of the receipt (only the returned names are under `apps`).
  * Idempotent.
  */
-export function recoverInstallation(id: string): string[] {
-  const gate = acquireLaunchGate(id);
+export function recoverInstallation(
+  id: string,
+  code: "UPDATE_FAILED" | "ROLLBACK_FAILED" = "UPDATE_FAILED",
+): string[] {
+  const gate = acquireLaunchGate(id, code);
   try {
     const receipt = readInstallReceipt(id);
     removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);

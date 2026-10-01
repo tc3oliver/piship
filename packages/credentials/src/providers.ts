@@ -36,8 +36,12 @@ export type BrokerOperation = "acquire" | "revoke";
  * - `authentication` (401), `denied` (403), `rate-limited` (429),
  *   `unavailable` (5xx), `rejected` (any other non-2xx)
  * - `contract`: a 2xx answer that breaks the http-broker contract
- * - `idempotency-conflict` (409 or 422 to an acquire that carried an
- *   idempotency key): the broker already used the key for other input
+ * - `idempotency-conflict` (422, or 409 with `error: idempotency_key_reused`,
+ *   to an acquire that carried an idempotency key): the broker already used
+ *   the key for other input; final
+ * - `idempotency-in-progress` (any other 409 to an acquire that carried an
+ *   idempotency key): the first request with the key is still running;
+ *   retryable, and the next attempt must send the same key
  *
  * A failure without an answer (`unreachable`, `timeout`, `cancelled`) also
  * carries `outcome`: `not-sent` when the request never reached the broker,
@@ -55,7 +59,8 @@ export type BrokerFailureReason =
   | "unavailable"
   | "rejected"
   | "contract"
-  | "idempotency-conflict";
+  | "idempotency-conflict"
+  | "idempotency-in-progress";
 
 /** Non-secret detail an acquire adds to every failure: its idempotency key. */
 type ExtraDetail = Readonly<Record<string, string>>;
@@ -101,6 +106,7 @@ function statusFailure(
   operation: BrokerOperation,
   response: Response,
   detail: ExtraDetail = {},
+  errorCode?: string,
 ): PiShipError {
   const status = response.status;
   if (status === 403)
@@ -113,6 +119,30 @@ function statusFailure(
         component: "credential",
         userAction: "Ask your administrator for access",
         sanitizedDetail: { operation, reason: "denied", status, ...detail },
+      },
+    );
+  // A 409 to a keyed acquire is, unless the broker names a reused key, the
+  // key's first request still running (the IETF Idempotency-Key answer).
+  // Releasing the key then would let the next attempt issue a second
+  // credential while the first is issued and never recorded, so it is kept:
+  // a broker that means a conflict and says nothing more costs a retry that
+  // fails the same way, never a duplicate credential.
+  if (
+    status === 409 &&
+    detail.idempotencyKey &&
+    errorCode !== IDEMPOTENCY_KEY_REUSED
+  )
+    return brokerFailure(
+      operation,
+      "idempotency-in-progress",
+      "The credential broker is still processing an earlier request with the same idempotency key",
+      {
+        retryable: true,
+        status,
+        retryAfterMs: parseRetryAfter(response.headers.get("retry-after")),
+        detail,
+        userAction:
+          "Try again shortly; the next attempt repeats the same request. If it keeps failing, ask your administrator to check the broker for this idempotency key",
       },
     );
   // Only an acquire that sent a key can conflict with an earlier use of it.
@@ -153,6 +183,29 @@ function statusFailure(
       detail,
     },
   );
+}
+
+/**
+ * The broker's `error` code for a key it already used for another request.
+ * Only this code, compared and never shown, is ever read from an error body.
+ */
+const IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused";
+
+/**
+ * The `error` field of a broker's JSON error body, read only to compare it
+ * with a fixed code. Best effort and bounded: an unreadable, oversized, or
+ * malformed body reads as no code. The body is never returned or shown.
+ */
+async function errorCodeOf(
+  read: () => Promise<string>,
+): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await read());
+    const code = (parsed as { error?: unknown } | null)?.error;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Largest broker answer body read; the http-broker answer is a few hundred bytes. */
@@ -363,6 +416,57 @@ async function brokerRequest(
   };
 }
 
+/**
+ * The refusal of a credential that is expired by this computer's clock when
+ * it arrives. It stays fail-closed, but signing in again cannot help while a
+ * clock is wrong: the next credential is refused the same way. So it names
+ * the clocks. With the broker's `Date` header (one-second resolution) it
+ * says which one disagrees: a credential valid by the broker's clock means
+ * this computer runs ahead; one expired by the broker's own clock is the
+ * broker's clock or credential lifetime. Times only, never a secret.
+ */
+function expiredOnArrival(
+  expiresAt: Date,
+  now: number,
+  response: Response,
+  detail: ExtraDetail,
+): PiShipError {
+  const header = response.headers.get("date");
+  const brokerTime = header === null ? Number.NaN : Date.parse(header);
+  const known = Number.isFinite(brokerTime);
+  const skewSeconds = known ? Math.round((now - brokerTime) / 1000) : 0;
+  // Within the header's resolution and the request's latency, the clocks agree.
+  const localAhead = known && expiresAt.getTime() > brokerTime;
+  const message = !known
+    ? "The credential broker issued a credential that is already expired by this computer's clock"
+    : localAhead
+      ? `The credential broker issued a credential that is already expired by this computer's clock, which is ${skewSeconds} s ahead of the credential broker's`
+      : "The credential broker issued a credential that is already expired by its own clock";
+  const userAction = !known
+    ? "Check that this computer's date, time, and time zone are correct (signing in again does not help while they are wrong); if they are, ask your administrator to check the credential broker's clock and credential lifetime"
+    : localAhead
+      ? "Correct this computer's clock (date, time, and time zone; enable network time), then try again"
+      : "Ask your administrator to check the credential broker's clock and credential lifetime";
+  return new PiShipError("CREDENTIAL_EXPIRED", message, {
+    component: "credential",
+    userAction,
+    sanitizedDetail: {
+      operation: "acquire",
+      reason: "contract",
+      status: response.status,
+      expiresAt: expiresAt.toISOString(),
+      localTime: new Date(now).toISOString(),
+      ...(known
+        ? {
+            brokerTime: new Date(brokerTime).toISOString(),
+            clockSkewSeconds: skewSeconds,
+          }
+        : {}),
+      ...detail,
+    },
+  });
+}
+
 function normalizeUrl(value: string): string {
   const url = new URL(value);
   return `${url.origin}${trimTrailingSlashes(url.pathname)}`;
@@ -444,6 +548,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         detail,
       },
     );
+    // The one error body read: a 409 to a keyed acquire, to tell a reused
+    // key (final) from a request still in progress (keep the key).
+    const errorCode =
+      response.status === 409 && key !== undefined
+        ? await errorCodeOf(readBody)
+        : undefined;
     if (response.status >= 300) discardBody(response);
     if (response.status === 401)
       throw new PiShipError(
@@ -461,7 +571,7 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         },
       );
     if (response.status >= 300)
-      throw statusFailure("acquire", response, detail);
+      throw statusFailure("acquire", response, detail, errorCode);
     const text = await readBody();
     let body: Record<string, unknown>;
     try {
@@ -564,23 +674,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       typeof body.expires_at === "string"
         ? new Date(body.expires_at)
         : undefined;
-    if (expiresAt && expiresAt.getTime() <= Date.now())
+    const now = Date.now();
+    if (expiresAt && expiresAt.getTime() <= now)
       throw await this.#discardIssued(
         body,
         ctx,
-        new PiShipError(
-          "CREDENTIAL_EXPIRED",
-          "The credential broker issued an already expired credential",
-          {
-            component: "credential",
-            sanitizedDetail: {
-              operation: "acquire",
-              reason: "contract",
-              status: response.status,
-              ...detail,
-            },
-          },
-        ),
+        expiredOnArrival(expiresAt, now, response, detail),
       );
     return {
       kind: type as RuntimeCredentialKind,

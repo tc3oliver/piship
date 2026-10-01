@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type ActivationContext,
@@ -29,7 +30,6 @@ import {
   claimedGuarantees,
   requiredPlanes,
   type SandboxCapabilities,
-  type SandboxExecIO,
   type SandboxExecResult,
   type SandboxWorkspaceDeclaration,
   workspaceDeclaration,
@@ -1013,26 +1013,63 @@ describe.skipIf(!posix)(
       await sandbox.dispose();
     });
 
-    it("fails closed when the check times out", async () => {
-      const hang = (_request: unknown, io: SandboxExecIO) =>
-        new Promise<SandboxExecResult>((resolvePromise) => {
-          io.signal.addEventListener("abort", () =>
-            resolvePromise({ exitCode: 0 }),
-          );
-        });
+    it("fails the command closed when the check times out, but keeps the sandbox and checks again (#158)", async () => {
+      let calls = 0;
       const fake = sharedBackend({
         declaration: { mode: "synchronized", propagationMs: 1 },
-        check: hang,
+        check: (request, io) => {
+          calls++;
+          if (calls === 1)
+            // Slow once, and stops when PiShip times it out.
+            return new Promise<SandboxExecResult>((resolvePromise) => {
+              io.signal.addEventListener("abort", () =>
+                resolvePromise({ exitCode: 0 }),
+              );
+            });
+          return runShell(workspace, request, io);
+        },
+      });
+      const sandbox = await activate(fake, { probeTimeoutMs: 200 });
+      const error = await run(sandbox, "echo agent").then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+      expect(error).toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining("timed out"),
+        retryable: true,
+      });
+      // A slow check says nothing about git control: no advice about it.
+      expect(JSON.stringify(error)).not.toMatch(/git control|hooks read-only/);
+      expect((error as PiShipError).userAction).toMatch(/again/);
+      // The agent's command did not run in an unverified workspace.
+      expect(fake.commands()).toEqual([]);
+      expect(sentinels()).toEqual([]);
+      expect(sandbox.workspace()?.verification).not.toBe("verified");
+      // The next command checks again, and runs once the check passes.
+      expect((await run(sandbox, "echo agent")).output).toBe("agent\n");
+      expect(sandbox.workspace()?.verification).toBe("verified");
+      expect(calls).toBe(2);
+      await sandbox.dispose();
+    });
+
+    it("still retires a sandbox whose timed-out check it could not stop", async () => {
+      const fake = sharedBackend({
+        declaration: { mode: "synchronized", propagationMs: 1 },
+        // Ignores the abort: PiShip cannot tell what it still does.
+        check: () => new Promise<SandboxExecResult>(() => {}),
       });
       const sandbox = await activate(fake, { probeTimeoutMs: 200 });
       await expect(run(sandbox, "echo agent")).rejects.toMatchObject({
         code: "SANDBOX_UNAVAILABLE",
-        message: expect.stringContaining("did not complete"),
+      });
+      await expect(run(sandbox, "echo agent")).rejects.toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        message: expect.stringContaining("retired"),
       });
       expect(fake.commands()).toEqual([]);
-      expect(sentinels()).toEqual([]);
       await sandbox.dispose();
-    });
+    }, 20_000);
 
     it("does not count a cancelled check as a result", async () => {
       let calls = 0;

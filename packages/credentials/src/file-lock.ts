@@ -27,6 +27,14 @@ const LOCK_HEARTBEAT_MS = 5_000;
  */
 const LOCK_STALE_MS = 75_000;
 const LOCK_WAIT_MS = 90_000;
+/**
+ * How long an empty lock may stay empty before it is taken as abandoned. A
+ * holder writes its token in the same synchronous step that creates the lock
+ * and removes the lock when that write fails, so a lock that stays empty is
+ * one whose holder died between the two (or an older release whose write
+ * failed): no holder will ever refresh or release it.
+ */
+const LOCK_EMPTY_GRACE_MS = 1_000;
 /** How long a waiter waits in silence before it says what it waits for. */
 const LOCK_NOTICE_MS = 2_000;
 const sleep = (ms: number) =>
@@ -90,6 +98,11 @@ function lockHolder(
 function observedHolder(state: string) {
   const token = state.slice(0, state.lastIndexOf("\n"));
   return token === "?" ? undefined : lockHolder(token);
+}
+
+/** Whether an observed lock was readable and holds no token at all. */
+function isEmptyLock(state: string): boolean {
+  return state.lastIndexOf("\n") === 0;
 }
 
 function describeHolder(state: string | undefined): string {
@@ -234,9 +247,18 @@ export async function withFileLock<T>(
     try {
       const fd = openSync(lock, "wx", 0o600);
       try {
-        writeSync(fd, token);
-      } finally {
-        closeSync(fd);
+        try {
+          if (writeSync(fd, token) !== Buffer.byteLength(token))
+            throw new Error(`Could not write the lock token to ${lock}`);
+        } finally {
+          closeSync(fd);
+        }
+      } catch (error) {
+        // An empty or partial lock names no holder and would block every
+        // other process for the whole stale interval. Nobody else can hold
+        // this path yet (they wait at least the empty grace), so it is ours.
+        rmSync(lock, { force: true });
+        throw error;
       }
       break;
     } catch (error) {
@@ -253,7 +275,10 @@ export async function withFileLock<T>(
         breakStaleLock(lock, state);
         seen = undefined;
       } else if (seen?.state !== state) seen = { state, since: now };
-      else if (now - seen.since > staleMs) {
+      else if (
+        now - seen.since >
+        (isEmptyLock(state) ? Math.min(staleMs, LOCK_EMPTY_GRACE_MS) : staleMs)
+      ) {
         breakStaleLock(lock, state);
         seen = undefined;
         continue;

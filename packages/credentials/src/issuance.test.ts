@@ -73,6 +73,9 @@ type Step =
   | "refused"
   | "denied"
   | "conflict"
+  | "reused"
+  | "in-progress"
+  | "busy"
   | "malformed";
 
 /**
@@ -122,6 +125,15 @@ class FakeBroker {
       });
     if (step === "denied") return new Response("{}", { status: 403 });
     if (step === "conflict") return new Response("{}", { status: 422 });
+    if (step === "reused")
+      return Response.json(
+        { error: "idempotency_key_reused" },
+        { status: 409 },
+      );
+    if (step === "busy")
+      // A bare 409: as an IETF Idempotency-Key server answers a key whose
+      // first request is still running.
+      return new Response("{}", { status: 409 });
     const token = headers.get("authorization") ?? "";
     const principal = token.replace(/^Bearer fake-identity-token-/, "");
     const record = `${principal}\n${key}`;
@@ -134,6 +146,13 @@ class FakeBroker {
     }
     if (step === "drop-after-create")
       throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+    // The first request with this key is still running (it already issued
+    // what a later repeat of the key replays).
+    if (step === "in-progress")
+      return Response.json(
+        { error: "request_in_progress" },
+        { status: 409, headers: { "retry-after": "2" } },
+      );
     if (step === "malformed")
       return new Response("not json", {
         status: 200,
@@ -509,8 +528,39 @@ describe("durable credential issuance", () => {
     },
   );
 
+  it("keeps the key while the broker says the first request with it is still running", async () => {
+    for (const step of ["in-progress", "busy"] as const) {
+      const broker = new FakeBroker();
+      broker.plan.push(step);
+      const credentials = brokerManager(broker);
+      const error = await failure(
+        credentials.ensure(alice, ctx, { allowAcquire: true }),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+        sanitizedDetail: {
+          reason: "idempotency-in-progress",
+          status: 409,
+          idempotencyKey: broker.keys[0],
+        },
+      });
+      if (step === "in-progress") expect(error.retryAfterMs).toBe(2_000);
+      expect(pending()?.idempotency_key).toBe(broker.keys[0]);
+      // The retry repeats the key and gets the one credential issued.
+      const active = await credentials.ensure(alice, ctx, {
+        allowAcquire: true,
+      });
+      expect(broker.keys[1]).toBe(broker.keys[0]);
+      expect(broker.issued.length).toBeLessThanOrEqual(1);
+      expect(active.secret?.reveal()).toBe(broker.issued[0]);
+      expect(pending()).toBeNull();
+      await credentials.logout(ctx);
+    }
+  });
+
   it("starts a new key after the broker's final answer to it", async () => {
-    for (const step of ["denied", "conflict", "malformed"] as const) {
+    for (const step of ["denied", "conflict", "reused", "malformed"] as const) {
       const broker = new FakeBroker();
       broker.plan.push(step);
       const credentials = brokerManager(broker);

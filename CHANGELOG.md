@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0 is the first milestone published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0); every package is versioned `0.7.0`.
 
+## Unreleased
+
+Changes on `main` after v0.7.0. Not released.
+
+### Security
+
+- The reference sandbox container service in `examples/enterprise-reference` pins every directory above a nested protected path, so a sandboxed command can no longer move a protected path aside and bypass the protected git path enforcement ([GHSA-w3j6-fv7v-wwr4](https://github.com/tc3oliver/piship/security/advisories/GHSA-w3j6-fv7v-wwr4), #170). Affected: that reference service in the v0.7.0 source. Not affected: the v0.7.0 release archives, the PiShip packages, and the bubblewrap and Seatbelt sandboxes.
+
+### Behavior and contract changes
+
+- A broker `409` to an acquire or renewal that sent an idempotency key is a final key conflict only when its JSON body is `{"error":"idempotency_key_reused"}`. Any other `409` now means the request is still in progress: the key is kept, `Retry-After` is honored, and the failure is retryable, so PiShip never issues a second credential for it (#157).
+- A renewal that fails with a retryable broker or network error keeps `CREDENTIAL_ACQUIRE_FAILED`, its `retryAfterMs`, and the action "try again later"; it is no longer reported as `CREDENTIAL_REVOKED` with "run login" (#157).
+- The lifecycle lock, the launch gate, and the `.launching` marker record the holder's process ID, start identity, host, and instance. A holder from this host whose process is gone or was replaced is reclaimed at once; a live matching holder is never reclaimed; a holder from another host is kept until its 24-hour lease ends. `update` and `rollback` wait up to 3 seconds for the launch gate, then fail as retryable (#144).
+- Every call into distribution-owned adapter code (identity, credential, custom sandbox `available`, `prepare`, `dispose`, and adapter loading) has a deadline and receives an optional `AbortSignal`. A timeout is retryable and names the adapter and the call; a hung credential adapter releases the credential lock (#145).
+- `/resume` is refused when the session inspection itself fails; session owner records from another host or PID namespace are reported as unverifiable instead of live or dead (#158).
+
+### Fixed
+
+- An empty or cut-short `state.json` is rebuilt; a torn final audit line is skipped; a damaged `preferences.json` is refused with its path and how to recover (#143).
+- The audit sink starts a new event on its own line after a torn final line, so the event is not lost (#143).
+- A failed credential lock write no longer leaves an empty lock file behind (#157).
+- A broker credential that arrives already expired names the local and broker clocks (#157).
+- A sandbox adapter failure keeps its `retryable` and `retryAfterMs` (#157).
+- Cancelling one Kubernetes command no longer fails another command on the same claim (#158).
+- A workspace check timeout no longer retires the sandbox (#158).
+- The abandoned-temporary sweep at launch is bounded to a short budget and continues on the next start (#158).
+- An edited command shim can be removed with `piship uninstall <id> --remove-edited-shim`; a foreign file is never removed (#158).
+- The adapter conformance kits no longer hang on an adapter factory or `available()` that never settles (#145).
+
 ## v0.7.0
 
 Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0) from tag `v0.7.0` (commit `4994eee`, the squash of #165); not published to npm. v0.7 connects a managed distribution to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and adds the adapter SDK, the conformance kits, and the reference stack that test those connections. The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`. Release qualification passed on that exact commit ([status](docs/status.md#v070-release-candidate)).

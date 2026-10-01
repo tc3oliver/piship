@@ -49,7 +49,7 @@ export async function rollbackDistribution(
   const lifecycle = acquireLock(id, "ROLLBACK_FAILED");
   try {
     const receipt = readInstallReceipt(id);
-    recoverInstallation(id);
+    recoverInstallation(id, "ROLLBACK_FAILED");
     const current = activeLock(receipt);
     repairStateMarker(id, current);
     const previous = receipt.releases.find(

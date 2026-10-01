@@ -16,6 +16,10 @@ It is example code for tests and local exploration, not a package and not a prod
 | [`piship.yaml`](piship.yaml), [`piship.lock`](piship.lock), [`resources/`](resources) | The reference distribution with this sandbox (below) |
 | [`test/`](test) | Contract tests for the service and the adapter, with a fake `docker`; no Docker needed |
 
+## Security notices
+
+- [GHSA-w3j6-fv7v-wwr4](https://github.com/tc3oliver/piship/security/advisories/GHSA-w3j6-fv7v-wwr4): in the v0.7.0 source of this service, a protected path nested below a writable workspace directory could be bypassed. Fixed on `main` in #170 (commit `2427391`); not yet in a release. The v0.7.0 release archives, the PiShip packages, and the bubblewrap and Seatbelt sandboxes are not affected.
+
 ## Run it
 
 Needs Docker and Node 22.19 or later. The project must be a git repository with a `.git` directory, under a directory the service is configured to mount.

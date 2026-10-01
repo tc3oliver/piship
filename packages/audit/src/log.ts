@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
 import {
   chmod,
+  type FileHandle,
   link,
   lstat,
   mkdir,
@@ -299,14 +300,23 @@ class FileSinkWriter implements AuditSink {
     const generation = bytes > 0 ? await this.generation() : "";
     let handle = await this.open();
     try {
-      const { size } = await handle.stat();
+      let { size } = await handle.stat();
       if (bytes > 0 && size > 0 && size + bytes > this.rotation.maxBytes) {
         await handle.close();
         await this.rotate(generation, bytes);
         handle = await this.open();
+        ({ size } = await handle.stat());
       }
       if (process.platform !== "win32") await handle.chmod(0o600);
-      if (data) await handle.appendFile(data, "utf8");
+      // A crash mid-append can leave a final line without its newline. Start
+      // on a fresh line so the next event is not glued onto the fragment; the
+      // fragment itself is kept as is. Checked on the handle that is appended
+      // to, so a writer still on a rotated file checks that file.
+      if (data)
+        await handle.appendFile(
+          (await endsMidLine(handle, size)) ? `\n${data}` : data,
+          "utf8",
+        );
     } finally {
       await handle.close().catch(() => undefined);
     }
@@ -315,7 +325,7 @@ class FileSinkWriter implements AuditSink {
   private open() {
     // O_NOFOLLOW refuses a planted symlink; it is 0 where unsupported.
     const flags =
-      constants.O_WRONLY |
+      constants.O_RDWR |
       constants.O_APPEND |
       constants.O_CREAT |
       (constants.O_NOFOLLOW ?? 0);
@@ -912,6 +922,14 @@ function markOpenFailure(sink: Sink, error: unknown): Sink {
   sink.state = "degraded";
   sink.lastError = reason;
   return sink;
+}
+
+/** Whether a file of `size` bytes is non-empty and does not end with a newline. */
+async function endsMidLine(handle: FileHandle, size: number): Promise<boolean> {
+  if (size === 0) return false;
+  const last = Buffer.alloc(1);
+  const { bytesRead } = await handle.read(last, 0, 1, size - 1);
+  return bytesRead === 1 && last[0] !== 0x0a;
 }
 
 /**
