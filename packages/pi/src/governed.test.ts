@@ -1077,6 +1077,35 @@ describe("governed shell output persistence", () => {
     },
   );
 
+  it("removes the pi-bash logs Pi recorded for this session's ! commands at close", async () => {
+    const { session } = await open([], allowShell);
+    const shutdown = load(governanceHooks(session)).handlers.get(
+      "session_shutdown",
+    );
+    const mine = join(temp, "pi-bash-0123456789abcdef.log");
+    const earlier = join(temp, "pi-bash-fedcba9876543210.log");
+    writeFileSync(mine, "mine");
+    writeFileSync(earlier, "an earlier session's");
+    const entry = (path: string, timestamp: number) => ({
+      type: "message",
+      message: { role: "bashExecution", fullOutputPath: path, timestamp },
+    });
+    await shutdown?.(
+      { type: "session_shutdown", reason: "quit" },
+      {
+        sessionManager: {
+          getEntries: () => [
+            entry(mine, Date.now()),
+            entry(earlier, session.outputStore.openedAt - 1),
+          ],
+        },
+      },
+    );
+    expect(existsSync(mine)).toBe(true);
+    await session.close();
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(earlier)).toBe(true);
+  });
 });
 
 describe("piship-ask-user", () => {

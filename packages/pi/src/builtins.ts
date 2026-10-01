@@ -85,6 +85,11 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
         attach(gov, ctx);
         return { operations: governedBashOperations(gov, "user-bash") };
       });
+      // Pi writes a `!` command's full output to its own pi-bash-*.log and
+      // records the path in the session; the session's close removes them.
+      pi.on("session_shutdown", (_event, ctx) => {
+        gov.outputStore.adoptUserBashOutput(ctx.sessionManager.getEntries());
+      });
       pi.on("before_provider_request", (_event, ctx) => {
         const model = ctx.model;
         gov.emit("model.request", {

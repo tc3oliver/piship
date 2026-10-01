@@ -14,6 +14,7 @@ import {
   readlink,
   stat,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import {
   type BashOperations,
@@ -49,7 +50,7 @@ import {
   withApprovedNetwork,
 } from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
-import { ShellOutput } from "./shell-output.js";
+import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
 /** True when `path` is `root` or below it. */
 const inside = (root: string, path: string) => isWithin(path, root);
@@ -283,6 +284,8 @@ export const GOVERNED_READ_LIMIT_BYTES = 16 * 1024 * 1024;
  */
 export const SHELL_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
 const OUTPUT_LIMIT_NOTICE = `\n[output exceeded the ${SHELL_OUTPUT_LIMIT_BYTES / 1024 / 1024} MiB shell output limit; PiShip stopped the command. Redirect large output to a file and inspect it with head, tail, or grep.]\n`;
+const lowDiskNotice = (budget: number) =>
+  `\n[output reached ${formatSize(budget)}, all the temporary disk can spare; PiShip stopped the command. Free temporary disk space or redirect large output to a file.]\n`;
 
 /** The path the kernel reports for an open file, where the platform has one. */
 async function openedPath(handle: FileHandle): Promise<string | undefined> {
@@ -443,16 +446,16 @@ async function gateCommand(
 type ExecOptions = Parameters<BashOperations["exec"]>[2];
 
 /**
- * Pass at most SHELL_OUTPUT_LIMIT_BYTES of output through, then one notice,
- * and abort the returned signal so the runner kills the process tree.
+ * Pass at most `budget` bytes of output through, then one notice, and abort
+ * the returned signal so the runner kills the process tree.
  */
-function boundedOutput(options: ExecOptions) {
+function boundedOutput(options: ExecOptions, budget: number, notice: string) {
   const limit = new AbortController();
   let passed = 0;
   let exceeded = false;
   const onData = (data: Buffer) => {
     if (exceeded) return;
-    const room = SHELL_OUTPUT_LIMIT_BYTES - passed;
+    const room = budget - passed;
     if (data.length <= room) {
       passed += data.length;
       options.onData(data);
@@ -460,7 +463,7 @@ function boundedOutput(options: ExecOptions) {
     }
     exceeded = true;
     if (room > 0) options.onData(data.subarray(0, room));
-    options.onData(Buffer.from(OUTPUT_LIMIT_NOTICE));
+    options.onData(Buffer.from(notice));
     limit.abort();
   };
   const signal = options.signal
@@ -473,7 +476,9 @@ function boundedOutput(options: ExecOptions) {
  * Shell operations: policy first, then the OS sandbox when it is enforced.
  * Without an enforced sandbox the command runs as Pi would run it, and the
  * decision was control-plane only. Either way the command's output is
- * bounded by SHELL_OUTPUT_LIMIT_BYTES.
+ * bounded by SHELL_OUTPUT_LIMIT_BYTES. A user's `!` command runs through Pi,
+ * which copies its full output to a temp file PiShip cannot configure, so
+ * its budget is also lowered to the free temp space minus a reserve.
  */
 export function governedBashOperations(
   gov: GovernanceSession,
@@ -518,7 +523,17 @@ export function governedBashOperations(
         options.onData(Buffer.from(`${refusal}\n`));
         return { exitCode: 126 };
       }
-      const output = boundedOutput(options);
+      const budget =
+        source === "user-bash"
+          ? userBashBudget(SHELL_OUTPUT_LIMIT_BYTES, freeBytes(tmpdir()))
+          : SHELL_OUTPUT_LIMIT_BYTES;
+      const output = boundedOutput(
+        options,
+        budget,
+        budget < SHELL_OUTPUT_LIMIT_BYTES
+          ? lowDiskNotice(budget)
+          : OUTPUT_LIMIT_NOTICE,
+      );
       try {
         const result = await run(command, cwd, {
           ...options,

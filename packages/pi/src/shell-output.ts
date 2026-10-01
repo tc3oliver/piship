@@ -16,10 +16,11 @@ import {
   realpathSync,
   rmSync,
   statfsSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Writable } from "node:stream";
 import {
   DEFAULT_MAX_BYTES,
@@ -34,7 +35,13 @@ export const OUTPUT_DIR_PREFIX = "piship-out-";
 export const PERSIST_LIMIT_BYTES = 64 * 1024 * 1024 + 4096;
 /** Free temp-disk space never used for shell output. */
 export const TEMP_DISK_RESERVE_BYTES = 256 * 1024 * 1024;
+/**
+ * Below this many bytes of output Pi's `!` path writes no file (it starts one
+ * past DEFAULT_MAX_BYTES); a nearly full temp disk still runs small commands.
+ */
+const MIN_USER_BASH_BUDGET = 32 * 1024;
 const OWNER_FILE = "owner";
+const PI_BASH_LOG = /^pi-bash-[0-9a-f]{16}\.log$/;
 
 /** Free bytes on the filesystem holding `path`, or undefined when unknown. */
 export function freeBytes(path: string): number | undefined {
@@ -44,6 +51,18 @@ export function freeBytes(path: string): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The output budget for a `!` command: the shell output limit, lowered to the
+ * free temp space minus the reserve, but never below what writes no file.
+ */
+export function userBashBudget(limit: number, free: number | undefined) {
+  if (free === undefined) return limit;
+  return Math.min(
+    limit,
+    Math.max(free - TEMP_DISK_RESERVE_BYTES, MIN_USER_BASH_BUDGET),
+  );
 }
 
 const uid = () => process.getuid?.();
@@ -137,11 +156,14 @@ export class OutputFile {
 
 /**
  * Full shell output owned by one governance session: a private directory
- * created on first use, removed with everything in it at dispose().
+ * created on first use, removed with everything in it at dispose(). It also
+ * removes the `pi-bash-*.log` files Pi wrote for this session's `!` commands.
  */
 export class SessionOutputStore {
+  readonly openedAt = Date.now();
   #dir: string | undefined;
   #root: string | undefined;
+  #userBashLogs = new Set<string>();
   #disposed = false;
 
   constructor(private readonly options: SessionOutputStoreOptions = {}) {}
@@ -211,9 +233,30 @@ export class SessionOutputStore {
     }
   }
 
+  /**
+   * Record the full-output files Pi wrote for this session's `!` commands,
+   * read from the session entries; removed at dispose().
+   */
+  adoptUserBashOutput(entries: readonly unknown[]): void {
+    for (const entry of entries) {
+      const message = (entry as { type?: string; message?: unknown }).message as
+        | { role?: string; fullOutputPath?: unknown; timestamp?: unknown }
+        | undefined;
+      if ((entry as { type?: string }).type !== "message" || !message) continue;
+      if (message.role !== "bashExecution") continue;
+      const path = message.fullOutputPath;
+      if (typeof path !== "string" || !isAbsolute(path)) continue;
+      if (typeof message.timestamp !== "number") continue;
+      if (message.timestamp < this.openedAt) continue;
+      this.#userBashLogs.add(path);
+    }
+  }
+
   /** Remove this session's output. Never throws. */
   async dispose(): Promise<void> {
     this.#disposed = true;
+    for (const path of this.#userBashLogs) removeUserBashLog(path);
+    this.#userBashLogs.clear();
     const dir = this.#dir;
     const root = this.#root;
     this.#dir = undefined;
@@ -263,6 +306,24 @@ export class SessionOutputStore {
         // Unreadable or concurrently removed: not provably abandoned.
       }
     }
+  }
+}
+
+/**
+ * Remove a Pi `!` output file: a regular file named as Pi names it, directly
+ * in the OS temp directory, owned by this user. Anything else is kept.
+ */
+function removeUserBashLog(path: string): void {
+  try {
+    if (!PI_BASH_LOG.test(basename(path))) return;
+    const stats = lstatSync(path);
+    if (!stats.isFile()) return;
+    const me = uid();
+    if (me !== undefined && stats.uid !== me) return;
+    if (dirname(realpathSync(path)) !== realpathSync(tmpdir())) return;
+    unlinkSync(path);
+  } catch {
+    // Already gone.
   }
 }
 

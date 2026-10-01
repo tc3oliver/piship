@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { inspect } from "node:util";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import * as upstreamPi from "@earendil-works/pi-coding-agent";
 import {
   type BashOperations,
@@ -671,6 +671,7 @@ describe("Pi session seams used by governance", () => {
     const seen: string[] = [];
     const context: { hasUI?: unknown; ui?: Record<string, unknown> } = {};
     const bashCalls: string[] = [];
+    const shutdownOutputs: string[] = [];
     const probeCalls: unknown[] = [];
     const commandArgs: string[] = [];
     const modelSelections: string[] = [];
@@ -702,6 +703,15 @@ describe("Pi session seams used by governance", () => {
         pi.on("tool_call", (event) => {
           seen.push(`tool_call:${event.toolName}`);
           return undefined;
+        });
+        pi.on("session_shutdown", (_event, ctx) => {
+          for (const entry of ctx.sessionManager.getEntries())
+            if (
+              entry.type === "message" &&
+              entry.message.role === "bashExecution" &&
+              entry.message.fullOutputPath
+            )
+              shutdownOutputs.push(entry.message.fullOutputPath);
         });
         pi.on("user_bash", () => ({
           operations: {
@@ -790,6 +800,41 @@ describe("Pi session seams used by governance", () => {
     });
     expect(bashCalls).toEqual(["echo from-user"]);
     expect(result.output).toContain("governed user bash");
+
+    // PiShip removes a `!` command's full-output file when the session
+    // closes: Pi names it pi-bash-<16 hex>.log directly in the OS temp
+    // directory, records it in the session entries with a timestamp, and
+    // session_shutdown hands extensions those entries.
+    const large = await agent.executeBash("echo large", undefined, {
+      operations: {
+        exec: async (_command, _cwd, options) => {
+          options.onData(Buffer.alloc(60 * 1024, 120));
+          return { exitCode: 0 };
+        },
+      },
+    });
+    const fullOutput = large.fullOutputPath as string;
+    try {
+      expect(fullOutput).toBeDefined();
+      expect(dirname(fullOutput)).toBe(tmpdir());
+      expect(basename(fullOutput)).toMatch(/^pi-bash-[0-9a-f]{16}\.log$/);
+      const recorded = agent.sessionManager
+        .getEntries()
+        .flatMap((entry) => (entry.type === "message" ? [entry.message] : []))
+        .find(
+          (message) =>
+            message.role === "bashExecution" &&
+            message.fullOutputPath === fullOutput,
+        );
+      expect(typeof recorded?.timestamp).toBe("number");
+      await agent.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      });
+      expect(shutdownOutputs).toContain(fullOutput);
+    } finally {
+      rmSync(fullOutput, { force: true });
+    }
     agent.dispose();
   });
 

@@ -2,17 +2,25 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { freeBytes, SessionOutputStore, ShellOutput } from "./shell-output.js";
+import {
+  freeBytes,
+  SessionOutputStore,
+  ShellOutput,
+  TEMP_DISK_RESERVE_BYTES,
+  userBashBudget,
+} from "./shell-output.js";
 
 const posix = process.platform !== "win32";
 let root = "";
@@ -132,5 +140,81 @@ describe("SessionOutputStore", () => {
       unrelated,
     ])
       expect(existsSync(kept), kept).toBe(true);
+  });
+});
+
+describe("user bash output adoption", () => {
+  const keys = ["TMPDIR", "TMP", "TEMP"] as const;
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    for (const key of keys) process.env[key] = root;
+  });
+  afterEach(() => {
+    for (const key of keys)
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+  });
+  const entry = (
+    path: unknown,
+    timestamp: unknown,
+    role = "bashExecution",
+  ) => ({
+    type: "message",
+    message: { role, fullOutputPath: path, timestamp },
+  });
+
+  it("removes only Pi's own temp files recorded during this session", async () => {
+    const store = new SessionOutputStore();
+    const now = Date.now();
+    const file = (name: string) => {
+      const path = join(root, name);
+      writeFileSync(path, name);
+      return path;
+    };
+    const mine = file("pi-bash-0123456789abcdef.log");
+    const earlier = file("pi-bash-1111111111111111.log");
+    const renamed = file("pi-bash-notpi.log");
+    const toolResult = file("pi-bash-2222222222222222.log");
+    mkdirSync(join(root, "nested"));
+    const nested = join(root, "nested", "pi-bash-3333333333333333.log");
+    writeFileSync(nested, "");
+    const outside = mkdtempSync(join(tmpdir(), "..", "piship-outside-"));
+    const target = join(outside, "keep.txt");
+    writeFileSync(target, "keep");
+    const link = join(root, "pi-bash-4444444444444444.log");
+    if (posix) symlinkSync(target, link);
+    try {
+      store.adoptUserBashOutput([
+        entry(mine, now),
+        entry(earlier, store.openedAt - 1),
+        entry(renamed, now),
+        entry(toolResult, now, "toolResult"),
+        entry(nested, now),
+        entry(link, now),
+        entry("pi-bash-5555555555555555.log", now),
+        { type: "custom", message: undefined },
+      ]);
+      await store.dispose();
+      expect(existsSync(mine)).toBe(false);
+      for (const kept of [earlier, renamed, toolResult, nested, target])
+        expect(existsSync(kept), kept).toBe(true);
+      if (posix) expect(existsSync(link)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("userBashBudget", () => {
+  const limit = 64 * 1024 * 1024;
+  it("keeps the limit with room or no reading, and lowers it to the free space above the reserve", () => {
+    expect(userBashBudget(limit, undefined)).toBe(limit);
+    expect(userBashBudget(limit, 10 * 1024 ** 3)).toBe(limit);
+    expect(userBashBudget(limit, TEMP_DISK_RESERVE_BYTES + 1024 * 1024)).toBe(
+      1024 * 1024,
+    );
+    // Never below what writes no file: small commands still run.
+    expect(userBashBudget(limit, 0)).toBe(32 * 1024);
   });
 });
