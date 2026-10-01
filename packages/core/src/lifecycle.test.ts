@@ -3,60 +3,59 @@ import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
-  watch,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  watch,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type SecretStore, SecretValue } from "@piship/contracts";
+import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
 } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PiShipError } from "@piship/contracts";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import { PISHIP_VERSION } from "./compatibility.js";
 import {
-  EVIDENCED_TARGETS,
   currentTarget,
+  EVIDENCED_TARGETS,
   lockManifest,
   payloadInventory,
   type requireCurrentLock,
   verifyPayload,
 } from "./index.js";
 import {
-  RECEIPT_SCHEMA,
-  installDistribution,
   holdRuntimeLease,
+  installDistribution,
   lifecycleStatus,
   purgeDistributionState,
+  RECEIPT_SCHEMA,
   readInstallReceipt,
   recoverInstallation,
   runtimeLeases,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { deadPid } from "../../../tests/helpers/processes.js";
 import { readStateMarker } from "./migration.js";
 import {
-  type CommandResult,
   buildRelease,
+  type CommandResult,
   signChannel,
 } from "./release/index.js";
 import { generateSigningKey } from "./signing.js";
 import {
-  type UpdateOptions,
   rollbackDistribution,
   selectChannel,
+  type UpdateOptions,
   updateDistribution,
 } from "./update/index.js";
 
@@ -2989,6 +2988,44 @@ describe("launch-time payload verification", () => {
     expect(error).toBeInstanceOf(PiShipError);
     expect(error.code).toBe("INTEGRITY_FAILED");
     expect(error.message).toMatch(/payload integrity mismatch/);
+    expect(error.message).toContain("modified: resources/resources/AGENTS.md");
+    expect((error as PiShipError).sanitizedDetail).toMatchObject({
+      added: [],
+      modified: ["resources/resources/AGENTS.md"],
+      missing: [],
+    });
+  });
+
+  it("names an unexpected added file, still refusing the payload", () => {
+    const directory = payload();
+    write(join(directory, ".DS_Store"), "finder metadata");
+    write(join(directory, "resources", "._AGENTS.md"), "resource fork");
+    const error = thrown(() => verifyPayload(directory)) as PiShipError;
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(
+      "unexpected (not in the inventory): .DS_Store, resources/._AGENTS.md",
+    );
+    expect(error.message).not.toContain("modified:");
+    expect(error.sanitizedDetail).toMatchObject({
+      added: [".DS_Store", "resources/._AGENTS.md"],
+      modified: [],
+      missing: [],
+    });
+    expect(error.userAction).toContain("piship repair <id> <release archive>");
+  });
+
+  it("names a missing file and caps a long list", () => {
+    const directory = payload();
+    rmSync(join(directory, "bin", ID));
+    for (let index = 0; index < 12; index += 1)
+      write(join(directory, "extra", `file-${index}`), "x");
+    const error = thrown(() => verifyPayload(directory)) as PiShipError;
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(`missing: bin/${ID}`);
+    expect(error.message).toContain("and 7 more");
+    expect(error.sanitizedDetail).toMatchObject({ missing: [`bin/${ID}`] });
+    expect(error.sanitizedDetail?.added).toHaveLength(12);
   });
 
   it("reports a lock tampered behind a rewritten inventory as LOCK_INVALID", () => {
