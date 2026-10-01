@@ -24,6 +24,7 @@ import {
 } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiShipError } from "@piship/contracts";
+import { PISHIP_VERSION } from "./compatibility.js";
 import {
   EVIDENCED_TARGETS,
   currentTarget,
@@ -438,7 +439,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
             target: currentTarget(),
             channel: "stable",
             pi: "0.87.1",
-            piship: "0.1.0",
+            piship: PISHIP_VERSION,
             lockSha256: a.metadata.lockSha256,
             archiveSha256: a.sha256,
           },
@@ -934,7 +935,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       distribution: ID,
       version: "1.1.0",
       pi: "0.87.1",
-      piship: "0.1.0",
+      piship: PISHIP_VERSION,
     });
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
   });
