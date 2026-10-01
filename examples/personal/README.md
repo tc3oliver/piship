@@ -2,7 +2,7 @@
 
 MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
-- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi neither reads nor changes. No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
+- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's interactive mode can still write tool binaries there ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
 - **An exact pinned Pi**, 0.87.1.
 - **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
@@ -31,9 +31,19 @@ node dist/mypi/piship.mjs inspect mypi
 node dist/mypi/piship.mjs uninstall mypi
 ```
 
-`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state. Install refuses existing state unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages.
+`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state. Install refuses existing state unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and the headless commands (`--version`, `--smoke`, `doctor`, `capabilities`) do not fetch packages.
 
 `--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. It reports the same session ID with `resumed: true` on every run after the first, and the first `mypi --smoke` here already resumes the session that `piship test` created. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
+
+### Interactive launch
+
+The interactive `mypi` is Pi's own interactive mode, and Pi does a few things on start that PiShip does not change:
+
+- If `fd` or `rg` is neither on `PATH` nor in `~/.pi/agent/bin/`, Pi downloads it from github.com into `~/.pi/agent/bin/`. That is Pi's agent directory, not MyPi's state, so `uninstall` and `purge` leave it.
+- Pi asks pi.dev for the latest Pi version and, when a newer one exists, shows "Update Available ... Run `pi update`". It may also refresh model catalogs over the network. MyPi pins Pi 0.87.1; a newer Pi comes only with a new MyPi release.
+- On exit Pi prints "To resume this session: pi --session-dir ... --session ...". `mypi` continues the project's most recent session by itself, and `mypi --new-session` starts a new one.
+
+Start it with `PI_OFFLINE=1` set to stop the download and the network checks. Pi then warns that `fd` and `rg` were not found, unless they are on `PATH`; the resume hint is still printed. Installing `fd` and `rg` on `PATH` avoids the download without going offline.
 
 ## Release, update, and rollback
 
