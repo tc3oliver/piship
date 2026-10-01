@@ -412,11 +412,24 @@ describe("checkStateMigration", () => {
       verdict: "safe",
       reason: "The target does not read the state marker",
     });
-    write(dir, "state.json", "{broken");
-    expect(readStateMarker(dir)).toBeNull();
-    expect(
-      item(checkStateMigration(dir, target(), current), "state marker").current,
-    ).toBe("unreadable");
+    // A damaged marker counts as absent: the active release is the source.
+    for (const damaged of ["{broken", "", '{"schema":"piship-st', "null"]) {
+      write(dir, "state.json", damaged);
+      expect(readStateMarker(dir)).toBeNull();
+      const report = checkStateMigration(dir, target(), current);
+      expect(item(report, "state marker")).toMatchObject({
+        current: "unreadable",
+        verdict: "safe",
+        action: "keep",
+      });
+      expect(item(report, "state marker").reason).toContain(
+        join(dir, "state.json"),
+      );
+      expect(report.from).toEqual({
+        version: current.version,
+        pi: current.pi,
+      });
+    }
   });
 });
 

@@ -275,19 +275,23 @@ export function markActivated(
 }
 
 /**
- * Repair a state marker that names another release than the active one. An
- * operation interrupted after its receipt commit, or one whose marker could
+ * Repair a state marker that names another release than the active one, or
+ * that cannot be read at all (empty or cut short by a crash or a full disk).
+ * An operation interrupted after its receipt commit, or one whose marker could
  * not be written (see `markActivated`), leaves it behind; the next
- * update or rollback fixes it before comparing state against a target. A
- * missing marker is left alone: the migration check then uses the active
- * release.
+ * update or rollback fixes it before comparing state against a target. The
+ * marker holds nothing but what the active release's lock says, so a damaged
+ * one is rebuilt rather than refused. A missing marker is left alone: the
+ * migration check then uses the active release.
  */
 export function repairStateMarker(id: string, lock: DistributionLock): void {
   const stateDir = runtimeStateDirectory({ value: id });
   const marker = readStateMarker(stateDir);
   if (
-    marker &&
-    (marker.version !== lock.app.version || marker.pi !== lock.runtime.version)
+    marker
+      ? marker.version !== lock.app.version ||
+        marker.pi !== lock.runtime.version
+      : existsSync(join(stateDir, STATE_MARKER_FILE))
   )
     writeStateMarker(stateDir, lock);
 }

@@ -477,15 +477,24 @@ export function checkStateMigration(
         });
       continue;
     }
+    // A marker that cannot be read counts as absent: it only repeats the
+    // active release's lock, and update and rollback rewrite it.
+    if (dataClass.schema === "state" && !marker && present) {
+      items.push({
+        name: dataClass.name,
+        path: dataClass.path,
+        current: "unreadable",
+        verdict: "safe",
+        action: "keep",
+        reason: `${path} cannot be read, so it counts as absent; it is rewritten for the active release`,
+      });
+      continue;
+    }
     const schema =
       dataClass.schema === "audit"
         ? newestAuditSchema(stateDir)
         : dataClass.schema === "state"
-          ? marker
-            ? marker.schema
-            : existsSync(path)
-              ? "unreadable"
-              : null
+          ? (marker?.schema ?? null)
           : readSchema(path);
     // A target whose lock predates this schema key reads none of the class.
     const supported = target.schemas[dataClass.schema] ?? [];
