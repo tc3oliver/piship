@@ -486,6 +486,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       channels: ["stable", "candidate"],
       source: `\${ACMEPI_UPDATE_SOURCE}`,
       trustedKeys: 1,
+      keys: [{ id: KEY.id, fingerprint: keyFingerprint(KEY.publicKey) }],
       rollback: true,
       fromRelease: true,
       leftovers: [],
@@ -1241,6 +1242,20 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     ]);
     await rollbackDistribution(ID, { runCheck: fakeRun });
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // doctor's status shows the pinned key as retired, not trusted.
+    expect(
+      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.0.0"))),
+    ).toMatchObject({
+      trustedKeys: 1,
+      keys: [
+        {
+          id: KEY.id,
+          fingerprint: keyFingerprint(KEY.publicKey),
+          retiredBy: "1.1.0",
+        },
+        { id: backup.id, fingerprint: keyFingerprint(backup.publicKey) },
+      ],
+    });
     // A still pins KEY, but metadata signed by it is refused, even newer.
     await sign(channelDir, [b.archive]);
     const retired = await rejection(updateDistribution(ID, opts));

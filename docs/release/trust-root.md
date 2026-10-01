@@ -62,7 +62,7 @@ A client must pin a key before it can accept a signed channel. Its first trust r
 
 TOFU (accept whatever key the first channel read presents) is not a mode PiShip offers, and it must not become the managed default. `readChannel` has no code path that adds a key, and a release with no pinned keys can never update.
 
-Gaps: `install` does not take an expected archive digest or key fingerprint on the command line, and `doctor` reports how many keys are trusted, not their IDs or fingerprints. Operators therefore compare by hand: `sha256sum` for the archive, and the `updates` section of the release's `piship.lock` for the keys.
+`doctor` lists the active release's trusted key IDs and `sha256:` fingerprints, and any pinned key this installation retired, so an operator can compare them with the fingerprints the owner published. Gap: `install` does not take an expected archive digest or key fingerprint on the command line, so operators compare by hand before installing: `sha256sum` for the archive, and the `updates` section of the release's `piship.lock` for the keys.
 
 ## Rotation
 
@@ -181,6 +181,6 @@ None of these weakens the current guarantees. Each one is a separate change that
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
 2. **Revocation before activation.** Retired keys are recorded per installation, only once it activates the release that drops a key. A client that never activated that release still trusts the key, as in [Compromised-key recovery](#compromised-key-recovery). Refusing a key earlier needs a revocation list the client can authenticate.
 3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
-4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
+4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `inspect` (`doctor` shows them for an installed release).
 5. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
 6. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).
