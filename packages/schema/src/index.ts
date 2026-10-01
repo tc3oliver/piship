@@ -28,6 +28,7 @@ export * from "./variables.js";
 export * from "./governance.js";
 export * from "./governance-parse.js";
 export * from "./lifecycle.js";
+export * from "./launch.js";
 
 /** The v0.1 personal alpha schema; still accepted for personal pi-native distributions. */
 export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;

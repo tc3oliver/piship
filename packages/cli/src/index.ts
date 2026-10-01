@@ -41,6 +41,7 @@ import {
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
 import {
+  launchWarnings,
   readManifest,
   ManifestError,
   migrateManifestSource,
@@ -331,6 +332,8 @@ export async function runCli(
       output.stdout(
         `Manifest is valid.\nSchema ${manifest.schema}, mode ${manifest.deployment.mode}.${variables.length ? `\nRuntime variables (resolved at launch, never locked): ${variables.join(", ")}` : ""}`,
       );
+      for (const warning of launchWarnings(manifest))
+        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
       if (missing.length)
         output.stderr(
           `Note: ${missing.join(", ")} not set in this shell; the branded command fails visibly until they are set at launch.`,

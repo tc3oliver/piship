@@ -255,3 +255,73 @@ describe("uninstall --purge", () => {
     expect(existsSync(state)).toBe(false);
   });
 });
+
+describe("validate", () => {
+  const base = {
+    schema: "piship/v1alpha4",
+    app: {
+      id: "acmecode",
+      name: "AcmeCode",
+      command: "acmecode",
+      version: "1.0.0",
+    },
+    runtime: { pi: "0.87.1" },
+    deployment: { mode: "managed" },
+    identity: {
+      mode: "oidc",
+      oidc: {
+        issuer: "https://login.acme.example",
+        clientId: "acmecode",
+        redirectUri: "http://127.0.0.1:8765/callback",
+      },
+    },
+    credential: {
+      provider: "http-broker",
+      broker: { endpoint: "https://broker.acme.example/token" },
+    },
+    inference: {
+      provider: "openai-compatible",
+      baseUrl: "https://gateway.acme.example/v1",
+    },
+    models: {
+      default: "acme/coder",
+      allowed: ["acme/coder"],
+      catalog: {
+        "acme/coder": {
+          name: "Acme Coder",
+          contextWindow: 128000,
+          maxOutputTokens: 8192,
+        },
+      },
+    },
+    updates: { channel: "stable", channels: ["stable"] },
+  };
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-validate-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+  async function validate(extra: Record<string, unknown>) {
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(manifest, JSON.stringify({ ...base, ...extra }));
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(["validate", manifest], {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  it("prints a warning for a setting that fails on some machines", async () => {
+    const result = await validate({
+      network: { tls: { additionalCA: ["certs/acme.pem"] } },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Manifest is valid.");
+    expect(result.stderr).toContain(
+      "Warning: network.tls.additionalCA[0]: A relative CA bundle path",
+    );
+  });
+});
