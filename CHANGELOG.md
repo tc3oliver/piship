@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0 is the first milestone published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0); every package is versioned `0.7.0`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0 is the first milestone published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0); every package is versioned `0.7.1`.
 
-## Unreleased
+## v0.7.1
 
-Changes on `main` after v0.7.0. Not released. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md).
+Preview milestone, to be published as a GitHub pre-release from tag `v0.7.1` after Release qualification; not published to npm. v0.7.1 collects the v0.7.x fixes made on `main` after v0.7.0 and is the production-validation baseline: the one PiShip version a production consumer pins while it validates PiShip in production, instead of tracking `main` ([baseline](docs/status.md#v071-production-validation-baseline), #173). The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`, and Pi stays at 0.87.1. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md); the project does not operate a signed channel yet.
 
 ### Security
 
