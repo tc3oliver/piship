@@ -53,6 +53,13 @@ describe.skipIf(!live || process.platform === "win32")(
       } catch {
         // Not JSON: the run failed before it answered; the status says so.
       }
+      // Only a failure's class goes into the result: the gateway's HTTP status
+      // (three digits) and PiShip's error code (upper case). Neither pattern
+      // can carry the provider's text, host, model, or key.
+      const httpStatus = /^(\d{3})\b/.exec(modelRequest?.error ?? "")?.[1];
+      const errorCode = /^(?:Error: )?([A-Z][A-Z_]+): /m.exec(
+        request.stderr,
+      )?.[1];
       const result = process.env.PISHIP_LIVE_PROVIDER_RESULT;
       if (result)
         writeFileSync(
@@ -63,6 +70,8 @@ describe.skipIf(!live || process.platform === "win32")(
             stopReason: modelRequest?.stopReason,
             replyLength: modelRequest?.text.length ?? 0,
             seconds,
+            ...(httpStatus ? { httpStatus: Number(httpStatus) } : {}),
+            ...(errorCode ? { errorCode } : {}),
           }),
         );
 

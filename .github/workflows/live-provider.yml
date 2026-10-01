@@ -130,6 +130,8 @@ jobs:
                     ["Stop reason", result.stopReason ?? "none"],
                     ["Reply length (characters)", String(result.replyLength ?? 0)],
                     ["Request time (s)", String(result.seconds)],
+                    ["Gateway HTTP status", String(result.httpStatus ?? "none")],
+                    ["PiShip error code", result.errorCode ?? "none"],
                   ]
                 : [["Request", "no result recorded"]]),
             ];

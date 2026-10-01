@@ -179,6 +179,7 @@ export interface Smoke {
     readonly text: string;
     readonly stopReason: string;
     readonly toolResults: number;
+    readonly error?: string;
   };
   readonly governance?: {
     readonly workflowMode: string;
