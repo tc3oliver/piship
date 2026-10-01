@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 import tls from "node:tls";
 import {
   Agent,
-  EnvHttpProxyAgent,
   type Dispatcher,
-  fetch as undiciFetch,
+  EnvHttpProxyAgent,
   Pool,
   setGlobalDispatcher,
+  fetch as undiciFetch,
 } from "undici";
 import { PiShipError } from "./errors.js";
 import { redact } from "./secret.js";
@@ -216,7 +216,16 @@ export function createDispatcher(
         }
       : {};
   const base = policy.inheritProxyEnvironment
-    ? new EnvHttpProxyAgent({ connect, ...pooling, ...timeouts })
+    ? new EnvHttpProxyAgent({
+        connect,
+        // Inside a CONNECT tunnel the target's TLS, and an HTTPS proxy's own,
+        // use these settings instead of `connect`: both verify against the
+        // declared roots.
+        requestTls: connect,
+        proxyTls: connect,
+        ...pooling,
+        ...timeouts,
+      })
     : new Agent({ connect, ...pooling, ...timeouts });
   if (!policy.privateOnly) return base;
   // Private-only: refuse undeclared origins for every request that uses this
