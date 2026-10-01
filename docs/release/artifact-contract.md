@@ -76,7 +76,7 @@ To check a downloaded candidate yourself:
 gh attestation verify acmecode-1.1.0-linux-x64.tar.gz --repo tc3oliver/piship \
   --signer-workflow tc3oliver/piship/.github/workflows/release-candidate.yml \
   --source-ref refs/heads/main
-npm exec -- piship verify-release acmecode-1.1.0-linux-x64.tar.gz
+node packages/cli/dist/bin.js verify-release acmecode-1.1.0-linux-x64.tar.gz
 ```
 
 A run dispatched on another branch carries a valid attestation from the same workflow that records its own ref (`refs/heads/<branch>`), and runs from before v0.5, when the workflow also ran for pull requests, recorded `refs/pull/<n>/merge`. Accept an archive as a `main` build only when verification with `--source-ref refs/heads/main` passes. Without `--source-ref`, branch and pull request builds are accepted too. Without `--signer-workflow`, an attestation from any workflow in the repository is accepted.

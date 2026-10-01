@@ -34,9 +34,9 @@ node examples/demo-company/fixtures/local-services.mjs
 It prints `export ACMECODE_...=...` lines (`set` lines on Windows) and keeps running. Pass `--port <n>` for a fixed port. In a second terminal, paste those lines, then:
 
 ```bash
-npm exec -- piship validate examples/demo-company/piship.yaml
-npm exec -- piship lock examples/demo-company/piship.yaml
-npm exec -- piship build examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js validate examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js lock examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode --version
 ~/.local/bin/acmecode login
@@ -76,7 +76,7 @@ This walkthrough plays both the owner and the user on one machine, with a local 
    ```bash
    cp -r examples/demo-company /tmp/acmecode
    mkdir -p ~/acme-keys
-   npm exec -- piship keygen ~/acme-keys/release.pem --id acme-release-2026
+   node packages/cli/dist/bin.js keygen ~/acme-keys/release.pem --id acme-release-2026
    ```
 
 2. Replace `keys: []` under `updates.trust` in the copied `piship.yaml` with the printed entry. Only the public key goes in the manifest; the private key stays out of the repository, CI logs, and any shared location:
@@ -92,9 +92,9 @@ This walkthrough plays both the owner and the user on one machine, with a local 
 3. Lock, build a release for this machine, and verify it. On Windows set `sandbox.required: false` first; a release that requires the sandbox is refused for `win32-x64`. The dependency scan needs registry access:
 
    ```bash
-   npm exec -- piship lock /tmp/acmecode/piship.yaml
-   npm exec -- piship release /tmp/acmecode/piship.yaml
-   npm exec -- piship verify-release dist/releases/acmecode-1.0.0-<target>.tar.gz
+   node packages/cli/dist/bin.js lock /tmp/acmecode/piship.yaml
+   node packages/cli/dist/bin.js release /tmp/acmecode/piship.yaml
+   node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.0.0-<target>.tar.gz
    ```
 
 4. Install it from the extracted release with its own script (`install.ps1` on Windows), which verifies it again first. Uninstall any earlier `acmecode` install first, and pass `--use-existing-state` to keep its state:
@@ -107,7 +107,7 @@ This walkthrough plays both the owner and the user on one machine, with a local 
 5. Change `app.version` in `/tmp/acmecode/piship.yaml` to `1.1.0`, lock, and release again. Sign it into the stable channel directory, then point the installed command at it:
 
    ```bash
-   npm exec -- piship sign-channel /tmp/acme-channel dist/releases/acmecode-1.1.0-<target>.tar.gz \
+   node packages/cli/dist/bin.js sign-channel /tmp/acme-channel dist/releases/acmecode-1.1.0-<target>.tar.gz \
      --channel stable --key ~/acme-keys/release.pem --key-id acme-release-2026
    export ACMECODE_UPDATE_SOURCE=/tmp/acme-channel
    ```

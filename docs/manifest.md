@@ -245,14 +245,14 @@ The manifest and lock keep the unresolved template, so a lock is not machine-spe
 ## Commands
 
 ```bash
-npm exec -- piship init ./my-agent             # personal v1alpha4 (identity none, pi-native)
-npm exec -- piship init ./my-agent --managed   # managed v1alpha4 template
-npm exec -- piship validate ./my-agent/piship.yaml
-npm exec -- piship migrate ./my-agent/piship.yaml [--write]
-npm exec -- piship lock ./my-agent/piship.yaml
-npm exec -- piship test ./my-agent/piship.yaml [--model-request]
-npm exec -- piship build ./my-agent/piship.yaml
-npm exec -- piship config explain <manifest|artifact|id>
+node packages/cli/dist/bin.js init ./my-agent             # personal v1alpha4 (identity none, pi-native)
+node packages/cli/dist/bin.js init ./my-agent --managed   # managed v1alpha4 template
+node packages/cli/dist/bin.js validate ./my-agent/piship.yaml
+node packages/cli/dist/bin.js migrate ./my-agent/piship.yaml [--write]
+node packages/cli/dist/bin.js lock ./my-agent/piship.yaml
+node packages/cli/dist/bin.js test ./my-agent/piship.yaml [--model-request]
+node packages/cli/dist/bin.js build ./my-agent/piship.yaml
+node packages/cli/dist/bin.js config explain <manifest|artifact|id>
 node ./dist/my-agent/piship.mjs install ./dist/my-agent
 my-agent --version
 my-agent --smoke

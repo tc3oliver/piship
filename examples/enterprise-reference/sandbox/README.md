@@ -43,7 +43,7 @@ The distribution is the reference distribution built from [`piship.yaml`](piship
 COMMAND=acmecode-reference
 export ACMECODE_SANDBOX_URL=http://127.0.0.1:18075
 # ...and the stack's variables, as in the reference README ("Try it")
-npm exec -- piship build examples/enterprise-reference/sandbox/piship.yaml
+node packages/cli/dist/bin.js build examples/enterprise-reference/sandbox/piship.yaml
 node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
 "$COMMAND" login                                      # sign in on Keycloak
 "$COMMAND" sandbox login < "$HOME/.acme-sandbox/alice.key"   # the key never reaches argv or history

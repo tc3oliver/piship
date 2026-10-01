@@ -169,6 +169,8 @@ npm ci
 npm run build
 ```
 
+Run the CLI from the repository root as `node packages/cli/dist/bin.js`. It is not published to npm, so `npm exec` and `npx` would look up `piship` on the public registry instead.
+
 ### Try a company distribution
 
 The repository includes **AcmeCode**, a deterministic local demo of a managed company distribution.
@@ -192,7 +194,7 @@ The fixture prints the required `ACMECODE_*` environment variables.
 In another terminal, export those values and build the distribution:
 
 ```bash
-npm exec -- piship build examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 
 node dist/acmecode/piship.mjs install dist/acmecode
 
@@ -310,7 +312,7 @@ You can still use the same distribution machinery to pin Pi, isolate its state, 
 The included **MyPi** example keeps its state separate from `~/.pi` and can use Pi-native authentication or a local OpenAI-compatible endpoint.
 
 ```bash
-npm exec -- piship build examples/personal/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/piship.yaml
 
 node dist/mypi/piship.mjs install dist/mypi
 

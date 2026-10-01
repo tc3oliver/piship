@@ -31,7 +31,7 @@ acmecode update --channel candidate     # switch to an allowed channel
 acmecode update --from ./channel        # use another directory or URL than updates.source
 acmecode update --accept-review         # proceed when the migration check requires review
 acmecode rollback                       # return to the retained release
-npm exec -- piship migrate-check acmecode <archive|release-dir|payload>
+node packages/cli/dist/bin.js migrate-check acmecode <archive|release-dir|payload>
 ```
 
 `update` needs a release-tracking install of a `piship/v1alpha4` release with at least one pinned key. It locks the installation against a concurrent update, rollback, or uninstall, repairs a state marker left behind by an interrupted operation, then:

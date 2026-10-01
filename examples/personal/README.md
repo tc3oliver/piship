@@ -17,10 +17,10 @@ From the repository root with Node.js 22.19.0 or newer:
 ```bash
 npm ci
 npm run build
-npm exec -- piship validate examples/personal/piship.yaml
-npm exec -- piship lock examples/personal/piship.yaml
-npm exec -- piship test examples/personal/piship.yaml
-npm exec -- piship build examples/personal/piship.yaml
+node packages/cli/dist/bin.js validate examples/personal/piship.yaml
+node packages/cli/dist/bin.js lock examples/personal/piship.yaml
+node packages/cli/dist/bin.js test examples/personal/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/piship.yaml
 node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi --version
 ~/.local/bin/mypi --smoke
@@ -44,14 +44,14 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    ```bash
    cp -r examples/personal /tmp/mypi
    mkdir -p ~/mypi-keys
-   npm exec -- piship keygen ~/mypi-keys/release.pem --id mypi-release
+   node packages/cli/dist/bin.js keygen ~/mypi-keys/release.pem --id mypi-release
    ```
 
 2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release:
 
    ```bash
-   npm exec -- piship lock /tmp/mypi/piship.yaml
-   npm exec -- piship release /tmp/mypi/piship.yaml
+   node packages/cli/dist/bin.js lock /tmp/mypi/piship.yaml
+   node packages/cli/dist/bin.js release /tmp/mypi/piship.yaml
    tar -xzf dist/releases/mypi-1.0.0-<target>.tar.gz -C /tmp
    sh /tmp/mypi-1.0.0-<target>/install.sh
    ```
@@ -59,7 +59,7 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
 3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
 
    ```bash
-   npm exec -- piship sign-channel /tmp/mypi-channel dist/releases/mypi-1.1.0-<target>.tar.gz \
+   node packages/cli/dist/bin.js sign-channel /tmp/mypi-channel dist/releases/mypi-1.1.0-<target>.tar.gz \
      --channel stable --key ~/mypi-keys/release.pem --key-id mypi-release
    export MYPI_UPDATE_SOURCE=/tmp/mypi-channel
    ~/.local/bin/mypi update --check
@@ -85,8 +85,8 @@ node examples/personal/local-model/model-server.mjs    # keeps running; prints M
 In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` on Windows), then:
 
 ```bash
-npm exec -- piship validate examples/personal/local-model/piship.yaml
-npm exec -- piship build examples/personal/local-model/piship.yaml
+node packages/cli/dist/bin.js validate examples/personal/local-model/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/local-model/piship.yaml
 dist/mypi-local/bin/mypi-local login           # paste the key
 dist/mypi-local/bin/mypi-local --smoke-model   # one request to the local endpoint
 dist/mypi-local/bin/mypi-local logout
