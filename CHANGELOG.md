@@ -30,6 +30,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 ### Added
 
 - `testCredentialBroker` and `testAuditCollector` in `@piship/adapter-conformance` send a company's own credential broker or audit collector the requests PiShip sends (a repeated and a reused `Idempotency-Key`, a missing and an invalid bearer, the readiness probe, a resent batch, a conflicting event ID, an unknown property) and report where the answers break the contract. [Enterprise integration](docs/enterprise-integration.md#testing-your-own-broker-and-audit-collector) describes how to test a broker and a collector against PiShip's real client, a build of the company's own distribution, and these kits (#162).
+- A [release key and rollback runbook](docs/release/key-runbook.md) for distribution owners: preparation (a backup key, key and release records), planned rotation over three releases, a compromised or lost key, recovering clients that can no longer verify the channel, and taking a bad release back from every machine. It is the operational side of the release trust root design (#162).
 
 ### Fixed
 
