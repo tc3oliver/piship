@@ -340,6 +340,26 @@ describe("headless workload distribution (local fixtures)", () => {
     );
     expect(doctor.stdout + doctor.stderr).not.toContain(firstToken);
 
+    // There is no non-interactive prompt mode: the interactive command
+    // without a terminal fails at once, before an identity session or a
+    // credential, and names the surfaces that do run headless.
+    const brokerBefore = brokerCalls().length;
+    for (const args of [[], ["--new-session"]]) {
+      const noTerminal = await branded(command, args, {
+        cwd: temp,
+        env,
+        timeoutMs: 30_000,
+      });
+      expect(noTerminal.status).toBe(1);
+      expect(noTerminal.stderr).toContain("needs a terminal");
+      expect(noTerminal.stderr).toContain("acmecode --smoke");
+    }
+    expect(brokerCalls().length).toBe(brokerBefore);
+    const print = await run(["-p", "hi"]);
+    expect(print.status).toBe(1);
+    expect(print.stderr).toContain("Unknown branded command option: -p hi");
+    expect(print.stderr).toContain("no non-interactive prompt mode");
+
     // 3. Managed policy stays enforced: model allowlist and entitlement,
     //    and the network policy for the adapter's own requests.
     const personalModel = await run(["--model", "openai/gpt-4o", "--smoke"]);

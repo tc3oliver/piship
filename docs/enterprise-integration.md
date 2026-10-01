@@ -84,7 +84,7 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 
 ## Headless and workload runs
 
-A managed distribution can run in CI, scheduled automation, a headless RPC service, or a managed worker, with no person, no browser, and no prior `login`. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
+A managed distribution's non-interactive surfaces can run in CI, scheduled automation, or a managed worker, with no person, no browser, and no prior `login`: the `--smoke` and `--smoke-model` acceptance runs and the subcommands (`doctor`, `models`, `login`, `logout`, `update`, and the others in `--help`). There is no non-interactive prompt, print, or RPC mode in this release; the interactive command needs a terminal and, without one, fails at once with `CONFIG_INVALID` instead of starting. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
 
 ```yaml
 identity:

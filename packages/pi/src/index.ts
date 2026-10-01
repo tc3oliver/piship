@@ -80,6 +80,19 @@ export async function launchPiDistribution(
     } else break;
   }
   const sessionOption = !!requestedModel || newSession;
+  // Pi's interactive TUI waits for keyboard input forever without a terminal,
+  // and there is no non-interactive prompt mode. Refuse before any state,
+  // identity session, credential or sandbox exists.
+  if (args.length === 0 && !(process.stdin.isTTY && process.stdout.isTTY)) {
+    const command = metadata.app.command;
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `${command} needs a terminal: the interactive session cannot run with stdin or stdout redirected, and there is no non-interactive prompt mode`,
+      {
+        userAction: `Run ${command} in a terminal. Without one, use ${command} --smoke (or --smoke-model) for an acceptance check, or a subcommand such as ${command} doctor (see ${command} --help).`,
+      },
+    );
+  }
   // Before anything is written to a layout in which one lifecycle operation
   // could delete another's files.
   assertDisjointRoots();
@@ -167,6 +180,8 @@ export async function launchPiDistribution(
       newSession,
     );
   if (args.length > 0)
-    throw new Error(`Unknown branded command option: ${args.join(" ")}`);
+    throw new Error(
+      `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
+    );
   return runInteractive(ctx, requestedModel, newSession);
 }

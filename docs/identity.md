@@ -49,7 +49,7 @@ The signed-in user is the normalized principal `(iss, sub)`: the issuer and the 
 
 ## Workload identity (headless runs)
 
-A managed distribution can run without a person: in CI, scheduled automation, a headless RPC service, or a managed worker. The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
+A managed distribution's non-interactive surfaces (`--smoke`, `--smoke-model`, and the subcommands) can run without a person: in CI, scheduled automation, or a managed worker. There is no non-interactive prompt or RPC mode in this release, and the interactive command refuses to start without a terminal ([headless runs](enterprise-integration.md#headless-and-workload-runs)). The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
 
 ```js
 // resources/adapters/workload-identity.mjs, declared as
