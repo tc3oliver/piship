@@ -34,13 +34,13 @@ A distribution cannot declare its own audit sink type: the manifest accepts `fil
 Everything else is re-exported unchanged from `@piship/contracts` or `@piship/sandbox`:
 
 - Context: `AdapterContext` (`distributionId`, the managed `fetch`, resolved `endpoints`), `ResolvedEndpoints`, and `CustomBackendContext` for sandbox adapters (`distributionId`, `fetch`, `endpoint`, and, when there is a credential to send, `credential`, `credentialOrigins`, and `credentialRejected`; see [the sandbox credential](#the-sandbox-credential)).
-- Identity and credentials: `IdentityProvider`, `WorkloadIdentityProvider` (an identity adapter that declares `interactive: false`), `IdentitySession`, `LoginContext`, `RETAINED_CLAIMS` (the claims PiShip keeps from a session), `CredentialProvider`, `CredentialContext`, `CredentialMode`, `RuntimeCredential`, `RuntimeCredentialKind`.
+- Identity and credentials: `IdentityProvider`, `WorkloadIdentityProvider` (an identity adapter that declares `interactive: false`), `IdentitySession`, `LoginContext`, `IdentityCallContext` (the optional `{ signal }` of `refresh` and `logout`), `RETAINED_CLAIMS` (the claims PiShip keeps from a session), `CredentialProvider`, `CredentialContext`, `CredentialMode`, `RuntimeCredential`, `RuntimeCredentialKind`.
 - The principal: `PrincipalKey`, `principalKey(session)` (the `(issuer, subject)` of a session, or `IDENTITY_INVALID` when either is missing), and `samePrincipal(a, b)`, the comparison PiShip applies to a refreshed session.
 - Secrets and redaction: `SecretValue`, `isSecretValue`, `redact`, `redactValue`, `REDACTED_TEXT`.
 - Managed HTTP: the `ManagedFetch` type. Use the `fetch` in the context: it applies the distribution's proxy, CA, and private-only policy. An adapter never builds its own client.
 - Errors: `PiShipError`, `isPiShipError`, `PISHIP_ERROR_CODES`, `PiShipErrorCode`, `PiShipErrorOptions`, `formatError`, and `parseRetryAfter` for a `Retry-After` header.
 - Audit: `AuditSink`, `AuditBatch`, `AuditEvent`, `AuditEventType`, `AUDIT_BATCH_SCHEMA`, `AUDIT_EVENT_SCHEMA`, `AUDIT_EVENT_TYPES`.
-- Sandbox backends and their capability declarations: `SandboxBackend`, `SandboxInstance`, `SandboxCapabilities`, `SandboxGuarantee`, `SANDBOX_GUARANTEES`, `HOST_FILESYSTEM_ISOLATION`, `SandboxPrepareRequest`, `SandboxProfile`, `SandboxExecRequest`, `SandboxExecIO`, `SandboxExecResult`, `SandboxCommand`, `WrappedCommand`, `AdapterAvailability`.
+- Sandbox backends and their capability declarations: `SandboxBackend`, `SandboxInstance`, `SandboxCapabilities`, `SandboxGuarantee`, `SANDBOX_GUARANTEES`, `HOST_FILESYSTEM_ISOLATION`, `SandboxPrepareRequest`, `SandboxProfile`, `SandboxExecRequest`, `SandboxExecIO`, `SandboxExecResult`, `SandboxCommand`, `WrappedCommand`, `AdapterAvailability`, `SandboxCallOptions` (the optional `{ signal }` of `available` and `dispose`).
 - `ADAPTER_KINDS`: `identity`, `credential`, `sandbox`, `audit-sink`.
 
 A unit test pins this list, checks that every value is the public package's own (never a copy), and fails if the SDK imports anything but the public roots of `@piship/contracts` and `@piship/sandbox`.
@@ -51,8 +51,28 @@ A unit test pins this list, checks that every value is the public package's own 
 - Report failures as a `PiShipError` with the contract's code (`IDENTITY_EXPIRED`, `CREDENTIAL_DENIED`, `GATEWAY_RATE_LIMITED`, ...), `retryable`, and `retryAfterMs` from `parseRetryAfter`. Rethrow a `PiShipError` from the managed fetch unchanged: a network or TLS policy refusal keeps its own code.
 - Never build a message from a transport error. Its text can quote a request header, and with it a token.
 - Pass `withTimeout(ms, ctx.signal)` to every request. The caller's signal cancels; the timeout never replaces it. After an abort, `ctx.signal?.aborted` tells a cancellation (final) from a timeout or outage (retryable).
+- Answer within PiShip's deadline, and stop when its signal aborts ([deadlines](#deadlines)).
 - A sandbox backend claims only what it enforces. A remote service that keeps host files out of reach claims `host-filesystem-isolation`, never the `filesystem-*` planes. It passes `io.signal` on to the service, since PiShip owns every command's timeout and cancellation, and its `dispose()` never throws ([sandbox backends](sandbox.md#custom-adapters)).
 - A remote sandbox backend may declare `networkProbe: {host, port}` in `capabilities()` (the `SandboxNetworkProbe` type): a TCP endpoint the backend or its operator controls, such as the operator's own endpoint on the execution network. Declare one only when the backend guarantees that a sandbox it creates with the network allowed can connect to it and one with the network denied cannot, never a public address it does not control, and never anything secret: the address travels to the sandbox in PiShip's check command. With a probe, and with both `deny` and `allow` listed in `network`, PiShip reports network denial `verified` when the probe is blocked in the session's sandbox and reachable from a temporary allow-mode one; a connection in the denied sandbox fails activation closed. Without one, network denial is reported attested by the backend and no second sandbox is created ([network denial](sandbox.md#network-denial)). The host is a hostname or IP address (letters, digits, `.`, `-`, `:`; no brackets or port) and the port 1 to 65535; a malformed probe fails closed.
+
+### Deadlines
+
+PiShip bounds every call into an adapter, as it bounds every request of its built-in OIDC, broker, and remote sandbox clients. Each call receives a signal that aborts at the deadline, and PiShip stops waiting there whether or not the adapter honors it: an adapter that never settles cannot hang sign-in, launch, or quit.
+
+| Call | Deadline | The signal | Past the deadline |
+| --- | --- | --- | --- |
+| Importing the module and running its factory | 60 s | none | The launch fails, retryable (`CONFIG_UNAVAILABLE` for identity and credential adapters; a custom sandbox adapter fails closed as one that could not be loaded) |
+| Identity `login` | The caller's `timeoutMs`, else 5 min (the built-in sign-in's browser wait); a workload adapter [30 s](identity.md#workload-identity-headless-runs) | `ctx.signal` | `GATEWAY_UNREACHABLE`, retryable |
+| Identity `refresh`, `logout` | 60 s | `ctx.signal`, an optional second argument (`IdentityCallContext`) | `GATEWAY_UNREACHABLE`, retryable |
+| Credential `acquire`, `refresh` | 60 s; 5 min when `ctx.readSecret` is set | `ctx.signal` | `CREDENTIAL_ACQUIRE_FAILED`, retryable, `detail.outcome: unknown` |
+| Credential `revoke` | 60 s | `ctx.signal` | `CREDENTIAL_REVOKED`, retryable, `detail.outcome: unknown`: a pending revocation |
+| Sandbox `available` | 60 s | an optional `{ signal }` argument (`SandboxCallOptions`) | `SANDBOX_UNAVAILABLE`, retryable: activation fails closed |
+| Sandbox `prepare` | 180 s (the Kubernetes backend's readiness wait plus its requests) | `request.signal` | `SANDBOX_UNAVAILABLE`, retryable: activation fails closed |
+| Sandbox instance `dispose` | 30 s | an optional `{ signal }` argument | Resolves, since a dispose never throws, and says on stderr that PiShip stopped waiting |
+
+The failure names the adapter (its path in the manifest, or a sandbox backend's `id`) and the call, and its `detail` holds `adapter`, `phase`, `reason: timeout`, and `timeoutMs`. A caller's own cancellation ends the call the same way, as a final failure. The signals are optional to honor, so an adapter written before them keeps working; honoring them stops the adapter's own work when PiShip no longer waits for it. The deadlines are about twice the built-in clients' 30 s request timeout, so an adapter whose requests use `withTimeout` with that timeout reports its own failure first.
+
+A credential the adapter returns after its deadline is never stored or used. A request PiShip sent with an idempotency key keeps it ([pending issuance](credentials.md#pending-issuance)): the next attempt repeats the key, and an adapter that honors it returns the credential it already issued, as a broker does for an answer that was lost. A credential returned late for a request without a key (a custom sandbox adapter's `sandboxCredential`) is revoked through the adapter's `revoke()`, when it has one. An instance a sandbox backend's `prepare` returns after its deadline is disposed.
 
 ### The sandbox credential
 

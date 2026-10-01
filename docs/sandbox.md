@@ -188,7 +188,7 @@ MCP stdio servers need a local process with pipes. A backend that cannot contain
 interface SandboxBackend {
   readonly id: string;                 // e.g. "linux-bubblewrap", "acme-sandbox"
   readonly provider: "native" | "custom" | "e2b-compatible" | "kubernetes-agent-sandbox";
-  available(): Promise<{ available: true } | { available: false; reason: string }>;
+  available(options?: { signal?: AbortSignal }): Promise<{ available: true } | { available: false; reason: string }>;
   capabilities(): {
     isolation: "local" | "remote";
     // filesystem-*: enforces the profile's readDeny and writeAllow paths.
@@ -226,7 +226,7 @@ interface SandboxInstance {
     io: { signal: AbortSignal; onStdout(chunk: Buffer): void; onStderr(chunk: Buffer): void },
   ): Promise<{ exitCode: number | null; signal?: NodeJS.Signals | null }>;
   wrap?(command: { file: string; args: string[]; cwd: string; env: Record<string, string> }): WrappedCommand;
-  dispose(): Promise<void>;
+  dispose(options?: { signal?: AbortSignal }): Promise<void>;
   // Optional: an opaque, non-secret id of the environment the last command ran in.
   epoch?(): string | undefined;
 }
@@ -353,7 +353,7 @@ export default ({ distributionId, fetch, endpoint, credential, credentialRejecte
 });
 ```
 
-The factory receives the distribution ID, PiShip's managed fetch, the resolved endpoint, and, under the rules above, `credential` (a function that returns the credential for one request), `credentialOrigins` (where it may be sent), and `credentialRejected` (to call when those origins reject the credential, which means authentication failed: HTTP 401 for the built-in backends, never a 403 authorization denial; it resolves true when a renewed credential is ready for one retry of a request that created nothing). PiShip fixes the provider to `custom`, rejects ids that belong to built-in backends, checks the shape of every returned object, and fails closed if the module is missing or throws. The adapter runs in the Pi process with the user's privileges, like other company adapters, so it is reviewed and shipped by the distribution owner.
+The factory receives the distribution ID, PiShip's managed fetch, the resolved endpoint, and, under the rules above, `credential` (a function that returns the credential for one request), `credentialOrigins` (where it may be sent), and `credentialRejected` (to call when those origins reject the credential, which means authentication failed: HTTP 401 for the built-in backends, never a 403 authorization denial; it resolves true when a renewed credential is ready for one retry of a request that created nothing). PiShip fixes the provider to `custom`, rejects ids that belong to built-in backends, checks the shape of every returned object, and fails closed if the module is missing or throws. It bounds the adapter's code as the built-in remote backends bound their requests: loading the module and running the factory have 60 s, `available()` 60 s, `prepare()` 180 s, and `dispose()` 30 s, each with a signal that aborts at the deadline (`request.signal` for `prepare`, an optional `{ signal }` argument for the others). A backend that runs past one fails activation closed with a retryable `SANDBOX_UNAVAILABLE` naming the backend and the call; a `dispose()` that does is no longer waited for, so quit never hangs, and PiShip says so on stderr ([deadlines](adapter-sdk.md#deadlines)). The adapter runs in the Pi process with the user's privileges, like other company adapters, so it is reviewed and shipped by the distribution owner.
 
 ### e2b-compatible
 
