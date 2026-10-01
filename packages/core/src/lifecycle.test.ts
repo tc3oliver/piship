@@ -612,8 +612,16 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const a = await release("1.0.0");
     await installDistribution(a.archive);
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
-    await expect(installDistribution(a.archive)).rejects.toThrow(
-      /Install collision for acmepi\/acmepi/,
+    const collision = await rejection(installDistribution(a.archive));
+    const cli = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "apps",
+      ID,
+      "1.0.0",
+      "piship.mjs",
+    );
+    expect(collision.message).toBe(
+      `Install collision for acmepi/acmepi; 1.0.0 is already installed. Run node ${cli} uninstall ${ID} (state is kept), then install again with --use-existing-state`,
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -756,7 +764,7 @@ await installDistribution(artifact);
     expect(outcomes.filter((item) => item.status === 0)).toHaveLength(1);
     const loser = outcomes.find((item) => item.status !== 0);
     expect(loser?.stderr).toMatch(
-      /Another (initial install of acmepi|operation owns command acmepi)|Install collision for acmepi\/acmepi; uninstall/,
+      /Another (initial install of acmepi|operation owns command acmepi)|Install collision for acmepi\/acmepi/,
     );
     const receipt = readInstallReceipt(ID);
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
@@ -3492,6 +3500,12 @@ describe("launch-time payload verification", () => {
       missing: [],
     });
     expect(error.userAction).toContain("piship repair <id> <release archive>");
+    expect(error.userAction).toContain(
+      "Remove the unexpected files it names, or restore it",
+    );
+    expect(error.userAction).toContain(
+      "without a PiShip CLI: node <extracted release>/payload/piship.mjs repair <id> <extracted release>",
+    );
   });
 
   it("names a missing file and caps a long list", () => {
@@ -3505,6 +3519,7 @@ describe("launch-time payload verification", () => {
     expect(error.message).toContain("and 7 more");
     expect(error.sanitizedDetail).toMatchObject({ missing: [`bin/${ID}`] });
     expect(error.sanitizedDetail?.added).toHaveLength(12);
+    expect(error.userAction).toMatch(/^Do not run it\. Restore it from/);
   });
 
   it("reports a lock tampered behind a rewritten inventory as LOCK_INVALID", () => {

@@ -489,10 +489,19 @@ export async function installDistribution(
           ownedIncompleteInstall(id, command, apps)
         )
           rmSync(apps, { recursive: true, force: true });
-        if (existsSync(receiptPath(id)))
+        if (existsSync(receiptPath(id))) {
+          // The branded command has no uninstall, so name the installed
+          // release's own CLI. A damaged receipt names no release.
+          let active: string | undefined;
+          try {
+            active = readInstallReceipt(id).active;
+          } catch {}
           throw new Error(
-            `Install collision for ${id}/${command}; uninstall the existing distribution first`,
+            active
+              ? `Install collision for ${id}/${command}; ${active} is already installed. Run node ${join(apps, active, "piship.mjs")} uninstall ${id} (state is kept), then install again with --use-existing-state`
+              : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
+        }
         // No receipt and no marker: PiShip did not create it, so it is never
         // removed here, and uninstall has nothing recorded to remove.
         for (const path of [apps, commandPath])

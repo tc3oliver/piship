@@ -174,7 +174,10 @@ function payloadIntegrityError(
     `Installed payload integrity mismatch${root ? ` in ${root}` : ""}${parts.length ? `; ${parts.join("; ")}` : ""}`,
     {
       component: "payload",
-      userAction: repairAction(root),
+      userAction: repairAction(
+        root,
+        diff && !diff.modified.length && !diff.missing.length,
+      ),
       ...(diff
         ? {
             sanitizedDetail: {
@@ -191,12 +194,15 @@ function payloadIntegrityError(
 /**
  * How to recover a payload that fails verification without running it. The
  * id is named when the payload is an installed release, `apps/<id>/<version>`.
+ * A personal user may have no PiShip CLI, so the copy inside the downloaded
+ * release is named too; only unexpected files can also just be removed.
  */
-function repairAction(root?: string): string {
+function repairAction(root?: string, onlyUnexpected = false): string {
   const id = root && basename(dirname(root));
   const installed =
     root &&
     basename(dirname(dirname(root))) === "apps" &&
     /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
-  return `Do not run it. Restore it from a trusted release of the same version with: piship repair ${installed ? id : "<id>"} <release archive> (repair does not run this payload). A payload that is not installed must be rebuilt or downloaded again`;
+  const name = installed ? id : "<id>";
+  return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version with: piship repair ${name} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${name} <extracted release> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
 }

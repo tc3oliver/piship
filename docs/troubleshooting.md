@@ -56,7 +56,7 @@ An installed release is verified against its inventory every time it starts, so 
 
 ```text
 INTEGRITY_FAILED: Installed payload integrity mismatch in <install-home>/apps/acmecode/1.1.0; unexpected (not in the inventory): .DS_Store
-Action: Do not run it. Restore it from a trusted release of the same version with: piship repair acmecode <release archive> (repair does not run this payload). …
+Action: Do not run it. Remove the unexpected files it names, or restore it from a trusted release of the same version with: piship repair acmecode <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair acmecode <extracted release> (repair does not run this payload; never run its piship.mjs). …
 ```
 
 `update` and `rollback` run through the active release, so they cannot fix it themselves. `piship repair` runs in PiShip instead and never runs or trusts the damaged payload:
