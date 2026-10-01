@@ -126,7 +126,8 @@ export async function startService(extraEnv = {}, options = {}) {
       ),
     /**
      * Turn a fault of the fake docker on or off: `DOWN`, `RUN_FAIL`, `NO_MAIN`,
-     * or `CANCEL_DELAY` (its `content` is the milliseconds).
+     * `NO_STAT`, `CANCEL_DELAY` (its `content` is the milliseconds), or `SWAP`
+     * (its `content` is `{"path", "to"}` as JSON).
      */
     fault(name, on = true, content = "") {
       const file = join(docker, name);

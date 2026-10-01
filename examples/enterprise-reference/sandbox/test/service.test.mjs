@@ -121,6 +121,7 @@ describe("configuration", () => {
       ["SANDBOX_MEMORY", "lots"],
       ["SANDBOX_CPUS", "0.00"],
       ["SANDBOX_INSTANCE", "Has Capitals"],
+      ["SANDBOX_MOUNT_IDENTITY", "maybe"],
     ]) {
       let message = "";
       try {
@@ -866,6 +867,122 @@ describe("a workspace that belongs to root", () => {
   });
 });
 
+describe("a path swapped between the check and the mount", () => {
+  // The fake docker resolves each mount source when it "mounts" it, as the
+  // daemon does. SWAP puts a link in place of a path for that moment only,
+  // and puts the path back after, so every check on the host before and
+  // after passes: only the container's view shows the swap.
+  let service;
+  before(async () => {
+    service = await startService();
+  });
+  after(() => service.stop());
+
+  const swapped = async (workspace, path, to, extra = {}) => {
+    service.fault("SWAP", true, JSON.stringify({ path, to }));
+    try {
+      return await service.create("alice", workspace, extra);
+    } finally {
+      service.fault("SWAP", false);
+    }
+  };
+  const refusedAndRemoved = (answer, before) => {
+    assert.equal(answer.status, 409, answer.text);
+    assert.equal(answer.json().error.code, "workspace_changed");
+    assert.equal(answer.text.includes(service.root), false);
+    assert.deepEqual(service.containers(), before, "the container was left");
+    assert.match(service.logs(), /a mount is not the file that was checked/);
+  };
+
+  it("removes the container when the workspace itself was swapped for a link", async () => {
+    const workspace = service.workspace("swap-root");
+    // Another repository, outside the service's roots.
+    const decoy = join(service.root, "decoy");
+    mkdirSync(join(decoy, ".git", "piship-workspace"), { recursive: true });
+    const before = service.containers();
+    refusedAndRemoved(await swapped(workspace, workspace, decoy), before);
+  });
+
+  it("removes the container when .git was swapped for a link", async () => {
+    const workspace = service.workspace("swap-git");
+    const decoy = join(service.root, "decoy-git");
+    mkdirSync(join(decoy, "piship-workspace"), { recursive: true });
+    const before = service.containers();
+    refusedAndRemoved(
+      await swapped(workspace, join(workspace, ".git"), decoy),
+      before,
+    );
+  });
+
+  it("removes the container when a protected path was swapped for a link", async () => {
+    const workspace = service.workspace("swap-protected");
+    const hooks = join(workspace, "tools", "hooks");
+    mkdirSync(hooks, { recursive: true });
+    const decoy = join(service.root, "decoy-hooks");
+    mkdirSync(decoy);
+    const before = service.containers();
+    refusedAndRemoved(
+      await swapped(workspace, hooks, decoy, {
+        writeProtect: { directories: [hooks] },
+      }),
+      before,
+    );
+  });
+
+  it("compares every mount, and starts the sandbox when each is the file checked", async () => {
+    const workspace = service.workspace("unswapped");
+    mkdirSync(join(workspace, "tools", "hooks"), { recursive: true });
+    const answer = await service.create("alice", workspace, {
+      writeProtect: { directories: [join(workspace, "tools", "hooks")] },
+    });
+    assert.equal(answer.status, 201, answer.text);
+    const stat = service
+      .calls()
+      .filter((call) => call.command === "stat")
+      .at(-1);
+    assert.deepEqual(stat.args.slice(stat.args.indexOf("--") + 1), [
+      "/workspace",
+      "/workspace/.git",
+      "/workspace/tools",
+      "/workspace/tools/hooks",
+      "/workspace/.git/piship-workspace",
+    ]);
+    await service.call(`/v1/sandboxes/${answer.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
+  });
+
+  it("removes the container when the mounts cannot be compared", async () => {
+    const workspace = service.workspace("no-stat");
+    const before = service.containers();
+    service.fault("NO_STAT");
+    try {
+      const answer = await service.create("alice", workspace);
+      assert.equal(answer.status, 502, answer.text);
+      assert.equal(answer.json().error.code, "runtime_error");
+    } finally {
+      service.fault("NO_STAT", false);
+    }
+    assert.deepEqual(service.containers(), before);
+  });
+
+  it("does not compare under SANDBOX_MOUNT_IDENTITY=unverified, and says so at start", async () => {
+    const open = await startService({ SANDBOX_MOUNT_IDENTITY: "unverified" });
+    try {
+      assert.match(open.logs(), /service\.mount_identity_unverified/);
+      const answer = await open.create("alice", open.workspace("plain"));
+      assert.equal(answer.status, 201, answer.text);
+      assert.equal(
+        open.calls().some((call) => call.command === "stat"),
+        false,
+      );
+    } finally {
+      await open.stop();
+    }
+  });
+});
+
 describe("a runtime that is down", () => {
   it("says so, and starts nothing", async () => {
     const service = await startService();
@@ -1180,7 +1297,8 @@ describe("commands", () => {
     const order = after
       .map((entry) => entry.command)
       .filter((command) => command !== "version");
-    assert.deepEqual(order.slice(0, 3), ["run", "main", "exec"]);
+    // The mounts are compared before anything else runs in the container.
+    assert.deepEqual(order.slice(0, 4), ["run", "stat", "main", "exec"]);
     assert.equal(order.filter((command) => command === "main").length, 1);
     await service.call(`/v1/sandboxes/${made.id}`, {
       method: "DELETE",

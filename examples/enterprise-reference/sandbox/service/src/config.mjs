@@ -101,6 +101,19 @@ export function loadConfig(env) {
   if (allowNetwork === "host" || allowNetwork === "none")
     throw new Error("SANDBOX_ALLOW_NETWORK must not be host or none");
 
+  // Whether every mount is compared, by device and inode, between what the
+  // service checked on the host and what the container got. Only a runtime
+  // that shares the host's kernel and filesystems (a Linux Docker Engine)
+  // reports the same numbers; one in a virtual machine (Docker Desktop,
+  // OrbStack, Colima) shares files through a layer with its own numbers, so
+  // there it can only be switched off, which the operator does by name.
+  const mountIdentity = text(
+    "SANDBOX_MOUNT_IDENTITY",
+    "verify",
+    /^(?:verify|unverified)$/,
+    "verify or unverified",
+  );
+
   const listenAddress =
     listenHost === "::1"
       ? `[::1]:${listenPort}`
@@ -148,6 +161,7 @@ export function loadConfig(env) {
     ),
     docker: env.SANDBOX_DOCKER || "docker",
     allowNetwork,
+    mountIdentity,
     memory: text(
       "SANDBOX_MEMORY",
       "1g",

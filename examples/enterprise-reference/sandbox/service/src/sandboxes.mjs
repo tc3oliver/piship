@@ -3,7 +3,16 @@
 // bind-mounted at /workspace. This module decides what may be mounted and
 // runs the container lifecycle; it never sees a credential.
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import {
   cancelArguments,
@@ -11,6 +20,7 @@ import {
   environmentInput,
   execArguments,
   mainProcessArguments,
+  mountIdentityArguments,
   runArguments,
   WORKSPACE_MOUNT,
 } from "./docker.mjs";
@@ -46,6 +56,51 @@ function lstatOrUndefined(path) {
     return lstatSync(path);
   } catch {
     return undefined;
+  }
+}
+
+// Linux's O_PATH, which Node does not export: a descriptor that names a file
+// without opening it, so it needs no read permission and opens nothing (a
+// FIFO, a device) by being taken.
+const O_PATH = process.platform === "linux" ? 0o10000000 : 0;
+
+/**
+ * The file at `path`, held by a descriptor while it is read: its stat, and
+ * its identity (`device:inode`), which the container's mount is compared
+ * with. Undefined unless `path` is, at that moment, the file's own path with
+ * no symbolic link anywhere in it: on Linux, the kernel's name for the held
+ * descriptor (/proc/self/fd) must be `path` itself. So every check made on
+ * the stat (directory, owner, inside the roots) is about one file, the one
+ * at that canonical path, whatever is renamed around it afterwards. Without
+ * /proc the name is read with `realpath`, which a link swapped in and back
+ * out around it could fool; such hosts (macOS) run Docker in a virtual
+ * machine, where the identity cannot be compared anyway
+ * (SANDBOX_MOUNT_IDENTITY=unverified).
+ */
+function identify(path) {
+  let fd;
+  try {
+    fd = openSync(
+      path,
+      O_PATH
+        ? O_PATH | constants.O_NOFOLLOW
+        : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch {
+    return undefined;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (stat.isSymbolicLink()) return undefined;
+    const where = O_PATH
+      ? readlinkSync(`/proc/self/fd/${fd}`)
+      : realpathSync(path);
+    if (where !== path) return undefined;
+    return { stat, identity: `${stat.dev}:${stat.ino}` };
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -176,7 +231,7 @@ export class Sandboxes {
     docker,
     log,
     now = Date.now,
-    owner = (path) => statSync(path),
+    owner = (_path, stat) => stat,
   }) {
     this.#config = config;
     this.#docker = docker;
@@ -207,6 +262,8 @@ export class Sandboxes {
         timeoutMs: 60_000,
       });
     this.#log("service.started", { removed: stale.length });
+    if (this.#config.mountIdentity !== "verify")
+      this.#log("service.mount_identity_unverified");
     this.#timer = setInterval(() => this.sweep(), this.#config.sweepMs);
     this.#timer.unref();
   }
@@ -277,12 +334,16 @@ export class Sandboxes {
       "workspace_not_allowed",
       "The workspace is not a directory this service may mount",
     );
+    // Every check below is made on the stat of the one directory held at its
+    // canonical path, and the mount is later compared with its identity.
     let real;
     let ownership;
+    let held;
     try {
       real = realpathSync(request.workspace);
-      ownership = this.#owner(real);
-      if (!statSync(real).isDirectory()) throw refused;
+      held = identify(real);
+      if (!held?.stat.isDirectory()) throw refused;
+      ownership = this.#owner(real, held.stat);
     } catch {
       throw refused;
     }
@@ -296,8 +357,8 @@ export class Sandboxes {
     const unsupported = (message) =>
       new SandboxError(409, "workspace_unsupported", message);
     const dotGit = join(real, ".git");
-    const dotGitStat = lstatOrUndefined(dotGit);
-    if (!dotGitStat || dotGitStat.isSymbolicLink() || !dotGitStat.isDirectory())
+    const dotGitHeld = identify(dotGit);
+    if (!dotGitHeld?.stat.isDirectory())
       throw unsupported(
         "The workspace must be a git repository with a .git directory",
       );
@@ -316,15 +377,21 @@ export class Sandboxes {
           );
       }
     }
-    const made = lstatOrUndefined(location);
-    if (!made || made.isSymbolicLink() || !made.isDirectory())
+    const made = identify(location);
+    if (!made?.stat.isDirectory())
       throw unsupported("The workspace's .git directory cannot be prepared");
     const mounts = [
-      { source: dotGit, target: `${WORKSPACE_MOUNT}/.git`, readonly: true },
+      {
+        source: dotGit,
+        target: `${WORKSPACE_MOUNT}/.git`,
+        readonly: true,
+        identity: dotGitHeld.identity,
+      },
       {
         source: location,
         target: `${WORKSPACE_MOUNT}/.git/piship-workspace`,
         readonly: false,
+        identity: made.identity,
       },
     ];
     // PiShip names the git control paths it needs kept read-only. Those under
@@ -363,8 +430,16 @@ export class Sandboxes {
         );
       if (stat.isSymbolicLink())
         throw unsupported("A protected path is a symbolic link");
-      if (stat.isDirectory()) directories.push(target);
-      protectedMounts.push({ source: resolved, target, readonly: true });
+      const guarded = identify(resolved);
+      if (!guarded || !(guarded.stat.isDirectory() || guarded.stat.isFile()))
+        throw unsupported("A protected path cannot be mounted");
+      if (guarded.stat.isDirectory()) directories.push(target);
+      protectedMounts.push({
+        source: resolved,
+        target,
+        readonly: true,
+        identity: guarded.identity,
+      });
     }
     // A read-only mount only keeps its own mount point from being renamed.
     // A protected path deeper than the workspace's top level could otherwise
@@ -379,16 +454,21 @@ export class Sandboxes {
         const pin = posix.join(WORKSPACE_MOUNT, ...parts.slice(0, depth));
         if (pins.has(pin) || directories.includes(pin)) continue;
         const source = join(real, ...parts.slice(0, depth));
-        const stat = lstatOrUndefined(source);
-        if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+        const pinned = identify(source);
+        if (!pinned?.stat.isDirectory())
           throw unsupported("A protected path cannot be mounted");
-        pins.set(pin, { source, target: pin, readonly: false });
+        pins.set(pin, {
+          source,
+          target: pin,
+          readonly: false,
+          identity: pinned.identity,
+        });
       }
     }
     mounts.push(...protectedMounts, ...pins.values());
     // A parent is mounted before what lies under it.
     mounts.sort((a, b) => a.target.length - b.target.length);
-    return { real, uid, gid, mounts };
+    return { real, identity: held.identity, uid, gid, mounts };
   }
 
   #assertOpen() {
@@ -458,6 +538,46 @@ export class Sandboxes {
         started.error ? "runtime_unavailable" : "runtime_error",
         "The container runtime could not start the sandbox",
       );
+    }
+    // The Docker daemon resolved every mount source again, by its path, when
+    // it mounted it: a path swapped for a link between the check and the
+    // mount would give the container another directory than the one checked.
+    // So before anything runs in it, the container's view of each mount must
+    // be the very file the check held, by device and inode; otherwise the
+    // container goes.
+    if (this.#config.mountIdentity === "verify") {
+      const targets = [WORKSPACE_MOUNT, ...plan.mounts.map((m) => m.target)];
+      const expected = [plan.identity, ...plan.mounts.map((m) => m.identity)];
+      const seen = await this.#docker.run(
+        mountIdentityArguments(name, targets),
+        { timeoutMs: 15_000 },
+      );
+      const lines = seen.stdout.trim().split("\n");
+      const same =
+        seen.code === 0 &&
+        lines.length === expected.length &&
+        lines.every((line, index) => line === expected[index]);
+      if (!same) {
+        this.#log("sandbox.create.failed", {
+          owner,
+          reason:
+            seen.code === 0
+              ? "a mount is not the file that was checked"
+              : "the mounts could not be compared",
+        });
+        await this.#docker.run(["rm", "--force", name]);
+        throw seen.code === 0
+          ? new SandboxError(
+              409,
+              "workspace_changed",
+              "The workspace changed while the sandbox was being created",
+            )
+          : new SandboxError(
+              502,
+              "runtime_error",
+              "The container runtime could not start the sandbox",
+            );
+      }
     }
     // The sandbox's main process, found now, before any command has run: a
     // cancel that sweeps the sandbox must leave it alone. If it cannot be

@@ -10,8 +10,9 @@
 //
 // Knobs, as files a test creates and removes under DOCKER_FAKE_DIR: DOWN fails
 // every command, RUN_FAIL fails `run`, NO_MAIN makes the sandbox's main
-// process unfindable, and CANCEL_DELAY (milliseconds as its content) makes a
-// cancel take that long.
+// process unfindable, CANCEL_DELAY (milliseconds as its content) makes a
+// cancel take that long, SWAP (below, at `run`) swaps a path for a link while
+// the mounts are made, and NO_STAT makes the container's `stat` missing.
 import { spawn } from "node:child_process";
 import {
   appendFileSync,
@@ -21,6 +22,8 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,7 +94,43 @@ if (command === "version") {
   const labels = args.flatMap((value, index) =>
     args[index - 1] === "--label" ? [value] : [],
   );
-  writeFileSync(containerFile(name), JSON.stringify({ name, labels, args }));
+  // Like the daemon, each mount source is resolved by its path now, links
+  // followed, and the container keeps what it found there. SWAP holds
+  // {"path", "to"}: that path is swapped for a link to `to` while the
+  // mounts are made, and put back after, as a user racing the service would.
+  const swap = existsSync(join(dir, "SWAP"))
+    ? JSON.parse(readFileSync(join(dir, "SWAP"), "utf8"))
+    : undefined;
+  if (swap) {
+    renameSync(swap.path, `${swap.path}.away`);
+    symlinkSync(swap.to, swap.path);
+  }
+  const identities = {};
+  let missing = false;
+  for (const [index, value] of args.entries()) {
+    if (args[index - 1] !== "--mount") continue;
+    const field = (key) =>
+      value
+        .split(",")
+        .find((part) => part.startsWith(`${key}=`))
+        ?.slice(key.length + 1);
+    try {
+      const found = statSync(field("src"));
+      identities[field("dst")] = `${found.dev}:${found.ino}`;
+    } catch {
+      missing = true;
+    }
+  }
+  if (swap) {
+    rmSync(swap.path);
+    renameSync(`${swap.path}.away`, swap.path);
+  }
+  if (missing)
+    fail("invalid mount config: bind source path does not exist", 125);
+  writeFileSync(
+    containerFile(name),
+    JSON.stringify({ name, labels, args, identities }),
+  );
   process.stdout.write(`${"f".repeat(64)}\n`);
 } else if (command === "ps") {
   log({ command, args });
@@ -123,6 +162,19 @@ if (command === "version") {
   process.exit(missing ? 1 : 0);
 } else if (command === "exec") {
   const flagValue = (flag) => args[args.indexOf(flag) + 1];
+  if (args[2] === "stat") {
+    // The service's comparison of the mounts: what the container got at each
+    // path, as `docker run` recorded it.
+    log({ command: "stat", args });
+    if (existsSync(join(dir, "NO_STAT")))
+      fail('exec: "stat": executable file not found in $PATH', 127);
+    const { identities } = JSON.parse(readFileSync(containerFile(args[1])));
+    for (const target of args.slice(args.indexOf("--") + 1)) {
+      if (!identities[target]) fail(`stat: cannot statx '${target}'`);
+      process.stdout.write(`${identities[target]}\n`);
+    }
+    process.exit(0);
+  }
   const main = args.indexOf("piship-main");
   if (main > 0) {
     // The service's question at creation: which process is the sandbox's own.

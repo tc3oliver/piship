@@ -264,6 +264,12 @@ export async function startSandboxService(
     SANDBOX_WORKSPACE_ROOTS: root,
     SANDBOX_IMAGE: image,
     SANDBOX_SHELL: "/bin/bash",
+    // A Linux Docker Engine shares the host's filesystems, so every mount is
+    // compared with the file the service checked; elsewhere Docker runs in a
+    // VM whose file sharing reports other numbers, and the comparison cannot
+    // be made.
+    SANDBOX_MOUNT_IDENTITY:
+      process.platform === "linux" ? "verify" : "unverified",
     // The test owns the service: its standard input is a pipe that closes
     // when this process is gone, even killed, and the service then removes
     // its containers and exits, instead of keeping its port for the next run.
