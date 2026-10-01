@@ -99,12 +99,12 @@ LiteLLM runs [`../enterprise-litellm/litellm-config.yaml`](../enterprise-litellm
 
 Only LiteLLM open-source features are used. Key regeneration and auto-rotation and per-model budgets are Enterprise-only in LiteLLM and appear nowhere here. Rotation is "generate a new key for the same `user_id`, then delete the old one".
 
-The [broker](broker/README.md) issues keys. To issue one by hand with the master key, as the broker does:
+The [broker](broker/README.md) issues keys. To issue one by hand with the master key, the call the broker makes (the broker's `user_id` is a hash of the issuer and subject, `principalUserId`; `manual-check` here is a user of its own, so its spend never counts against an employee's budget):
 
 ```sh
 set -a; . ./.env; set +a
 curl -s -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'content-type: application/json' \
-  -d '{"models":["acme/coder"],"duration":"1h","user_id":"alice"}' \
+  -d '{"models":["acme/coder"],"duration":"1h","user_id":"manual-check"}' \
   http://127.0.0.1:$LITELLM_PORT/key/generate          # returns {"key": ...}; do not print it in logs
 ```
 

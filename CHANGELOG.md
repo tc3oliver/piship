@@ -58,6 +58,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - `examples/demo-company` and the enterprise reference distribution (and its sandbox variant) declared a `sandbox.filesystem.read.deny` list that replaced the defaults and silently left `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, and `~/.pi` (and, in the demo, `~/.netrc` and `~/.npmrc`) readable in the sandbox. They now restate every default, a test keeps them doing so, and the manifest reference says that a declared list replaces its default (#162).
 - `docs/release/update-lifecycle.md` listed the state marker, identity session, and runtime credential metadata twice with different text, and left out four state classes. It now has one row per class, which a test checks against the migration check's class list (#162).
 - `docs/adapter-sdk.md` described `AuditSink` both as the collector's receiving side and as a sink that delivers onward. It now has one definition (anything a batch is written to, as PiShip's own `file` and `http` sinks are) and names the two places a company writes one (#162).
+- The LiteLLM recipe in the enterprise integration contract keyed a broker's LiteLLM user, and with it the budget, on `sub` alone, so two principals from different issuers with the same subject would share one budget. It now derives the user from the issuer and the subject, as the reference broker already does (#162).
 
 ## v0.7.0
 
