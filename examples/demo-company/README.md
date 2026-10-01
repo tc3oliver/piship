@@ -34,9 +34,9 @@ node examples/demo-company/fixtures/local-services.mjs
 It prints `export ACMECODE_...=...` lines (`set` lines on Windows) and keeps running. Pass `--port <n>` for a fixed port. In a second terminal, paste those lines, then:
 
 ```bash
-npm exec -- piship validate examples/demo-company/piship.yaml
-npm exec -- piship lock examples/demo-company/piship.yaml
-npm exec -- piship build examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js validate examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js lock examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode --version
 ~/.local/bin/acmecode login
@@ -65,7 +65,14 @@ What to look for:
 
 To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. This is a managed distribution, so both files are narrowing only: a user or project rule can tighten a default such as `acme.shell` from `ask` to `deny`, their `allow` rules are ignored and reported, and neither can relax the enforced rules. `policy explain` shows which layer decided.
 
-Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall, and deletes the secret-store entries it references first (each deletion confirmed, nothing revoked: a secret that cannot be deleted fails the purge before any state is removed). `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` does the uninstall and the purge in one command.
+Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall, and deletes the secret-store entries it references first (each deletion confirmed, nothing revoked: a secret that cannot be deleted fails the purge before any state is removed). `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` does the uninstall and the purge in one command. Because purge revokes nothing, both refuse before deleting anything while you are signed in; remove AcmeCode in this order:
+
+```bash
+acmecode logout                                                 # revokes the credential at the broker
+node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
+```
+
+After a plain `uninstall`, sign out with the release's own command, `node dist/acmecode/bin/acmecode logout`, before `purge`. Only with no release left to run `logout`, `--without-logout` (after `--yes`) purges anyway and warns that the credential stays live at the broker until it expires.
 
 ## Release, update, and rollback
 
@@ -76,7 +83,7 @@ This walkthrough plays both the owner and the user on one machine, with a local 
    ```bash
    cp -r examples/demo-company /tmp/acmecode
    mkdir -p ~/acme-keys
-   npm exec -- piship keygen ~/acme-keys/release.pem --id acme-release-2026
+   node packages/cli/dist/bin.js keygen ~/acme-keys/release.pem --id acme-release-2026
    ```
 
 2. Replace `keys: []` under `updates.trust` in the copied `piship.yaml` with the printed entry. Only the public key goes in the manifest; the private key stays out of the repository, CI logs, and any shared location:
@@ -92,9 +99,9 @@ This walkthrough plays both the owner and the user on one machine, with a local 
 3. Lock, build a release for this machine, and verify it. On Windows set `sandbox.required: false` first; a release that requires the sandbox is refused for `win32-x64`. The dependency scan needs registry access:
 
    ```bash
-   npm exec -- piship lock /tmp/acmecode/piship.yaml
-   npm exec -- piship release /tmp/acmecode/piship.yaml
-   npm exec -- piship verify-release dist/releases/acmecode-1.0.0-<target>.tar.gz
+   node packages/cli/dist/bin.js lock /tmp/acmecode/piship.yaml
+   node packages/cli/dist/bin.js release /tmp/acmecode/piship.yaml
+   node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.0.0-<target>.tar.gz
    ```
 
 4. Install it from the extracted release with its own script (`install.ps1` on Windows), which verifies it again first. Uninstall any earlier `acmecode` install first, and pass `--use-existing-state` to keep its state:
@@ -107,7 +114,7 @@ This walkthrough plays both the owner and the user on one machine, with a local 
 5. Change `app.version` in `/tmp/acmecode/piship.yaml` to `1.1.0`, lock, and release again. Sign it into the stable channel directory, then point the installed command at it:
 
    ```bash
-   npm exec -- piship sign-channel /tmp/acme-channel dist/releases/acmecode-1.1.0-<target>.tar.gz \
+   node packages/cli/dist/bin.js sign-channel /tmp/acme-channel dist/releases/acmecode-1.1.0-<target>.tar.gz \
      --channel stable --key ~/acme-keys/release.pem --key-id acme-release-2026
    export ACMECODE_UPDATE_SOURCE=/tmp/acme-channel
    ```

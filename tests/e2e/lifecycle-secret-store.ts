@@ -186,22 +186,39 @@ export function secretStoreLifecycle(storage: Storage): void {
 
         // A user who installed from the release, whose download is gone
         // (installFirst deletes it), removes everything with the manager
-        // the install ships, including the secrets of a signed-in user.
+        // the install ships. Purge revokes nothing, so while signed in it
+        // refuses, deleting nothing, until logout revoked the credential.
         await run(["login"]);
-        await credentialId();
-        expectStored(Object.values(refs()));
+        const live = await credentialId();
+        const signedIn = refs();
+        expectStored(Object.values(signedIn));
         const receiptFile = join(s.install, "receipts", `${s.id}.json`);
         const { payload } = read(receiptFile) as { payload: string };
-        const purge = spawnSync(
-          process.execPath,
-          [join(payload, "piship.mjs"), "uninstall", s.id, "--purge", "--yes"],
-          { cwd: s.temp, env: s.env, encoding: "utf8" },
+        const purge = () =>
+          spawnSync(
+            process.execPath,
+            [
+              join(payload, "piship.mjs"),
+              "uninstall",
+              s.id,
+              "--purge",
+              "--yes",
+            ],
+            { cwd: s.temp, env: s.env, encoding: "utf8" },
+          );
+        const refused = purge();
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain(
+          `Run ${s.id} logout first, then purge again`,
         );
-        expect(purge.status, purge.stderr).toBe(0);
-        // Purge deletes every reference the metadata can name, which is more
-        // than the two it holds (the next generation, for one).
-        if (storage === "system")
-          expect(purge.stdout).toMatch(/Deleted \d+ secret-store entries/);
+        expect(existsSync(s.command)).toBe(true);
+        expect(refs()).toEqual(signedIn);
+        expectStored(Object.values(signedIn));
+        expect(services.state.revokedCredentials).not.toContain(live);
+        await run(["logout"]);
+        expect(services.state.revokedCredentials).toContain(live);
+        const purged = purge();
+        expect(purged.status, purged.stderr).toBe(0);
         expect(existsSync(s.command)).toBe(false);
         expect(existsSync(join(s.install, "apps", s.id))).toBe(false);
         expect(existsSync(receiptFile)).toBe(false);

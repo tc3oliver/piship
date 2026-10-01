@@ -86,3 +86,39 @@ export function applyStorageTransition(
       : item,
   );
 }
+
+/**
+ * Linux Secret Service values over 8000 characters have been stored as parts
+ * behind a `chunks:<n>:<write>` primary since lock key `credentialIssuance`
+ * (both v0.7). A target whose lock lacks that key predates the layout: it
+ * would read the marker as the secret and delete only the primary, leaving
+ * the parts. Every present store-bound class is therefore cleared by the
+ * switching release, which reads the layout, before such a target activates;
+ * the target signs in again. Other stores kept their layout.
+ */
+export function applySecretLayoutTransition(
+  items: readonly MigrationItem[],
+  storage: SecretStoreProvider | undefined,
+  target: { readonly credentialIssuance?: readonly string[] },
+  platform: NodeJS.Platform = process.platform,
+): MigrationItem[] {
+  if (
+    storage !== "system" ||
+    platform !== "linux" ||
+    target.credentialIssuance !== undefined
+  )
+    return [...items];
+  return items.map((item) =>
+    STORE_BOUND.has(item.path) &&
+    item.current !== null &&
+    item.action === "keep"
+      ? {
+          ...item,
+          verdict: "safe",
+          action: "clear-and-reacquire",
+          reason:
+            "The target predates the Linux Secret Service layout that splits long secrets into parts, so its secrets are deleted before the switch and the target signs in or reacquires the credential",
+        }
+      : item,
+  );
+}

@@ -169,6 +169,15 @@ const HEADER_BREAKING = /[^\x21-\x7e]/;
 /** A broker credential ID: non-secret, shown, audited, and sent back on revoke. */
 const CREDENTIAL_ID = /^[A-Za-z0-9._:-]{1,256}$/;
 
+/** Optional broker answer fields, where `null` is read as absent. */
+const OPTIONAL_ANSWER_FIELDS = [
+  "subject",
+  "credential_id",
+  "expires_at",
+  "models",
+  "base_url",
+] as const;
+
 /** An idempotency key: 1 to 255 visible ASCII characters, no spaces. */
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
 
@@ -468,6 +477,10 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         { status: response.status, detail },
       );
     }
+    // Many serializers write `null` for an unset field: an optional field
+    // that is `null` means exactly what an absent one means.
+    for (const field of OPTIONAL_ANSWER_FIELDS)
+      if (body[field] === null) delete body[field];
     // A broker may say whom it authenticated. If it does, it must be the
     // identity PiShip sent: the reuse of a stored credential trusts the
     // principal the identity adapter asserted, and a broker that answers for
@@ -484,28 +497,41 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       );
     const type = body.credential_type;
     const secret = body.credential;
-    if (
-      (type !== "api_key" && type !== "bearer" && type !== "opaque") ||
-      typeof secret !== "string" ||
-      secret.length < 8 ||
-      HEADER_BREAKING.test(secret) ||
-      (body.credential_id !== undefined &&
-        (typeof body.credential_id !== "string" ||
-          !CREDENTIAL_ID.test(body.credential_id))) ||
-      (body.expires_at !== undefined &&
-        (typeof body.expires_at !== "string" ||
-          Number.isNaN(Date.parse(body.expires_at)))) ||
-      (body.models !== undefined &&
-        (!Array.isArray(body.models) ||
-          body.models.some((item) => typeof item !== "string"))) ||
-      (body.base_url !== undefined && typeof body.base_url !== "string")
-    )
+    // The first field that breaks the contract, named in the error; its
+    // value never is.
+    const invalid =
+      type !== "api_key" && type !== "bearer" && type !== "opaque"
+        ? "credential_type"
+        : typeof secret !== "string" ||
+            secret.length < 8 ||
+            HEADER_BREAKING.test(secret)
+          ? "credential"
+          : body.credential_id !== undefined &&
+              (typeof body.credential_id !== "string" ||
+                !CREDENTIAL_ID.test(body.credential_id))
+            ? "credential_id"
+            : body.expires_at !== undefined &&
+                (typeof body.expires_at !== "string" ||
+                  Number.isNaN(Date.parse(body.expires_at)))
+              ? "expires_at"
+              : body.models !== undefined &&
+                  (!Array.isArray(body.models) ||
+                    body.models.some((item) => typeof item !== "string"))
+                ? "models"
+                : body.base_url !== undefined &&
+                    typeof body.base_url !== "string"
+                  ? "base_url"
+                  : undefined;
+    // `typeof secret` repeats the check above only to narrow its type.
+    if (invalid !== undefined || typeof secret !== "string") {
+      const field = invalid ?? "credential";
       throw brokerFailure(
         "acquire",
         "contract",
-        "The credential broker response does not match the http-broker contract",
-        { status: response.status, detail },
+        `The credential broker response does not match the http-broker contract: invalid ${field}`,
+        { status: response.status, detail: { ...detail, field } },
       );
+    }
     if (
       typeof body.base_url === "string" &&
       this.options.expectedBaseUrl &&

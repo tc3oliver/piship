@@ -27,6 +27,17 @@ export function credentialGroup(data: DoctorData, out: DoctorSection): void {
     else if (credential?.state === "rejected")
       out.warn("state", "rejected by the gateway; renewed on next use");
     else out.bad("state", `${credential?.state ?? "unknown"}; ${login}`);
+    const pending = access.pendingIssuance;
+    if (pending?.stale)
+      out.warn(
+        "pending request",
+        `credential request ${pending.idempotencyKey} is older than broker retention; renewal fails until you run ${data.ctx.metadata.app.command} logout, then ${data.ctx.metadata.app.command} login`,
+      );
+    else if (pending)
+      out.warn(
+        "pending request",
+        `credential request ${pending.idempotencyKey} is unresolved; the next renewal repeats it`,
+      );
   }
   if (data.ctx.mode === "managed")
     out.ok(

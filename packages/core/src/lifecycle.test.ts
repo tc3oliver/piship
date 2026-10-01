@@ -832,6 +832,11 @@ await installDistribution(artifact);
       JSON.stringify({ ...receipt, schema: "piship-install/v2" }),
     );
     expect(() => readInstallReceipt(ID)).toThrow(/written by a newer PiShip/);
+    // Uninstall leaves that receipt to the PiShip that wrote it.
+    expect(() => uninstallDistribution(ID)).toThrow(
+      /written by a newer PiShip/,
+    );
+    expect(existsSync(appsDir())).toBe(true);
     writeFileSync(
       path,
       JSON.stringify({
@@ -1989,6 +1994,15 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       tracked: false,
       leftovers: [],
     });
+    // Still signed in: purge revokes nothing, so it refuses and deletes
+    // nothing until logout has run.
+    await expect(purgeDistributionState(ID)).rejects.toThrow(
+      /acmepi is still signed in \(an identity session, a runtime credential\)\. .* Run logout with the release's own command .* first, then purge again; .* add --without-logout/,
+    );
+    expect(treeHash(stateDir())).toEqual(state);
+    // What logout leaves: no identity session and no credential.
+    rmSync(join(stateDir(), "identity", "session.json"));
+    rmSync(join(stateDir(), "credentials-metadata", "inference.json"));
     // The seeded state uses the file fallback, which goes with the directory.
     expect(await purgeDistributionState(ID)).toEqual({
       state: stateDir(),
@@ -2051,7 +2065,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     // A secret that cannot be deleted fails the purge and removes no state,
     // so the metadata still names it.
     const error = await rejection(
-      purgeDistributionState(ID, { secretStore: store }),
+      purgeDistributionState(ID, { secretStore: store, withoutLogout: true }),
     );
     expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
     expect(error.message).toBe(
@@ -2064,7 +2078,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     ]);
     lock.on = false;
     deleted.length = 0;
-    const result = await purgeDistributionState(ID, { secretStore: store });
+    const result = await purgeDistributionState(ID, {
+      secretStore: store,
+      withoutLogout: true,
+    });
     // Current, adjacent, and orphaned generations of this distribution only.
     expect(deleted).toEqual([
       `piship:${ID}:identity#1`,
@@ -2077,6 +2094,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     expect(result).toEqual({
       state,
       deletedSecrets: deleted,
+      notRevoked: ["an identity session", "a runtime credential"],
     });
     expect(existsSync(state)).toBe(false);
   });
@@ -2136,7 +2154,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     const releaseLease = holdRuntimeLease(ID, "1.0.0");
     try {
       await expect(
-        uninstallAndPurgeDistribution(ID, { secretStore: store }),
+        uninstallAndPurgeDistribution(ID, {
+          secretStore: store,
+          withoutLogout: true,
+        }),
       ).rejects.toThrow(/runtime session/);
     } finally {
       releaseLease();
@@ -2145,7 +2166,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     // receipt, and the state in place, so the same command can be retried.
     const before = treeHash(state);
     const error = await rejection(
-      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+      uninstallAndPurgeDistribution(ID, {
+        secretStore: store,
+        withoutLogout: true,
+      }),
     );
     expect(error.code).toBe("SECRET_STORE_UNAVAILABLE");
     expect(readInstallReceipt(ID)).toEqual(receipt);
@@ -2156,6 +2180,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     lock.on = false;
     const result = await uninstallAndPurgeDistribution(ID, {
       secretStore: store,
+      withoutLogout: true,
     });
     expect(result.state).toBe(state);
     expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
@@ -2166,6 +2191,62 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
       /No PiShip installation recorded/,
     );
     expect(existsSync(state)).toBe(false);
+  });
+
+  it("uninstall with purge refuses a signed-in distribution until logout, deleting nothing", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const state = stateDir();
+    const metadata = join(state, "credentials-metadata", "inference.json");
+    write(
+      metadata,
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: `piship:${ID}:inference#1`,
+      }),
+    );
+    const { store, memory } = testStore(() => false);
+    await memory.put(`piship:${ID}:inference#1`, new SecretValue(SENTINEL));
+    const before = treeHash(state);
+    await expect(
+      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+    ).rejects.toThrow(
+      /acmepi is still signed in \(a runtime credential\)\. .* Run acmepi logout first, then purge again/,
+    );
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(existsSync(receipt.payload)).toBe(true);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    expect(treeHash(state)).toEqual(before);
+    expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
+    // A discarded marker is signed out: purge deletes what it still names.
+    write(
+      metadata,
+      JSON.stringify({
+        schema: "piship-credential-discarded/v1",
+        orphans: [`piship:${ID}:inference#1`],
+      }),
+    );
+    const result = await uninstallAndPurgeDistribution(ID, {
+      secretStore: store,
+    });
+    expect(result.notRevoked).toBeUndefined();
+    expect(memory.refs()).toEqual([]);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(existsSync(state)).toBe(false);
+  });
+
+  it("names sandbox logout when only a stored sandbox credential is signed in", async () => {
+    await installDistribution((await release("1.0.0")).archive);
+    write(
+      join(stateDir(), "credentials-metadata", "sandbox.json"),
+      JSON.stringify({
+        schema: "piship-sandbox-credential-metadata/v1",
+        credential_ref: `piship:${ID}:sandbox#1`,
+      }),
+    );
+    await expect(uninstallAndPurgeDistribution(ID, {})).rejects.toThrow(
+      /\(a sandbox credential\)\. .* Run acmepi sandbox logout first/,
+    );
   });
 
   it("uninstall with purge refuses a rewritten command shim before it deletes a secret", async () => {
@@ -2186,7 +2267,10 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     const shim = readFileSync(receipt.commandPath, "utf8");
     writeFileSync(receipt.commandPath, `${shim}\n# rewritten`);
     await expect(
-      uninstallAndPurgeDistribution(ID, { secretStore: store }),
+      uninstallAndPurgeDistribution(ID, {
+        secretStore: store,
+        withoutLogout: true,
+      }),
     ).rejects.toThrow(/not owned/);
     expect(memory.refs()).toEqual([`piship:${ID}:inference#1`]);
     expect(existsSync(state)).toBe(true);
@@ -2194,6 +2278,7 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     writeFileSync(receipt.commandPath, shim);
     const result = await uninstallAndPurgeDistribution(ID, {
       secretStore: store,
+      withoutLogout: true,
     });
     expect(result.deletedSecrets).toContain(`piship:${ID}:inference#1`);
     expect(memory.refs()).toEqual([]);
@@ -2214,6 +2299,152 @@ describe.runIf(HOST_EVIDENCED)("uninstall after an interrupted update", () => {
     expect(() => readInstallReceipt(ID)).toThrow(
       /No PiShip installation recorded/,
     );
+  });
+});
+
+describe.runIf(HOST_EVIDENCED)("a damaged install receipt", () => {
+  const receiptFile = () =>
+    join(process.env.PISHIP_INSTALL_HOME as string, "receipts", `${ID}.json`);
+  /** A payload of another distribution, `otherpi`, with its own command. */
+  function otherPayload(command: string): string {
+    const dir = temp("piship-other-project-");
+    const manifest = join(dir, "piship.yaml");
+    write(join(dir, "resources", "AGENTS.md"), "# other\n");
+    writeFileSync(
+      manifest,
+      manifestSource("1.0.0", true)
+        .replace(`id: ${ID}`, "id: otherpi")
+        .replace(`command: ${ID}`, `command: ${command}`),
+    );
+    lockManifest(manifest);
+    return fakeAssemble(manifest, temp("piship-other-"));
+  }
+
+  for (const [kind, damage] of [
+    ["truncated", (text: string) => text.slice(0, 120)],
+    ["empty", () => ""],
+  ] as const)
+    it(`uninstalls and purges a distribution whose receipt is ${kind}`, async () => {
+      const a = await release("1.0.0");
+      const receipt = await installDistribution(a.archive);
+      seedState();
+      const bin = process.env.PISHIP_BIN_HOME as string;
+      writeFileSync(join(bin, "unrelated"), "#!/bin/sh\necho unrelated\n");
+      writeFileSync(receiptFile(), damage(readFileSync(receiptFile(), "utf8")));
+      const error = (() => {
+        try {
+          readInstallReceipt(ID);
+        } catch (caught) {
+          return caught;
+        }
+      })();
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({ code: "CONFIG_INVALID" });
+      expect((error as Error).message).toContain(receiptFile());
+      expect((error as PiShipError).userAction).toBe(
+        `Run piship uninstall ${ID}, then install ${ID} again`,
+      );
+      // Reinstalling still refuses while the receipt exists.
+      await expect(installDistribution(a.archive)).rejects.toThrow(
+        /uninstall the existing distribution first/,
+      );
+      expect(uninstallDistribution(ID)).toBe(stateDir());
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(receiptFile())).toBe(false);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(readFileSync(join(bin, "unrelated"), "utf8")).toContain(
+        "unrelated",
+      );
+      expect(existsSync(stateDir())).toBe(true);
+      // Still signed in: purge refuses until the release's own logout ran,
+      // which removes what this does.
+      await expect(purgeDistributionState(ID)).rejects.toThrow(
+        /still signed in .*payload\/bin\/<command> logout/,
+      );
+      rmSync(join(stateDir(), "identity"), { recursive: true, force: true });
+      rmSync(join(stateDir(), "credentials-metadata"), {
+        recursive: true,
+        force: true,
+      });
+      await expect(purgeDistributionState(ID)).resolves.toMatchObject({
+        state: stateDir(),
+      });
+      expect(existsSync(stateDir())).toBe(false);
+      await expect(installDistribution(a.archive)).resolves.toMatchObject({
+        active: "1.0.0",
+      });
+    });
+
+  it("names PISHIP_BIN_HOME for a command path under another bin home and removes nothing", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const original = process.env.PISHIP_BIN_HOME as string;
+    const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
+    process.env.PISHIP_BIN_HOME = temp("piship-other-bin-");
+    let error: unknown;
+    try {
+      uninstallDistribution(ID);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).message).toContain(receiptFile());
+    expect((error as PiShipError).userAction).toBe(
+      `Set PISHIP_BIN_HOME=${original} and run the command again`,
+    );
+    expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    process.env.PISHIP_BIN_HOME = original;
+    uninstallDistribution(ID);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+  });
+
+  it("removes only the current install home's paths when the receipt names another install home", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const home = process.env.PISHIP_INSTALL_HOME as string;
+    // The receipt names an install home that exists and holds files.
+    const decoy = join(temp("piship-decoy-"), "install");
+    cpSync(home, decoy, { recursive: true });
+    const decoyTree = treeHash(decoy);
+    writeFileSync(
+      receiptFile(),
+      readFileSync(receiptFile(), "utf8").replaceAll(
+        JSON.stringify(home).slice(1, -1),
+        JSON.stringify(decoy).slice(1, -1),
+      ),
+    );
+    expect(() => readInstallReceipt(ID)).toThrow(
+      `it was written with PISHIP_INSTALL_HOME=${decoy}`,
+    );
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
+    expect(existsSync(receiptFile())).toBe(false);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(treeHash(decoy)).toEqual(decoyTree);
+  });
+
+  it("installs another distribution while this one's receipt is damaged", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    writeFileSync(receiptFile(), "");
+    const shim = readFileSync(receipt.commandPath, "utf8");
+    const other = await installDistribution(otherPayload("otherpi"));
+    expect(other.app.id).toBe("otherpi");
+    expect(readFileSync(receipt.commandPath, "utf8")).toBe(shim);
+    // A damaged receipt whose text still names the command keeps it, even
+    // before its shim was written.
+    uninstallDistribution("otherpi");
+    rmSync(receipt.commandPath);
+    writeFileSync(
+      receiptFile(),
+      `{"app": {"id": "${ID}", "command": "otherpi"`,
+    );
+    await expect(installDistribution(otherPayload("otherpi"))).rejects.toThrow(
+      `Install collision: command otherpi is owned by ${ID}`,
+    );
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
   });
 });
 

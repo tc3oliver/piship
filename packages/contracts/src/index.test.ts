@@ -501,6 +501,8 @@ describe("normalized principal", () => {
     ).toBe(false);
   });
   it("renders an unambiguous audit key and a directory-safe digest", () => {
+    // Audit `user` under piship-audit/v1 (decision 29): changing this form
+    // needs a new audit schema.
     expect(principalId(alice)).toBe("https://idp.example/realms/acme#alice");
     // A # or % in the issuer cannot make two principals share a string.
     const left = principalId({ issuer: "a#b", subject: "c" });

@@ -84,7 +84,7 @@ Built on `openid-client`, as a native **public** client ([identity](identity.md)
 
 ## Headless and workload runs
 
-A managed distribution can run in CI, scheduled automation, a headless RPC service, or a managed worker, with no person, no browser, and no prior `login`. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
+A managed distribution's non-interactive surfaces can run in CI, scheduled automation, or a managed worker, with no person, no browser, and no prior `login`: the `--smoke` and `--smoke-model` acceptance runs and the subcommands (`doctor`, `models`, `login`, `logout`, `update`, and the others in `--help`). There is no non-interactive prompt, print, or RPC mode in this release; the interactive command needs a terminal and, without one, fails at once with `CONFIG_INVALID` instead of starting. The identity is a workload identity from an identity adapter that declares `interactive: false` ([identity](identity.md#workload-identity-headless-runs)); the manifest is an ordinary managed manifest with `identity.mode: adapter`:
 
 ```yaml
 identity:
@@ -156,6 +156,8 @@ Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 | `models` | no | Array of model IDs the credential is entitled to; narrows the catalog, never widens it |
 | `base_url` | no | If present, must equal `inference.baseUrl` (trailing slash ignored), or the response is rejected |
 
+An optional field set to `null` is read as absent, so a serializer that writes `null` for an unset field needs no change; a `subject: null` checks no principal, exactly like an absent `subject`. A field of the wrong type fails as a `contract` failure whose message and `sanitizedDetail.field` name the field, never its value.
+
 | Broker status | PiShip behavior |
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
@@ -181,7 +183,7 @@ A lost answer can hide an issued credential: the broker may create a gateway key
 - the principal changes, the user runs `logout` (also without the runtime variables), the state is purged, or an update or rollback moves to a release that cannot read the record or clears the runtime credential;
 - the destination changes: the record holds a hash of the broker endpoint (or of an adapter's module and endpoints), and a key is never sent to another broker than the one it was recorded for.
 
-A key recorded 24 hours ago or more by PiShip's clock, or dated more than a minute ahead of it, is not released and not sent: PiShip assumes the broker keeps a key at least 24 hours ([below](#what-a-broker-must-do)), past which a repeated key may no longer recover anything while a new key could issue a second credential. The acquire or renewal fails with `CREDENTIAL_ACQUIRE_FAILED` until the user reconciles the pending key with the broker and runs `logout`, which releases it.
+A key recorded 24 hours ago or more by PiShip's clock, or dated more than a minute ahead of it, is not released and not sent: PiShip assumes the broker keeps a key at least 24 hours ([below](#what-a-broker-must-do)), past which a repeated key may no longer recover anything while a new key could issue a second credential. An acquire or renewal fails with `CREDENTIAL_ACQUIRE_FAILED` (`detail.reason: issuance-retention`, naming the key) until the user runs `logout`, which releases it, and then `login`; a launch that can use the stored credential is not affected. A credential the broker may have issued for the released key stays unused until it expires, as for any [dropped key](#idempotency-and-retries).
 
 A renewal after a gateway rejection and an entitlement re-read after a model denial are requests of their own: they repeat only a key recorded by the same kind of request, never an older request's key, whose credential the broker would replay. A `login` of the same principal repeats whatever key is pending. A caller that passes its own `CredentialContext.idempotencyKey` has it recorded and sent only when no key is pending; a pending key is never replaced by a different caller key. Details are in [pending issuance](credentials.md#pending-issuance).
 
@@ -239,7 +241,7 @@ The bearer is the **runtime credential**, not the identity token; `credential_id
 - A failed renewal keeps the broker failure's `retryable`, `Retry-After`, and `detail`, so a broker outage or rate limit on renewal is still retryable rather than a request to sign in again.
 - A renewal whose answer was lost is not re-sent. While the current credential is valid, PiShip keeps using it, and the next renewal is a new logical acquire with a new key; a credential the broker issued for the lost answer is never used, so let it expire.
 - Renewal replaces the local copy but does **not** call the revoke endpoint for the old credential; rely on its expiry.
-- Concurrent launches share one renewal through a lock file. A live holder keeps changing the lock, so it is never broken while held, whatever the wall clock does; only a lock a waiter has seen unchanged for 75 s (monotonic) is taken over. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
+- Concurrent launches share one renewal through a lock file. A live holder keeps changing the lock, so it is never broken while held, whatever the wall clock does; only a lock a waiter has seen unchanged for 75 s (monotonic), or whose holder process on the same host no longer exists, is taken over. A waiter says after about 2 s which process holds the lock. A waiter that times out fails with retryable `CREDENTIAL_ACQUIRE_FAILED`.
 
 ## LLM gateway (OpenAI-compatible)
 
@@ -407,7 +409,7 @@ audit:
 }
 ```
 
-`user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
+`user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). v0.6 wrote the bare subject under the same `piship-audit/v1`; from v0.7 this form is fixed, and changing it again needs a new schema ([decision 29](decisions.md)). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
 
 ## Network and TLS
 

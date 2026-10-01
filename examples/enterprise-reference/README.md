@@ -238,7 +238,7 @@ export ACMECODE_CREDENTIAL_BROKER_URL=http://127.0.0.1:18070/v1/credential
 export ACMECODE_CREDENTIAL_REVOKE_URL=http://127.0.0.1:18070/v1/revoke
 export ACMECODE_LLM_GATEWAY_URL=http://127.0.0.1:14000/v1
 
-npm exec -- piship build examples/enterprise-reference/piship.yaml
+node packages/cli/dist/bin.js build examples/enterprise-reference/piship.yaml
 node dist/acmecode-reference/piship.mjs install dist/acmecode-reference
 ~/.local/bin/acmecode-reference login              # sign in as alice on the Keycloak page
 ~/.local/bin/acmecode-reference models

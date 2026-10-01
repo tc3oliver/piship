@@ -10,7 +10,8 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -302,4 +303,102 @@ describe.runIf(posixUser)("a lock path whose content cannot be read", () => {
       clearInterval(heartbeat);
     }
   });
+});
+
+/** The PID of a process that existed on this host and was killed with SIGKILL. */
+async function killedPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  const pid = child.pid;
+  if (pid === undefined) throw new Error("the child did not start");
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGKILL");
+  await exited;
+  return pid;
+}
+
+describe("file lock holder identity", () => {
+  it("breaks at once a lock whose holder on this host was killed", async () => {
+    const path = join(temp, "inference.json");
+    const lock = `${path}.lock`;
+    const pid = await killedPid();
+    writeFileSync(lock, `${pid}-0123456789abcdef@${hostname()}`);
+    const notices: string[] = [];
+    const started = performance.now();
+    // The default stale interval (75 s): only the dead holder lets it through.
+    const result = await within(
+      withFileLock(path, async () => "recovered", {
+        waitMs: 5_000,
+        notify: (message) => notices.push(message),
+      }),
+      2_000,
+    );
+    expect(result).toBe("recovered");
+    expect(performance.now() - started).toBeLessThan(1_000);
+    expect(notices).toEqual([]);
+    expect(readdirSync(temp)).toEqual([]);
+  });
+
+  it("tells a waiter which lock it waits for and who holds it, once", async () => {
+    const path = join(temp, "inference.json");
+    const live = holder(path);
+    await live.holding;
+    const notices: string[] = [];
+    const error = await within(
+      withFileLock(path, async () => "ran", {
+        noticeMs: 100,
+        waitMs: 600,
+        notify: (message) => notices.push(message),
+      }).catch((caught: unknown) => caught),
+      3_000,
+    );
+    live.release();
+    await live.done;
+    const named = `process ${process.pid} on ${hostname()}`;
+    expect(notices).toEqual([
+      `Waiting for ${path}.lock, held by ${named} (up to 1 s)`,
+    ]);
+    expect(error).toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+    expect((error as Error).message).toContain(`held by ${named}`);
+    expect(live.events).toEqual(["holder:start", "holder:end"]);
+  });
+
+  it.each([
+    ["another host", (pid: number) => `${pid}-0123456789abcdef@other-host`],
+    ["a token without a host", (pid: number) => `${pid}-0123456789abcdef`],
+  ])(
+    "keeps the stale interval for a dead PID from %s",
+    async (_label, token) => {
+      const path = join(temp, "inference.json");
+      writeFileSync(`${path}.lock`, token(await killedPid()));
+      const started = performance.now();
+      const result = await within(
+        withFileLock(path, async () => "recovered", {
+          staleMs: 300,
+          waitMs: 5_000,
+          notify: () => {},
+        }),
+        4_000,
+      );
+      expect(result).toBe("recovered");
+      expect(performance.now() - started).toBeGreaterThanOrEqual(280);
+    },
+  );
+
+  it.runIf(posixUser)(
+    "treats a holder this user may not signal as alive",
+    async () => {
+      const path = join(temp, "inference.json");
+      const lock = `${path}.lock`;
+      // PID 1 always exists and belongs to root: kill(1, 0) fails with EPERM.
+      writeFileSync(lock, `1-0123456789abcdef@${hostname()}`);
+      const error = await withFileLock(path, async () => "ran", {
+        waitMs: 300,
+        notify: () => {},
+      }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "CREDENTIAL_ACQUIRE_FAILED" });
+      expect(existsSync(lock)).toBe(true);
+    },
+  );
 });

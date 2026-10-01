@@ -25,10 +25,12 @@ import { runLogout } from "./branded/login.js";
 import { runSandbox } from "./branded/sandbox.js";
 import { resolveLock } from "./index.js";
 
-// A TTY double: what readline was asked for, and the answer it gives.
+// A TTY double: what readline was asked for, and the answer it gives, or
+// the event it emits instead (Ctrl-C is SIGINT, Ctrl-D is close).
 const tty = vi.hoisted(() => ({
   options: [] as Record<string, unknown>[],
   answer: "",
+  cancel: undefined as "close" | "SIGINT" | undefined,
 }));
 vi.mock("node:readline", async (original) => {
   const actual = await original<typeof import("node:readline")>();
@@ -36,9 +38,12 @@ vi.mock("node:readline", async (original) => {
     ...actual,
     createInterface: (options: Record<string, unknown>) => {
       tty.options.push(options);
+      const handlers = new Map<string, () => void>();
       return {
+        once: (event: string, handler: () => void) =>
+          handlers.set(event, handler),
         question: (_query: string, answer: (value: string) => void) =>
-          answer(tty.answer),
+          tty.cancel ? handlers.get(tty.cancel)?.() : answer(tty.answer),
         close: () => {},
       };
     },
@@ -63,6 +68,7 @@ beforeEach(async () => {
   });
   tty.options.length = 0;
   tty.answer = "";
+  tty.cancel = undefined;
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -227,6 +233,62 @@ describe("sandbox login", () => {
     expect((await store.get("piship:acmecode:sandbox#1"))?.reveal()).toBe(
       SECRET,
     );
+  });
+
+  it.each([
+    ["Ctrl-C", "SIGINT"],
+    ["Ctrl-D", "close"],
+  ] as const)(
+    "fails with no lock left when %s cancels the prompt",
+    async (_key, event) => {
+      const { ctx } = context();
+      await signIn(ctx);
+      const stream = new Readable({ read() {} }) as Readable & {
+        isTTY?: boolean;
+      };
+      stream.isTTY = true;
+      vi.spyOn(process, "stdin", "get").mockReturnValue(
+        stream as unknown as typeof process.stdin,
+      );
+      vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      tty.cancel = event;
+      await expect(runSandbox(ctx, ["login"])).rejects.toMatchObject({
+        code: "CREDENTIAL_REQUIRED",
+      });
+      expect(existsSync(sandboxFile(ctx))).toBe(false);
+      expect(
+        readdirSync(ctx.stateDir, { recursive: true }).filter((name) =>
+          String(name).endsWith(".lock"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("fails at the end of a piped stdin with nothing on it, and reads a line from a pipe left open", async () => {
+    const { ctx, store } = context();
+    await signIn(ctx);
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    pipe("");
+    await expect(runSandbox(ctx, ["login"])).rejects.toMatchObject({
+      code: "CREDENTIAL_REQUIRED",
+    });
+    expect(existsSync(sandboxFile(ctx))).toBe(false);
+    // A pipe that is never closed after the line still completes the login.
+    const open = new Readable({ read() {} }) as Readable & { isTTY?: boolean };
+    open.push(`${SECRET}\n`);
+    vi.spyOn(process, "stdin", "get").mockReturnValue(
+      open as unknown as typeof process.stdin,
+    );
+    await runSandbox(ctx, ["login"]);
+    expect((await store.get("piship:acmecode:sandbox#1"))?.reveal()).toBe(
+      SECRET,
+    );
+    // The prompt is on stderr for a pipe too, never the secret.
+    const written = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(written).toContain("Sandbox API key: ");
+    expect(written).not.toContain(SECRET);
   });
 
   it("takes no secret from argv or the environment", async () => {

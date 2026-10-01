@@ -259,17 +259,17 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
     });
     expect(readFileSync(sessionFile).equals(damaged)).toBe(true);
 
-    // A damaged user session is not resumed: the interactive launch stops
-    // before the TUI starts, with the file named and unchanged.
+    // Without a terminal the interactive launch is refused before it reads
+    // a user session, so a damaged one there stays unchanged. The refusal of
+    // a damaged user session is covered in launch/session-file.test.ts.
     const users = join(s.state, "mypi", "sessions", "user");
     mkdirSync(users, { recursive: true });
     const userFile = join(users, sessionName as string);
     writeFileSync(userFile, damaged);
     const refused = await s.run([]);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("line 2 is not valid JSON");
-    expect(refused.stderr).toContain(userFile);
-    expect(refused.stderr).toContain("mypi --new-session");
+    expect(refused.stderr).toContain("mypi needs a terminal");
+    expect(refused.stderr).toContain("mypi --smoke");
     expect(readFileSync(userFile).equals(damaged)).toBe(true);
 
     // Nothing but the channel was contacted, and no enterprise state exists.

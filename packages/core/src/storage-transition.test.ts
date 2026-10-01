@@ -12,8 +12,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type SecretStore, SecretValue } from "@piship/contracts";
 import {
+  type CommandRunner,
   MemorySecretStore,
   RestrictedFileSecretStore,
+  SecretServiceSecretStore,
   type SecretStoreProvider,
   withFileLock,
 } from "@piship/credentials";
@@ -27,7 +29,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { DistributionAccess, SandboxCredential } from "./access/index.js";
 import { purgeDistributionState } from "./install/index.js";
-import { checkStateMigration, STATE_SCHEMAS } from "./migration.js";
+import {
+  checkStateMigration,
+  LEGACY_STATE_SCHEMAS,
+  STATE_SCHEMAS,
+} from "./migration.js";
 import { storageOf } from "./storage-transition.js";
 import { clearCredentials } from "./update/state.js";
 
@@ -490,7 +496,10 @@ describe("purge after a storage provider change", () => {
       }),
     );
     expect(readdirSync(secretsDir()).length).toBeGreaterThan(0);
-    const result = await purgeDistributionState(ID, { secretStore: platform });
+    const result = await purgeDistributionState(ID, {
+      secretStore: platform,
+      withoutLogout: true,
+    });
     expect(platform.refs()).toEqual([]);
     expect(result.deletedSecrets).toContain(identityRef);
     // A file-store reference is never looked up in the platform store.
@@ -505,7 +514,10 @@ describe("purge after a storage provider change", () => {
       delete value.secret_store;
       writeFileSync(file, JSON.stringify(value));
     }
-    const result = await purgeDistributionState(ID, { secretStore: platform });
+    const result = await purgeDistributionState(ID, {
+      secretStore: platform,
+      withoutLogout: true,
+    });
     expect(result.deletedSecrets).toEqual([]);
     expect(platform.deleted).toEqual([]);
     expect(existsSync(stateDir())).toBe(false);
@@ -668,5 +680,124 @@ describe("storageOf", () => {
       storage: "file",
     });
     expect(storageOf({})).toEqual({});
+  });
+});
+
+describe("rollback to a release before the Linux Secret Service part layout", () => {
+  // A `secret-tool` double: items match on every attribute given; `clear`
+  // removes every match unless `failClear` is set.
+  function secretTool() {
+    const items: Record<string, string>[] = [];
+    const texts = new Map<Record<string, string>, string>();
+    const knobs = { failClear: false };
+    const attributesOf = (args: string[]) => {
+      const words = args.slice(1).filter((word) => !word.startsWith("--"));
+      const attrs: Record<string, string> = {};
+      for (let index = 0; index + 1 < words.length; index += 2)
+        attrs[words[index] as string] = words[index + 1] as string;
+      return attrs;
+    };
+    const matching = (query: Record<string, string>) =>
+      items.filter((item) =>
+        Object.entries(query).every(([name, value]) => item[name] === value),
+      );
+    const run: CommandRunner = (_command, args, stdin) => {
+      const attrs = attributesOf(args);
+      const found = matching(attrs);
+      if (args[0] === "store") {
+        for (const item of found) items.splice(items.indexOf(item), 1);
+        items.push(attrs);
+        texts.set(attrs, stdin ?? "");
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "lookup")
+        return found[0]
+          ? { status: 0, stdout: texts.get(found[0]) ?? "", stderr: "" }
+          : { status: 1, stdout: "", stderr: "" };
+      if (args[0] === "search") return { status: 0, stdout: "", stderr: "" };
+      if (knobs.failClear)
+        return { status: 1, stdout: "", stderr: "secret-tool: keyring error" };
+      for (const item of found) items.splice(items.indexOf(item), 1);
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    return { items, knobs, store: new SecretServiceSecretStore(run) };
+  }
+
+  const ref = `piship:${ID}:inference#1`;
+  const metadata = {
+    schema: "piship-credential-metadata/v1",
+    mode: "local-secret",
+    credential_ref: ref,
+    generation: 1,
+    kind: "api_key",
+    acquired_at: "2026-01-01T00:00:00.000Z",
+    secret_store: "system",
+  };
+
+  /** A v0.7 install on Linux signed in with a secret long enough to split. */
+  async function signedIn() {
+    const tool = secretTool();
+    mkdirSync(dirname(credentialFile()), { recursive: true });
+    writeFileSync(credentialFile(), JSON.stringify(metadata));
+    await tool.store.put(ref, new SecretValue("x".repeat(20_000)));
+    expect(tool.items.length).toBeGreaterThan(1);
+    return tool;
+  }
+
+  const rollback = (
+    schemas: typeof STATE_SCHEMAS,
+    platform: NodeJS.Platform = "linux",
+  ) =>
+    checkStateMigration(
+      stateDir(),
+      { version: "0.6.0", pi: "0.87.1", schemas, storage: "system" },
+      { version: "0.7.0", pi: "0.87.1", storage: "system", platform },
+    );
+
+  it("deletes every part and the metadata before the switch, and the target signs in again", async () => {
+    const tool = await signedIn();
+    const report = rollback(LEGACY_STATE_SCHEMAS);
+    expect(
+      report.items.find((item) => item.name === "runtime credential metadata"),
+    ).toMatchObject({
+      verdict: "safe",
+      action: "clear-and-reacquire",
+      reason: expect.stringContaining("predates the Linux Secret Service"),
+    });
+    const notices = await clearCredentials(stateDir(), ID, report, {
+      secretStore: tool.store,
+    });
+    expect(notices).toEqual([
+      "runtime credential metadata was cleared because the target cannot read it; sign in again",
+    ]);
+    // No part is orphaned, and no `chunks:` marker is left to be read as the secret.
+    expect(tool.items).toEqual([]);
+    expect(existsSync(credentialFile())).toBe(false);
+  });
+
+  it("stops before the switch, and keeps the metadata, when the parts cannot be deleted", async () => {
+    const tool = await signedIn();
+    tool.knobs.failClear = true;
+    await expect(
+      clearCredentials(stateDir(), ID, rollback(LEGACY_STATE_SCHEMAS), {
+        secretStore: tool.store,
+      }),
+    ).rejects.toMatchObject({ code: "SECRET_STORE_UNAVAILABLE" });
+    expect(existsSync(credentialFile())).toBe(true);
+    expect(tool.items.length).toBeGreaterThan(1);
+  });
+
+  it("keeps the credential for a target that knows the layout, and off Linux", async () => {
+    await signedIn();
+    for (const report of [
+      rollback(STATE_SCHEMAS),
+      rollback(LEGACY_STATE_SCHEMAS, "darwin"),
+      rollback(LEGACY_STATE_SCHEMAS, "win32"),
+    ])
+      expect(
+        report.items.find(
+          (item) => item.name === "runtime credential metadata",
+        ),
+      ).toMatchObject({ action: "keep" });
   });
 });

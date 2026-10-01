@@ -265,6 +265,22 @@ describe("a corrupt session is not resumed (#62)", () => {
     expect(inspectSession(file)).toBeUndefined();
   });
 
+  it("resumes a session with an entry type this check does not know (a newer Pi's)", () => {
+    const { file, lines: entries } = persistedSession();
+    const last = entries.at(-1) as { id: string };
+    rewrite(file, [
+      ...entries,
+      {
+        type: "future_entry_type",
+        id: "f0f0f0f0",
+        parentId: last.id,
+        timestamp: new Date().toISOString(),
+        payload: { anything: true },
+      },
+    ]);
+    expect(inspectSession(file)).toBeUndefined();
+  });
+
   it("refuses an entry whose parent is missing", () => {
     const { file, lines: entries } = persistedSession();
     const removed = entries[2] as { id: string };
@@ -738,7 +754,7 @@ describe("one owner per session file (#57)", () => {
           schema: "piship-session-owner/v1",
           session,
           pid,
-          identity: "a process that started earlier",
+          identity: "1",
           host: hostname(),
           instance,
         }),

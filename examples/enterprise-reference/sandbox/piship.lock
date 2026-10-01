@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "b16f584e72dc8d2cb8fddbea2ab8a5dd7f6bfe21e2c426eb550e79791281aa08"
+    "sha256": "678e770c4f468827d8583dfb3125f7f5eaa962e675263dbaa6ed5b3ecc82e34c"
   },
   "app": {
     "id": "acmecode-reference",
@@ -1412,7 +1412,18 @@
     ],
     "vulnerabilities": {
       "failOn": "high",
-      "allow": []
+      "allow": [
+        {
+          "id": "GHSA-qhr7-859c-m2p7",
+          "reason": "Transitive dependency pinned by upstream Pi's shrinkwrap; local stack-exhaustion DoS from crafted nested brace patterns. PiShip does not patch upstream Pi dependency trees. Temporary.",
+          "expires": "2026-12-31"
+        },
+        {
+          "id": "GHSA-6j4f-fj2g-mc7p",
+          "reason": "Transitive dependency pinned by upstream Pi's shrinkwrap; local stack-exhaustion DoS from crafted nested brace patterns. PiShip does not patch upstream Pi dependency trees. Temporary.",
+          "expires": "2026-12-31"
+        }
+      ]
     }
   }
 }

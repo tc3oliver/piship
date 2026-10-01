@@ -103,7 +103,7 @@ export function killAllManaged(): void {
   live.clear();
 }
 
-function cancelledBeforeStart(): ManagedProcess {
+function notStarted(error?: string): ManagedProcess {
   return {
     pid: undefined,
     stdin: null,
@@ -113,7 +113,8 @@ function cancelledBeforeStart(): ManagedProcess {
       code: null,
       signal: null,
       timedOut: false,
-      cancelled: true,
+      cancelled: error === undefined,
+      ...(error === undefined ? {} : { error }),
     }),
     terminate: () => {},
   };
@@ -173,7 +174,7 @@ export function spawnManaged(options: ManagedSpawnOptions): ManagedProcess {
  * the uncontained local shell, where the caller's environment is kept as is.
  */
 export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
-  if (options.signal?.aborted) return cancelledBeforeStart();
+  if (options.signal?.aborted) return notStarted();
   const platform = options.platform ?? process.platform;
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(options.env))
@@ -182,7 +183,17 @@ export function spawnProcess(options: ManagedSpawnOptions): ManagedProcess {
   const target = options.sandbox
     ? options.sandbox.wrap(options.file, args, options.cwd, env)
     : { file: options.file, args, cwd: options.cwd, env };
-  const launched = platform === "win32" ? windowsJobCommand(target) : target;
+  let launched: {
+    file: string;
+    args: readonly string[];
+    env: NodeJS.ProcessEnv;
+  };
+  try {
+    launched = platform === "win32" ? windowsJobCommand(target) : target;
+  } catch (error) {
+    // Fail closed: never fall back to an unresolved supervisor.
+    return notStarted(redact((error as Error).message));
+  }
   const child = spawn(launched.file, [...launched.args], {
     cwd: target.cwd,
     env: { ...launched.env },

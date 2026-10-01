@@ -51,7 +51,10 @@ export {
   verifyPayload,
   verifyPayloadContents,
 } from "./payload.js";
-export { processIdentity } from "./process-identity.js";
+export {
+  processIdentity,
+  processIdentityMatches,
+} from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
 export * from "./signing.js";

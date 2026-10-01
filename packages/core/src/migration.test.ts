@@ -325,6 +325,25 @@ describe("checkStateMigration", () => {
     expect(item(report, "Pi agent configuration").action).toBe("keep");
   });
 
+  it("moves a v0.6 install to this release without a schema bump (decision 27)", () => {
+    // v0.6 locks list the six older keys; v0.7 added two, additively, under
+    // the same piship-lock/v1alpha4. A v0.6 state keeps every class, and
+    // this release still reads a v0.6 lock's schema list.
+    const {
+      sandboxCredential: _s,
+      credentialIssuance: _c,
+      ...v06
+    } = STATE_SCHEMAS;
+    const dir = populated();
+    const from = { version: "0.6.0", pi: "0.87.1" };
+    const forward = checkStateMigration(dir, target(), from);
+    expect(forward.verdict).toBe("safe");
+    expect(forward.items.every((entry) => entry.action === "keep")).toBe(true);
+    const back = checkStateMigration(dir, target("0.87.1", v06), current);
+    expect(back.verdict).toBe("safe");
+    expect(back.items.every((entry) => entry.action === "keep")).toBe(true);
+  });
+
   it("clears the sandbox credential for a target whose lock predates its schema key", () => {
     const dir = populated();
     write(dir, "credentials-metadata/sandbox.json", {

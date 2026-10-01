@@ -49,10 +49,10 @@ The signed-in user is the normalized principal `(iss, sub)`: the issuer and the 
 
 ## Workload identity (headless runs)
 
-A managed distribution can run without a person: in CI, scheduled automation, a headless RPC service, or a managed worker. The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
+A managed distribution's non-interactive surfaces (`--smoke`, `--smoke-model`, and the subcommands) can run without a person: in CI, scheduled automation, or a managed worker. There is no non-interactive prompt or RPC mode in this release, and the interactive command refuses to start without a terminal ([headless runs](enterprise-integration.md#headless-and-workload-runs)). The identity is then a workload identity, supplied by an identity adapter that declares itself non-interactive. There is no manifest change: it is `identity.mode: adapter`.
 
 ```js
-// resources/adapters/workload-identity.mjs, declared as
+// adapters/workload-identity.mjs next to piship.yaml, declared as
 //   identity: { mode: adapter, adapter: ./adapters/workload-identity.mjs }
 import { readFileSync } from "node:fs";
 
@@ -61,8 +61,10 @@ export default (context) => ({
   interactive: false,
   async login() {
     // Read the token the platform provides: a projected service account
-    // token, a CI job token, or a token exchange through context.fetch.
-    const token = readFileSync(process.env.ACME_WORKLOAD_TOKEN_PATH, "utf8").trim();
+    // token, a CI job token, or a token exchange through context.fetch. The
+    // variable names only where the token is; a managed launch removes
+    // credential-named variables such as *_TOKEN_* before the adapter loads.
+    const token = readFileSync(process.env.ACME_WORKLOAD_IDENTITY_PATH, "utf8").trim();
     // Take the principal from the token itself, never from a side field that
     // can go stale. PiShip does not verify the token: the broker does.
     const claims = JSON.parse(

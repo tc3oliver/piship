@@ -437,6 +437,26 @@ describe("renderDoctor", () => {
     ).toBe(false);
   });
 
+  it("reports a pending credential request, and the user step once it is past retention", () => {
+    const lines = (stale: boolean) =>
+      group(
+        renderDoctor(
+          doctorData("managed", {
+            access: accessData({
+              pendingIssuance: { idempotencyKey: "key-0001", stale },
+            }),
+          }),
+        ).render(),
+        "Credential",
+      );
+    expect(lines(false)).toContain(
+      `  ! ${"pending request".padEnd(20)} credential request key-0001 is unresolved; the next renewal repeats it`,
+    );
+    expect(lines(true)).toContain(
+      `  ! ${"pending request".padEnd(20)} credential request key-0001 is older than broker retention; renewal fails until you run acmecode logout, then acmecode login`,
+    );
+  });
+
   it("warns about the plaintext file secret store and says when no store is used", () => {
     const file = renderDoctor(
       doctorData("managed", {

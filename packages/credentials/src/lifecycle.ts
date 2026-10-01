@@ -76,7 +76,8 @@ export const CREDENTIAL_ISSUANCE_FILE = "pending-issuance.json";
  * broker contract requires at least. Past it, the broker may have forgotten
  * the key, so reusing it no longer recovers an issued credential, and a new
  * key could issue a second one: the next acquire or renewal fails closed
- * (`CREDENTIAL_ACQUIRE_FAILED`) until logout removes the record.
+ * (`CREDENTIAL_ACQUIRE_FAILED`) until logout removes the record. A launch
+ * that needs no new credential is not affected.
  */
 export const ISSUANCE_RETENTION_MS = 24 * 60 * 60 * 1000;
 /** A pending issuance dated further ahead of the clock than this fails closed like an expired one. */
@@ -1018,6 +1019,8 @@ export class CredentialManager {
     readonly idempotencyKey: string;
     readonly createdAt: string;
     readonly renewal: boolean;
+    /** Past the retention or dated ahead: the next request fails closed. */
+    readonly stale: boolean;
   } | null {
     if (!this.#tracksIssuance) return null;
     const pending = this.#readIssuance();
@@ -1026,7 +1029,20 @@ export class CredentialManager {
       idempotencyKey: pending.idempotency_key,
       createdAt: pending.created_at,
       renewal: !!pending.renews,
+      stale: this.#issuanceStale(pending),
     };
+  }
+
+  /**
+   * Whether `pending` is 24 hours old or more by this clock (the configured
+   * retention), or dated further ahead of it than the tolerance.
+   */
+  #issuanceStale(pending: PendingIssuance): boolean {
+    const age = this.#now() - Date.parse(pending.created_at);
+    return (
+      !(age >= -ISSUANCE_CLOCK_TOLERANCE_MS) ||
+      age >= (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS)
+    );
   }
 
   #dropIssuance(): void {
@@ -1036,13 +1052,15 @@ export class CredentialManager {
   /**
    * Keep the recorded pending issuance only while it still names an
    * unresolved request that the next acquire may repeat: recorded for this
-   * provider mode, within the retention, for `principal` (when given), and
+   * provider mode and destination, for `principal` (when given), and
    * with no credential committed since it was recorded (the stored
    * credential is absent or still the one it renews). Anything else is
    * dropped: a credential committed since means the request was resolved,
    * including by a process that stopped after committing and before it
    * removed the record. Runs under the credential lock, before anything
-   * changes the metadata.
+   * changes the metadata. Its age is judged only where a request would be
+   * sent (`#beginIssuance`), so a stale record never blocks a launch that
+   * uses the credential stored now.
    */
   #settleIssuance(principal?: PrincipalKey | null): PendingIssuance | null {
     const pending = this.#readIssuance();
@@ -1059,26 +1077,6 @@ export class CredentialManager {
       this.#dropIssuance();
       return null;
     }
-    // Wall time cannot prove broker retention across clock steps, sleep or a
-    // process restart. Never turn an unresolved remote side effect into a new
-    // key. Once the recorded age exceeds the broker's promised window, or the
-    // record is dated ahead of the clock by more than the tolerance (its age
-    // cannot be known), stop automatic issuance and require reconciliation
-    // instead of guessing. Only logout removes the record.
-    const age = this.#now() - Date.parse(pending.created_at);
-    if (
-      !(age >= -ISSUANCE_CLOCK_TOLERANCE_MS) ||
-      age >= (this.options.issuanceRetentionMs ?? ISSUANCE_RETENTION_MS)
-    )
-      throw new PiShipError(
-        "CREDENTIAL_ACQUIRE_FAILED",
-        "An unresolved credential request may be older than broker idempotency retention; reconcile it before acquiring again",
-        {
-          component: "credential",
-          userAction:
-            "Check the broker for the pending issuance key and revoke a credential it issued, then run the branded logout command and the branded login command",
-        },
-      );
     return pending;
   }
 
@@ -1099,6 +1097,28 @@ export class CredentialManager {
     kind: IssuanceRequest,
   ): { readonly key: string; readonly resumed: boolean } {
     const pending = this.#readIssuance();
+    if (pending && pending !== "invalid" && this.#issuanceStale(pending))
+      // Wall time cannot prove broker retention across clock steps, sleep or
+      // a process restart. Never turn an unresolved remote side effect into
+      // a new key, and never send a key the broker may have forgotten: past
+      // the broker's promised window, or dated ahead of the clock by more
+      // than the tolerance (its age cannot be known), nothing is sent. Only
+      // logout removes the record.
+      throw new PiShipError(
+        "CREDENTIAL_ACQUIRE_FAILED",
+        `An unresolved credential request (idempotency key ${pending.idempotency_key}) may be older than broker idempotency retention, so no new credential was requested`,
+        {
+          component: "credential",
+          userAction:
+            "Run the branded logout command, then the branded login command; a credential the broker may have issued for that key stays unused until it expires",
+          sanitizedDetail: {
+            operation: "acquire",
+            outcome: "not-sent",
+            reason: "issuance-retention",
+            idempotencyKey: pending.idempotency_key,
+          },
+        },
+      );
     if (
       pending &&
       pending !== "invalid" &&
@@ -1707,7 +1727,8 @@ export class CredentialManager {
         if (status.state === "expired" || force) {
           if (
             error instanceof PiShipError &&
-            error.code !== "CREDENTIAL_ACQUIRE_FAILED"
+            (error.code !== "CREDENTIAL_ACQUIRE_FAILED" ||
+              error.sanitizedDetail?.reason === "issuance-retention")
           )
             throw error;
           // Keep the retry contract of the failed renewal: a broker outage

@@ -71,6 +71,8 @@ sandbox:
   router: ${SANDBOX_ROUTER_URL}      # the sandbox router
   namespace: agents                  # default: default
   template: python-sandbox-pool      # SandboxWarmPool to claim from
+  network:
+    mode: allow                      # required: this backend cannot enforce deny
 ```
 
 ```yaml

@@ -1,6 +1,6 @@
 # Experimental manifest and lock
 
-Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change only when the manifest or lock format changes, independently of project milestones: v0.5, v0.6, and the in-progress v0.7 still use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)).
+Four alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change independently of project milestones: v0.5, v0.6, and v0.7 all use `piship/v1alpha4` and `piship-lock/v1alpha4` ([version map](status.md#version-map)). While a schema is preview, a backward-compatible addition (a new enum value, a new optional lock key) keeps its version; removing or reinterpreting a field, or making one required, needs a new version ([decision 27](decisions.md)). v0.7 added `sandbox.credential: stored` and two `runtime.stateSchemas` lock keys this way.
 
 - `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The personal example used it in v0.1; it now uses `piship/v1alpha4`.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
@@ -245,31 +245,32 @@ The manifest and lock keep the unresolved template, so a lock is not machine-spe
 ## Commands
 
 ```bash
-npm exec -- piship init ./my-agent             # personal v1alpha4 (identity none, pi-native)
-npm exec -- piship init ./my-agent --managed   # managed v1alpha4 template
-npm exec -- piship validate ./my-agent/piship.yaml
-npm exec -- piship migrate ./my-agent/piship.yaml [--write]
-npm exec -- piship lock ./my-agent/piship.yaml
-npm exec -- piship test ./my-agent/piship.yaml [--model-request]
-npm exec -- piship build ./my-agent/piship.yaml
-npm exec -- piship config explain <manifest|artifact|id>
-node ./dist/my-agent/piship.mjs install ./dist/my-agent
+node packages/cli/dist/bin.js init ./my-agent             # personal v1alpha4 (identity none, pi-native)
+node packages/cli/dist/bin.js init ./my-agent --managed   # managed v1alpha4 template
+node packages/cli/dist/bin.js validate ./my-agent/piship.yaml
+node packages/cli/dist/bin.js migrate ./my-agent/piship.yaml [--write]
+node packages/cli/dist/bin.js lock ./my-agent/piship.yaml
+node packages/cli/dist/bin.js test ./my-agent/piship.yaml [--model-request]
+node packages/cli/dist/bin.js build ./my-agent/piship.yaml
+node packages/cli/dist/bin.js config explain <manifest|artifact|id>
+node ./dist/my-agent/piship.mjs install ./dist/my-agent --use-existing-state   # test created the state
 my-agent --version
 my-agent --smoke
 node ./dist/my-agent/piship.mjs inspect my-agent
 node ./dist/my-agent/piship.mjs doctor my-agent
 node ./dist/my-agent/piship.mjs uninstall my-agent
 node ./dist/my-agent/piship.mjs purge my-agent --yes
+my-agent logout                                                      # a managed one: revoke the credential first
 node ./dist/my-agent/piship.mjs uninstall my-agent --purge --yes   # both in one command
 ```
 
-`uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)).
+`uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)). Neither revokes anything, so both refuse while the distribution is signed in: run `<command> logout` first ([logout and revocation](security.md#logout-and-revocation)).
 
 v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
 
-`validate` also runs the resource, certified-integrity, and provider-integrity checks of `lock` without writing a lock. `dev` builds and starts the interactive branded command with the same resource and state isolation; `dev --smoke` runs it headlessly with `--smoke` and prints the JSON result. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
+`validate` also runs the resource, certified-integrity, and provider-integrity checks of `lock` without writing a lock. `dev` builds and starts the interactive branded command with the same resource and state isolation; `dev --smoke` runs it headlessly with `--smoke` and prints the JSON result. `test` assembles the artifact and runs the branded `--smoke`: Pi SDK, extension, read-tool, and session checks without a model request. It runs against the distribution's real state directory, so it creates that state, and a later `install` needs `--use-existing-state` to adopt it. `--model-request` runs `--smoke-model` instead, which sends one acceptance prompt to the selected model. For v1alpha2 and later payloads both need the same runtime variables and, where the distribution requires it, the same prior `login` as the branded command. `inspect` accepts a manifest, artifact directory, or installed ID and includes the static `access` section. `doctor` accepts an artifact directory or installed ID, verifies payload integrity, runs the branded `doctor` report for access-enabled payloads, and launches the smoke. `config explain` explains a manifest directly (without building) using that distribution's state, or runs the branded explanation for an artifact directory or installed ID.
 
-v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint. Every distribution's branded command also accepts `--new-session`, which starts a new Pi session instead of continuing the project's most recent one: the way to go on after a damaged or over-64 MiB session is refused ([sessions](architecture.md#sessions)).
+v1alpha2 branded commands add `login`, `logout`, `doctor`, `models`, `version`, `config explain [--json]`, `config set <key> <value>`, `config unset <key>`, `--model <id>`, `--smoke`, and `--smoke-model`. `--smoke` writes a clearly labeled synthetic entry to a separate acceptance session; `--smoke-model` makes a real request to the configured endpoint. Every distribution's branded command also accepts `--new-session`, which starts a new Pi session instead of continuing the project's most recent one: the way to go on after a damaged or over-64 MiB session is refused ([sessions](architecture.md#sessions)). Without `--smoke`, `--smoke-model`, or a subcommand, the branded command starts the interactive Pi session, which needs a terminal: with stdin or stdout not a terminal it fails at once with `CONFIG_INVALID`. There is no non-interactive prompt or print mode.
 
 v1alpha3 and v1alpha4 branded commands add:
 

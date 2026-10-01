@@ -2,7 +2,7 @@
 
 MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
-- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi neither reads nor changes. No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
+- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's interactive mode can still write tool binaries there ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
 - **An exact pinned Pi**, 0.87.1.
 - **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
@@ -17,11 +17,11 @@ From the repository root with Node.js 22.19.0 or newer:
 ```bash
 npm ci
 npm run build
-npm exec -- piship validate examples/personal/piship.yaml
-npm exec -- piship lock examples/personal/piship.yaml
-npm exec -- piship test examples/personal/piship.yaml
-npm exec -- piship build examples/personal/piship.yaml
-node dist/mypi/piship.mjs install dist/mypi
+node packages/cli/dist/bin.js validate examples/personal/piship.yaml
+node packages/cli/dist/bin.js lock examples/personal/piship.yaml
+node packages/cli/dist/bin.js test examples/personal/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/piship.yaml
+node dist/mypi/piship.mjs install dist/mypi --use-existing-state
 ~/.local/bin/mypi --version
 ~/.local/bin/mypi --smoke
 ~/.local/bin/mypi doctor
@@ -31,9 +31,19 @@ node dist/mypi/piship.mjs inspect mypi
 node dist/mypi/piship.mjs uninstall mypi
 ```
 
-On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and launch do not fetch packages.
+`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state. Install refuses existing state unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and the headless commands (`--version`, `--smoke`, `doctor`, `capabilities`) do not fetch packages.
 
-`--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. Repeating it reports the same session ID with `resumed: true`. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
+`--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. It reports the same session ID with `resumed: true` on every run after the first, and the first `mypi --smoke` here already resumes the session that `piship test` created. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
+
+### Interactive launch
+
+The interactive `mypi` is Pi's own interactive mode, and Pi does a few things on start that PiShip does not change:
+
+- If `fd` or `rg` is neither on `PATH` nor in `~/.pi/agent/bin/`, Pi downloads it from github.com into `~/.pi/agent/bin/`. That is Pi's agent directory, not MyPi's state, so `uninstall` and `purge` leave it.
+- Pi asks pi.dev for the latest Pi version and, when a newer one exists, shows "Update Available ... Run `pi update`". It may also refresh model catalogs over the network. MyPi pins Pi 0.87.1; a newer Pi comes only with a new MyPi release.
+- On exit Pi prints "To resume this session: pi --session-dir ... --session ...". `mypi` continues the project's most recent session by itself, and `mypi --new-session` starts a new one.
+
+Start it with `PI_OFFLINE=1` set to stop the download and the network checks. Pi then warns that `fd` and `rg` were not found, unless they are on `PATH`; the resume hint is still printed. Installing `fd` and `rg` on `PATH` avoids the download without going offline.
 
 ## Release, update, and rollback
 
@@ -44,22 +54,22 @@ The lifecycle works as for the demo company ([release](../../docs/release.md)), 
    ```bash
    cp -r examples/personal /tmp/mypi
    mkdir -p ~/mypi-keys
-   npm exec -- piship keygen ~/mypi-keys/release.pem --id mypi-release
+   node packages/cli/dist/bin.js keygen ~/mypi-keys/release.pem --id mypi-release
    ```
 
-2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release:
+2. Lock, release for this machine, and install with the release's own script (`install.ps1` on Windows). The dependency scan needs registry access. `piship release` also runs the offline `--smoke` on the release. Uninstall any earlier `mypi` install first; uninstall keeps state, so pass `--use-existing-state` to adopt it:
 
    ```bash
-   npm exec -- piship lock /tmp/mypi/piship.yaml
-   npm exec -- piship release /tmp/mypi/piship.yaml
+   node packages/cli/dist/bin.js lock /tmp/mypi/piship.yaml
+   node packages/cli/dist/bin.js release /tmp/mypi/piship.yaml
    tar -xzf dist/releases/mypi-1.0.0-<target>.tar.gz -C /tmp
-   sh /tmp/mypi-1.0.0-<target>/install.sh
+   sh /tmp/mypi-1.0.0-<target>/install.sh --use-existing-state
    ```
 
 3. Set `app.version` to `1.1.0` in the copy, lock and release again, and sign it into a channel directory:
 
    ```bash
-   npm exec -- piship sign-channel /tmp/mypi-channel dist/releases/mypi-1.1.0-<target>.tar.gz \
+   node packages/cli/dist/bin.js sign-channel /tmp/mypi-channel dist/releases/mypi-1.1.0-<target>.tar.gz \
      --channel stable --key ~/mypi-keys/release.pem --key-id mypi-release
    export MYPI_UPDATE_SOURCE=/tmp/mypi-channel
    ~/.local/bin/mypi update --check
@@ -85,8 +95,8 @@ node examples/personal/local-model/model-server.mjs    # keeps running; prints M
 In a second terminal, paste the printed `export MYPI_MODEL_URL=...` line (`set` on Windows), then:
 
 ```bash
-npm exec -- piship validate examples/personal/local-model/piship.yaml
-npm exec -- piship build examples/personal/local-model/piship.yaml
+node packages/cli/dist/bin.js validate examples/personal/local-model/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/local-model/piship.yaml
 dist/mypi-local/bin/mypi-local login           # paste the key
 dist/mypi-local/bin/mypi-local --smoke-model   # one request to the local endpoint
 dist/mypi-local/bin/mypi-local logout

@@ -263,11 +263,26 @@ async function startRuntime(
           ? [activated.runtime.providerId, activated.selectedModel]
           : activated.selectedModel.split("/");
       model = modelRuntime.getModel(provider ?? "", rest.join("/"));
-      if (!model)
+      if (!model) {
+        const command = ctx.metadata.app.command;
+        const flag =
+          activated.runtime.kind === "managed-endpoint"
+            ? "--model <model>"
+            : "--model <provider/model>";
+        const fromPreference =
+          activated.config.values.model === activated.selectedModel &&
+          activated.config.entries.find((entry) => entry.key === "model")
+            ?.source === "user-preference";
         throw new PiShipError(
           "MODEL_UNAVAILABLE",
           `Model ${activated.selectedModel} is not available in the Pi runtime`,
+          {
+            userAction: fromPreference
+              ? `Run ${command} config unset model to remove the model preference, or start ${command} ${flag}`
+              : `Start ${command} ${flag} with a model Pi offers`,
+          },
         );
+      }
     }
     const result = await createAgentSession({
       cwd,

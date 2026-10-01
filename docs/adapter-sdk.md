@@ -110,7 +110,7 @@ Each result is `passed`, `failed` with a reason, or `skipped` with a reason. A r
 | --- | --- |
 | metadata-only defaults | An event arrives already metadata-only, with `content` only for the classes the distribution opted in to. The sink stores an event without `content` without one, never copies prompt or command text from one event into another or outside `content` (a raw request body kept with each event does), and keeps opted-in `content` exactly as it arrived |
 | secret redaction | The sink's own credential never appears in a stored event, a request body, or an error or `lastError` it reports |
-| identity attribution | `user` is stored as sent: the identity subject, or `null`. The sink never fills it with its own principal or a token |
+| identity attribution | `user` is stored as sent: the principal (issuer, `#`, subject), or `null`. The sink never fills it with its own principal or a token |
 | session correlation | `session` is stored as sent, so every event of one session has the same value across batches, and `null` stays `null`. The sink never replaces it with a per-request correlation ID |
 | event id stability | Every event reaches the collector with the `id` it was written with, on the first delivery and on a retry after the collector failed |
 | delivery failure | A plain sink's write resolves only after the collector answered `2xx`; HTTP 503, a redirect (never followed), a network error, or an aborted signal makes it reject. A buffering sink's flush finishes only after the collector answered, and the sink counts a failed batch as pending (required) or dropped (optional), never as delivered, and never loses it uncounted |

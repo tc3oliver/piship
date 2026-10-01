@@ -13,14 +13,14 @@ The flow for a distribution owner:
 5. Users install the release, then run `<command> update` and `<command> rollback`.
 
 ```bash
-npm exec -- piship migrate ./acmecode/piship.yaml --write
-npm exec -- piship keygen ~/keys/acme-release.pem --id acme-release-2026
-npm exec -- piship lock ./acmecode/piship.yaml
-npm exec -- piship release ./acmecode/piship.yaml [--out <dir>] [--channel <name>] [--reclaim-staging]
-npm exec -- piship verify-release dist/releases/acmecode-1.1.0-linux-x64.tar.gz [--sha256 <hex>] [--json]
-npm exec -- piship reproducibility <release-a> <release-b> [--out report.json]
-npm exec -- piship diff <before> <after> [--json]
-npm exec -- piship sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64.tar.gz \
+node packages/cli/dist/bin.js migrate ./acmecode/piship.yaml --write
+node packages/cli/dist/bin.js keygen ~/keys/acme-release.pem --id acme-release-2026
+node packages/cli/dist/bin.js lock ./acmecode/piship.yaml
+node packages/cli/dist/bin.js release ./acmecode/piship.yaml [--out <dir>] [--channel <name>] [--reclaim-staging]
+node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.1.0-linux-x64.tar.gz [--sha256 <hex>] [--json]
+node packages/cli/dist/bin.js reproducibility <release-a> <release-b> [--out report.json]
+node packages/cli/dist/bin.js diff <before> <after> [--json]
+node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64.tar.gz \
   --channel stable --key ~/keys/acme-release.pem --key-id acme-release-2026 [--sequence <n>] [--expires-days <n>]
 ```
 

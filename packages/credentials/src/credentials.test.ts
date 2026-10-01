@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -243,6 +244,48 @@ describe("platform secret stores", () => {
       code: "CONFIG_INVALID",
     });
   });
+  // A store that exists but cannot be read is unavailable, never absent.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports an unreadable file store or entry as SECRET_STORE_UNAVAILABLE naming the path",
+    async () => {
+      const directory = join(temp, "secrets");
+      const store = new RestrictedFileSecretStore(directory);
+      expect(await store.get("piship:x:absent#1")).toBeNull();
+      await store.put("piship:x:inference#1", secret);
+      const file = join(directory, readdirSync(directory)[0] ?? "");
+      const expectUnavailable = async (path: string) => {
+        const error = await store.get("piship:x:inference#1").then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+        expect(error).toMatchObject({
+          code: "SECRET_STORE_UNAVAILABLE",
+          userAction: expect.stringContaining(directory),
+        });
+        expect((error as PiShipError).message).toContain(path);
+        expect((error as PiShipError).userAction).not.toMatch(/opt in/);
+      };
+      chmodSync(directory, 0o000);
+      try {
+        await expectUnavailable(file);
+      } finally {
+        chmodSync(directory, 0o700);
+      }
+      chmodSync(file, 0o000);
+      try {
+        await expectUnavailable(file);
+      } finally {
+        chmodSync(file, 0o600);
+      }
+      rmSync(file);
+      mkdirSync(file);
+      await expectUnavailable(file);
+      rmSync(file, { recursive: true });
+      writeFileSync(file, "not json", { mode: 0o600 });
+      await expectUnavailable(file);
+      expect(await store.get("piship:x:absent#1")).toBeNull();
+    },
+  );
 });
 
 describe("http-broker credential provider", () => {
@@ -558,7 +601,13 @@ describe("http-broker failure and retry contract", () => {
           fetch: async () => json({ ...answer, subject: identity.subject }),
         }).acquire(identity, ctx),
       ).resolves.toBeDefined();
-      for (const subject of ["someone-else", 42, null]) {
+      // A null subject says nothing about the principal, like an absent one.
+      const { subject: _, ...unsaid } = answer;
+      for (const body of [unsaid, { ...answer, subject: null }])
+        await expect(
+          broker({ fetch: async () => json(body) }).acquire(identity, ctx),
+        ).resolves.toBeDefined();
+      for (const subject of ["someone-else", 42, "", {}]) {
         const error = await failure(
           call.acquire(
             broker({ fetch: async () => json({ ...answer, subject }) }),
@@ -569,6 +618,58 @@ describe("http-broker failure and retry contract", () => {
           sanitizedDetail: { reason: "contract" },
         });
         expectNoSecret(error);
+      }
+    });
+
+    it("reads null in an optional answer field as absent, and names a field of the wrong type", async () => {
+      const answer = await realAnswer();
+      const optional = {
+        credential_id: 7,
+        expires_at: 7,
+        models: "acme/coder",
+        base_url: 7,
+      } as const;
+      for (const [field, wrong] of Object.entries(optional)) {
+        const { [field]: _, ...absent } = answer;
+        for (const body of [absent, { ...answer, [field]: null }]) {
+          const credential = await broker({
+            fetch: async () => json(body),
+          }).acquire(identity, ctx);
+          // Null leaves exactly what absence leaves.
+          expect(credential, field).toEqual(
+            await broker({ fetch: async () => json(absent) }).acquire(
+              identity,
+              ctx,
+            ),
+          );
+        }
+        const error = await failure(
+          call.acquire(
+            broker({ fetch: async () => json({ ...answer, [field]: wrong }) }),
+          ),
+        );
+        expect(error, field).toMatchObject({
+          code: "CREDENTIAL_ACQUIRE_FAILED",
+          sanitizedDetail: { reason: "contract", field },
+        });
+        expect(error.message).toContain(field);
+        expectNoSecret(error);
+      }
+      // The required fields are named too, never their values.
+      for (const [field, wrong] of [
+        ["credential_type", null],
+        ["credential", null],
+        ["credential", "sk-live injected"],
+      ] as const) {
+        const error = await failure(
+          call.acquire(
+            broker({ fetch: async () => json({ ...answer, [field]: wrong }) }),
+          ),
+        );
+        expect(error, field).toMatchObject({
+          sanitizedDetail: { reason: "contract", field },
+        });
+        expect(String(error)).not.toContain("injected");
       }
     });
 

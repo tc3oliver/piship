@@ -162,12 +162,16 @@ Requirements:
 
 **Node.js 22.19.0 or newer.**
 
+The managed demo also needs an OS sandbox (Seatbelt on macOS, or bubblewrap with unprivileged user namespaces on Linux) and a platform secret store (macOS Keychain, Linux Secret Service, or Windows Credential Manager). [Troubleshooting](docs/troubleshooting.md) lists the prerequisites and every PiShip error code with what to do.
+
 Clone the repository and build it:
 
 ```bash
 npm ci
 npm run build
 ```
+
+Run the CLI from the repository root as `node packages/cli/dist/bin.js`. It is not published to npm, so `npm exec` and `npx` would look up `piship` on the public registry instead.
 
 ### Try a company distribution
 
@@ -192,7 +196,7 @@ The fixture prints the required `ACMECODE_*` environment variables.
 In another terminal, export those values and build the distribution:
 
 ```bash
-npm exec -- piship build examples/demo-company/piship.yaml
+node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
 
 node dist/acmecode/piship.mjs install dist/acmecode
 
@@ -213,6 +217,13 @@ acmecode config explain
 
 acmecode policy explain shell.execute "git status"
 acmecode policy explain filesystem.read ~/.ssh/id_ed25519
+```
+
+To remove it, sign out first: `logout` revokes the runtime credential at the broker, and purge revokes nothing, so it refuses while you are signed in.
+
+```bash
+acmecode logout
+node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
 ```
 
 The local services are deterministic test fixtures, not evidence of a live company integration.
@@ -310,7 +321,7 @@ You can still use the same distribution machinery to pin Pi, isolate its state, 
 The included **MyPi** example keeps its state separate from `~/.pi` and can use Pi-native authentication or a local OpenAI-compatible endpoint.
 
 ```bash
-npm exec -- piship build examples/personal/piship.yaml
+node packages/cli/dist/bin.js build examples/personal/piship.yaml
 
 node dist/mypi/piship.mjs install dist/mypi
 
@@ -438,6 +449,7 @@ See [compatibility](docs/compatibility.md).
 | Writing and testing adapters | [Adapter SDK](docs/adapter-sdk.md) |
 | Release, update, rollback | [Release](docs/release.md) |
 | Pi compatibility | [Compatibility](docs/compatibility.md) |
+| Prerequisites and error codes | [Troubleshooting](docs/troubleshooting.md) |
 | Future direction | [Roadmap](docs/roadmap.md) |
 | Architecture decisions | [Decisions](docs/decisions.md) |
 
