@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -42,6 +43,7 @@ import {
   downloadArchive,
   evaluateSignatures,
   evaluateVulnerabilities,
+  npmAuditScanner,
   piCompatibility,
   piCompatibilitySurfaces,
   RELEASE_FILES,
@@ -981,6 +983,75 @@ policy:
         },
       }),
     ).rejects.toThrow("registry unreachable");
+  });
+
+  it("vulnerability: npm audit fails on a high advisory for a nested runtime package", async () => {
+    // A local registry stub answers npm's bulk advisory request with a high
+    // advisory for a package Pi pulls in. It runs in a child process because
+    // the scanner blocks this one while npm audit runs.
+    const stub = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { createServer } from "node:http";
+const advisory = { id: 1, url: "https://github.com/advisories/GHSA-hhhh-iiii-jjjj", title: "ReDoS", severity: "high", vulnerable_versions: "*", cwe: [], cvss: { score: 7.5, vectorString: null } };
+const server = createServer((request, response) => {
+  request.resume().on("end", () => {
+    const bulk = request.method === "POST" && request.url.endsWith("/-/npm/v1/security/advisories/bulk");
+    response.writeHead(bulk ? 200 : 404, { "content-type": "application/json" });
+    response.end(bulk ? JSON.stringify({ "@earendil-works/pi-coding-agent": [advisory] }) : "{}");
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(server.address().port));`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    const saved = process.env.npm_config_registry;
+    try {
+      const port = await new Promise<string>((done, fail) => {
+        stub.stdout.once("data", (chunk) => done(String(chunk).trim()));
+        stub.once("error", fail);
+      });
+      process.env.npm_config_registry = `http://127.0.0.1:${port}/`;
+      const { path } = project();
+      const error = await rejection(
+        build(path, {
+          // The payload carries the workspace build input as buildDistribution
+          // installs it: the root manifest and each workspace manifest.
+          assemble: (manifestPath, outputRoot) => {
+            const out = fakeAssemble(manifestPath, outputRoot);
+            const input = join(
+              out,
+              "node_modules",
+              "@piship",
+              "core",
+              "dist",
+              "build-input",
+            );
+            for (const file of readdirSync(join(BUILD_INPUT, "packages")))
+              cpSync(
+                join(BUILD_INPUT, "packages", file, "package.json"),
+                join(input, "packages", file, "package.json"),
+              );
+            cpSync(
+              join(BUILD_INPUT, "package.json"),
+              join(input, "package.json"),
+            );
+            return out;
+          },
+          scanner: npmAuditScanner,
+        }),
+      );
+      expect(error.code).toBe("POLICY_DENIED");
+      expect(error.message).toMatch(
+        /GHSA-hhhh-iiii-jjjj \(@earendil-works\/pi-coding-agent, high\)/,
+      );
+    } finally {
+      if (saved === undefined) delete process.env.npm_config_registry;
+      else process.env.npm_config_registry = saved;
+      stub.kill();
+    }
   });
 
   it("signature: records a passing check and the packages without a registry signature", async () => {

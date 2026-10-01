@@ -47,7 +47,7 @@ The SBOM is SPDX 2.3 JSON built by walking every `package.json` under the payloa
 
 `licenses/THIRD_PARTY_NOTICES.txt` reproduces each package's `LICENSE`, `LICENCE`, `COPYING`, and `NOTICE` files from its package root. A package that ships none gets an explicit "No license file is shipped" entry with its declared license.
 
-The dependency scan runs `npm audit --omit=dev --json` over the payload's npm lock and applies `release.vulnerabilities`:
+The dependency scan runs `npm audit --omit=dev --json` over the payload's npm lock, beside the root and workspace package manifests it was built from (so every runtime package, nested ones included, is reachable and none is treated as a development dependency), and applies `release.vulnerabilities`:
 
 - A finding at or above `failOn` (`low`, `moderate`, `high`, or `critical`; default `high`) is blocking unless its advisory ID is listed in `allow` with an `expires` date that is today or later. Advisory IDs are the GHSA ID from the advisory URL, or `npm-<source>` otherwise.
 - An expired exception no longer applies, so the build fails again until the dependency is fixed or the exception is reviewed and renewed.

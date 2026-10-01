@@ -27,6 +27,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { STATE_SCHEMAS } from "../migration.js";
+import { workspacePackages } from "../runtime-dependencies.js";
 import {
   formatChecksums,
   generateNotices,
@@ -234,17 +235,32 @@ export async function buildRelease(
       join(payload, "package-lock.json"),
       join(lockDirectory, "package-lock.json"),
     );
-    const buildInputPackage = join(
+    const buildInputDirectory = join(
       payload,
       "node_modules",
       "@piship",
       "core",
       "dist",
       "build-input",
-      "package.json",
     );
-    if (existsSync(buildInputPackage))
-      copyFileSync(buildInputPackage, join(lockDirectory, "package.json"));
+    if (existsSync(join(buildInputDirectory, "package.json"))) {
+      copyFileSync(
+        join(buildInputDirectory, "package.json"),
+        join(lockDirectory, "package.json"),
+      );
+      // npm audit reaches the runtime dependencies only through the
+      // workspace packages that declare them. Without their manifests every
+      // locked package is unreachable, `--omit=dev` drops it, and the scan
+      // passes without checking anything.
+      for (const name of workspacePackages) {
+        const folder = join(lockDirectory, "packages", name);
+        mkdirSync(folder, { recursive: true });
+        copyFileSync(
+          join(buildInputDirectory, "packages", name, "package.json"),
+          join(folder, "package.json"),
+        );
+      }
+    }
     const release = lock.release as ReleaseManifest;
     const report = evaluateVulnerabilities(
       await (options.scanner ?? npmAuditScanner)(lockDirectory),
