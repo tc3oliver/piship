@@ -260,3 +260,27 @@ describe("sandbox.credential: runtime", () => {
     ]);
   });
 });
+
+describe("sandbox.network.mode", () => {
+  it("warns that deny is not enforced by a sandbox that is not required", () => {
+    for (const sandbox of [
+      { network: { mode: "deny" } },
+      { required: false, network: { mode: "deny" } },
+    ])
+      expect(warnings(managed({ sandbox }))).toEqual([
+        expect.objectContaining({
+          path: "sandbox.network.mode",
+          message: expect.stringContaining("sandbox.required: true"),
+        }),
+      ]);
+  });
+  it("accepts deny on a required sandbox and allow on an optional one", () => {
+    for (const sandbox of [
+      { required: true, network: { mode: "deny" } },
+      { required: true },
+      { network: { mode: "allow" } },
+      {},
+    ])
+      expect(warnings(managed({ sandbox }))).toEqual([]);
+  });
+});

@@ -153,9 +153,27 @@ function sandboxCredential(
   return findings;
 }
 
+/**
+ * The sandbox is activated only when required. An optional sandbox defaults
+ * to network allow, so deny was declared and is silently not enforced.
+ */
+function ignoredSandboxNetwork(governance: GovernanceManifest): Finding[] {
+  const sandbox = governance.sandbox;
+  if (sandbox.required || sandbox.network.mode !== "deny") return [];
+  return [
+    {
+      path: "sandbox.network.mode",
+      certain: false,
+      message:
+        "deny is not enforced: the sandbox is activated only with sandbox.required: true, so commands run without network denial; set sandbox.required: true or remove sandbox.network.mode",
+    },
+  ];
+}
+
 function findings(sections: LaunchSections): Finding[] {
   const { mode, access, governance } = sections;
   return [
+    ...(governance ? ignoredSandboxNetwork(governance) : []),
     ...(access ? caPaths(access) : []),
     ...(access && governance ? auditHosts(mode, access, governance) : []),
     ...(governance ? sandboxCredential(access, governance) : []),
