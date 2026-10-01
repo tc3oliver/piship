@@ -12,6 +12,8 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 
 ### Behavior and contract changes
 
+- `piship inspect` prints a summary by default; its JSON now needs `--json`. `piship test` and `piship doctor` print human summaries and take `--json` (#161).
+- Update sources: redirects are followed only within the same origin (at most 5), HTTP 429 is retryable with `Retry-After`, and a local clock that is ahead is named (#161).
 - Broker requests (acquire, renewal, revoke) and gateway requests carry an additive `PiShip-Client` header with the distribution, its version, the PiShip version, and the protocol version, so a broker or gateway can refuse releases it no longer supports; PiShip itself never decides anything from it (decision 31, #162).
 - An explicit sandbox filesystem or environment list replaces the defaults, as before; the example manifests now restate every default they need (#162).
 - A cancelled `--smoke-model` request reports the new, additive error code `REQUEST_CANCELLED`; a managed endpoint's request that got no answer (refused or reset connection, DNS failure, deadline) is `GATEWAY_UNREACHABLE`, retryable, instead of `GATEWAY_PROTOCOL_ERROR` (#85).
@@ -36,6 +38,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 
 ### Fixed
 
+- Every command takes `--help`; raw EISDIR, ENOENT, and EEXIST failures become PiShip errors with actions; `config explain` shows the manifest schema and governance rows; `doctor` no longer reports an unusable session, a dead issuer, or itself as healthy; `update`, `rollback`, and `build` show progress on a terminal; an invalid user policy names its file; `init`, `build`, and `install` end with the next step and a PATH line (#161).
 - `@piship/adapter-conformance` adds `testCredentialBroker` and `testAuditCollector`, to check a company's own broker and audit collector against what PiShip sends (#162).
 - Documentation: a key rotation and compromised-key runbook, a separate maintainer release checklist, one migration table, exact `network.allowHosts` semantics, one `AuditSink` definition, an onboarding path in the README, and the reference README's services and prerequisites (#162).
 - The agent's `bash` tool keeps its full output in a session-owned directory that is removed at close, and a full temp filesystem no longer crashes the session; a user's `!` command output files are removed at close and kept within free temp space (#64).
