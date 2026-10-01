@@ -142,4 +142,13 @@ describe("documented examples", () => {
       expect.arrayContaining([...DEFAULT_SANDBOX_ENVIRONMENT]),
     );
   });
+
+  it("the README manifest is a complete manifest PiShip accepts on its own", () => {
+    const snippet = block("README.md", "yaml", "schema: piship/v1alpha4");
+    const directory = temporary();
+    writeFileSync(join(directory, "piship.yaml"), snippet);
+    const manifest = readManifest(join(directory, "piship.yaml"));
+    expect(manifest.deployment.mode).toBe("managed");
+    expect(manifest.governance?.sandbox?.required).toBe(true);
+  });
 });

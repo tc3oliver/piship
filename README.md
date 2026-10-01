@@ -109,7 +109,7 @@ A PiShip distribution can define the parts of Pi that should be consistent acros
 
 The distribution is declarative.
 
-An excerpt of the demo company manifest:
+A complete managed manifest, valid on its own (`piship validate` accepts it as is):
 
 ```yaml
 schema: piship/v1alpha4
@@ -118,6 +118,7 @@ app:
   id: acmecode
   name: AcmeCode
   command: acmecode
+  version: 1.0.0
 
 runtime:
   pi: "0.87.1"
@@ -125,11 +126,25 @@ runtime:
 deployment:
   mode: managed
 
+# Endpoints are resolved from the environment at launch.
+variables:
+  - ACMECODE_OIDC_ISSUER
+  - ACMECODE_OIDC_CLIENT_ID
+  - ACMECODE_CREDENTIAL_BROKER_URL
+  - ACMECODE_LLM_GATEWAY_URL
+
 identity:
   mode: oidc
+  oidc:
+    issuer: ${ACMECODE_OIDC_ISSUER}
+    clientId: ${ACMECODE_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    redirectUri: http://127.0.0.1:8765/callback
 
 credential:
   provider: http-broker
+  broker:
+    endpoint: ${ACMECODE_CREDENTIAL_BROKER_URL}
 
 inference:
   provider: openai-compatible
@@ -140,17 +155,34 @@ models:
   allowed:
     - acme/coder
     - acme/general
-    - acme/review
+  catalog:
+    acme/coder:
+      name: Acme Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+    acme/general:
+      name: Acme General
+      contextWindow: 128000
+      maxOutputTokens: 8192
+
+network:
+  publicFallback: deny
 
 sandbox:
   required: true
   network:
     mode: deny
+
+updates:
+  channel: stable
+  channels: [stable]
+  rollback: true
 ```
 
 The manifest contains configuration, not company secrets. Runtime endpoints are resolved at launch and credentials are stored separately.
 
-See the complete [demo company manifest](examples/demo-company/piship.yaml).
+Everything else (policy, resources, MCP servers, audit sinks, release gates) is optional and has defaults; the [manifest reference](docs/manifest.md) lists every field, and the [demo company manifest](examples/demo-company/piship.yaml) uses most of them.
 
 ---
 
@@ -167,6 +199,8 @@ The managed demo also needs an OS sandbox (Seatbelt on macOS, or bubblewrap with
 Clone the repository and build it:
 
 ```bash
+git clone https://github.com/tc3oliver/piship.git
+cd piship
 npm ci
 npm run build
 ```
@@ -229,6 +263,23 @@ node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
 The local services are deterministic test fixtures, not evidence of a live company integration.
 
 See the full [company demo walkthrough](examples/demo-company/README.md).
+
+### Start your own distribution
+
+`piship init` writes a new distribution directory: a `piship.yaml` and a `resources/AGENTS.md` to edit. Keep it in a repository of your own, not inside the PiShip clone, and run the CLI by path ([running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)):
+
+```bash
+node ~/src/piship/packages/cli/dist/bin.js init ./my-agent              # personal: Pi-native providers and auth
+node ~/src/piship/packages/cli/dist/bin.js init ./my-agent --managed    # managed: OIDC, credential broker, gateway
+
+# edit my-agent/piship.yaml and my-agent/resources/AGENTS.md, then:
+node ~/src/piship/packages/cli/dist/bin.js validate ./my-agent/piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js lock ./my-agent/piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js build ./my-agent/piship.yaml
+node dist/my-agent/piship.mjs install dist/my-agent
+```
+
+Commit `piship.yaml`, `piship.lock`, and `resources/`; never a secret. A managed template needs your identity provider, broker, and gateway ([enterprise integration](docs/enterprise-integration.md)); to ship releases and updates to other people, follow the [release guide](docs/release.md).
 
 ---
 

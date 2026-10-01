@@ -64,6 +64,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - The enterprise reference README described four services (there are five, with the broker), did not list the Linux sandbox prerequisites the reference distribution needs (bubblewrap with unprivileged user namespaces, and the Secret Service), and did not say which broker variables (`BROKER_DISTRIBUTION`, `BROKER_AUTHORIZED_PARTY`) to change for another `app.id` (#162).
 - The manifest reference now states what `network.allowHosts` accepts and matches: exact hostnames or IP literals only, with no wildcard, suffix, port, path, or range, and tests hold both the parser and the destination check to it (#162).
 - The owner workflow's release checklist was the PiShip project's own (its CI workflows, the example distributions, its maintainer's approval). It moved to the [maintainer release checklist](docs/maintainers/release-checklist.md), and the owner workflow now has a checklist for a company releasing its own distribution (#162).
+- The README now gives the clone URL, a `piship init` path to start your own distribution, and a complete managed manifest that a test validates on its own (the excerpt before was not a valid manifest); `docs/release.md` opens with a task table instead of only the former-anchor table (#162).
 
 ## v0.7.0
 
