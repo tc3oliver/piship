@@ -178,7 +178,7 @@ On macOS 27.0 arm64 (Apple M4 Max) under OrbStack (Docker Engine 29.4.0, Compose
 
 | Step | Time |
 | --- | --- |
-| `docker compose up --wait`, from nothing to all four services healthy | 11.7 s, 12.1 s, and 14.7 s (three runs) |
+| `docker compose up --wait`, from nothing to the four services healthy (measured before the `broker` service was added) | 11.7 s, 12.1 s, and 14.7 s (three runs) |
 | LiteLLM healthy after its container started (184 Prisma migrations applied to the empty database) | 8 to 11 s |
 | `docker compose down` | 2.5 s |
 | Sign-in with `scripts/get-token.mjs` | 0.1 to 0.6 s |
