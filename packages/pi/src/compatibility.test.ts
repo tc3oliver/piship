@@ -109,7 +109,10 @@ function memoryCredentials() {
 const API_KEY = "sk-compat-fixture-key";
 
 /** ModelRuntime.create + registerProvider, as the managed runtime does. */
-async function managedRuntime(baseUrl: string) {
+async function managedRuntime(
+  baseUrl: string,
+  headers?: Record<string, string>,
+) {
   const runtime = await ModelRuntime.create({
     credentials: memoryCredentials() as never,
     modelsPath: null,
@@ -122,6 +125,7 @@ async function managedRuntime(baseUrl: string) {
     apiKey: API_KEY,
     api: "openai-completions",
     models: [model("acme/coder"), model("acme/general")],
+    ...(headers ? { headers } : {}),
   });
   return runtime;
 }
@@ -628,9 +632,10 @@ describe("Pi session seams used by governance", () => {
       extensions?: InlineExtension[];
       customTools?: ToolDefinition[];
       sessionManager?: SessionManager;
+      headers?: Record<string, string>;
     } = {},
   ) {
-    const runtime = await managedRuntime(services.gatewayUrl);
+    const runtime = await managedRuntime(services.gatewayUrl, options.headers);
     const settingsManager = SettingsManager.inMemory({
       retry: { enabled: false },
     });
@@ -931,6 +936,23 @@ describe("Pi session seams used by governance", () => {
       "decision failed",
     );
     expect(readdirSync(temp)).toEqual([]);
+    agent.dispose();
+  });
+
+  // The managed runtime sends PiShip-Client to the gateway through the
+  // provider's public `headers` option (launch/model-runtime.ts).
+  it("sends a registered provider's headers on every model request", async () => {
+    const client =
+      'distribution="acmecode", version="1.0.0", piship="0.7.0", protocol=1';
+    const { session: agent } = await session({
+      headers: { "piship-client": client },
+    });
+    await agent.prompt("hello");
+    const sent = services.state.requests.filter((item: { path: string }) =>
+      item.path.endsWith("/chat/completions"),
+    );
+    expect(sent.length).toBeGreaterThan(0);
+    for (const item of sent) expect(item.client).toBe(client);
     agent.dispose();
   });
 

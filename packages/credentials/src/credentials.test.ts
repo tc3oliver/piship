@@ -315,6 +315,26 @@ describe("http-broker credential provider", () => {
       ...extra,
     });
 
+  it("identifies the client on acquire and revoke only when given one", async () => {
+    const client =
+      'distribution="acmecode", version="1.0.0", piship="0.7.0", protocol=1';
+    const credential = await broker({ client }).acquire(identity, ctx);
+    await broker({ client }).revoke(credential, ctx);
+    await broker().acquire(identity, ctx);
+    expect(
+      services.state.requests
+        .filter((item: { path: string }) => item.path.startsWith("/broker/"))
+        .map((item: { path: string; client: string | null }) => [
+          item.path,
+          item.client,
+        ]),
+    ).toEqual([
+      ["/broker/v1/llm-credential", client],
+      ["/broker/v1/revoke", client],
+      ["/broker/v1/llm-credential", null],
+    ]);
+  });
+
   it("acquires a scoped credential with the identity token and revokes it", async () => {
     const credential = await broker().acquire(identity, ctx);
     expect(credential).toMatchObject({

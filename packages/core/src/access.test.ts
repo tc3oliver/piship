@@ -13,6 +13,7 @@ import { inspect } from "node:util";
 import { fileURLToPath } from "node:url";
 import { LocalMetrics } from "@piship/audit";
 import { PiShipError, SecretValue } from "@piship/contracts";
+import { PISHIP_VERSION } from "./compatibility.js";
 import { MemorySecretStore } from "@piship/credentials";
 import { computeCapabilityStates } from "@piship/policy";
 import {
@@ -418,6 +419,32 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     await expect(
       DistributionAccess.open(options).activate(),
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
+  });
+
+  it("identifies the distribution, its version, and PiShip to the broker and the gateway", async () => {
+    const distribution = DistributionAccess.open(options);
+    await distribution.login({ openUrl: (url) => void services.approve(url) });
+    const activated = await distribution.activate();
+    await distribution.logout();
+    const client = `distribution="${demo.app.id}", version="${demo.app.version}", piship="${PISHIP_VERSION}", protocol=1`;
+    const seen = services.state.requests
+      .filter(
+        (item: { path: string }) =>
+          item.path.startsWith("/broker/") || item.path.startsWith("/gateway/"),
+      )
+      .map((item: { path: string; client: string | null }) => [
+        item.path,
+        item.client,
+      ]);
+    expect(seen.map(([path]: string[]) => path)).toEqual(
+      expect.arrayContaining([
+        "/broker/v1/llm-credential",
+        "/gateway/v1/models",
+        "/broker/v1/revoke",
+      ]),
+    );
+    for (const [path, value] of seen) expect(value, path).toBe(client);
+    expect(activated.runtime.headers).toEqual({ "piship-client": client });
   });
 
   it("adopts a credential another process renewed after the same rejection instead of issuing a second", async () => {

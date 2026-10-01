@@ -258,6 +258,7 @@ export async function startLocalServices(options = {}) {
       method: request.method,
       path: url.pathname,
       authorization: request.headers.authorization ?? null,
+      client: request.headers["piship-client"] ?? null,
       body: text,
     });
     try {

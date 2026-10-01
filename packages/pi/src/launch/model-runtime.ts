@@ -90,6 +90,10 @@ export async function createModelRuntime(
     baseUrl: activated.runtime.baseUrl ?? "",
     api: activated.runtime.api ?? "openai-completions",
     models: toPiModels(activated),
+    // PiShip-Client, so the gateway sees what calls it.
+    ...(activated.runtime.headers
+      ? { headers: { ...activated.runtime.headers } }
+      : {}),
   });
   const governed = governModelRuntime(
     modelRuntime,

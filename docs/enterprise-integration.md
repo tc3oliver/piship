@@ -176,11 +176,12 @@ Authorization: Bearer <identity access token>
 Content-Type: application/json
 Accept: application/json
 Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
 
 {"distribution": "acmecode", "purpose": "inference"}
 ```
 
-`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). Success is any 2xx with a JSON body:
+`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). `PiShip-Client` says which distribution release and PiShip sent the request ([client identification](#client-identification-piship-client)). Success is any 2xx with a JSON body:
 
 ```json
 {
@@ -276,6 +277,7 @@ Only when `credential.broker.revokeEndpoint` is declared:
 POST {credential.broker.revokeEndpoint}
 Authorization: Bearer <runtime credential>
 Content-Type: application/json
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
 
 {"credential_id": "vk_1234", "distribution": "acmecode"}
 ```
@@ -460,6 +462,27 @@ audit:
 ```
 
 `user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). v0.6 wrote the bare subject under the same `piship-audit/v1`; from v0.7 this form is fixed, and changing it again needs a new schema ([decision 29](decisions.md)). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
+
+## Client identification (`PiShip-Client`)
+
+Every request PiShip sends to the credential broker (acquire, renewal, and revoke) and to the LLM gateway (the model list and every inference request) carries a `PiShip-Client` header, so a broker or gateway can see which distribution release, built with which PiShip, is calling, and apply a minimum version of its own:
+
+```http
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
+```
+
+| Member | Value |
+| --- | --- |
+| `distribution` | `app.id` |
+| `version` | `app.version` of the active release |
+| `piship` | The PiShip version the release was built with |
+| `protocol` | An integer for the broker and gateway wire behavior this client speaks. `1` is this contract as of v0.7.x; it increases only when PiShip's requests, or its reading of answers, change in a way a service must know about, and that change is listed in the changelog |
+
+The value is an [RFC 8941](https://www.rfc-editor.org/rfc/rfc8941) structured field dictionary. Parse it as one, ignore members you do not know (members may be added, never removed or redefined while `protocol` stays the same), and treat a missing header as a client from before v0.7.x.
+
+**Enforcing a minimum version.** The header is how a company retires a release that carries old policy: the broker refuses to issue credentials below a version, and the gateway refuses requests, and employees then run `<command> update`. Answer the broker acquire with 403 (PiShip reports `CREDENTIAL_DENIED`, not retryable) and the gateway with 403 (at launch, `MODEL_DENIED`; during a session, Pi reports the error in the conversation; see [gateway status mapping](#gateway-status-mapping)), and tell employees out of band why: PiShip does not read or show an error body. Do not answer 401, which PiShip reads as an expired sign-in and retries once after a refresh, or 426, which it treats as any other refusal.
+
+**It is a label, not a proof.** The header is self-reported and unauthenticated: anyone holding a valid token or credential can send any value. Use it to steer well-behaved clients onto supported releases, never as an authorization decision on its own; who may get a credential is still decided by the identity token. PiShip itself never makes a decision from it: it sends it and nothing else. An identity provider, an MCP server, an audit collector, a sandbox service, and the update source do not receive it.
 
 ## Network and TLS
 

@@ -5,6 +5,7 @@ import {
   type InferenceProvider,
   type ManagedFetch,
   type ModelDefinition,
+  PISHIP_CLIENT_HEADER,
   PiShipError,
   parseRetryAfter,
   type ResolvedModel,
@@ -261,6 +262,12 @@ export interface OpenAICompatibleOptions {
   readonly fetch: ManagedFetch;
   /** Request-time accessor for the credential secret (null when none is needed). */
   readonly secret: () => SecretValue | null;
+  /**
+   * The `PiShip-Client` header value (`pishipClientHeader`), sent on the model
+   * list request and, through the runtime configuration, on every inference
+   * request; none is sent without it.
+   */
+  readonly client?: string;
 }
 
 const PROBE_TIMEOUT_MS = 15_000;
@@ -287,6 +294,9 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
           headers: {
             accept: "application/json",
             ...(secret ? { authorization: `Bearer ${secret.reveal()}` } : {}),
+            ...(this.options.client
+              ? { [PISHIP_CLIENT_HEADER]: this.options.client }
+              : {}),
           },
           signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         },
@@ -363,6 +373,9 @@ export class OpenAICompatibleInferenceProvider implements InferenceProvider {
       api: this.options.api,
       models: ctx.models.filter((model) => model.availability.available),
       requiresCredential: ctx.credential !== null,
+      ...(this.options.client
+        ? { headers: { [PISHIP_CLIENT_HEADER]: this.options.client } }
+        : {}),
     };
   }
 }

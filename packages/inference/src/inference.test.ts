@@ -333,6 +333,49 @@ describe("OpenAI-compatible endpoint", () => {
       fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
       secret: () => secret,
     });
+  it("identifies the client on the model list request only when given one", async () => {
+    const client =
+      'distribution="acmecode", version="1.0.0", piship="0.7.0", protocol=1';
+    const secret = new SecretValue("sk-local-owner-key");
+    await new OpenAICompatibleInferenceProvider({
+      providerId: "acmecode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      catalog,
+      allowed: ["acme/coder"],
+      liveCatalog: true,
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+      secret: () => secret,
+      client,
+    }).probe();
+    await provider(secret).probe();
+    expect(
+      services.state.requests
+        .filter((item: { path: string }) => item.path.endsWith("/models"))
+        .map((item: { client: string | null }) => item.client),
+    ).toEqual([client, null]);
+    const configure = (options: { client?: string }) =>
+      new OpenAICompatibleInferenceProvider({
+        providerId: "acmecode",
+        baseUrl: services.gatewayUrl,
+        api: "openai-completions",
+        catalog,
+        allowed: ["acme/coder"],
+        liveCatalog: true,
+        fetch: createManagedFetch(DEFAULT_NETWORK_POLICY),
+        secret: () => secret,
+        ...options,
+      }).configureRuntime({
+        providerId: "acmecode",
+        credential: null,
+        models: [],
+      });
+    expect((await configure({ client })).headers).toEqual({
+      "piship-client": client,
+    });
+    expect((await configure({})).headers).toBeUndefined();
+  });
+
   it("marks models the live gateway does not list as unavailable", async () => {
     const models = await provider(
       new SecretValue("sk-local-owner-key"),

@@ -3,6 +3,7 @@ import {
   type CredentialProvider,
   type IdentitySession,
   type ManagedFetch,
+  PISHIP_CLIENT_HEADER,
   PiShipError,
   parseRetryAfter,
   type RuntimeCredential,
@@ -18,6 +19,11 @@ export interface HttpBrokerOptions {
   /** Declared gateway; a broker-returned base_url must match it. */
   readonly expectedBaseUrl?: string;
   readonly timeoutMs?: number;
+  /**
+   * The `PiShip-Client` header value sent on acquire and revoke
+   * (`pishipClientHeader`); none is sent without it.
+   */
+  readonly client?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -581,6 +587,9 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           "content-type": "application/json",
           accept: "application/json",
           ...(key === undefined ? {} : { "idempotency-key": key }),
+          ...(this.options.client
+            ? { [PISHIP_CLIENT_HEADER]: this.options.client }
+            : {}),
         },
         body: JSON.stringify({
           distribution: ctx.distributionId,
@@ -824,6 +833,9 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         headers: {
           authorization: `Bearer ${credential.secret.reveal()}`,
           "content-type": "application/json",
+          ...(this.options.client
+            ? { [PISHIP_CLIENT_HEADER]: this.options.client }
+            : {}),
         },
         body: JSON.stringify({
           credential_id: credential.credentialId ?? null,
