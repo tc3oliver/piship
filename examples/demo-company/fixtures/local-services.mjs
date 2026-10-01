@@ -147,7 +147,8 @@ let processSigningKey;
  *   brokerIdempotency        true: read the key, record it in
  *                            `state.idempotencyKeys`, replay the original
  *                            result for a repeated key with the same subject
- *                            and body, answer 409 for the same key with
+ *                            and body, answer 409 (`error:
+ *                            idempotency_key_reused`) for the same key with
  *                            different input. Only successful issues are kept.
  *   brokerIdempotencyHeader  header carrying the key (default "Idempotency-Key")
  *
@@ -453,7 +454,7 @@ export async function startLocalServices(options = {}) {
       if (seen)
         return seen.fingerprint === fingerprint
           ? { ...seen.result, headers: { "idempotent-replayed": "true" } }
-          : { status: 409, body: { error: "idempotency_key_reuse" } };
+          : { status: 409, body: { error: "idempotency_key_reused" } };
     }
     state.credentialCount += 1;
     const credential = `sk-demo-${random()}`;

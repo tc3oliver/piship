@@ -162,7 +162,8 @@ An optional field set to `null` is read as absent, so a serializer that writes `
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
 | 403 | `CREDENTIAL_DENIED`: user or distribution denied. Not retryable |
-| 409 or 422 | `CREDENTIAL_ACQUIRE_FAILED`, not retryable, `reason: idempotency-conflict`: the key was already used for a different request |
+| 422, or 409 with `{"error": "idempotency_key_reused"}` | `CREDENTIAL_ACQUIRE_FAILED`, not retryable, `reason: idempotency-conflict`: the key was already used for a different request |
+| Any other 409 | `CREDENTIAL_ACQUIRE_FAILED`, retryable, `reason: idempotency-in-progress`, with `Retry-After` when sent: the first request with the key is still running, and the next attempt sends the same key |
 | 429 | `CREDENTIAL_ACQUIRE_FAILED`, retryable; `Retry-After` (seconds or HTTP date) is shown as `Retry after: <n> s`. No automatic retry |
 | 5xx | `CREDENTIAL_ACQUIRE_FAILED`, retryable, with `Retry-After` when sent. No automatic retry |
 | 3xx, other 4xx, malformed JSON, contract violation | `CREDENTIAL_ACQUIRE_FAILED`. Redirects are never followed |
@@ -179,7 +180,7 @@ A lost answer can hide an issued credential: the broker may create a gateway key
 **What PiShip sends.** Every acquire and renewal carries `Idempotency-Key`: a random UUID (version 4), unquoted. It is not secret and is never derived from the identity, a token, or the user. The key names one logical acquire or renewal, and PiShip records it (`credentials-metadata/pending-issuance.json`, with the principal it is for and the credential it renews; never a secret) before the request is sent; if it cannot be recorded, nothing is sent. Every later attempt of the same request sends the same key: a retry after a timeout, a connection reset, a 5xx, a 429 or 503, a 401, a crash or kill of the PiShip process, a second `login` of the same principal, or a concurrent launch that waited for the credential lock. The key is released, and the next request gets a new one, when:
 
 - the credential is committed locally (after a commit, a later renewal is a new request with a new key);
-- the broker gives a final answer: 403, 409 or 422, another non-2xx that is not 401, 429 or 5xx, or a 2xx that breaks this contract;
+- the broker gives a final answer: 403, a 409 or 422 key conflict, another non-2xx that is not 401, 409, 429 or 5xx, or a 2xx that breaks this contract;
 - the principal changes, the user runs `logout` (also without the runtime variables), the state is purged, or an update or rollback moves to a release that cannot read the record or clears the runtime credential;
 - the destination changes: the record holds a hash of the broker endpoint (or of an adapter's module and endpoints), and a key is never sent to another broker than the one it was recorded for.
 
@@ -201,8 +202,10 @@ Repeating a key must return the same issuance, or an equivalent result PiShip ca
 | --- | --- |
 | New key | Issue as usual. Store the answer under the key only when issuing started: never for a 401, 403, 429, or 503 |
 | Same key, same input, first request finished | Return the stored answer, same credential, same `credential_id`. Do not issue again |
-| Same key, different input | 422 (or 409). Do not issue, and never return the stored credential |
-| Same key while the first request is still running | 503 with `Retry-After`. Do not use 409 for this: PiShip reads 409 as a conflict |
+| Same key, different input | 422, or 409 with the JSON body `{"error": "idempotency_key_reused"}`. Do not issue, and never return the stored credential |
+| Same key while the first request is still running | 503 with `Retry-After`, or 409 (with `Retry-After` when the broker knows a wait). PiShip keeps the key and sends it again on the next attempt |
+
+PiShip reads a 409 as a conflict only when its JSON body's `error` is `idempotency_key_reused`; any other 409 (no body, another code, a proxy's page) is read as a request still in progress. Releasing the key of a request that is in fact still running would let the next attempt issue a second credential, while keeping the key of a real conflict only costs a retry that fails the same way. Before v0.7.x, PiShip read every 409 as a conflict; a broker that answers a different-input conflict with a bare 409 should send 422 or add the code. The body is read (at most 64 KiB, under the same timeout) only to compare that one field; it is never logged or shown.
 
 "Same input" is the authenticated principal (issuer and subject) plus the request body. It is **not** the access token: an identity refresh changes the token but not the user, and a retry after it must still match. A key sent by another principal is different input, so one user's key never returns another user's credential. A replayed credential that expired meanwhile is refused by PiShip (`CREDENTIAL_EXPIRED`), which releases the key; one that was revoked since is refused by the gateway, and PiShip renews with a new key. A broker that loses its records issues again for a repeated key: that credential is the one PiShip stores, and the first stays unused until it expires. The [reference broker](../examples/enterprise-reference/broker/README.md#idempotency) does not meet the retention minimum in three cases (a restart, its per-principal record cap, and a 502 with an unknown upstream outcome); its README says what a production broker needs instead.
 
@@ -216,7 +219,8 @@ Repeating a key must return the same issuance, or an equivalent result PiShip ca
 | Refused before sending: `outcome: not-sent` (connection refused, DNS failure, connect timeout, a signal that was already cancelled) | No: the request never left PiShip | Yes |
 | Timeout, connection reset, or cancellation after sending: `outcome: unknown` | Maybe: a credential may have been issued | Only with the same `Idempotency-Key` (PiShip's next attempt sends it), and only if the broker honors it |
 | 500, 502, 504 | Maybe, depending on where it failed | Only with the same key (PiShip's next attempt sends it), if the broker honors it |
-| 403, 409 or 422 conflict, other 4xx, contract violation | Decided | No; PiShip's next attempt is a new request with a new key |
+| 409 for a request still in progress | No: the first request is still running | Yes, with the same key (PiShip's next attempt sends it) |
+| 403, 409 or 422 key conflict, other 4xx, contract violation | Decided | No; PiShip's next attempt is a new request with a new key |
 
 ### Revoke
 

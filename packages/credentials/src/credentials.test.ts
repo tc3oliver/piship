@@ -1315,8 +1315,11 @@ describe("http-broker idempotency and retry", () => {
   });
 
   it("reads 409 and 422 as a key conflict only when the acquire sent a key", async () => {
-    for (const status of [409, 422]) {
-      services.knobs.brokerFaults.push({ status }, { status });
+    for (const [status, body] of [
+      [409, { error: "idempotency_key_reused" }],
+      [422, undefined],
+    ] as const) {
+      services.knobs.brokerFaults.push({ status, body }, { status, body });
       await expect(
         broker().acquire(identity, { ...ctx, idempotencyKey: "retry-key-3" }),
       ).rejects.toMatchObject({
@@ -1327,6 +1330,37 @@ describe("http-broker idempotency and retry", () => {
         retryable: false,
         sanitizedDetail: { reason: "rejected", status },
       });
+    }
+  });
+
+  it("reads any other 409 to a keyed acquire as the key's request still in progress, and keeps the key", async () => {
+    for (const [body, retryAfter] of [
+      [{ error: "request_in_progress" }, 3],
+      [{ error: "conflict", detail: "sk-broker-body-secret-0001" }, undefined],
+      ["<html>409 sk-broker-body-secret-0001</html>", undefined],
+      [undefined, undefined],
+    ] as const) {
+      services.knobs.brokerFaults.push({ status: 409, body, retryAfter });
+      const error = await failure(
+        broker().acquire(identity, { ...ctx, idempotencyKey: "retry-key-4" }),
+      );
+      expect(error).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "idempotency-in-progress",
+          status: 409,
+          idempotencyKey: "retry-key-4",
+        },
+      });
+      expect(error.retryAfterMs).toBe(
+        retryAfter === undefined ? undefined : retryAfter * 1000,
+      );
+      expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(
+        "sk-broker-body-secret",
+      );
+      expectNoSecret(error);
     }
   });
 
