@@ -236,6 +236,9 @@ export async function startLocalServices(options = {}) {
     codes: new Map(),
     accessTokens: new Map(),
     refreshTokens: new Map(),
+    // Every ID token issued, so a leak scan looks for it like any other
+    // token: nothing else keeps it once the client has it.
+    idTokens: new Set(),
     credentials: new Map(),
     revokedTokens: [],
     revokedCredentials: [],
@@ -291,15 +294,17 @@ export async function startLocalServices(options = {}) {
       email: session.email ?? "developer@demo.example",
       email_verified: true,
     };
+    const idToken = signJwt(
+      knobs.signWithRogueKey ? rogueKey() : signingKey,
+      claims,
+    );
+    state.idTokens.add(idToken);
     return {
       access_token: accessToken,
       token_type: "Bearer",
       expires_in: knobs.accessTokenTtl,
       refresh_token: refreshToken,
-      id_token: signJwt(
-        knobs.signWithRogueKey ? rogueKey() : signingKey,
-        claims,
-      ),
+      id_token: idToken,
       scope: session.scope,
     };
   }
