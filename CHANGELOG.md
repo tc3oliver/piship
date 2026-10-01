@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm or as a GitHub Release, and every package is still versioned `0.1.0`.
 
-## Unreleased (v0.7)
+## v0.7.0
 
 Preview milestone; not published to npm. v0.7 connects a managed distribution to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and adds the adapter SDK, the conformance kits, and the reference stack that test those connections. The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`. The [status page](docs/status.md#recorded-evidence) records what evidence exists for this milestone; this section does not claim release qualification.
 
