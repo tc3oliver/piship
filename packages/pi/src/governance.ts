@@ -216,13 +216,20 @@ export function governModelRuntime(
   };
   target.stream = ((model: Model, ...rest: unknown[]) => {
     guard(model);
-    return (original.stream as (...args: unknown[]) => unknown)(model, ...rest);
+    return observeTransport(
+      original.stream as (...args: unknown[]) => unknown,
+      model,
+      rest,
+      !!managed,
+    );
   }) as unknown;
   target.streamSimple = ((model: Model, ...rest: unknown[]) => {
     guard(model);
-    return (original.streamSimple as (...args: unknown[]) => unknown)(
+    return observeTransport(
+      original.streamSimple as (...args: unknown[]) => unknown,
       model,
-      ...rest,
+      rest,
+      !!managed,
     );
   }) as unknown;
   target.complete = ((model: Model, ...rest: unknown[]) => {
@@ -290,6 +297,72 @@ export function governModelRuntime(
       };
     },
   };
+}
+
+/**
+ * How a failed request's fetch failed before any response arrived, by the
+ * message Pi reported for it: a system error code (`ECONNREFUSED`), `timeout`,
+ * or `network error`. Pi's message keeps only the SDK's text ("Connection
+ * error."), so PiShip records what its own fetch saw.
+ */
+const transportFailures = new WeakMap<object, string>();
+
+/**
+ * Call a managed endpoint's stream through a fetch PiShip owns (Pi's public
+ * `fetch` request option, which the OpenAI-compatible adapters a managed
+ * endpoint uses accept), so a request that never got an answer keeps the
+ * structured reason: the system error code, or that the client's deadline
+ * aborted it. The fetch forwards to the caller's fetch or the global one
+ * unchanged. Only the last attempt counts: a later answer clears an earlier
+ * failure. A Pi-native provider's request is left as it is, because some of
+ * Pi's adapters refuse a custom fetch.
+ */
+function observeTransport(
+  call: (...args: unknown[]) => unknown,
+  model: Model,
+  rest: unknown[],
+  managed: boolean,
+): unknown {
+  if (!managed) return call(model, ...rest);
+  const [context, options] = rest as [
+    unknown,
+    { fetch?: typeof fetch; signal?: AbortSignal } | undefined,
+  ];
+  let failure: string | undefined;
+  const fetchThrough: typeof fetch = async (input, init) => {
+    try {
+      const response = await (options?.fetch ?? globalThis.fetch)(input, init);
+      failure = undefined;
+      return response;
+    } catch (error) {
+      failure = transportFailure(error, options?.signal);
+      throw error;
+    }
+  };
+  const stream = call(model, context, { ...options, fetch: fetchThrough }) as {
+    result?: () => Promise<{ stopReason?: string }>;
+  };
+  void stream.result?.().then((message) => {
+    if (failure && message?.stopReason === "error")
+      transportFailures.set(message, failure);
+  });
+  return stream;
+}
+
+function transportFailure(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): string | undefined {
+  // The caller cancelled: Pi reports that itself as "aborted".
+  if (signal?.aborted) return undefined;
+  const name = (error as { name?: unknown })?.name;
+  // Aborted although the caller did not: the client's request deadline.
+  if (name === "AbortError" || name === "TimeoutError") return "timeout";
+  const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+  // Only a system error code, never a message, which may quote a header.
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : "network error";
 }
 
 /** A failed request as Pi reports it: the status and error body, when its message carries them. */
@@ -364,10 +437,12 @@ export function isModelDenial(message: unknown): boolean {
  * The error a failed acceptance request (`--smoke-model`) is reported with.
  * When Pi's message carries the gateway's status, it is classified as the
  * model list check classifies that status (with the error body, so a
- * provider's refusal relayed by the gateway reads as such). Pi's "aborted"
- * stop reason, which it sets only when the caller's signal aborted the
- * request, is a cancellation. Anything else without a status (an
- * interrupted stream, a failed connection) is a protocol error.
+ * provider's refusal relayed by the gateway reads as such). A request to a
+ * managed endpoint that got no answer (a refused or reset connection, a DNS
+ * failure, the client's deadline) is an unreachable gateway, by what PiShip's
+ * fetch saw. Pi's "aborted" stop reason, which it sets only when the caller's
+ * signal aborted the request, is a cancellation. Anything else without a
+ * status (a stream that failed after it started) is a protocol error.
  * Pi's message carries no response headers, so there is no retry time.
  */
 export function acceptanceFailure(message: unknown): PiShipError {
@@ -382,6 +457,20 @@ export function acceptanceFailure(message: unknown): PiShipError {
       { component: "inference" },
     );
   const failure = requestFailure(message);
+  const transport =
+    failure && failure.status === undefined
+      ? transportFailures.get(message as object)
+      : undefined;
+  if (transport)
+    return new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `The acceptance model request failed: ${detail} (${transport})`,
+      {
+        component: "inference",
+        retryable: true,
+        sanitizedDetail: { transport },
+      },
+    );
   const classified =
     failure?.status === undefined
       ? null

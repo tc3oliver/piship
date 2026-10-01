@@ -70,9 +70,10 @@ During a session, Pi performs the request. PiShip recognizes an authentication r
 | Failure | Code |
 | --- | --- |
 | Aborted by the caller (Pi's stop reason `aborted`, which Pi sets only when the caller's signal aborted the request) | `REQUEST_CANCELLED`, not retryable |
-| A stream that failed after it started, or a request that got no answer | `GATEWAY_PROTOCOL_ERROR` |
+| Managed endpoint, no answer: a refused or reset connection, a DNS failure, or the request deadline | `GATEWAY_UNREACHABLE`, retryable; `detail.transport` and the end of the message name the system error code (`ECONNREFUSED`, `ENOTFOUND`), `timeout`, or `network error` |
+| A stream that failed after it started, or a Pi-native provider's request that got no answer | `GATEWAY_PROTOCOL_ERROR` |
 
-`REQUEST_CANCELLED` is an additive error code (#85): a cancellation is not a gateway failure, and no earlier code described it.
+Pi's message keeps only the SDK's text for a request that got no answer ("Connection error.", "Request timed out."), so for a managed endpoint PiShip passes its own `fetch` through Pi's public request option and records what it saw: the system error code of the failed connection, or that the request was aborted although the caller had not aborted it (the client's deadline). It forwards each request to the global `fetch` unchanged. A Pi-native provider's request is not observed, because some of Pi's adapters refuse a custom `fetch`. `REQUEST_CANCELLED` is an additive error code (#85): a cancellation is not a gateway failure, and no earlier code described it.
 
 ## Failure policy
 

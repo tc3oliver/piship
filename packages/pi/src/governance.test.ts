@@ -608,6 +608,56 @@ describe("acceptance request failures without a status (#85)", () => {
     );
     return `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
   }
+  // A loopback port with nothing listening: the connection is refused.
+  async function closedPort(): Promise<string> {
+    const server = createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    await new Promise((resolve) => server.close(resolve));
+    return `http://127.0.0.1:${port}/v1`;
+  }
+
+  it("reports a refused connection as an unreachable gateway with its system code", async () => {
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl: await closedPort(),
+    });
+    await session.prompt("hello");
+    const message = session.messages.at(-1);
+    expect(requestFailure(message)?.status).toBeUndefined();
+    const error = acceptanceFailure(message);
+    expect(error).toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      sanitizedDetail: { transport: "ECONNREFUSED" },
+    });
+    expect(error.message).toMatch(/\(ECONNREFUSED\)$/);
+    session.dispose();
+  });
+
+  it("reports a request that ran past its deadline as an unreachable gateway", async () => {
+    const { runtime } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl: await hangingGateway(),
+    });
+    const selected = runtime.getModel("acmecode", "acme/coder");
+    if (!selected) throw new Error("no model");
+    const message = await runtime
+      .streamSimple(
+        selected,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { timeoutMs: 200, maxRetries: 0 },
+      )
+      .result();
+    expect(message.stopReason).toBe("error");
+    expect(acceptanceFailure(message)).toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      sanitizedDetail: { transport: "timeout" },
+    });
+  });
 
   it("reports a request the caller aborted as cancelled, not a protocol error", async () => {
     const baseUrl = await hangingGateway();
