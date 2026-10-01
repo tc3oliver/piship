@@ -408,9 +408,16 @@ describe("Pi tool definitions route through their operations overrides", () => {
     });
 
     // The full-output path, from the result, a live update, or the error.
-    const savedPath = (json: string) =>
-      /"fullOutputPath":"([^"]+)"/.exec(json)?.[1] ??
-      /Full output: ([^\]\s]+)\]/.exec(json)?.[1];
+    // Both come from JSON text, so a Windows path is decoded from its escaped
+    // form before it is compared with a real path.
+    const savedPath = (json: string) => {
+      const found =
+        /"fullOutputPath":"((?:[^"\\]|\\.)+)"/.exec(json)?.[1] ??
+        /Full output: ([^\]\s]+)\]/.exec(json)?.[1];
+      return found === undefined
+        ? undefined
+        : (JSON.parse(`"${found}"`) as string);
+    };
 
     async function capture(tool: ToolDefinition) {
       const updates: unknown[] = [];
