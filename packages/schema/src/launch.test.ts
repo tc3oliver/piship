@@ -179,3 +179,84 @@ describe("HTTP audit sinks under a private-only network policy", () => {
     expect(warnings(managed(extra))).toEqual([]);
   });
 });
+
+describe("sandbox.credential: runtime", () => {
+  const sandbox = (extra: Json): Json => ({
+    sandbox: {
+      required: true,
+      provider: "e2b-compatible",
+      endpoint: "https://gateway.acme.example/sandbox",
+      credential: "runtime",
+      ...extra,
+    },
+  });
+  it("accepts a sandbox endpoint on the inference gateway origin", () => {
+    expect(warnings(managed(sandbox({})))).toEqual([]);
+    expect(
+      warnings(
+        managed(
+          sandbox({
+            provider: "kubernetes-agent-sandbox",
+            router: "https://gateway.acme.example/router",
+            template: "warm",
+          }),
+        ),
+      ),
+    ).toEqual([]);
+  });
+  it("rejects an endpoint or router on another origin", () => {
+    rejects(
+      managed(sandbox({ endpoint: "https://sandbox.acme.example" })),
+      "sandbox.endpoint",
+      "https://gateway.acme.example",
+    );
+    rejects(
+      managed(sandbox({ endpoint: "https://gateway.acme.example:8443/x" })),
+      "sandbox.endpoint",
+      "origin",
+    );
+    rejects(
+      managed(
+        sandbox({
+          provider: "kubernetes-agent-sandbox",
+          router: "https://router.acme.example",
+          template: "warm",
+        }),
+      ),
+      "sandbox.router",
+      "origin",
+    );
+  });
+  it("rejects it when the launch has no runtime credential", () => {
+    const personal = {
+      ...managed(sandbox({})),
+      deployment: { mode: "personal" },
+      identity: { mode: "none" },
+      credential: { provider: "none" },
+      models: { allowed: ["acme/coder"], catalog },
+    };
+    rejects(personal, "sandbox.credential", "no runtime credential");
+    rejects(
+      {
+        ...personal,
+        credential: { provider: "pi-native" },
+        inference: { provider: "pi-native" },
+        models: { allowed: ["acme/coder"] },
+      },
+      "sandbox.credential",
+      "no runtime credential",
+    );
+  });
+  it("warns when either origin is decided by a runtime variable", () => {
+    const templated = managed({
+      variables: ["ACME_SANDBOX_URL"],
+      ...sandbox({ endpoint: `\${ACME_SANDBOX_URL}` }),
+    });
+    expect(warnings(templated)).toEqual([
+      expect.objectContaining({
+        path: "sandbox.endpoint",
+        message: expect.stringContaining("inference.baseUrl"),
+      }),
+    ]);
+  });
+});

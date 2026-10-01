@@ -106,11 +106,59 @@ function auditHosts(
   return findings;
 }
 
+/**
+ * `sandbox.credential: runtime` sends the runtime credential, which is
+ * issued for the inference gateway, and only to the gateway's origin.
+ */
+function sandboxCredential(
+  access: AccessManifest | undefined,
+  governance: GovernanceManifest,
+): Finding[] {
+  const sandbox = governance.sandbox;
+  if (sandbox.credential !== "runtime") return [];
+  const gateway = access?.inference.baseUrl;
+  if (gateway === undefined || access?.credential.provider === "none")
+    return [
+      {
+        path: "sandbox.credential",
+        certain: true,
+        message:
+          "sandbox.credential: runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential; use stored or none",
+      },
+    ];
+  const findings: Finding[] = [];
+  for (const [field, url] of [
+    ["endpoint", sandbox.endpoint],
+    ["router", sandbox.router],
+  ] as const) {
+    if (url === undefined) continue;
+    const path = `sandbox.${field}`;
+    if (hasRuntimeReference(url) || hasRuntimeReference(gateway)) {
+      findings.push({
+        path,
+        certain: false,
+        message:
+          "sandbox.credential: runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or the required sandbox fails",
+      });
+      continue;
+    }
+    const expected = new URL(gateway).origin;
+    if (new URL(url).origin !== expected)
+      findings.push({
+        path,
+        certain: true,
+        message: `sandbox.credential: runtime sends the runtime credential only to the inference gateway origin ${expected}, so the required sandbox fails every launch; serve the sandbox from that origin or use sandbox.credential: stored`,
+      });
+  }
+  return findings;
+}
+
 function findings(sections: LaunchSections): Finding[] {
   const { mode, access, governance } = sections;
   return [
     ...(access ? caPaths(access) : []),
     ...(access && governance ? auditHosts(mode, access, governance) : []),
+    ...(governance ? sandboxCredential(access, governance) : []),
   ];
 }
 
