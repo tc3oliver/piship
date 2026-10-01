@@ -52,6 +52,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - An edited command shim can be removed with `piship uninstall <id> --remove-edited-shim`; a foreign file is never removed (#158).
 - The adapter conformance kits no longer hang on an adapter factory or `available()` that never settles (#145).
 - `examples/demo-company` and the enterprise reference distribution (and its sandbox variant) declared a `sandbox.filesystem.read.deny` list that replaced the defaults and silently left `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, and `~/.pi` (and, in the demo, `~/.netrc` and `~/.npmrc`) readable in the sandbox. They now restate every default, a test keeps them doing so, and the manifest reference says that a declared list replaces its default (#162).
+- `docs/release/update-lifecycle.md` listed the state marker, identity session, and runtime credential metadata twice with different text, and left out four state classes. It now has one row per class, which a test checks against the migration check's class list (#162).
 
 ## v0.7.0
 

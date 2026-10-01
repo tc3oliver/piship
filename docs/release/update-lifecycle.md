@@ -62,12 +62,13 @@ The migration check compares each local data class with the state schemas the ta
 
 | Class | Path under the state directory | Update and rollback |
 | --- | --- | --- |
-| State marker | `state.json` (`piship-state/v1`) | Rewritten at each update and rollback activation with the distribution, version, Pi, and PiShip versions |
+| State marker | `state.json` (`piship-state/v1`) | Rewritten after each update and rollback activation with the distribution, version, Pi, and PiShip versions. One that cannot be written then keeps its previous content, is reported as a notice, and is repaired by the next update or rollback. One that is empty or cannot be parsed (a crash or full disk mid-write) counts as absent: the active release is used and the marker is rewritten |
 | Identity session | `identity/session.json` | Credential class: kept when the target reads its schema and uses the same secret store, otherwise cleared with its secret-store entry and reacquired by `login` |
 | Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable and the secret store stays the same, otherwise cleared with its secret-store entry and reacquired |
-| State marker | `state.json` (`piship-state/v1`) | Rewritten after each update and rollback activation with the distribution, version, Pi, and PiShip versions. One that cannot be written then keeps its previous content, is reported as a notice, and is repaired by the next update or rollback. One that is empty or cannot be parsed (a crash or full disk mid-write) counts as absent: the active release is used and the marker is rewritten |
-| Identity session | `identity/session.json` | Credential class: kept when the target reads its schema, otherwise cleared with its secret-store entry and reacquired by `login` |
-| Runtime credential metadata | `credentials-metadata/inference.json` | Credential class: kept when readable, otherwise cleared with its secret-store entry and reacquired |
+| Sandbox credential metadata | `credentials-metadata/sandbox.json` | Credential class: kept when readable and the secret store stays the same; otherwise (every release before it, and always for a discarded marker) its secret is deleted before the switch and the user runs `sandbox login` again |
+| Pending credential issuance | `credentials-metadata/pending-issuance.json` | Credential class without a secret: kept when the target reads its schema and the runtime credential is kept, otherwise deleted before the switch; never snapshotted |
+| Principal binding | `identity/principal.json` | Kept in place; never snapshotted. An unreadable record counts as a change of principal |
+| Pending revocations | `credentials-metadata/revocation-retry.json` | Kept in place; never snapshotted; holds no secret |
 | File secret fallback | `secrets/` | Never copied, snapshotted, or restored; a cleared class's own secrets are deleted from it; the directory is removed only when every present class that holds secrets is cleared (always for a change of storage provider), so a kept credential or identity keeps its secrets |
 | Preferences | `config/preferences.json` | Kept in place; `unsupported` when the target cannot read its schema; included in the snapshot. An empty or damaged file is `unsupported` and never deleted: the reason names its path, and moving it aside (for example to `preferences.json.damaged`) lets the command go ahead with default preferences |
 | User policy rules | `config/policy.json` | Kept in place; included in the snapshot |

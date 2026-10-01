@@ -3,8 +3,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,14 +13,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  LEGACY_STATE_SCHEMAS,
-  STATE_DATA_CLASSES,
-  STATE_SCHEMAS,
   checkStateMigration,
   compareVersions,
   formatMigrationReport,
-  readStateMarker,
+  LEGACY_STATE_SCHEMAS,
   type MigrationReport,
+  readStateMarker,
+  STATE_DATA_CLASSES,
+  STATE_SCHEMAS,
 } from "./migration.js";
 
 const roots: string[] = [];
@@ -164,6 +164,29 @@ describe("STATE_DATA_CLASSES", () => {
         STATE_DATA_CLASSES.some((entry) => covers(entry.path, row)),
         row,
       ).toBe(true);
+  });
+
+  it("has one row per class in the docs/release/update-lifecycle.md migration table", () => {
+    const doc = readFileSync(
+      new URL("../../../docs/release/update-lifecycle.md", import.meta.url),
+      "utf8",
+    );
+    const section = doc.slice(
+      doc.indexOf("| Class | Path under the state directory |"),
+      doc.indexOf("Verdicts are"),
+    );
+    // A row names its class's path or a path inside it
+    // (`migration/snapshots/` for `migration`).
+    const rows = [...section.matchAll(/^\| [^|]+ \| `([^`]+)`/gm)].map(
+      (match) =>
+        STATE_DATA_CLASSES.find(
+          (entry) =>
+            match[1] === entry.path || match[1]?.startsWith(`${entry.path}/`),
+        )?.path ?? match[1],
+    );
+    expect(rows.sort()).toEqual(
+      STATE_DATA_CLASSES.map((entry) => entry.path).sort(),
+    );
   });
 });
 
