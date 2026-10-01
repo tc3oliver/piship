@@ -21,7 +21,8 @@ import { type ContainmentReport, enforcesPathPolicy } from "@piship/sandbox";
 import type { PolicyRule } from "@piship/schema";
 import type { GovernanceOptions } from "./options.js";
 
-function readUserRules(stateDir: string): PolicyRule[] {
+/** The user's `config/policy.json`; an invalid file names itself. */
+export function readUserRules(stateDir: string): PolicyRule[] {
   const path = join(stateDir, "config", "policy.json");
   if (!existsSync(path)) return [];
   let value: unknown;
@@ -34,9 +35,20 @@ function readUserRules(stateDir: string): PolicyRule[] {
       { userAction: `Fix or remove ${path}` },
     );
   }
-  return [
-    ...parseRuleList(value, "user-preference", { narrowingOnly: false }).rules,
-  ];
+  try {
+    return [
+      ...parseRuleList(value, path, {
+        narrowingOnly: false,
+        layer: "user-preference",
+      }).rules,
+    ];
+  } catch (error) {
+    if (!(error instanceof PiShipError)) throw error;
+    throw new PiShipError(error.code, error.message, {
+      component: "policy",
+      userAction: `Fix or remove the rule in ${path}; the distribution's own policy is not affected`,
+    });
+  }
 }
 
 async function readTeamRules(
@@ -66,7 +78,10 @@ async function readTeamRules(
     );
   }
   return withIgnored(
-    parseRuleList(exported, "team-project", { narrowingOnly: true }),
+    parseRuleList(exported, `the policy adapter ${adapter}`, {
+      narrowingOnly: true,
+      layer: "team-project",
+    }),
   );
 }
 
