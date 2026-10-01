@@ -3500,6 +3500,12 @@ describe("launch-time payload verification", () => {
       missing: [],
     });
     expect(error.userAction).toContain("piship repair <id> <release archive>");
+    expect(error.userAction).toContain(
+      "Remove the unexpected files it names, or restore it",
+    );
+    expect(error.userAction).toContain(
+      "without a PiShip CLI: node <extracted release>/payload/piship.mjs repair <id> <extracted release>",
+    );
   });
 
   it("names a missing file and caps a long list", () => {
@@ -3513,6 +3519,7 @@ describe("launch-time payload verification", () => {
     expect(error.message).toContain("and 7 more");
     expect(error.sanitizedDetail).toMatchObject({ missing: [`bin/${ID}`] });
     expect(error.sanitizedDetail?.added).toHaveLength(12);
+    expect(error.userAction).toMatch(/^Do not run it\. Restore it from/);
   });
 
   it("reports a lock tampered behind a rewritten inventory as LOCK_INVALID", () => {
