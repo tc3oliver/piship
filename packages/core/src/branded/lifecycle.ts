@@ -17,6 +17,7 @@ import { resolveTemplate } from "@piship/schema";
 import {
   accessStatePaths,
   networkPolicyFor,
+  resolveAdditionalCA,
   resolveRuntimeReferences,
 } from "../access/index.js";
 import {
@@ -105,36 +106,24 @@ function storeOf(
 
 /**
  * The network policy of update and rollback's own requests (the update
- * channel and HTTP audit sinks): the launch's policy. When a runtime
+ * channel and HTTP audit sinks): the launch's policy. When an endpoint
  * reference does not resolve (a gateway variable unset in the shell that runs
  * update), it comes from the manifest alone: the declared proxy setting,
- * private-only, and allowHosts apply as they do at launch, the hosts of the
- * endpoints are not added, and a CA bundle whose path does not resolve is
- * left out. That policy is never wider than the launch's.
+ * private-only, and allowHosts apply as they do at launch, and the hosts of
+ * the endpoints are not added. That policy is never wider than the launch's.
+ * A declared CA bundle is never left out: an unset variable in
+ * network.tls.additionalCA throws CONFIG_UNAVAILABLE naming it, as launch
+ * does, before any request is attempted.
  */
 export function lifecycleNetwork(ctx: BrandedContext): NetworkPolicy {
   const access = ctx.metadata.access;
   if (!access) return DEFAULT_NETWORK_POLICY;
+  const additionalCA = resolveAdditionalCA(access);
   let endpoints: ResolvedEndpoints;
   try {
     endpoints = resolveRuntimeReferences(access);
   } catch {
-    endpoints = {
-      additionalCA: access.network.tls.additionalCA.flatMap((path, index) => {
-        try {
-          return [
-            resolveTemplate(
-              `network.tls.additionalCA[${index}]`,
-              path,
-              access.variables,
-              process.env,
-            ),
-          ];
-        } catch {
-          return [];
-        }
-      }),
-    };
+    endpoints = { additionalCA };
   }
   return networkPolicyFor(access, endpoints, ctx.mode);
 }

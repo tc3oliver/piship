@@ -1,7 +1,7 @@
 // The network policy of update and rollback when a runtime variable is unset
 // in the shell that runs them: the manifest's private-only rule and proxy
 // setting still apply, so an undeclared host is never contacted.
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -17,6 +17,7 @@ import {
   stateDir,
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
+import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
 import type { BrandedContext } from "./branded/context.js";
 import {
   auditLifecycle,
@@ -114,6 +115,70 @@ describe.runIf(HOST_EVIDENCED)(
       );
       expect(error.code).toBe("NETWORK_DENIED");
       expect(requests).toEqual([]);
+    });
+  },
+);
+
+describe.runIf(HOST_EVIDENCED)(
+  "update with a network.tls.additionalCA runtime reference",
+  () => {
+    const CA_VARIABLE = "ACMEPI_CORP_CA";
+    let temp: string;
+    beforeEach(() => {
+      temp = mkdtempSync(join(tmpdir(), "piship-lifecycle-ca-"));
+      delete process.env[CA_VARIABLE];
+      delete process.env.ACMEPI_GATEWAY_URL;
+    });
+    afterEach(() => {
+      delete process.env[CA_VARIABLE];
+      rmSync(temp, { recursive: true, force: true });
+    });
+
+    /** The installed release, declaring an enterprise CA on CA_VARIABLE. */
+    function withCaReference(): BrandedContext {
+      const ctx = installedContext();
+      const access = ctx.metadata.access as AccessManifest;
+      return {
+        ...ctx,
+        metadata: {
+          ...ctx.metadata,
+          access: {
+            ...access,
+            variables: [...access.variables, CA_VARIABLE],
+            network: {
+              ...access.network,
+              tls: { additionalCA: [`\${${CA_VARIABLE}}`] },
+            },
+          },
+        },
+      };
+    }
+
+    it("names the unset variable before any request instead of dropping the CA", async () => {
+      await installed(true);
+      const ctx = withCaReference();
+      expect(() => lifecycleNetwork(ctx)).toThrow(CA_VARIABLE);
+      const error = await refusal(
+        runUpdate(ctx, ["--check", "--from", `${url}/`]),
+      );
+      expect(error.code).toBe("CONFIG_UNAVAILABLE");
+      expect(error.message).toContain(CA_VARIABLE);
+      expect(error.userAction).toBe(
+        `Set ${CA_VARIABLE} in the launch environment (see the distribution documentation)`,
+      );
+      expect(requests).toEqual([]);
+    });
+
+    it("trusts the bundle and proceeds when the variable is set", async () => {
+      await installed(true);
+      const bundle = join(temp, "ca.pem");
+      writeFileSync(bundle, selfSignedLoopbackCertificate("corp").certificate);
+      process.env[CA_VARIABLE] = bundle;
+      const ctx = withCaReference();
+      expect(lifecycleNetwork(ctx).additionalCA).toEqual([bundle]);
+      const lines: string[] = [];
+      await runUpdate({ ...ctx, out: (line) => lines.push(line) }, ["--check"]);
+      expect(lines.join("\n")).toContain("1.1.0 is available");
     });
   },
 );
