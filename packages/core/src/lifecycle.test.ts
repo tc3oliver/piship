@@ -2364,6 +2364,51 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     process.env.PISHIP_BIN_HOME = bin;
   });
 
+  it("refuses update when the roots overlap, changing nothing", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    const before = readInstallReceipt(ID);
+    const state = process.env.PISHIP_STATE_HOME as string;
+    // A state home inside the install home. The receipt records the payload
+    // and command paths, not the state home, so only the overlap check can
+    // refuse this layout.
+    const nested = join(process.env.PISHIP_INSTALL_HOME as string, "state");
+    process.env.PISHIP_STATE_HOME = nested;
+    const error = await rejection(updateDistribution(ID, opts));
+    expect(error.message).toMatch(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(readInstallReceipt(ID)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(existsSync(nested)).toBe(false);
+    // With separate roots again the same update goes through.
+    process.env.PISHIP_STATE_HOME = state;
+    await updateDistribution(ID, opts);
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+  });
+
+  it("refuses rollback when the roots overlap, changing nothing", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, opts);
+    const before = readInstallReceipt(ID);
+    const state = process.env.PISHIP_STATE_HOME as string;
+    const nested = join(process.env.PISHIP_INSTALL_HOME as string, "state");
+    process.env.PISHIP_STATE_HOME = nested;
+    const error = await rejection(
+      rollbackDistribution(ID, { runCheck: fakeRun }),
+    );
+    expect(error.message).toMatch(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(readInstallReceipt(ID)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(existsSync(nested)).toBe(false);
+    process.env.PISHIP_STATE_HOME = state;
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+  });
+
   it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
     const a = await release("1.0.0");
     const receipt = await installDistribution(a.archive);
