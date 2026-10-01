@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSmokeSummary } from "./summary.js";
+import { formatSmokeSummary, pathHint } from "./summary.js";
 
 const smoke = {
   initialized: true,
@@ -43,5 +43,43 @@ describe("formatSmokeSummary", () => {
 
   it("returns output that is not JSON unchanged", () => {
     expect(formatSmokeSummary("not json")).toBe("not json");
+  });
+});
+
+describe("pathHint", () => {
+  it("says nothing when the directory is on PATH", () => {
+    expect(
+      pathHint(
+        "/home/a/.local/bin",
+        { PATH: "/usr/bin:/home/a/.local/bin/" },
+        "linux",
+      ),
+    ).toBeUndefined();
+    expect(
+      pathHint(
+        "C:\\Users\\a\\bin",
+        { Path: "C:\\Windows;c:\\users\\a\\BIN" },
+        "win32",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("prints an executable line for the user's shell", () => {
+    const zsh = pathHint(
+      "/home/a/my bin",
+      { PATH: "/usr/bin", SHELL: "/bin/zsh" },
+      "darwin",
+    );
+    expect(zsh).toContain('  export PATH="/home/a/my bin:$PATH"');
+    expect(zsh).toContain("~/.zshrc");
+    expect(
+      pathHint("/x/$bin", { PATH: "", SHELL: "/bin/bash" }, "linux"),
+    ).toContain('export PATH="/x/\\$bin:$PATH"');
+    expect(
+      pathHint("/x", { PATH: "", SHELL: "/usr/bin/fish" }, "linux"),
+    ).toContain('fish_add_path "/x"');
+    expect(pathHint("C:\\bin", { Path: "C:\\Windows" }, "win32")).toContain(
+      "[Environment]::SetEnvironmentVariable(",
+    );
   });
 });

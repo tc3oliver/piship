@@ -185,3 +185,46 @@ export function formatSmokeSummary(output: string): string {
     );
   return lines.join("\n");
 }
+
+/**
+ * How to put `bin` on PATH, or `undefined` when it already is. The lines
+ * fit the user's shell (from `SHELL`) or PowerShell on Windows.
+ */
+export function pathHint(
+  bin: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  const windows = platform === "win32";
+  const same = (a: string, b: string) =>
+    windows
+      ? a.replace(/[\\/]+$/, "").toLowerCase() ===
+        b.replace(/[\\/]+$/, "").toLowerCase()
+      : a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+  const path = env.PATH ?? env.Path ?? "";
+  if (
+    path.split(windows ? ";" : ":").some((entry) => entry && same(entry, bin))
+  )
+    return undefined;
+  if (windows)
+    return [
+      `${bin} is not on PATH. In PowerShell, add it for new terminals with:`,
+      `  [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";${bin}", "User")`,
+      "then open a new terminal.",
+    ].join("\n");
+  const quoted = bin.replace(/(["\\$`])/g, "\\$1");
+  const shell = (env.SHELL ?? "").split("/").pop();
+  if (shell === "fish")
+    return `${bin} is not on PATH. Add it with:\n  fish_add_path "${quoted}"`;
+  const profile =
+    shell === "zsh"
+      ? "~/.zshrc"
+      : shell === "bash"
+        ? "~/.bashrc"
+        : "~/.profile";
+  return [
+    `${bin} is not on PATH. Add it for this shell with:`,
+    `  export PATH="${quoted}:$PATH"`,
+    `and add that line to ${profile} for new shells.`,
+  ].join("\n");
+}

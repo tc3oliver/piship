@@ -525,6 +525,30 @@ describe("inspect", () => {
   });
 });
 
+describe("init", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-init-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("ends with the next command to run", async () => {
+    const stdout: string[] = [];
+    const directory = join(temp, "agent");
+    expect(
+      await runCli(["init", directory], {
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+      }),
+    ).toBe(0);
+    const manifest = join(directory, "piship.yaml");
+    expect(stdout.join("\n")).toBe(
+      `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest}.`,
+    );
+  });
+});
+
 describe("config explain from a manifest", () => {
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));

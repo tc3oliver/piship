@@ -31,6 +31,7 @@ import {
   payloadApp,
   payloadStateSchemas,
   PISHIP_VERSION,
+  pathHint,
   progressReporter,
   purgeDistributionState,
   readInstallReceipt,
@@ -406,11 +407,14 @@ export async function runCli(
   }
   if (!target) return 2;
   try {
-    if (command === "init")
+    if (command === "init") {
+      const created = initDistribution(target, {
+        managed: rest[0] === "--managed",
+      });
       output.stdout(
-        `Created ${initDistribution(target, { managed: rest[0] === "--managed" })}`,
+        `Created ${created}\nNext: piship validate ${created}, then piship test ${created}.`,
       );
-    else if (command === "validate") {
+    } else if (command === "validate") {
       const manifest = readManifest(target);
       checkPiVersion(manifest);
       // The same resource and governance checks as lock, without writing it.
@@ -502,12 +506,13 @@ export async function runCli(
       output.stdout(`Wrote ${lockManifest(target)}`);
     else if (command === "build") {
       const progress = progressReporter(output.stderr);
+      const built = buildDistribution(target, undefined, {
+        reclaimStaging: rest[0] === "--reclaim-staging",
+        abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+        ...(progress ? { progress } : {}),
+      });
       output.stdout(
-        `Built ${buildDistribution(target, undefined, {
-          reclaimStaging: rest[0] === "--reclaim-staging",
-          abandonedStaging: (found) => output.stderr(stagingNotice(found)),
-          ...(progress ? { progress } : {}),
-        })}`,
+        `Built ${built}\nNext: node ${join(built, "piship.mjs")} install ${built} to install it for this user.`,
       );
     } else if (command === "install") {
       const receipt = await installDistribution(
@@ -515,7 +520,13 @@ export async function runCli(
         rest[0] === "--use-existing-state",
       );
       output.stdout(
-        `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}\nAdd ${binHome()} to PATH if needed.`,
+        [
+          `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
+          pathHint(dirname(receipt.commandPath)),
+          `Next: run ${receipt.app.command} --help to see its commands, then ${receipt.app.command} to start.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
