@@ -97,7 +97,6 @@ const simpleUsage: Record<string, string> = {
   test: "test <manifest> [--model-request] [--json]",
   inspect: "inspect <manifest|artifact|id> [--json]",
   doctor: "doctor <artifact|id> [--json]",
-  install: "install <artifact|release-dir|archive> [--use-existing-state]",
   purge: "purge <id> --yes [--without-logout]",
   migrate: "migrate <manifest> [--write]",
   config: "config explain <manifest|artifact|id>",
@@ -110,8 +109,18 @@ const lifecycleCommands: Record<
     readonly positional: [number, number];
     readonly values: readonly string[];
     readonly flags: readonly string[];
+    /** Value options that may be given more than once. */
+    readonly repeated?: readonly string[];
   }
 > = {
+  install: {
+    usage:
+      "install <artifact|release-dir|archive> [--sha256 <hex>] [--expect-key sha256:<fingerprint>]... [--use-existing-state]",
+    positional: [1, 1],
+    values: ["--sha256"],
+    flags: ["--use-existing-state"],
+    repeated: ["--expect-key"],
+  },
   release: {
     usage:
       "release <manifest> [--out <dir>] [--channel <name>] [--reclaim-staging]",
@@ -194,6 +203,7 @@ interface Parsed {
   readonly positional: string[];
   readonly options: Record<string, string>;
   readonly flags: Set<string>;
+  readonly repeated: Record<string, string[]>;
 }
 function parseArguments(
   spec: (typeof lifecycleCommands)[string],
@@ -202,9 +212,15 @@ function parseArguments(
   const positional: string[] = [];
   const options: Record<string, string> = {};
   const flags = new Set<string>();
+  const repeated: Record<string, string[]> = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
-    if (spec.values.includes(arg)) {
+    if (spec.repeated?.includes(arg)) {
+      const value = args[index + 1];
+      if (value === undefined) return undefined;
+      repeated[arg] = [...(repeated[arg] ?? []), value];
+      index += 1;
+    } else if (spec.values.includes(arg)) {
       const value = args[index + 1];
       if (value === undefined || arg in options) return undefined;
       options[arg] = value;
@@ -218,7 +234,7 @@ function parseArguments(
     positional.length > spec.positional[1]
   )
     return undefined;
-  return { positional, options, flags };
+  return { positional, options, flags, repeated };
 }
 /** A lock from a manifest, lock file, payload, release, archive, or installed id. */
 async function lockFor(target: string): Promise<DistributionLock> {
@@ -243,7 +259,6 @@ async function lockFor(target: string): Promise<DistributionLock> {
 const allowedOptions: Record<string, readonly string[]> = {
   build: ["--reclaim-staging"],
   purge: ["--yes", "--yes --without-logout"],
-  install: ["--use-existing-state"],
   init: ["--managed"],
   migrate: ["--write"],
   test: [
@@ -514,20 +529,6 @@ export async function runCli(
       output.stdout(
         `Built ${built}\nNext: node ${join(built, "piship.mjs")} install ${built} to install it for this user.`,
       );
-    } else if (command === "install") {
-      const receipt = await installDistribution(
-        target,
-        rest[0] === "--use-existing-state",
-      );
-      output.stdout(
-        [
-          `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
-          pathHint(dirname(receipt.commandPath)),
-          `Next: run ${receipt.app.command} --help to see its commands, then ${receipt.app.command} to start.`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
         throw new Error(
@@ -654,11 +655,33 @@ export async function runCli(
 
 async function runLifecycle(
   command: string,
-  { positional, options, flags }: Parsed,
+  { positional, options, flags, repeated }: Parsed,
   output: CliOutput,
 ): Promise<number> {
   const [first = "", second = ""] = positional;
-  if (command === "release") {
+  if (command === "install") {
+    const receipt = await installDistribution(
+      first,
+      flags.has("--use-existing-state"),
+      {
+        ...(options["--sha256"] !== undefined
+          ? { expectedSha256: options["--sha256"] }
+          : {}),
+        ...(repeated["--expect-key"]
+          ? { expectedKeys: repeated["--expect-key"] }
+          : {}),
+      },
+    );
+    output.stdout(
+      [
+        `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
+        pathHint(dirname(receipt.commandPath)),
+        `Next: run ${receipt.app.command} --help to see its commands, then ${receipt.app.command} to start.`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  } else if (command === "release") {
     const built = await buildRelease(first, {
       ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
       ...(options["--channel"] ? { channel: options["--channel"] } : {}),

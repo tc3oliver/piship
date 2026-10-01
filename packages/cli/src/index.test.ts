@@ -460,6 +460,14 @@ describe("help", () => {
       }
     },
   );
+
+  it("lists the install-time digest and key checks", async () => {
+    const result = await run(["install", "--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[--sha256 <hex>]");
+    expect(result.stdout).toContain("[--expect-key sha256:<fingerprint>]...");
+    expect(result.stdout).toContain("[--use-existing-state]");
+  });
 });
 
 describe("file system errors", () => {
@@ -489,6 +497,34 @@ describe("file system errors", () => {
         `Action: Pass the manifest file, such as ${join(temp, "piship.yaml")}`,
       );
     }
+  });
+
+  it("refuses an expected archive digest for a directory, with an action", async () => {
+    const result = await run(["install", temp, "--sha256", "a".repeat(64)]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `CONFIG_INVALID: --sha256 checks a release archive, but ${temp} is a directory`,
+    );
+    expect(result.stderr).toContain("Action: Install the release .tar.gz");
+  });
+
+  it("refuses malformed install checks before touching the source", async () => {
+    const missing = join(temp, "missing");
+    const digest = await run(["install", missing, "--sha256", "xyz"]);
+    expect(digest.status).toBe(1);
+    expect(digest.stderr).toContain("64 hexadecimal characters");
+    const key = await run([
+      "install",
+      missing,
+      "--expect-key",
+      `sha256:${"a".repeat(64)}`,
+      "--expect-key",
+      "not-a-fingerprint",
+    ]);
+    expect(key.status).toBe(1);
+    expect(key.stderr).toContain("not-a-fingerprint");
+    expect(key.stderr).toContain("sha256:<64 hexadecimal characters>");
+    expect((await run(["install", missing, "--sha256"])).status).toBe(2);
   });
 
   it("names a missing install source and what install accepts", async () => {
@@ -545,7 +581,13 @@ describe("inspect", () => {
     expect(info.deployment.mode).toBe("managed");
     expect(info.access).toBeDefined();
     expect(info.governance).toBeDefined();
+    expect(info.trust).toEqual({ keys: [] });
     expect(typeof info.state).toBe("string");
+  });
+
+  it("names the pinned update keys in the human summary", async () => {
+    const result = await inspect([]);
+    expect(result.stdout).toMatch(/^ {2}trust\s+no pinned update keys$/m);
   });
 });
 

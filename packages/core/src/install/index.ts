@@ -1,6 +1,6 @@
 // Installed release ownership: the receipt, install, uninstall, purge, and
 // status.
-export { installDistribution } from "./install.js";
+export { installDistribution, type InstallChecks } from "./install.js";
 export { purgeDistributionState, type PurgeResult } from "./purge.js";
 export {
   RECEIPT_SCHEMA,

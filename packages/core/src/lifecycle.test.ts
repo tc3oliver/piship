@@ -28,6 +28,8 @@ import { PISHIP_VERSION } from "./compatibility.js";
 import {
   currentTarget,
   EVIDENCED_TARGETS,
+  formatInspection,
+  inspection,
   lockManifest,
   payloadInventory,
   type requireCurrentLock,
@@ -511,6 +513,99 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(receipt.releases[0]?.release).not.toHaveProperty("archiveSha256");
     // The release directory is left untouched.
     expect(existsSync(join(a.directory, "payload", "piship.lock"))).toBe(true);
+  });
+
+  it("installs an archive whose SHA-256 matches the expected digest", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive, false, {
+      expectedSha256: a.sha256.toUpperCase(),
+    });
+    expect(receipt.releases[0]?.release?.archiveSha256).toBe(a.sha256);
+  });
+
+  it("refuses an archive whose SHA-256 differs from the expected digest, installing nothing", async () => {
+    const a = await release("1.0.0");
+    const error = await rejection(
+      installDistribution(a.archive, false, { expectedSha256: "f".repeat(64) }),
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(
+      `does not match the expected ${"f".repeat(64)}`,
+    );
+    expect(apps()).toEqual([]);
+    expect(files(process.env.PISHIP_BIN_HOME as string)).toEqual([]);
+    expect(
+      existsSync(
+        join(
+          process.env.PISHIP_INSTALL_HOME as string,
+          "receipts",
+          `${ID}.json`,
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses an expected digest for a directory or in the wrong format", async () => {
+    const a = await release("1.0.0");
+    const directory = await rejection(
+      installDistribution(a.directory, false, { expectedSha256: a.sha256 }),
+    );
+    expect(directory).toBeInstanceOf(PiShipError);
+    expect(directory.code).toBe("CONFIG_INVALID");
+    expect(directory.message).toContain("is a directory");
+    expect((directory as PiShipError).userAction).toContain(".tar.gz");
+    const malformed = await rejection(
+      installDistribution(a.archive, false, { expectedSha256: "abc" }),
+    );
+    expect(malformed.code).toBe("CONFIG_INVALID");
+    expect(malformed.message).toContain("64 hexadecimal characters");
+    expect(apps()).toEqual([]);
+  });
+
+  it("installs when every expected key fingerprint is pinned", async () => {
+    const backup = generateSigningKey("test-backup");
+    const a = await release("1.0.0", true, undefined, [KEY, backup]);
+    const receipt = await installDistribution(a.archive, false, {
+      expectedKeys: [keyFingerprint(backup.publicKey)],
+    });
+    expect(receipt.active).toBe("1.0.0");
+    // inspect reports the pinned keys by fingerprint.
+    const info = inspection(verifyPayload(receipt.payload), stateDir());
+    expect(info.trust).toEqual({
+      keys: [
+        { id: KEY.id, fingerprint: keyFingerprint(KEY.publicKey) },
+        { id: backup.id, fingerprint: keyFingerprint(backup.publicKey) },
+      ],
+    });
+    expect(formatInspection(info)).toContain(
+      `${backup.id} ${keyFingerprint(backup.publicKey)}`,
+    );
+  });
+
+  it("refuses a release that does not pin an expected key, installing nothing", async () => {
+    const other = generateSigningKey("test-other");
+    const a = await release("1.0.0");
+    const missing = keyFingerprint(other.publicKey);
+    const error = await rejection(
+      installDistribution(a.archive, false, {
+        expectedKeys: [keyFingerprint(KEY.publicKey), missing],
+      }),
+    );
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(missing);
+    expect(error.message).not.toContain(keyFingerprint(KEY.publicKey));
+    expect(apps()).toEqual([]);
+    expect(files(process.env.PISHIP_BIN_HOME as string)).toEqual([]);
+    expect(
+      readdirSync(process.env.PISHIP_INSTALL_HOME as string).filter(
+        (name) => name !== "receipts" && name !== "apps",
+      ),
+    ).toEqual([]);
+    const malformed = await rejection(
+      installDistribution(a.archive, false, { expectedKeys: ["abc"] }),
+    );
+    expect(malformed.code).toBe("CONFIG_INVALID");
   });
 
   it("refuses collisions and unowned state, leaving nothing behind", async () => {
