@@ -778,17 +778,30 @@ function lowered(h2s: Propagation, s2h: Propagation): string {
 }
 
 /**
+ * What `run` rejects with when the check command ran out of time and the
+ * backend stopped it: the check found nothing either way.
+ */
+export class WorkspaceCheckTimeout extends Error {}
+
+/**
  * Run the two-way sentinel and the git-control probe through one command.
  * `run` executes a POSIX shell command in the sandbox at the workspace root
- * and resolves with its exit code; it rejects when the command could not run
- * or timed out. `unsafe` is set when the host's git control files could be
- * changed from the sandbox, or the check could not show that they cannot:
- * the caller retires the instance and fails the pending command.
+ * and resolves with its exit code; it rejects when the command could not run,
+ * with `WorkspaceCheckTimeout` when it timed out. `unsafe` is set when the
+ * host's git control files could be changed from the sandbox, or the check
+ * could not show that they cannot: the caller retires the instance and fails
+ * the pending command. `timedOut` is set instead when the check ran out of
+ * time: the caller fails the pending command and checks again before the
+ * next one.
  */
 export async function verifyWorkspace(
   run: (command: string, onData: (chunk: Buffer) => void) => Promise<number>,
   ctx: SentinelContext,
-): Promise<{ readonly report: WorkspaceReport; readonly unsafe?: string }> {
+): Promise<{
+  readonly report: WorkspaceReport;
+  readonly unsafe?: string;
+  readonly timedOut?: true;
+}> {
   const now = ctx.now ?? Date.now;
   const monotonic = ctx.monotonic ?? (() => performance.now());
   const declared = ctx.declaration.mode;
@@ -844,6 +857,7 @@ export async function verifyWorkspace(
     let output = "";
     let exitCode: number | undefined;
     let runError: string | undefined;
+    let timedOut = false;
     try {
       exitCode = await run(
         checkScript({
@@ -868,9 +882,26 @@ export async function verifyWorkspace(
       );
     } catch (error) {
       runError = String((error as Error)?.message ?? error);
+      timedOut = error instanceof WorkspaceCheckTimeout;
     }
     const lines = output.split(/\r?\n/).map((line) => line.trim());
     let unsafe: string | undefined;
+    // A check that ran out of time found nothing either way: the command it
+    // guards does not run, and the next one checks again.
+    if (timedOut)
+      return {
+        report: {
+          declared,
+          windowMs,
+          verifiedAt: rfc3339(now()),
+          complete: false,
+          effective: "snapshot",
+          verification: "failed",
+          gitControlProtection: "not-verified",
+          reason: "the workspace check timed out",
+        },
+        timedOut: true,
+      };
     if (runError !== undefined)
       unsafe = "the workspace check command did not complete";
     else if (exitCode !== 0 || !lines.includes(`${WORKSPACE_MARKER} done`))

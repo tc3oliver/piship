@@ -61,6 +61,7 @@ import {
   missingFilesWarning,
   verifyWorkspace,
   WORKSPACE_VALIDITY_MS,
+  WorkspaceCheckTimeout,
   type WorkspaceReport,
   workspaceWindowMs,
 } from "./workspace.js";
@@ -420,6 +421,20 @@ function unsafeWorkspaceError(
   );
 }
 
+function checkTimeoutError(report: ContainmentReport): PiShipError {
+  return new PiShipError(
+    "SANDBOX_UNAVAILABLE",
+    `The workspace check in the ${report.adapter} sandbox backend timed out, so the command did not run; the sandbox is kept and checked again before the next command`,
+    {
+      component: "sandbox",
+      retryable: true,
+      userAction:
+        "Run the command again; if the check keeps timing out, make sure the sandbox backend is reachable and not overloaded",
+      sanitizedDetail: { adapter: report.adapter, provider: report.provider },
+    },
+  );
+}
+
 function retiredError(report: ContainmentReport): PiShipError {
   return new PiShipError(
     "SANDBOX_UNAVAILABLE",
@@ -559,6 +574,8 @@ function createActiveSandbox(session: Session): ActiveSandbox {
           },
         );
         if (result.kind === "exit") return result.exitCode;
+        if (result.kind === "timeout")
+          throw new WorkspaceCheckTimeout("the workspace check timed out");
         throw new Error(`the workspace check ${result.kind}`);
       },
       {
@@ -569,17 +586,33 @@ function createActiveSandbox(session: Session): ActiveSandbox {
         now: session.now,
         monotonic: session.monotonic,
       },
-    ).catch(() => ({
-      // Anything unexpected on the host side proves nothing: fail closed.
-      report: {
-        ...(workspace ?? initialWorkspaceReport(declaration)),
-        verification: "failed" as const,
-        effective: "snapshot" as const,
-        complete: false,
-      },
-      unsafe: "the workspace check could not run",
-    }));
+    ).catch(
+      (): Awaited<ReturnType<typeof verifyWorkspace>> => ({
+        // Anything unexpected on the host side proves nothing: fail closed.
+        report: {
+          ...(workspace ?? initialWorkspaceReport(declaration)),
+          verification: "failed" as const,
+          effective: "snapshot" as const,
+          complete: false,
+        },
+        unsafe: "the workspace check could not run",
+      }),
+    );
     if (signal?.aborted) return false;
+    if (outcome.timedOut) {
+      // A backend that did not stop the timed-out check is retired already.
+      if (retired || disposed) throw retiredError(report);
+      // Found nothing either way: the sandbox stays, the result stays due,
+      // and the next command checks again.
+      workspace = outcome.report;
+      for (const listener of listeners)
+        try {
+          listener(workspace);
+        } catch {
+          // a listener never decides the command
+        }
+      throw checkTimeoutError(report);
+    }
     if (outcome.unsafe) {
       unsafe = unsafeWorkspaceError(report, declaration.mode, outcome.unsafe);
       retire();
