@@ -162,6 +162,8 @@ Requirements:
 
 **Node.js 22.19.0 or newer.**
 
+The managed demo also needs an OS sandbox (Seatbelt on macOS, or bubblewrap with unprivileged user namespaces on Linux) and a platform secret store (macOS Keychain, Linux Secret Service, or Windows Credential Manager). [Troubleshooting](docs/troubleshooting.md) lists the prerequisites and every PiShip error code with what to do.
+
 Clone the repository and build it:
 
 ```bash
@@ -447,6 +449,7 @@ See [compatibility](docs/compatibility.md).
 | Writing and testing adapters | [Adapter SDK](docs/adapter-sdk.md) |
 | Release, update, rollback | [Release](docs/release.md) |
 | Pi compatibility | [Compatibility](docs/compatibility.md) |
+| Prerequisites and error codes | [Troubleshooting](docs/troubleshooting.md) |
 | Future direction | [Roadmap](docs/roadmap.md) |
 | Architecture decisions | [Decisions](docs/decisions.md) |
 
