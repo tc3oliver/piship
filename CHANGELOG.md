@@ -20,6 +20,7 @@ Changes on `main` after v0.7.1. Not released.
 ### Fixed
 
 - Installing a distribution that is already installed names the installed version and the exact uninstall command (the installed release's own `piship.mjs`; the branded command has none), says that state is kept, and says to install again with `--use-existing-state`. A damaged receipt keeps the previous message (#184).
+- `INTEGRITY_FAILED` for an installed release also names the recoveries a user without a PiShip CLI can run: the copy inside the downloaded release (`node <extracted release>/payload/piship.mjs repair <id> <extracted release>`) and, when the message lists only unexpected files such as a Finder `.DS_Store`, removing them ([repairing an installed release](docs/troubleshooting.md#repairing-an-installed-release), #186).
 
 ## v0.7.1
 
