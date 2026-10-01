@@ -6,12 +6,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { after, before, describe, it } from "node:test";
+import { loadConfig } from "../server.mjs";
 import {
   CREDENTIAL_ID_PATTERN,
   GROUP_MODELS,
   principalUserId,
 } from "../src/broker.mjs";
-import { loadConfig } from "../server.mjs";
 import { ISSUER, MASTER_KEY, UPSTREAM_BODY_MARK } from "./fakes.mjs";
 import { GATEWAY_BASE_URL, startHarness } from "./harness.mjs";
 
@@ -658,6 +658,113 @@ describe("acquire: idempotency (docs: Idempotency and retries)", () => {
     const a = await h.acquire(mint(h, ALICE));
     const b = await h.acquire(mint(h, ALICE));
     assert.notEqual(a.json.credential_id, b.json.credential_id);
+  });
+});
+
+describe("acquire: a replay never returns a revoked or out-of-entitlement credential", () => {
+  let h;
+  before(async () => {
+    h = await harness();
+  });
+
+  it("revoke, then replay: the revoked credential is never returned; a new one is issued", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    assert.equal(first.status, 200);
+    assert.equal(
+      (await h.revoke(first.json.credential, first.json.credential_id)).status,
+      200,
+    );
+    const count = generateCalls(h).length;
+    const replay = await h.acquire(mint(h, ALICE), { key });
+    assert.equal(replay.status, 200);
+    assert.notEqual(replay.json.credential_id, first.json.credential_id);
+    assert.ok(!replay.text.includes(first.json.credential));
+    assert.equal(generateCalls(h).length, count + 1, "issued again");
+    assert.ok(h.litellm.keys.has(replay.json.credential), "a live key");
+    const again = await h.acquire(mint(h, ALICE), { key });
+    assert.deepEqual(again.json, replay.json, "the new answer is the record");
+  });
+
+  it("a key deleted in LiteLLM behind the broker's back is never replayed", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    h.litellm.keys.delete(first.json.credential);
+    const replay = await h.acquire(mint(h, ALICE), { key });
+    assert.equal(replay.status, 200);
+    assert.notEqual(replay.json.credential_id, first.json.credential_id);
+    assert.ok(!replay.text.includes(first.json.credential));
+  });
+
+  it("a key LiteLLM refuses to its holder (expired, blocked) is never replayed", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    h.litellm.state.holderKeyInfoStatus = 401;
+    try {
+      const replay = await h.acquire(mint(h, ALICE), { key });
+      assert.ok(!replay.text.includes(first.json.credential));
+    } finally {
+      h.litellm.state.holderKeyInfoStatus = undefined;
+    }
+  });
+
+  it("entitlement narrowed, then replay: the wider credential is never returned", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    assert.deepEqual(first.json.models, ["acme/coder", "acme/general"]);
+    const narrowed = await h.acquire(
+      mint(h, { ...ALICE, groups: ["/support"] }),
+      { key },
+    );
+    assert.equal(narrowed.status, 200);
+    assert.deepEqual(narrowed.json.models, ["acme/coder"]);
+    assert.notEqual(narrowed.json.credential_id, first.json.credential_id);
+    assert.ok(!narrowed.text.includes(first.json.credential));
+  });
+
+  it("entitlement removed, then replay: 403, the stored credential never returned", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    const res = await h.acquire(mint(h, { ...ALICE, groups: ["/other"] }), {
+      key,
+    });
+    assert.equal(res.status, 403);
+    assert.ok(!res.text.includes(first.json.credential));
+  });
+
+  it("a key rotation retired is never replayed", async () => {
+    const h1 = await harness({ BROKER_MAX_KEYS_PER_USER: "1" });
+    const key = uuid();
+    const first = await h1.acquire(mint(h1, ALICE), { key });
+    assert.equal((await h1.acquire(mint(h1, ALICE))).status, 200);
+    assert.ok(!h1.litellm.keys.has(first.json.credential), "retired");
+    const replay = await h1.acquire(mint(h1, ALICE), { key });
+    assert.equal(replay.status, 200);
+    assert.notEqual(replay.json.credential_id, first.json.credential_id);
+    assert.ok(!replay.text.includes(first.json.credential));
+  });
+
+  it("an expired token never reaches the record", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    const now = Math.floor(Date.now() / 1000);
+    const expired = await h.acquire(
+      mint(h, { ...ALICE, exp: now - 100, iat: now - 400 }),
+      { key },
+    );
+    assert.equal(expired.status, 401);
+    assert.ok(!expired.text.includes(first.json.credential));
+  });
+
+  it("replay fails closed when LiteLLM cannot confirm the key: 503, nothing returned", async () => {
+    const key = uuid();
+    const first = await h.acquire(mint(h, ALICE), { key });
+    h.litellm.state.faults.set("/key/info", { status: 500, count: 1 });
+    const res = await h.acquire(mint(h, ALICE), { key });
+    assert.equal(res.status, 503);
+    assert.ok(!res.text.includes(first.json.credential));
+    const later = await h.acquire(mint(h, ALICE), { key });
+    assert.deepEqual(later.json, first.json, "the record is kept");
   });
 });
 

@@ -82,12 +82,25 @@ As [docs/enterprise-integration.md](../../../docs/enterprise-integration.md#idem
 | Request | Broker answer |
 | --- | --- |
 | New `Idempotency-Key` | Issues; the answer is stored under the key only once issuing started, never for a 401, 403, 429 or 503 |
-| Same key, same input, first finished | The stored answer: same credential, same `credential_id`; nothing is issued |
+| Same key, same input, first finished | The stored answer: same credential, same `credential_id`; nothing is issued. Only while that credential is still valid ([below](#a-replay-is-checked-first)) |
+| Same key, same input, stored credential since revoked, deleted, refused, or outside the principal's current entitlement | The record is dropped and a new credential is issued under the current entitlement; the old one is never returned |
+| Same key, stored credential cannot be confirmed (LiteLLM unreachable or 5xx) | 503, `Retry-After: 5`; nothing returned, the record kept |
 | Same key, same principal, different body | 422; nothing issued, the stored credential never returned |
 | Same key while the first is still running | 503, `Retry-After: 1` |
 | No key | Issues every time |
 
-"Input" is the verified `iss` and `sub` plus the request body with its keys sorted, never the token, so a retry after an identity refresh still matches. Records are scoped to the principal: they are kept per `user_id` and key, so the same key sent by another principal is a separate request that issues that principal's own credential; it can neither read nor block someone else's. A replay is not counted against the rate limit. A stored answer is kept until its credential expires; the record of a request in progress until that request ends, however long it waits behind the same user's other acquires (every LiteLLM call it makes has a timeout). A request's late completion or failure only ever touches the record it reserved itself. A principal keeps at most twice `BROKER_MAX_KEYS_PER_USER` records: a new one drops that principal's oldest finished record, so a retry of that old key issues a new credential, and a principal whose records are all still in progress gets 503. Only past 10 000 records in all are other principals' oldest finished records dropped. A replay returns the stored credential as issued, even if rotation has deleted it since; the gateway then refuses it with 401 and PiShip renews.
+"Input" is the verified `iss` and `sub` plus the request body with its keys sorted, never the token, so a retry after an identity refresh still matches. Records are scoped to the principal: they are kept per `user_id` and key, so the same key sent by another principal is a separate request that issues that principal's own credential; it can neither read nor block someone else's. A replay is not counted against the rate limit. A stored answer is kept until its credential expires; the record of a request in progress until that request ends, however long it waits behind the same user's other acquires (every LiteLLM call it makes has a timeout). A request's late completion or failure only ever touches the record it reserved itself. A principal keeps at most twice `BROKER_MAX_KEYS_PER_USER` records: a new one drops that principal's oldest finished record, so a retry of that old key issues a new credential, and a principal whose records are all still in progress gets 503. Only past 10 000 records in all are other principals' oldest finished records dropped.
+
+### A replay is checked first
+
+A stored answer is replayed only to a request that would be allowed to acquire now, and only while its credential is still good:
+
+- The caller's token is verified, and its distribution and entitlement checked, before the record is looked up, exactly as for a new request: an expired or invalid token is 401 and a principal who no longer has any entitled group is 403, with nothing returned.
+- The models the principal is entitled to now must be exactly the stored credential's models. A narrowed (or widened) entitlement never replays the old credential; a new one is issued.
+- LiteLLM must still describe the stored key to its holder (`/key/info` with the key as the bearer), under the stored alias, for this principal, with those models. A key revoked through this broker, retired by rotation, deleted or blocked by an administrator, or expired fails this, and a new credential is issued. The new answer becomes the key's record, and the reissue counts against the rate limit like any new request.
+- If LiteLLM cannot answer that check, the replay fails closed: 503, nothing returned, the record kept for a retry.
+
+Residual: a credential revoked after this check, while the answer is on its way, is still returned, just as one revoked right after its first issue would be; the gateway then refuses it with 401 and PiShip renews. A key whose `/key/info` LiteLLM answers but that the gateway would refuse for another reason (an exhausted budget, say) can still be replayed; the gateway's refusal is what PiShip acts on.
 
 The store is **in memory**: a broker restart forgets every key, so a retry after a restart issues a new credential (the old one expires, or rotation deletes it). A production broker with several instances needs a shared store; so does the per-principal rate limit, which is also in memory.
 

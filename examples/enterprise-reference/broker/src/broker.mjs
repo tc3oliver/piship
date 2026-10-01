@@ -9,8 +9,8 @@
 // fixed code, never an upstream message. Nothing secret is logged: see log.mjs.
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { JwksUnavailableError, TokenError } from "./token.mjs";
 import { ISSUER_MARK, UpstreamError } from "./litellm.mjs";
+import { JwksUnavailableError, TokenError } from "./token.mjs";
 
 /**
  * Model entitlement by Keycloak group, keyed by the group's full path. A
@@ -156,6 +156,17 @@ export function createIdempotencyStore({
       entry.state = "done";
       entry.response = response;
       entry.expiresAt = expiresAtMs;
+    },
+    /**
+     * Forget a finished record whose stored answer is no longer valid (its
+     * credential was revoked, deleted or refused, or the principal's
+     * entitlement changed), so the key issues again. Only the record that
+     * still holds `response` is dropped: a newer record for the key stays.
+     */
+    discard(principal, key, response) {
+      const id = recordId(principal, key);
+      const entry = entries.get(id);
+      if (entry?.state === "done" && entry.response === response) remove(id);
     },
     /** Forget a key whose issuing failed, so it can be sent again. */
     abandon(principal, key, token) {
@@ -451,19 +462,50 @@ export function createBroker(
     };
     let reserved = false;
     let reservation;
+    let staleReason;
     if (typeof key === "string") {
       const fingerprint = createHash("sha256")
         .update(canonical([claims.iss, claims.sub, body]))
         .digest("hex");
-      const outcome = idempotency.begin(userId, key, fingerprint, admit);
-      if (outcome.kind === "replay")
-        return {
-          status: 200,
-          body: outcome.response,
-          userId,
-          idempotency: "replay",
-          credentialId: outcome.response.credential_id,
-        };
+      let outcome = idempotency.begin(userId, key, fingerprint, admit);
+      if (outcome.kind === "replay") {
+        let stale;
+        try {
+          stale = await staleReplay(outcome.response, userId, models);
+        } catch (error) {
+          if (!(error instanceof UpstreamError)) throw error;
+          // The key could not be confirmed: nothing is returned, and the
+          // record stays for a retry.
+          return {
+            ...failure(503, "gateway_unavailable", { "retry-after": "5" }),
+            userId,
+            idempotency: "replay-unconfirmed",
+            reason: error.operation,
+            upstreamStatus: error.status,
+          };
+        }
+        if (!stale)
+          return {
+            status: 200,
+            body: outcome.response,
+            userId,
+            idempotency: "replay",
+            credentialId: outcome.response.credential_id,
+          };
+        // The stored credential must not be handed out again. The record is
+        // dropped and the key issues a new credential under the current
+        // entitlement, as a new request (rate limited like one).
+        staleReason = stale;
+        idempotency.discard(userId, key, outcome.response);
+        outcome = idempotency.begin(userId, key, fingerprint, admit);
+        if (outcome.kind === "replay")
+          // Another request already reissued for this key meanwhile.
+          return {
+            ...failure(503, "request_in_progress", { "retry-after": "1" }),
+            userId,
+            idempotency: "in-flight",
+          };
+      }
       if (outcome.kind === "conflict")
         return {
           ...failure(422, "idempotency_key_reused"),
@@ -521,7 +563,8 @@ export function createBroker(
         userId,
         credentialId,
         models,
-        idempotency: reserved ? "new" : "none",
+        idempotency: reserved ? (staleReason ? "reissued" : "new") : "none",
+        reason: staleReason,
       };
     } catch (error) {
       if (reserved) idempotency.abandon(userId, key, reservation);
@@ -554,6 +597,44 @@ export function createBroker(
         upstreamStatus: error.status,
       };
     }
+  }
+
+  /**
+   * Why a stored answer may no longer be replayed, or undefined when it may.
+   * The caller's token has already been verified and its entitlement
+   * recomputed, so a principal without a valid token, or who lost every
+   * entitled group, never gets here. What is checked:
+   *
+   * - entitlement: the models the principal is entitled to now must be
+   *   exactly those the stored credential carries; a changed entitlement
+   *   issues a new credential rather than replaying the old one.
+   * - liveness: LiteLLM must still describe the key to its holder, as this
+   *   principal's key under the stored alias (and, when LiteLLM reports
+   *   them, with those models). A key revoked through this broker, retired
+   *   by rotation, deleted by an administrator, or refused as expired or
+   *   blocked fails this.
+   *
+   * An UpstreamError (LiteLLM unreachable or answering 5xx) propagates: the
+   * caller then returns nothing rather than an unconfirmed credential.
+   * Residual: a key revoked between this check and the answer reaching the
+   * client is returned, as it would be had it been revoked just after its
+   * first issue; the gateway refuses it and PiShip renews.
+   */
+  async function staleReplay(response, userId, models) {
+    const sameModels = (list) =>
+      Array.isArray(list) &&
+      list.length === models.length &&
+      [...list].sort().every((model, i) => model === models[i]);
+    if (!sameModels(response.models)) return "replay-entitlement-changed";
+    const info = await litellm.keyInfoAsHolder(response.credential);
+    if (!info) return "replay-credential-refused";
+    if (
+      info.key_alias !== response.credential_id ||
+      info.user_id !== userId ||
+      (info.models !== undefined && !sameModels(info.models))
+    )
+      return "replay-credential-changed";
+    return undefined;
   }
 
   async function issue({ claims, userId, models, credentialId }) {
