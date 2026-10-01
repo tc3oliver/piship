@@ -85,9 +85,9 @@ The selected model is then decided as `model.use`, and Pi starts with only the a
 
 Governance uses these public Pi seams:
 
-- `createAgentSession` with `noTools: "builtin"` and `customTools`: governed `read`, `write`, `edit`, and `bash` built with `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, and `createBashToolDefinition` and their `operations` hooks, plus MCP tools.
+- `createAgentSession` with `noTools: "builtin"` and `customTools`: governed `read`, `write`, `edit`, and `bash` built with `createReadToolDefinition`, `createWriteToolDefinition`, `createEditToolDefinition`, and `createBashToolDefinition` and their `operations` hooks, plus MCP tools. The governed `bash` keeps Pi's definition (schema, prompt text, renderers) but runs PiShip's execute, which matches Pi's results and persists the full output in a session-owned directory ([security](security.md#tools-shell-and-plan-mode)).
 - `DefaultResourceLoader`, which receives only admitted instruction, skill, extension, prompt, and theme paths.
-- Extension events: `tool_call` (policy and Plan mode, able to block), `user_bash` (governed operations for `!` commands), `before_agent_start` (Plan or Build prompt), `before_provider_request` (model request audit), and `session_start`.
+- Extension events: `tool_call` (policy and Plan mode, able to block), `user_bash` (governed operations for `!` commands), `before_agent_start` (Plan or Build prompt), `before_provider_request` (model request audit), `session_start`, and `session_shutdown` (the `pi-bash-*.log` files Pi recorded for the session's `!` commands, removed when the session closes).
 - `registerTool` for `ask_user` and `registerCommand` for `/plan` and `/build`; the extension context's `hasUI`, `ui.confirm`, `ui.select`, `ui.setStatus`, and `ui.notify` for approvals and mode display.
 
 ## State
