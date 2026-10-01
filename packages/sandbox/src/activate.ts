@@ -639,8 +639,35 @@ function createActiveSandbox(session: Session): ActiveSandbox {
       throw new Error(
         `Working directory is outside the workspace, where the ${report.adapter} sandbox backend cannot run commands: ${cwd}`,
       );
+    // A backend that reports its environment may replace it while running a
+    // command (an expired claim, say), and reports the new one only after.
+    // A no-op runs first, so a replacement happens on it and is verified
+    // before the command runs in it.
+    const watches = verifies && instance?.epoch !== undefined;
+    if (watches && checkedAt !== undefined) {
+      const probe = await runGoverned(
+        instance as SandboxInstance,
+        {
+          command: "true",
+          cwd: profile.workspace,
+          workspacePath: ".",
+          env: commandEnvironment(session, sourceEnv),
+        },
+        {
+          timeoutMs: session.checkTimeoutMs,
+          ...(options.signal ? { signal: options.signal } : {}),
+          settleMs: session.settleMs,
+          onData: () => {},
+          retire,
+        },
+      );
+      if (probe.kind === "cancelled") throw new Error("aborted");
+      if (probe.kind !== "exit")
+        throw new Error(`The ${report.adapter} sandbox did not answer`);
+    }
     await ensureVerified(options.signal);
     if (retired || disposed) throw retiredError(report);
+    const verifiedEpoch = epoch();
     const outcome = await runGoverned(
       instance,
       {
@@ -660,6 +687,12 @@ function createActiveSandbox(session: Session): ActiveSandbox {
     if (outcome.kind === "cancelled") throw new Error("aborted");
     if (outcome.kind === "timeout")
       throw new Error(`timeout:${options.timeout}`);
+    // Replaced between the no-op and the command: it ran in an environment
+    // whose workspace nothing verified, so its result is not reported.
+    if (watches && epoch() !== verifiedEpoch)
+      throw new Error(
+        `The ${report.adapter} sandbox environment was replaced while the command ran, before its workspace was verified; run the command again`,
+      );
     return { exitCode: outcome.exitCode };
   };
   return {
