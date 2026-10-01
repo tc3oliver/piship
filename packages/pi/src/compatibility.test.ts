@@ -196,6 +196,8 @@ describe("Pi public SDK", () => {
       "getAvailableSnapshot",
       "checkAuth",
       "getAuth",
+      // Pi's `/login` lists the providers this returns.
+      "getProviders",
       "stream",
       "streamSimple",
       "complete",

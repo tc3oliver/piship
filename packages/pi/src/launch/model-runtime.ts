@@ -96,6 +96,7 @@ export async function createModelRuntime(
     {
       kind: "managed-endpoint",
       providerId: activated.runtime.providerId,
+      command: ctx.metadata.app.command,
       // Models that miss an enabled capability's model requirements are not
       // offered for switching; the launch model was checked at activation.
       allowedModelIds: activated.runtime.models

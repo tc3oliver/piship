@@ -12,6 +12,8 @@ export interface ManagedEndpointGovernance {
   readonly allowedModelIds: readonly string[];
   /** Request-time key; `force` re-acquires after a gateway rejection. */
   readonly apiKey: (options: { force: boolean }) => Promise<string>;
+  /** The distribution's command, named where Pi asks the user to sign in. */
+  readonly command?: string;
 }
 
 export interface PiNativeGovernance {
@@ -72,6 +74,7 @@ export function governModelRuntime(
     getAvailable: runtime.getAvailable.bind(runtime),
     getAvailableSnapshot: runtime.getAvailableSnapshot.bind(runtime),
     checkAuth: runtime.checkAuth.bind(runtime),
+    getProviders: runtime.getProviders.bind(runtime),
     getAuth: runtime.getAuth.bind(runtime) as (
       model: unknown,
       overrides?: unknown,
@@ -152,6 +155,31 @@ export function governModelRuntime(
       return { type: "api_key", source: "PiShip managed credential" };
     return original.checkAuth(providerId, options);
   };
+  if (managed) {
+    // Pi's `/login` offers the login methods of `getProviders()`. A managed
+    // distribution signs in with its own command, so only its provider is
+    // listed, with a method that has no `login`: Pi shows it as configured
+    // outside Pi, under a name that says where to sign in.
+    const signIn = managed.command
+      ? ` (run ${managed.command} login in a terminal)`
+      : "";
+    target.getProviders = () =>
+      original.getProviders().flatMap((provider) =>
+        provider.id === managed.providerId
+          ? [
+              {
+                ...provider,
+                auth: {
+                  apiKey: {
+                    name: `${provider.name} sign-in${signIn}`,
+                    resolve: async () => undefined,
+                  },
+                },
+              },
+            ]
+          : [],
+      );
+  }
   target.getAuth = async (
     model: string | Model,
     overrides?: unknown,

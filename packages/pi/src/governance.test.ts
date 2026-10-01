@@ -84,6 +84,7 @@ async function managedSession(
     kind: "managed-endpoint",
     providerId: "acmecode",
     allowedModelIds: ["acme/coder"],
+    command: "acme",
     apiKey: async ({ force }) => {
       calls += 1;
       const key =
@@ -240,6 +241,21 @@ describe("managed model governance on the pinned Pi runtime", () => {
       "sk-revoked-credential-1",
       "sk-rotated-credential-2",
     ]);
+    session.dispose();
+  });
+
+  it("offers no upstream provider login on /login, only where to sign in", async () => {
+    const { runtime, session } = await managedSession({ keys: ["sk-1"] });
+    // Pi's /login picker lists `getProviders()` and starts the login of the
+    // chosen provider's method; a method without `login` is shown as
+    // configured outside Pi, under its name.
+    const providers = runtime.getProviders();
+    expect(providers.map((provider) => provider.id)).toEqual(["acmecode"]);
+    expect(providers[0]?.auth.oauth).toBeUndefined();
+    expect(providers[0]?.auth.apiKey?.login).toBeUndefined();
+    expect(providers[0]?.auth.apiKey?.name).toBe(
+      "AcmeCode sign-in (run acme login in a terminal)",
+    );
     session.dispose();
   });
 
