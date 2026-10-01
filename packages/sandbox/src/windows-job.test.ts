@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawnProcess } from "./process.js";
+import { spawnManaged, spawnProcess } from "./process.js";
 import { windowsJobCommand } from "./windows-job.js";
 
 const target = {
@@ -109,3 +109,57 @@ describe("windowsJobCommand", () => {
     });
   });
 });
+
+// The real supervisor: spawnManaged starts the system powershell.exe by
+// absolute path, which compiles the Job Object helper and starts a real
+// child. Launcher secrets reach neither the child nor any output.
+describe.runIf(process.platform === "win32")(
+  "the Windows Job Object supervisor, live",
+  () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("runs a governed child to its marker and exit 0 with only the approved environment", async () => {
+      vi.stubEnv("PISHIP_TEST_SECRET", "should-not-arrive-1");
+      vi.stubEnv("GITHUB_TOKEN", "should-not-arrive-2");
+      let stdout = "";
+      let stderr = "";
+      const child = spawnManaged({
+        file: process.execPath,
+        args: [
+          "-e",
+          'process.stdout.write("piship-windows-job-ok " + JSON.stringify(process.env) + "\\n")',
+        ],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH ?? "", DOCS_MODE: "demo" },
+        onStdout: (chunk) => {
+          stdout += chunk.toString("utf8");
+        },
+        onStderr: (chunk) => {
+          stderr += chunk.toString("utf8");
+        },
+      });
+      const result = await child.exited;
+      const output = `stdout: ${stdout}\nstderr: ${stderr}`;
+      expect(result, output).toMatchObject({ code: 0, timedOut: false });
+      const line = stdout
+        .split("\n")
+        .find((entry) => entry.startsWith("piship-windows-job-ok "));
+      expect(line, output).toBeDefined();
+      const env = JSON.parse(
+        (line as string).slice("piship-windows-job-ok ".length),
+      ) as Record<string, string>;
+      expect(env.DOCS_MODE).toBe("demo");
+      const names = Object.keys(env).map((name) => name.toUpperCase());
+      expect(names).not.toContain("PISHIP_TEST_SECRET");
+      expect(names).not.toContain("GITHUB_TOKEN");
+      // Only the approved variables, plus SystemRoot and WINDIR, which
+      // CreateProcess needs in an explicit block.
+      expect(names.sort()).toEqual(
+        ["DOCS_MODE", "PATH", "SYSTEMROOT", "WINDIR"].sort(),
+      );
+      expect(stdout + stderr).not.toContain("should-not-arrive");
+    });
+  },
+);
