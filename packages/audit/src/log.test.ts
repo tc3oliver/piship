@@ -180,6 +180,88 @@ describe("AuditLog file sink", () => {
     await reopened.close();
   });
 
+  describe("after a torn final line", () => {
+    const sink = [{ id: "local", type: "file", required: false }] as const;
+    const torn = '{"schema":"piship-audit/v1","event":"session.sta';
+    const intact = `${JSON.stringify({ event: "session.start", user: "alice" })}\n`;
+    /** What a reader that skips unparseable lines recovers. */
+    const readable = (path: string) =>
+      readFileSync(path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as { event: string; resource?: string }];
+          } catch {
+            return [];
+          }
+        });
+
+    it("starts the next event on its own line and keeps the torn bytes", async () => {
+      const path = join(temp, "logs", "audit.jsonl");
+      mkdirSync(join(temp, "logs"), { recursive: true });
+      writeFileSync(path, `${intact}${torn}`, { mode: 0o600 });
+      const log = await AuditLog.open({
+        config: config([...sink]),
+        distribution: "acmecode",
+        stateDir: temp,
+      });
+      log.emit({ event: "resource.load", resource: "after-crash" });
+      log.emit({ event: "resource.load", resource: "second" });
+      await log.flush();
+      log.emit({ event: "resource.load", resource: "third" });
+      await log.close();
+      const text = readFileSync(path, "utf8");
+      // Existing bytes are never rewritten: the fragment stays, on its own line.
+      expect(text.startsWith(`${intact}${torn}\n`)).toBe(true);
+      expect(text.endsWith("\n")).toBe(true);
+      expect(text.split("\n").filter(Boolean)).toHaveLength(5);
+      expect(readable(path).map((item) => item.resource ?? item.event)).toEqual(
+        ["session.start", "after-crash", "second", "third"],
+      );
+    });
+
+    it("adds no blank line when the file already ends with a newline", async () => {
+      const path = join(temp, "logs", "audit.jsonl");
+      mkdirSync(join(temp, "logs"), { recursive: true });
+      writeFileSync(path, intact, { mode: 0o600 });
+      const log = await AuditLog.open({
+        config: config([...sink]),
+        distribution: "acmecode",
+        stateDir: temp,
+      });
+      log.emit({ event: "resource.load", resource: "next" });
+      await log.close();
+      const lines = readFileSync(path, "utf8").split("\n");
+      expect(lines).toHaveLength(3);
+      expect(lines.slice(0, 2).every(Boolean)).toBe(true);
+      expect(lines[2]).toBe("");
+    });
+
+    it("keeps the torn file untouched when the next append rotates it away", async () => {
+      const base = join(temp, "logs", "audit.jsonl");
+      mkdirSync(join(temp, "logs"), { recursive: true });
+      writeFileSync(base, `${intact}${torn}`, { mode: 0o600 });
+      const log = await AuditLog.open({
+        config: config([...sink]),
+        distribution: "acmecode",
+        stateDir: temp,
+        rotation: { maxBytes: 400, files: 2 },
+      });
+      // Padded so this append crosses maxBytes and rotates the torn file.
+      log.emit({
+        event: "resource.load",
+        resource: `after-crash-${"x".repeat(300)}`,
+      });
+      await log.close();
+      expect(readFileSync(`${base}.1`, "utf8")).toBe(`${intact}${torn}`);
+      expect(readFileSync(base, "utf8").startsWith("{")).toBe(true);
+      expect(readable(base).map((item) => item.event)).toEqual([
+        "resource.load",
+      ]);
+    });
+  });
+
   it("fails launch when a required file sink cannot be opened", async () => {
     const blocked = join(temp, "blocked");
     writeFileSync(blocked, "not a directory");
