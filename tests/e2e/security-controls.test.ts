@@ -391,12 +391,11 @@ describe("identity: an invalid sign-in is refused and stores nothing (cases 1-3)
       "replayed-nonce",
       "IDENTITY_INVALID",
     ],
-    [
-      "a callback with another state",
-      "stateOverride",
-      "attacker-state",
-      "IDENTITY_INVALID",
-    ],
+    // A callback with another state is not here: the loopback listener
+    // refuses it and the login keeps waiting for the genuine callback (#149),
+    // so at the launcher it ends only with the 5-minute timeout or Ctrl-C.
+    // oidc-invalid.test.ts proves, through DistributionAccess, that it is
+    // refused, its code never exchanged, and nothing stored or revoked.
     [
       "an ID token signed with an unpublished key",
       "signWithRogueKey",

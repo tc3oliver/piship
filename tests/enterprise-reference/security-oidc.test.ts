@@ -83,8 +83,13 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
 
   it.each(ATTACKS)("rejects $name", async (attack) => {
     const hostile = browser(at("alice"), attack);
+    // A refused callback leaves the sign-in waiting until its timeout: long
+    // enough for Keycloak to deliver the callback, short enough to end.
     const error = await rejection(
-      provider().login({ openUrl: hostile.openUrl, timeoutMs: 60_000 }),
+      provider().login({
+        openUrl: hostile.openUrl,
+        timeoutMs: attack.refused ? 20_000 : 60_000,
+      }),
     );
     expect(await hostile.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);

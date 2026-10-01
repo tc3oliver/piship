@@ -232,13 +232,17 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
 
   async login(ctx: LoginContext): Promise<IdentitySession> {
     const config = await this.configuration();
+    // The listener refuses a callback without this state and keeps waiting,
+    // so a stray request cannot end the sign-in; the state is still checked
+    // again below with the code exchange.
+    const state = client.randomState();
     const receiver = await startLoopbackReceiver(this.options.redirectUri, {
+      state,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(ctx.timeoutMs ? { timeoutMs: ctx.timeoutMs } : {}),
     });
     try {
       const verifier = client.randomPKCECodeVerifier();
-      const state = client.randomState();
       const nonce = client.randomNonce();
       const parameters: Record<string, string> = {
         redirect_uri: receiver.redirectUri,

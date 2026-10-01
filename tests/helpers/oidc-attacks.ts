@@ -16,23 +16,32 @@ export interface Attack {
   readonly authorize?: (parameters: URLSearchParams) => void;
   /** Changes the callback before it is delivered to PiShip's loopback listener. */
   readonly callback?: (parameters: URLSearchParams) => void;
-  readonly code: "IDENTITY_INVALID";
+  readonly code: "IDENTITY_INVALID" | "IDENTITY_REQUIRED";
   /** What the rejection names, so it fails for the reason the attack aims at. */
   readonly message: RegExp;
+  /**
+   * The loopback listener itself refuses the callback (HTTP 400) and keeps
+   * waiting for the genuine one, so a stray or forged callback cannot end the
+   * sign-in; it ends when its wait does, naming the refusal. A caller gives
+   * such an attack a short wait.
+   */
+  readonly refused?: true;
 }
 
 export const ATTACKS: readonly Attack[] = [
   {
     name: "a callback whose state is not the one PiShip sent",
     callback: (parameters) => parameters.set("state", "attacker-state"),
-    code: "IDENTITY_INVALID",
-    message: /state/,
+    code: "IDENTITY_REQUIRED",
+    message: /refused 1 callback without this sign-in's state/,
+    refused: true,
   },
   {
     name: "a callback with no state",
     callback: (parameters) => parameters.delete("state"),
-    code: "IDENTITY_INVALID",
-    message: /state/,
+    code: "IDENTITY_REQUIRED",
+    message: /refused 1 callback without this sign-in's state/,
+    refused: true,
   },
   {
     name: "an authorization request whose nonce is not the one PiShip sent",
@@ -77,8 +86,13 @@ export function browser(follow: Follow, attack?: Attack): HostileBrowser {
         attack?.authorize?.(authorization.searchParams);
         const callback = await follow(authorization);
         attack?.callback?.(callback.searchParams);
-        // PiShip's listener answers the first request it gets.
-        await fetch(callback);
+        // PiShip's listener answers the first matching request it gets and
+        // refuses one without the sign-in's state.
+        const answer = await fetch(callback);
+        if (attack?.refused && answer.status !== 400)
+          throw new Error(
+            `the listener answered a callback it must refuse with HTTP ${answer.status}`,
+          );
       })().catch((error: unknown) => {
         failure = error as Error;
       });
