@@ -1,8 +1,9 @@
 // Update and rollback over each versioned state file the migration check
 // reads, left empty or cut short (a crash mid-write, a full disk). None may
-// leave either operation refusing forever: the state marker is rebuilt, and
-// credential metadata is cleared and reacquired.
-import { existsSync } from "node:fs";
+// leave either operation refusing forever: the state marker is rebuilt,
+// credential metadata is cleared and reacquired, and a torn audit line is
+// kept in place.
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MemorySecretStore } from "@piship/credentials";
 import { describe, expect, it } from "vitest";
@@ -52,6 +53,10 @@ const FILES: readonly { path: string; valid: string }[] = [
   {
     path: "credentials-metadata/pending-issuance.json",
     valid: JSON.stringify({ schema: "piship-credential-issuance/v1" }),
+  },
+  {
+    path: "logs/audit.jsonl",
+    valid: `${JSON.stringify({ schema: "piship-audit/v1", type: "launch" })}\n`,
   },
 ];
 
@@ -118,7 +123,10 @@ describe.runIf(HOST_EVIDENCED)("a damaged versioned state file", () => {
             schema: "piship-state/v1",
             version: TARGET[operation],
           });
-          if (path !== "state.json")
+          if (path.startsWith("logs/"))
+            // An audit log is never rewritten or dropped.
+            expect(readFileSync(absolute(path), "utf8")).toBe(content);
+          else if (path !== "state.json")
             // Credential metadata is cleared and reacquired.
             expect(existsSync(absolute(path))).toBe(false);
         },

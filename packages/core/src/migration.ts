@@ -399,19 +399,34 @@ export function readStateMarker(stateDir: string): StateMarker | null {
   }
 }
 
-function newestAuditSchema(stateDir: string): string | null | "unreadable" {
+/**
+ * The schema of the newest audit event, or null when there is none. A line
+ * that is not an event (one cut short by a crash or a full disk) is skipped:
+ * no release reads it as an event, and the log is never rewritten, so it is
+ * kept in place and named in `damaged`.
+ */
+function newestAuditSchema(stateDir: string): {
+  schema: string | null;
+  damaged: string | null;
+} {
+  let damaged: string | null = null;
   // Right after a size rotation the newest events are in `audit.jsonl.1`.
   for (const path of auditLogFiles(stateDir)) {
-    const last = readFileSync(path, "utf8").trimEnd().split("\n").at(-1);
-    if (!last) continue;
-    try {
-      const value = JSON.parse(last) as { schema?: unknown };
-      return typeof value.schema === "string" ? value.schema : "unreadable";
-    } catch {
-      return "unreadable";
+    const lines = readFileSync(path, "utf8").split("\n");
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = (lines[index] as string).trim();
+      if (!line) continue;
+      try {
+        const value = JSON.parse(line) as { schema?: unknown } | null;
+        if (typeof value?.schema === "string")
+          return { schema: value.schema, damaged };
+      } catch {
+        // Not an event; see below.
+      }
+      damaged ??= path;
     }
   }
-  return null;
+  return { schema: null, damaged };
 }
 
 function worst(verdicts: readonly MigrationVerdict[]): MigrationVerdict {
@@ -490,12 +505,13 @@ export function checkStateMigration(
       });
       continue;
     }
-    const schema =
-      dataClass.schema === "audit"
-        ? newestAuditSchema(stateDir)
-        : dataClass.schema === "state"
-          ? (marker?.schema ?? null)
-          : readSchema(path);
+    const audit =
+      dataClass.schema === "audit" ? newestAuditSchema(stateDir) : null;
+    const schema = audit
+      ? audit.schema
+      : dataClass.schema === "state"
+        ? (marker?.schema ?? null)
+        : readSchema(path);
     // A target whose lock predates this schema key reads none of the class.
     const supported = target.schemas[dataClass.schema] ?? [];
     if (schema === null) {
@@ -505,7 +521,9 @@ export function checkStateMigration(
         current: null,
         verdict: "safe",
         action: "keep",
-        reason: "Not present",
+        reason: audit?.damaged
+          ? `Kept in place; ${audit.damaged} holds only a line cut short, which no release reads as an event`
+          : "Not present",
       });
       continue;
     }

@@ -303,6 +303,39 @@ describe("checkStateMigration", () => {
     });
   });
 
+  it("keeps an audit log whose newest line was cut short, and reads the event before it", () => {
+    const dir = populated();
+    const event = '{"schema":"piship-audit/v1","type":"launch"}';
+    // A torn final append, after an event and on its own.
+    write(dir, "logs/audit.jsonl", `${event}\n{"schema":"piship-au`);
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "audit and metrics logs",
+      ),
+    ).toMatchObject({
+      current: "piship-audit/v1",
+      verdict: "safe",
+      action: "keep",
+    });
+    write(dir, "logs/audit.jsonl", '{"schema":"piship-au');
+    const torn = item(
+      checkStateMigration(dir, target(), current),
+      "audit and metrics logs",
+    );
+    expect(torn).toMatchObject({ current: null, verdict: "safe" });
+    expect(torn.reason).toContain(join(dir, "logs", "audit.jsonl"));
+    // The newest complete event decides, also across a rotation.
+    write(dir, "logs/audit.jsonl", "{\n");
+    write(dir, "logs/audit.jsonl.1", '{"schema":"piship-audit/v2"}\n');
+    expect(
+      item(
+        checkStateMigration(dir, target(), current),
+        "audit and metrics logs",
+      ).verdict,
+    ).toBe("unsupported");
+  });
+
   it("clears and reacquires credential classes the target cannot read", () => {
     const dir = populated();
     write(dir, "credentials-metadata/inference.json", {
