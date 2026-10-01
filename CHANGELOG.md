@@ -17,6 +17,10 @@ Changes on `main` after v0.7.1. Not released.
 - The [trust root](docs/release/trust-root.md) records the decisions that the PiShip project operates no official update channel for the example distributions and that release key custody belongs to each distribution owner; the remaining signed-channel gaps are deferred to #181 (#180).
 - The [status page](docs/status.md#after-v071-on-main) records the first passing `Live provider` runs: manual, real-provider evidence for the reference stack only, with no validation yet against a company identity provider or gateway in production.
 
+### Fixed
+
+- Installing a distribution that is already installed names the installed version and the exact uninstall command (the installed release's own `piship.mjs`; the branded command has none), says that state is kept, and says to install again with `--use-existing-state`. A damaged receipt keeps the previous message (#184).
+
 ## v0.7.1
 
 Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) from tag `v0.7.1` (commit `bd4bc09`, the squash of #174); not published to npm. Release qualification passed on that exact commit ([run 36857734987](https://github.com/tc3oliver/piship/actions/runs/36857734987)). v0.7.1 collects the v0.7.x fixes made on `main` after v0.7.0 and is the production-validation baseline: the one PiShip version a production consumer pins while it validates PiShip in production, instead of tracking `main` ([baseline](docs/status.md#v071-production-validation-baseline), #173). The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`, and Pi stays at 0.87.1. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md); the project does not operate a signed channel yet.
