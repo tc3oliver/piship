@@ -6,9 +6,13 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditLogFiles } from "@piship/audit";
 import type { SecretStoreProvider } from "@piship/credentials";
-import { applyStorageTransition } from "./storage-transition.js";
+import {
+  applySecretLayoutTransition,
+  applyStorageTransition,
+} from "./storage-transition.js";
 
 export {
+  applySecretLayoutTransition,
   applyStorageTransition,
   storageOf,
   storageTransition,
@@ -432,6 +436,8 @@ export function checkStateMigration(
      * active store and reacquired (see `applyStorageTransition`).
      */
     readonly storage?: SecretStoreProvider;
+    /** Defaults to `process.platform`; see `applySecretLayoutTransition`. */
+    readonly platform?: NodeJS.Platform;
   },
 ): MigrationReport {
   const items: MigrationItem[] = [];
@@ -538,7 +544,12 @@ export function checkStateMigration(
     });
   }
   const checked = applyStorageTransition(
-    items,
+    applySecretLayoutTransition(
+      items,
+      current.storage,
+      target.schemas,
+      current.platform,
+    ),
     current.storage,
     target.storage,
   );
