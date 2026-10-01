@@ -105,7 +105,8 @@ The runtime credential still comes from `credential.provider: http-broker`, with
 
 | Situation | Code |
 | --- | --- |
-| Not signed in, sign-in cancelled or timed out, redirect port unavailable | `IDENTITY_REQUIRED` |
+| Not signed in, sign-in cancelled or timed out | `IDENTITY_REQUIRED` |
+| The registered redirect port is in use (another `login` still running, say) or cannot be bound | `CONFIG_UNAVAILABLE`, naming the port and how to find what holds it |
 | Denied or rejected authorization, failed ID token or discovery check, revocation failure | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |
 

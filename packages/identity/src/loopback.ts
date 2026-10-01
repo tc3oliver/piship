@@ -14,6 +14,38 @@ const PAGE = (message: string) =>
   `<!doctype html><meta charset="utf-8"><title>Sign-in</title><p>${message}</p>`;
 
 /**
+ * The registered redirect cannot be bound. That is a local resource the login
+ * needs, not a missing identity: name the port and how to free it.
+ */
+function listenError(base: URL, error: Error): PiShipError {
+  const code = (error as NodeJS.ErrnoException).code;
+  const port = base.port;
+  if (code === "EADDRINUSE") {
+    const find =
+      process.platform === "win32"
+        ? `netstat -ano | findstr :${port}`
+        : `lsof -nP -iTCP:${port} -sTCP:LISTEN`;
+    return new PiShipError(
+      "CONFIG_UNAVAILABLE",
+      `Cannot listen on the registered redirect ${base.host}: port ${port} is already in use`,
+      {
+        component: "identity",
+        userAction: `Another login may still be running: finish or cancel it (Ctrl-C), then try again. Otherwise find the process holding port ${port} (\`${find}\`) and stop it, or ask your administrator to register another loopback redirect port`,
+      },
+    );
+  }
+  return new PiShipError(
+    "CONFIG_UNAVAILABLE",
+    `Cannot listen on the registered redirect ${base.host}: ${code ?? error.message}`,
+    {
+      component: "identity",
+      userAction:
+        "Check that the loopback address and port of the registered redirect can be used on this machine",
+    },
+  );
+}
+
+/**
  * Listen on the registered loopback redirect (RFC 8252 section 7.3). Only the
  * registered path is answered, the first callback wins, and the listener
  * closes on completion, timeout, or cancellation.
@@ -55,15 +87,7 @@ export async function startLoopbackReceiver(
     settle.resolve(url);
   });
   await new Promise<void>((resolve, reject) => {
-    server.once("error", (error) =>
-      reject(
-        new PiShipError(
-          "IDENTITY_REQUIRED",
-          `Cannot listen on the registered redirect ${base.host}: ${(error as NodeJS.ErrnoException).code ?? error.message}`,
-          { component: "identity" },
-        ),
-      ),
-    );
+    server.once("error", (error) => reject(listenError(base, error)));
     server.listen(Number(base.port || 0), host, () => resolve());
   });
   const port = (server.address() as AddressInfo).port;
