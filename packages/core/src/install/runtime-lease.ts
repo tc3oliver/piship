@@ -43,9 +43,9 @@ export function acquireLaunchGate(id: string) {
   const path = join(installHome(), "receipts", `.${id}.launch.lock`);
   return acquireLifecycleLock(
     path,
-    () =>
+    (_pid, holder) =>
       new Error(
-        `A launcher or lifecycle operation for ${id} is registering; retry`,
+        `A launcher or lifecycle operation for ${id} is registering: ${path} is held by ${holder}; retry when it finishes, and if no launcher or PiShip command is running, remove that file`,
       ),
     () => new Error(`Could not lock launcher registration for ${id}`),
   );

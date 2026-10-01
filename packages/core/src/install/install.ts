@@ -218,15 +218,26 @@ const breakGate = (observed) => {
   } catch {}
   try { rmSync(aside, { force: true }); } catch {}
 };
+const describeHolder = (holder) =>
+  holder.raw === null ? "a holder whose record cannot be read"
+  : holder.raw === "" ? "a holder still writing its record"
+  : holder.pid === null ? "an unknown holder"
+  : "process " + holder.pid + (holder.host !== null && holder.host !== host ? " on another host" : "");
 const gateDeadline = Date.now() + 500;
 for (;;) {
   try {
     writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
     break;
   } catch (error) {
-    const holder = error.code === "EEXIST" ? gateHolder() : undefined;
-    if (error.code !== "EEXIST" || Date.now() > gateDeadline) {
-      console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering; retry.`)});
+    // Only an existing gate is contention; anything else (EACCES, ENOSPC,
+    // EROFS) is reported as it is, since retrying cannot help.
+    if (error.code !== "EEXIST") {
+      console.error(${JSON.stringify(`Could not register a launch of ${id}: `)} + error.message);
+      process.exit(1);
+    }
+    const holder = gateHolder();
+    if (Date.now() > gateDeadline) {
+      console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering: `)} + gatePath + " is held by " + (holder ? describeHolder(holder) : "another launcher") + ". Retry when it finishes; if no launcher or PiShip command is running, remove that file.");
       process.exit(1);
     }
     if (holder && gateStale(holder)) breakGate(holder);

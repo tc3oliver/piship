@@ -2829,7 +2829,10 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
       encoding: "utf8",
     });
     expect(busy.status).toBe(1);
-    expect(busy.stderr).toMatch(/registering; retry/);
+    // The launcher names the gate by its real path, which can differ from
+    // the configured one (/private/var on macOS).
+    expect(busy.stderr).toContain(join("receipts", `.${ID}.launch.lock`));
+    expect(busy.stderr).toContain(`is held by process ${process.pid}. Retry`);
     expect(Date.now() - started).toBeLessThan(10_000);
     rmSync(gate);
   }, 30_000);

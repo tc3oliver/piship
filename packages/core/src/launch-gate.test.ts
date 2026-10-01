@@ -4,9 +4,11 @@
 // PiShip's).
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   readFileSync,
   readdirSync,
+  renameSync,
   writeFileSync,
   watch,
 } from "node:fs";
@@ -24,11 +26,18 @@ import {
   livePid,
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
-import { readInstallReceipt } from "./install/index.js";
+import { readInstallReceipt, uninstallDistribution } from "./install/index.js";
 import { LIFECYCLE_LOCK_REUSE_MS } from "./install/lifecycle-lock.js";
 import { processIdentity, recordedProcessGone } from "./process-identity.js";
 
 useLifecycleHomes();
+
+/**
+ * The end of the gate's path: the launcher names it by its real path, which
+ * on macOS (/private/var) and Windows (a long user name for a short one)
+ * differs from the configured one.
+ */
+const GATE_TAIL = join("receipts", `.${ID}.launch.lock`);
 
 function gatePath(): string {
   return join(
@@ -53,11 +62,18 @@ function gate(fields: Record<string, unknown>): void {
 }
 
 function runLauncher() {
-  return spawnSync(
-    process.execPath,
-    [readInstallReceipt(ID).launcher as string],
-    { encoding: "utf8" },
-  );
+  return spawnSync(process.execPath, [join(appsDir(), "launch.mjs")], {
+    encoding: "utf8",
+  });
+}
+
+function refusal(action: () => unknown): Error {
+  try {
+    action();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected a refusal");
 }
 
 const waitForFile = (path: string): Promise<void> =>
@@ -182,12 +198,67 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
 
   it("never reclaims another host's gate by this host's processes before its lease runs out", async () => {
     await installed();
-    gate({ pid: deadPid(), identity: "1", host: "0123456789ab" });
-    expect(runLauncher().status).toBe(1);
+    const gone = deadPid();
+    gate({ pid: gone, identity: "1", host: "0123456789ab" });
+    const refused = runLauncher();
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(`process ${gone} on another host`);
     expect(existsSync(gatePath())).toBe(true);
     age(gatePath(), LIFECYCLE_LOCK_REUSE_MS + 60_000);
     const launched = runLauncher();
     expect(launched.status, launched.stderr).toBe(0);
     expect(existsSync(gatePath())).toBe(false);
   }, 60_000);
+
+  it("names the gate and its holder when it stops waiting, in the launcher and in core", async () => {
+    await installed();
+    const holder = livePid();
+    gate({ pid: holder, identity: processIdentity(holder) ?? null });
+    const launched = runLauncher();
+    expect(launched.status).toBe(1);
+    expect(launched.stderr).toContain(GATE_TAIL);
+    expect(launched.stderr).toContain(`held by process ${holder}.`);
+    const error = refusal(() => uninstallDistribution(ID));
+    expect(error.message).toContain(gatePath());
+    expect(error.message).toContain(`held by process ${holder}`);
+  }, 60_000);
+
+  it("reports an error other than a held gate as it is, never as contention", async () => {
+    await installed();
+    // The receipts directory replaced by a file: the gate cannot be created
+    // (ENOTDIR, or ENOENT on Windows), and retrying cannot help.
+    const receipts = dirname(gatePath());
+    renameSync(receipts, `${receipts}.moved`);
+    writeFileSync(receipts, "not a directory");
+    const launched = runLauncher();
+    expect(launched.status).toBe(1);
+    expect(launched.stderr).toContain(
+      `Could not register a launch of ${ID}: E`,
+    );
+    expect(launched.stderr).toContain(`.${ID}.launch.lock`);
+    expect(launched.stderr).not.toMatch(/registering|retry/i);
+  }, 60_000);
+
+  // Permissions do not stop file creation on Windows, and root ignores them.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "reports a read-only receipts directory as the permission error it is",
+    async () => {
+      await installed();
+      const receipts = dirname(gatePath());
+      chmodSync(receipts, 0o555);
+      try {
+        const launched = runLauncher();
+        expect(launched.status).toBe(1);
+        expect(launched.stderr).toContain("EACCES");
+        expect(launched.stderr).toContain(GATE_TAIL);
+        expect(launched.stderr).not.toMatch(/registering|retry/i);
+        const error = refusal(() => uninstallDistribution(ID));
+        expect(error.message).toContain("EACCES");
+        expect(error.message).not.toMatch(/registering|retry/i);
+      } finally {
+        chmodSync(receipts, 0o755);
+      }
+    },
+    60_000,
+  );
 });
