@@ -252,6 +252,18 @@ describe("private-only destinations", () => {
     ).toThrow(expect.objectContaining({ code: "NETWORK_DENIED" }));
   });
 
+  it("matches the exact hostname: never a subdomain, a parent, or a spelling with a trailing dot", () => {
+    for (const url of [
+      "https://api.llm.internal.example/v1",
+      "https://internal.example/v1",
+      "https://llm.internal.example./v1",
+      "https://203.0.113.8/",
+    ])
+      expect(() => checkDestination(new URL(url), policy), url).toThrow(
+        expect.objectContaining({ code: "NETWORK_DENIED" }),
+      );
+  });
+
   it("does not check that an allowed address is private", () => {
     // 203.0.113.7 is a documentation address, not a private one: listing a
     // public host in allowHosts is honored, and nothing warns about it.

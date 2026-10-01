@@ -61,6 +61,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - The LiteLLM recipe in the enterprise integration contract keyed a broker's LiteLLM user, and with it the budget, on `sub` alone, so two principals from different issuers with the same subject would share one budget. It now derives the user from the issuer and the subject, as the reference broker already does (#162).
 - The reference READMEs, tests, and the identity conformance kit cited decisions D-01, D-07, and D-11 and sections of a maintainer-local specification, none of which a reader can find; `docs/decisions.md` numbers its decisions 1 to 30. Each reference now names what it meant, or the public document or test that holds it (#162).
 - The enterprise reference README described four services (there are five, with the broker), did not list the Linux sandbox prerequisites the reference distribution needs (bubblewrap with unprivileged user namespaces, and the Secret Service), and did not say which broker variables (`BROKER_DISTRIBUTION`, `BROKER_AUTHORIZED_PARTY`) to change for another `app.id` (#162).
+- The manifest reference now states what `network.allowHosts` accepts and matches: exact hostnames or IP literals only, with no wildcard, suffix, port, path, or range, and tests hold both the parser and the destination check to it (#162).
 
 ## v0.7.0
 

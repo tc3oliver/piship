@@ -375,3 +375,42 @@ describe("alpha migration", () => {
     ).toEqual([]);
   });
 });
+
+describe("network.allowHosts", () => {
+  const hosts = (allowHosts: unknown) =>
+    parseManifest({ ...managed, network: { allowHosts } }).access?.network
+      .allowHosts;
+
+  it("takes exact hostnames and IP literals, lowercased", () => {
+    expect(
+      hosts([
+        "SIEM.Corp.Example",
+        "10.0.0.5",
+        "xn--bcher-kva.example",
+        "[::1]",
+      ]),
+    ).toEqual([
+      "siem.corp.example",
+      "10.0.0.5",
+      "xn--bcher-kva.example",
+      "[::1]",
+    ]);
+  });
+
+  it.each([
+    "*.corp.example",
+    ".corp.example",
+    "corp.example.",
+    "https://siem.corp.example",
+    "siem.corp.example:8443",
+    "siem.corp.example/ingest",
+    "10.0.0.0/8",
+    "[fd00::1]",
+    "b\u00fccher.example",
+  ])(
+    "rejects %s: no wildcard, suffix, URL, port, path, range, or Unicode form",
+    (entry) => {
+      expect(() => hosts([entry])).toThrow("Expected a hostname");
+    },
+  );
+});
