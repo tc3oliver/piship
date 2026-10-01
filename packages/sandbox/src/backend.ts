@@ -161,6 +161,19 @@ export interface SandboxCapabilities {
 export interface SandboxPrepareRequest {
   /** The resolved policy: paths, network mode, and environment allowlist. */
   readonly profile: SandboxProfile;
+  /**
+   * Aborts when PiShip stops waiting for the sandbox. A custom backend's
+   * `prepare()` always gets one, which also aborts at PiShip's deadline.
+   */
+  readonly signal?: AbortSignal;
+}
+
+/** What PiShip passes to a backend's `available()` and an instance's `dispose()`. */
+export interface SandboxCallOptions {
+  /**
+   * Aborts when PiShip stops waiting for the call: at its deadline for a
+   * custom backend. Optional to honor; PiShip stops waiting either way.
+   */
   readonly signal?: AbortSignal;
 }
 
@@ -207,7 +220,7 @@ export interface SandboxInstance {
    */
   wrap?(command: SandboxCommand): WrappedCommand;
   /** Release everything the instance holds. Called once; must not throw. */
-  dispose(): Promise<void>;
+  dispose(options?: SandboxCallOptions): Promise<void>;
   /**
    * Optional: an opaque id of the environment the last command ran in, such
    * as a Kubernetes claim name. A change makes PiShip check a shared or
@@ -221,7 +234,7 @@ export interface SandboxBackend {
   readonly id: string;
   readonly provider: SandboxProvider;
   /** Whether the mechanism or service can be used now. */
-  available(): Promise<AdapterAvailability>;
+  available(options?: SandboxCallOptions): Promise<AdapterAvailability>;
   capabilities(): SandboxCapabilities;
   /** Create or prepare an isolated environment for a session. */
   prepare(request: SandboxPrepareRequest): Promise<SandboxInstance>;

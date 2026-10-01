@@ -856,6 +856,120 @@ describe("PiShip owns timeout, cancellation, and dispose", () => {
   });
 });
 
+describe("custom backend deadlines", () => {
+  const never = () => new Promise<never>(() => undefined);
+  const instance = (
+    dispose: (options?: { signal?: AbortSignal }) => Promise<void>,
+  ) => ({
+    exec: async () => ({ exitCode: 0 }),
+    dispose,
+  });
+
+  it("fails activation when available() never answers, naming the backend", {
+    timeout: 2_000,
+  }, async () => {
+    let seen: AbortSignal | undefined;
+    const backend = customBackend(
+      {
+        id: "acme",
+        available: (options?: { signal?: AbortSignal }) => {
+          seen = options?.signal;
+          return never();
+        },
+        capabilities: () => REMOTE,
+        prepare: never,
+      },
+      { availableMs: 20 },
+    );
+    await expect(activate(backend)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining(
+        "the acme sandbox backend did not answer available() within 1 s",
+      ),
+    });
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it("fails activation when prepare() never answers, and disposes an instance that arrives late", {
+    timeout: 2_000,
+  }, async () => {
+    let seen: AbortSignal | undefined;
+    let deliver: (value: unknown) => void = () => {};
+    let disposed = 0;
+    const backend = customBackend(
+      {
+        id: "acme",
+        available: async () => ({ available: true }),
+        capabilities: () => REMOTE,
+        prepare: (request: { signal?: AbortSignal }) => {
+          seen = request.signal;
+          return new Promise((resolve) => {
+            deliver = resolve;
+          });
+        },
+      },
+      { prepareMs: 20 },
+    );
+    await expect(activate(backend)).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining(
+        "the acme sandbox backend did not answer prepare() within 1 s",
+      ),
+    });
+    expect(seen?.aborted).toBe(true);
+    deliver(
+      instance(async () => {
+        disposed += 1;
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(disposed).toBe(1);
+  });
+
+  it("ends a dispose() that never answers without throwing, and says so", {
+    timeout: 2_000,
+  }, async () => {
+    const notices: string[] = [];
+    let seen: AbortSignal | undefined;
+    const backend = customBackend(
+      {
+        id: "acme",
+        available: async () => ({ available: true }),
+        capabilities: () => REMOTE,
+        prepare: async () =>
+          instance((options) => {
+            seen = options?.signal;
+            return never();
+          }),
+      },
+      { disposeMs: 20, notify: (message) => notices.push(message) },
+    );
+    const prepared = await backend.prepare({ profile: {} as SandboxProfile });
+    await expect(prepared.dispose()).resolves.toBeUndefined();
+    expect(seen?.aborted).toBe(true);
+    expect(notices).toEqual([
+      expect.stringContaining(
+        "the acme sandbox backend did not answer dispose() within 1 s",
+      ),
+    ]);
+  });
+
+  it("keeps a backend that ignores the signal, and its own dispose() failure", async () => {
+    const backend = customBackend({
+      id: "acme",
+      available: async () => ({ available: true }),
+      capabilities: () => REMOTE,
+      prepare: async () =>
+        instance(async () => {
+          throw new Error("service refused");
+        }),
+    });
+    await expect(backend.available()).resolves.toEqual({ available: true });
+    const prepared = await backend.prepare({ profile: {} as SandboxProfile });
+    await expect(prepared.dispose()).rejects.toThrow("service refused");
+  });
+});
+
 const native = selectAdapter();
 const nativeReady = (await native.available()).available;
 const requireSandbox = process.env.PISHIP_REQUIRE_SANDBOX === "1";

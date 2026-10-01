@@ -36,6 +36,7 @@ export {
   SANDBOX_GUARANTEES,
   SANDBOX_PROVIDERS,
   type SandboxBackend,
+  type SandboxCallOptions,
   type SandboxCapabilities,
   type SandboxExecIO,
   type SandboxExecRequest,
@@ -114,7 +115,13 @@ export {
   type WorkspaceReport,
   type WorkspaceVerification,
 } from "./workspace.js";
-export { type CustomBackendContext, customBackend } from "./custom.js";
+export {
+  CUSTOM_DISPOSE_TIMEOUT_MS,
+  CUSTOM_PREPARE_TIMEOUT_MS,
+  type CustomBackendContext,
+  type CustomBackendDeadlines,
+  customBackend,
+} from "./custom.js";
 export {
   connectEnvelope,
   E2bCompatibleBackend,

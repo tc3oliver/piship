@@ -72,6 +72,7 @@ export {
   HOST_FILESYSTEM_ISOLATION,
   SANDBOX_GUARANTEES,
   type SandboxBackend,
+  type SandboxCallOptions,
   type SandboxCapabilities,
   type SandboxCommand,
   type SandboxExecIO,
