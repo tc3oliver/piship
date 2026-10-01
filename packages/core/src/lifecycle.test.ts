@@ -491,6 +491,17 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       fromRelease: true,
       leftovers: [],
     });
+    // doctor runs inside a launcher that holds a lease: its own lease is
+    // not another live session.
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      expect(runtimeLeases(ID).map((lease) => lease.self)).toEqual([true]);
+      expect(
+        lifecycleStatus(ID, verifyPayload(payload)).runtimeLeases,
+      ).toBeUndefined();
+    } finally {
+      releaseLease();
+    }
   });
 
   it("installs a release directory without an archive digest", async () => {

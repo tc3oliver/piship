@@ -438,6 +438,9 @@ async function collectAccess(
   // proxy, a TLS chain, an endpoint) is at fault: a working activation has
   // already reached them, and the extra unauthenticated requests would only
   // reach the services' logs.
+  // The OIDC issuer is the exception: it serves its discovery document to
+  // anyone, and a stored session hides a dead issuer from activation until
+  // the next refresh, so it is always checked.
   const checks =
     opened && !tlsError
       ? await networkChecks(
@@ -452,7 +455,9 @@ async function collectAccess(
                 },
                 { label: "gateway", url: opened.endpoints.baseUrl },
               ]
-            : [],
+            : manifest.identity.mode === "oidc" && !workload
+              ? [{ label: "identity", url: opened.endpoints.issuer }]
+              : [],
         )
       : {};
   if (opened) saveMetrics(metrics);

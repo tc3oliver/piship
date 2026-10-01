@@ -67,7 +67,9 @@ export function lifecycleStatus(
       ...(retired ? { retiredBy: retired.release } : {}),
     };
   });
-  const leases = runtimeLeases(id);
+  // The process asking (doctor runs in a launcher that holds a lease) is
+  // not another session.
+  const leases = runtimeLeases(id).filter((lease) => !lease.self);
   const live = leases.filter((lease) => lease.live).length;
   const stale = leases.length - live;
   return {

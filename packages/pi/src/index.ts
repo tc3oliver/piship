@@ -139,16 +139,16 @@ export async function launchPiDistribution(
     // logout refuse it, so they are not advertised.
     const piNative = metadata.access?.credential.provider === "pi-native";
     const accessCommands = piNative
-      ? "doctor | models | version"
-      : "login | logout | doctor | models | version";
+      ? "doctor [--json] | models | version"
+      : "login | logout | doctor [--json] | models | version";
     const piNativeHelp = piNative
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
       ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--smoke | --smoke-model]${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor | version | update [--check] | rollback${governanceHelp}\n  [--new-session] [--smoke]`
-        : "\n\nCommands:\n  doctor | version";
+        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session] [--smoke]`
+        : "\n\nCommands:\n  doctor [--json] | version";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
     );
@@ -157,7 +157,7 @@ export async function launchPiDistribution(
   if (!sessionOption) {
     if (args.length === 1 && command === "login") return runLogin(ctx);
     if (args.length === 1 && command === "logout") return runLogout(ctx);
-    if (args.length === 1 && command === "doctor") return runDoctor(ctx);
+    if (command === "doctor") return runDoctor(ctx, rest);
     if (args.length === 1 && command === "models") return runModels(ctx);
     if (command === "update") return runUpdate(ctx, rest);
     if (args.length === 1 && command === "rollback") return runRollback(ctx);

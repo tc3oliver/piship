@@ -194,7 +194,9 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     // launch: the command starts, and signed out it refuses before it
     // contacts a service or writes a secret.
     const help = await run(["--help"]);
-    expect(help.stdout).toContain("login | logout | doctor | models | version");
+    expect(help.stdout).toContain(
+      "login | logout | doctor [--json] | models | version",
+    );
     const unsigned = await run(["--smoke"], 1);
     expect(unsigned.stderr).toContain("IDENTITY_REQUIRED");
     expect(unsigned.stderr).toContain(`${s.id} login`);

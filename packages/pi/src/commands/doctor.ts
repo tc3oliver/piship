@@ -45,9 +45,26 @@ export function renderDoctor(data: DoctorData): DoctorReport {
   return report;
 }
 
-export async function runDoctor(ctx: LaunchContext): Promise<void> {
+export async function runDoctor(
+  ctx: LaunchContext,
+  args: readonly string[] = [],
+): Promise<void> {
+  const command = ctx.metadata.app.command;
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    ctx.out(
+      `Usage: ${command} doctor [--json]\n\nCheck this distribution's configuration, sign-in, network, governance, and release, and exit non-zero on any failure. --json prints the same checks as JSON.`,
+    );
+    return;
+  }
+  if (args.length && !(args.length === 1 && args[0] === "--json"))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Usage: ${command} doctor [--json]`,
+    );
   const report = renderDoctor(await collectDoctorData(ctx));
-  ctx.out(report.render());
+  ctx.out(
+    args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),
+  );
   if (report.failed)
     throw new PiShipError(
       "CONFIG_UNAVAILABLE",
