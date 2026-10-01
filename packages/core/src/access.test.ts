@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
   type AccessEvent,
+  boundedCredentialProvider,
   DistributionAccess,
   accessStatePaths,
   configuredModel,
@@ -737,6 +738,59 @@ describe("credential adapters", () => {
     );
   });
 
+  it("stops waiting for an adapter whose acquire never settles, releases the lock, and repeats the key", {
+    timeout: 5_000,
+  }, async () => {
+    write(
+      "hangs.mjs",
+      `export default () => ({
+        mode: "adapter",
+        requiresIdentity: false,
+        acquire(_identity, ctx) {
+          (globalThis.__pishipHungAcquire ??= []).push(ctx);
+          return new Promise(() => {});
+        },
+      });`,
+    );
+    const options = {
+      ...open("./adapters/hangs.mjs").options,
+      adapterTimeoutMs: 50,
+    };
+    const timedOut = {
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: true,
+      message:
+        "The credential adapter ./adapters/hangs.mjs did not answer acquire() within 1 s",
+      sanitizedDetail: expect.objectContaining({
+        adapter: "./adapters/hangs.mjs",
+        phase: "acquire",
+        reason: "timeout",
+        outcome: "unknown",
+      }),
+    };
+    await expect(
+      DistributionAccess.open(options).activate(),
+    ).rejects.toMatchObject(timedOut);
+    // The lock is free (a held one would keep the next launch waiting) and
+    // the request whose answer never came keeps its idempotency key.
+    const locks = readdirSync(join(temp, "state"), { recursive: true }).filter(
+      (name) => String(name).endsWith(".lock"),
+    );
+    expect(locks).toEqual([]);
+    await expect(
+      DistributionAccess.open(options).activate(),
+    ).rejects.toMatchObject(timedOut);
+    const calls = (globalThis as Record<string, unknown>)
+      .__pishipHungAcquire as {
+      idempotencyKey?: string;
+      signal?: AbortSignal;
+    }[];
+    expect(calls).toHaveLength(2);
+    expect(calls.every((ctx) => ctx.signal?.aborted)).toBe(true);
+    expect(calls[0]?.idempotencyKey).toBeTruthy();
+    expect(calls[1]?.idempotencyKey).toBe(calls[0]?.idempotencyKey);
+  });
+
   it("stops waiting for an adapter module or factory that never settles", {
     timeout: 5_000,
   }, async () => {
@@ -759,6 +813,92 @@ describe("credential adapters", () => {
         adapterTimeoutMs: 50,
       }).activate(),
     ).rejects.toMatchObject({ code: "CONFIG_UNAVAILABLE", retryable: true });
+  });
+});
+
+describe("credential adapter deadlines", () => {
+  const credential = {
+    kind: "api_key" as const,
+    secret: new SecretValue("sk-late-credential-0001"),
+  };
+  const late = () => {
+    let issue: (value: typeof credential) => void = () => {};
+    const revoked: unknown[] = [];
+    const provider = boundedCredentialProvider(
+      {
+        mode: "adapter",
+        requiresIdentity: false,
+        acquire: () =>
+          new Promise((resolve) => {
+            issue = resolve;
+          }),
+        revoke: async (value) => {
+          revoked.push(value);
+        },
+      },
+      "./adapters/late.mjs",
+      { timeoutMs: 20 },
+    );
+    return { provider, issue: (value = credential) => issue(value), revoked };
+  };
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it("revokes a credential issued after the deadline for a request no key can repeat", async () => {
+    const { provider, issue, revoked } = late();
+    await expect(
+      provider.acquire(null, { distributionId: "mypi" }),
+    ).rejects.toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: true,
+    });
+    issue();
+    await settled();
+    expect(revoked).toEqual([credential]);
+  });
+
+  it("leaves a late credential to the idempotency key that recovers it", async () => {
+    const { provider, issue, revoked } = late();
+    await expect(
+      provider.acquire(null, { distributionId: "mypi", idempotencyKey: "k-1" }),
+    ).rejects.toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: true,
+    });
+    issue();
+    await settled();
+    expect(revoked).toEqual([]);
+  });
+
+  it("ends a cancelled call that ignores its signal, and keeps the provider's declarations", async () => {
+    const provider = boundedCredentialProvider(
+      Object.assign(
+        {
+          mode: "adapter" as const,
+          requiresIdentity: true,
+          acquire: () => new Promise<never>(() => {}),
+        },
+        { revocable: false },
+      ),
+      "./adapters/hangs.mjs",
+    );
+    const controller = new AbortController();
+    const acquire = provider.acquire(null, {
+      distributionId: "mypi",
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(acquire).rejects.toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
+      retryable: false,
+      sanitizedDetail: expect.objectContaining({ outcome: "unknown" }),
+    });
+    expect(provider).toMatchObject({
+      mode: "adapter",
+      requiresIdentity: true,
+      revocable: false,
+    });
+    expect(provider.refresh).toBeUndefined();
+    expect(provider.revoke).toBeUndefined();
   });
 });
 

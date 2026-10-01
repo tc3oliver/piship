@@ -1,4 +1,8 @@
-export type { AdapterContext } from "./adapters.js";
+export {
+  type AdapterContext,
+  boundedCredentialProvider,
+  type CredentialAdapterDeadlines,
+} from "./adapters.js";
 export {
   DistributionAccess,
   writeIdentityDiscardedMarker,

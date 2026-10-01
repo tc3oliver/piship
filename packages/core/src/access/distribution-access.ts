@@ -63,7 +63,11 @@ import {
 import { incompatibleCapabilities } from "@piship/policy";
 import type { AccessManifest } from "@piship/schema";
 import { readPreferences, resolveEffectiveConfig } from "../config.js";
-import { type AdapterContext, loadAdapter } from "./adapters.js";
+import {
+  type AdapterContext,
+  boundedCredentialProvider,
+  loadAdapter,
+} from "./adapters.js";
 import { type AccessMetrics, recordGatewayResult } from "./metrics.js";
 import { modelIncompatible } from "./models.js";
 import { SandboxCredential, type SignedInGuard } from "./sandbox-credential.js";
@@ -600,9 +604,18 @@ export class DistributionAccess {
       provider = new LocalSecretCredentialProvider();
     else if (mode === "none") provider = new NoCredentialProvider();
     else if (mode === "adapter")
-      provider = await this.#loadAdapter<CredentialProvider>(
+      provider = boundedCredentialProvider(
+        await this.#loadAdapter<CredentialProvider>(
+          access?.credential.adapter ?? "",
+          "credential",
+        ),
         access?.credential.adapter ?? "",
-        "credential",
+        this.options.adapterTimeoutMs
+          ? {
+              timeoutMs: this.options.adapterTimeoutMs,
+              interactiveTimeoutMs: this.options.adapterTimeoutMs,
+            }
+          : {},
       );
     else provider = new PiNativeCredentialProvider();
     if (provider.requiresIdentity && this.identityMode === "none")
