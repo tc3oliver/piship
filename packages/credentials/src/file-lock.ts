@@ -12,6 +12,7 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { basename, dirname } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { heldLocks, touchLock } from "./lock-heartbeat.js";
@@ -26,6 +27,8 @@ const LOCK_HEARTBEAT_MS = 5_000;
  */
 const LOCK_STALE_MS = 75_000;
 const LOCK_WAIT_MS = 90_000;
+/** How long a waiter waits in silence before it says what it waits for. */
+const LOCK_NOTICE_MS = 2_000;
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 /**
@@ -64,6 +67,59 @@ export interface FileLockTiming {
   readonly heartbeatMs?: number;
   readonly staleMs?: number;
   readonly waitMs?: number;
+  readonly noticeMs?: number;
+  /** Where the one wait notice goes; standard error by default. */
+  readonly notify?: (message: string) => void;
+}
+
+/**
+ * The holder a lock token names. A token is `<pid>-<random>@<hostname>`; one
+ * written before the hostname was recorded is `<pid>-<random>`, and its host
+ * is unknown. Anything else (an unusual hostname included) names no holder,
+ * so it is shown as "another process" and judged by the stale interval.
+ */
+function lockHolder(
+  token: string,
+): { pid: number; host: string | undefined } | undefined {
+  const match = /^(\d+)-[0-9a-f]+(?:@([\w.-]{1,255}))?$/.exec(token);
+  if (!match) return undefined;
+  return { pid: Number(match[1]), host: match[2] };
+}
+
+/** The holder named in an observed lock state, or undefined when unreadable. */
+function observedHolder(state: string) {
+  const token = state.slice(0, state.lastIndexOf("\n"));
+  return token === "?" ? undefined : lockHolder(token);
+}
+
+function describeHolder(state: string | undefined): string {
+  if (state === undefined) return "another process";
+  const holder = observedHolder(state);
+  if (!holder) return "another process";
+  return holder.host === undefined
+    ? `process ${holder.pid}`
+    : `process ${holder.pid} on ${holder.host}`;
+}
+
+/**
+ * Whether the lock's holder is provably gone: it recorded this host and its
+ * PID no longer exists here. Only "no such process" counts; any other answer
+ * (EPERM: alive under another user) leaves the holder alive. A reused PID can
+ * only make a dead holder look alive, which falls back to the stale interval,
+ * never a live holder look dead. A lock from another host, or from a token
+ * without a host, is judged by the stale interval alone. Limit: two machines
+ * or containers that share the lock directory, report the same hostname and
+ * see different process tables could break each other's live locks.
+ */
+function holderIsDead(state: string): boolean {
+  const holder = observedHolder(state);
+  if (!holder || holder.host !== hostname() || holder.pid <= 0) return false;
+  try {
+    process.kill(holder.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }
 
 /**
@@ -139,12 +195,14 @@ function breakStaleLock(lock: string, observed: string): void {
  * an interval, and before each blocking secret-store command). A waiter
  * breaks the lock only when it has watched the same token with the same
  * mtime for the stale interval, measured on the monotonic clock: its holder
- * made no progress, such as a crashed process. How old the mtime looks
+ * made no progress, such as a crashed process. A lock whose holder recorded
+ * this host and no longer exists here is broken at once (see `holderIsDead`). How old the mtime looks
  * against the wall clock never matters, so a clock that jumps forward never
  * lets a live holder lose the lock, and one that jumps backward never keeps
  * an abandoned lock forever. The caller's wait is monotonic as well; after
  * it, the caller fails with a retryable error. The lock is reentrant within
- * one call chain (see `holdsFileLock`).
+ * one call chain (see `holdsFileLock`). A waiter that is still waiting after
+ * the notice interval says once which lock it waits for and who holds it.
  *
  * A lease has a limit: a holder that makes no progress for the whole stale
  * interval (a stopped process, a suspended VM, a very long blocking call)
@@ -159,12 +217,17 @@ export async function withFileLock<T>(
   const heartbeatMs = timing.heartbeatMs ?? LOCK_HEARTBEAT_MS;
   const staleMs = timing.staleMs ?? LOCK_STALE_MS;
   const waitMs = timing.waitMs ?? LOCK_WAIT_MS;
+  const noticeMs = timing.noticeMs ?? LOCK_NOTICE_MS;
+  const notify =
+    timing.notify ?? ((message) => process.stderr.write(`${message}\n`));
   const lock = `${path}.lock`;
   const held = heldByChain.getStore();
   if (held?.has(lock)) return task();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
-  const deadline = monotonic() + waitMs;
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}@${hostname()}`;
+  const started = monotonic();
+  const deadline = started + waitMs;
+  let noticed = false;
   // The holder state last seen, and since when (monotonic) it is unchanged.
   let seen: { state: string; since: number } | undefined;
   for (;;) {
@@ -184,16 +247,27 @@ export async function withFileLock<T>(
       // symlink) waits like any other: the deadline and the pause apply on
       // every pass, so no state of the lock path can make a waiter spin.
       if (state === undefined) seen = undefined;
-      else if (seen?.state !== state) seen = { state, since: now };
+      else if (holderIsDead(state)) {
+        // Retried after the pause below, so a lock that cannot be moved
+        // aside never makes the waiter spin.
+        breakStaleLock(lock, state);
+        seen = undefined;
+      } else if (seen?.state !== state) seen = { state, since: now };
       else if (now - seen.since > staleMs) {
         breakStaleLock(lock, state);
         seen = undefined;
         continue;
       }
+      if (!noticed && now - started >= noticeMs) {
+        noticed = true;
+        notify(
+          `Waiting for ${lock}, held by ${describeHolder(state)} (up to ${Math.round(waitMs / 1000)} s)`,
+        );
+      }
       if (now > deadline)
         throw new PiShipError(
           "CREDENTIAL_ACQUIRE_FAILED",
-          `Another process is still updating ${basename(path)}; gave up after ${Math.round(waitMs / 1000)} s`,
+          `Another process is still updating ${basename(path)} (held by ${describeHolder(state)}); gave up after ${Math.round(waitMs / 1000)} s`,
           {
             component: "credential",
             retryable: true,
