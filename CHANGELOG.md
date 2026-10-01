@@ -65,6 +65,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - The manifest reference now states what `network.allowHosts` accepts and matches: exact hostnames or IP literals only, with no wildcard, suffix, port, path, or range, and tests hold both the parser and the destination check to it (#162).
 - The owner workflow's release checklist was the PiShip project's own (its CI workflows, the example distributions, its maintainer's approval). It moved to the [maintainer release checklist](docs/maintainers/release-checklist.md), and the owner workflow now has a checklist for a company releasing its own distribution (#162).
 - The README now gives the clone URL, a `piship init` path to start your own distribution, and a complete managed manifest that a test validates on its own (the excerpt before was not a valid manifest); `docs/release.md` opens with a task table instead of only the former-anchor table (#162).
+- `docs/security.md` gave the audit rotation size as 10 MB and 60 MB; it is 10 MiB per file (about 60 MiB in all). The roadmap claimed the README quickstart is checked against the current CLI; it now says which documentation checks exist (#162).
 
 ## v0.7.0
 
