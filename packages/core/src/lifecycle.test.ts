@@ -832,6 +832,11 @@ await installDistribution(artifact);
       JSON.stringify({ ...receipt, schema: "piship-install/v2" }),
     );
     expect(() => readInstallReceipt(ID)).toThrow(/written by a newer PiShip/);
+    // Uninstall leaves that receipt to the PiShip that wrote it.
+    expect(() => uninstallDistribution(ID)).toThrow(
+      /written by a newer PiShip/,
+    );
+    expect(existsSync(appsDir())).toBe(true);
     writeFileSync(
       path,
       JSON.stringify({
@@ -2214,6 +2219,142 @@ describe.runIf(HOST_EVIDENCED)("uninstall after an interrupted update", () => {
     expect(() => readInstallReceipt(ID)).toThrow(
       /No PiShip installation recorded/,
     );
+  });
+});
+
+describe.runIf(HOST_EVIDENCED)("a damaged install receipt", () => {
+  const receiptFile = () =>
+    join(process.env.PISHIP_INSTALL_HOME as string, "receipts", `${ID}.json`);
+  /** A payload of another distribution, `otherpi`, with its own command. */
+  function otherPayload(command: string): string {
+    const dir = temp("piship-other-project-");
+    const manifest = join(dir, "piship.yaml");
+    write(join(dir, "resources", "AGENTS.md"), "# other\n");
+    writeFileSync(
+      manifest,
+      manifestSource("1.0.0", true)
+        .replace(`id: ${ID}`, "id: otherpi")
+        .replace(`command: ${ID}`, `command: ${command}`),
+    );
+    lockManifest(manifest);
+    return fakeAssemble(manifest, temp("piship-other-"));
+  }
+
+  for (const [kind, damage] of [
+    ["truncated", (text: string) => text.slice(0, 120)],
+    ["empty", () => ""],
+  ] as const)
+    it(`uninstalls and purges a distribution whose receipt is ${kind}`, async () => {
+      const a = await release("1.0.0");
+      const receipt = await installDistribution(a.archive);
+      seedState();
+      const bin = process.env.PISHIP_BIN_HOME as string;
+      writeFileSync(join(bin, "unrelated"), "#!/bin/sh\necho unrelated\n");
+      writeFileSync(receiptFile(), damage(readFileSync(receiptFile(), "utf8")));
+      const error = (() => {
+        try {
+          readInstallReceipt(ID);
+        } catch (caught) {
+          return caught;
+        }
+      })();
+      expect(error).toBeInstanceOf(PiShipError);
+      expect(error).toMatchObject({ code: "CONFIG_INVALID" });
+      expect((error as Error).message).toContain(receiptFile());
+      expect((error as PiShipError).userAction).toBe(
+        `Run piship uninstall ${ID}, then install ${ID} again`,
+      );
+      // Reinstalling still refuses while the receipt exists.
+      await expect(installDistribution(a.archive)).rejects.toThrow(
+        /uninstall the existing distribution first/,
+      );
+      expect(uninstallDistribution(ID)).toBe(stateDir());
+      expect(existsSync(appsDir())).toBe(false);
+      expect(existsSync(receiptFile())).toBe(false);
+      expect(existsSync(receipt.commandPath)).toBe(false);
+      expect(readFileSync(join(bin, "unrelated"), "utf8")).toContain(
+        "unrelated",
+      );
+      expect(existsSync(stateDir())).toBe(true);
+      await expect(purgeDistributionState(ID)).resolves.toMatchObject({
+        state: stateDir(),
+      });
+      expect(existsSync(stateDir())).toBe(false);
+      await expect(installDistribution(a.archive)).resolves.toMatchObject({
+        active: "1.0.0",
+      });
+    });
+
+  it("names PISHIP_BIN_HOME for a command path under another bin home and removes nothing", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const original = process.env.PISHIP_BIN_HOME as string;
+    const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
+    process.env.PISHIP_BIN_HOME = temp("piship-other-bin-");
+    let error: unknown;
+    try {
+      uninstallDistribution(ID);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect((error as PiShipError).message).toContain(receiptFile());
+    expect((error as PiShipError).userAction).toBe(
+      `Set PISHIP_BIN_HOME=${original} and run the command again`,
+    );
+    expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
+    expect(existsSync(receipt.commandPath)).toBe(true);
+    process.env.PISHIP_BIN_HOME = original;
+    uninstallDistribution(ID);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+  });
+
+  it("removes only the current install home's paths when the receipt names another install home", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    const home = process.env.PISHIP_INSTALL_HOME as string;
+    // The receipt names an install home that exists and holds files.
+    const decoy = join(temp("piship-decoy-"), "install");
+    cpSync(home, decoy, { recursive: true });
+    const decoyTree = treeHash(decoy);
+    writeFileSync(
+      receiptFile(),
+      readFileSync(receiptFile(), "utf8").replaceAll(
+        JSON.stringify(home).slice(1, -1),
+        JSON.stringify(decoy).slice(1, -1),
+      ),
+    );
+    expect(() => readInstallReceipt(ID)).toThrow(
+      `it was written with PISHIP_INSTALL_HOME=${decoy}`,
+    );
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
+    expect(existsSync(receiptFile())).toBe(false);
+    expect(existsSync(receipt.commandPath)).toBe(false);
+    expect(treeHash(decoy)).toEqual(decoyTree);
+  });
+
+  it("installs another distribution while this one's receipt is damaged", async () => {
+    const a = await release("1.0.0");
+    const receipt = await installDistribution(a.archive);
+    writeFileSync(receiptFile(), "");
+    const shim = readFileSync(receipt.commandPath, "utf8");
+    const other = await installDistribution(otherPayload("otherpi"));
+    expect(other.app.id).toBe("otherpi");
+    expect(readFileSync(receipt.commandPath, "utf8")).toBe(shim);
+    // A damaged receipt whose text still names the command keeps it, even
+    // before its shim was written.
+    uninstallDistribution("otherpi");
+    rmSync(receipt.commandPath);
+    writeFileSync(
+      receiptFile(),
+      `{"app": {"id": "${ID}", "command": "otherpi"`,
+    );
+    await expect(installDistribution(otherPayload("otherpi"))).rejects.toThrow(
+      `Install collision: command otherpi is owned by ${ID}`,
+    );
+    uninstallDistribution(ID);
+    expect(existsSync(appsDir())).toBe(false);
   });
 });
 

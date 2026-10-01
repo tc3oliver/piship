@@ -12,7 +12,7 @@ import {
   readdirSync,
   rmSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { PiShipError, type SecretStore } from "@piship/contracts";
 import {
   type SecretStoreResolver,
@@ -176,26 +176,104 @@ export function writeReceipt(receipt: InstallReceipt): void {
   );
 }
 
-/** Read and validate an install receipt; paths must be the owned ones. */
+/**
+ * The home a receipt path was recorded under, when it is the owned path
+ * `expected` under another home: the receipt was written with a different
+ * `PISHIP_INSTALL_HOME` or `PISHIP_BIN_HOME`, or that home was moved.
+ */
+function recordedHome(
+  recorded: unknown,
+  expected: string,
+  home: string,
+): string | undefined {
+  const owned = relative(home, expected);
+  if (typeof recorded !== "string" || !recorded.endsWith(`${sep}${owned}`))
+    return undefined;
+  const other = recorded.slice(0, -(owned.length + 1));
+  return other && other !== home ? other : undefined;
+}
+
+/**
+ * Read and validate an install receipt; paths must be the owned ones. A
+ * receipt that cannot be read, or fails a check, is a CONFIG_INVALID error
+ * naming the file and the check (`sanitizedDetail.check`); a path recorded
+ * under another home also names the variable to restore
+ * (`sanitizedDetail.variable`).
+ */
 export function readInstallReceipt(id: string): InstallReceipt {
   const path = receiptPath(id);
   if (!existsSync(path))
     throw new Error(`No PiShip installation recorded for ${id}`);
-  const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<InstallReceipt>;
-  const unsafe = () => new Error(`Unsafe installation receipt for ${id}`);
-  if (!raw.app || raw.app.id !== id) throw unsafe();
-  const expectedCommand = commandPathFor(raw.app.command);
-  if (raw.commandPath !== expectedCommand) throw unsafe();
+  const fail = (check: string, mismatch?: [string, string]) =>
+    new PiShipError(
+      "CONFIG_INVALID",
+      `Unsafe installation receipt for ${id}: ${path} ${check}${mismatch ? `: it was written with ${mismatch[0]}=${mismatch[1]}` : ""}`,
+      {
+        userAction: mismatch
+          ? `Set ${mismatch[0]}=${mismatch[1]} and run the command again`
+          : `Run piship uninstall ${id}, then install ${id} again`,
+        sanitizedDetail: {
+          receipt: path,
+          check,
+          ...(mismatch ? { variable: mismatch[0], recorded: mismatch[1] } : {}),
+        },
+      },
+    );
+  let raw: Partial<InstallReceipt>;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8")) as Partial<InstallReceipt>;
+  } catch (error) {
+    throw fail(
+      `is damaged: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!raw || typeof raw !== "object" || !raw.app || raw.app.id !== id)
+    throw fail(`does not record distribution ${id}`);
+  /** A path that is not the owned one, naming the home it was recorded under. */
+  const owned = (
+    recorded: unknown,
+    expected: string,
+    what: string,
+    variable: "PISHIP_INSTALL_HOME" | "PISHIP_BIN_HOME",
+  ) => {
+    if (recorded === expected) return;
+    const home = recordedHome(
+      recorded,
+      expected,
+      variable === "PISHIP_BIN_HOME" ? binHome() : installHome(),
+    );
+    throw fail(
+      `records the ${what} ${String(recorded)}, not ${expected}`,
+      home ? [variable, home] : undefined,
+    );
+  };
+  if (typeof raw.app.command !== "string")
+    throw fail("does not record a command");
+  owned(
+    raw.commandPath,
+    commandPathFor(raw.app.command),
+    "command path",
+    "PISHIP_BIN_HOME",
+  );
   if (raw.schema === undefined) {
     // Written before receipts were versioned: one release, shim to payload.
-    if (raw.payload !== join(appDirectory(id), raw.app.version)) throw unsafe();
+    owned(
+      raw.payload,
+      join(appDirectory(id), raw.app.version),
+      "payload",
+      "PISHIP_INSTALL_HOME",
+    );
     return {
       app: raw.app,
-      payload: raw.payload,
-      commandPath: raw.commandPath,
+      payload: raw.payload as string,
+      commandPath: raw.commandPath as string,
       active: raw.app.version,
       releases: [
-        { version: raw.app.version, payload: raw.payload, installedAt: "" },
+        {
+          version: raw.app.version,
+          payload: raw.payload as string,
+          installedAt: "",
+        },
       ],
     };
   }
@@ -204,22 +282,34 @@ export function readInstallReceipt(id: string): InstallReceipt {
       "CONFIG_INVALID",
       `Install receipt ${raw.schema} was written by a newer PiShip; use that version to manage ${id}`,
     );
+  if (raw.releases !== undefined && !Array.isArray(raw.releases))
+    throw fail("does not record a list of releases");
   const releases = raw.releases ?? [];
-  for (const release of releases)
-    if (
-      !VERSION_NAME.test(release.version) ||
-      release.payload !== join(appDirectory(id), release.version)
-    )
-      throw unsafe();
+  for (const release of releases) {
+    if (!release || !VERSION_NAME.test(String(release.version)))
+      throw fail("records a release without a valid version");
+    owned(
+      release.payload,
+      join(appDirectory(id), release.version),
+      `payload of ${release.version}`,
+      "PISHIP_INSTALL_HOME",
+    );
+  }
+  owned(
+    raw.launcher,
+    join(appDirectory(id), "launch.mjs"),
+    "launcher",
+    "PISHIP_INSTALL_HOME",
+  );
   const active = releases.find((item) => item.version === raw.active);
+  if (!active) throw fail(`does not record its active release ${raw.active}`);
+  if (raw.payload !== active.payload)
+    throw fail("records a payload that is not its active release");
   if (
-    !active ||
-    raw.payload !== active.payload ||
-    raw.launcher !== join(appDirectory(id), "launch.mjs") ||
-    (raw.previous !== undefined &&
-      !releases.some((item) => item.version === raw.previous))
+    raw.previous !== undefined &&
+    !releases.some((item) => item.version === raw.previous)
   )
-    throw unsafe();
+    throw fail(`does not record its previous release ${raw.previous}`);
   return raw as InstallReceipt;
 }
 

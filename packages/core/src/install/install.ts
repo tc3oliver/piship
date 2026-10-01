@@ -53,20 +53,31 @@ function otherCommandOwner(
 ): string | undefined {
   for (const name of readdirSync(receipts)) {
     if (!name.endsWith(".json") || name === `${id}.json`) continue;
+    let text: string;
     try {
-      const value = JSON.parse(
-        readFileSync(join(receipts, name), "utf8"),
-      ) as Partial<InstallReceipt>;
-      if (
-        value.app?.command === command ||
-        value.commandPath === commandPathFor(command)
-      )
-        return name.slice(0, -5);
+      text = readFileSync(join(receipts, name), "utf8");
     } catch {
-      throw new Error(
-        `Cannot establish command ownership while receipt ${name} is damaged`,
-      );
+      // Unreadable (a directory, or gone since the listing): it records no
+      // command, and a shim it wrote is still refused as an existing path.
+      continue;
     }
+    let value: Partial<InstallReceipt> | undefined;
+    try {
+      value = JSON.parse(text) as Partial<InstallReceipt>;
+    } catch {
+      value = undefined;
+    }
+    // A damaged receipt does not stop other installs: it still owns the
+    // command when its remaining text names it, and a shim it wrote is
+    // refused as an existing path; a shim it never wrote is not a collision.
+    if (
+      value?.app?.command === command ||
+      value?.commandPath === commandPathFor(command) ||
+      (value === undefined &&
+        (text.includes(JSON.stringify(command)) ||
+          text.includes(JSON.stringify(commandPathFor(command)).slice(1, -1))))
+    )
+      return name.slice(0, -5);
   }
   return undefined;
 }
