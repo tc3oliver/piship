@@ -107,10 +107,11 @@ const lifecycleCommands: Record<
     flags: ["--check", "--accept-review"],
   },
   uninstall: {
-    usage: "uninstall <id> [--purge --yes [--without-logout]]",
+    usage:
+      "uninstall <id> [--purge --yes [--without-logout]] [--remove-edited-shim]",
     positional: [1, 1],
     values: [],
-    flags: ["--purge", "--yes", "--without-logout"],
+    flags: ["--purge", "--yes", "--without-logout", "--remove-edited-shim"],
   },
   rollback: {
     usage: "rollback <id>",
@@ -536,9 +537,10 @@ async function runLifecycle(
       output.stderr(`Usage: piship ${lifecycleCommands.uninstall?.usage}`);
       return 2;
     }
+    const removeEditedShim = flags.has("--remove-edited-shim");
     if (!flags.has("--purge"))
       output.stdout(
-        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first)}`,
+        `Uninstalled ${first}. State preserved: ${uninstallDistribution(first, { removeEditedShim })}`,
       );
     else {
       if (!flags.has("--yes"))
@@ -551,6 +553,7 @@ async function runLifecycle(
         `Uninstalled ${first}. ${purgeReport(
           await uninstallAndPurgeDistribution(first, {
             withoutLogout: flags.has("--without-logout"),
+            removeEditedShim,
           }),
           output,
         )}`,

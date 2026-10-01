@@ -16,6 +16,7 @@ export { sweepStateTemporaries } from "./temporaries.js";
 export {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
+  type UninstallOptions,
 } from "./uninstall.js";
 export {
   holdRuntimeLease,
