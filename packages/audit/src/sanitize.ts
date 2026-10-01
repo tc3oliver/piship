@@ -65,13 +65,15 @@ function cap(text: string, limit: number): string {
   return `${text.slice(0, Math.max(0, limit - TRUNCATED.length))}${TRUNCATED}`;
 }
 
-/** Scrub, strip control characters, and cap one metadata string. */
+/** Strip control characters, scrub, and cap one metadata string. */
 function metadataString(value: unknown, limit: number): string | undefined {
   if (value instanceof SecretValue) return REDACTED_TEXT;
   if (typeof value !== "string") return undefined;
-  // Control characters are removed after scrubbing so they cannot split a token.
+  // Control characters are replaced before scrubbing: one that hid a token
+  // from the scrubber (`token\u0007=value`) would otherwise leave, once
+  // replaced, a token the scrubber recognizes but never saw.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional control character removal
-  const text = scrubText(value).replace(/[\u0000-\u001f\u007f]+/g, " ");
+  const text = scrubText(value.replace(/[\u0000-\u001f\u007f]+/g, " "));
   return cap(text, limit);
 }
 
