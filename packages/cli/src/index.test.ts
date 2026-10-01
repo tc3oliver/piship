@@ -94,6 +94,43 @@ describe("forwarding update and rollback to the installed release", () => {
   });
 });
 
+describe("repair", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-repair-"));
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_INSTALL_HOME;
+    delete process.env.PISHIP_BIN_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  async function repair(args: string[]) {
+    const errors: string[] = [];
+    const status = await runCli(["repair", ...args], {
+      stdout: () => {},
+      stderr: (message) => errors.push(message),
+    });
+    return { status, stderr: errors.join("\n") };
+  }
+
+  it("runs in PiShip and never runs the installed release it repairs", async () => {
+    const { received } = installRecorder();
+    const source = join(temp, "not-a-release");
+    mkdirSync(source);
+    const result = await repair([ID, source]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("inventory.json");
+    expect(existsSync(received)).toBe(false);
+  });
+
+  it("needs the distribution and the trusted source", async () => {
+    expect(await repair([ID])).toEqual({
+      status: 2,
+      stderr: "Usage: piship repair <id> <archive|release-dir|payload>",
+    });
+  });
+});
+
 describe("uninstall --purge", () => {
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), "piship-cli-uninstall-"));

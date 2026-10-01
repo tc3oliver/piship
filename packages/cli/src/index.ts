@@ -25,6 +25,7 @@ import {
   PISHIP_VERSION,
   purgeDistributionState,
   readInstallReceipt,
+  repairDistribution,
   requireCurrentLock,
   resolveResources,
   runtimeStateDirectory,
@@ -65,6 +66,7 @@ const commands = [
   "diff",
   "update",
   "rollback",
+  "repair",
   "migrate-check",
   "keygen",
   "sign-channel",
@@ -116,6 +118,12 @@ const lifecycleCommands: Record<
   rollback: {
     usage: "rollback <id>",
     positional: [1, 1],
+    values: [],
+    flags: [],
+  },
+  repair: {
+    usage: "repair <id> <archive|release-dir|payload>",
+    positional: [2, 2],
     values: [],
     flags: [],
   },
@@ -571,6 +579,15 @@ async function runLifecycle(
       return 1;
     }
     if (result.stderr.trim()) output.stderr(result.stderr.trimEnd());
+  } else if (command === "repair") {
+    // Runs here, not through the installed release: the payload it restores
+    // may be the active one, which refuses to run.
+    const result = await repairDistribution(first, second);
+    output.stdout(
+      result.status === "intact"
+        ? `${result.id} ${result.version} is intact; nothing to repair`
+        : `Repaired ${result.id} ${result.version} from ${second}\n  was: ${result.problem}`,
+    );
   } else if (command === "migrate-check") {
     const receipt = readInstallReceipt(first);
     const current = verifyPayload(receipt.payload);

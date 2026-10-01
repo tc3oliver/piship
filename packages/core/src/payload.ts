@@ -117,8 +117,8 @@ export function verifyPayloadContents(
   )
     throw new PiShipError(
       "LOCK_INVALID",
-      "Installed manifest and lock mismatch; reinstall this distribution",
-      { component: "payload" },
+      `Installed manifest and lock mismatch in ${root}`,
+      { component: "payload", userAction: repairAction(root) },
     );
   if (
     lock.runtime.npmLockSha256 !==
@@ -126,8 +126,8 @@ export function verifyPayloadContents(
   )
     throw new PiShipError(
       "LOCK_INVALID",
-      "Installed npm lock mismatch; reinstall this distribution",
-      { component: "payload" },
+      `Installed npm lock mismatch in ${root}`,
+      { component: "payload", userAction: repairAction(root) },
     );
   if (process.env.PISHIP_DEBUG_TIMING === "1")
     process.stderr.write(
@@ -174,7 +174,7 @@ function payloadIntegrityError(
     `Installed payload integrity mismatch${root ? ` in ${root}` : ""}${parts.length ? `; ${parts.join("; ")}` : ""}`,
     {
       component: "payload",
-      userAction: `Do not run it. Restore it from a trusted release of the same version with: piship repair ${(root && installedId(root)) ?? "<id>"} <release archive> (repair does not run this payload). A payload that is not installed must be rebuilt or downloaded again`,
+      userAction: repairAction(root),
       ...(diff
         ? {
             sanitizedDetail: {
@@ -188,11 +188,15 @@ function payloadIntegrityError(
     },
   );
 }
-/** The distribution id of an installed payload, `apps/<id>/<version>`. */
-function installedId(root: string): string | undefined {
-  const id = basename(dirname(root));
-  return basename(dirname(dirname(root))) === "apps" &&
-    /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id)
-    ? id
-    : undefined;
+/**
+ * How to recover a payload that fails verification without running it. The
+ * id is named when the payload is an installed release, `apps/<id>/<version>`.
+ */
+function repairAction(root?: string): string {
+  const id = root && basename(dirname(root));
+  const installed =
+    root &&
+    basename(dirname(dirname(root))) === "apps" &&
+    /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
+  return `Do not run it. Restore it from a trusted release of the same version with: piship repair ${installed ? id : "<id>"} <release archive> (repair does not run this payload). A payload that is not installed must be rebuilt or downloaded again`;
 }

@@ -73,8 +73,7 @@ export async function rollbackDistribution(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} failed verification: ${(error as Error).message}`,
         {
-          userAction:
-            "Reinstall a trusted release; the damaged one is not activated",
+          userAction: `The damaged release is not activated. Restore it with: piship repair ${id} <release archive of ${receipt.previous}>, then roll back again`,
         },
       );
     }

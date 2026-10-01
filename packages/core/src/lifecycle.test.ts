@@ -53,6 +53,7 @@ import {
 } from "./release/index.js";
 import { generateSigningKey } from "./signing.js";
 import {
+  repairDistribution,
   rollbackDistribution,
   selectChannel,
   type UpdateOptions,
@@ -2034,6 +2035,164 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
   });
 });
 
+// ------------------------------------------------------------------ repair
+
+describe.runIf(HOST_EVIDENCED)("repair", () => {
+  /** A installed, updated to B: B active, A retained. */
+  async function updated() {
+    const f = await fixture();
+    seedState();
+    await installDistribution(f.a.archive, true);
+    await updateDistribution(ID, f.opts);
+    return f;
+  }
+
+  it("restores an active release with a stray file, so rollback and update work again", async () => {
+    const f = await updated();
+    const active = join(appsDir(), "1.1.0");
+    write(join(active, ".DS_Store"), "finder metadata");
+    // Still refused, naming the file and the command that repairs it.
+    const refused = (() => {
+      try {
+        verifyPayload(active);
+      } catch (error) {
+        return error as PiShipError;
+      }
+      throw new Error("expected a throw");
+    })();
+    expect(refused.code).toBe("INTEGRITY_FAILED");
+    expect(refused.message).toContain(
+      "unexpected (not in the inventory): .DS_Store",
+    );
+    expect(refused.userAction).toContain(
+      `piship repair ${ID} <release archive>`,
+    );
+    expect(
+      (await rejection(rollbackDistribution(ID, { runCheck: fakeRun }))).code,
+    ).toBe("INTEGRITY_FAILED");
+    expect(
+      (await rejection(updateDistribution(ID, { ...f.opts, check: true })))
+        .code,
+    ).toBe("INTEGRITY_FAILED");
+    const receipt = readInstallReceipt(ID);
+
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result).toMatchObject({
+      status: "repaired",
+      id: ID,
+      version: "1.1.0",
+    });
+    expect(result.problem).toContain(".DS_Store");
+    expect(existsSync(join(active, ".DS_Store"))).toBe(false);
+    expect(verifyPayload(active).app.version).toBe("1.1.0");
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+
+    // Neither is blocked any longer.
+    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
+      "1.0.0",
+    );
+    expect((await updateDistribution(ID, f.opts)).status).toBe("updated");
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+  });
+
+  it("restores a modified file in the retained release, so rollback works again", async () => {
+    const f = await updated();
+    write(
+      join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
+      "# tampered\n",
+    );
+    const blocked = await rejection(
+      rollbackDistribution(ID, { runCheck: fakeRun }),
+    );
+    expect(blocked.code).toBe("ROLLBACK_FAILED");
+    expect(blocked.message).toContain(
+      "modified: resources/resources/AGENTS.md",
+    );
+    expect((blocked as PiShipError).userAction).toContain(
+      `piship repair ${ID} <release archive of 1.0.0>`,
+    );
+    const result = await repairDistribution(ID, f.a.archive);
+    expect(result).toMatchObject({ status: "repaired", version: "1.0.0" });
+    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
+      "1.0.0",
+    );
+  });
+
+  it("restores a release whose directory is missing", async () => {
+    const f = await updated();
+    rmSync(join(appsDir(), "1.1.0"), { recursive: true, force: true });
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result.status).toBe("repaired");
+    expect(verifyPayload(join(appsDir(), "1.1.0")).app.version).toBe("1.1.0");
+  });
+
+  it("reports an intact release and changes nothing", async () => {
+    const f = await updated();
+    const before = treeHash(appsDir());
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result).toMatchObject({ status: "intact", version: "1.1.0" });
+    expect(treeHash(appsDir())).toEqual(before);
+  });
+
+  it("refuses a source that is not the recorded release, and changes nothing", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    const active = join(appsDir(), "1.0.0");
+    write(join(active, ".DS_Store"), "finder metadata");
+    const before = treeHash(appsDir());
+    const receipt = readInstallReceipt(ID);
+
+    // A version this installation does not record.
+    const other = await rejection(repairDistribution(ID, b.archive));
+    expect(other.code).toBe("UPDATE_FAILED");
+    expect(other.message).toMatch(
+      /acmepi 1.1.0, which is not a release of acmepi this installation records \(1.0.0\)/,
+    );
+
+    // The same version built from different content.
+    const path = project("1.0.0");
+    write(join(dirname(path), "resources", "AGENTS.md"), "# impostor\n");
+    lockManifest(path);
+    const impostor = await buildRelease(path, {
+      outputRoot: join(dirname(path), "dist"),
+      assemble: fakeAssemble,
+      runTest: fakeRun,
+      scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+      signatureAuditor,
+    });
+    const mismatch = await rejection(repairDistribution(ID, impostor.archive));
+    expect(mismatch.code).toBe("INTEGRITY_FAILED");
+    expect(mismatch.message).toMatch(/does not match the 1.0.0 release/);
+
+    // A damaged archive.
+    const copy = join(temp(), basename(a.archive));
+    cpSync(a.archive, copy);
+    flipByte(copy);
+    expect((await rejection(repairDistribution(ID, copy))).code).toBe(
+      "INTEGRITY_FAILED",
+    );
+
+    expect(treeHash(appsDir())).toEqual(before);
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+  });
+
+  it("does not replace a release a running session still uses", async () => {
+    const f = await updated();
+    write(join(appsDir(), "1.1.0", ".DS_Store"), "finder metadata");
+    const release = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(repairDistribution(ID, f.b.archive));
+      expect(error.code).toBe("UPDATE_FAILED");
+      expect(error.message).toMatch(/runtime session/);
+      expect(existsSync(join(appsDir(), "1.1.0", ".DS_Store"))).toBe(true);
+    } finally {
+      release();
+    }
+  });
+});
+
 // --------------------------------------------------------------- uninstall
 
 describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
@@ -3048,5 +3207,6 @@ describe("launch-time payload verification", () => {
     const error = thrown(() => verifyPayload(directory));
     expect(error.code).toBe("LOCK_INVALID");
     expect(error.message).toMatch(/npm lock mismatch/);
+    expect((error as PiShipError).userAction).toContain("piship repair <id>");
   });
 });
