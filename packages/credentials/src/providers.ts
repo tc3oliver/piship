@@ -416,6 +416,57 @@ async function brokerRequest(
   };
 }
 
+/**
+ * The refusal of a credential that is expired by this computer's clock when
+ * it arrives. It stays fail-closed, but signing in again cannot help while a
+ * clock is wrong: the next credential is refused the same way. So it names
+ * the clocks. With the broker's `Date` header (one-second resolution) it
+ * says which one disagrees: a credential valid by the broker's clock means
+ * this computer runs ahead; one expired by the broker's own clock is the
+ * broker's clock or credential lifetime. Times only, never a secret.
+ */
+function expiredOnArrival(
+  expiresAt: Date,
+  now: number,
+  response: Response,
+  detail: ExtraDetail,
+): PiShipError {
+  const header = response.headers.get("date");
+  const brokerTime = header === null ? Number.NaN : Date.parse(header);
+  const known = Number.isFinite(brokerTime);
+  const skewSeconds = known ? Math.round((now - brokerTime) / 1000) : 0;
+  // Within the header's resolution and the request's latency, the clocks agree.
+  const localAhead = known && expiresAt.getTime() > brokerTime;
+  const message = !known
+    ? "The credential broker issued a credential that is already expired by this computer's clock"
+    : localAhead
+      ? `The credential broker issued a credential that is already expired by this computer's clock, which is ${skewSeconds} s ahead of the credential broker's`
+      : "The credential broker issued a credential that is already expired by its own clock";
+  const userAction = !known
+    ? "Check that this computer's date, time, and time zone are correct (signing in again does not help while they are wrong); if they are, ask your administrator to check the credential broker's clock and credential lifetime"
+    : localAhead
+      ? "Correct this computer's clock (date, time, and time zone; enable network time), then try again"
+      : "Ask your administrator to check the credential broker's clock and credential lifetime";
+  return new PiShipError("CREDENTIAL_EXPIRED", message, {
+    component: "credential",
+    userAction,
+    sanitizedDetail: {
+      operation: "acquire",
+      reason: "contract",
+      status: response.status,
+      expiresAt: expiresAt.toISOString(),
+      localTime: new Date(now).toISOString(),
+      ...(known
+        ? {
+            brokerTime: new Date(brokerTime).toISOString(),
+            clockSkewSeconds: skewSeconds,
+          }
+        : {}),
+      ...detail,
+    },
+  });
+}
+
 function normalizeUrl(value: string): string {
   const url = new URL(value);
   return `${url.origin}${trimTrailingSlashes(url.pathname)}`;
@@ -623,23 +674,12 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       typeof body.expires_at === "string"
         ? new Date(body.expires_at)
         : undefined;
-    if (expiresAt && expiresAt.getTime() <= Date.now())
+    const now = Date.now();
+    if (expiresAt && expiresAt.getTime() <= now)
       throw await this.#discardIssued(
         body,
         ctx,
-        new PiShipError(
-          "CREDENTIAL_EXPIRED",
-          "The credential broker issued an already expired credential",
-          {
-            component: "credential",
-            sanitizedDetail: {
-              operation: "acquire",
-              reason: "contract",
-              status: response.status,
-              ...detail,
-            },
-          },
-        ),
+        expiredOnArrival(expiresAt, now, response, detail),
       );
     return {
       kind: type as RuntimeCredentialKind,

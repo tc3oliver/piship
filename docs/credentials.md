@@ -56,7 +56,7 @@ A 2xx response must be JSON:
 | `credential_type` | yes | `api_key`, `bearer`, or `opaque` |
 | `credential` | yes | The secret, at least 8 characters, visible ASCII only (it is sent in a header) |
 | `credential_id` | no | Non-secret identifier, used for display and revocation: 1 to 256 characters from `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, and `-` |
-| `expires_at` | no | ISO 8601 time; an already expired credential is rejected |
+| `expires_at` | no | ISO 8601 time; a credential already expired by this computer's clock is rejected with `CREDENTIAL_EXPIRED`, whose action and `detail` (`expiresAt`, `localTime`, and from the broker's `Date` header `brokerTime` and `clockSkewSeconds`) point at the clock that disagrees rather than at signing in again |
 | `models` | no | Entitled model IDs; narrows the catalog |
 | `base_url` | no | Must match the declared `inference.baseUrl` |
 

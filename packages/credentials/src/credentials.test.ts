@@ -670,6 +670,65 @@ describe("http-broker failure and retry contract", () => {
       }
     });
 
+    // Regression: an already expired credential said nothing about clocks, so
+    // the only visible action was signing in again, which issues another
+    // credential that this computer's wrong clock refuses just the same.
+    it("refuses an already expired credential with a clock check, comparing the broker's clock when it sent one", async () => {
+      const answer = await realAnswer();
+      const expiresAt = new Date(Date.now() - 30_000);
+      // The broker's Date: one minute before the expiry, so by its clock the
+      // credential was valid and this computer runs about 90 s ahead.
+      const brokerNow = new Date(expiresAt.getTime() - 60_000);
+      const skewed = await failure(
+        call.acquire(
+          broker({
+            fetch: async () =>
+              Response.json(
+                { ...answer, expires_at: expiresAt.toISOString() },
+                { headers: { date: brokerNow.toUTCString() } },
+              ),
+          }),
+        ),
+      );
+      expect(skewed).toMatchObject({
+        code: "CREDENTIAL_EXPIRED",
+        retryable: false,
+        sanitizedDetail: {
+          operation: "acquire",
+          reason: "contract",
+          expiresAt: expiresAt.toISOString(),
+          brokerTime: new Date(
+            Math.floor(brokerNow.getTime() / 1000) * 1000,
+          ).toISOString(),
+        },
+      });
+      const skew = skewed.sanitizedDetail?.clockSkewSeconds as number;
+      expect(skew).toBeGreaterThanOrEqual(85);
+      expect(skew).toBeLessThanOrEqual(100);
+      expect(skewed.message).toContain("ahead of the credential broker");
+      expect(skewed.userAction).toMatch(/clock/);
+      expect(skewed.userAction).not.toMatch(/login/i);
+      expectNoSecret(skewed);
+
+      // Without a broker Date, the action still names both clocks.
+      const unknown = await failure(
+        call.acquire(
+          broker({
+            fetch: async () =>
+              json({ ...answer, expires_at: expiresAt.toISOString() }),
+          }),
+        ),
+      );
+      expect(unknown).toMatchObject({
+        code: "CREDENTIAL_EXPIRED",
+        retryable: false,
+        sanitizedDetail: { expiresAt: expiresAt.toISOString() },
+      });
+      expect(unknown.sanitizedDetail).not.toHaveProperty("clockSkewSeconds");
+      expect(unknown.userAction).toMatch(/clock/);
+      expect(unknown.userAction).toMatch(/broker/);
+    });
+
     it("reads null in an optional answer field as absent, and names a field of the wrong type", async () => {
       const answer = await realAnswer();
       const optional = {
