@@ -16,7 +16,8 @@ const INCLUDE = [
 ];
 
 // The Reference E2E workflow runs one group per runner, each with a Docker of
-// its own, so the fixed test ports of two groups never meet. The groups are
+// its own. Every stack publishes on ports Docker chooses, so two runs on one
+// host do not meet either (concurrent-stacks.test.ts). The groups are
 // balanced by the durations measured on ubuntu-latest, stack start and stop
 // included (about 205 s each). A file no group names runs in the last group,
 // so a new file is never left out.
