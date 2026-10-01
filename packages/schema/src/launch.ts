@@ -49,31 +49,51 @@ function caPaths(access: AccessManifest): Finding[] {
   return findings;
 }
 
+interface PrivateOnlyHosts {
+  /** `network.allowHosts` and the plain hosts of the declared endpoints. */
+  readonly allowed: ReadonlySet<string>;
+  /** False when a templated endpoint adds a host known only at launch. */
+  readonly endpointsKnown: boolean;
+}
+
 /**
- * HTTP audit sinks under a private-only network policy, which contacts only
- * `network.allowHosts` and the hosts of the declared access endpoints.
+ * The hosts a private-only network policy contacts: `network.allowHosts`
+ * and the hosts of the declared access endpoints. Undefined when the policy
+ * is not private-only.
  */
-function auditHosts(
+function privateOnlyHosts(
   mode: DeploymentMode,
   access: AccessManifest,
-  governance: GovernanceManifest,
-): Finding[] {
+): PrivateOnlyHosts | undefined {
   const privateOnly =
     access.network.privateOnly ||
     (mode === "managed" && access.network.publicFallback === "deny");
-  if (!privateOnly || !governance.audit.enabled) return [];
+  if (!privateOnly) return undefined;
   const endpoints = [
     access.identity.mode === "oidc" ? access.identity.oidc.issuer : undefined,
     access.credential.broker?.endpoint,
     access.credential.broker?.revokeEndpoint,
     access.inference.baseUrl,
   ].filter((url): url is string => url !== undefined);
-  // A templated endpoint adds a host that is known only at launch.
-  const endpointsKnown = endpoints.every((url) => !hasRuntimeReference(url));
-  const allowed = new Set([
-    ...access.network.allowHosts,
-    ...endpoints.map(plainHost).filter((host) => host !== undefined),
-  ]);
+  return {
+    endpointsKnown: endpoints.every((url) => !hasRuntimeReference(url)),
+    allowed: new Set([
+      ...access.network.allowHosts,
+      ...endpoints.map(plainHost).filter((host) => host !== undefined),
+    ]),
+  };
+}
+
+/** HTTP audit sinks under a private-only network policy. */
+function auditHosts(
+  mode: DeploymentMode,
+  access: AccessManifest,
+  governance: GovernanceManifest,
+): Finding[] {
+  if (!governance.audit.enabled) return [];
+  const hosts = privateOnlyHosts(mode, access);
+  if (!hosts) return [];
+  const { allowed, endpointsKnown } = hosts;
   const findings: Finding[] = [];
   for (const [index, sink] of governance.audit.sinks.entries()) {
     if (sink.type !== "http" || sink.url === undefined) continue;
@@ -156,6 +176,96 @@ function sandboxCredential(
 }
 
 /**
+ * Streamable HTTP MCP servers. `credential: runtime` sends the runtime
+ * credential only to the inference gateway's origin, and a private-only
+ * network policy refuses an undeclared host. Either way the server never
+ * starts: a required one fails the launch with MCP_UNHEALTHY.
+ */
+function mcpServers(
+  mode: DeploymentMode,
+  access: AccessManifest | undefined,
+  governance: GovernanceManifest,
+): Finding[] {
+  if (governance.mcp.mode === "off") return [];
+  const gateway =
+    access?.credential.provider === "none"
+      ? undefined
+      : access?.inference.baseUrl;
+  const hosts = access ? privateOnlyHosts(mode, access) : undefined;
+  const findings: Finding[] = [];
+  for (const server of governance.mcp.servers) {
+    if (server.transport !== "streamable-http" || server.url === undefined)
+      continue;
+    const path = `mcp.servers.${server.id}`;
+    const url = server.url;
+    // `always`: the server can never start; `otherwise`: it starts only if
+    // a runtime value resolves as the message says.
+    const [always, otherwise] = server.required
+      ? [
+          "this required server fails every launch (MCP_UNHEALTHY)",
+          "this required server fails the launch (MCP_UNHEALTHY)",
+        ]
+      : [
+          "this optional server never starts and its tools are unavailable",
+          "this optional server does not start",
+        ];
+    const report = (field: string, certain: boolean, message: string) =>
+      findings.push({
+        path: `${path}.${field}`,
+        certain: certain && server.required,
+        message,
+      });
+    if (server.credential === "runtime") {
+      if (gateway === undefined) {
+        report(
+          "credential",
+          true,
+          `credential: runtime needs the runtime credential of an openai-compatible gateway, and this distribution has no runtime credential, so ${always}; use credential: none`,
+        );
+        continue;
+      }
+      if (hasRuntimeReference(url) || hasRuntimeReference(gateway)) {
+        report(
+          "url",
+          false,
+          `credential: runtime sends the runtime credential only to the origin of inference.baseUrl; this URL must resolve to that origin at launch, or ${otherwise}`,
+        );
+        continue;
+      }
+      const expected = new URL(gateway).origin;
+      if (new URL(url).origin !== expected) {
+        report(
+          "url",
+          true,
+          `credential: runtime sends the runtime credential only to the inference gateway origin ${expected}, so ${always}; serve the server from that origin or use credential: none`,
+        );
+        continue;
+      }
+    }
+    if (!hosts) continue;
+    const host = plainHost(url);
+    if (host === undefined) {
+      report(
+        "url",
+        false,
+        `The network policy is private-only: the host this URL resolves to at launch must be in network.allowHosts or be the host of a declared endpoint, or ${otherwise}`,
+      );
+      continue;
+    }
+    if (hosts.allowed.has(host)) continue;
+    const refused = `${host} is not in network.allowHosts, and the private-only network policy refuses it`;
+    report(
+      "url",
+      hosts.endpointsKnown,
+      hosts.endpointsKnown
+        ? `${refused}, so ${always}. Add ${host} to network.allowHosts`
+        : `${refused} unless a templated endpoint resolves to it, or ${otherwise}. Add ${host} to network.allowHosts`,
+    );
+  }
+  return findings;
+}
+
+/**
  * The sandbox is activated only when required. An optional sandbox defaults
  * to network allow, so deny was declared and is silently not enforced.
  */
@@ -179,6 +289,7 @@ function findings(sections: LaunchSections): Finding[] {
     ...(access ? caPaths(access) : []),
     ...(access && governance ? auditHosts(mode, access, governance) : []),
     ...(governance ? sandboxCredential(access, governance) : []),
+    ...(governance ? mcpServers(mode, access, governance) : []),
   ];
 }
 

@@ -81,7 +81,8 @@ node ~/src/piship/packages/cli/dist/bin.js release ./piship.yaml
 | --- | --- |
 | Fails | A required HTTP audit sink on a host outside `network.allowHosts` and the endpoint hosts (managed mode is always private-only, so every launch fails with `AUDIT_UNAVAILABLE`) |
 | Fails | `sandbox.credential: runtime` with a plain `sandbox.endpoint` or `sandbox.router` on another origin than `inference.baseUrl`, or with no runtime credential at all (`pi-native` inference or `credential.provider: none`); the required sandbox fails every launch with `SANDBOX_UNAVAILABLE` |
-| Warns | The same audit or sandbox URL as a runtime variable, or an optional audit sink whose events would be dropped |
+| Fails | A required Streamable HTTP MCP server with a plain `url` that can never start: on a host outside `network.allowHosts` and the endpoint hosts, or with `credential: runtime` on another origin than `inference.baseUrl` or with no runtime credential at all; every launch fails with `MCP_UNHEALTHY` |
+| Warns | The same audit, sandbox, or MCP URL as a runtime variable (or with a templated endpoint), an optional audit sink whose events would be dropped, or an optional MCP server that would never start |
 | Warns | A relative `network.tls.additionalCA` path ([CA bundles](#ca-bundles)) |
 | Warns | `sandbox.network.mode: deny` without `sandbox.required: true`; the sandbox is activated only when required, so nothing enforces it |
 

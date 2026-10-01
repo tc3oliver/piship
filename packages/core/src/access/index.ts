@@ -19,6 +19,7 @@ export {
   effectivePrivateOnly,
   networkPolicyFor,
   type ResolvedEndpoints,
+  resolveAdditionalCA,
   resolveRuntimeReferences,
 } from "./network.js";
 export { type AccessStatePaths, accessStatePaths } from "./state.js";

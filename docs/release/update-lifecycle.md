@@ -124,6 +124,7 @@ Every failure happens before activation and leaves the active release and state 
 | Signature by an unpinned key or a key this installation retired, altered metadata, wrong distribution or channel, expired metadata, or a replayed lower sequence | `INTEGRITY_FAILED` |
 | Channel not in `updates.channels` | `POLICY_DENIED` |
 | `updates.source` variable unset | `CONFIG_UNAVAILABLE` |
+| A `network.tls.additionalCA` variable unset in the shell that runs `update` | `CONFIG_UNAVAILABLE` naming the variable, before any request; the declared CA is never left out |
 | Plain `http` to a non-loopback source, or another scheme | `NETWORK_DENIED` |
 | Update source URL with credentials, query, or fragment, or `updates.source` resolving to a relative directory | `CONFIG_INVALID` |
 | Downloaded archive differs from its signed entry | `INTEGRITY_FAILED` |

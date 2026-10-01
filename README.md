@@ -456,7 +456,7 @@ See the [release documentation](docs/release.md).
 
 **PiShip is pre-release.**
 
-v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0) with attested example release archives. Nothing is published to npm, and there is no official signed update channel yet.
+v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0) with attested example release archives. Nothing is published to npm, and there is no official signed update channel yet. v0.7.1, the release candidate for the [production-validation baseline](docs/status.md#v071-production-validation-baseline) a production consumer pins, is not yet tagged.
 
 The portable personal distribution core is the most mature surface. Managed access, governance, and release lifecycle are currently compatibility candidates. Sandbox maturity is reported per backend: the native Linux (bubblewrap) and macOS (Seatbelt) sandboxes are candidates, native Windows is unavailable, and the `custom`, `e2b-compatible`, and `kubernetes-agent-sandbox` backends are preview functionality ([per-backend table](docs/status.md#sandbox-backends)).
 

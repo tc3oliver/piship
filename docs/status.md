@@ -2,7 +2,25 @@
 
 This page is the single source of truth for what current `main` supports and what evidence backs each claim. Other documents describe how things work and link here for status. When this page and another document disagree, this page wins; please report the mismatch.
 
-v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. Every milestone below is a preview milestone.
+v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. v0.7.1 is the release candidate for the [production-validation baseline](#v071-production-validation-baseline). Every milestone below is a preview milestone.
+
+## v0.7.1 production-validation baseline
+
+v0.7.1 is the one PiShip baseline a production consumer pins for production validation ([#173](https://github.com/tc3oliver/piship/issues/173)). A production consumer pins tag `v0.7.1` and installs its qualified release artifact directly; it does not track `main`. Until the tag exists, v0.7.1 is a release candidate, not a release.
+
+- Qualification: recorded when v0.7.1 is tagged (the exact commit, the Release qualification run, and the published artifacts).
+- PiShip version: `0.7.1` (every `@piship/*` package and `PISHIP_VERSION` in [`compatibility.ts`](../packages/core/src/compatibility.ts)).
+- Pinned Pi: `@earendil-works/pi-coding-agent` 0.87.1, exact-pinned in [`packages/pi/package.json`](../packages/pi/package.json). [`compatibility/pi.json`](../compatibility/pi.json) lists it as `supported`, with the `personal` surface `supported` and the `managed`, `governance`, and `lifecycle` surfaces `candidate` ([Pi compatibility](#pi-compatibility)).
+- Manifest schema: `piship/v1alpha4`. Lock schema: `piship-lock/v1alpha4`. Both unchanged since v0.4 ([version map](#version-map)).
+- Known vulnerability exceptions: GHSA-qhr7-859c-m2p7 and GHSA-6j4f-fj2g-mc7p (high, `brace-expansion` 5.0.9 pinned by Pi 0.87.1), a reviewed exception that every example manifest allows with a reason until 2026-12-31, after which the release vulnerability gate fails again (#129). GHSA-q2hr-2g5m-vwhr (moderate, same package) is not an exception: it is reported below `failOn: high`. Details in [known limits](#known-limits-and-non-claims).
+- Known upstream limitations, each needing a public Pi API or a Pi change:
+  - An identity or credential failure inside the TUI shows PiShip's action, but Pi still adds its own `/bug` hint (#139).
+  - A user's `!` shell command still writes its full output through Pi's temp file, so a temp filesystem that fills while Pi writes it (`ENOSPC`) is not contained (#64, #68).
+  - A Pi-native provider's `--smoke-model` request that gets no answer is still reported as `GATEWAY_PROTOCOL_ERROR` (#85).
+- Maintainer and infrastructure limitations:
+  - No run of the `Live provider` workflow is recorded; it needs the maintainer's protected GitHub Environment and provider secrets (#77).
+  - The project operates no signed update channel and pins no release key, so an installation cannot update through a channel (#167, [trust root](release/trust-root.md)). A production consumer pins and installs the exact qualified artifact directly. A signed update channel is required before broad production rollout.
+- Supported production-validation platforms: `linux-x64`, `darwin-arm64`, and `win32-x64` with Node.js 22.19.0 or later (qualified on Node 22.19.0), the release targets the Release candidate builds and the targets in [compatibility](compatibility.md). Native Windows has no sandbox adapter: a distribution that requires the sandbox fails closed there with `SANDBOX_UNAVAILABLE` ([sandbox backends](#sandbox-backends)).
 
 ## Status terms
 

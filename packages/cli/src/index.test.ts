@@ -356,6 +356,30 @@ describe("validate", () => {
     );
   });
 
+  it("rejects a required MCP server that fails every launch and warns about an optional one", async () => {
+    const mcp = (required: boolean) => ({
+      mcp: {
+        servers: {
+          docs: {
+            transport: "streamable-http",
+            url: "https://mcp.acme.example/mcp",
+            required,
+          },
+        },
+      },
+    });
+    const rejected = await validate(mcp(true));
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout).not.toContain("Manifest is valid.");
+    expect(rejected.stderr).toContain("mcp.servers.docs.url");
+    expect(rejected.stderr).toContain("MCP_UNHEALTHY");
+    const warned = await validate(mcp(false));
+    expect(warned.status).toBe(0);
+    expect(warned.stderr).toContain(
+      "Warning: mcp.servers.docs.url: mcp.acme.example is not in network.allowHosts",
+    );
+  });
+
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;
