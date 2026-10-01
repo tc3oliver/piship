@@ -33,6 +33,12 @@ export interface GovernanceOptions {
    * is reported (default 5 s). A test seam: fault-injection tests shorten it.
    */
   readonly auditCloseDeadlineMs?: number;
+  /**
+   * How long one call into a custom sandbox adapter may take: its factory,
+   * `available()`, `prepare()`, `dispose()`, and its `sandboxCredential`.
+   * A test seam; production uses PiShip's defaults for each call.
+   */
+  readonly adapterTimeoutMs?: number;
   /** Bearer for `credential: runtime` MCP servers. */
   readonly credential?: () => Promise<string | undefined>;
   /** Origins the runtime credential is issued for (the inference gateway). */

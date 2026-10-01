@@ -4,8 +4,17 @@
 // since only a required sandbox uses a non-native backend.
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { PiShipError, redact } from "@piship/contracts";
-import { AdapterSandboxCredential } from "@piship/core";
+import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  type CredentialProvider,
+  callWithDeadline,
+  PiShipError,
+  redact,
+} from "@piship/contracts";
+import {
+  AdapterSandboxCredential,
+  boundedCredentialProvider,
+} from "@piship/core";
 import {
   type CustomBackendContext,
   customBackend,
@@ -160,9 +169,24 @@ async function loadCustom(
     "resources",
     ...adapter.slice(2).split("/"),
   );
+  // The module and its factory are the distribution's code: neither may
+  // hang the launch.
+  const timeoutMs = options.adapterTimeoutMs ?? ADAPTER_CALL_TIMEOUT_MS;
+  const bounded = <T>(what: string, call: () => Promise<T>): Promise<T> =>
+    callWithDeadline(call, {
+      timeoutMs,
+      timedOut: () =>
+        new Error(
+          `${what} did not settle within ${Math.ceil(timeoutMs / 1000)} s`,
+        ),
+      cancelled: () => new Error(`${what} was cancelled`),
+    });
   let module: { default?: unknown; sandboxCredential?: unknown };
   try {
-    module = (await import(pathToFileURL(path).href)) as typeof module;
+    module = (await bounded(
+      "the module",
+      () => import(pathToFileURL(path).href),
+    )) as typeof module;
   } catch (error) {
     throw unavailable(
       `the custom sandbox adapter could not be loaded: ${String((error as Error)?.message ?? error)}`,
@@ -182,7 +206,21 @@ async function loadCustom(
     own = new AdapterSandboxCredential({
       distributionId: options.lock.app.id,
       command: options.lock.app.command,
-      provider: module.sandboxCredential,
+      // Bounded like a credential adapter; anything else is refused there.
+      provider:
+        typeof (module.sandboxCredential as Partial<CredentialProvider> | null)
+          ?.acquire === "function"
+          ? boundedCredentialProvider(
+              module.sandboxCredential as CredentialProvider,
+              `${adapter} sandboxCredential`,
+              options.adapterTimeoutMs
+                ? {
+                    timeoutMs: options.adapterTimeoutMs,
+                    interactiveTimeoutMs: options.adapterTimeoutMs,
+                  }
+                : {},
+            )
+          : module.sandboxCredential,
       identity: options.sandboxIdentity?.current ?? (async () => null),
       principal: options.sandboxIdentity?.principal ?? null,
       origins: endpointOrigin ? [endpointOrigin] : [],
@@ -212,8 +250,16 @@ async function loadCustom(
   try {
     if (typeof module.default !== "function")
       throw new Error("the adapter must default-export a factory function");
+    const factory = module.default as (value: unknown) => unknown;
     backend = customBackend(
-      await (module.default as (value: unknown) => unknown)(context),
+      await bounded("the factory", async () => factory(context)),
+      options.adapterTimeoutMs
+        ? {
+            availableMs: options.adapterTimeoutMs,
+            prepareMs: options.adapterTimeoutMs,
+            disposeMs: options.adapterTimeoutMs,
+          }
+        : {},
     );
   } catch (error) {
     await own?.revoke().catch(() => undefined);

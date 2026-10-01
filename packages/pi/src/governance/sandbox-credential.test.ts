@@ -501,3 +501,75 @@ describe("a custom adapter's own sandboxCredential", () => {
     },
   );
 });
+
+describe("a custom adapter that never answers", () => {
+  const custom = {
+    provider: "custom" as const,
+    adapter: "./sandbox/hung.mjs",
+    endpoint: `\${ACME_SANDBOX_URL}`,
+  };
+  interface HungLog {
+    signals: AbortSignal[];
+    issue?: () => void;
+    revoked: string[];
+  }
+  const hungLog = () =>
+    (globalThis as unknown as { __sandboxHungLog: HungLog }).__sandboxHungLog;
+  const write = (body: string) => {
+    mkdirSync(join(root, "resources", "sandbox"), { recursive: true });
+    writeFileSync(
+      join(root, "resources", "sandbox", "hung.mjs"),
+      `const log = (globalThis.__sandboxHungLog = { signals: [], revoked: [] });
+${body}`,
+    );
+  };
+
+  it("fails the launch when the factory never settles", {
+    timeout: 5_000,
+  }, async () => {
+    write("export default () => new Promise(() => {});");
+    await expect(
+      sandboxBackend(
+        options(custom, { adapterTimeoutMs: 50 } as Partial<GovernanceOptions>),
+      ),
+    ).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining(
+        "the custom sandbox adapter could not be loaded: the factory did not settle within 1 s",
+      ),
+    });
+  });
+
+  it("fails the launch when sandboxCredential never answers, and revokes a credential issued late", {
+    timeout: 5_000,
+  }, async () => {
+    write(`export const sandboxCredential = {
+  mode: "adapter",
+  requiresIdentity: false,
+  acquire(_identity, ctx) {
+    log.signals.push(ctx.signal);
+    return new Promise((resolve) => {
+      log.issue = () => resolve({ kind: "bearer", secret: "fake-late-token" });
+    });
+  },
+  async revoke(credential) {
+    log.revoked.push(credential.secret.reveal?.() ?? credential.secret);
+  },
+};
+export default () => ({});`);
+    await expect(
+      sandboxBackend(
+        options(custom, { adapterTimeoutMs: 50 } as Partial<GovernanceOptions>),
+      ),
+    ).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("CREDENTIAL_ACQUIRE_FAILED"),
+    });
+    const log = hungLog();
+    expect(log.signals).toHaveLength(1);
+    expect(log.signals[0]?.aborted).toBe(true);
+    log.issue?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(log.revoked).toEqual(["fake-late-token"]);
+  });
+});
