@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
-Changes on `main` after v0.7.0. Not released.
+Changes on `main` after v0.7.0. Not released. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md).
 
 ### Security
 
@@ -12,6 +12,10 @@ Changes on `main` after v0.7.0. Not released.
 
 ### Behavior and contract changes
 
+- A cancelled `--smoke-model` request reports the new, additive error code `REQUEST_CANCELLED`; a managed endpoint's request that got no answer (refused or reset connection, DNS failure, deadline) is `GATEWAY_UNREACHABLE`, retryable, instead of `GATEWAY_PROTOCOL_ERROR` (#85).
+- `rollback` no longer re-trusts a release key that a later update removed: the install receipt records retired keys (`retiredKeys`, optional) and channel metadata signed by one is refused (#167).
+- `sign-channel` verifies existing channel metadata before extending it and replaces it atomically; signing on top of metadata from a rotated-out key takes `--previous-key <id>=<public-key>` (#167).
+- `npm run typecheck` also type-checks the test files (`tsconfig.tests.json`) (#160).
 - A login callback without this sign-in's `state` (a stray request, a stale tab) is answered 400 and ignored; the login keeps waiting instead of failing (#149).
 - A required HTTP audit sink whose host the private-only network refuses, and a `sandbox.credential: runtime` that can never be sent, now fail `validate` and `lock` when every URL involved is plain; with a variable involved they warn (#142).
 - Managed request failures name the hop: a dead, blackholed, or 407/403 proxy is reported as the proxy's failure with a proxy action, and an untrusted, expired, or mismatched TLS chain is a non-retryable `TLS_POLICY_VIOLATION` with an `additionalCA` action (#148).
@@ -25,6 +29,10 @@ Changes on `main` after v0.7.0. Not released.
 
 ### Fixed
 
+- The agent's `bash` tool keeps its full output in a session-owned directory that is removed at close, and a full temp filesystem no longer crashes the session; a user's `!` command output files are removed at close and kept within free temp space (#64).
+- Two Reference E2E runs can share a host: Docker chooses the host ports, and the reference sandbox service accepts port `0` (#79).
+- `doctor` lists each trusted release key's ID and fingerprint and any key this installation retired (#167).
+- Test coverage: sandbox probe mutants, #49 refusal at launch, update and rollback, killed Compose project recovery, CI guards on self-skipping tests, ID tokens in the secret ledger, stronger boundary controls, and shared malformed `networkProbe` cases (#160).
 - `piship repair <id> <release archive>` restores a damaged installed release from a verified copy without running it; `INTEGRITY_FAILED` names each unexpected, modified, or missing path. Integrity checking is unchanged: no file is exempt (#136).
 - A PiShip identity or credential failure inside the TUI shows a PiShip action (`<command> login` in a terminal, or restart for a changed principal), and managed `/login` names the distribution's sign-in instead of upstream provider logins (#139).
 - `validate` warns about a relative `additionalCA`, an ignored `network: deny` on an optional sandbox, and lists the variables needed at launch separately from those only `update` needs (#142).
