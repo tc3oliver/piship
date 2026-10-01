@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import {
   PiShipError,
   type PrincipalKey,
@@ -952,5 +953,82 @@ describe("a custom adapter's own sandbox credential: revoke during a renewal", (
     await expect(access.secret()).rejects.toMatchObject({
       code: "SANDBOX_UNAVAILABLE",
     });
+  });
+});
+
+describe("a custom adapter's own sandbox credential: adapter failures", () => {
+  const ADAPTER_SECRET = "sk-adapter-token-source-abcdef";
+  const own = (failure: unknown) =>
+    new AdapterSandboxCredential({
+      distributionId: "acmecode",
+      command: "acmecode",
+      provider: {
+        mode: "adapter",
+        async acquire() {
+          throw failure;
+        },
+      },
+      identity: async () => null,
+      principal: null,
+      origins: ["https://sandbox.example"],
+    });
+
+  // Regression: every adapter failure became a non-retryable
+  // SANDBOX_UNAVAILABLE, so an outage or a rate limit with its wait read as
+  // a broken credential source.
+  it("keeps an adapter failure's retry contract and a sanitized diagnostic", async () => {
+    const limited = new PiShipError(
+      "CREDENTIAL_ACQUIRE_FAILED",
+      `token service said 429 for ${ADAPTER_SECRET}`,
+      {
+        retryable: true,
+        retryAfterMs: 9_000,
+        sanitizedDetail: {
+          reason: "rate-limited",
+          status: 429,
+          outcome: "not-sent",
+          body: `{"token":"${ADAPTER_SECRET}"}`,
+        },
+      },
+    );
+    const error = (await own(limited)
+      .access()
+      .catch((caught: unknown) => caught)) as PiShipError;
+    expect(error).toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      component: "sandbox",
+      retryable: true,
+      retryAfterMs: 9_000,
+      sanitizedDetail: {
+        adapterCode: "CREDENTIAL_ACQUIRE_FAILED",
+        reason: "rate-limited",
+        status: 429,
+        outcome: "not-sent",
+      },
+    });
+    expect(error.userAction).toMatch(/try again/i);
+    expect(error.sanitizedDetail).not.toHaveProperty("body");
+    const rendered = inspect(error, { depth: 10, showHidden: true });
+    expect(rendered).not.toContain(ADAPTER_SECRET);
+    expect(JSON.stringify(error)).not.toContain(ADAPTER_SECRET);
+  });
+
+  it("keeps a final adapter failure final, and an unknown throw non-retryable", async () => {
+    for (const failure of [
+      new PiShipError("CREDENTIAL_DENIED", `denied ${ADAPTER_SECRET}`),
+      new Error(`crashed reading ${ADAPTER_SECRET}`),
+    ]) {
+      const error = (await own(failure)
+        .access()
+        .catch((caught: unknown) => caught)) as PiShipError;
+      expect(error).toMatchObject({
+        code: "SANDBOX_UNAVAILABLE",
+        retryable: false,
+        retryAfterMs: undefined,
+      });
+      expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(
+        ADAPTER_SECRET,
+      );
+    }
   });
 });
