@@ -60,6 +60,8 @@ A 2xx response must be JSON:
 | `models` | no | Entitled model IDs; narrows the catalog |
 | `base_url` | no | Must match the declared `inference.baseUrl` |
 
+An optional field set to `null` is read as absent. A response that breaks the contract fails with `reason: contract` and names the offending field (never its value) in the message and in `sanitizedDetail.field`.
+
 Revocation, when `revokeEndpoint` is declared:
 
 ```http

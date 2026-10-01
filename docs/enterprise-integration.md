@@ -156,6 +156,8 @@ Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
 | `models` | no | Array of model IDs the credential is entitled to; narrows the catalog, never widens it |
 | `base_url` | no | If present, must equal `inference.baseUrl` (trailing slash ignored), or the response is rejected |
 
+An optional field set to `null` is read as absent, so a serializer that writes `null` for an unset field needs no change; a `subject: null` checks no principal, exactly like an absent `subject`. A field of the wrong type fails as a `contract` failure whose message and `sanitizedDetail.field` name the field, never its value.
+
 | Broker status | PiShip behavior |
 | --- | --- |
 | 401 | Treated as an expired identity: PiShip refreshes the identity once and retries once; otherwise `IDENTITY_EXPIRED`, "run login" |
