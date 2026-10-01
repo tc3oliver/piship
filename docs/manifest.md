@@ -343,7 +343,7 @@ A maintainer-local product specification (v1.0) guided the design; it is not req
 | Project origins | `policy.projectTrust.company`, `external`, and `unknown` | `companyRepo` and `externalRepo` |
 | Update source | `updates.source`: an `https` URL, a loopback `http` URL, or a `${NAME}` runtime reference; `update --from` also accepts a directory | A symbolic `company` or `self` source |
 | State location | `~/.piship/<id>` (or `PISHIP_STATE_HOME`); project restrictions in `.piship/policy.json`; no `app.configDir` or `branding` section | A branded configuration directory |
-| Data retention | No `data` section; `logs/audit.jsonl` is rotated by size with fixed limits (10 MB per file, five rotated files) | A `data` section with retention settings |
+| Data retention | No `data` section; `logs/audit.jsonl` is rotated by size with fixed limits (10 MiB per file, five rotated files) | A `data` section with retention settings |
 | Pi packages as resources | No `resources.packages` class | `resources.packages` |
 | Distribution tests | `piship test` builds the payload and runs the branded `--smoke`; no `tests` section | A configured test suite |
 | Release provenance | GitHub artifact attestations made by CI, verified with `gh attestation verify`; no `provenance.json` in the archive; `install.sh` and `install.ps1` at the archive root | An embedded provenance file and an `installers/` directory |

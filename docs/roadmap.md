@@ -4,7 +4,7 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 ## History
 
-Seven preview milestones are implemented; none has been published to npm or as a GitHub Release, and v0.7 has no Release qualification recorded. v0.1 delivered the portable personal distribution core (`piship/v1alpha1`). v0.2 added managed access and layered configuration: OIDC sign-in, broker-issued runtime credentials, an explicit OpenAI-compatible gateway, and model governance (`piship/v1alpha2`). v0.3 added governance: a layered policy engine, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses on Linux and macOS, and metadata-first audit (`piship/v1alpha3`). v0.4 added the production lifecycle: per-target release archives with an SBOM, notices, and a vulnerability gate, signed update channels, verified update, and rollback (`piship/v1alpha4`). v0.5 closed gaps across governance, access, supply chain, and the personal profile, and introduced the three CI evidence tiers, without a new schema. v0.6 consolidated the project, and v0.7 connected it to company infrastructure; both are described below. The [changelog](../CHANGELOG.md) has the details of each milestone.
+Seven preview milestones are implemented; none has been published to npm or as a GitHub Release, and v0.7 has a green Release qualification at its candidate commit `ee8b4a9`, with release blockers found after it still open ([#122](https://github.com/tc3oliver/piship/issues/122)). v0.1 delivered the portable personal distribution core (`piship/v1alpha1`). v0.2 added managed access and layered configuration: OIDC sign-in, broker-issued runtime credentials, an explicit OpenAI-compatible gateway, and model governance (`piship/v1alpha2`). v0.3 added governance: a layered policy engine, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses on Linux and macOS, and metadata-first audit (`piship/v1alpha3`). v0.4 added the production lifecycle: per-target release archives with an SBOM, notices, and a vulnerability gate, signed update channels, verified update, and rollback (`piship/v1alpha4`). v0.5 closed gaps across governance, access, supply chain, and the personal profile, and introduced the three CI evidence tiers, without a new schema. v0.6 consolidated the project, and v0.7 connected it to company infrastructure; both are described below. The [changelog](../CHANGELOG.md) has the details of each milestone.
 
 ## v0.6 — Project Consolidation (implemented)
 
@@ -19,7 +19,7 @@ v0.6 makes the documentation match `main`, fixes known contract problems, and sp
 6. **Module split and boundaries.** Large files in `core`, `pi`, and `schema` are split into modules with no behavior change, Pi-independent branded commands move out of `packages/pi`, and the boundary check discovers packages automatically and reads the Pi version from one source.
 7. **Compatibility and examples.** A `governance` surface is added to `compatibility/pi.json` and to the weaker-of-surfaces rule in `release.json`; a read-only latest-Pi canary; the examples and README quickstart are checked against the current CLI; the Release candidate workflow also qualifies the personal example.
 
-## v0.7 — Enterprise Integration and Qualification (implemented; Release qualification not recorded)
+## v0.7 — Enterprise Integration and Qualification (implemented; release blockers open)
 
 v0.7 connects PiShip to the identity, credential, gateway, sandbox, and audit infrastructure a company already runs, and qualifies managed deployments on real components and on clean machines. It starts from the frozen v0.6 baseline and keeps `piship/v1alpha4` and `piship-lock/v1alpha4` unless the work shows that a manifest field is necessary; a schema change would ship once, as `piship/v1alpha5`. PiShip does not become an identity provider, gateway, credential broker, sandbox service, or audit platform, and Pi remains the agent runtime. Publication and a Windows sandbox adapter are not planned for v0.7. Direction, not dates:
 
@@ -29,7 +29,7 @@ v0.7 connects PiShip to the identity, credential, gateway, sandbox, and audit in
 4. **Reference deployment.** A neutral, runnable reference stack of open-source components, exercised on Ubuntu by the Reference E2E, which runs nightly, on demand, and inside Release qualification.
 5. **Qualification.** Live Linux secret store coverage, and clean-machine managed and personal flows on all three targets.
 
-Everything on this list is implemented on `main`. What evidence backs each item, and that no Release qualification is recorded for a v0.7 commit, is on the [status page](status.md#recorded-evidence); nothing here is claimed beyond it.
+Everything on this list is implemented on `main`. What evidence backs each item, including the Release qualification of the candidate `ee8b4a9`, is on the [status page](status.md#recorded-evidence); nothing here is claimed beyond it.
 
 ## Next
 
