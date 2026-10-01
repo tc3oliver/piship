@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -15,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import {
   type ExtensionContext,
   type InlineExtension,
@@ -27,7 +29,7 @@ import { normalizePathResource } from "@piship/policy";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askUserExtension,
   DEFAULT_PLAN_PROMPT,
@@ -47,6 +49,7 @@ import {
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
+import { SessionOutputStore } from "./shell-output.js";
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -964,6 +967,116 @@ describe("governed shell output bounds", () => {
     setTimeout(() => controller.abort(), 200);
     await expect(running).rejects.toThrow(/aborted/);
   });
+});
+
+describe("governed shell output persistence", () => {
+  const node = process.execPath.replaceAll("\\", "/");
+  // About 200 KB: well past the 50 KB display tail.
+  const noisy = `"${node}" -e "for (let i = 0; i < 4000; i++) console.log('line ' + i + ' ' + 'x'.repeat(40))"`;
+  const allowShell = {
+    userRules: [{ id: "me.shell", action: "shell.execute", effect: "allow" }],
+  };
+  const tempKeys = ["TMPDIR", "TMP", "TEMP"] as const;
+  let saved: Record<string, string | undefined> = {};
+  let temp = "";
+  // A fresh OS temp directory, so whatever the session leaves there is
+  // visible and nothing else is.
+  beforeEach(() => {
+    temp = realpathSync(mkdtempSync(join(tmpdir(), "piship-tmpdir-")));
+    roots.push(temp);
+    saved = Object.fromEntries(tempKeys.map((key) => [key, process.env[key]]));
+    for (const key of tempKeys) process.env[key] = temp;
+  });
+  afterEach(() => {
+    for (const key of tempKeys)
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+  });
+  const piBashLogs = () =>
+    readdirSync(temp).filter((name) => name.startsWith("pi-bash-"));
+  const details = (result: { details?: unknown }) =>
+    result.details as {
+      fullOutputPath?: string;
+      truncation?: { truncated: boolean };
+    };
+
+  it("keeps an agent command's full output in the session's own directory and removes it at close", async () => {
+    const { session, workspace } = await open([], allowShell);
+    const bash = tool(governedTools(session, workspace), "bash");
+    const result = await run(bash, { command: noisy });
+    const path = details(result).fullOutputPath as string;
+    expect(path).toBeDefined();
+    expect(dirname(path)).toBe(session.outputStore.dir);
+    expect(parse(dirname(path)).base).toMatch(/^piship-out-/);
+    expect(dirname(dirname(path))).toBe(temp);
+    expect(text(result)).toContain("line 3999 ");
+    expect(text(result).endsWith(`Full output: ${path}]`)).toBe(true);
+    const saved = readFileSync(path, "utf8");
+    expect(saved).toContain("line 0 ");
+    expect(saved).toContain("line 3999 ");
+    if (process.platform !== "win32") {
+      expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
+    // Pi's own unowned file is never written for the agent's tool.
+    expect(piBashLogs()).toEqual([]);
+    await session.close();
+    expect(existsSync(dirname(path))).toBe(false);
+    expect(
+      readdirSync(temp).filter((name) => name.startsWith("piship-out-")),
+    ).toEqual([]);
+  });
+
+  async function containsFullDisk(openSink: () => Writable) {
+    const uncaught: unknown[] = [];
+    const record = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", record);
+    try {
+      const { session, workspace } = await open([], allowShell);
+      session.outputStore = new SessionOutputStore({ openSink });
+      const bash = tool(governedTools(session, workspace), "bash");
+      const result = await run(bash, { command: noisy });
+      // A late stream error would surface after the result.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(uncaught).toEqual([]);
+      expect(details(result).truncation?.truncated).toBe(true);
+      expect(details(result).fullOutputPath).toBeUndefined();
+      expect(text(result)).toContain("line 3999 ");
+      expect(text(result)).toMatch(
+        /\[Showing lines \d+-4000 of 4000 \(50\.0KB limit\)\. Full output not saved: ENOSPC\]$/,
+      );
+      // The session goes on: the next command runs normally.
+      const next = await run(bash, { command: "echo next-command" });
+      expect(text(next).trim()).toBe("next-command");
+      expect(piBashLogs()).toEqual([]);
+    } finally {
+      process.off("uncaughtException", record);
+    }
+  }
+
+  it("contains ENOSPC from the output file: an intact tail, a note, no crash", async () => {
+    await containsFullDisk(
+      () =>
+        new Writable({
+          write(_chunk, _encoding, callback) {
+            callback(
+              Object.assign(new Error("ENOSPC: no space left on device"), {
+                code: "ENOSPC",
+              }),
+            );
+          },
+        }),
+    );
+  });
+
+  // A real kernel ENOSPC: every write to /dev/full fails with it.
+  it.skipIf(process.platform !== "linux" || !existsSync("/dev/full"))(
+    "contains a real ENOSPC from /dev/full",
+    async () => {
+      await containsFullDisk(() => createWriteStream("/dev/full"));
+    },
+  );
+
 });
 
 describe("piship-ask-user", () => {

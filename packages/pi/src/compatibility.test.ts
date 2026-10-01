@@ -43,12 +43,15 @@ import { PI_VERSION } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
+import type { GovernanceSession } from "./governance-session.js";
+import { governedTools } from "./governed-tools.js";
 import { governModelRuntime, PINNED_PI_VERSION } from "./index.js";
 import {
   installCrashRedaction,
   uninstallCrashRedaction,
 } from "./launch/crash-redaction.js";
 import { ASSISTANT_MESSAGE_FIELDS } from "./launch/redaction.js";
+import { SessionOutputStore } from "./shell-output.js";
 
 // The scheduled Pi latest canary installs the newest published Pi over the
 // pin in a throwaway checkout and runs this suite read-only. Only the
@@ -165,8 +168,12 @@ describe("Pi public SDK", () => {
       "createEditToolDefinition",
       "createBashToolDefinition",
       "createLocalBashOperations",
+      "truncateTail",
+      "formatSize",
     ])
       expect(typeof exported[name], name).toBe("function");
+    for (const name of ["DEFAULT_MAX_BYTES", "DEFAULT_MAX_LINES"])
+      expect(typeof exported[name], name).toBe("number");
     expect(VERSION).toBe(EXPECTED_PI_VERSION);
     expect(typeof InteractiveMode.prototype.run).toBe("function");
     expect(typeof ModelRuntime.create).toBe("function");
@@ -367,6 +374,139 @@ describe("Pi tool definitions route through their operations overrides", () => {
     await expect(run(tool, { command: "rm -rf /" })).rejects.toThrow(
       "compat: command denied",
     );
+  });
+
+  // PiShip's governed bash keeps Pi's bash definition but runs its own
+  // execute, so the full output is owned by the session. Its results, live
+  // updates, and failures must match Pi's, apart from the saved path.
+  describe("governed bash execute matches Pi's", () => {
+    const outputs = {
+      small: [Buffer.from("one\ntwo\n")],
+      "truncated by lines": [
+        Buffer.from(
+          Array.from({ length: 3000 }, (_, i) => `line ${i}\n`).join(""),
+        ),
+      ],
+      "truncated by bytes": [
+        Buffer.from(`${"y".repeat(200)}\n`.repeat(400)),
+        Buffer.from("tail\n"),
+      ],
+      "one long line": [Buffer.alloc(120 * 1024, 122)],
+      empty: [],
+    } as const;
+    const exitCodes = [0, 2, null] as const;
+    let store = new SessionOutputStore();
+    beforeEach(() => {
+      store = new SessionOutputStore();
+    });
+    afterEach(async () => {
+      await store.dispose();
+    });
+
+    // The full-output path, from the result, a live update, or the error.
+    const savedPath = (json: string) =>
+      /"fullOutputPath":"([^"]+)"/.exec(json)?.[1] ??
+      /Full output: ([^\]\s]+)\]/.exec(json)?.[1];
+
+    async function capture(tool: ToolDefinition) {
+      const updates: unknown[] = [];
+      const outcome = await tool
+        .execute(
+          "call_compat",
+          { command: "emit" } as never,
+          undefined,
+          (update) => updates.push(update),
+          {
+            hasUI: false,
+            cwd: cwd(),
+            sessionManager: SessionManager.inMemory(temp),
+          } as never,
+        )
+        .then(
+          (result) => ({ result }),
+          (error: Error) => ({ error: error.message }),
+        );
+      const json = JSON.stringify({ outcome, updates });
+      const path = savedPath(json);
+      return {
+        path,
+        json: path ? json.replaceAll(path, "<full-output>") : json,
+      };
+    }
+
+    for (const [name, chunks] of Object.entries(outputs))
+      for (const exitCode of exitCodes)
+        it(`${name}, exit ${exitCode}`, async () => {
+          const exec: BashOperations["exec"] = async (_c, _d, options) => {
+            for (const chunk of chunks) options.onData(chunk);
+            return { exitCode };
+          };
+          const pi = createBashToolDefinition(cwd(), { operations: { exec } });
+          const gov = {
+            workflowMode: "build",
+            currentChannel: () => undefined,
+            decide: async () => ({ outcome: "allow" }),
+            sandbox: { report: { level: "enforced" }, exec },
+            outputStore: store,
+            withChannel: (_channel: unknown, fn: () => unknown) => fn(),
+            mcp: null,
+          } as unknown as GovernanceSession;
+          const governed = governedTools(gov, cwd()).find(
+            (tool) => tool.name === "bash",
+          ) as ToolDefinition;
+          const fromPi = await capture(pi as ToolDefinition);
+          const fromPiShip = await capture(governed);
+          if (fromPi.path) rmSync(fromPi.path, { force: true });
+          expect(Boolean(fromPiShip.path)).toBe(Boolean(fromPi.path));
+          if (fromPiShip.path)
+            expect(fromPiShip.path.startsWith(store.dir as string)).toBe(true);
+          expect(fromPiShip.json).toBe(fromPi.json);
+        });
+
+    it("runs the command, cwd, timeout, and environment Pi would run", async () => {
+      const calls: unknown[] = [];
+      const exec: BashOperations["exec"] = async (command, dir, options) => {
+        calls.push({
+          command,
+          dir,
+          timeout: options.timeout,
+          path: options.env?.PATH,
+          session: options.env?.PI_SESSION_ID,
+        });
+        return { exitCode: 0 };
+      };
+      const ctx = {
+        hasUI: false,
+        cwd: join(cwd(), "sub"),
+        sessionManager: SessionManager.inMemory(temp),
+      } as never;
+      const gov = {
+        workflowMode: "build",
+        currentChannel: () => undefined,
+        decide: async () => ({ outcome: "allow" }),
+        sandbox: { report: { level: "enforced" }, exec },
+        outputStore: store,
+        withChannel: (_channel: unknown, fn: () => unknown) => fn(),
+        mcp: null,
+      } as unknown as GovernanceSession;
+      const params = { command: "echo env", timeout: 5 } as never;
+      await createBashToolDefinition(cwd(), { operations: { exec } }).execute(
+        "a",
+        params,
+        undefined,
+        undefined,
+        ctx,
+      );
+      await (
+        governedTools(gov, cwd()).find(
+          (tool) => tool.name === "bash",
+        ) as ToolDefinition
+      ).execute("b", params, undefined, undefined, ctx);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(calls[0]);
+      expect(calls[0]).toMatchObject({ dir: join(cwd(), "sub"), timeout: 5 });
+      expect((calls[0] as { session?: string }).session).toBeTruthy();
+    });
   });
 
   // Governed bash falls back to Pi's local shell backend when no sandbox is
