@@ -138,7 +138,7 @@ Consequence: the `personal` surface stays `supported` in `compatibility/pi.json`
 
 ### v0.7 candidate
 
-The last v0.7 code change is pull request #118, head `44d11e2`. Its squash commit on `main`, `3110556`, has the same tree as `44d11e2` (`e1b374e`). CI, CodeQL, and Portable E2E ran on `44d11e2` or on the merge ref built from it, before the squash, and cover that tree. Reference E2E ran on `3e935a5`; see its row. None of them ran on `3110556` itself. Pull request #119 then changed documentation only; its squash commit `ee8b4a9` is the v0.7 candidate, and its [Release qualification](https://github.com/tc3oliver/piship/actions/runs/36764947340) ran on that exact commit. The rows before it are the pull request evidence, kept for their own commits.
+The last v0.7 code change is pull request #118, head `44d11e2`. Its squash commit on `main`, `3110556`, has the same tree as `44d11e2` (`e1b374e`). CI, CodeQL, and Portable E2E ran on `44d11e2` or on the merge ref built from it, before the squash, and cover that tree. Reference E2E ran on `3e935a5`; see its row. None of them ran on `3110556` itself. Pull request #119 then changed documentation only; its squash commit `ee8b4a9` is the v0.7 candidate, and its [Release qualification](https://github.com/tc3oliver/piship/actions/runs/36764947340) ran on that exact commit. The rows before it are the pull request evidence, kept for their own commits. A review of `ee8b4a9` after that run found release blockers ([#122](https://github.com/tc3oliver/piship/issues/122)), so `ee8b4a9` will not be tagged; Release qualification runs again on the commit that fixes them.
 
 | Tier | Commit | Result |
 | --- | --- | --- |
@@ -175,6 +175,6 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.4 | Production release lifecycle | `piship/v1alpha4` | `piship-lock/v1alpha4` |
 | v0.5 | Gap closure across governance, access, supply chain, and the personal profile | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.6 (implemented, frozen and qualified at `ab3e7f2`) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
-| v0.7 (implemented and qualified at `ee8b4a9`) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
+| v0.7 (implemented; qualified at `ee8b4a9`, release blockers open) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 
 All four manifest schemas are still accepted and all are experimental; only v1alpha4 can build a release. Both examples use `piship/v1alpha4`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).
