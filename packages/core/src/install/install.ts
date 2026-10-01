@@ -103,9 +103,11 @@ function ownedIncompleteInstall(
 
 function launcherSource(id: string): string {
   return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
-import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync } from "node:fs";
+import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // Node resolves this module to its real path, while the receipt records the
 // install path as configured (on macOS /var is a symlink to /private/var).
@@ -113,33 +115,97 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // outside this directory still fails closed.
 const home = dirname(fileURLToPath(import.meta.url));
 const gatePath = join(home, "..", "..", "receipts", ${JSON.stringify(`.${id}.launch.lock`)});
-const gateRecord = JSON.stringify({ schema: "piship-lifecycle-lock/v1", pid: process.pid, instance: randomUUID() }) + "\\n";
-// The gate is judged as the lifecycle lock is: a holder whose process is gone
-// (killed before its exit handler ran) is stale at once, a live one only
-// after 24 hours without a refresh. A live holder is waited for briefly.
+// The gate and launching records name this process as a runtime lease and the
+// lifecycle lock do. These helpers mirror @piship/core (process-identity.ts
+// and processHostToken), which the launcher cannot load before it holds the
+// gate: the start identity (the boot ID and start ticks on Linux, UTC start
+// ticks on Windows, UTC start seconds elsewhere), the host token, and the
+// start time. A launcher reads its own start identity only on Linux, where
+// that costs no process start; elsewhere its start time stands in for it.
+const identityOf = (pid) => {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync("/proc/" + pid + "/stat", "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      return fields[19] ? readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() + ":" + fields[19] : null;
+    }
+    if (process.platform === "win32") {
+      const value = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-Process -Id " + pid + " -ErrorAction Stop).StartTime.ToUniversalTime().Ticks"], { encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
+      return /^\\d+$/.test(value) ? value : null;
+    }
+    const value = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 5000, env: { ...process.env, TZ: "UTC0", LC_ALL: "C" }, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const match = /^\\w{3} (\\w{3}) +(\\d{1,2}) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$/.exec(value);
+    const month = match ? "JanFebMarAprMayJunJulAugSepOctNovDec".indexOf(match[1]) : -1;
+    if (!match || month < 0 || month % 3) return null;
+    return String(Date.UTC(Number(match[6]), month / 3, Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5])) / 1000);
+  } catch { return null; }
+};
+const startMs = (identity) =>
+  !/^\\d+$/.test(identity) || process.platform === "linux" ? null
+  : process.platform === "win32" ? Number(BigInt(identity) / 10000n) - 62135596800000
+  : Number(identity) * 1000;
+let namespace = "";
+try { namespace = readlinkSync("/proc/self/ns/pid"); } catch {}
+const host = createHash("sha256").update(hostname() + "\\0" + namespace).digest("hex").slice(0, 12);
+const self = { pid: process.pid, identity: process.platform === "linux" ? identityOf(process.pid) : null, host, started: Math.round(performance.timeOrigin) };
+const gateRecord = JSON.stringify({ schema: "piship-lifecycle-lock/v1", ...self, instance: randomUUID() }) + "\\n";
+const alive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
+};
+// Whether the process a record names is gone: true when proven, false when it
+// is the same running process, null when that cannot be told (another host's
+// record, or a record of an earlier PiShip that names only a process ID).
+const gone = (record) => {
+  if (record.host !== null && record.host !== host) return null;
+  if (!alive(record.pid)) return true;
+  if (record.identity === null && record.started === null) return null;
+  const current = identityOf(record.pid);
+  if (current === null) return null;
+  if (record.identity !== null) {
+    if (record.identity === current) return false;
+    if (process.platform === "linux" || process.platform === "win32" || /^\\d+$/.test(record.identity)) return true;
+  }
+  if (record.started === null) return null;
+  const start = startMs(current);
+  return start === null ? null : Math.abs(start - record.started) > 5000;
+};
+// The gate is judged as the lifecycle lock is: a holder that is gone (killed
+// before its exit handler ran, or whose process ID an unrelated process took
+// after a crash or a reboot) is stale at once, the same running holder never,
+// and one that cannot be judged (another host's) only after 24 hours without
+// a refresh. A live holder is waited for briefly.
 const gateHolder = () => {
   let stat;
   try { stat = lstatSync(gatePath); } catch { return undefined; }
   let raw = null;
   try { raw = readFileSync(gatePath, "utf8"); } catch (error) { if (error.code === "ENOENT") return undefined; }
-  let pid = null;
-  if (raw !== null && /^\\d+$/.test(raw.trim())) pid = Number(raw.trim());
+  let record = {};
+  if (raw !== null && /^\\d+$/.test(raw.trim())) record = { pid: Number(raw.trim()) };
   else try {
-    const record = JSON.parse(raw ?? "");
-    if (record.schema === "piship-lifecycle-lock/v1" && typeof record.instance === "string") pid = record.pid;
+    const value = JSON.parse(raw ?? "");
+    if (value.schema === "piship-lifecycle-lock/v1" && typeof value.instance === "string") record = value;
   } catch {}
-  return { raw, pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, mtimeMs: stat.mtimeMs, regular: stat.isFile() };
+  return {
+    raw,
+    pid: Number.isSafeInteger(record.pid) && record.pid > 0 ? record.pid : null,
+    identity: typeof record.identity === "string" && record.identity.length <= 128 ? record.identity : null,
+    host: typeof record.host === "string" && /^[0-9a-f]{12}$/.test(record.host) ? record.host : null,
+    started: Number.isSafeInteger(record.started) ? record.started : null,
+    mtimeMs: stat.mtimeMs,
+    regular: stat.isFile(),
+  };
 };
-const alive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-};
+// A holder's verdict is read once per record: on Windows each read of a
+// process start is a PowerShell start.
+const verdicts = new Map();
 const gateStale = (holder) => {
   const age = Date.now() - holder.mtimeMs;
   if (!holder.regular) return false;
   if (holder.raw === null) return age > 86400000;
   if (holder.raw === "") return age > 5000;
-  if (holder.pid === null || age > 86400000) return true;
-  return holder.pid !== process.pid && !alive(holder.pid);
+  if (holder.pid === null) return true;
+  if (!verdicts.has(holder.raw)) verdicts.set(holder.raw, gone(holder));
+  return verdicts.get(holder.raw) ?? age > 86400000;
 };
 // Moved aside under a unique name first, so only one launcher removes it; a
 // gate that turned out to be another one is put back.
@@ -174,7 +240,7 @@ process.on("exit", clearGate);
 const launchingDir = join(home, ".runtime-leases", ".launching");
 mkdirSync(launchingDir, { recursive: true, mode: 0o700 });
 const launching = join(launchingDir, randomUUID() + ".json");
-writeFileSync(launching, JSON.stringify({ schema: "piship-launching-lease/v1", pid: process.pid }) + "\\n", { flag: "wx", mode: 0o600 });
+writeFileSync(launching, JSON.stringify({ schema: "piship-launching-lease/v1", ...self }) + "\\n", { flag: "wx", mode: 0o600 });
 const clearLaunching = () => { try { rmSync(launching, { force: true }); } catch {} };
 process.on("exit", clearLaunching);
 let payload;

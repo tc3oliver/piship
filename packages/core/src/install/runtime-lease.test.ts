@@ -10,7 +10,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { processHostToken } from "@piship/contracts";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  deadPid,
+  livePid,
+  stopLiveProcesses,
+} from "../../../../tests/helpers/processes.js";
+import { processIdentity } from "../process-identity.js";
 import { holdRuntimeLease, runtimeLeases } from "./runtime-lease.js";
 
 const roots: string[] = [];
@@ -159,3 +166,65 @@ it.runIf(process.platform === "darwin")(
     expect(existsSync(path)).toBe(true);
   },
 );
+
+describe("a launching marker", () => {
+  function marker(record: Record<string, unknown>): string {
+    const directory = join(
+      home(),
+      "apps",
+      "acme",
+      ".runtime-leases",
+      ".launching",
+    );
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "00000000-0000-0000-0000-000000000000.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ schema: "piship-launching-lease/v1", ...record }),
+    );
+    return path;
+  }
+  afterEach(stopLiveProcesses);
+
+  it("is stale at once when its process ID now belongs to a process with another start identity", () => {
+    const path = marker({
+      pid: livePid(),
+      identity: "1",
+      host: processHostToken(),
+      started: null,
+    });
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(false);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("is live while its launcher runs", () => {
+    const pid = livePid();
+    const path = marker({
+      pid,
+      identity: processIdentity(pid) ?? null,
+      host: processHostToken(),
+      started: null,
+    });
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(true);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it("is never judged gone by this host's processes when another host wrote it", () => {
+    const path = marker({
+      pid: deadPid(),
+      identity: "1",
+      host: "0123456789ab",
+      started: null,
+    });
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(true);
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it("of an earlier launcher is judged by its process ID", () => {
+    const path = marker({ pid: deadPid() });
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(false);
+    expect(existsSync(path)).toBe(false);
+    marker({ pid: livePid() });
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(true);
+  });
+});
