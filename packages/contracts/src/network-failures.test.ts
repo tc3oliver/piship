@@ -15,6 +15,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
 import { formatError, PiShipError } from "./errors.js";
 import {
+  checkProxyConnection,
+  countCertificates,
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   type NetworkPolicy,
@@ -356,5 +358,36 @@ describe("a target failure without a proxy still names the target", () => {
     expect(error.message).toBe(
       `access request to 127.0.0.1:${port} failed: ECONNREFUSED`,
     );
+  });
+});
+
+describe("doctor's proxy and CA checks", () => {
+  it("opens a connection to a running proxy, and names the code for a dead one", async () => {
+    const running = await proxy("tunnel");
+    expect(
+      await checkProxyConnection(`http://127.0.0.1:${running.port}`),
+    ).toBeUndefined();
+    const port = await deadPort();
+    expect(await checkProxyConnection(`http://127.0.0.1:${port}`)).toBe(
+      "ECONNREFUSED",
+    );
+    expect(running.seen).toEqual([]);
+  });
+
+  it("counts the certificates of the declared bundles, and fails as loading does", () => {
+    const first = selfSignedLoopbackCertificate("one").certificate;
+    const second = selfSignedLoopbackCertificate("two").certificate;
+    expect(countCertificates([bundle(first + second), bundle(first)])).toBe(3);
+    expect(countCertificates([])).toBe(0);
+    expect(() => countCertificates([bundle("not a certificate")])).toThrow(
+      expect.objectContaining({ code: "CONFIG_INVALID" }),
+    );
+    expect(() =>
+      countCertificates([
+        bundle(
+          "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+        ),
+      ]),
+    ).toThrow(/does not parse/);
   });
 });

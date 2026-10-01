@@ -1,4 +1,6 @@
+import { X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { connect as connectSocket } from "node:net";
 import { resolve } from "node:path";
 import tls from "node:tls";
 import {
@@ -158,6 +160,66 @@ function loadCertificates(paths: readonly string[]): string[] {
     output.push(...certificates);
   }
   return output;
+}
+
+/**
+ * How many certificates the declared CA bundles hold, each parsed as X.509.
+ * Fails as loading them for a request does, and also on a certificate that
+ * does not parse; for doctor.
+ */
+export function countCertificates(paths: readonly string[]): number {
+  let count = 0;
+  for (const path of paths)
+    for (const pem of loadCertificates([path])) {
+      try {
+        new X509Certificate(pem);
+      } catch {
+        throw new PiShipError(
+          "CONFIG_INVALID",
+          `Enterprise CA bundle contains a certificate that does not parse: ${path}`,
+          { component: "network" },
+        );
+      }
+      count += 1;
+    }
+  return count;
+}
+
+/**
+ * Whether a TCP connection to the proxy opens within the deadline: undefined
+ * when it does, otherwise a bare system code or `timeout`. Sends nothing; for
+ * doctor. The proxy is given as `scheme://host:port`.
+ */
+export function checkProxyConnection(
+  proxy: string,
+  timeoutMs = 3_000,
+): Promise<string | undefined> {
+  let url: URL;
+  try {
+    url = new URL(proxy);
+  } catch {
+    return Promise.resolve("invalid URL");
+  }
+  const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  return new Promise((done) => {
+    const socket = connectSocket({ host, port });
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
+    const finish = (result: string | undefined) => {
+      clearTimeout(timer);
+      socket.destroy();
+      done(result);
+    };
+    socket.once("connect", () => finish(undefined));
+    socket.once("error", (error) => {
+      const code = (error as { code?: unknown }).code;
+      finish(
+        typeof code === "string" && SYSTEM_CODE.test(code)
+          ? code
+          : "network error",
+      );
+    });
+  });
 }
 
 function trustRoots(extra: readonly string[]): string[] | undefined {

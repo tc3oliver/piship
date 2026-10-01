@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AuditStatus } from "@piship/audit";
 import { PiShipError } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { selfSignedLoopbackCertificate } from "../../../../tests/helpers/x509.js";
 import type { LaunchContext } from "../launch/context.js";
 
 // The governed session is replaced so each close() outcome can be forced.
@@ -36,7 +40,7 @@ vi.mock("../governance-session.js", () => ({
   }),
 }));
 
-const { collectDoctorData } = await import("./data.js");
+const { collectDoctorData, networkChecks } = await import("./data.js");
 const { renderDoctor } = await import("../commands/doctor.js");
 
 const lostStatus: AuditStatus = {
@@ -172,5 +176,105 @@ describe("collectDoctorData", () => {
     expect(output).toContain(
       `  ✓ ${"sink siem".padEnd(20)} http, required, host audit.acme.example: healthy; delivered 1, pending 0, dropped 0`,
     );
+  });
+});
+
+describe("networkChecks", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      await new Promise<void>((closed) => server.close(() => closed()));
+    }
+  });
+  const listen = (server: Server) =>
+    new Promise<number>((done) => {
+      servers.push(server);
+      server.listen(0, "127.0.0.1", () =>
+        done((server.address() as AddressInfo).port),
+      );
+    });
+  const policy = {
+    inheritProxyEnvironment: true,
+    additionalCA: [] as string[],
+    privateOnly: false,
+    allowHosts: [],
+  };
+
+  it("checks the proxy, the CA bundles, and each endpoint's path, with the proxy credential removed", async () => {
+    const certificate = selfSignedLoopbackCertificate();
+    const tlsPort = await listen(
+      createHttpsServer(
+        { cert: certificate.certificate, key: certificate.key },
+        (_request, response) => response.writeHead(404).end(),
+      ),
+    );
+    const plainPort = await listen(
+      createServer((_request, response) => response.writeHead(405).end()),
+    );
+    const dead = createServer();
+    const deadPort = await listen(dead);
+    dead.close();
+    vi.stubEnv(
+      "HTTPS_PROXY",
+      `http://proxyuser:proxy-pass-8812@127.0.0.1:${deadPort}`,
+    );
+    vi.stubEnv("https_proxy", undefined);
+    vi.stubEnv("HTTP_PROXY", undefined);
+    vi.stubEnv("http_proxy", undefined);
+    vi.stubEnv("NO_PROXY", undefined);
+    vi.stubEnv("no_proxy", undefined);
+    const checks = await networkChecks(policy, [
+      { label: "gateway", url: `https://127.0.0.1:${tlsPort}/v1` },
+      { label: "broker", url: `http://127.0.0.1:${plainPort}/broker` },
+      { label: "issuer", url: undefined },
+    ]);
+    expect(checks.proxyChecks).toEqual([
+      { proxy: `http://127.0.0.1:${deadPort}`, error: "ECONNREFUSED" },
+    ]);
+    expect(checks.paths).toEqual([
+      {
+        label: "gateway",
+        host: `127.0.0.1:${tlsPort}`,
+        code: "GATEWAY_UNREACHABLE",
+        error: expect.stringContaining(
+          `failed at the proxy http://127.0.0.1:${deadPort}: ECONNREFUSED`,
+        ),
+      },
+      // Plain HTTP to a loopback host is not proxied by HTTPS_PROXY.
+      { label: "broker", host: `127.0.0.1:${plainPort}`, status: 405 },
+    ]);
+    expect(JSON.stringify(checks)).not.toContain("proxy-pass-8812");
+
+    vi.stubEnv("HTTPS_PROXY", undefined);
+    const direct = await networkChecks(policy, [
+      { label: "gateway", url: `https://127.0.0.1:${tlsPort}/v1` },
+    ]);
+    expect(direct.proxyChecks).toEqual([]);
+    expect(direct.paths).toEqual([
+      {
+        label: "gateway",
+        host: `127.0.0.1:${tlsPort}`,
+        code: "TLS_POLICY_VIOLATION",
+        error: expect.stringContaining("network.tls.additionalCA"),
+      },
+    ]);
+
+    const bundle = join(temp, "ca.pem");
+    writeFileSync(bundle, certificate.certificate);
+    const trusted = await networkChecks({ ...policy, additionalCA: [bundle] }, [
+      { label: "gateway", url: `https://127.0.0.1:${tlsPort}/v1` },
+    ]);
+    expect(trusted.caCertificates).toBe(1);
+    expect(trusted.paths).toEqual([
+      { label: "gateway", host: `127.0.0.1:${tlsPort}`, status: 404 },
+    ]);
+
+    writeFileSync(bundle, "not a certificate");
+    const broken = await networkChecks({ ...policy, additionalCA: [bundle] }, [
+      { label: "gateway", url: `https://127.0.0.1:${tlsPort}/v1` },
+    ]);
+    expect(broken.caError).toContain("CONFIG_INVALID");
+    expect(broken.paths).toBeUndefined();
   });
 });
