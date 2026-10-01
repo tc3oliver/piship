@@ -489,11 +489,15 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       body.subject !== undefined &&
       (typeof body.subject !== "string" || body.subject !== identity.subject)
     )
-      throw brokerFailure(
-        "acquire",
-        "contract",
-        "The credential broker issued a credential for another subject",
-        { status: response.status, detail },
+      throw await this.#discardIssued(
+        body,
+        ctx,
+        brokerFailure(
+          "acquire",
+          "contract",
+          "The credential broker issued a credential for another subject",
+          { status: response.status, detail },
+        ),
       );
     const type = body.credential_type;
     const secret = body.credential;
@@ -537,19 +541,23 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
       this.options.expectedBaseUrl &&
       normalizeUrl(body.base_url) !== normalizeUrl(this.options.expectedBaseUrl)
     )
-      throw new PiShipError(
-        "CREDENTIAL_ACQUIRE_FAILED",
-        "The credential broker returned an undeclared gateway base_url",
-        {
-          component: "credential",
-          userAction: "Align the broker with inference.baseUrl",
-          sanitizedDetail: {
-            operation: "acquire",
-            reason: "contract",
-            status: response.status,
-            ...detail,
+      throw await this.#discardIssued(
+        body,
+        ctx,
+        new PiShipError(
+          "CREDENTIAL_ACQUIRE_FAILED",
+          "The credential broker returned an undeclared gateway base_url",
+          {
+            component: "credential",
+            userAction: "Align the broker with inference.baseUrl",
+            sanitizedDetail: {
+              operation: "acquire",
+              reason: "contract",
+              status: response.status,
+              ...detail,
+            },
           },
-        },
+        ),
       );
     const value = new SecretValue(secret);
     const expiresAt =
@@ -557,18 +565,22 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         ? new Date(body.expires_at)
         : undefined;
     if (expiresAt && expiresAt.getTime() <= Date.now())
-      throw new PiShipError(
-        "CREDENTIAL_EXPIRED",
-        "The credential broker issued an already expired credential",
-        {
-          component: "credential",
-          sanitizedDetail: {
-            operation: "acquire",
-            reason: "contract",
-            status: response.status,
-            ...detail,
+      throw await this.#discardIssued(
+        body,
+        ctx,
+        new PiShipError(
+          "CREDENTIAL_EXPIRED",
+          "The credential broker issued an already expired credential",
+          {
+            component: "credential",
+            sanitizedDetail: {
+              operation: "acquire",
+              reason: "contract",
+              status: response.status,
+              ...detail,
+            },
           },
-        },
+        ),
       );
     return {
       kind: type as RuntimeCredentialKind,
@@ -586,6 +598,56 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           : {}),
       },
     };
+  }
+
+  /**
+   * Revoke, best effort, a credential the broker issued in an answer PiShip
+   * then refuses, so it does not stay live at the broker with nothing
+   * recording it. Returns `error`, the refusal, which is what the caller
+   * sees either way; a failed revocation is noted in its detail.
+   */
+  async #discardIssued(
+    body: Record<string, unknown>,
+    ctx: CredentialContext,
+    error: PiShipError,
+  ): Promise<PiShipError> {
+    const secret = body.credential;
+    const type = body.credential_type;
+    if (
+      !this.options.revokeEndpoint ||
+      (type !== "api_key" && type !== "bearer" && type !== "opaque") ||
+      typeof secret !== "string" ||
+      secret.length < 8 ||
+      HEADER_BREAKING.test(secret)
+    )
+      return error;
+    const issued: RuntimeCredential = {
+      kind: type,
+      secret: new SecretValue(secret),
+      ...(typeof body.credential_id === "string" &&
+      CREDENTIAL_ID.test(body.credential_id)
+        ? { credentialId: body.credential_id }
+        : {}),
+      metadata: {},
+    };
+    try {
+      await this.revoke(issued, ctx);
+      return error;
+    } catch {
+      return new PiShipError(
+        error.code,
+        `${error.message}; revoking the credential it issued failed, so it stays live at the broker until it expires`,
+        {
+          component: "credential",
+          ...(error.userAction ? { userAction: error.userAction } : {}),
+          retryable: error.retryable,
+          sanitizedDetail: {
+            ...error.sanitizedDetail,
+            issuedNotRevoked: true,
+          },
+        },
+      );
+    }
   }
 
   refresh(

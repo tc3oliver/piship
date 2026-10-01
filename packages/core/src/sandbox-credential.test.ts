@@ -37,6 +37,7 @@ import { startLocalServices } from "../../../examples/demo-company/fixtures/loca
 import {
   type AccessEvent,
   type AccessPhase,
+  AdapterSandboxCredential,
   DistributionAccess,
   SandboxCredential,
   type SandboxCredentialOptions,
@@ -901,5 +902,55 @@ describe("sandbox credential across user switches (fixtures)", () => {
     expect(scan(stateDir(), [SECRET])).toEqual([]);
     expect(JSON.stringify(accessEvents)).not.toContain(SECRET);
     expect(JSON.stringify(spy.mock.calls)).not.toContain(SECRET);
+  });
+});
+
+describe("a custom adapter's own sandbox credential: revoke during a renewal", () => {
+  it("revokes the credential a renewal in flight obtains, and keeps none", async () => {
+    const revoked: string[] = [];
+    let release: () => void = () => {};
+    let issued = 0;
+    const provider = {
+      mode: "adapter",
+      async acquire() {
+        issued += 1;
+        const secret = `sk-adapter-sandbox-${issued}-abcdef`;
+        if (issued > 1)
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        return {
+          kind: "bearer",
+          secret: new SecretValue(secret),
+          expiresAt: new Date(Date.now() + 3_600_000),
+        };
+      },
+      async revoke(credential: { secret: SecretValue }) {
+        revoked.push(credential.secret.reveal());
+      },
+    };
+    const own = new AdapterSandboxCredential({
+      distributionId: "acmecode",
+      command: "acmecode",
+      provider,
+      identity: async () => null,
+      principal: null,
+      origins: ["https://sandbox.example"],
+    });
+    const access = await own.access();
+    // The sandbox rejects the first credential; its renewal is in flight.
+    const renewal = access.rejected();
+    await vi.waitFor(() => expect(issued).toBe(2));
+    const revoking = own.revoke();
+    release();
+    await renewal;
+    await revoking;
+    expect(revoked).toEqual([
+      "sk-adapter-sandbox-1-abcdef",
+      "sk-adapter-sandbox-2-abcdef",
+    ]);
+    await expect(access.secret()).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
   });
 });

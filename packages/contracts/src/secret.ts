@@ -74,7 +74,11 @@ export function forgetSecret(value: SecretValue): void {
  * errors, stderr, MCP output handed to the model, and audit events.
  */
 const SECRET_PATTERNS: readonly RegExp[] = [
-  /(authorization\s*:\s*)(bearer|basic)\s+[^\s"',;]+/gi,
+  // Any Authorization scheme (Bearer, Basic, Token, ...) or a bare
+  // credential, also as a JSON key whose quotes are escaped (`\"`).
+  /(authorization(?:\\*")?\s*[:=]\s*(?:\\*")?)(?:[A-Za-z][\w.-]*\s+)?[^\s"',;\\]+/gi,
+  // A cookie header carries several `name=value; ` pairs up to the line end.
+  /((?:set-)?cookie(?:\\*")?\s*:\s*(?:\\*")?)(?:\\[^"\r\n]|[^"\r\n\\])+/gi,
   /\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
   // A standalone Basic credential must look like base64 (a digit, `+`, `/`,
   // `=`, or a lower-to-upper case change), so "basic authentication" stays.
@@ -94,7 +98,11 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bAIza[A-Za-z0-9_-]{30,}/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-  /("?(?:access_token|refresh_token|id_token|credential|api_?key|client_secret|password|secret)"?\s*[:=]\s*"?)([^"\s,}&]+)/gi,
+  // A key, header, or query parameter whose name ends in a credential word,
+  // with any separator or none (`X-Api-Key`, `client_secret`, `?token=`,
+  // `secretAccessKey`), quoted, escaped (`\"`), or bare. The match starts at
+  // the word, so the rest of the name is never rescanned.
+  /((?:token|secret|passw(?:or)?d|credentials?|(?:api|access|secret|private)[-_]?key)(?:\\*")?\s*[:=]\s*(?:\\*")?)((?:\\[^"\s]|[^"\s,}&\\])+)/gi,
 ];
 
 /**
@@ -113,7 +121,8 @@ export function redact(text: string): string {
     output = output.split(value).join(REDACTED);
   for (const pattern of SECRET_PATTERNS)
     output = output.replace(pattern, (_match, prefix: string) =>
-      typeof prefix === "string" && /[:=]\s*"?$|authorization/i.test(prefix)
+      typeof prefix === "string" &&
+      /[:=]\s*(?:\\*")?$|authorization/i.test(prefix)
         ? `${prefix}${REDACTED}`
         : REDACTED,
     );

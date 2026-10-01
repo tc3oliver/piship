@@ -23,6 +23,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { LocalMetrics } from "@piship/audit";
+import { normalizePathResource } from "@piship/policy";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
@@ -42,6 +43,7 @@ import {
   GOVERNED_READ_LIMIT_BYTES,
   governedBashOperations,
   governedTools,
+  isProtectedGitPath,
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
@@ -459,6 +461,61 @@ describe("governed built-in tools", () => {
     );
     expect(audit).toContain('"rule":"piship.project.git-config"');
   });
+
+  it("compares protected git paths without case where the filesystem ignores it", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-gitcase-"));
+    try {
+      mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+      writeFileSync(join(root, ".git", "config"), "[core]\n");
+      const real = realpathSync(root);
+      // The paths the tools compare are normalized to POSIX separators.
+      const base = normalizePathResource(real, { workspaceRoot: real });
+      const variants = [
+        `${base}/.GIT/hooks/pre-commit`,
+        `${base}/.Git/config`,
+        `${base}/.git/HOOKS/post-checkout`,
+      ];
+      for (const platform of ["darwin", "win32"] as const)
+        for (const path of variants)
+          expect(isProtectedGitPath(real, [path], platform), path).toBe(true);
+      // Linux filesystems tell case apart: .GIT is another directory.
+      for (const path of variants)
+        expect(isProtectedGitPath(real, [path], "linux"), path).toBe(false);
+      for (const platform of ["darwin", "win32", "linux"] as const) {
+        expect(
+          isProtectedGitPath(real, [`${base}/.git/hooks/x`], platform),
+        ).toBe(true);
+        expect(
+          isProtectedGitPath(real, [`${base}/src/.github/x`], platform),
+        ).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === "darwin" || process.platform === "win32")(
+    "does not let a tool plant a git hook through a case variant",
+    async () => {
+      const { session, workspace } = await open();
+      // The hooks directory does not exist yet, so the path's real form
+      // keeps the case the tool was given.
+      mkdirSync(join(workspace, ".git"));
+      writeFileSync(join(workspace, ".git", "config"), "[core]\n");
+      const write = tool(governedTools(session, workspace), "write");
+      for (const path of [".git/HOOKS/pre-commit", ".git/Hooks/post-checkout"])
+        await expect(
+          run(
+            write,
+            { path, content: "#!/bin/sh\ntouch pwned\n" },
+            context(true),
+          ),
+          path,
+        ).rejects.toThrow(/what git runs|decides this project's origin/);
+      expect(existsSync(join(workspace, ".git", "hooks"))).toBe(false);
+      await session.close();
+    },
+  );
 
   it("shows the path or command in the approval prompt but keeps audit metadata-only", async () => {
     const { session, workspace, root } = await open(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   forgetSecret,
+  REDACTED_TEXT as REDACTED,
   redact,
   redactValue,
   SECRET_KEY_PATTERN,
@@ -141,5 +142,74 @@ describe("redactValue", () => {
       view: "plain bytes",
     });
     forgetSecret(secret);
+  });
+});
+
+describe("redaction of common secret forms", () => {
+  const value = "s3cr3t-Value_0123";
+  it.each([
+    ["X-Api-Key header", `X-Api-Key: ${value}`, "X-Api-Key: "],
+    ["lowercase api-key header", `api-key: ${value}`, "api-key: "],
+    ["x-api-key in any case", `X-API-KEY:${value}`, "X-API-KEY:"],
+    [
+      "Authorization Token scheme",
+      `Authorization: Token ${value}`,
+      "Authorization: ",
+    ],
+    [
+      "Authorization in lower case",
+      `authorization: token ${value}`,
+      "authorization: ",
+    ],
+    [
+      "query token after ?",
+      `GET /v1/models?token=${value} HTTP/1.1`,
+      "?token=",
+    ],
+    [
+      "query token after &",
+      `https://h.example/x?a=1&token=${value}&b=2`,
+      "&token=",
+    ],
+    ["access_token query", `?access_token=${value}`, "access_token="],
+    ["Cookie header", `Cookie: session=${value}; theme=dark`, "Cookie: "],
+    ["Set-Cookie header", `Set-Cookie: sid=${value}; Path=/`, "Set-Cookie: "],
+    [
+      "escaped JSON password",
+      `{\\"password\\":\\"${value}\\"}`,
+      '\\"password\\":\\"',
+    ],
+    [
+      "escaped JSON api_key",
+      `\\"api_key\\": \\"${value}\\"`,
+      '\\"api_key\\": \\"',
+    ],
+    [
+      "camelCase secretAccessKey",
+      `{"secretAccessKey":"${value}"}`,
+      '"secretAccessKey":"',
+    ],
+    ["camelCase key=value", `secretAccessKey=${value}`, "secretAccessKey="],
+    ["clientSecret", `clientSecret: ${value}`, "clientSecret: "],
+  ])("redacts %s", (_name, input, label) => {
+    const output = redact(input);
+    expect(output).not.toContain(value);
+    expect(output).toContain(label);
+    expect(output).toContain(REDACTED);
+  });
+
+  it("keeps the parameters after a redacted query token", () => {
+    expect(redact(`https://h.example/x?token=${value}&page=2`)).toBe(
+      `https://h.example/x?token=${REDACTED}&page=2`,
+    );
+  });
+
+  it("leaves counts and prose without a value alone", () => {
+    for (const text of [
+      "maxTokens: 4096",
+      "the token expired",
+      "basic authentication is off",
+    ])
+      expect(redact(text)).toBe(text);
   });
 });

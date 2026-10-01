@@ -131,16 +131,33 @@ function builtinDenial(
   });
   if (posix.some((path) => isWithinPosix(state, path))) return STATE_RULE;
   if (action !== "filesystem.write") return undefined;
-  const git = projectGitControlFiles(gov.project.root);
-  const trees = projectGitControlDirectories(gov.project.root);
-  if (
-    posix.some(
+  if (isProtectedGitPath(gov.project.root, posix)) return GIT_CONFIG_RULE;
+  return undefined;
+}
+
+/**
+ * Whether one of `paths` (POSIX separators) is a protected git file of the
+ * project at `root`, or inside a protected git tree. macOS and Windows
+ * filesystems ignore case by default, where `.GIT/hooks` is `.git/hooks`,
+ * so there the comparison ignores case too.
+ */
+export function isProtectedGitPath(
+  root: string,
+  paths: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const fold =
+    platform === "darwin" || platform === "win32"
+      ? (path: string) => path.toLowerCase()
+      : (path: string) => path;
+  const git = projectGitControlFiles(root).map(fold);
+  const trees = projectGitControlDirectories(root).map(fold);
+  return paths
+    .map(fold)
+    .some(
       (path) =>
         git.includes(path) || trees.some((dir) => isWithinPosix(dir, path)),
-    )
-  )
-    return GIT_CONFIG_RULE;
-  return undefined;
+    );
 }
 
 /**

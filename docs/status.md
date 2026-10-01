@@ -36,7 +36,7 @@ Not claimed anywhere: sign-in at a production identity provider, inference throu
 
 Each sandbox backend has its own maturity; a distribution's containment is only as strong as the backend it selects. What each backend enforces and reports is in [sandbox backends](sandbox.md). The statuses use the terms above, which are defined by `compatibility/pi.json`: a native backend is `candidate` because the `governance` surface it belongs to is, and no row is promoted beyond what that record says.
 
-Every run named below used Node 22.19.0 and the pinned Pi 0.87.1. The [v0.7 candidate](#v07-candidate) section lists the runs.
+Every run named below used Node 22.19.0 and the pinned Pi 0.87.1. The [v0.7.0 release candidate](#v070-release-candidate) section says where its qualification is recorded; the [v0.7 candidate](#v07-candidate) section lists the earlier runs.
 
 | Backend | Status | Environment and versions | Evidence and results |
 | --- | --- | --- | --- |
@@ -95,6 +95,7 @@ Limits of v0.7 as shipped, each checked against the code or document it cites. N
 - The payload ships `brace-expansion` 5.0.9, which upstream Pi 0.87.1 pins in its `npm-shrinkwrap.json`; it has two high advisories (GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p: local stack-exhaustion DoS from crafted nested brace patterns) and one moderate (GHSA-q2hr-2g5m-vwhr). This is a reviewed exception, not a gate that ignores vulnerabilities: the release vulnerability gate scans the payload's runtime dependencies and fails on a high advisory, and the example manifests allow exactly these two IDs, with a reason, until 2026-12-31, when the gate fails again. `failOn` stays `high`; the moderate one is reported below the threshold. PiShip does not patch Pi's dependency tree; the exception goes when Pi ships a fixed version (#129).
 - The branded command has no non-interactive prompt, print, or RPC mode: without a terminal the interactive command fails at once, and headless runs (CI, automation, a workload identity) use `--smoke`, `--smoke-model`, and the subcommands (#135).
 - Deferred to v0.7.x, each confirmed and tracked in its issue with the current workaround: a stray file in the installed payload fails its integrity check until removed or reinstalled (#136); an identity or credential failure inside the TUI shows Pi's own hints (#139); configuration that validates can still fail on an employee's machine, such as a relative `additionalCA` (#142); a corrupt versioned state file blocks update and rollback until moved aside (#143); the lifecycle lock and launch gate trust a bare PID for up to 24 hours (#144); adapter and custom sandbox calls have no deadline (#145); Kubernetes sandbox commands over 300 seconds fail as retryable (#146); proxy and CA failures name the target, not the proxy or CA (#148); login on a busy port 8765, with a wrong client ID, or over SSH fails or waits without a clear message (#149).
+- Also deferred to v0.7.x, tracked under [#125](https://github.com/tc3oliver/piship/issues/125): the items left open in #157 (409 semantics, `retryAfterMs` from sandbox adapters, an empty lock file after a failed lock write, the clock hint for an already expired broker credential, the wording of a broker outage during renewal), #158 (`/resume` when session inspection fails, PID namespaces and foreign host names in session owner records, Kubernetes parallel cancellation, sandbox check timeout semantics, the synchronous temporary reclaim, recovery of an edited command shim), #159 (the reference sandbox's Docker mount TOCTOU, reference broker replay of a revoked credential, the reference realm's password and brute-force policy, the `docs/security.md` session-file wording), and #160 to #162.
 
 ## Pi compatibility
 
@@ -139,6 +140,12 @@ A result is evidence only for the commit and tier it ran on. A run that has not 
 
 Consequence: the `personal` surface stays `supported` in `compatibility/pi.json`, and the Release qualification on `21de31a` covered the `piship/v1alpha4` personal example on all three targets. The freeze SHA `ab3e7f2` now has its own green Release qualification, so the v0.6 baseline is implemented, frozen, and qualified at its exact commit. Still, a v0.7 result is evidence only for the v0.7 commit it ran on and does not stand in for the v0.6 baseline.
 
+### v0.7.0 release candidate
+
+The release blockers found after `ee8b4a9` (#122, #123, #124) were fixed in pull request #163, and the selected hardening items of #157, #158, and #159 in pull request #164, which also sets the PiShip version to `0.7.0`. The squash commit of #164 that carries this page is the v0.7.0 candidate. Its Release qualification (CI, CodeQL, Portable E2E, Reference E2E, and Release candidate on that exact commit) is recorded in [#121](https://github.com/tc3oliver/piship/issues/121), and the `v0.7.0` tag is set only on that commit. The `ee8b4a9` evidence below is kept for its own commit.
+
+Pi stays at 0.87.1 for v0.7.0. The latest stable Pi when the candidate was frozen, 0.99.2 (2026-09-30), still pins `brace-expansion` 5.0.9 in its `npm-shrinkwrap.json`, so it would not clear the advisory below, and its 0.99.0 adds built-in MCP, codemode, and tool search extensions that run tools outside the paths PiShip governs, which needs a compatibility review of its own. Upstream tracking: [earendil-works/pi#10273](https://github.com/earendil-works/pi/issues/10273).
+
 ### v0.7 candidate
 
 The last v0.7 code change is pull request #118, head `44d11e2`. Its squash commit on `main`, `3110556`, has the same tree as `44d11e2` (`e1b374e`). CI, CodeQL, and Portable E2E ran on `44d11e2` or on the merge ref built from it, before the squash, and cover that tree. Reference E2E ran on `3e935a5`; see its row. None of them ran on `3110556` itself. Pull request #119 then changed documentation only; its squash commit `ee8b4a9` is the v0.7 candidate, and its [Release qualification](https://github.com/tc3oliver/piship/actions/runs/36764947340) ran on that exact commit. The rows before it are the pull request evidence, kept for their own commits. A review of `ee8b4a9` after that run found release blockers ([#122](https://github.com/tc3oliver/piship/issues/122)), so `ee8b4a9` will not be tagged; Release qualification runs again on the commit that fixes them.
@@ -178,6 +185,6 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.4 | Production release lifecycle | `piship/v1alpha4` | `piship-lock/v1alpha4` |
 | v0.5 | Gap closure across governance, access, supply chain, and the personal profile | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.6 (implemented, frozen and qualified at `ab3e7f2`) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
-| v0.7 (implemented; qualified at `ee8b4a9`, release blockers open) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
+| v0.7 (v0.7.0 candidate: the squash commit of #164; qualification in [#121](https://github.com/tc3oliver/piship/issues/121)) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 
 All four manifest schemas are still accepted and all are experimental; only v1alpha4 can build a release. Both examples use `piship/v1alpha4`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).

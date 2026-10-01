@@ -17,8 +17,8 @@
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
     "version": "0.87.1",
-    "pishipVersion": "0.1.0",
-    "npmLockSha256": "a124a9f5f4e9d0fea29d66d0dc872981ba33f1d8188ebd158132c0083995096c",
+    "pishipVersion": "0.7.0",
+    "npmLockSha256": "7bbd0edf302a109b259c50dbeacfae824334b25c94187211dcf395e60f3d8f0a",
     "packages": [
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",

@@ -267,3 +267,33 @@ describe("sanitizeEvent", () => {
     expect(event).not.toHaveProperty("enforcement");
   });
 });
+
+describe("sanitizeEvent control characters", () => {
+  it("never rejoins a token that a control character hid from the scrubber", () => {
+    const hidden = [
+      "password\u0007=hunter2-audit-value",
+      "Bearer\u0000abcdefgh0123456789",
+      "client_secret\u001b:audit-client-value",
+    ];
+    for (const text of hidden) {
+      const event = sanitizeEvent(
+        {
+          event: AUDIT_EVENT_TYPES[0],
+          distribution: "acmecode",
+          resource: text,
+          detail: { note: text },
+        },
+        NO_CONTENT_CAPTURE,
+        fixed,
+      );
+      const serialized = JSON.stringify(event);
+      for (const value of [
+        "hunter2-audit-value",
+        "abcdefgh0123456789",
+        "audit-client-value",
+      ])
+        expect(serialized, JSON.stringify(text)).not.toContain(value);
+      expect(event.resource).toContain("[REDACTED]");
+    }
+  });
+});

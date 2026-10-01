@@ -24,6 +24,7 @@ import {
 } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiShipError } from "@piship/contracts";
+import { PISHIP_VERSION } from "./compatibility.js";
 import {
   EVIDENCED_TARGETS,
   currentTarget,
@@ -438,7 +439,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
             target: currentTarget(),
             channel: "stable",
             pi: "0.87.1",
-            piship: "0.1.0",
+            piship: PISHIP_VERSION,
             lockSha256: a.metadata.lockSha256,
             archiveSha256: a.sha256,
           },
@@ -934,9 +935,34 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       distribution: ID,
       version: "1.1.0",
       pi: "0.87.1",
-      piship: "0.1.0",
+      piship: PISHIP_VERSION,
     });
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
+  });
+
+  it("does not replace a retained release that a running session still uses", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    // A session started on 1.1.0 before the rollback is still running.
+    const retained = join(appsDir(), "1.1.0");
+    const marker = join(retained, "in-use-by-session");
+    writeFileSync(marker, "running");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(updateDistribution(ID, opts));
+      expect(error).toMatchObject({ code: "UPDATE_FAILED" });
+      expect(error.message).toMatch(/runtime session/);
+      expect(readFileSync(marker, "utf8")).toBe("running");
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    } finally {
+      releaseLease();
+    }
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+    });
   });
 
   it("reports up-to-date on the next run", async () => {

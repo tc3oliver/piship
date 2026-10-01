@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DIFF_TESTS, diffLocks, formatDiff } from "./diff/index.js";
+import { PISHIP_VERSION } from "./compatibility.js";
 import type { DistributionLock } from "./index.js";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
@@ -86,7 +87,7 @@ describe("diffLocks", () => {
     expect(report.changes).toEqual([]);
     expect(report.requiredTests).toEqual([]);
     expect(formatDiff(report)).toBe(
-      "acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 0.87.1, PiShip 0.1.0\nNo release-impact changes.\n",
+      `acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 0.87.1, PiShip ${PISHIP_VERSION}\nNo release-impact changes.\n`,
     );
   });
 
@@ -365,10 +366,10 @@ describe("diffLocks", () => {
     expect(formatDiff(report)).toBe(
       [
         "acmecode 1.0.0 -> 1.1.0 (risk: medium)",
-        "Pi 0.87.1, PiShip 0.1.0 -> 0.2.0",
+        `Pi 0.87.1, PiShip ${PISHIP_VERSION} -> 0.2.0`,
         "Changes:",
         "  [low] distribution: changed version (1.0.0 -> 1.1.0): Release version change.",
-        "  [medium] piship: changed PiShip version (0.1.0 -> 0.2.0): PiShip runtime changed; launch and governance code differ.",
+        `  [medium] piship: changed PiShip version (${PISHIP_VERSION} -> 0.2.0): PiShip runtime changed; launch and governance code differ.`,
         "  [low] models: changed default model (acme/coder -> acme/review): Default model changed.",
         "Required tests:",
         `  - ${DIFF_TESTS.compatibility}`,

@@ -1,6 +1,6 @@
 {
   "name": "@piship/pi",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -20,13 +20,13 @@
   ],
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",
-    "@piship/audit": "0.1.0",
-    "@piship/contracts": "0.1.0",
-    "@piship/core": "0.1.0",
-    "@piship/mcp": "0.1.0",
-    "@piship/policy": "0.1.0",
-    "@piship/sandbox": "0.1.0",
-    "@piship/schema": "0.1.0"
+    "@piship/audit": "0.7.0",
+    "@piship/contracts": "0.7.0",
+    "@piship/core": "0.7.0",
+    "@piship/mcp": "0.7.0",
+    "@piship/policy": "0.7.0",
+    "@piship/sandbox": "0.7.0",
+    "@piship/schema": "0.7.0"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",
   "keywords": [

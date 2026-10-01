@@ -1,3 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxAdapter } from "./adapter.js";
@@ -394,9 +399,55 @@ describe("seatbelt profile", () => {
   });
   it("omits the network deny in allow mode", () => {
     expect(seatbeltProfile(profile({ network: "allow" }), seams)).not.toContain(
-      "network",
+      "(deny network*)",
     );
   });
+  it("denies the Docker socket in both network modes", () => {
+    for (const network of ["allow", "deny"] as const) {
+      const text = seatbeltProfile(profile({ network }), seams);
+      expect(text, network).toContain(
+        '(deny network-outbound\n  (remote unix-socket (path-regex #"(^|/)docker(\\.raw)?\\.sock$")))',
+      );
+    }
+  });
+  it.runIf(
+    process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec"),
+  )(
+    "keeps an allow-mode command from connecting to a Docker socket",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "piship-dsock-"));
+      const path = join(dir, "docker.sock");
+      const server = createServer((socket) => socket.end());
+      await new Promise<void>((done) => server.listen(path, done));
+      try {
+        const connect = `const s=require("net").connect(process.argv[1]);s.on("connect",()=>{console.log("connected");s.destroy()});s.on("error",(e)=>console.log(e.code))`;
+        const run = (args: string[]) =>
+          spawnSync(args[0] as string, args.slice(1), {
+            encoding: "utf8",
+          }).stdout.trim();
+        // The socket answers outside the sandbox, so the denial is the profile's.
+        expect(run([process.execPath, "-e", connect, path])).toBe("connected");
+        const text = seatbeltProfile(
+          profile({ network: "allow", readDeny: [], writeAllow: [dir] }),
+          seams,
+        );
+        expect(
+          run([
+            "/usr/bin/sandbox-exec",
+            "-p",
+            text,
+            process.execPath,
+            "-e",
+            connect,
+            path,
+          ]),
+        ).toBe("EPERM");
+      } finally {
+        server.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
   it("escapes strings and refuses control characters", () => {
     expect(sbplString('/a "b"\\c')).toBe('"/a \\"b\\"\\\\c"');
     expect(() => sbplString("/a\nb")).toThrow(

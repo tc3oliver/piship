@@ -43,6 +43,7 @@ import {
   snapshotBackend,
   syncedBackend,
   type WorkspaceFake,
+  type WorkspaceFakeOptions,
   workspaceCapabilities,
 } from "./testing/workspace-fakes.js";
 import {
@@ -1470,6 +1471,38 @@ describe.skipIf(!posix)("the propagation window", () => {
 });
 
 describe.skipIf(!posix)("the validity window", () => {
+  it("verifies an environment the backend replaces while running a command before the command uses it", async () => {
+    let epoch = "pod-1";
+    let replaceOnNext = false;
+    const options: {
+      -readonly [K in keyof WorkspaceFakeOptions]: WorkspaceFakeOptions[K];
+    } = {
+      epoch: () => epoch,
+      // The backend replaces its environment inside exec (an expired claim)
+      // and reports the new one only afterwards.
+      exec: async (request, io) => {
+        if (replaceOnNext) {
+          replaceOnNext = false;
+          epoch = "pod-2";
+        }
+        return runShell(workspace, request, io);
+      },
+    };
+    const fake = sharedBackend(options);
+    const sandbox = await activate(fake);
+    await run(sandbox, "one");
+    expect(checks(fake)).toHaveLength(1);
+    replaceOnNext = true;
+    // The new environment's workspace does not verify.
+    options.check = async () => ({ exitCode: 2 });
+    await expect(run(sandbox, "two")).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+    });
+    expect(checks(fake)).toHaveLength(2);
+    expect(fake.commands()).toContain("one");
+    expect(fake.commands()).not.toContain("two");
+    await sandbox.dispose();
+  });
   it("checks again before the next command after 30 minutes or a new environment", async () => {
     let monotonic = 1000;
     let epoch = "pod-1";
@@ -1492,7 +1525,11 @@ describe.skipIf(!posix)("the validity window", () => {
     expect(checks(fake)).toHaveLength(3);
     // Each check ran before the command that found the result expired.
     const order = fake.requests
-      .filter((request) => !request.command.includes("piship-sandbox-ready"))
+      .filter(
+        (request) =>
+          !request.command.includes("piship-sandbox-ready") &&
+          request.command !== "true",
+      )
       .map((request) =>
         request.command.includes("piship-ws done") ? "check" : request.command,
       );

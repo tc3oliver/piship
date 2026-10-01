@@ -621,6 +621,55 @@ describe("http-broker failure and retry contract", () => {
       }
     });
 
+    it("revokes a credential it refuses from a 2xx answer, and keeps the refusal", async () => {
+      const refusals = [
+        [{ subject: "someone-else" }, "CREDENTIAL_ACQUIRE_FAILED"],
+        [{ base_url: "https://other.example/v1" }, "CREDENTIAL_ACQUIRE_FAILED"],
+        [
+          { expires_at: new Date(Date.now() - 1000).toISOString() },
+          "CREDENTIAL_EXPIRED",
+        ],
+      ] as const;
+      for (const [change, code] of refusals) {
+        // A real issuance at the fixture, answered back with one field broken.
+        const answer = await realAnswer();
+        const refusing = (revoke: typeof real) =>
+          broker({
+            fetch: async (url: string | URL, init?: RequestInit) =>
+              String(url) === services.revokeUrl
+                ? revoke(url, init)
+                : json({ ...answer, ...change }),
+          });
+        const error = await failure(call.acquire(refusing(real)));
+        expect(error, JSON.stringify(change)).toMatchObject({ code });
+        expect(services.state.revokedCredentials).toContain(
+          answer.credential_id,
+        );
+        expectNoSecret(error);
+        // A revocation that fails still reports the refusal, and says the
+        // issued credential stays live.
+        const unrevoked = await realAnswer();
+        const kept = await failure(
+          call.acquire(
+            broker({
+              fetch: async (url: string | URL) =>
+                String(url) === services.revokeUrl
+                  ? new Response("", { status: 503 })
+                  : json({ ...unrevoked, ...change }),
+            }),
+          ),
+        );
+        expect(kept).toMatchObject({
+          code,
+          sanitizedDetail: { issuedNotRevoked: true },
+        });
+        expect(kept.message).toContain("stays live at the broker");
+        expect(services.state.revokedCredentials).not.toContain(
+          unrevoked.credential_id,
+        );
+      }
+    });
+
     it("reads null in an optional answer field as absent, and names a field of the wrong type", async () => {
       const answer = await realAnswer();
       const optional = {

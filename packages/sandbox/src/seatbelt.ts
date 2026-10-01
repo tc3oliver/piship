@@ -65,6 +65,16 @@ const LAUNCH_ESCAPES = [
   (signing-identifier "com.apple.osascript"))`,
 ];
 
+/**
+ * The Docker daemon's socket would let a contained command start a
+ * container outside the sandbox, also with the network allowed. Every Docker
+ * Engine on macOS (Docker Desktop, OrbStack, Colima, Rancher Desktop) listens
+ * on a socket named docker.sock or docker.raw.sock, reached directly or
+ * through /var/run/docker.sock.
+ */
+const DOCKER_SOCKETS = String.raw`(deny network-outbound
+  (remote unix-socket (path-regex #"(^|/)docker(\.raw)?\.sock$")))`;
+
 /** Quote a path as an SBPL string literal. Control characters are refused. */
 export function sbplString(value: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
@@ -129,7 +139,7 @@ export function seatbeltProfile(
         .map((path) => denyFilter(path, exists, isDir))
         .join("\n  ")})`,
     );
-  lines.push(...LAUNCH_ESCAPES);
+  lines.push(...LAUNCH_ESCAPES, DOCKER_SOCKETS);
   if (profile.network === "deny") lines.push("(deny network*)");
   return `${lines.join("\n")}\n`;
 }

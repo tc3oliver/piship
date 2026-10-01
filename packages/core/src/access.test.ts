@@ -419,6 +419,24 @@ describe("Identity → Credential → Inference orchestration (fixtures)", () =>
     ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
   });
 
+  it("adopts a credential another process renewed after the same rejection instead of issuing a second", async () => {
+    const login = DistributionAccess.open(options);
+    await login.login({ openUrl: (url) => void services.approve(url) });
+    // Two processes hold the same credential, and the gateway rejects it for both.
+    const first = DistributionAccess.open(options);
+    const second = DistributionAccess.open(options);
+    const rejected = (await first.requestSecret())?.reveal();
+    expect((await second.requestSecret())?.reveal()).toBe(rejected);
+    const renewed = (await first.requestSecret({ force: true }))?.reveal();
+    expect(renewed).not.toBe(rejected);
+    // The second renews the generation it saw rejected, which is already
+    // replaced: it adopts the renewal instead of issuing another credential.
+    expect((await second.requestSecret({ force: true }))?.reveal()).toBe(
+      renewed,
+    );
+    expect(services.state.credentials.size).toBe(2);
+  });
+
   it("reports corrupt preferences in explain output instead of crashing", async () => {
     const { mkdirSync, writeFileSync } = await import("node:fs");
     mkdirSync(join(temp, "state", "config"), { recursive: true });

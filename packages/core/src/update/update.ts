@@ -27,6 +27,7 @@ import {
   compareVersions,
   type MigrationReport,
 } from "../migration.js";
+import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
@@ -311,6 +312,21 @@ export async function updateDistribution(
           notices,
         };
       }
+      const destination = join(apps, entry.version);
+      // A retained release (after a rollback) is replaced below; a session
+      // started on it may still be running from that directory.
+      if (existsSync(destination)) {
+        const live = runtimeLeases(id, true).filter(
+          (lease) =>
+            lease.live &&
+            (lease.version === entry.version || lease.version === "*"),
+        );
+        if (live.length)
+          throw new PiShipError(
+            "UPDATE_FAILED",
+            `Cannot update ${id} to ${entry.version} while ${live.length} runtime session(s) still use its retained payload; close them and retry`,
+          );
+      }
       const snapshot = snapshotState(
         stateDir,
         receipt.active,
@@ -318,7 +334,6 @@ export async function updateDistribution(
         now(),
         options.faults,
       );
-      const destination = join(apps, entry.version);
       rmSync(destination, { recursive: true, force: true });
       renameSync(verified.payload, destination);
       verifyPayload(destination);

@@ -1570,8 +1570,14 @@ export class DistributionAccess {
       );
       await this.options.onPhase?.("credential-rejected");
       // The renewal is checked against the pinned principal like any other,
-      // and its entitlement is what it returned under the lock.
-      credential = await this.#renewCredential(manager, true);
+      // and its entitlement is what it returned under the lock. Only the
+      // rejected generation is renewed: one another process already replaced
+      // is adopted instead of issuing a second credential.
+      credential = await this.#renewCredential(
+        manager,
+        true,
+        credential.ref?.ref,
+      );
       notices.push(
         "The gateway rejected the stored credential; a new credential was acquired",
         ...credential.notices,
@@ -1739,7 +1745,15 @@ export class DistributionAccess {
     if (options.force && !manager.renewable)
       throw rejectedUserSecret(this.options.app.command);
     if (!options.force && this.#cachedSecretValid(manager)) return this.#secret;
-    return (await this.#renewCredential(manager, !!options.force)).secret;
+    // A forced renewal is about the generation this session sent, not
+    // whatever another process stored since.
+    return (
+      await this.#renewCredential(
+        manager,
+        !!options.force,
+        options.force ? this.#secretRef : undefined,
+      )
+    ).secret;
   }
 
   #cachedSecretValid(manager: CredentialManager): boolean {
