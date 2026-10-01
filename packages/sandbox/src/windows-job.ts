@@ -147,7 +147,9 @@ public static class PiShipJob {
 const SCRIPT = `
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$PSModuleAutoLoadingPreference = 'None'
 try {
+  Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')
   Add-Type -TypeDefinition @'
 ${SOURCE}
 '@
@@ -165,35 +167,10 @@ ${SOURCE}
 }`;
 
 /**
- * Variables Windows sets for every user session (no credentials): what the
- * supervisor's PowerShell and its C# compile read while they start.
+ * The host variables the supervisor keeps (no credentials): TEMP and TMP,
+ * where Add-Type writes its compile.
  */
-const SUPERVISOR_SYSTEM_VARIABLES = [
-  "TEMP",
-  "TMP",
-  "SystemDrive",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "ALLUSERSPROFILE",
-  "PUBLIC",
-  "ProgramData",
-  "ProgramFiles",
-  "ProgramFiles(x86)",
-  "ProgramW6432",
-  "CommonProgramFiles",
-  "CommonProgramFiles(x86)",
-  "CommonProgramW6432",
-  "PATHEXT",
-  "COMPUTERNAME",
-  "USERNAME",
-  "USERDOMAIN",
-  "NUMBER_OF_PROCESSORS",
-  "PROCESSOR_ARCHITECTURE",
-  "OS",
-] as const;
+const SUPERVISOR_SYSTEM_VARIABLES = ["TEMP", "TMP"] as const;
 
 /**
  * The Windows directory from `SystemRoot` (or `WINDIR`), only when it is an

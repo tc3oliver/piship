@@ -15,7 +15,8 @@ const host = {
   TEMP: "C:\\Users\\dev\\AppData\\Local\\Temp",
   TMP: "C:\\Users\\dev\\AppData\\Local\\Temp",
   USERPROFILE: "C:\\Users\\dev",
-  appdata: "C:\\Users\\dev\\AppData\\Roaming",
+  psmoduleanalysiscachepath:
+    "C:\\PSModuleAnalysisCachePath\\ModuleAnalysisCache",
   PATH: "C:\\launcher\\bin",
   ComSpec: "C:\\Windows\\System32\\cmd.exe",
   ACMECODE_API_KEY: "fixture-launcher-key",
@@ -46,20 +47,19 @@ describe("windowsJobCommand", () => {
   it("gives the supervisor only the variables it needs", () => {
     const { env } = windowsJobCommand(target, host);
     expect(Object.keys(env).sort()).toEqual([
-      "APPDATA",
       "PATH",
       "PISHIP_JOB_REQUEST",
       "SystemRoot",
       "TEMP",
       "TMP",
-      "USERPROFILE",
       "WINDIR",
     ]);
     // Windows names match case-insensitively.
-    expect(env.APPDATA).toBe("C:\\Users\\dev\\AppData\\Roaming");
+    expect(env.PSModuleAnalysisCachePath).toBeUndefined();
     expect(env.PATH).toBe("C:\\tools\\bin");
     expect(JSON.stringify(env)).not.toContain("fixture-launcher");
     expect(env.ComSpec).toBeUndefined();
+    expect(env.USERPROFILE).toBeUndefined();
   });
 
   it("carries the child's approved environment in the request", () => {
@@ -125,6 +125,7 @@ describe.runIf(process.platform === "win32")(
       vi.stubEnv("GITHUB_TOKEN", "should-not-arrive-2");
       let stdout = "";
       let stderr = "";
+      const started = Date.now();
       const child = spawnManaged({
         file: process.execPath,
         args: [
@@ -141,8 +142,12 @@ describe.runIf(process.platform === "win32")(
         },
       });
       const result = await child.exited;
+      const elapsed = Date.now() - started;
       const output = `stdout: ${stdout}\nstderr: ${stderr}`;
       expect(result, output).toMatchObject({ code: 0, timedOut: false });
+      // PowerShell must not search every installed module for its cmdlets:
+      // without a warm module analysis cache that took 20 to 30 seconds.
+      expect(elapsed, output).toBeLessThan(2000);
       const line = stdout
         .split("\n")
         .find((entry) => entry.startsWith("piship-windows-job-ok "));
