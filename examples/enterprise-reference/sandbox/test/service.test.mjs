@@ -112,6 +112,25 @@ describe("configuration", () => {
     );
   });
 
+  it("takes port 0, for a port the system chooses, only with a name of its own", () => {
+    // Every such service would otherwise be named reference-<uid>-0.
+    assert.throws(
+      () => loadConfig({ ...base(), SANDBOX_LISTEN_PORT: "0" }),
+      /SANDBOX_LISTEN_PORT=0 requires SANDBOX_INSTANCE/,
+    );
+    const config = loadConfig({
+      ...base(),
+      SANDBOX_LISTEN_PORT: "0",
+      SANDBOX_INSTANCE: "team-a",
+    });
+    assert.equal(config.listenPort, 0);
+    assert.equal(config.instance, "team-a");
+    assert.throws(
+      () => loadConfig({ ...base(), SANDBOX_LISTEN_PORT: "-1" }),
+      /SANDBOX_LISTEN_PORT must be a number from 0 to 65535/,
+    );
+  });
+
   it("names a bad variable and never repeats its value", () => {
     for (const [name, value] of [
       ["SANDBOX_IMAGE", "bad image with spaces"],
@@ -423,6 +442,13 @@ describe("the HTTP surface", () => {
       headers: { host: `localhost:${service.port}` },
     });
     assert.equal(named.status, 200);
+    // Started on port 0, it answers for the port the system chose, and logs
+    // it for whoever started it.
+    assert.equal(
+      (await service.call("/v1/status", { key: "alice" })).status,
+      200,
+    );
+    assert.ok(service.logs().includes(`"listen":"127.0.0.1:${service.port}"`));
   });
 
   it("refuses a body that is not JSON, not small, or not an object", async () => {

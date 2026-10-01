@@ -59,10 +59,15 @@ export function loadConfig(env) {
   const listenHost = env.SANDBOX_LISTEN_HOST || "127.0.0.1";
   if (!LOOPBACK_HOSTS.has(listenHost))
     throw new Error("SANDBOX_LISTEN_HOST must be 127.0.0.1 or ::1");
+  // 0 lets the system choose a free port; the service logs the one it got
+  // (`service.listening`). Such a service needs a SANDBOX_INSTANCE of its own:
+  // the default name is made of the port.
   const listenPort = number("SANDBOX_LISTEN_PORT", 18075, {
-    min: 1,
+    min: 0,
     max: 65535,
   });
+  if (listenPort === 0 && !env.SANDBOX_INSTANCE)
+    throw new Error("SANDBOX_LISTEN_PORT=0 requires SANDBOX_INSTANCE");
 
   const rootsText = env.SANDBOX_WORKSPACE_ROOTS;
   if (!rootsText) throw new Error("SANDBOX_WORKSPACE_ROOTS is required");
