@@ -52,6 +52,7 @@ export interface PreparedAccess {
 export async function prepareAccess(
   ctx: LaunchContext,
   requestedModel: string | undefined,
+  listOnly = false,
 ): Promise<PreparedAccess> {
   const metrics = launchMetrics(ctx.metadata, ctx.stateDir, VERSION);
   if (!ctx.metadata.access) {
@@ -85,9 +86,10 @@ export async function prepareAccess(
     restrictChildren: ctx.mode === "managed",
   });
   try {
-    const activated = await access.activate(
-      requestedModel ? { requestedModel } : {},
-    );
+    const activated = await access.activate({
+      ...(requestedModel ? { requestedModel } : {}),
+      ...(listOnly ? { listOnly } : {}),
+    });
     return { metrics, access, activated, removedEnvironment, events };
   } finally {
     saveMetrics(metrics);

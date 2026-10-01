@@ -90,6 +90,39 @@ function rejectedUserSecret(command: string): PiShipError {
   );
 }
 
+/**
+ * A refused model selection with the recovery for where the model came from:
+ * a stale user preference is removed with `config unset model`; another model
+ * is chosen with `--model`. An enforced model has no user recovery.
+ */
+function withModelRecovery(
+  error: unknown,
+  command: string,
+  source: string | undefined,
+): unknown {
+  if (
+    !(error instanceof PiShipError) ||
+    (error.code !== "MODEL_UNAVAILABLE" && error.code !== "MODEL_DENIED") ||
+    !(
+      source === "flag" ||
+      source === "user-preference" ||
+      source === "distribution-default"
+    )
+  )
+    return error;
+  const recovery =
+    source === "user-preference"
+      ? `Run ${command} config unset model to remove the model preference, or start ${command} --model <model>`
+      : `Start ${command} --model <model>`;
+  return new PiShipError(error.code, error.message, {
+    component: error.component ?? "inference",
+    userAction: `${error.userAction ? `${error.userAction}. ` : ""}${recovery}; ${command} models lists the models`,
+    ...(error.sanitizedDetail
+      ? { sanitizedDetail: error.sanitizedDetail }
+      : {}),
+  });
+}
+
 /** What activation and renewal ask of `CredentialManager.ensure`. */
 type CredentialEnsureOptions = Omit<
   Parameters<CredentialManager["ensure"]>[2],
@@ -1460,10 +1493,11 @@ export class DistributionAccess {
   /**
    * Launch-time resolution: identity, credential, catalog, and effective model
    * selection. Fails closed with the error contract when anything required is
-   * missing; never falls back to personal providers.
+   * missing; never falls back to personal providers. `listOnly` (the models
+   * listing) leaves an unavailable requested model unselected instead.
    */
   async activate(
-    options: { requestedModel?: string } = {},
+    options: { requestedModel?: string; listOnly?: boolean } = {},
   ): Promise<ActivatedAccess> {
     const notices: string[] = [];
     const access = this.options.access;
@@ -1587,10 +1621,23 @@ export class DistributionAccess {
           "No default model is configured",
           { component: "inference" },
         );
-      const resolved = (
-        await inference.resolveModel(requested, { models, allowed })
-      ).model;
-      selectedModel = resolved.id;
+      let resolved: ModelDefinition | undefined;
+      try {
+        resolved = (
+          await inference.resolveModel(requested, { models, allowed })
+        ).model;
+      } catch (error) {
+        // Listing never uses the selection, so a stale one does not block it.
+        if (!options.listOnly)
+          throw withModelRecovery(
+            error,
+            this.options.app.command,
+            options.requestedModel
+              ? "flag"
+              : config.entries.find((entry) => entry.key === "model")?.source,
+          );
+      }
+      selectedModel = resolved?.id;
       const incompatible: Record<string, string> = {};
       for (const id of allowed) {
         const gaps = incompatibleCapabilities(
@@ -1603,8 +1650,10 @@ export class DistributionAccess {
             .join(", ");
       }
       incompatibleModels = incompatible;
-      const gaps = incompatibleCapabilities(resolved, capabilities);
-      if (gaps.length)
+      const gaps = resolved
+        ? incompatibleCapabilities(resolved, capabilities)
+        : [];
+      if (resolved && gaps.length)
         throw modelIncompatible(
           `${this.providerId}/${resolved.id}`,
           gaps,

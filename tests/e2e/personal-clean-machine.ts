@@ -197,6 +197,17 @@ export function myPiFlow(): void {
     expect(unconfigured.status).toBe(1);
     expect(unconfigured.stderr).toContain("mypi-fixture/local/coder");
     expect(requests).toEqual([]);
+    // A preference for a model Pi does not offer names its own undo, and
+    // that undo works while the preference blocks launch.
+    const typo = await s.run(["config", "set", "model", "mypi-fixture/typo"]);
+    expect(typo.status, typo.stderr).toBe(0);
+    const stale = await s.run(["--smoke"]);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain(
+      "Run mypi config unset model to remove the model preference",
+    );
+    const unset = await s.run(["config", "unset", "model"]);
+    expect(unset.status, unset.stderr).toBe(0);
     writeFileSync(
       join(first.agentDir, "models.json"),
       JSON.stringify({

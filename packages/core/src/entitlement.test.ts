@@ -216,6 +216,46 @@ describe("effective model catalog (§10)", () => {
     });
   });
 
+  it("names config unset model for a stale preference, which unsets and leaves the listing working", async () => {
+    services.knobs.entitledModels = [CODER];
+    const distribution = DistributionAccess.open(options());
+    await login(distribution);
+    const preferences = accessStatePaths(join(temp, "state")).preferences;
+    setPreference(preferences, access, undefined, "model", GENERAL);
+    await expect(distribution.activate()).rejects.toMatchObject({
+      code: "MODEL_UNAVAILABLE",
+      userAction: expect.stringContaining(
+        "Run acmecode config unset model to remove the model preference, or start acmecode --model <model>; acmecode models lists the models",
+      ),
+    });
+    // The models listing never uses the selection, so it still lists.
+    const listed = await distribution.activate({ listOnly: true });
+    expect(listed.selectedModel).toBeUndefined();
+    expect(available(listed)).toEqual([CODER]);
+    // Unsetting the preference recovers.
+    setPreference(preferences, access, undefined, "model", undefined);
+    expect((await distribution.activate()).selectedModel).toBe(CODER);
+  });
+
+  it("names --model and the models command when the entitlement leaves out the default", async () => {
+    services.knobs.entitledModels = [GENERAL];
+    const distribution = DistributionAccess.open(options());
+    await login(distribution);
+    const refused = distribution.activate();
+    await expect(refused).rejects.toMatchObject({
+      code: "MODEL_UNAVAILABLE",
+      userAction: expect.stringContaining(
+        "Start acmecode --model <model>; acmecode models lists the models",
+      ),
+    });
+    await expect(refused).rejects.not.toMatchObject({
+      userAction: expect.stringContaining("config unset model"),
+    });
+    expect(
+      (await distribution.activate({ requestedModel: GENERAL })).selectedModel,
+    ).toBe(GENERAL);
+  });
+
   it("lets a user preference only narrow the effective catalog", async () => {
     services.knobs.entitledModels = [CODER, GENERAL];
     const distribution = DistributionAccess.open(options());

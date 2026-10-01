@@ -1,7 +1,7 @@
 import { type LaunchContext, prepareAccess } from "../launch/context.js";
 
 export async function runModels(ctx: LaunchContext): Promise<void> {
-  const prepared = await prepareAccess(ctx, undefined);
+  const prepared = await prepareAccess(ctx, undefined, true);
   if (!prepared.activated || prepared.activated.runtime.kind === "pi-native") {
     ctx.out(
       "Pi-native inference: use /model inside the session to choose from Pi's configured providers.",
