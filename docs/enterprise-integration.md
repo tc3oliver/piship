@@ -4,7 +4,7 @@ This page is for the infrastructure or platform team that connects a managed PiS
 
 ## At a glance
 
-You provide three services. Their URLs are `${NAME}` [runtime references](manifest.md#runtime-references) in `piship.yaml`, resolved from the launch environment; the manifest and lock never hold secrets.
+You provide three services. Their URLs go in `piship.yaml` either as plain `https` URLs, which are locked and shipped with every release, or as `${NAME}` [runtime references](manifest.md#runtime-references) resolved from the launch environment ([company setup](#company-setup) compares the two); the manifest and lock never hold secrets.
 
 | Service | Manifest field | Called by | When |
 | --- | --- | --- | --- |
@@ -62,6 +62,52 @@ network:
   privateOnly: true
   allowHosts: []
 ```
+
+## Company setup
+
+### Running the CLI from your own repository
+
+Keep the distribution (`piship.yaml`, `piship.lock`, resources, and adapters) in a repository of your own. The PiShip CLI is not published to npm: clone PiShip, run `npm ci` and `npm run build` once, then run its CLI by path against your manifest. Relative paths in the manifest resolve from the manifest's directory, not from the PiShip clone.
+
+```bash
+node ~/src/piship/packages/cli/dist/bin.js validate ./piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js lock ./piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js release ./piship.yaml
+```
+
+`validate` fails on any setting that is certain to fail on every employee's machine, and prints a `Warning:` for one that fails only in some environments or has no effect. Treat the warnings as release blockers unless you know why they do not apply.
+
+| `validate` | When |
+| --- | --- |
+| Fails | A required HTTP audit sink on a host outside `network.allowHosts` and the endpoint hosts (managed mode is always private-only, so every launch fails with `AUDIT_UNAVAILABLE`) |
+| Fails | `sandbox.credential: runtime` with a plain `sandbox.endpoint` or `sandbox.router` on another origin than `inference.baseUrl`, or with no runtime credential at all (`pi-native` inference or `credential.provider: none`); the required sandbox fails every launch with `SANDBOX_UNAVAILABLE` |
+| Warns | The same audit or sandbox URL as a runtime variable, or an optional audit sink whose events would be dropped |
+| Warns | A relative `network.tls.additionalCA` path ([CA bundles](#ca-bundles)) |
+| Warns | `sandbox.network.mode: deny` without `sandbox.required: true`; the sandbox is activated only when required, so nothing enforces it |
+
+### Plain URLs or runtime variables
+
+| | Plain URL (`baseUrl: https://llm.corp.example/v1`) | Runtime variable (`baseUrl: ${ACMECODE_LLM_GATEWAY_URL}`) |
+| --- | --- | --- |
+| Where the value lives | In `piship.yaml` and the lock, shipped in every release | In the environment of every process that starts the branded command |
+| Employee setup | None | Each variable set on each machine, for every way the command is started |
+| Changing it | A new release, which users get with `update` | Changing the environment on every machine; no release |
+| Checked by `validate` | Fully, including the cross-field checks above | Syntax only; the value is checked at launch |
+| Fits | Production endpoints that are the same for everyone | One build used against several environments, such as a staging and a production gateway, or local fixtures |
+
+Prefer plain URLs for production. Endpoint URLs are not secrets, and a plain URL removes the per-machine setup. Use a variable only where the value differs between machines that run the same release.
+
+The branded command reads variables only from its own process environment. A variable exported in a shell profile reaches commands started from that shell, but not ones started by an IDE, a desktop launcher, or a scheduled job, which then fail with `CONFIG_UNAVAILABLE`. Deliver variables the way you deliver other machine configuration (device management, a login script, or the environment of the launching tool), and check them on a real machine with `<command> config explain` or `<command> doctor`.
+
+`validate` lists the variables in two groups. Variables needed at launch are read by the branded command: the access endpoints, CA bundles, and MCP, audit, and sandbox URLs. A variable referenced only by `updates.source` is read only by `<command> update`; launch works without it. `validate` notes which of each group are unset in the shell it runs in.
+
+### CA bundles
+
+Give each `network.tls.additionalCA` entry as an absolute path that your device management installs at the same place on every machine, such as `/etc/acme/ca.pem` or `C:\ProgramData\Acme\ca.pem`. The bundle is not packaged into the release or recorded in the lock; it is read on the employee's machine at launch. A relative path is read from whatever directory the command is started in, so it works only by accident. When the location differs between platforms or machines, use a runtime variable for the whole path (`${ACMECODE_CA_BUNDLE}`). A missing or unreadable bundle fails the launch with `CONFIG_UNAVAILABLE`.
+
+### How changes reach employees
+
+An installed release runs the `piship.yaml` and `piship.lock` it was built from; nothing reads your repository at launch. A change to policy, allowed models, endpoints, allowed hosts, sandbox, or audit therefore reaches employees only as a new release: lock, `release`, `sign-channel`, and serve the channel ([owner workflow](release/owner-workflow.md)). Employees get it with `<command> update`, which verifies and activates it ([update lifecycle](release/update-lifecycle.md)); until they run it they keep the previous settings. Only runtime variables and the employee's own permitted preferences and policy narrowing (`config/policy.json`) change without a release.
 
 ## Identity provider (OIDC)
 
@@ -422,7 +468,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | Rule | Detail |
 | --- | --- |
 | HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION` |
-| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots. A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
+| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots, read on the employee's machine at launch; use absolute paths ([CA bundles](#ca-bundles)). A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
 | Proxy | `HTTP(S)_PROXY` and `NO_PROXY` (either case) are honored unless `network.proxy.inheritEnvironment: false`. A host in `NO_PROXY` is contacted directly; every other request, including to a private endpoint, goes through the proxy |
 | Child processes | In a managed distribution, commands the agent runs receive only the proxy variables the policy approves (never a proxy URL that embeds credentials) and, for a single declared bundle, `NODE_EXTRA_CA_CERTS`. Other proxy, CA, and TLS-verification variables are dropped ([security](security.md#child-process-network-environment)) |
 | Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The match is on the hostname only: a declared host admits every port and scheme on it, and PiShip does not check that the host is a private address. The authorization page opens in the browser and is not subject to this rule |
