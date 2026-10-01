@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
+import { PassThrough } from "node:stream";
 import {
   type ExtensionContext,
   type InlineExtension,
@@ -32,7 +33,11 @@ import {
   governanceHooks,
   workflowExtension,
 } from "./builtins.js";
-import { GovernanceSession, inspectGovernance } from "./governance-session.js";
+import {
+  GovernanceSession,
+  inspectGovernance,
+  terminalApproval,
+} from "./governance-session.js";
 import {
   GOVERNED_READ_LIMIT_BYTES,
   governedBashOperations,
@@ -528,6 +533,57 @@ describe("governed built-in tools", () => {
       ),
     ).rejects.toThrow(/builtin:default/);
   });
+
+  it.each([
+    ["Ctrl-C", "\x03"],
+    ["Ctrl-D", "\x04"],
+    ["end of input", null],
+  ] as const)(
+    "records %s at the terminal approval prompt as cancelled, and the session still ends",
+    async (_name, keys) => {
+      const { session, workspace, root } = await open([
+        "audit:",
+        "  enabled: true",
+        "  sinks:",
+        "    - { id: local, type: file, required: false }",
+      ]);
+      const terminal = () => {
+        const stream = new PassThrough() as PassThrough & {
+          isTTY?: boolean;
+          columns?: number;
+        };
+        stream.isTTY = true;
+        stream.columns = 80;
+        return stream;
+      };
+      const stdin = terminal();
+      vi.spyOn(process, "stdin", "get").mockReturnValue(
+        stdin as unknown as typeof process.stdin,
+      );
+      vi.spyOn(process, "stderr", "get").mockReturnValue(
+        terminal() as unknown as typeof process.stderr,
+      );
+      const channel = terminalApproval();
+      expect(channel).toBeDefined();
+      setImmediate(() => (keys === null ? stdin.end() : stdin.write(keys)));
+      const decided = await session.decide(
+        "filesystem.write",
+        join(workspace, "cancelled.txt"),
+        channel,
+      );
+      vi.restoreAllMocks();
+      expect(decided).toMatchObject({ outcome: "deny", approval: "cancelled" });
+      sessions.splice(sessions.indexOf(session), 1);
+      const dispose = vi.spyOn(session.sandbox, "dispose");
+      await session.close();
+      expect(dispose).toHaveBeenCalled();
+      const audit = readFileSync(
+        join(root, "state", "logs", "audit.jsonl"),
+        "utf8",
+      );
+      expect(audit).toContain('"session.end"');
+    },
+  );
 
   it("never runs a denied command", async () => {
     const { session, workspace } = await open();

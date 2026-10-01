@@ -22,9 +22,15 @@ export function terminalApproval(): ApprovalChannel | undefined {
       terminal: true,
     });
     try {
-      const answer = await new Promise<string>((done) =>
-        rl.question(`${detail.title}\n${detail.message}\nAllow? [y/N] `, done),
-      );
+      // Ctrl-C or Ctrl-D cancels: closing the interface never calls the
+      // question callback, so without these the launch would never settle
+      // and its teardown would not run.
+      const answer = await new Promise<string | null>((done) => {
+        rl.once("close", () => done(null));
+        rl.once("SIGINT", () => done(null));
+        rl.question(`${detail.title}\n${detail.message}\nAllow? [y/N] `, done);
+      });
+      if (answer === null) return "cancelled";
       return /^y(es)?$/i.test(answer.trim()) ? "approved" : "denied";
     } finally {
       rl.close();

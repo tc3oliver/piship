@@ -62,29 +62,52 @@ function openBrowser(url: string): void {
   }
 }
 
+/** No secret was entered: the prompt was cancelled or stdin ended. */
+function noSecretEntered(): PiShipError {
+  return new PiShipError(
+    "CREDENTIAL_REQUIRED",
+    "No secret was entered: the prompt was cancelled or input ended",
+    { component: "credential" },
+  );
+}
+
 /**
  * Read a secret without it reaching argv, the environment, shell history, or
  * the terminal: a prompt on stderr with no echo, or the first line of a piped
- * stdin (for provisioning from a secret manager).
+ * stdin (for provisioning from a secret manager). Ctrl-C, Ctrl-D, or the end
+ * of stdin before a line rejects, so the caller's cleanup (a lock it holds)
+ * still runs.
  */
 export async function readSecretInput(prompt: string): Promise<string> {
+  process.stderr.write(`${prompt}: `);
   if (!process.stdin.isTTY) {
+    // The first line is enough: a pipe left open after it must not hang.
     let data = "";
-    for await (const chunk of process.stdin) data += chunk;
+    for await (const chunk of process.stdin) {
+      data += chunk;
+      if (/[\r\n]/.test(data)) break;
+    }
+    process.stderr.write("\n");
+    if (!data) throw noSecretEntered();
     return data.split(/\r?\n/)[0] ?? "";
   }
-  process.stderr.write(`${prompt}: `);
   const rl = createInterface({
     input: process.stdin,
     output: undefined,
     terminal: true,
   });
-  const answer = await new Promise<string>((resolveAnswer) =>
-    rl.question("", resolveAnswer),
-  );
-  rl.close();
-  process.stderr.write("\n");
-  return answer;
+  try {
+    // Closing the interface (Ctrl-D, end of input) never calls the question
+    // callback, and a SIGINT listener keeps Ctrl-C from closing it silently.
+    return await new Promise<string>((resolveAnswer, reject) => {
+      rl.once("close", () => reject(noSecretEntered()));
+      rl.once("SIGINT", () => reject(noSecretEntered()));
+      rl.question("", resolveAnswer);
+    });
+  } finally {
+    rl.close();
+    process.stderr.write("\n");
+  }
 }
 
 export async function runLogin(ctx: BrandedContext): Promise<void> {
