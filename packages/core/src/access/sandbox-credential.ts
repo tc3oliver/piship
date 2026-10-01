@@ -787,13 +787,21 @@ export class AdapterSandboxCredential {
   async revoke(): Promise<void> {
     if (this.#revoked) return;
     this.#revoked = true;
-    const current = this.#current;
+    const held = this.#current;
+    // A renewal in flight would hold a new credential once revoke returned:
+    // wait for it, and revoke what it obtained as well as what was held.
+    await this.#pending?.catch(() => {});
+    const renewed = this.#current;
     this.#current = null;
-    if (!current) return;
+    for (const credential of new Set([held, renewed]))
+      if (credential) await this.#revokeOne(credential);
+  }
+
+  async #revokeOne(credential: RuntimeCredential): Promise<void> {
     let revocation: "revoked" | "failed" | "unsupported" = "unsupported";
     if (this.#provider.revoke)
       try {
-        await this.#provider.revoke(current, {
+        await this.#provider.revoke(credential, {
           distributionId: this.#options.distributionId,
         });
         revocation = "revoked";
@@ -801,7 +809,7 @@ export class AdapterSandboxCredential {
         revocation = "failed";
       }
     this.#emit("credential.revoke", {
-      kind: current.kind,
+      kind: credential.kind,
       reason: "logout",
       revocation,
     });
