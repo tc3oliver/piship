@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. Each section is
 
 Changes on `main` after v0.7.1. Not released.
 
+### Added
+
+- `piship install --sha256 <hex>` refuses a release archive whose SHA-256 differs from the published digest; with a release or payload directory it is refused, because a directory has no archive digest. `--expect-key sha256:<fingerprint>`, repeatable, refuses a release whose lock does not pin each given update key; the lock may pin further keys. Either refusal installs nothing ([distribution bootstrap](docs/release/trust-root.md#distribution-bootstrap), #167).
+- `piship inspect` shows the pinned update keys by ID and `sha256:` fingerprint, in the summary and as an additive `trust` field in `--json` (#167).
+
 ## v0.7.1
 
 Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) from tag `v0.7.1` (commit `bd4bc09`, the squash of #174); not published to npm. Release qualification passed on that exact commit ([run 36857734987](https://github.com/tc3oliver/piship/actions/runs/36857734987)). v0.7.1 collects the v0.7.x fixes made on `main` after v0.7.0 and is the production-validation baseline: the one PiShip version a production consumer pins while it validates PiShip in production, instead of tracking `main` ([baseline](docs/status.md#v071-production-validation-baseline), #173). The manifest and lock schemas stay `piship/v1alpha4` and `piship-lock/v1alpha4`, and Pi stays at 0.87.1. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md); the project does not operate a signed channel yet.

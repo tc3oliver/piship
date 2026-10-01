@@ -1,6 +1,7 @@
 // Human-readable summaries of what `piship inspect`, `test`, and `doctor`
 // report. Their full JSON stays available behind `--json`.
 import type { DistributionLock } from "./lock-schema.js";
+import { keyFingerprint } from "./signing.js";
 
 /** What `piship inspect --json` prints. */
 export interface Inspection {
@@ -10,6 +11,13 @@ export interface Inspection {
   readonly resources: DistributionLock["resources"];
   readonly access?: NonNullable<DistributionLock["access"]>;
   readonly governance?: NonNullable<DistributionLock["governance"]>;
+  /** The update keys the lock pins, by id and `sha256:` fingerprint. */
+  readonly trust?: {
+    readonly keys: readonly {
+      readonly id: string;
+      readonly fingerprint: string;
+    }[];
+  };
   readonly artifact?: string;
   readonly state: string;
 }
@@ -26,6 +34,16 @@ export function inspection(
     resources: lock.resources,
     ...(lock.access ? { access: lock.access } : {}),
     ...(lock.governance ? { governance: lock.governance } : {}),
+    ...(lock.updates
+      ? {
+          trust: {
+            keys: lock.updates.trust.keys.map((key) => ({
+              id: key.id,
+              fingerprint: keyFingerprint(key.publicKey),
+            })),
+          },
+        }
+      : {}),
     ...(artifact ? { artifact } : {}),
     state,
   };
@@ -89,6 +107,15 @@ export function formatInspection(info: Inspection): string {
       row(
         "audit",
         audit.enabled ? `${audit.sinks.length} sink(s)` : "disabled",
+      ),
+    );
+  }
+  if (info.trust) {
+    const { keys } = info.trust;
+    if (!keys.length) lines.push(row("trust", "no pinned update keys"));
+    lines.push(
+      ...keys.map((key, index) =>
+        row(index ? "" : "trust", `${key.id} ${key.fingerprint}`),
       ),
     );
   }

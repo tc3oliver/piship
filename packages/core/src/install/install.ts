@@ -13,7 +13,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { systemError } from "@piship/contracts";
+import { PiShipError, systemError } from "@piship/contracts";
 import { sha256File } from "../archive.js";
 import {
   assertDisjointRoots,
@@ -23,6 +23,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
   RECEIPT_SCHEMA,
@@ -317,15 +318,50 @@ export function ownsCommandShim(
   return readFileSync(commandPath, "utf8") === expected;
 }
 
+/** Checks an installer asks for before anything is installed. */
+export interface InstallChecks {
+  /** The release archive's SHA-256, obtained out of band from its publisher. */
+  readonly expectedSha256?: string;
+  /**
+   * Update-key fingerprints (`sha256:<hex>`) the release lock must pin. Each
+   * given key must be among `updates.trust.keys`; the lock may pin others.
+   */
+  readonly expectedKeys?: readonly string[];
+}
+
+function invalidCheck(message: string, userAction: string): PiShipError {
+  return new PiShipError("CONFIG_INVALID", message, {
+    component: "install",
+    userAction,
+  });
+}
+
 /**
  * Install a payload directory, a verified release directory, or a verified
  * release archive for the current user. Collisions fail; state is adopted
- * only with `useExistingState`.
+ * only with `useExistingState`. `checks` pin the archive digest and update
+ * keys the installer expects; a mismatch installs nothing.
  */
 export async function installDistribution(
   artifact: string,
   useExistingState = false,
+  checks: InstallChecks = {},
 ): Promise<InstallReceipt> {
+  const expectedSha256 = checks.expectedSha256?.toLowerCase();
+  if (expectedSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedSha256))
+    throw invalidCheck(
+      "The expected archive SHA-256 must be 64 hexadecimal characters",
+      "Pass the digest the publisher printed for the release archive",
+    );
+  const expectedKeys = (checks.expectedKeys ?? []).map((key) =>
+    key.toLowerCase(),
+  );
+  for (const key of checks.expectedKeys ?? [])
+    if (!/^sha256:[0-9a-f]{64}$/i.test(key))
+      throw invalidCheck(
+        `Expected key fingerprint ${key} is not sha256:<64 hexadecimal characters>`,
+        "Pass the fingerprint piship keygen printed for the publisher's key",
+      );
   const source = resolve(artifact);
   let isArchive: boolean;
   try {
@@ -339,6 +375,11 @@ export async function installDistribution(
       ) ?? error
     );
   }
+  if (expectedSha256 !== undefined && !isArchive)
+    throw invalidCheck(
+      `--sha256 checks a release archive, but ${source} is a directory and has no archive digest`,
+      "Install the release .tar.gz archive with --sha256, or omit --sha256 for a release or payload directory",
+    );
   const isRelease = isArchive || existsSync(join(source, "release.json"));
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
@@ -352,6 +393,7 @@ export async function installDistribution(
       const verified = await verifyRelease(source, {
         requireTarget: true,
         extractTo: staging,
+        ...(expectedSha256 ? { expectedSha256 } : {}),
       });
       payload = verified.payload;
       lock = verified.lock;
@@ -360,6 +402,22 @@ export async function installDistribution(
         isArchive ? await sha256File(source) : undefined,
       );
     } else lock = verifyPayload(source);
+    const pinned = new Set(
+      (lock.updates?.trust.keys ?? []).map((key) =>
+        keyFingerprint(key.publicKey),
+      ),
+    );
+    const unpinned = expectedKeys.filter((key) => !pinned.has(key));
+    if (unpinned.length)
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `Install check: ${lock.app.id}@${lock.app.version} does not pin the expected update key ${unpinned.join(", ")}`,
+        {
+          component: "install",
+          userAction:
+            "Do not install this artifact; obtain it again from the trusted source, or confirm the fingerprint with its publisher",
+        },
+      );
     const { id, command, version } = lock.app;
     if (!VERSION_NAME.test(version))
       throw new Error(`Unsupported distribution version ${version}`);
