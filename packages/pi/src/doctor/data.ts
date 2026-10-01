@@ -143,7 +143,8 @@ export interface NetworkData {
   /**
    * Each managed endpoint requested through the network policy (proxy, CA,
    * private-only): the HTTP status it answered with, or the failure, which
-   * names the hop (proxy, TLS chain, or endpoint). By host only.
+   * names the hop (proxy, TLS chain, or endpoint). By host only. Empty
+   * unless activation or the gateway probe failed.
    */
   readonly paths?: readonly NetworkPathCheck[];
 }
@@ -432,19 +433,27 @@ async function collectAccess(
       if (error instanceof PiShipError && error.component === "identity")
         identityError = activationError;
     }
-  // Checked whether or not activation succeeded: when it failed, these say
-  // which hop (the proxy, a TLS chain, an endpoint) is at fault.
+  // The proxy and the CA bundles are always checked. The endpoint paths only
+  // when activation or the gateway probe failed, to say which hop (the
+  // proxy, a TLS chain, an endpoint) is at fault: a working activation has
+  // already reached them, and the extra unauthenticated requests would only
+  // reach the services' logs.
   const checks =
     opened && !tlsError
-      ? await networkChecks(opened.network, [
-          { label: "identity", url: opened.endpoints.issuer },
-          { label: "broker", url: opened.endpoints.brokerEndpoint },
-          {
-            label: "broker revoke",
-            url: opened.endpoints.brokerRevokeEndpoint,
-          },
-          { label: "gateway", url: opened.endpoints.baseUrl },
-        ])
+      ? await networkChecks(
+          opened.network,
+          activationError || gateway?.error
+            ? [
+                { label: "identity", url: opened.endpoints.issuer },
+                { label: "broker", url: opened.endpoints.brokerEndpoint },
+                {
+                  label: "broker revoke",
+                  url: opened.endpoints.brokerRevokeEndpoint,
+                },
+                { label: "gateway", url: opened.endpoints.baseUrl },
+              ]
+            : [],
+        )
       : {};
   if (opened) saveMetrics(metrics);
   const gatewayOrigin = origin(activated?.runtime.baseUrl);
