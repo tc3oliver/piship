@@ -15,7 +15,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { installHome } from "../index.js";
-import { processIdentity } from "../process-identity.js";
+import {
+  processIdentity,
+  processIdentityMatches,
+} from "../process-identity.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { appDirectory, syncDirectory, VERSION_NAME } from "./receipt.js";
 
@@ -72,8 +75,8 @@ function alive(lease: Pick<Lease, "pid" | "identity">, path: string): boolean {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
-  const identity = processIdentity(lease.pid);
-  if (lease.identity && identity) return lease.identity === identity;
+  const same = processIdentityMatches(lease.identity, lease.pid);
+  if (same !== undefined) return same;
   // A platform unable to query a process start time is conservative while
   // the lease is recent, then reclaims it after an extended stale interval.
   try {

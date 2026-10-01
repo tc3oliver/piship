@@ -27,7 +27,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiShipError, processAlive } from "@piship/contracts";
-import { processIdentity } from "@piship/core";
+import { processIdentity, processIdentityMatches } from "@piship/core";
 
 /**
  * The largest session file a launch resumes on its own: 64 MiB. Pi holds
@@ -388,8 +388,8 @@ function ownerAlive(record: OwnerRecord, path: string): boolean {
     if (!processAlive(record.pid)) return false;
     // A process with the ID exists; the start identity tells whether it is
     // the owner or a later process that was given the same ID.
-    const identity = processIdentity(record.pid);
-    if (record.identity && identity) return record.identity === identity;
+    const same = processIdentityMatches(record.identity, record.pid);
+    if (same !== undefined) return same;
   }
   return recentlyModified(path, UNVERIFIED_OWNER_MS);
 }

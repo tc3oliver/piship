@@ -69,7 +69,7 @@ it("does not mistake a reused PID for the original process instance", () => {
     JSON.stringify({
       schema: "piship-runtime-lease/v1",
       pid: process.pid,
-      identity: "another-process-instance",
+      identity: "1",
       instance: "00000000-0000-0000-0000-000000000000",
       version: "1.0.0",
     }),
@@ -102,3 +102,60 @@ it("tracks simultaneous sessions on different payload versions", () => {
     releaseTwo();
   }
 });
+
+it("keeps a lease live for a checker in another time zone", async () => {
+  home();
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      "import { holdRuntimeLease } from '@piship/core'; holdRuntimeLease('acme', '1.0.0'); process.stdout.write('ready'); setInterval(() => {}, 1000);",
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, TZ: "Asia/Tokyo", LC_ALL: "fr_FR.UTF-8" },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const tz = process.env.TZ;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stdout?.once("data", () => resolve());
+      child.once("error", reject);
+    });
+    process.env.TZ = "America/Los_Angeles";
+    expect(runtimeLeases("acme", true).map((item) => item.live)).toEqual([
+      true,
+    ]);
+  } finally {
+    if (tz === undefined) delete process.env.TZ;
+    else process.env.TZ = tz;
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  }
+});
+
+it.runIf(process.platform === "darwin")(
+  "keeps a live process's lease written in the earlier ps text format",
+  () => {
+    const root = home();
+    const directory = join(root, "apps", "acme", ".runtime-leases", "1.0.0");
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "00000000-0000-0000-0000-000000000000.json");
+    // The local-time `ps -o lstart=` text earlier releases recorded, in a
+    // time zone that matches no reading of this process's start time.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: "piship-runtime-lease/v1",
+        pid: process.pid,
+        identity: "Thu Jan  1 00:00:00 1970",
+        instance: "00000000-0000-0000-0000-000000000000",
+        version: "1.0.0",
+      }),
+    );
+    expect(runtimeLeases("acme", true)[0]?.live).toBe(true);
+    expect(existsSync(path)).toBe(true);
+  },
+);

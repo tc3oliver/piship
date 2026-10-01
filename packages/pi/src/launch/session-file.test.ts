@@ -754,7 +754,7 @@ describe("one owner per session file (#57)", () => {
           schema: "piship-session-owner/v1",
           session,
           pid,
-          identity: "a process that started earlier",
+          identity: "1",
           host: hostname(),
           instance,
         }),
