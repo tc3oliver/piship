@@ -2158,8 +2158,9 @@ describe("credential lifecycle events", () => {
     ).rejects.toMatchObject({ code: "CREDENTIAL_DENIED", retryable: false });
   });
 
-  // Regression: a failed renewal used to drop retryable and retryAfterMs, so
-  // a broker outage or rate limit read as "sign in again".
+  // Regression: a failed renewal used to drop retryable and retryAfterMs, and
+  // then still named the outage CREDENTIAL_REVOKED or CREDENTIAL_EXPIRED with
+  // "run login": a broker outage or rate limit read as "sign in again".
   it("keeps the retry contract when a renewal fails", async () => {
     let failure: unknown = new Error("unused");
     const provider = {
@@ -2202,20 +2203,25 @@ describe("credential lifecycle events", () => {
     failure = limited;
     const rejected = await renew(true);
     expect(rejected).toMatchObject({
-      code: "CREDENTIAL_REVOKED",
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
       retryAfterMs: 7_000,
       sanitizedDetail: { reason: "rate-limited", status: 429 },
       userAction: expect.stringContaining("Try again later"),
     });
+    expect(rejected.message).toContain("was rejected and could not be renewed");
     now += 120_000;
     expect(credentials.status().state).toBe("expired");
     const expired = await renew(false);
     expect(expired).toMatchObject({
-      code: "CREDENTIAL_EXPIRED",
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
       retryAfterMs: 7_000,
     });
+    expect(expired.message).toContain("expired and could not be renewed");
+    // An outage asks for a retry, never for a new sign-in.
+    for (const error of [rejected, expired])
+      expect(error.userAction).not.toMatch(/login/i);
     // Without a retry signal the renewal failure stays fail-closed.
     failure = new PiShipError("CREDENTIAL_ACQUIRE_FAILED", "contract");
     expect(await renew(false)).toMatchObject({
@@ -2269,7 +2275,7 @@ describe("credential lifecycle events", () => {
         .ensure(identity, ctx, { allowAcquire: false, forceRefresh: true })
         .catch((caught: unknown) => caught as PiShipError);
       expect(error).toMatchObject({
-        code: "CREDENTIAL_REVOKED",
+        code: "CREDENTIAL_ACQUIRE_FAILED",
         retryable: true,
         retryAfterMs: 11_000,
         sanitizedDetail: {
@@ -2278,6 +2284,20 @@ describe("credential lifecycle events", () => {
           status: 503,
         },
       });
+      expect(error.userAction).not.toMatch(/login/i);
+      // An unreachable broker is the same outage, with the key kept.
+      services.knobs.brokerFaults.push({ timeoutMs: 2_000 });
+      const timeout = await credentials
+        .ensure(identity, ctx, {
+          allowAcquire: false,
+          forceRefresh: true,
+        })
+        .catch((caught: unknown) => caught as PiShipError);
+      expect(timeout).toMatchObject({
+        code: "CREDENTIAL_ACQUIRE_FAILED",
+        retryable: true,
+      });
+      expect(timeout.userAction).not.toMatch(/login/i);
       const rendered = inspect(error, { depth: 10, showHidden: true });
       expect(rendered).not.toContain(token);
       expect(rendered).not.toContain(active.secret?.reveal() ?? "missing");

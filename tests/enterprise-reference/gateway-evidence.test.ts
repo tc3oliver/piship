@@ -448,7 +448,7 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       }
     });
 
-    it("reports CREDENTIAL_REVOKED when the renewal of a refused credential fails, and renews on the next start", async () => {
+    it("reports a retryable broker failure when the renewal of a refused credential fails, and renews on the next start", async () => {
       const before = credentialMetadata().credential_id;
       const { hash } = await heldKey();
       expect((await stack.admin("/key/block", { key: hash })).status).toBe(200);
@@ -464,8 +464,11 @@ describe(`gateway evidence against LiteLLM v${LITELLM_VERSION} (live reference s
       // The broker is named with the system code of its transport failure,
       // never the gateway's code.
       expect(refused.stderr).toMatch(
-        /CREDENTIAL_REVOKED: The runtime credential was rejected and could not be renewed: The credential broker is unreachable \((ECONNREFUSED|ECONNRESET|UND_ERR_SOCKET|network error)\)\nAction: Try again later; if it keeps failing, run the branded login command/,
+        /CREDENTIAL_ACQUIRE_FAILED: The runtime credential was rejected and could not be renewed: The credential broker is unreachable \((ECONNREFUSED|ECONNRESET|UND_ERR_SOCKET|network error)\)\nAction: Try again later; the credential service is temporarily unavailable/,
       );
+      // A broker outage is not a revoked credential: no login is asked for.
+      expect(refused.stderr).not.toContain("CREDENTIAL_REVOKED");
+      expect(refused.stderr).not.toMatch(/login/i);
       expect(refused.stderr).not.toContain("GATEWAY_UNREACHABLE");
       // The rejection is recorded, so the next start renews first.
       expect(credentialMetadata()).toMatchObject({ credential_id: before });

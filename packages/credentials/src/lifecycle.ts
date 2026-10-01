@@ -1734,18 +1734,33 @@ export class CredentialManager {
           // Keep the retry contract of the failed renewal: a broker outage
           // or rate limit stays retryable, with the server's wait.
           const failure = error instanceof PiShipError ? error : undefined;
+          // A temporary failure (an outage, a timeout, a rate limit, a key
+          // still in progress) says nothing about the credential or the
+          // user: it keeps its own code and asks for a retry, never for a
+          // new sign-in that would not help.
+          if (failure?.retryable)
+            throw new PiShipError(
+              failure.code,
+              `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed: ${redact(failure.message)}`,
+              {
+                component: "credential",
+                userAction:
+                  "Try again later; the credential service is temporarily unavailable",
+                retryable: true,
+                ...(failure.retryAfterMs === undefined
+                  ? {}
+                  : { retryAfterMs: failure.retryAfterMs }),
+                ...(failure.sanitizedDetail
+                  ? { sanitizedDetail: failure.sanitizedDetail }
+                  : {}),
+              },
+            );
           throw new PiShipError(
             force ? "CREDENTIAL_REVOKED" : "CREDENTIAL_EXPIRED",
             `The runtime credential ${force ? "was rejected" : "expired"} and could not be renewed${error instanceof Error ? `: ${redact(error.message)}` : ""}`,
             {
               component: "credential",
-              userAction: failure?.retryable
-                ? "Try again later; if it keeps failing, run the branded login command"
-                : "Run the branded login command",
-              retryable: failure?.retryable ?? false,
-              ...(failure?.retryAfterMs === undefined
-                ? {}
-                : { retryAfterMs: failure.retryAfterMs }),
+              userAction: "Run the branded login command",
               ...(failure?.sanitizedDetail
                 ? { sanitizedDetail: failure.sanitizedDetail }
                 : {}),

@@ -395,8 +395,10 @@ describe("managed distribution (local fixtures)", () => {
     services.knobs.brokerStatus = 503;
     const rejected = await run(["--smoke"]);
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("CREDENTIAL_REVOKED");
+    // The broker outage is what stops the renewal: retryable, not "log in".
+    expect(rejected.stderr).toContain("CREDENTIAL_ACQUIRE_FAILED");
     expect(rejected.stderr).toContain("could not be renewed");
+    expect(rejected.stderr).not.toMatch(/run \S+ login/i);
     services.knobs.brokerStatus = undefined;
     const recovered = await run(["--smoke"]);
     expect(recovered.status, recovered.stderr).toBe(0);

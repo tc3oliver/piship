@@ -423,15 +423,25 @@ describe("workload identity (fixtures)", () => {
     expect(JSON.parse(readFileSync(credentialFile(), "utf8"))).toMatchObject({
       principal: { subject: "svc-build-1" },
     });
-    // Past its expiry, with the broker down: the launch fails closed.
+    // Past its expiry, with the broker down: the launch fails closed, as a
+    // retryable broker outage rather than a revoked or expired credential.
     clock += 3 * 3600_000;
     // The platform has issued the workload a current token by then.
     source().expiresAt = new Date(clock + 3600_000).toISOString();
     services.knobs.brokerStatus = 503;
-    await expect(open(store).activate()).rejects.toMatchObject({
-      code: "CREDENTIAL_EXPIRED",
+    const outage = await open(store)
+      .activate()
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(outage).toMatchObject({
+      code: "CREDENTIAL_ACQUIRE_FAILED",
       retryable: true,
     });
+    expect(String((outage as { action?: string }).action)).not.toMatch(
+      /login/i,
+    );
   });
 
   it("gives a new workload principal nothing of the previous one between runs", async () => {
