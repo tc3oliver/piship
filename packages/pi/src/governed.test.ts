@@ -23,6 +23,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { LocalMetrics } from "@piship/audit";
+import { normalizePathResource } from "@piship/policy";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
 import { resolveTemplate } from "@piship/schema";
@@ -466,7 +467,9 @@ describe("governed built-in tools", () => {
     try {
       mkdirSync(join(root, ".git", "hooks"), { recursive: true });
       writeFileSync(join(root, ".git", "config"), "[core]\n");
-      const base = realpathSync(root);
+      const real = realpathSync(root);
+      // The paths the tools compare are normalized to POSIX separators.
+      const base = normalizePathResource(real, { workspaceRoot: real });
       const variants = [
         `${base}/.GIT/hooks/pre-commit`,
         `${base}/.Git/config`,
@@ -474,16 +477,16 @@ describe("governed built-in tools", () => {
       ];
       for (const platform of ["darwin", "win32"] as const)
         for (const path of variants)
-          expect(isProtectedGitPath(base, [path], platform), path).toBe(true);
+          expect(isProtectedGitPath(real, [path], platform), path).toBe(true);
       // Linux filesystems tell case apart: .GIT is another directory.
       for (const path of variants)
-        expect(isProtectedGitPath(base, [path], "linux"), path).toBe(false);
+        expect(isProtectedGitPath(real, [path], "linux"), path).toBe(false);
       for (const platform of ["darwin", "win32", "linux"] as const) {
         expect(
-          isProtectedGitPath(base, [`${base}/.git/hooks/x`], platform),
+          isProtectedGitPath(real, [`${base}/.git/hooks/x`], platform),
         ).toBe(true);
         expect(
-          isProtectedGitPath(base, [`${base}/src/.github/x`], platform),
+          isProtectedGitPath(real, [`${base}/src/.github/x`], platform),
         ).toBe(false);
       }
     } finally {
