@@ -441,7 +441,10 @@ describe("Pi tool definitions route through their operations overrides", () => {
       const path = savedPath(json);
       return {
         path,
-        json: path ? json.replaceAll(path, "<full-output>") : json,
+        // The path appears in the JSON text in its escaped form.
+        json: path
+          ? json.replaceAll(JSON.stringify(path).slice(1, -1), "<full-output>")
+          : json,
       };
     }
 
