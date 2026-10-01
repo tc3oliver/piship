@@ -14,9 +14,12 @@ import {
   explainConfiguration,
   formatDiff,
   formatExplanation,
+  formatInspection,
+  formatSmokeSummary,
   formatMigrationReport,
   generateSigningKey,
   initDistribution,
+  inspection,
   installDistribution,
   keyFingerprint,
   lockManifest,
@@ -84,9 +87,9 @@ const simpleUsage: Record<string, string> = {
   validate: "validate <manifest>",
   lock: "lock <manifest>",
   build: "build <manifest> [--reclaim-staging]",
-  test: "test <manifest> [--model-request]",
-  inspect: "inspect <manifest|artifact|id>",
-  doctor: "doctor <artifact|id>",
+  test: "test <manifest> [--model-request] [--json]",
+  inspect: "inspect <manifest|artifact|id> [--json]",
+  doctor: "doctor <artifact|id> [--json]",
   install: "install <artifact|release-dir|archive> [--use-existing-state]",
   purge: "purge <id> --yes [--without-logout]",
   migrate: "migrate <manifest> [--write]",
@@ -236,7 +239,14 @@ const allowedOptions: Record<string, readonly string[]> = {
   install: ["--use-existing-state"],
   init: ["--managed"],
   migrate: ["--write"],
-  test: ["--model-request"],
+  test: [
+    "--model-request",
+    "--json",
+    "--model-request --json",
+    "--json --model-request",
+  ],
+  inspect: ["--json"],
+  doctor: ["--json"],
   dev: ["--smoke"],
 };
 export interface CliOutput {
@@ -473,43 +483,30 @@ export async function runCli(
         ),
       );
     } else if (command === "inspect") {
-      if (existsSync(resolve(target)) && statSync(resolve(target)).isFile()) {
-        const lock = requireCurrentLock(target);
-        output.stdout(
-          JSON.stringify(
-            {
-              app: lock.app,
-              deployment: lock.deployment,
-              runtime: lock.runtime,
-              resources: lock.resources,
-              ...(lock.access ? { access: lock.access } : {}),
-              ...(lock.governance ? { governance: lock.governance } : {}),
-              state: runtimeStateDirectory({ value: lock.app.id }),
-            },
-            null,
-            2,
-          ),
-        );
-      } else {
-        const artifact = artifactFor(target);
-        const lock = verifyPayload(artifact);
-        output.stdout(
-          JSON.stringify(
-            {
-              app: lock.app,
-              deployment: lock.deployment,
-              runtime: lock.runtime,
-              resources: lock.resources,
-              ...(lock.access ? { access: lock.access } : {}),
-              ...(lock.governance ? { governance: lock.governance } : {}),
-              artifact,
-              state: runtimeStateDirectory({ value: lock.app.id }),
-            },
-            null,
-            2,
-          ),
-        );
-      }
+      const path = resolve(target);
+      const info =
+        existsSync(path) && statSync(path).isFile()
+          ? (() => {
+              const lock = requireCurrentLock(target);
+              return inspection(
+                lock,
+                runtimeStateDirectory({ value: lock.app.id }),
+              );
+            })()
+          : (() => {
+              const artifact = artifactFor(target);
+              const lock = verifyPayload(artifact);
+              return inspection(
+                lock,
+                runtimeStateDirectory({ value: lock.app.id }),
+                artifact,
+              );
+            })();
+      output.stdout(
+        rest.includes("--json")
+          ? JSON.stringify(info, null, 2)
+          : `${formatInspection(info)}\nRun piship inspect ${target} --json for the full locked configuration.`,
+      );
     } else if (command === "dev" || command === "test") {
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
@@ -523,7 +520,7 @@ export async function runCli(
         artifact,
         lock.app.command,
         command === "test"
-          ? [rest[0] === "--model-request" ? "--smoke-model" : "--smoke"]
+          ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
           : interactive
             ? []
             : ["--smoke"],
@@ -533,25 +530,57 @@ export async function runCli(
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
       if (command === "test")
         output.stdout(
-          `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed: ${result.stdout.trim()}`,
+          rest.includes("--json")
+            ? result.stdout.trim()
+            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed\n${formatSmokeSummary(result.stdout.trim())}`,
         );
       else if (!interactive) output.stdout(result.stdout.trim());
     } else if (command === "doctor") {
       const artifact = artifactFor(target);
       const app = payloadApp(artifact);
       const lock = verifyPayload(artifact);
+      const json = rest[0] === "--json";
+      const distribution = { id: app.id, version: app.version };
+      let report: string[] | undefined;
       if (lock.access || lock.governance) {
-        const report = runLauncher(artifact, app.command, ["doctor"]);
-        output.stdout(report.stdout.trimEnd());
-        if (report.status !== 0)
-          throw new Error(report.stderr.trim() || "doctor found problems");
+        const result = runLauncher(artifact, app.command, ["doctor"]);
+        report = result.stdout.trimEnd().split("\n");
+        if (!json) output.stdout(result.stdout.trimEnd());
+        if (result.status !== 0) {
+          if (json)
+            output.stdout(
+              JSON.stringify({ distribution, healthy: false, report }, null, 2),
+            );
+          throw new Error(result.stderr.trim() || "doctor found problems");
+        }
       }
       const result = runLauncher(artifact, app.command, ["--smoke"]);
       if (result.status !== 0)
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
-      output.stdout(
-        `Healthy ${app.id}@${app.version}: ${result.stdout.trim()}`,
-      );
+      const smoke = result.stdout.trim();
+      if (json) {
+        let parsed: unknown = smoke;
+        try {
+          parsed = JSON.parse(smoke);
+        } catch {
+          // Kept as text.
+        }
+        output.stdout(
+          JSON.stringify(
+            {
+              distribution,
+              healthy: true,
+              ...(report ? { report } : {}),
+              smoke: parsed,
+            },
+            null,
+            2,
+          ),
+        );
+      } else
+        output.stdout(
+          `Healthy ${app.id}@${app.version}\n${formatSmokeSummary(smoke)}`,
+        );
     }
     return 0;
   } catch (error) {

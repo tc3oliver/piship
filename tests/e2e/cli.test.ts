@@ -108,7 +108,9 @@ describe("CLI", () => {
       expect(cli("migrate", manifest).stdout).toContain(
         `Already ${LATEST_SCHEMA}`,
       );
-      expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
+      expect(cli("inspect", manifest, "--json").stdout).toContain(
+        '"id": "new-agent"',
+      );
     },
     180000,
   );

@@ -375,7 +375,9 @@ describe("managed distribution (local fixtures)", () => {
       child.on("close", (status) => resolve({ status, stdout, stderr }));
     });
     expect(cliDoctor.status, cliDoctor.stdout + cliDoctor.stderr).toBe(0);
-    const inspected = JSON.parse(cli(env, "inspect", artifact).stdout);
+    const inspected = JSON.parse(
+      cli(env, "inspect", artifact, "--json").stdout,
+    );
     expect(inspected.access.credential.provider).toBe("http-broker");
 
     // A gateway-rejected runtime credential is renewed once automatically.

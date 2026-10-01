@@ -16,6 +16,7 @@ import {
   checkStateMigration,
   compareVersions,
   formatMigrationReport,
+  formatMigrationSummary,
   LEGACY_STATE_SCHEMAS,
   type MigrationReport,
   readStateMarker,
@@ -239,6 +240,22 @@ describe("checkStateMigration", () => {
     );
     expect(formatMigrationReport(report)).toMatch(
       /^Migration check 1.1.0 -> 1.0.0 \(Pi 0.87.1 -> 0.87.1\): safe/,
+    );
+  });
+
+  it("summarizes a no-op migration in one line and lists only what changes", () => {
+    const kept = checkStateMigration(populated(), target(), current);
+    const brief = formatMigrationSummary(kept);
+    expect(brief.split("\n")).toHaveLength(1);
+    expect(brief).toContain(
+      `every state item (${STATE_DATA_CLASSES.length}) is kept unchanged`,
+    );
+    const review = checkStateMigration(populated(), target("0.86.0"), current);
+    const lines = formatMigrationSummary(review).split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toMatch(/^ {2}! sessions\s+review/);
+    expect(lines[2]).toContain(
+      `${STATE_DATA_CLASSES.length - 1} other state item(s) are kept unchanged`,
     );
   });
 

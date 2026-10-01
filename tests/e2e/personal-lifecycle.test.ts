@@ -166,7 +166,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
 
     // The installed lock declares no enterprise endpoint: no identity,
     // broker, or gateway, and the update source is the only variable.
-    const inspected = s.cli("inspect", "mypi");
+    const inspected = s.cli("inspect", "mypi", "--json");
     expect(inspected.status, inspected.stderr).toBe(0);
     const inspect = JSON.parse(inspected.stdout);
     expect(inspect).toMatchObject({

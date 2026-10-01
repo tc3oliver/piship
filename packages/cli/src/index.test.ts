@@ -461,6 +461,40 @@ describe("file system errors", () => {
   });
 });
 
+describe("inspect", () => {
+  const manifest = fileURLToPath(
+    new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
+  );
+  async function inspect(args: string[]) {
+    const stdout: string[] = [];
+    const status = await runCli(["inspect", manifest, ...args], {
+      stdout: (message) => stdout.push(message),
+      stderr: () => {},
+    });
+    return { status, stdout: stdout.join("\n") };
+  }
+
+  it("prints a human summary by default", async () => {
+    const result = await inspect([]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^\S.* \(\S+, command \S+\)$/m);
+    expect(result.stdout).toMatch(/^ {2}mode\s+managed$/m);
+    expect(result.stdout).toMatch(/^ {2}policy\s+\S+@\d+/m);
+    expect(result.stdout).toContain("--json for the full locked configuration");
+    expect(() => JSON.parse(result.stdout)).toThrow();
+  });
+
+  it("keeps the full JSON behind --json", async () => {
+    const result = await inspect(["--json"]);
+    expect(result.status).toBe(0);
+    const info = JSON.parse(result.stdout);
+    expect(info.deployment.mode).toBe("managed");
+    expect(info.access).toBeDefined();
+    expect(info.governance).toBeDefined();
+    expect(typeof info.state).toBe("string");
+  });
+});
+
 describe("config explain from a manifest", () => {
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));

@@ -21,7 +21,7 @@ import {
 } from "../access/index.js";
 import {
   type AccessEvent,
-  formatMigrationReport,
+  formatMigrationSummary,
   readInstallReceipt,
   rollbackDistribution,
   updateDistribution,
@@ -267,7 +267,7 @@ export async function runUpdate(
     );
     return;
   }
-  if (result.migration) ctx.out(formatMigrationReport(result.migration));
+  if (result.migration) ctx.out(formatMigrationSummary(result.migration));
   if (result.status === "available") {
     ctx.out(
       `${app.name} ${result.to} is available on the ${result.channel} channel (signed by ${result.keyId}); run ${app.command} update to install it.`,

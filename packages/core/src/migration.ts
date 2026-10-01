@@ -593,14 +593,39 @@ export function checkStateMigration(
   };
 }
 
+function migrationHeader(report: MigrationReport): string {
+  return `Migration check ${report.from.version ?? "unknown"} -> ${report.to.version} (Pi ${report.from.pi ?? "unknown"} -> ${report.to.pi}): ${report.verdict}`;
+}
+
+function migrationLine(item: MigrationReport["items"][number]): string {
+  return `  ${item.verdict === "safe" ? "✓" : item.verdict === "requires-review" ? "!" : "✗"} ${item.name.padEnd(28)} ${item.action.padEnd(19)} ${item.reason}`;
+}
+
 /** Plain-text rendering for CLI output. */
 export function formatMigrationReport(report: MigrationReport): string {
-  const lines = [
-    `Migration check ${report.from.version ?? "unknown"} -> ${report.to.version} (Pi ${report.from.pi ?? "unknown"} -> ${report.to.pi}): ${report.verdict}`,
-  ];
-  for (const item of report.items)
-    lines.push(
-      `  ${item.verdict === "safe" ? "✓" : item.verdict === "requires-review" ? "!" : "✗"} ${item.name.padEnd(28)} ${item.action.padEnd(19)} ${item.reason}`,
-    );
-  return lines.join("\n");
+  return [migrationHeader(report), ...report.items.map(migrationLine)].join(
+    "\n",
+  );
+}
+
+/**
+ * The report without the state items that are kept unchanged, for update:
+ * one line when nothing in the state changes.
+ */
+export function formatMigrationSummary(report: MigrationReport): string {
+  const changed = report.items.filter(
+    (item) => item.verdict !== "safe" || item.action !== "keep",
+  );
+  const kept = report.items.length - changed.length;
+  if (!changed.length)
+    return `${migrationHeader(report)}; every state item (${kept}) is kept unchanged.`;
+  return [
+    migrationHeader(report),
+    ...changed.map(migrationLine),
+    ...(kept
+      ? [
+          `  ${kept} other state item(s) are kept unchanged; piship migrate-check prints them all.`,
+        ]
+      : []),
+  ].join("\n");
 }
