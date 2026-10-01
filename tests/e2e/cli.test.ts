@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PISHIP_VERSION } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -68,7 +69,7 @@ afterEach(() => {
 describe("CLI", () => {
   it("prints help/version and requires init target", () => {
     expect(cli("--help").stdout).toContain("Usage: piship <command>");
-    expect(cli("--version").stdout.trim()).toBe("0.1.0");
+    expect(cli("--version").stdout.trim()).toBe(PISHIP_VERSION);
     expect(cli("init").status).toBe(2);
   });
   it.each([
@@ -356,7 +357,7 @@ describe("CLI", () => {
           });
     expect(brandedVersion.status, brandedVersion.stderr).toBe(0);
     expect(brandedVersion.stdout).toContain("MyPi 1.0.0");
-    expect(brandedVersion.stdout).toContain("PiShip 0.1.0");
+    expect(brandedVersion.stdout).toContain(`PiShip ${PISHIP_VERSION}`);
     expect(brandedVersion.stdout).toContain("Pi 0.87.1 by Earendil Works");
     const brandedHelp =
       process.platform === "win32"
