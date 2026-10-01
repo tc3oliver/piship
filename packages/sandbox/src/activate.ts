@@ -8,6 +8,7 @@ import { constants as osConstants, homedir, tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import {
   createTemporaryDirectory,
+  LAUNCH_RECLAIM_BUDGET_MS,
   PiShipError,
   processNetworkEnvironment,
   reclaimTemporaryDirectories,
@@ -759,7 +760,10 @@ let tmpExitHookInstalled = false;
  * next activation reclaims it once its process is gone.
  */
 function createSessionTmp(): TemporaryDirectory {
-  reclaimTemporaryDirectories(tmpdir(), ["sandbox"]);
+  // Bounded like the launch sweep: what is left waits for a later start.
+  reclaimTemporaryDirectories(tmpdir(), ["sandbox"], {
+    deadline: performance.now() + LAUNCH_RECLAIM_BUDGET_MS,
+  });
   const dir = createTemporaryDirectory(tmpdir(), "sandbox");
   sessionTmpDirs.add(dir);
   if (!tmpExitHookInstalled) {

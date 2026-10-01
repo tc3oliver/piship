@@ -475,7 +475,28 @@ export interface ReclaimOptions {
   readonly onStep?: (step: ReclaimStep, path: string) => void;
   /** Test seam: `portable` uses the portable walk where `rm` would be used. */
   readonly remover?: "portable";
+  /**
+   * When, on `monotonic`, to stop: no removal starts after it, and one that
+   * is still running then is stopped (once it had `MIN_REMOVAL_MS`), put
+   * back under its name and marker, and left for a later sweep. The rules
+   * for what is abandoned do not change. Unbounded when undefined.
+   */
+  readonly deadline?: number;
+  /** The clock `deadline` is on. Default `performance.now`. */
+  readonly monotonic?: () => number;
 }
+
+/**
+ * How long a start (a launch, a sandbox session) spends removing what killed
+ * operations left before it goes on; what is left is removed by later starts.
+ */
+export const LAUNCH_RECLAIM_BUDGET_MS = 2000;
+
+/** A removal that has started runs at least this long before a deadline stops it. */
+export const MIN_REMOVAL_MS = 1000;
+
+/** A removal stopped by its deadline: the directory is kept for a later sweep. */
+class Deferred extends Error {}
 
 /** A name nothing else looks for, in the directory that held the original. */
 const QUARANTINE = ".piship-reclaim-";
@@ -691,6 +712,11 @@ function removeContents(
   keep?: string,
 ): void {
   options.onStep?.("walk", path);
+  if (
+    options.deadline !== undefined &&
+    (options.monotonic ?? performance.now)() >= options.deadline
+  )
+    throw new Deferred("the time for this sweep ran out");
   const names = readdirSync(path);
   const after = lstatSync(path);
   if (
@@ -736,13 +762,39 @@ function removePortable(
   rmdirSync(path);
 }
 
-/** One `rm` of the moved directory itself, as the only operand. */
-function removeWithSystem(tool: Remover, path: string): void {
+/**
+ * One `rm` of the moved directory itself, as the only operand, stopped at the
+ * deadline (what it removed by then stays removed).
+ */
+function removeWithSystem(
+  tool: Remover,
+  path: string,
+  options: ReclaimOptions,
+): void {
+  const left =
+    options.deadline === undefined
+      ? 10 * 60_000
+      : Math.max(
+          1,
+          Math.min(
+            10 * 60_000,
+            Math.ceil(
+              options.deadline - (options.monotonic ?? performance.now)(),
+            ),
+          ),
+        );
   const result = spawnSync(tool.file, [...tool.args, path], {
     stdio: "ignore",
     env: {},
-    timeout: 10 * 60_000,
+    timeout: left,
   });
+  if (
+    options.deadline !== undefined &&
+    ((result.error as NodeJS.ErrnoException | undefined)?.code ===
+      "ETIMEDOUT" ||
+      result.signal !== null)
+  )
+    throw new Deferred("the time for this sweep ran out");
   if (result.error || result.status !== 0)
     throw new Error("the system remover could not remove the directory");
   if (existsSync(path)) throw new Error("the directory is still there");
@@ -838,7 +890,7 @@ function removeAbandoned(
   }
   try {
     const tool = options.remover === "portable" ? null : systemRemover();
-    if (tool) removeWithSystem(tool, quarantine);
+    if (tool) removeWithSystem(tool, quarantine, options);
     else removePortable(quarantine, found, options);
   } catch (error) {
     let ours = false;
@@ -857,6 +909,11 @@ export interface ReclaimResult {
   readonly removed: readonly string[];
   /** Abandoned directories that could not be removed. */
   readonly failed: readonly string[];
+  /**
+   * Abandoned directories left for a later sweep because the deadline came
+   * first; present only when there are any.
+   */
+  readonly deferred?: readonly string[];
 }
 
 /**
@@ -875,12 +932,32 @@ export function reclaimTemporaryDirectories(
 ): ReclaimResult {
   const removed: string[] = [];
   const failed: string[] = [];
-  for (const found of findAbandonedTemporaryDirectories(root, kinds, options))
-    try {
-      if (removeAbandoned(found, options) === "removed")
-        removed.push(found.path);
-    } catch {
-      failed.push(found.path);
+  const deferred: string[] = [];
+  const monotonic = options.monotonic ?? (() => performance.now());
+  for (const found of findAbandonedTemporaryDirectories(root, kinds, options)) {
+    let bounded = options;
+    if (options.deadline !== undefined) {
+      const now = monotonic();
+      if (now >= options.deadline) {
+        deferred.push(found.path);
+        continue;
+      }
+      // A removal that starts gets a moment, so a short budget still
+      // makes progress on a large directory.
+      bounded = {
+        ...options,
+        monotonic,
+        deadline: Math.max(options.deadline, now + MIN_REMOVAL_MS),
+      };
     }
-  return { removed, failed };
+    try {
+      if (removeAbandoned(found, bounded) === "removed")
+        removed.push(found.path);
+    } catch (error) {
+      (error instanceof Deferred ? deferred : failed).push(found.path);
+    }
+  }
+  return deferred.length > 0
+    ? { removed, failed, deferred }
+    : { removed, failed };
 }

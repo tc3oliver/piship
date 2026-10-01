@@ -70,6 +70,7 @@ export * from "./supply-chain.js";
 export {
   abandonedTemporaryCount,
   reclaimInstallTemporaries,
+  reclaimLaunchTemporaries,
   reclaimOsTemporaries,
   sweepOutputStaging,
   type AbandonedStaging,

@@ -14,8 +14,7 @@ import {
   runLogout,
   runRollback,
   runSandbox,
-  reclaimInstallTemporaries,
-  reclaimOsTemporaries,
+  reclaimLaunchTemporaries,
   runUpdate,
   runtimeStateDirectory,
   sweepStateTemporaries,
@@ -104,9 +103,10 @@ export async function launchPiDistribution(
   sweepStateTemporaries(stateDir);
   // Directories of PiShip operations killed before they cleaned up: session
   // sandbox temp, verification and launch-check scratch, install and update
-  // staging. Only those whose owner is gone are removed.
-  reclaimOsTemporaries();
-  reclaimInstallTemporaries(metadata.app.id);
+  // staging. Only those whose owner is gone are removed, within a bounded
+  // time: what is left waits for a later start, and the user is told.
+  const reclaimNotice = reclaimLaunchTemporaries(metadata.app.id);
+  if (reclaimNotice) console.error(reclaimNotice);
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),

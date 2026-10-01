@@ -46,8 +46,10 @@ import { join } from "node:path";
 import {
   createTemporaryDirectory,
   findAbandonedTemporaryDirectories,
-  reclaimTemporaryDirectories,
+  LAUNCH_RECLAIM_BUDGET_MS,
+  type ReclaimOptions,
   type ReclaimResult,
+  reclaimTemporaryDirectories,
   type TemporaryDirectory,
   type TemporaryKind,
 } from "@piship/contracts";
@@ -68,18 +70,23 @@ function installRoots(id: string | undefined): readonly string[] {
 }
 
 function merge(results: readonly ReclaimResult[]): ReclaimResult {
+  const deferred = results.flatMap((result) => result.deferred ?? []);
   return {
     removed: results.flatMap((result) => result.removed),
     failed: results.flatMap((result) => result.failed),
+    ...(deferred.length > 0 ? { deferred } : {}),
   };
 }
+
+/** The bound of a sweep: when to stop, on which clock. */
+type SweepBound = Pick<ReclaimOptions, "deadline" | "monotonic">;
 
 /**
  * Remove the abandoned sandbox, probe, verify, launch-check, and release-test
  * directories under the OS temp directory. Best effort, never throws.
  */
-export function reclaimOsTemporaries(): ReclaimResult {
-  return reclaimTemporaryDirectories(tmpdir(), OS_KINDS);
+export function reclaimOsTemporaries(bound: SweepBound = {}): ReclaimResult {
+  return reclaimTemporaryDirectories(tmpdir(), OS_KINDS, bound);
 }
 
 /**
@@ -89,12 +96,41 @@ export function reclaimOsTemporaries(): ReclaimResult {
  * update itself also removes everything unreferenced under the lifecycle
  * lock). Best effort, never throws.
  */
-export function reclaimInstallTemporaries(id?: string): ReclaimResult {
+export function reclaimInstallTemporaries(
+  id?: string,
+  bound: SweepBound = {},
+): ReclaimResult {
   return merge(
     installRoots(id).map((root) =>
-      reclaimTemporaryDirectories(root, ["staging"]),
+      reclaimTemporaryDirectories(root, ["staging"], bound),
     ),
   );
+}
+
+/**
+ * The sweep every launch runs, bounded by `LAUNCH_RECLAIM_BUDGET_MS` (a
+ * removal that has started may run a moment longer): the OS temp directory,
+ * the install home, and `apps/<id>`. The rules for what is abandoned are
+ * those of every sweep. Returns a notice when some of the work was left for a
+ * later start, and undefined otherwise. Best effort, never throws.
+ */
+export function reclaimLaunchTemporaries(
+  id: string,
+  options: {
+    readonly budgetMs?: number;
+    readonly monotonic?: () => number;
+  } = {},
+): string | undefined {
+  const monotonic = options.monotonic ?? (() => performance.now());
+  const budgetMs = options.budgetMs ?? LAUNCH_RECLAIM_BUDGET_MS;
+  const bound: SweepBound = { deadline: monotonic() + budgetMs, monotonic };
+  const result = merge([
+    reclaimOsTemporaries(bound),
+    reclaimInstallTemporaries(id, bound),
+  ]);
+  const left = result.deferred?.length ?? 0;
+  if (left === 0) return undefined;
+  return `PiShip left ${left} abandoned temporary ${left === 1 ? "directory" : "directories"} of earlier interrupted runs for a later start, so this one does not wait (it spends up to ${budgetMs / 1000} s removing them${result.removed.length > 0 ? ` and removed ${result.removed.length} now` : ""}). Each start removes more; doctor shows how many remain.`;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   abandonedTemporaryCount,
   readInstallReceipt,
   reclaimInstallTemporaries,
+  reclaimLaunchTemporaries,
   reclaimOsTemporaries,
   rollbackDistribution,
   sweepOutputStaging,
@@ -183,6 +184,29 @@ describe("where each start reclaims", () => {
     reclaimOsTemporaries();
     reclaimInstallTemporaries(ID);
     expect(existsSync(build)).toBe(true);
+  });
+
+  it("bounds a launch's sweep and says what it left for a later start (#158)", () => {
+    const dead = deadPid();
+    const stale = [
+      plant(osTemp, "piship-verify-aaaaaa", "verify", dead),
+      plant(osTemp, "piship-sandbox-bbbbbb", "sandbox", dead),
+      plant(installHome(), ".staging-cccccc", "staging", dead),
+    ];
+    // A budget that is spent before the first removal.
+    let clock = 0;
+    const notice = reclaimLaunchTemporaries(ID, {
+      budgetMs: 0,
+      monotonic: () => clock++,
+    });
+    expect(notice).toMatch(/left 3 abandoned temporary directories/);
+    expect(notice).toMatch(/later start/);
+    for (const path of stale) expect(existsSync(path)).toBe(true);
+    expect(abandonedTemporaryCount(ID)).toBe(3);
+    // The next launch with time to spare finishes the work, quietly.
+    expect(reclaimLaunchTemporaries(ID)).toBeUndefined();
+    for (const path of stale) expect(existsSync(path)).toBe(false);
+    expect(abandonedTemporaryCount(ID)).toBe(0);
   });
 
   it("counts, without removing, what a start could not remove", () => {
