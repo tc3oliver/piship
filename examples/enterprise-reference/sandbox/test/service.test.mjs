@@ -590,11 +590,13 @@ describe("creating a sandbox", () => {
     assert.equal(args.at(-2), "sleep");
     assert.equal(Number(args.at(-1)), 43_200 + 60);
     // The workspace, the read-only .git, the protected paths that exist in
-    // the working tree, and the one writable place under .git; a parent
-    // before what lies under it.
+    // the working tree, the directory above a protected path bound onto
+    // itself so it cannot be renamed away, and the one writable place under
+    // .git; a parent before what lies under it.
     assert.deepEqual(flagValues(args, "--mount"), [
       `type=bind,src=${workspace},dst=/workspace`,
       `type=bind,src=${join(workspace, ".git")},dst=/workspace/.git,readonly`,
+      `type=bind,src=${shared},dst=/workspace/config`,
       `type=bind,src=${hooks},dst=/workspace/.githooks,readonly`,
       `type=bind,src=${join(shared, "local.cfg")},dst=/workspace/config/local.cfg,readonly`,
       `type=bind,src=${join(workspace, ".git", "piship-workspace")},dst=/workspace/.git/piship-workspace`,
@@ -611,6 +613,34 @@ describe("creating a sandbox", () => {
       0o700,
     );
     assert.ok(service.containers().includes(name));
+  });
+
+  it("binds every directory above a nested protected path onto itself, so it cannot be moved aside", async () => {
+    // Without these, `mv tools tools-old` inside the sandbox carries the
+    // read-only mount away, and a writable `tools/git/hooks` can be made in
+    // its place on the host, where git then runs it.
+    const workspace = service.workspace("nested-protected");
+    const hooks = join(workspace, "tools", "git", "hooks");
+    mkdirSync(hooks, { recursive: true });
+    const answer = await service.create("alice", workspace, {
+      writeProtect: { directories: [hooks] },
+    });
+    assert.equal(answer.status, 201, answer.text);
+    const mounts = flagValues(runCalls(service).at(-1).args, "--mount");
+    const tools = mounts.indexOf(
+      `type=bind,src=${join(workspace, "tools")},dst=/workspace/tools`,
+    );
+    const git = mounts.indexOf(
+      `type=bind,src=${join(workspace, "tools", "git")},dst=/workspace/tools/git`,
+    );
+    const guarded = mounts.indexOf(
+      `type=bind,src=${hooks},dst=/workspace/tools/git/hooks,readonly`,
+    );
+    assert.ok(tools > 0 && git > tools && guarded > git, mounts.join("\n"));
+    await service.call(`/v1/sandboxes/${answer.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
   });
 
   it("mounts a workspace only for a key bound to the user who owns it", async () => {

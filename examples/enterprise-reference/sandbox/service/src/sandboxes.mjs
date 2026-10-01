@@ -351,6 +351,7 @@ export class Sandboxes {
     // mounted read-only is covered by that mount, missing or not.
     candidates.sort((a, b) => a.depth - b.depth);
     const directories = [];
+    const protectedMounts = [];
     for (const { resolved, target } of candidates) {
       if (directories.some((dir) => target.startsWith(`${dir}/`))) continue;
       const stat = lstatOrUndefined(resolved);
@@ -363,8 +364,28 @@ export class Sandboxes {
       if (stat.isSymbolicLink())
         throw unsupported("A protected path is a symbolic link");
       if (stat.isDirectory()) directories.push(target);
-      mounts.push({ source: resolved, target, readonly: true });
+      protectedMounts.push({ source: resolved, target, readonly: true });
     }
+    // A read-only mount only keeps its own mount point from being renamed.
+    // A protected path deeper than the workspace's top level could otherwise
+    // be moved aside with its parent (`mv x x-old`), and a writable `x/hooks`
+    // made in its place on the host. Each directory between the workspace
+    // and a protected path is therefore bound onto itself, writable: a mount
+    // point, which cannot be renamed or removed.
+    const pins = new Map();
+    for (const { target } of protectedMounts) {
+      const parts = posix.relative(WORKSPACE_MOUNT, target).split("/");
+      for (let depth = 1; depth < parts.length; depth++) {
+        const pin = posix.join(WORKSPACE_MOUNT, ...parts.slice(0, depth));
+        if (pins.has(pin) || directories.includes(pin)) continue;
+        const source = join(real, ...parts.slice(0, depth));
+        const stat = lstatOrUndefined(source);
+        if (!stat || stat.isSymbolicLink() || !stat.isDirectory())
+          throw unsupported("A protected path cannot be mounted");
+        pins.set(pin, { source, target: pin, readonly: false });
+      }
+    }
+    mounts.push(...protectedMounts, ...pins.values());
     // A parent is mounted before what lies under it.
     mounts.sort((a, b) => a.target.length - b.target.length);
     return { real, uid, gid, mounts };
