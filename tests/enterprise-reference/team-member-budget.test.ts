@@ -7,7 +7,7 @@ import {
   startReferenceStack,
 } from "./stack.js";
 
-// Decision D-01's check: are team-member budgets (`max_budget_in_team`)
+// The check behind the reference broker's budget model: are team-member budgets (`max_budget_in_team`)
 // enforced by the pinned LiteLLM? The reference broker issues keys WITHOUT a
 // team (one LiteLLM user per principal with a personal budget); teams would
 // be adopted only if this holds. The broker does not create teams, so this
@@ -38,7 +38,7 @@ beforeAll(() => {
 });
 afterAll(() => stack?.stop());
 
-describe("D-01: team-member budgets in the pinned LiteLLM (live reference stack)", () => {
+describe("team-member budgets in the pinned LiteLLM (live reference stack)", () => {
   it("enforces max_budget_in_team on every team key of the member, and not the member's personal budget", async () => {
     const suffix = randomBytes(4).toString("hex");
     const members = [

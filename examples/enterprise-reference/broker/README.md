@@ -64,7 +64,7 @@ The broker does not introspect tokens: an access token of a session signed out a
 
 The key is the group's full path, because it must be unique in the realm and a Keycloak group name is not: `/contractors/engineering` is also named `engineering`, and keyed by name it would inherit `/engineering`'s models. The realm's `groups` mapper therefore sends full paths (`full.path: true`), and a bare name matches nothing. Whatever an adaptation keys entitlement by (a group path, a client role), it must be unique in the realm. A user gets the union over their groups; other groups grant nothing. The table is `GROUP_MODELS` in [`src/broker.mjs`](src/broker.mjs). The models are written into the key, so LiteLLM itself refuses any other model (`key_model_access_denied`, 403); PiShip then narrows its catalog to the same list. The entitlement is read at every acquire: a group change applies to the next key, and keys already issued keep their models until they expire or are rotated out.
 
-## Principal, budget and keys (D-01)
+## Principal, budget and keys
 
 - **One LiteLLM user per principal.** `user_id` is `oidc-` plus the first 40 hex characters of SHA-256 over `[iss, sub]` (`principalUserId`). It depends on the issuer and subject only, never on the token, the username, or the email, so every key one employee is issued, and every rotation, belongs to the same user. The user's LiteLLM `metadata` records `iss` and `sub` for an operator.
 - **The budget is on the user, not the key, and keys have no `team_id`.** The first acquire creates the user with `/user/new`: `max_budget` `BROKER_USER_MAX_BUDGET` (default 10), `budget_duration` `BROKER_USER_BUDGET_DURATION` (default `30d`), optional `tpm_limit` and `rpm_limit`, role `internal_user_viewer`, and `auto_create_key: false`. A LiteLLM key with a `team_id` is governed by team budgets only and ignores the user's personal budget, so the broker never sets one. An existing user keeps its budget and spend; the broker refuses to issue for an existing user whose role is not `internal_user_viewer` (503).
@@ -180,7 +180,7 @@ node --test test/*.test.mjs
 
 ## Observed LiteLLM behavior (v1.103.0)
 
-From the D-01 check against the pinned image, which the broker relies on:
+From the budget checks against the pinned image (`tests/enterprise-reference/usage-continuity.test.ts` and `team-member-budget.test.ts`), which the broker relies on:
 
 - Two keys without `team_id` for one `user_id` accrue one user spend: the user's spend equals the sum of the keys' spends. A user over `max_budget` is refused on every key, including a key that never spent (429, `budget_exceeded`).
 - Spend is written in batches: key and user spend appeared 2 to 5 s after the requests, so a test must poll.

@@ -17,7 +17,7 @@ import {
 } from "../helpers/lifecycle.js";
 import { PRIMARY_STORAGE } from "../helpers/secret-store.js";
 
-// Managed clean-machine flow (spec §30.4, decision D-11): one continuous run
+// Managed clean-machine flow: one continuous run
 // of a managed distribution from a machine that has nothing of it to a machine
 // that has nothing of it again:
 //

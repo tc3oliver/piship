@@ -33,7 +33,7 @@ import {
   sightings,
 } from "../helpers/security.js";
 
-// Security case 7 (spec 30.3), sandbox credential leakage, and the sandbox
+// Security case 7 (docs/security.md, security test map), sandbox credential leakage, and the sandbox
 // control of case 13, at the launcher. A remote sandbox (a mock Kubernetes
 // Agent Sandbox API and router that require a bearer token) holds the agent's
 // commands; the token is stored with `sandbox login`. The stored-credential

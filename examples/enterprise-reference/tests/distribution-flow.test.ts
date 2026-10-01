@@ -37,7 +37,7 @@ import {
 import { referenceDirectory, type Stack, startStack } from "./support/stack.js";
 
 // The AcmeCode reference distribution against the live reference stack, for one
-// user, as the managed clean-machine flow of spec 30.4 and decision D-11:
+// user, as the managed clean-machine flow (tests/e2e/managed-clean-machine.test.ts):
 // build, install, launch, sign in on the real Keycloak authorization page,
 // exchange the identity for a scoped credential at the reference broker, keep
 // it in the secret store, discover models, send a request through LiteLLM,

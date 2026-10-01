@@ -100,7 +100,7 @@ describe("acquire: success response", () => {
     ]);
   });
 
-  it("mints the key per D-01: user_id is the principal, no team_id, OSS fields only", async () => {
+  it("mints the key as one LiteLLM user per principal: user_id is the principal, no team_id, OSS fields only", async () => {
     const res = await h.acquire(mint(h, ALICE));
     const call = generateCalls(h).at(-1);
     assert.equal(call.auth, "master");

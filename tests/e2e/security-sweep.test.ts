@@ -27,7 +27,7 @@ import {
   sightings,
 } from "../helpers/security.js";
 
-// Security cases 6 and 12 (spec 30.3), credential leakage and audit secret
+// Security cases 6 and 12 (docs/security.md, security test map), credential leakage and audit secret
 // leakage, as a sweep of everything a real managed run writes or shows. One
 // installed-style distribution runs the whole flow (sign in, launch, agent
 // turns that try to read secrets, a gateway and a broker that echo the

@@ -9,7 +9,8 @@ import {
   sum,
 } from "./stack.js";
 
-// Section 9.1 of the v0.7 plan, decision D-01: one employee's credentials A,
+// The reference broker's budget model (one LiteLLM user per principal,
+// examples/enterprise-reference/broker/README.md): one employee's credentials A,
 // B and C, and every rotation, accrue ONE spend total against ONE budget, and
 // a second employee has their own. Every spend figure is read from LiteLLM's
 // own records (`/spend/users`, `/spend/logs`, `/key/info`), never counted by

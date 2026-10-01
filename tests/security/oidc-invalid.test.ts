@@ -17,7 +17,7 @@ import { startLocalServices } from "../../examples/demo-company/fixtures/local-s
 import { ATTACKS, browser, followFixture } from "../helpers/oidc-attacks.js";
 import { SecretLedger, scanTree } from "../helpers/security.js";
 
-// Security case 1-3 (spec 30.3): invalid OIDC issuer, audience, state, nonce.
+// Security case 1-3 (docs/security.md, security test map): invalid OIDC issuer, audience, state, nonce.
 //
 // The real OIDC client (`OidcPkceIdentityProvider`, and `DistributionAccess`
 // around it) runs against the fixture provider over loopback HTTP. Two things

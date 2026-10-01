@@ -9,7 +9,7 @@ import { authorizeAtKeycloak } from "../../examples/enterprise-reference/tests/s
 import { ATTACKS, browser, type Follow } from "../helpers/oidc-attacks.js";
 import { type ReferenceStack, request, startReferenceStack } from "./stack.js";
 
-// Security cases 1-3 (spec 30.3) against a live Keycloak: invalid issuer,
+// Security cases 1-3 (docs/security.md, security test map) against a live Keycloak: invalid issuer,
 // audience, state, nonce. The real OIDC client runs against the reference
 // realm and a hostile browser changes one thing between the authorization
 // request PiShip prints and the callback it receives (the same attacks

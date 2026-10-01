@@ -27,7 +27,7 @@ import {
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
-// Security cases 1-3, 8 and 13 (spec 30.3) at the launcher: the six mandatory
+// Security cases 1-3, 8 and 13 (docs/security.md, security test map) at the launcher: the six mandatory
 // controls (identity, credential, sandbox, policy, integrity, audit) each stop
 // the launch, or the action, when their configuration or implementation is
 // missing or broken, and a user, project, or team policy cannot widen what the

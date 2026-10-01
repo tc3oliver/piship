@@ -26,7 +26,7 @@ import {
 } from "../helpers/security.js";
 import { selfSignedLoopbackCertificate } from "../helpers/x509.js";
 
-// Security cases 6, 9, 10 and 11 (spec 30.3) over the lifecycle of one
+// Security cases 6, 9, 10 and 11 (docs/security.md, security test map) over the lifecycle of one
 // installed distribution: credential leakage in the reports of update and
 // rollback and in the rollback snapshots, and the network policy and TLS
 // that the update transport keeps. The credential-class matrix of
