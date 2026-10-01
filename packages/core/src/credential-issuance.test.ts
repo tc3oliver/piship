@@ -391,7 +391,10 @@ describe("the pending issuance never names a secret to delete", () => {
       const store = new MemorySecretStore();
       for (const ref of [`piship:${ID}:inference#1`, planted])
         await store.put(ref, new SecretValue("fake-purge-SENTINEL-0001"));
-      const result = await purgeDistributionState(ID, { secretStore: store });
+      const result = await purgeDistributionState(ID, {
+        secretStore: store,
+        withoutLogout: true,
+      });
       expect(result.deletedSecrets).toEqual([
         `piship:${ID}:inference#1`,
         `piship:${ID}:inference#2`,

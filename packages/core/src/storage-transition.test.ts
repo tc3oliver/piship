@@ -496,7 +496,10 @@ describe("purge after a storage provider change", () => {
       }),
     );
     expect(readdirSync(secretsDir()).length).toBeGreaterThan(0);
-    const result = await purgeDistributionState(ID, { secretStore: platform });
+    const result = await purgeDistributionState(ID, {
+      secretStore: platform,
+      withoutLogout: true,
+    });
     expect(platform.refs()).toEqual([]);
     expect(result.deletedSecrets).toContain(identityRef);
     // A file-store reference is never looked up in the platform store.
@@ -511,7 +514,10 @@ describe("purge after a storage provider change", () => {
       delete value.secret_store;
       writeFileSync(file, JSON.stringify(value));
     }
-    const result = await purgeDistributionState(ID, { secretStore: platform });
+    const result = await purgeDistributionState(ID, {
+      secretStore: platform,
+      withoutLogout: true,
+    });
     expect(result.deletedSecrets).toEqual([]);
     expect(platform.deleted).toEqual([]);
     expect(existsSync(stateDir())).toBe(false);

@@ -65,7 +65,14 @@ What to look for:
 
 To try the user and project layers, write rules to `~/.piship/acmecode/config/policy.json` (or `$PISHIP_STATE_HOME/acmecode/config/policy.json`) or to `.piship/policy.json` in a project. This is a managed distribution, so both files are narrowing only: a user or project rule can tighten a default such as `acme.shell` from `ask` to `deny`, their `allow` rules are ignored and reported, and neither can relax the enforced rules. `policy explain` shows which layer decided.
 
-Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall, and deletes the secret-store entries it references first (each deletion confirmed, nothing revoked: a secret that cannot be deleted fails the purge before any state is removed). `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` does the uninstall and the purge in one command.
+Every branded command resolves the `ACMECODE_*` variables at launch, so keep them set in that shell. The fixture keeps its sessions in memory: after restarting it, run `login` again. `logout` revokes the credential and tokens at the fixture, clears local secrets, and keeps sessions; `node dist/acmecode/piship.mjs purge acmecode --yes` removes the state, including the audit log, after uninstall, and deletes the secret-store entries it references first (each deletion confirmed, nothing revoked: a secret that cannot be deleted fails the purge before any state is removed). `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes` does the uninstall and the purge in one command. Because purge revokes nothing, both refuse before deleting anything while you are signed in; remove AcmeCode in this order:
+
+```bash
+acmecode logout                                                 # revokes the credential at the broker
+node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
+```
+
+After a plain `uninstall`, sign out with the release's own command, `node dist/acmecode/bin/acmecode logout`, before `purge`. Only with no release left to run `logout`, `--without-logout` (after `--yes`) purges anyway and warns that the credential stays live at the broker until it expires.
 
 ## Release, update, and rollback
 

@@ -107,10 +107,10 @@ const lifecycleCommands: Record<
     flags: ["--check", "--accept-review"],
   },
   uninstall: {
-    usage: "uninstall <id> [--purge --yes]",
+    usage: "uninstall <id> [--purge --yes [--without-logout]]",
     positional: [1, 1],
     values: [],
-    flags: ["--purge", "--yes"],
+    flags: ["--purge", "--yes", "--without-logout"],
   },
   rollback: {
     usage: "rollback <id>",
@@ -196,7 +196,7 @@ async function lockFor(target: string): Promise<DistributionLock> {
 }
 const allowedOptions: Record<string, readonly string[]> = {
   build: ["--reclaim-staging"],
-  purge: ["--yes"],
+  purge: ["--yes", "--yes --without-logout"],
   install: ["--use-existing-state"],
   init: ["--managed"],
   migrate: ["--write"],
@@ -218,7 +218,11 @@ function stagingNotice(found: AbandonedStaging): string {
     ? `${what} could not be removed; check its permissions.`
     : `${what}. They are not removed unless you ask, because this directory may be writable by sandboxed commands; run again with --reclaim-staging to remove them.`;
 }
-function purgeReport(purged: PurgeResult): string {
+function purgeReport(purged: PurgeResult, output: CliOutput): string {
+  if (purged.notRevoked)
+    output.stderr(
+      `Warning: purged without logout: ${purged.notRevoked.join(", ")} ${purged.notRevoked.length > 1 ? "were" : "was"} deleted locally but not revoked, and stays live at the identity provider or broker until it expires`,
+    );
   const count = purged.deletedSecrets.length;
   return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`;
 }
@@ -295,8 +299,7 @@ export async function runCli(
     }
   } else if (
     !target ||
-    (rest.length &&
-      !(rest.length === 1 && allowedOptions[command]?.includes(rest[0] ?? "")))
+    (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
   ) {
     output.stderr(
       `Usage: piship ${command} <target>${allowedOptions[command] ? ` [${allowedOptions[command].join("|")}]` : ""}`,
@@ -388,7 +391,14 @@ export async function runCli(
         throw new Error(
           "Purge deletes this distribution's state; repeat with --yes after checking the id",
         );
-      output.stdout(purgeReport(await purgeDistributionState(target)));
+      output.stdout(
+        purgeReport(
+          await purgeDistributionState(target, {
+            withoutLogout: rest[1] === "--without-logout",
+          }),
+          output,
+        ),
+      );
     } else if (command === "inspect") {
       if (existsSync(resolve(target)) && statSync(resolve(target)).isFile()) {
         const lock = requireCurrentLock(target);
@@ -519,7 +529,10 @@ async function runLifecycle(
         : formatDiff(report).trimEnd(),
     );
   } else if (command === "uninstall") {
-    if (flags.has("--yes") && !flags.has("--purge")) {
+    if (
+      (flags.has("--yes") || flags.has("--without-logout")) &&
+      !flags.has("--purge")
+    ) {
       output.stderr(`Usage: piship ${lifecycleCommands.uninstall?.usage}`);
       return 2;
     }
@@ -535,7 +548,12 @@ async function runLifecycle(
       // The installed release is often the only PiShip the user has, so the
       // purge happens here rather than after it is gone.
       output.stdout(
-        `Uninstalled ${first}. ${purgeReport(await uninstallAndPurgeDistribution(first))}`,
+        `Uninstalled ${first}. ${purgeReport(
+          await uninstallAndPurgeDistribution(first, {
+            withoutLogout: flags.has("--without-logout"),
+          }),
+          output,
+        )}`,
       );
     }
   } else if (command === "update" || command === "rollback") {

@@ -217,6 +217,13 @@ acmecode policy explain shell.execute "git status"
 acmecode policy explain filesystem.read ~/.ssh/id_ed25519
 ```
 
+To remove it, sign out first: `logout` revokes the runtime credential at the broker, and purge revokes nothing, so it refuses while you are signed in.
+
+```bash
+acmecode logout
+node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
+```
+
 The local services are deterministic test fixtures, not evidence of a live company integration.
 
 See the full [company demo walkthrough](examples/demo-company/README.md).

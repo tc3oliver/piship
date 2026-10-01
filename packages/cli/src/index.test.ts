@@ -146,4 +146,45 @@ describe("uninstall --purge", () => {
     ).toBe(false);
     expect(existsSync(state)).toBe(false);
   });
+
+  it("refuses while signed in, naming logout, and purges --without-logout with a warning", async () => {
+    const { payload } = installRecorder();
+    const state = seedState();
+    // The file fallback holds the secret, so no platform store is touched.
+    mkdirSync(join(state, "secrets"));
+    writeFileSync(join(state, "secrets", "inference"), "fake-SENTINEL\n");
+    mkdirSync(join(state, "credentials-metadata"));
+    writeFileSync(
+      join(state, "credentials-metadata", "inference.json"),
+      JSON.stringify({
+        schema: "piship-credential-metadata/v1",
+        credential_ref: "file:inference",
+      }),
+    );
+    const lines: string[] = [];
+    const output = {
+      stdout: (message: string) => lines.push(message),
+      stderr: (message: string) => lines.push(message),
+    };
+    expect(await runCli(["uninstall", ID, "--purge", "--yes"], output)).toBe(1);
+    expect(lines.join("\n")).toContain(
+      `Run ${ID} logout first, then purge again`,
+    );
+    expect(existsSync(payload)).toBe(true);
+    expect(existsSync(state)).toBe(true);
+    expect(await runCli(["uninstall", ID, "--without-logout"], output)).toBe(2);
+    lines.length = 0;
+    expect(
+      await runCli(
+        ["uninstall", ID, "--purge", "--yes", "--without-logout"],
+        output,
+      ),
+      lines.join("\n"),
+    ).toBe(0);
+    expect(lines.join("\n")).toContain(
+      "Warning: purged without logout: a runtime credential was deleted locally but not revoked",
+    );
+    expect(existsSync(payload)).toBe(false);
+    expect(existsSync(state)).toBe(false);
+  });
 });

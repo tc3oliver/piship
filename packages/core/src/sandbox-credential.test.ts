@@ -504,7 +504,10 @@ describe("sandbox credential: every deletion path", () => {
         `piship:${ID}:sandbox#2`,
         new SecretValue("fake-pending-SENTINEL-2"),
       );
-      const result = await purgeDistributionState(ID, { secretStore: store });
+      const result = await purgeDistributionState(ID, {
+        secretStore: store,
+        withoutLogout: true,
+      });
       expect(result.deletedSecrets).toEqual([
         `piship:${ID}:sandbox#1`,
         `piship:${ID}:sandbox#2`,

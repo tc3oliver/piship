@@ -10,7 +10,12 @@ import {
 } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { ownsCommandShim } from "./install.js";
-import { deleteReferencedSecrets, type PurgeResult } from "./purge.js";
+import {
+  assertSignedOut,
+  deleteReferencedSecrets,
+  type PurgeOptions,
+  type PurgeResult,
+} from "./purge.js";
 import {
   acquireLock,
   appDirectory,
@@ -235,10 +240,12 @@ export function uninstallDistribution(id: string): string {
  * while the release is still installed; when one cannot be deleted this
  * throws SECRET_STORE_UNAVAILABLE and nothing is removed, so the same
  * command can be run again. Then the install is removed, and the state last.
+ * A distribution that is still signed in is refused before anything is
+ * removed: its `<command> logout` revokes what purge would only delete.
  */
 export async function uninstallAndPurgeDistribution(
   id: string,
-  options: { readonly secretStore?: SecretStore } = {},
+  options: PurgeOptions = {},
 ): Promise<PurgeResult> {
   const hold = holdForUninstall(id);
   try {
@@ -247,10 +254,20 @@ export async function uninstallAndPurgeDistribution(
     // secret goes: a refusal afterwards would leave state that names
     // credentials that are already gone.
     hold.verify();
+    const live = assertSignedOut(
+      id,
+      state,
+      `${readInstallReceipt(id).app.command} logout`,
+      options,
+    );
     const deletedSecrets = await deleteReferencedSecrets(id, state, options);
     hold.remove();
     rmSync(state, { recursive: true, force: true });
-    return { state, deletedSecrets };
+    return {
+      state,
+      deletedSecrets,
+      ...(live.length ? { notRevoked: live } : {}),
+    };
   } finally {
     hold.release();
   }

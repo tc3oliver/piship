@@ -260,10 +260,11 @@ node ./dist/my-agent/piship.mjs inspect my-agent
 node ./dist/my-agent/piship.mjs doctor my-agent
 node ./dist/my-agent/piship.mjs uninstall my-agent
 node ./dist/my-agent/piship.mjs purge my-agent --yes
+my-agent logout                                                      # a managed one: revoke the credential first
 node ./dist/my-agent/piship.mjs uninstall my-agent --purge --yes   # both in one command
 ```
 
-`uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)).
+`uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)). Neither revokes anything, so both refuse while the distribution is signed in: run `<command> logout` first ([logout and revocation](security.md#logout-and-revocation)).
 
 v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
 
