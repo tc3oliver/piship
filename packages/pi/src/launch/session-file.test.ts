@@ -522,14 +522,28 @@ describe("a /resume checks its target like a launch does (#57, #62, #65)", () =>
     expect(statSync(file).size).toBe(MAX_RESUME_BYTES + 1);
   });
 
-  it("leaves a file that cannot be read to Pi", () => {
+  it("refuses a session it could not check, whatever the error (#158)", () => {
+    // Missing, and a read that fails after the open succeeds (EISDIR here,
+    // EMFILE or EIO elsewhere): neither proves the file safe to resume.
     expect(
       resumeRefusal(
         new SessionOwnership(),
         join(sessionDir, "gone.jsonl"),
         "mypi",
       ),
-    ).toBeUndefined();
+    ).toMatch(/not resumed: PiShip could not check it \(ENOENT\)/);
+    const directory = join(sessionDir, "unreadable.jsonl");
+    mkdirSync(directory);
+    const message = resumeRefusal(new SessionOwnership(), directory, "mypi");
+    // Windows opens a directory and reads it as empty, so there it is refused
+    // as damaged rather than as a failed read; either way it is not resumed.
+    expect(message).toMatch(
+      process.platform === "win32"
+        ? /not resumed: /
+        : /not resumed: PiShip could not check it \(E[A-Z]+\)/,
+    );
+    expect(message).toMatch(/not loaded or changed/);
+    expect(message).toMatch(/start a new session here/i);
   });
 
   it("shows an entry ID from the file escaped and bounded, never raw", () => {

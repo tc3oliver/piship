@@ -535,6 +535,12 @@ function printable(text: string, limit = 240): string {
   return clean.length > limit ? `${clean.slice(0, limit)}...` : clean;
 }
 
+/** The error code of a failed file operation, shown escaped. */
+function errorCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" ? printable(code, 32) : "unknown error";
+}
+
 /**
  * Why a `/resume` into `target` is refused, worded for the user, or undefined
  * when it may go ahead: another live process owns the file, or it is over the
@@ -550,9 +556,10 @@ export function resumeRefusal(
   let problem: SessionProblem | undefined;
   try {
     problem = inspectSession(target);
-  } catch {
-    // Unreadable: Pi reports it when it opens the file.
-    return undefined;
+  } catch (error) {
+    // A check that did not finish (EMFILE, EIO, a file that is gone) proves
+    // nothing about the file, so it is not resumed.
+    return `That session is not resumed: PiShip could not check it (${errorCode(error)}). The file was not loaded or changed. Make sure the file is readable and the system is not out of open files, then resume it again, or start a new session here.`;
   }
   if (!problem) return undefined;
   const why =
