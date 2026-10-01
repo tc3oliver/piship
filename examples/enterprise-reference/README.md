@@ -1,8 +1,8 @@
 # Enterprise reference stack
 
-A local, runnable version of the company services a managed PiShip distribution talks to: an OIDC identity provider, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
+A local, runnable version of the company services a managed PiShip distribution talks to, five Compose services in all: an OIDC identity provider, a credential broker, an LLM gateway with its database, and a model upstream. It is the tested successor of [`examples/enterprise-litellm`](../enterprise-litellm/README.md), whose LiteLLM config it runs unchanged, and it implements the gateway side of the [enterprise integration contract](../../docs/enterprise-integration.md).
 
-This is reference infrastructure for tests and local exploration, not a production deployment. It includes the [reference credential broker](broker/README.md), [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack, and a [container sandbox](#reference-container-sandbox) that distribution can run its commands in. Nothing here needs an Internet model provider or a paid API key.
+This is reference infrastructure for tests and local exploration, not a production deployment. Beside the services it includes [AcmeCode](#acmecode-reference-distribution), a managed distribution wired to the stack, and a [container sandbox](#reference-container-sandbox) that distribution can run its commands in. Nothing here needs an Internet model provider or a paid API key.
 
 | Service | Image (pinned by index digest) | Host port (default) | Role |
 | --- | --- | --- | --- |
@@ -234,6 +234,15 @@ The URLs are runtime variables, so the lock is the same whatever ports the stack
 
 `ACMECODE_UPDATE_SOURCE` is read only by `update`. Use the ports in your `.env` if you changed them.
 
+To run a distribution with another `app.id` against this stack (your own copy, or the demo company's `acmecode`), change the broker's configuration in [`compose.yaml`](compose.yaml) to match before `docker compose up`, since the broker serves one distribution and one client:
+
+| Broker variable | Set it to | Otherwise |
+| --- | --- | --- |
+| `BROKER_DISTRIBUTION` (`acmecode-reference` in `compose.yaml`) | The distribution's `app.id`, which PiShip sends as `distribution` | Every acquire is refused with 403, which PiShip reports as `CREDENTIAL_DENIED` |
+| `BROKER_AUTHORIZED_PARTY` (default `acmecode`) | The `identity.oidc.clientId`, when it is not `acmecode`; the client must also exist in the realm, as a public client with the same settings as `acmecode` ([identity provider](#identity-provider-keycloak)) | Every token fails the `azp` check with 401, which PiShip reads as an expired identity (`IDENTITY_EXPIRED`) after one refresh |
+
+The other broker settings, including `BROKER_AUDIENCE`, are in the [broker's configuration](broker/README.md#configuration).
+
 A manifest cannot reach outside its own directory (resource paths start with `./` and may not contain `..` or symlinks), so this distribution cannot reuse the demo's resources by path. [`resources/`](resources) is a copy of the two it needs, the company instructions and the `acme-review` skill. It leaves out the demo's handbook MCP server, certified skill, and enterprise-context extension: none of them touches the stack. The release targets are Linux x64 and macOS arm64: the stack runs in Linux containers and the required sandbox has an adapter on those two only. The manifest pins no release key, as the demo does; a release is built from a copy that pins one (`piship keygen`).
 
 ### Users and entitlements
@@ -249,7 +258,11 @@ For Bob, `--model acme/general` is refused by PiShip with `MODEL_UNAVAILABLE` (n
 
 ### Try it
 
-With Node 22.19 or later and Docker, from the repository root:
+With Node 22.19 or later and Docker, from the repository root. The distribution requires the native OS sandbox (`sandbox.required: true`), so the machine that runs `acmecode-reference` also needs what that sandbox needs ([prerequisites](../../docs/troubleshooting.md#prerequisites)):
+
+- **Linux:** bubblewrap (`bwrap`, for example `sudo apt-get install bubblewrap`) with unprivileged user namespaces. On Ubuntu 24.04, and wherever `kernel.apparmor_restrict_unprivileged_userns` is `1`, AppArmor blocks them: allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, as the Reference E2E workflow does, or with an AppArmor profile for `bwrap`. Without them every launch fails with `SANDBOX_UNAVAILABLE`. The Linux Secret Service (`secret-tool` and an unlocked keyring) is needed too, for `login` (below).
+- **macOS:** Seatbelt is built in; nothing to install.
+- **Windows:** there is no native sandbox, and the release targets leave Windows out.
 
 ```sh
 npm ci

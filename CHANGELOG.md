@@ -60,6 +60,7 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - `docs/adapter-sdk.md` described `AuditSink` both as the collector's receiving side and as a sink that delivers onward. It now has one definition (anything a batch is written to, as PiShip's own `file` and `http` sinks are) and names the two places a company writes one (#162).
 - The LiteLLM recipe in the enterprise integration contract keyed a broker's LiteLLM user, and with it the budget, on `sub` alone, so two principals from different issuers with the same subject would share one budget. It now derives the user from the issuer and the subject, as the reference broker already does (#162).
 - The reference READMEs, tests, and the identity conformance kit cited decisions D-01, D-07, and D-11 and sections of a maintainer-local specification, none of which a reader can find; `docs/decisions.md` numbers its decisions 1 to 30. Each reference now names what it meant, or the public document or test that holds it (#162).
+- The enterprise reference README described four services (there are five, with the broker), did not list the Linux sandbox prerequisites the reference distribution needs (bubblewrap with unprivileged user namespaces, and the Secret Service), and did not say which broker variables (`BROKER_DISTRIBUTION`, `BROKER_AUTHORIZED_PARTY`) to change for another `app.id` (#162).
 
 ## v0.7.0
 
