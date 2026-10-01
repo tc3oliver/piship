@@ -8,8 +8,14 @@ Changes on `main` after v0.7.1. Not released.
 
 ### Added
 
-- `piship install --sha256 <hex>` refuses a release archive whose SHA-256 differs from the published digest; with a release or payload directory it is refused, because a directory has no archive digest. `--expect-key sha256:<fingerprint>`, repeatable, refuses a release whose lock does not pin each given update key; the lock may pin further keys. Either refusal installs nothing ([distribution bootstrap](docs/release/trust-root.md#distribution-bootstrap), #167).
-- `piship inspect` shows the pinned update keys by ID and `sha256:` fingerprint, in the summary and as an additive `trust` field in `--json` (#167).
+- `piship install --sha256 <hex>` refuses a release archive whose SHA-256 differs from the published digest; with a release or payload directory it is refused, because a directory has no archive digest. `--expect-key sha256:<fingerprint>`, repeatable, refuses a release whose lock does not pin each given update key; the lock may pin further keys. Either refusal installs nothing ([distribution bootstrap](docs/release/trust-root.md#distribution-bootstrap), #178, #167).
+- `piship inspect` shows the pinned update keys by ID and `sha256:` fingerprint, in the summary and as an additive `trust` field in `--json` (#178, #167).
+- The manual `Live provider` workflow takes an optional `model` input that replaces the `LIVE_PROVIDER_MODEL` secret for one run, and a failed run's job summary shows the gateway's HTTP status and PiShip's error code, never provider text (#182).
+
+### Changed
+
+- The [trust root](docs/release/trust-root.md) records the decisions that the PiShip project operates no official update channel for the example distributions and that release key custody belongs to each distribution owner; the remaining signed-channel gaps are deferred to #181 (#180).
+- The [status page](docs/status.md#after-v071-on-main) records the first passing `Live provider` runs: manual, real-provider evidence for the reference stack only, with no validation yet against a company identity provider or gateway in production.
 
 ## v0.7.1
 
