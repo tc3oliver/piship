@@ -2,13 +2,13 @@
 
 This page is the single source of truth for what current `main` supports and what evidence backs each claim. Other documents describe how things work and link here for status. When this page and another document disagree, this page wins; please report the mismatch.
 
-v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. v0.7.1 is the release candidate for the [production-validation baseline](#v071-production-validation-baseline). Every milestone below is a preview milestone.
+v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. v0.7.1 is published the same way as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) and is the [production-validation baseline](#v071-production-validation-baseline). Every milestone below is a preview milestone.
 
 ## v0.7.1 production-validation baseline
 
-v0.7.1 is the one PiShip baseline a production consumer pins for production validation ([#173](https://github.com/tc3oliver/piship/issues/173)). A production consumer pins tag `v0.7.1` and installs its qualified release artifact directly; it does not track `main`. Until the tag exists, v0.7.1 is a release candidate, not a release.
+v0.7.1 is the one PiShip baseline a production consumer pins for production validation ([#173](https://github.com/tc3oliver/piship/issues/173)). A production consumer pins tag `v0.7.1` and installs its qualified release artifact directly; it does not track `main`.
 
-- Qualification: recorded when v0.7.1 is tagged (the exact commit, the Release qualification run, and the published artifacts).
+- Qualification: tag `v0.7.1` is commit `bd4bc09eac22aefdb2b5c576884934e8d6200318` (the squash of #174). [Release qualification run 36857734987](https://github.com/tc3oliver/piship/actions/runs/36857734987) passed on that exact commit: CI, CodeQL, Portable E2E, Reference E2E, and Release candidate (two byte-identical builds per target, `verify-release`, tamper rejection, and install on fresh runners). The [pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) carries that run's six attested archives unchanged, with their SHA-256 files.
 - PiShip version: `0.7.1` (every `@piship/*` package and `PISHIP_VERSION` in [`compatibility.ts`](../packages/core/src/compatibility.ts)).
 - Pinned Pi: `@earendil-works/pi-coding-agent` 0.87.1, exact-pinned in [`packages/pi/package.json`](../packages/pi/package.json). [`compatibility/pi.json`](../compatibility/pi.json) lists it as `supported`, with the `personal` surface `supported` and the `managed`, `governance`, and `lifecycle` surfaces `candidate` ([Pi compatibility](#pi-compatibility)).
 - Manifest schema: `piship/v1alpha4`. Lock schema: `piship-lock/v1alpha4`. Both unchanged since v0.4 ([version map](#version-map)).
