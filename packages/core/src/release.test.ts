@@ -288,11 +288,11 @@ function caught(fn: () => unknown): Error & { code?: string } {
 }
 async function rejection(
   promise: Promise<unknown>,
-): Promise<Error & { code?: string }> {
+): Promise<Error & { code?: string; userAction?: string }> {
   try {
     await promise;
   } catch (error) {
-    return error as Error & { code?: string };
+    return error as Error & { code?: string; userAction?: string };
   }
   throw new Error("expected a rejection");
 }

@@ -94,7 +94,7 @@ function brokerStatuses(
 describe("testCredentialBroker", () => {
   const options = (fetch: Fetch, revokeEndpoint: string | null = REVOKE) => ({
     endpoint: BROKER,
-    revokeEndpoint: revokeEndpoint ?? undefined,
+    ...(revokeEndpoint === null ? {} : { revokeEndpoint }),
     distribution: "acmecode",
     identityToken: () => TOKEN,
     fetch,
