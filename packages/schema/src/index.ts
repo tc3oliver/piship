@@ -9,6 +9,7 @@ import {
   type DeploymentMode,
 } from "./access.js";
 import type { GovernanceManifest } from "./governance.js";
+import { assertLaunchable } from "./launch.js";
 import {
   GOVERNANCE_KEYS,
   governanceReferences,
@@ -364,6 +365,7 @@ export function parseManifest(value: unknown): Manifest {
         ...(governance ? governanceReferences(governance) : []),
         ...(lifecycle ? lifecycleReferences(lifecycle) : []),
       ]);
+      assertLaunchable({ mode, access, governance });
     } catch (error) {
       if (error instanceof AccessFieldError)
         throw new ManifestError(error.kind, error.field, error.message);

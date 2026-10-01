@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   launchWarnings,
+  ManifestError,
   PISHIP_SCHEMA_V1ALPHA4,
   parseManifest,
 } from "./index.js";
@@ -47,6 +48,17 @@ function managed(extra: Json = {}): Json {
     ...extra,
   };
 }
+function rejects(input: Json, field: string, message: string) {
+  let error: unknown;
+  try {
+    parseManifest(input);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(ManifestError);
+  expect((error as ManifestError).field).toBe(field);
+  expect((error as ManifestError).message).toContain(message);
+}
 function warnings(input: Json) {
   return launchWarnings(parseManifest(input));
 }
@@ -87,5 +99,83 @@ describe("network.tls.additionalCA paths", () => {
         }),
       ).map((item) => item.path),
     ).toEqual(["network.tls.additionalCA[0]"]);
+  });
+});
+
+describe("HTTP audit sinks under a private-only network policy", () => {
+  const sink = (url: string, required = true): Json => ({
+    audit: {
+      enabled: true,
+      sinks: [{ id: "siem", type: "http", url, required }],
+    },
+  });
+  const personal = (extra: Json): Json => ({
+    ...managed(extra),
+    deployment: { mode: "personal" },
+    identity: { mode: "none" },
+    credential: { provider: "local-secret" },
+    models: { allowed: ["acme/coder"], catalog },
+  });
+  it("rejects a required sink whose host the launch can never contact", () => {
+    rejects(
+      managed(sink("https://siem.acme.example/events")),
+      "audit.sinks[0].url",
+      "siem.acme.example is not in network.allowHosts",
+    );
+    rejects(
+      personal({
+        ...sink("https://siem.acme.example/events"),
+        network: { privateOnly: true },
+      }),
+      "audit.sinks[0].url",
+      "network.allowHosts",
+    );
+  });
+  it("accepts the sink host when it is allowed or is a declared endpoint host", () => {
+    for (const extra of [
+      {
+        ...sink("https://siem.acme.example/events"),
+        network: { allowHosts: ["siem.acme.example"] },
+      },
+      sink("https://gateway.acme.example/audit"),
+      sink("https://siem.acme.example/events", false),
+    ])
+      expect(() => parseManifest(managed(extra))).not.toThrow();
+    // Personal mode is not private-only unless it says so.
+    expect(
+      warnings(personal(sink("https://siem.acme.example/events"))),
+    ).toEqual([]);
+  });
+  it("warns when the host is decided by a runtime variable or the sink is optional", () => {
+    expect(
+      warnings(managed(sink("https://siem.acme.example/events", false))),
+    ).toEqual([
+      expect.objectContaining({
+        path: "audit.sinks[0].url",
+        message: expect.stringContaining("dropped"),
+      }),
+    ]);
+    expect(
+      warnings(
+        managed({
+          variables: ["ACME_SIEM_URL"],
+          ...sink(`\${ACME_SIEM_URL}`),
+        }),
+      ).map((item) => item.path),
+    ).toEqual(["audit.sinks[0].url"]);
+    // A templated endpoint may resolve to the sink's host; not certain.
+    const templated = managed({
+      variables: ["ACME_GATEWAY_URL"],
+      ...sink("https://siem.acme.example/events"),
+    });
+    (templated.inference as Json).baseUrl = `\${ACME_GATEWAY_URL}`;
+    expect(warnings(templated).map((item) => item.path)).toEqual([
+      "audit.sinks[0].url",
+    ]);
+  });
+  it("ignores the sinks of a disabled audit log", () => {
+    const extra = sink("https://siem.acme.example/events");
+    (extra.audit as Json).enabled = false;
+    expect(warnings(managed(extra))).toEqual([]);
   });
 });
