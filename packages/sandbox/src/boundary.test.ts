@@ -682,17 +682,23 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
     it("denies external and host loopback network access", async () => {
       const listener = await listen();
       try {
+        // The sandbox must refuse the connection at once. A timeout is not
+        // accepted: it is what a host without a route to 1.1.1.1, or a
+        // dropped packet that did leave the sandbox, looks like, so it proves
+        // nothing about the sandbox. connect.js exits 2 only on a socket
+        // error, 3 on its 3 s timeout.
         const external = await run(sandbox, `"${node}" connect.js 1.1.1.1 443`);
-        expect(external.output).toMatch(/refused|timeout/);
+        expect(external.output, external.output).toMatch(/^refused E[A-Z]+/m);
         expect(external.output).not.toContain("connected");
-        expect(external.exitCode).not.toBe(0);
+        expect(external.exitCode, external.output).toBe(2);
         const loopback = await run(
           sandbox,
           `"${node}" connect.js 127.0.0.1 ${listener.port}`,
         );
-        expect(loopback.output).toMatch(/refused|timeout/);
+        // The host listener is reachable, so only the sandbox can refuse.
+        expect(loopback.output, loopback.output).toMatch(/^refused E[A-Z]+/m);
         expect(loopback.output).not.toContain("connected");
-        expect(loopback.exitCode).not.toBe(0);
+        expect(loopback.exitCode, loopback.output).toBe(2);
         expect(listener.hits()).toBe(0);
       } finally {
         listener.server.close();
@@ -738,13 +744,26 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       const heartbeat = join(ws, "hb-abort");
       const token = `piship-sbx-abort-${Date.now()}`;
       const controller = new AbortController();
-      setTimeout(() => controller.abort(), 800);
-      await expect(
-        sandbox.exec(`"${node}" tree.js "${heartbeat}" ${token}`, ws, {
-          onData: () => {},
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow("aborted");
+      // Control: abort only once the grandchild is demonstrably alive and
+      // writing, so a stopped heartbeat afterwards proves the abort killed it
+      // rather than that it never started.
+      let beforeAbort = 0;
+      const abortWhenBeating = async () => {
+        for (let waited = 0; waited < 10_000; waited += 50) {
+          if (size(heartbeat) > 0 && running(token)) break;
+          await sleep(50);
+        }
+        beforeAbort = size(heartbeat);
+        controller.abort();
+      };
+      const exec = sandbox.exec(
+        `"${node}" tree.js "${heartbeat}" ${token}`,
+        ws,
+        { onData: () => {}, signal: controller.signal },
+      );
+      void abortWhenBeating();
+      await expect(exec).rejects.toThrow("aborted");
+      expect(beforeAbort).toBeGreaterThan(0);
       expect(await heartbeatStopped(heartbeat)).toBe(true);
       expect(running(token)).toBe(false);
     });
@@ -754,22 +773,33 @@ describe.skipIf(!native)(`native sandbox adapter ${adapter.id}`, () => {
       expect((await run(sandbox, "exit 7")).exitCode).toBe(7);
     });
 
-    it("redacts stderr of a sandboxed governed child", async () => {
+    // spawnManaged hands stderr to the caller unredacted; redaction is the
+    // caller's sanitizeStderr. The child must also demonstrably run inside the
+    // sandbox: it cannot read a denied file the host can read.
+    it("passes a sandboxed governed child's raw stderr to the caller, whose sanitizeStderr redacts it", async () => {
+      let stdout = "";
       let stderr = "";
+      const denied = join(home, ".ssh", "id_ed25519");
+      expect(readFileSync(denied, "utf8")).toBe(SECRET);
       const exit = await spawnManaged({
         file: "/bin/sh",
         args: [
           "-c",
-          'echo "request failed: Authorization: Bearer abcdefgh12345678" >&2; echo "$DOCS_MODE"',
+          `echo "request failed: Authorization: Bearer abcdefgh12345678" >&2; cat "${denied}" 2>/dev/null || echo denied-read`,
         ],
         cwd: ws,
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", DOCS_MODE: "demo" },
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
         sandbox,
+        onStdout: (chunk) => {
+          stdout += chunk.toString("utf8");
+        },
         onStderr: (chunk) => {
           stderr += chunk.toString("utf8");
         },
       }).exited;
       expect(exit.code).toBe(0);
+      expect(stdout).toContain("denied-read");
+      expect(stdout).not.toContain(SECRET);
       expect(stderr).toContain("abcdefgh12345678");
       const clean = sanitizeStderr(stderr, 1024);
       expect(clean).not.toContain("abcdefgh12345678");
