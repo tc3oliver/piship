@@ -90,12 +90,23 @@ function mapError(error: unknown, action: string): PiShipError {
       : ((error as Error)?.message ?? String(error));
   if (error instanceof client.AuthorizationResponseError) {
     const denied = error.error === "access_denied";
+    // These name the request PiShip built from the configuration, not the
+    // person signing in: a wrong client ID, redirect URI, or scope.
+    const registration = [
+      "unauthorized_client",
+      "invalid_client",
+      "invalid_request",
+      "invalid_scope",
+      "unsupported_response_type",
+    ].includes(error.error);
     return new PiShipError(
       "IDENTITY_INVALID",
       `${action}: the identity provider ${denied ? "denied" : "rejected"} the request (${error.error})`,
       {
         component: "identity",
-        userAction: "Run login again or contact your administrator",
+        userAction: registration
+          ? "Ask your administrator to check the configured client ID, its registered redirect URI, and the requested scopes, then run login again"
+          : "Run login again or contact your administrator",
       },
     );
   }

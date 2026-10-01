@@ -325,6 +325,40 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     expect(session.subject).toBe("demo-user-1");
   });
 
+  it.each([
+    "unauthorized_client",
+    "invalid_client",
+    "invalid_scope",
+    "invalid_request",
+  ])(
+    "fails at once when the provider redirects with %s, naming the client registration",
+    async (code) => {
+      const started = Date.now();
+      const error = await provider()
+        .login({
+          openUrl: async (url) => {
+            const authorization = new URL(url);
+            const callback = new URL(
+              authorization.searchParams.get("redirect_uri") ?? "",
+            );
+            callback.searchParams.set("error", code);
+            callback.searchParams.set(
+              "state",
+              authorization.searchParams.get("state") ?? "",
+            );
+            await fetch(callback);
+          },
+        })
+        .catch((caught: unknown) => caught);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(error).toMatchObject({
+        code: "IDENTITY_INVALID",
+        message: expect.stringContaining(`rejected the request (${code})`),
+        userAction: expect.stringContaining("client ID"),
+      });
+    },
+  );
+
   it("reports a denied sign-in, cancellation, and timeout visibly", async () => {
     services.knobs.denyLogin = true;
     await expect(provider().login({ openUrl: approve })).rejects.toMatchObject({

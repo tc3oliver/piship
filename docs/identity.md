@@ -107,7 +107,7 @@ The runtime credential still comes from `credential.provider: http-broker`, with
 | --- | --- |
 | Not signed in, sign-in cancelled or timed out | `IDENTITY_REQUIRED` |
 | The registered redirect port is in use (another `login` still running, say) or cannot be bound | `CONFIG_UNAVAILABLE`, naming the port and how to find what holds it |
-| Denied or rejected authorization, failed ID token or discovery check, revocation failure | `IDENTITY_INVALID` |
+| Denied or rejected authorization, failed ID token or discovery check, revocation failure. A provider error that names the client registration (`unauthorized_client`, `invalid_client`, `invalid_request`, `invalid_scope`, `unsupported_response_type`) says to check the client ID, redirect URI, and scopes | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |
 
 Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`); an OIDC request that times out (30 s) is a retryable `GATEWAY_UNREACHABLE`. A token endpoint answer of 5xx (including an HTML error page from a proxy), `server_error`, or `temporarily_unavailable` is also a retryable `GATEWAY_UNREACHABLE`, and a 429 is a retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After` when it sends one. `invalid_grant` stays `IDENTITY_EXPIRED`. When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.
