@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { systemError } from "@piship/contracts";
 import { parseDocument } from "yaml";
 import { valid as validSemver } from "semver";
 import {
@@ -440,11 +442,14 @@ function flatResources(governance: GovernanceManifest): Manifest["resources"] {
 export function readManifest(path: string): Manifest {
   return parseManifest(readManifestDocument(path));
 }
-/** Read and parse YAML without schema validation (used by migration). */
-export function readManifestDocument(path: string): unknown {
-  let source: string;
+/**
+ * The text of a manifest file. A missing file is a ManifestError; a
+ * directory or another file system failure is a PiShip error that names the
+ * path and what to pass instead.
+ */
+export function readManifestSource(path: string): string {
   try {
-    source = readFileSync(path, "utf8");
+    return readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new ManifestError(
@@ -452,8 +457,20 @@ export function readManifestDocument(path: string): unknown {
         path,
         "Manifest does not exist",
       );
-    throw error;
+    throw (
+      systemError(
+        error,
+        path,
+        (error as NodeJS.ErrnoException).code === "EISDIR"
+          ? `Pass the manifest file, such as ${join(path, "piship.yaml")}`
+          : undefined,
+      ) ?? error
+    );
   }
+}
+/** Read and parse YAML without schema validation (used by migration). */
+export function readManifestDocument(path: string): unknown {
+  const source = readManifestSource(path);
   const document = parseDocument(source, { uniqueKeys: true });
   if (document.errors.length)
     throw new ManifestError(

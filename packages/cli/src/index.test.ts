@@ -408,6 +408,59 @@ describe("help", () => {
   );
 });
 
+describe("file system errors", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-fs-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+  async function run(args: string[]) {
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stderr: stderr.join("\n") };
+  }
+
+  it("names a directory passed as a manifest and the file to pass", async () => {
+    for (const command of ["validate", "migrate"]) {
+      const result = await run([command, temp]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `CONFIG_INVALID: ${temp} is a directory where a file was expected (EISDIR`,
+      );
+      expect(result.stderr).toContain(
+        `Action: Pass the manifest file, such as ${join(temp, "piship.yaml")}`,
+      );
+    }
+  });
+
+  it("names a missing install source and what install accepts", async () => {
+    const missing = join(temp, "missing");
+    const result = await run(["install", missing]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `CONFIG_INVALID: ${missing} does not exist (ENOENT`,
+    );
+    expect(result.stderr).toContain("Action: Pass the artifact directory");
+  });
+
+  it("refuses to overwrite a key with an action instead of EEXIST", async () => {
+    const key = join(temp, "signing.pem");
+    expect((await run(["keygen", key, "--id", "k1"])).status).toBe(0);
+    const before = readFileSync(key, "utf8");
+    const result = await run(["keygen", key, "--id", "k1"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `CONFIG_INVALID: ${key} already exists (EEXIST`,
+    );
+    expect(result.stderr).toContain("Action: keygen never overwrites a key");
+    expect(readFileSync(key, "utf8")).toBe(before);
+  });
+});
+
 describe("config explain from a manifest", () => {
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));

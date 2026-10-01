@@ -13,6 +13,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { systemError } from "@piship/contracts";
 import { sha256File } from "../archive.js";
 import {
   assertDisjointRoots,
@@ -326,7 +327,18 @@ export async function installDistribution(
   useExistingState = false,
 ): Promise<InstallReceipt> {
   const source = resolve(artifact);
-  const isArchive = statSync(source).isFile();
+  let isArchive: boolean;
+  try {
+    isArchive = statSync(source).isFile();
+  } catch (error) {
+    throw (
+      systemError(
+        error,
+        source,
+        "Pass the artifact directory piship build printed, a release directory, or a release .tar.gz archive",
+      ) ?? error
+    );
+  }
   const isRelease = isArchive || existsSync(join(source, "release.json"));
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });

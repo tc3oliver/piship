@@ -85,8 +85,70 @@ export function isPiShipError(value: unknown): value is PiShipError {
   return value instanceof PiShipError;
 }
 
+/** What a file system error means and what to do, by Node error code. */
+const SYSTEM_ERRORS: Readonly<
+  Record<string, (path: string | undefined) => [string, string]>
+> = {
+  ENOENT: (path) => [
+    `${path ?? "A path"} does not exist`,
+    "Check the path, or pass an absolute path",
+  ],
+  EISDIR: (path) => [
+    `${path ?? "A path"} is a directory where a file was expected`,
+    "Pass the file, not the directory that holds it",
+  ],
+  ENOTDIR: (path) => [
+    `${path ?? "A path"} is not a directory, or a part of it is a file`,
+    "Check the path",
+  ],
+  EEXIST: (path) => [
+    `${path ?? "A path"} already exists`,
+    "Choose another path, or move the existing file away first",
+  ],
+  EACCES: (path) => [
+    `Permission denied for ${path ?? "a path"}`,
+    "Check the owner and permissions of the path and its directories",
+  ],
+  EPERM: (path) => [
+    `Operation not permitted on ${path ?? "a path"}`,
+    "Check the owner and permissions of the path and its directories",
+  ],
+};
+
+/**
+ * A PiShip error for a Node file system error (ENOENT, EISDIR, ENOTDIR,
+ * EEXIST, EACCES, EPERM): it names the path, says what to do, and keeps the
+ * system code and call as sanitized detail. `undefined` for anything else.
+ */
+export function systemError(
+  error: unknown,
+  path?: string,
+  userAction?: string,
+): PiShipError | undefined {
+  if (!(error instanceof Error) || error instanceof PiShipError)
+    return undefined;
+  const { code, syscall } = error as NodeJS.ErrnoException;
+  const describe = code ? SYSTEM_ERRORS[code] : undefined;
+  if (!code || !describe) return undefined;
+  const [message, action] = describe(
+    path ?? (error as NodeJS.ErrnoException).path,
+  );
+  return new PiShipError(
+    "CONFIG_INVALID",
+    `${message} (${code}${syscall ? ` from ${syscall}` : ""})`,
+    {
+      userAction: userAction ?? action,
+      component: "filesystem",
+      sanitizedDetail: { code, ...(syscall ? { syscall } : {}) },
+      cause: error,
+    },
+  );
+}
+
 /** Human-readable, single-block, redacted rendering for CLI output. */
 export function formatError(error: unknown): string {
+  const system = systemError(error);
+  if (system) return formatError(system);
   if (error instanceof PiShipError)
     return redact(
       `${error.code}: ${error.message}${error.retryAfterMs !== undefined && error.retryAfterMs > 0 ? `\nRetry after: ${Math.ceil(error.retryAfterMs / 1000)} s` : ""}${error.userAction ? `\nAction: ${error.userAction}` : ""}`,

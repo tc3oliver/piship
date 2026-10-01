@@ -46,8 +46,9 @@ import {
   readManifest,
   ManifestError,
   migrateManifestSource,
+  readManifestSource,
 } from "@piship/schema";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 
 /** Every command with a one-line summary, in help order. */
 const summaries = {
@@ -395,7 +396,7 @@ export async function runCli(
           `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
         );
     } else if (command === "migrate") {
-      const plan = migrateManifestSource(readFileSync(target, "utf8"));
+      const plan = migrateManifestSource(readManifestSource(target));
       if (!plan.changes.length)
         output.stdout(`Already ${plan.to}; nothing to migrate.`);
       else if (rest[0] === "--write") {
