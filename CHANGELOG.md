@@ -27,6 +27,10 @@ Changes on `main` after v0.7.0. Not released. The signed update channel's trust 
 - Every call into distribution-owned adapter code (identity, credential, custom sandbox `available`, `prepare`, `dispose`, and adapter loading) has a deadline and receives an optional `AbortSignal`. A timeout is retryable and names the adapter and the call; a hung credential adapter releases the credential lock (#145).
 - `/resume` is refused when the session inspection itself fails; session owner records from another host or PID namespace are reported as unverifiable instead of live or dead (#158).
 
+### Added
+
+- `testCredentialBroker` and `testAuditCollector` in `@piship/adapter-conformance` send a company's own credential broker or audit collector the requests PiShip sends (a repeated and a reused `Idempotency-Key`, a missing and an invalid bearer, the readiness probe, a resent batch, a conflicting event ID, an unknown property) and report where the answers break the contract. [Enterprise integration](docs/enterprise-integration.md#testing-your-own-broker-and-audit-collector) describes how to test a broker and a collector against PiShip's real client, a build of the company's own distribution, and these kits (#162).
+
 ### Fixed
 
 - The agent's `bash` tool keeps its full output in a session-owned directory that is removed at close, and a full temp filesystem no longer crashes the session; a user's `!` command output files are removed at close and kept within free temp space (#64).

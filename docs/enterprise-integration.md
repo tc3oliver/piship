@@ -520,6 +520,58 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
   4. For revocation, accepts the virtual key as the bearer and calls LiteLLM `POST /key/delete` with `{"keys": ["<that key>"]}`; holding the key is the proof.
 - **Keep the master key in the broker.** Never put it or a shared virtual key in `piship.yaml`, a runtime variable, or the user's environment. Budgets, rate limits, and spend tracking are LiteLLM key settings you choose in step 2.
 
+## Testing your own broker and audit collector
+
+Before employees depend on them, run your own credential broker and audit collector, ideally staging instances, against PiShip itself. Two tests do this, and neither uses PiShip's test fixtures or reference services.
+
+**1. PiShip's real client: your own distribution.** A build of your distribution is the client employees will run, with its real `http-broker` provider, `http` audit sink, managed fetch, proxy, and CA settings. Build it from a copy of your manifest whose endpoints point at staging (runtime variables make this one build; [plain URLs or runtime variables](#plain-urls-or-runtime-variables)), install it under a throwaway install home, and drive it with a test user:
+
+```bash
+node ~/src/piship/packages/cli/dist/bin.js build ./piship.yaml
+node dist/<id>/piship.mjs install dist/<id>
+<command> login           # acquire: Authorization, Idempotency-Key, the response contract
+<command> doctor          # identity, credential, gateway, sandbox, and audit sink state
+<command> --smoke         # a gateway request with the credential; a required audit sink is probed and receives the session's events
+<command> models          # the entitlement (`models`) narrows the catalog
+<command> logout          # revoke: the runtime credential as the bearer
+```
+
+Then check your side: the broker logged one issuance per `Idempotency-Key` and the revocation of the same `credential_id`; the collector stored the `identity.login`, `credential.acquire`, `session.start`, `session.end`, and `credential.revoke` events, each once, with `user` in the `<issuer>#<subject>` form. Every PiShip failure names its code, and [troubleshooting](troubleshooting.md) says what to do.
+
+**2. The contract edges: the service kits.** A real client exercises the normal path; it does not, on demand, send a request again with a used `Idempotency-Key`, resend a batch, or present an invalid token. `@piship/adapter-conformance` has two kits for that, the other direction from its [adapter kits](adapter-sdk.md#credential-conformance-kit): they send your service the requests PiShip sends and hold its answers to this contract. They import only `@piship/adapter-sdk` and Node built-ins.
+
+| Kit | Checks |
+| --- | --- |
+| `testCredentialBroker` | `acquire` (2xx and the [response fields](#acquire-and-renew); a redirect fails), `idempotent replay` (the same request with the same key returns the same credential and `credential_id`), `key reuse` (a different request with a used key answers 422 or 409 `idempotency_key_reused`, never a credential; a broker that refuses the changed request first is reported `skipped`), `authentication` (no bearer and an invalid bearer answer 401), and `revoke` (2xx, 401, or 404 for each credential the kit obtained; `skipped` without `revokeEndpoint`) |
+| `testAuditCollector` | `readiness probe` (the empty batch answers 2xx), `batch`, `duplicate batch` (a resent batch answers 2xx and is stored once), `conflicting id` (an ID resent with other content answers 2xx and both are kept), and `unknown property` (an optional property the collector does not know answers 2xx). With `stored`, the kit also reads back what the collector kept |
+
+The package is private and unpublished: run the kits from a checkout of PiShip, in a test file inside the workspace, as for the adapter kits. The identity token is a live credential of a test user: give it to the test from your secret manager or an environment variable, never on a command line or in a file in the repository, and never print it. The kits never put a credential or token in a report.
+
+```ts
+import { testAuditCollector, testCredentialBroker } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+
+it("our staging broker follows the http-broker contract", async () => {
+  const report = await testCredentialBroker({
+    endpoint: "https://broker.staging.acme.example/v1/llm-credential",
+    revokeEndpoint: "https://broker.staging.acme.example/v1/revoke",
+    distribution: "acmecode",
+    identityToken: () => process.env.ACME_TEST_USER_TOKEN ?? "",
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+
+it("our staging collector follows piship-audit-batch/v1", async () => {
+  const report = await testAuditCollector({
+    url: "https://audit.staging.acme.example/v1/batches",
+    distribution: "acmecode",
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+```
+
+The broker kit obtains up to two credentials for the test user and revokes them at the end when `revokeEndpoint` is given; otherwise they stay valid until they expire. The collector kit stores test events with the user `piship-conformance` and `detail.conformance: true`, so run it against staging or filter them out. The broker kit passes against the [reference broker](../examples/enterprise-reference/broker/README.md) (`examples/enterprise-reference/broker/test/conformance-kit.test.mjs`). A pass means these requests got conforming answers; it does not show that the broker validates tokens correctly for every issuer, scopes keys per principal (that needs a second test user), or keeps keys for 24 hours across a restart ([what a broker must do](#what-a-broker-must-do)).
+
 ## Reference implementation
 
 [`examples/demo-company/fixtures/local-services.mjs`](../examples/demo-company/fixtures/local-services.mjs) implements this whole contract on loopback: discovery, PKCE, JWKS, token and revocation endpoints; `POST /broker/v1/llm-credential` and `/broker/v1/revoke`; and `GET /gateway/v1/models` and streaming `POST /gateway/v1/chat/completions`. Use it to see exact request and response shapes. It auto-approves every sign-in and is test infrastructure, not evidence of a live integration. For the same contract against real components, the [enterprise reference stack](../examples/enterprise-reference/README.md) runs Keycloak, a [reference broker](../examples/enterprise-reference/broker/README.md) (which shows what a production broker still needs, such as idempotency records that survive a restart), and LiteLLM in Docker Compose. The [demo company example](../examples/demo-company/README.md#authorized-live-path) shows the variables to set for a real deployment.
