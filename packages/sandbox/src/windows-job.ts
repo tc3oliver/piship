@@ -164,30 +164,62 @@ ${SOURCE}
   exit 127
 }`;
 
-export function windowsJobCommand(target: {
-  readonly file: string;
-  readonly args: readonly string[];
-  readonly cwd: string;
-  readonly env: Readonly<Record<string, string>>;
-}): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
+/**
+ * The Windows directory from `SystemRoot` (or `WINDIR`), only when it is an
+ * absolute drive path. Anything else fails closed: a bare `powershell.exe`
+ * would be looked up in the workspace before `PATH`.
+ */
+function systemRoot(host: NodeJS.ProcessEnv): string {
+  const value = host.SystemRoot || host.WINDIR;
+  if (!value || !/^[A-Za-z]:[\\/]/.test(value) || value.includes(".."))
+    throw new Error(
+      "Windows Job Object supervisor needs an absolute SystemRoot or WINDIR",
+    );
+  return value.replace(/[\\/]+$/, "");
+}
+
+export function windowsJobCommand(
+  target: {
+    readonly file: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly env: Readonly<Record<string, string>>;
+  },
+  host: NodeJS.ProcessEnv = process.env,
+): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
+  const root = systemRoot(host);
   // Windows needs SystemRoot to resolve side-by-side runtime assemblies when
   // CreateProcess receives an explicit environment block. Keep the rest of
   // the child's environment restricted to the caller-approved values.
   const childEnv = { ...target.env };
   for (const name of ["SystemRoot", "WINDIR"] as const)
-    if (!(name in childEnv) && process.env[name])
-      childEnv[name] = process.env[name];
+    if (!(name in childEnv) && host[name]) childEnv[name] = host[name];
   const request = Buffer.from(
     JSON.stringify({ ...target, env: childEnv }),
   ).toString("base64");
+  // The supervisor runs outside the Job Object, so it gets only what
+  // PowerShell and Add-Type need, never the launcher's environment. Its PATH
+  // is the child's approved one: CreateProcess resolves a bare child file
+  // name through the supervisor's PATH.
+  const env: NodeJS.ProcessEnv = {
+    SystemRoot: root,
+    WINDIR: root,
+    PISHIP_JOB_REQUEST: request,
+  };
+  for (const name of ["TEMP", "TMP"] as const)
+    if (host[name]) env[name] = host[name];
+  const path = Object.keys(childEnv).find(
+    (name) => name.toUpperCase() === "PATH",
+  );
+  if (path !== undefined) env.PATH = childEnv[path];
   return {
-    file: "powershell.exe",
+    file: `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
     args: [
       "-NoProfile",
       "-NonInteractive",
       "-EncodedCommand",
       Buffer.from(SCRIPT, "utf16le").toString("base64"),
     ],
-    env: { ...process.env, PISHIP_JOB_REQUEST: request },
+    env,
   };
 }
