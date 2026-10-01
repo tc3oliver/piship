@@ -513,6 +513,9 @@ describe("McpGovernor over stdio", () => {
             "--exit",
             "3",
           ],
+          // The exit must win: a loaded Windows runner can take longer than
+          // the default startup deadline to start node and write stderr.
+          startupTimeoutMs: 30_000,
         }),
       ],
     });
@@ -522,7 +525,7 @@ describe("McpGovernor over stdio", () => {
     expect(report?.reason).toContain("stderr");
     expect((report?.reason ?? "").length).toBeLessThanOrEqual(1203);
     expect(JSON.stringify(governor.health())).not.toContain(token);
-  });
+  }, 40_000);
 
   it("keeps the secret out of a short stderr tail", async () => {
     const token = "sk-live-abcdefghijklmnop";

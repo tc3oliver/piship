@@ -2,7 +2,7 @@
 
 This page covers the key that signs a distribution's update channel: where it comes from, how clients pin it, how it is rotated, revoked, and recovered, and how a channel is hosted. It is part of the [release guide](../release.md). The signing commands are in the [owner workflow](owner-workflow.md#signing-a-channel), and what a client checks when it reads a channel is in the [update lifecycle](update-lifecycle.md#channels-and-signed-metadata).
 
-Each section separates what PiShip does today from what the distribution owner has to do, and lists the gaps. The gaps are collected under [Gaps and follow-ups](#gaps-and-follow-ups). The [examples decision](#examples) is a recommendation that the maintainer has to confirm.
+Each section separates what PiShip does today from what the distribution owner has to do, and lists the gaps. The gaps are collected under [Gaps and follow-ups](#gaps-and-follow-ups). The [examples decision](#examples) is settled: the project operates no official channel, and key custody belongs to each distribution owner.
 
 ## Model in one paragraph
 
@@ -46,7 +46,7 @@ Each distribution has its own trust root. The owner generates Ed25519 release ke
 
 If an owner later signs from CI, keep the key in a protected deployment environment secret that only the signing job reads. Never echo the key or pass it as a command argument: `sign-channel --key` takes a file path, so write the secret to a 0600 file and delete it after the job. Never upload the channel directory's parent as an artifact if the key file sits there. That setup is the owner's decision and is outside PiShip.
 
-**Custody.** One named person or role holds each key and is the only one allowed to sign. For the PiShip project itself, generating and holding any official key is a maintainer action; no agent or automation generates or pins a production key.
+**Custody.** Key custody belongs to the distribution owner: one named person or role in the owner's organization holds each key and is the only one allowed to sign. The PiShip project holds no release key for any distribution, and no agent or automation generates or pins a production key.
 
 **Two keys from the start (recommended).** Pin a primary key and a backup key from the first release. Store the backup separately, offline, and never use it for routine signing. Today this is the only way a client can recover from a lost or compromised key without a reinstall (see below). It needs no new code, because `updates.trust.keys` already accepts several keys.
 
@@ -165,7 +165,7 @@ An installed client never consults GitHub, attestations, or checksum files when 
 
 ## Examples
 
-**Recommendation (maintainer to confirm):** the example distributions (`examples/demo-company`, `examples/personal`, `examples/enterprise-*`) only **demonstrate a distribution owner's own channel**. The PiShip project does not operate an official update channel for them and does not pin a project key in them.
+**Decision (#167):** the example distributions (`examples/demo-company`, `examples/personal`, `examples/enterprise-*`) only **demonstrate a distribution owner's own channel**. The PiShip project does not operate an official update channel for them and does not pin a project key in them.
 
 Reasons, from the current code and repository:
 
@@ -174,7 +174,7 @@ Reasons, from the current code and repository:
 - An official channel would make the project the update publisher for distributions whose IDs and commands (`acmecode`, `mypi`) are fictional. It would also require key custody, hosting, and re-signing every 30 days, for no user who needs it.
 - A throwaway "production" key committed only to make a demo look complete would be a key whose custody nobody owns. It must not be added.
 
-If the maintainer later decides to operate an official channel, key generation, custody, and the first pin are maintainer actions, and this page and the example manifests change in that same decision.
+Operating an official channel would be a new decision; key generation, custody, and the first pin would then be maintainer actions, and this page and the example manifests would change in that same decision.
 
 ## Test coverage
 
@@ -192,10 +192,10 @@ The `channel-trust.test.ts` cases build no release and run on every target in th
 
 ## Gaps and follow-ups
 
-None of these weakens the current guarantees. Each one is a separate change that needs maintainer review:
+None of these weakens the current guarantees, and none blocks production validation. Items 1 to 4 are deferred to [#181](https://github.com/tc3oliver/piship/issues/181); each is a separate change that needs maintainer review:
 
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
 2. **Revocation before activation.** Retired keys are recorded per installation, only once it activates the release that drops a key. A client that never activated that release still trusts the key, as in [Compromised-key recovery](#compromised-key-recovery). Refusing a key earlier needs a revocation list the client can authenticate.
 3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
 4. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
-5. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).
+5. **Official channel.** Not planned; see [Examples](#examples).
