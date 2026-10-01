@@ -91,6 +91,8 @@ interface Session {
   readonly state: string;
   run(args: string[], extra?: NodeJS.ProcessEnv, cwd?: string): Promise<Result>;
   login(): Promise<Result>;
+  /** `login`, approved in the fixture browser, then Ctrl-C. */
+  loginInterrupted(): Promise<Result>;
   /** One scripted model turn with `steps` as the agent's tool calls. */
   script(
     steps: { name: string; arguments: Record<string, unknown> }[],
@@ -298,6 +300,14 @@ function build(services: Services, auditUrl: string): Fixture {
           expect(done.status, done.stderr).toBe(0);
           return done;
         },
+        loginInterrupted: () =>
+          branded(command, ["login"], {
+            cwd: project,
+            env: { ...baseEnv, PISHIP_STATE_HOME: state, ...extra },
+            approve: (url) => services.approve(url),
+            interruptAfterApprove: true,
+            timeoutMs: 60_000,
+          }),
         async script(steps, cwd = project, more = {}) {
           services.knobs.gatewayMode = "script";
           services.knobs.toolScript = steps;
@@ -391,11 +401,8 @@ describe("identity: an invalid sign-in is refused and stores nothing (cases 1-3)
       "replayed-nonce",
       "IDENTITY_INVALID",
     ],
-    // A callback with another state is not here: the loopback listener
-    // refuses it and the login keeps waiting for the genuine callback (#149),
-    // so at the launcher it ends only with the 5-minute timeout or Ctrl-C.
-    // oidc-invalid.test.ts proves, through DistributionAccess, that it is
-    // refused, its code never exchanged, and nothing stored or revoked.
+    // A callback with another state is its own case below: the listener
+    // refuses it and the login keeps waiting, so the case ends it with Ctrl-C.
     [
       "an ID token signed with an unpublished key",
       "signWithRogueKey",
@@ -427,6 +434,52 @@ describe("identity: an invalid sign-in is refused and stores nothing (cases 1-3)
       expect(existsSync(secrets) ? readdirSync(secrets) : []).toEqual([]);
       // The next launch is still signed out, and the ambient key is not used.
       services.knobs[knob as string] = defaults[knob as string];
+      const launch = await session.run(["--smoke"]);
+      expect(launch.status).toBe(1);
+      expect(launch.stderr).toMatch(/IDENTITY_REQUIRED/);
+      expectAmbientKeyUnused(services);
+    },
+  );
+
+  // Ctrl-C cannot be delivered to a Windows child; the refusal itself is
+  // covered there by tests/security/oidc-invalid.test.ts.
+  it.skipIf(windows)(
+    "refuses a callback with another state, keeps waiting, and stores nothing when cancelled",
+    async () => {
+      const { services } = fixture;
+      const session = fixture.session();
+      services.knobs.stateOverride = "attacker-state";
+      const before = (services.state.requests as { path: string }[]).length;
+      const refused = await session.loginInterrupted();
+      // The listener answered the forged callback with 400 and went on
+      // waiting until Ctrl-C, which ends the login as a cancelled sign-in
+      // that names the refusal.
+      expect(refused.approval).toBe(400);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("IDENTITY_REQUIRED");
+      expect(refused.stderr).toMatch(
+        /cancelled; refused 1 callback without this sign-in's state/,
+      );
+      expect(refused.stderr).not.toMatch(/demo-(at|rt|code)-/);
+      // The forged callback's code was never exchanged.
+      expect(
+        (services.state.requests as { path: string }[])
+          .slice(before)
+          .filter((request) => request.path === "/idp/token"),
+      ).toEqual([]);
+      expect(brokerCalls(services)).toEqual([]);
+      expect(gatewayCalls(services)).toEqual([]);
+      expect(existsSync(join(session.state, "identity", "session.json"))).toBe(
+        false,
+      );
+      expect(
+        existsSync(
+          join(session.state, "credentials-metadata", "inference.json"),
+        ),
+      ).toBe(false);
+      const secrets = join(session.state, "secrets");
+      expect(existsSync(secrets) ? readdirSync(secrets) : []).toEqual([]);
+      services.knobs.stateOverride = defaults.stateOverride;
       const launch = await session.run(["--smoke"]);
       expect(launch.status).toBe(1);
       expect(launch.stderr).toMatch(/IDENTITY_REQUIRED/);
