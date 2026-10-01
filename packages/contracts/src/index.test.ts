@@ -278,7 +278,7 @@ describe("network policy", () => {
       inheritProxyEnvironment: false,
     });
     await expect(noCa(url)).rejects.toMatchObject({
-      code: "GATEWAY_UNREACHABLE",
+      code: "TLS_POLICY_VIOLATION",
     });
     const withCa = createManagedFetch({
       ...DEFAULT_NETWORK_POLICY,

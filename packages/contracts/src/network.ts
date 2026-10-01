@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import tls from "node:tls";
 import {
   Agent,
+  Client,
   type Dispatcher,
   EnvHttpProxyAgent,
   Pool,
@@ -188,33 +189,153 @@ export function createDispatcher(
   policy: NetworkPolicy,
   options: DispatcherOptions = {},
 ): Dispatcher {
+  return buildDispatcher(policy, options).dispatcher;
+}
+
+/** The proxy hop a transport failure happened on, keyed by the error object. */
+interface ProxyHop {
+  /** The proxy as `scheme://host:port`, never with credentials. */
+  readonly proxy: string;
+  /** The proxy's answer to CONNECT, when it was not 200. */
+  readonly status?: number;
+}
+const proxyHops = new WeakMap<object, ProxyHop>();
+
+function markProxyHop(error: unknown, hop: ProxyHop): void {
+  if (error && typeof error === "object" && !proxyHops.has(error))
+    proxyHops.set(error, hop);
+}
+
+/** A proxy URL as it may be shown: scheme, host and port, never credentials. */
+function shownProxy(value: string | URL): string {
+  try {
+    const url = new URL(value.toString());
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "(unparseable proxy URL)";
+  }
+}
+
+type Connector = (
+  options: object,
+  callback: (error: Error | null, socket: unknown) => void,
+) => void;
+
+interface BuiltDispatcher {
+  readonly dispatcher: Dispatcher;
+  /** The proxy still opening a CONNECT tunnel to `host:port`, if any. */
+  readonly pendingTunnel: (hostPort: string) => string | undefined;
+}
+
+function buildDispatcher(
+  policy: NetworkPolicy,
+  options: DispatcherOptions,
+): BuiltDispatcher {
   const ca = trustRoots(loadCertificates(policy.additionalCA));
   const connect = ca
     ? { ca, rejectUnauthorized: true }
     : { rejectUnauthorized: true };
+  const keepAlive = options.keepAlive !== false;
+  // The proxies undici's EnvHttpProxyAgent reads, read at the same moment.
+  const proxies = policy.inheritProxyEnvironment
+    ? [
+        process.env.http_proxy ?? process.env.HTTP_PROXY,
+        process.env.https_proxy ?? process.env.HTTPS_PROXY,
+      ].flatMap((value) => {
+        try {
+          return value ? [new URL(value)] : [];
+        } catch {
+          return [];
+        }
+      })
+    : [];
+  const proxyAt = (origin: string | URL): string | undefined => {
+    try {
+      const url = new URL(origin.toString());
+      const proxy = proxies.find(
+        (candidate) =>
+          candidate.protocol === url.protocol && candidate.host === url.host,
+      );
+      return proxy && shownProxy(proxy);
+    } catch {
+      return undefined;
+    }
+  };
+  // A connection opened to the proxy itself: its failure is the proxy's,
+  // whatever the system code.
+  const toProxy =
+    (connector: Connector, proxy: string): Connector =>
+    (opts, callback) =>
+      connector(opts, (error, socket) => {
+        if (error) markProxyHop(error, { proxy });
+        callback(error, socket);
+      });
   // `pipelining: 0` disables keep-alive for HTTP/1.1; HTTP/2, which undici
   // negotiates by default over TLS, keeps one session per origin and ignores
   // `pipelining`, so it is turned off too. The factory carries both to every
   // pool the agents create, including a proxy agent's pool to the proxy,
-  // which does not receive the agent's own options.
+  // which does not receive the agent's own options. A plain-HTTP request to
+  // a forward proxy is sent on such a pool, whose origin is the proxy.
   const timeouts =
     options.inactivityTimeouts === false
       ? { headersTimeout: 0, bodyTimeout: 0 }
       : {};
-  const pooling =
-    options.keepAlive === false
-      ? {
-          pipelining: 0,
-          allowH2: false,
-          factory: (origin: string | URL, opts: object) =>
-            new Pool(origin, {
-              ...opts,
-              pipelining: 0,
-              allowH2: false,
-              ...timeouts,
-            }),
+  const factory = (origin: string | URL, opts: object): Dispatcher => {
+    const proxy = proxyAt(origin);
+    const given = (opts as { connect?: unknown }).connect;
+    const settings = {
+      ...opts,
+      ...(proxy && typeof given === "function"
+        ? { connect: toProxy(given as Connector, proxy) }
+        : {}),
+      ...(keepAlive ? {} : { pipelining: 0, allowH2: false }),
+      ...timeouts,
+    } as Pool.Options;
+    return keepAlive && (opts as { connections?: unknown }).connections === 1
+      ? new Client(origin, settings)
+      : new Pool(origin, settings);
+  };
+  // The proxy agent's client to the proxy, which opens CONNECT tunnels. Its
+  // failures and a CONNECT answer other than 200 are the proxy's, and a
+  // tunnel still opening when a deadline expires was never answered.
+  const tunnels = new Map<string, { proxy: string; count: number }>();
+  const clientFactory = (origin: URL, opts: object): Dispatcher => {
+    const proxy = shownProxy(origin);
+    const pool = new Pool(origin, { ...(opts as Pool.Options), ...timeouts });
+    const open = pool.connect.bind(pool) as unknown as (
+      params: Dispatcher.ConnectOptions,
+    ) => Promise<Dispatcher.ConnectData>;
+    const tunnel = async (
+      params: Dispatcher.ConnectOptions,
+    ): Promise<Dispatcher.ConnectData> => {
+      const key = String(params.path);
+      const pending = tunnels.get(key) ?? { proxy, count: 0 };
+      pending.count += 1;
+      tunnels.set(key, pending);
+      try {
+        const data = await open(params);
+        if (data.statusCode !== 200) {
+          data.socket.on("error", () => {}).destroy();
+          const refused = Object.assign(
+            new Error(`proxy answered CONNECT with HTTP ${data.statusCode}`),
+            { code: "PISHIP_PROXY_STATUS" },
+          );
+          markProxyHop(refused, { proxy, status: data.statusCode });
+          throw refused;
         }
-      : {};
+        return data;
+      } catch (error) {
+        markProxyHop(error, { proxy });
+        throw error;
+      } finally {
+        pending.count -= 1;
+        if (pending.count === 0) tunnels.delete(key);
+      }
+    };
+    Object.assign(pool, { connect: tunnel });
+    return pool;
+  };
+  const pooling = keepAlive ? {} : { pipelining: 0, allowH2: false };
   const base = policy.inheritProxyEnvironment
     ? new EnvHttpProxyAgent({
         connect,
@@ -225,20 +346,183 @@ export function createDispatcher(
         proxyTls: connect,
         ...pooling,
         ...timeouts,
+        factory,
+        clientFactory,
       })
-    : new Agent({ connect, ...pooling, ...timeouts });
-  if (!policy.privateOnly) return base;
+    : new Agent({ connect, ...pooling, ...timeouts, factory });
+  const pendingTunnel = (hostPort: string) => tunnels.get(hostPort)?.proxy;
+  if (!policy.privateOnly) return { dispatcher: base, pendingTunnel };
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
   // fetch calls. Raw sockets and child processes are not covered.
-  return base.compose((dispatch) => (options, handler) => {
-    const origin =
-      typeof options.origin === "string"
-        ? options.origin
-        : options.origin?.toString();
-    if (origin) checkDestination(new URL(origin), policy, "network");
-    return dispatch(options, handler);
-  });
+  return {
+    dispatcher: base.compose((dispatch) => (options, handler) => {
+      const origin =
+        typeof options.origin === "string"
+          ? options.origin
+          : options.origin?.toString();
+      if (origin) checkDestination(new URL(origin), policy, "network");
+      return dispatch(options, handler);
+    }),
+    pendingTunnel,
+  };
+}
+
+/** TLS verification codes that mean the chain does not lead to a trusted root. */
+const UNTRUSTED_CHAIN_CODES = new Set([
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_UNTRUSTED",
+  "CERT_REJECTED",
+  "INVALID_CA",
+  "CERT_CHAIN_TOO_LONG",
+]);
+const EXPIRED_CERT_CODES = new Set(["CERT_HAS_EXPIRED", "CERT_NOT_YET_VALID"]);
+const NAME_MISMATCH_CODE = "ERR_TLS_CERT_ALTNAME_INVALID";
+const SYSTEM_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+/**
+ * undici's error for a 407 from a forward proxy (a plain-HTTP request sent to
+ * the proxy, not a CONNECT tunnel). It carries no status field, so its fixed
+ * text at the pinned undici version is compared whole, never searched.
+ */
+const FORWARD_PROXY_407 = "Proxy Authentication Required (407)";
+
+const PROXY_ACTION = (proxy: string) =>
+  `Check that the proxy ${proxy} is running and reachable from this machine, and that HTTPS_PROXY and HTTP_PROXY name it correctly; list hosts that must bypass it in NO_PROXY`;
+
+/**
+ * Classify a transport failure of a managed request by the hop it happened
+ * on, from structured fields only (system and TLS error codes, the proxy's
+ * CONNECT status, which connection failed): the proxy, the TLS chain of the
+ * host, or the target. Never an error message: undici puts an invalid header
+ * value, such as a bearer token, into its message.
+ */
+function transportFailure(
+  error: unknown,
+  target: URL,
+  component: string,
+): PiShipError {
+  let hop: ProxyHop | undefined;
+  let code: string | undefined;
+  let tlsCode: string | undefined;
+  let forward407 = false;
+  for (
+    let current: unknown = error, depth = 0;
+    current && typeof current === "object" && depth < 8;
+    current = (current as { cause?: unknown }).cause, depth += 1
+  ) {
+    hop ??= proxyHops.get(current);
+    const value = (current as { code?: unknown }).code;
+    if (typeof value === "string" && SYSTEM_CODE.test(value)) {
+      if (
+        UNTRUSTED_CHAIN_CODES.has(value) ||
+        EXPIRED_CERT_CODES.has(value) ||
+        value === NAME_MISMATCH_CODE
+      )
+        tlsCode ??= value;
+      // The innermost code is the most specific one.
+      code = value;
+    }
+    if (
+      value === "UND_ERR_INVALID_ARG" &&
+      (current as Error).message === FORWARD_PROXY_407
+    )
+      forward407 = true;
+  }
+  if (forward407) {
+    const proxy = shownProxy(
+      process.env.http_proxy ?? process.env.HTTP_PROXY ?? "",
+    );
+    hop = { proxy, status: 407 };
+  }
+  const host = target.host;
+  if (hop?.status !== undefined) {
+    const { proxy, status } = hop;
+    const detail = { hop: "proxy", proxy, status };
+    if (status === 407)
+      return new PiShipError(
+        "NETWORK_DENIED",
+        `${component} request to ${host} was refused by the proxy ${proxy}: it requires authentication (HTTP 407)`,
+        {
+          component,
+          sanitizedDetail: detail,
+          userAction: `Check the proxy credentials: put them in HTTPS_PROXY or HTTP_PROXY as http://user:password@host:port for ${proxy}, or ask the proxy administrator how this machine authenticates`,
+        },
+      );
+    if (status === 403)
+      return new PiShipError(
+        "NETWORK_DENIED",
+        `${component} request to ${host} was refused by the proxy ${proxy} (HTTP 403)`,
+        {
+          component,
+          sanitizedDetail: detail,
+          userAction: `Ask the proxy administrator to allow ${target.hostname}, or list it in NO_PROXY if it must not use the proxy`,
+        },
+      );
+    return new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `${component} request to ${host} failed: the proxy ${proxy} could not open a tunnel (HTTP ${status})`,
+      {
+        retryable: true,
+        component,
+        sanitizedDetail: detail,
+        userAction: `Check that ${target.hostname} is reachable from the proxy ${proxy}, or list it in NO_PROXY if it must not use the proxy`,
+      },
+    );
+  }
+  if (tlsCode) {
+    // The TLS chain of the proxy itself (an HTTPS proxy) or of the target.
+    const subject = hop ? `the proxy ${hop.proxy}` : host;
+    const name = hop ? hop.proxy : target.hostname;
+    const detail = {
+      hop: hop ? "proxy" : "target",
+      ...(hop ? { proxy: hop.proxy } : {}),
+      tls: tlsCode,
+    };
+    const [what, action] = EXPIRED_CERT_CODES.has(tlsCode)
+      ? [
+          "its certificate has expired or is not yet valid",
+          `Check this machine's clock; if it is right, ask the administrator of ${name} to renew its certificate`,
+        ]
+      : tlsCode === NAME_MISMATCH_CODE
+        ? [
+            "its certificate does not name this host",
+            `Use the host name on ${name}'s certificate in the endpoint URL, or ask its administrator for a certificate that names it`,
+          ]
+        : [
+            "its certificate chain is not trusted",
+            `If ${name} uses an enterprise or private CA, or a TLS-inspecting proxy re-signs its traffic, declare that CA's PEM bundle in network.tls.additionalCA (a \${NAME} reference must be quoted: additionalCA: ["\${CORP_CA_BUNDLE}"]); never turn TLS verification off`,
+          ];
+    return new PiShipError(
+      "TLS_POLICY_VIOLATION",
+      `${component} request to ${host} failed TLS verification of ${subject}: ${what} (${tlsCode})`,
+      { component, sanitizedDetail: detail, userAction: action },
+    );
+  }
+  const shownCode = code ?? "network error";
+  if (hop)
+    return new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `${component} request to ${host} failed at the proxy ${hop.proxy}: ${shownCode}`,
+      {
+        retryable: true,
+        component,
+        sanitizedDetail: {
+          hop: "proxy",
+          proxy: hop.proxy,
+          ...(code ? { transport: code } : {}),
+        },
+        userAction: PROXY_ACTION(hop.proxy),
+      },
+    );
+  return new PiShipError(
+    "GATEWAY_UNREACHABLE",
+    `${component} request to ${host} failed: ${shownCode}`,
+    { retryable: true, component },
+  );
 }
 
 /** Validate a destination against transport and private-only policy. */
@@ -294,12 +578,14 @@ export function createManagedFetch(
   // and is never retried. Managed requests (identity, broker, gateway probes,
   // the audit sinks and update downloads) are few and small, so each opens its
   // own connection.
-  const dispatcher = createDispatcher(policy, { keepAlive: false });
+  const { dispatcher, pendingTunnel } = buildDispatcher(policy, {
+    keepAlive: false,
+  });
   // A long-running request has a dispatcher of its own, without undici's
   // header and body timeouts, created on first use.
-  let untimed: Dispatcher | undefined;
+  let untimed: BuiltDispatcher | undefined;
   const longRunningDispatcher = () => {
-    untimed ??= createDispatcher(policy, {
+    untimed ??= buildDispatcher(policy, {
       keepAlive: false,
       inactivityTimeouts: false,
     });
@@ -313,23 +599,37 @@ export function createManagedFetch(
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),
         redirect: "manual",
-        dispatcher: longRunning ? longRunningDispatcher() : dispatcher,
+        dispatcher: longRunning
+          ? longRunningDispatcher().dispatcher
+          : dispatcher,
       } as Parameters<typeof undiciFetch>[1]);
       return response as unknown as Response;
     } catch (error) {
       if (error instanceof PiShipError) throw error;
+      const name = (error as Error)?.name;
+      // A deadline that expired while the proxy was still opening the tunnel
+      // is the proxy's: the request never reached the target.
+      if (name === "TimeoutError") {
+        const proxy = (
+          longRunning ? longRunningDispatcher() : { pendingTunnel }
+        ).pendingTunnel(
+          `${target.hostname}:${target.port || (target.protocol === "https:" ? "443" : "80")}`,
+        );
+        if (proxy)
+          throw new PiShipError(
+            "GATEWAY_UNREACHABLE",
+            `${component} request to ${target.host} failed: the proxy ${proxy} did not open a tunnel in time`,
+            {
+              retryable: true,
+              component,
+              sanitizedDetail: { hop: "proxy", proxy, transport: "timeout" },
+              userAction: PROXY_ACTION(proxy),
+            },
+          );
+      }
       // Caller cancellations and deadlines stay recognizable to the caller.
-      if (["AbortError", "TimeoutError"].includes((error as Error)?.name))
-        throw error;
-      const cause = (error as { cause?: { code?: string; message?: string } })
-        ?.cause;
-      // Only a system error code, never a message: undici puts an invalid
-      // header value, such as a bearer token, into its message.
-      throw new PiShipError(
-        "GATEWAY_UNREACHABLE",
-        `${component} request to ${target.host} failed: ${typeof cause?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(cause.code) ? cause.code : "network error"}`,
-        { retryable: true, component },
-      );
+      if (name === "AbortError" || name === "TimeoutError") throw error;
+      throw transportFailure(error, target, component);
     }
   };
 }

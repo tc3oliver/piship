@@ -221,7 +221,7 @@ describe("TLS is never downgraded or disabled", () => {
       createManagedFetch({ ...direct, additionalCA: [wrong] })(
         `https://127.0.0.1:${port}/`,
       ),
-    ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE" });
+    ).rejects.toMatchObject({ code: "TLS_POLICY_VIOLATION" });
     expect(served).toBe(0);
     const right = join(directory, "server-ca.pem");
     writeFileSync(right, server.certificate);

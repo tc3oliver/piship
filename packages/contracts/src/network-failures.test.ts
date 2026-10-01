@@ -1,4 +1,6 @@
-// Managed requests through a proxy.
+// Transport failures name the hop that failed (the proxy, the target's TLS
+// chain, or the target) and carry an action, read from structured error
+// fields only. Proxy credentials never appear in what is reported.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
@@ -11,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../../../tests/helpers/x509.js";
+import { formatError, PiShipError } from "./errors.js";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
@@ -43,6 +46,18 @@ function listen(server: Server): Promise<number> {
         }),
     );
   });
+}
+
+/** A loopback port nothing listens on. */
+async function deadPort(): Promise<number> {
+  const server = createHttpServer();
+  const port = await new Promise<number>((done) =>
+    server.listen(0, "127.0.0.1", () =>
+      done((server.address() as AddressInfo).port),
+    ),
+  );
+  await new Promise<void>((closed) => server.close(() => closed()));
+  return port;
 }
 
 function withProxyEnvironment(values: Record<string, string>): void {
@@ -126,9 +141,195 @@ function bundle(pem: string): string {
   return path;
 }
 
-const inherited: NetworkPolicy = DEFAULT_NETWORK_POLICY;
+async function failure(promise: Promise<unknown>): Promise<PiShipError> {
+  const error = await promise.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(PiShipError);
+  return error as PiShipError;
+}
 
-describe("TLS through a proxy", () => {
+/** Everything a user or a log could see of an error. */
+function shown(error: PiShipError): string {
+  return `${formatError(error)}\n${JSON.stringify(error)}`;
+}
+
+const inherited: NetworkPolicy = DEFAULT_NETWORK_POLICY;
+const PROXY_PASSWORD = "pr0xy-hunter2-pass";
+
+describe("a proxy failure names the proxy, not the target", () => {
+  it("dead proxy: ECONNREFUSED at the proxy, with an action, and no proxy credential", async () => {
+    const target = await tlsTarget();
+    const port = await deadPort();
+    withProxyEnvironment({
+      HTTPS_PROXY: `http://corp-user:${PROXY_PASSWORD}@127.0.0.1:${port}`,
+    });
+    const error = await failure(
+      createManagedFetch(
+        { ...inherited, additionalCA: [bundle(target.certificate)] },
+        "access",
+      )(`https://127.0.0.1:${target.port}/v1/models`),
+    );
+    expect(error.code).toBe("GATEWAY_UNREACHABLE");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain(`proxy http://127.0.0.1:${port}`);
+    expect(error.message).toMatch(/: ECONNREFUSED$/);
+    expect(error.userAction).toMatch(/proxy/i);
+    expect(error.sanitizedDetail).toMatchObject({
+      hop: "proxy",
+      proxy: `http://127.0.0.1:${port}`,
+      transport: "ECONNREFUSED",
+    });
+    expect(shown(error)).not.toContain(PROXY_PASSWORD);
+    expect(shown(error)).not.toContain("corp-user");
+  });
+
+  it("dead forward proxy for a loopback http target names the proxy", async () => {
+    const port = await deadPort();
+    withProxyEnvironment({
+      HTTP_PROXY: `http://corp-user:${PROXY_PASSWORD}@127.0.0.1:${port}`,
+    });
+    const error = await failure(
+      createManagedFetch(
+        inherited,
+        "access",
+      )("http://127.0.0.1:4567/v1/models"),
+    );
+    expect(error.code).toBe("GATEWAY_UNREACHABLE");
+    expect(error.message).toContain(`proxy http://127.0.0.1:${port}`);
+    expect(error.message).toMatch(/: ECONNREFUSED$/);
+    expect(shown(error)).not.toContain(PROXY_PASSWORD);
+  });
+
+  it("407 on CONNECT: the proxy wants credentials", async () => {
+    const target = await tlsTarget();
+    const auth = await proxy("auth");
+    withProxyEnvironment({
+      HTTPS_PROXY: `http://corp-user:${PROXY_PASSWORD}@127.0.0.1:${auth.port}`,
+    });
+    const error = await failure(
+      createManagedFetch(
+        { ...inherited, additionalCA: [bundle(target.certificate)] },
+        "access",
+      )(`https://127.0.0.1:${target.port}/v1/models`),
+    );
+    expect(auth.seen).toEqual([`CONNECT 127.0.0.1:${target.port}`]);
+    expect(error.code).toBe("NETWORK_DENIED");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain(`proxy http://127.0.0.1:${auth.port}`);
+    expect(error.message).toContain("HTTP 407");
+    expect(error.userAction).toMatch(/proxy credential/i);
+    expect(error.sanitizedDetail).toMatchObject({ hop: "proxy", status: 407 });
+    expect(shown(error)).not.toContain(PROXY_PASSWORD);
+    expect(shown(error)).not.toContain("corp-user");
+  });
+
+  it("407 from a forward proxy for a loopback http target", async () => {
+    const auth = await proxy("auth");
+    withProxyEnvironment({ HTTP_PROXY: `http://127.0.0.1:${auth.port}` });
+    const error = await failure(
+      createManagedFetch(
+        inherited,
+        "access",
+      )("http://127.0.0.1:4567/v1/models"),
+    );
+    expect(error.code).toBe("NETWORK_DENIED");
+    expect(error.message).toContain(`proxy http://127.0.0.1:${auth.port}`);
+    expect(error.message).toContain("HTTP 407");
+  });
+
+  it("403 on CONNECT: the proxy refuses the destination", async () => {
+    const target = await tlsTarget();
+    const forbidden = await proxy("forbidden");
+    withProxyEnvironment({
+      HTTPS_PROXY: `http://127.0.0.1:${forbidden.port}`,
+    });
+    const error = await failure(
+      createManagedFetch(
+        inherited,
+        "access",
+      )(`https://127.0.0.1:${target.port}/`),
+    );
+    expect(error.code).toBe("NETWORK_DENIED");
+    expect(error.message).toContain("HTTP 403");
+    expect(error.userAction).toMatch(/proxy/i);
+  });
+
+  it("blackholed proxy: a deadline that expires before the tunnel opens names the proxy", async () => {
+    const target = await tlsTarget();
+    const hole = await proxy("blackhole");
+    withProxyEnvironment({
+      HTTPS_PROXY: `http://corp-user:${PROXY_PASSWORD}@127.0.0.1:${hole.port}`,
+    });
+    const error = await failure(
+      createManagedFetch(inherited, "inference")(
+        `https://127.0.0.1:${target.port}/v1/models`,
+        { signal: AbortSignal.timeout(300) },
+      ),
+    );
+    expect(hole.seen).toEqual([`CONNECT 127.0.0.1:${target.port}`]);
+    expect(error.code).toBe("GATEWAY_UNREACHABLE");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain(`proxy http://127.0.0.1:${hole.port}`);
+    expect(error.message).toMatch(/did not open a tunnel/);
+    expect(error.userAction).toMatch(/proxy/i);
+    expect(shown(error)).not.toContain(PROXY_PASSWORD);
+  });
+
+  it("a caller's own cancellation stays an AbortError, even while the tunnel is pending", async () => {
+    const target = await tlsTarget();
+    const hole = await proxy("blackhole");
+    withProxyEnvironment({ HTTPS_PROXY: `http://127.0.0.1:${hole.port}` });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 200);
+    await expect(
+      createManagedFetch(inherited)(`https://127.0.0.1:${target.port}/`, {
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("an untrusted TLS chain names the host and suggests additionalCA", () => {
+  it("direct: the target's chain is not trusted", async () => {
+    const target = await tlsTarget();
+    const error = await failure(
+      createManagedFetch(
+        { ...inherited, inheritProxyEnvironment: false },
+        "access",
+      )(`https://127.0.0.1:${target.port}/v1/models`),
+    );
+    expect(error.code).toBe("TLS_POLICY_VIOLATION");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain(`127.0.0.1:${target.port}`);
+    expect(error.message).toMatch(
+      /\((?:DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE)\)$/,
+    );
+    expect(error.userAction).toContain("network.tls.additionalCA");
+    expect(error.sanitizedDetail).toMatchObject({ hop: "target" });
+  });
+
+  it("through a proxy: the target's chain is blamed, not the proxy", async () => {
+    const target = await tlsTarget();
+    const tunnel = await proxy("tunnel");
+    withProxyEnvironment({
+      HTTPS_PROXY: `http://corp-user:${PROXY_PASSWORD}@127.0.0.1:${tunnel.port}`,
+    });
+    const error = await failure(
+      createManagedFetch(
+        inherited,
+        "access",
+      )(`https://127.0.0.1:${target.port}/v1/models`),
+    );
+    expect(tunnel.seen).toEqual([`CONNECT 127.0.0.1:${target.port}`]);
+    expect(error.code).toBe("TLS_POLICY_VIOLATION");
+    expect(error.message).toContain(`127.0.0.1:${target.port}`);
+    expect(error.message).not.toContain("proxy");
+    expect(error.userAction).toContain("network.tls.additionalCA");
+    expect(shown(error)).not.toContain(PROXY_PASSWORD);
+  });
+
   it("through a proxy: the declared additionalCA is trusted for the target", async () => {
     const target = await tlsTarget();
     const tunnel = await proxy("tunnel");
@@ -139,5 +340,21 @@ describe("TLS through a proxy", () => {
     })(`https://127.0.0.1:${target.port}/`);
     expect(await response.text()).toBe("target");
     expect(tunnel.seen).toEqual([`CONNECT 127.0.0.1:${target.port}`]);
+  });
+});
+
+describe("a target failure without a proxy still names the target", () => {
+  it("connection refused", async () => {
+    const port = await deadPort();
+    const error = await failure(
+      createManagedFetch(
+        { ...inherited, inheritProxyEnvironment: false },
+        "access",
+      )(`http://127.0.0.1:${port}/`),
+    );
+    expect(error.code).toBe("GATEWAY_UNREACHABLE");
+    expect(error.message).toBe(
+      `access request to 127.0.0.1:${port} failed: ECONNREFUSED`,
+    );
   });
 });
