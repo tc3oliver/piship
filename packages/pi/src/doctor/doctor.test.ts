@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, type AuditStatus } from "@piship/audit";
-import type { WorkspaceReport } from "@piship/sandbox";
 import {
   approvedNetworkEnvironment,
   formatError,
@@ -13,6 +12,7 @@ import {
   SecretValue,
 } from "@piship/contracts";
 import { type ActivatedAccess, SandboxCredential } from "@piship/core";
+import type { WorkspaceReport } from "@piship/sandbox";
 import type { GovernanceManifest } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderDoctor } from "../commands/doctor.js";
@@ -20,9 +20,9 @@ import type { GovernanceInspection } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import type { AccessData, DoctorData, GovernanceData } from "./data.js";
 import { sandboxIsolation } from "./data.js";
+import { DOCTOR_GROUPS, DoctorReport, sanitizeDoctorText } from "./report.js";
 import { sandboxCredentialData } from "./sandbox.js";
 import { workspaceData } from "./workspace.js";
-import { DOCTOR_GROUPS, DoctorReport, sanitizeDoctorText } from "./report.js";
 
 let temp: string;
 const saved = { ...process.env };
@@ -162,11 +162,14 @@ const okStatus: AuditStatus = {
   ],
 };
 
+/** Overrides of the defaults below; a field set to undefined is left out. */
 function governanceData(
-  overrides: Partial<GovernanceData> = {},
+  overrides: {
+    readonly [K in keyof GovernanceData]?: GovernanceData[K] | undefined;
+  } = {},
 ): GovernanceData {
   const inspected = inspection();
-  return {
+  const defaults: GovernanceData = {
     manifest: {
       policy: { default: "deny", enforced: [], defaults: [], adapter: null },
       capabilities: [],
@@ -181,8 +184,11 @@ function governanceData(
       status: okStatus,
       targets: [{ id: "local", target: "local file" }],
     },
-    ...overrides,
   };
+  const data = { ...defaults, ...overrides };
+  for (const key of Object.keys(data) as (keyof GovernanceData)[])
+    if (data[key] === undefined) delete data[key];
+  return data as GovernanceData;
 }
 
 function doctorData(
@@ -299,7 +305,7 @@ describe("renderDoctor", () => {
     expect(group(output, "Identity")).toEqual([
       `  ✓ ${"mode".padEnd(20)} oidc`,
       `  ✓ ${"session".padEnd(20)} signed in`,
-      `  ✓ ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
+      `  - ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
     ]);
     expect(group(output, "Credential")).toContain(
       `  ✓ ${"valid".padEnd(20)} 43m remaining`,
@@ -364,7 +370,7 @@ describe("renderDoctor", () => {
       expect(group(report.render(), "Identity")).toEqual([
         `  ✓ ${"mode".padEnd(20)} adapter`,
         `  ✓ ${"session".padEnd(20)} workload identity, obtained per run`,
-        `  ✓ ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
+        `  - ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme`,
       ]);
     }
     const failed = renderDoctor(
@@ -379,6 +385,98 @@ describe("renderDoctor", () => {
     expect(failed.failed).toBe(true);
     expect(group(failed.render(), "Identity")).toContain(
       `  ✗ ${"session".padEnd(20)} IDENTITY_INVALID: The workload identity adapter could not obtain a session`,
+    );
+  });
+
+  it("serializes the same checks for doctor --json", () => {
+    const report = renderDoctor(
+      doctorData("managed", { access: accessData({ signedIn: false }) }),
+    );
+    const json = JSON.parse(JSON.stringify(report));
+    expect(json.failed).toBe(true);
+    const identity = json.groups.find(
+      (item: { group: string }) => item.group === "Identity",
+    );
+    expect(identity.checks).toContainEqual({
+      status: "fail",
+      label: "session",
+      value: "not signed in; run acmecode login",
+    });
+    // The text report is rendered from the same checks.
+    expect(report.render()).toContain(
+      `  ✗ ${"session".padEnd(20)} not signed in; run acmecode login`,
+    );
+  });
+
+  it("shows a stored session as working only when activation used it", () => {
+    const identity = (overrides: Partial<AccessData>) => {
+      const report = renderDoctor(
+        doctorData("managed", { access: accessData(overrides) }),
+      );
+      return group(report.render(), "Identity").find((line) =>
+        line.includes("session"),
+      );
+    };
+    expect(
+      identity({
+        activationError: "IDENTITY_EXPIRED: The session expired",
+        identityError: "IDENTITY_EXPIRED: The session expired",
+      }),
+    ).toBe(
+      `  ✗ ${"session".padEnd(20)} stored, but activation could not use it; see the Inference activation line`,
+    );
+    expect(
+      identity({
+        activationError: "CREDENTIAL_ACQUIRE_FAILED: The broker refused",
+      }),
+    ).toBe(
+      `  ! ${"session".padEnd(20)} stored; not verified, because activation failed before using it`,
+    );
+  });
+
+  it("shows the issuer as answering only when doctor reached it", () => {
+    const issuer = (overrides: Partial<AccessData>, path?: object) => {
+      const base = accessData();
+      return group(
+        renderDoctor(
+          doctorData("managed", {
+            access: accessData({
+              ...overrides,
+              network: {
+                ...base.network,
+                ...(path
+                  ? {
+                      paths: [
+                        {
+                          label: "identity",
+                          host: "idp.acme.example",
+                          ...path,
+                        },
+                      ],
+                    }
+                  : {}),
+              },
+            }),
+          }),
+        ).render(),
+        "Identity",
+      ).find((line) => line.includes("issuer"));
+    };
+    const dead = {
+      code: "GATEWAY_UNREACHABLE",
+      error: "GATEWAY_UNREACHABLE: doctor request to idp.acme.example failed",
+    };
+    // A stored session hides a dead issuer from activation until refresh.
+    expect(issuer({}, dead)).toBe(
+      `  ! ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme does not answer (${dead.error}); sign-in and session refresh fail until it does`,
+    );
+    expect(
+      issuer({ activationError: "IDENTITY_INVALID: refresh failed" }, dead),
+    ).toMatch(
+      /^ {2}✗ issuer\s+https:\/\/idp\.acme\.example\/realms\/acme does not answer/,
+    );
+    expect(issuer({}, { status: 200 })).toBe(
+      `  ✓ ${"issuer".padEnd(20)} https://idp.acme.example/realms/acme answers`,
     );
   });
 
@@ -561,6 +659,126 @@ describe("Network group", () => {
       `  ✓ ${"proxy".padEnd(20)} not used; network.proxy.inheritEnvironment is off`,
     );
     expect(ignored.join("\n")).not.toContain("NO_PROXY");
+  });
+
+  it("fails on a proxy that refuses connections and on an endpoint path that fails, naming the hop", () => {
+    const approved = approvedNetworkEnvironment(policy, {
+      HTTPS_PROXY: "http://proxyuser:proxy-pass-8812@proxy.acme.example:3128",
+    });
+    const base = accessData();
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData({
+          network: {
+            ...base.network,
+            approved,
+            proxyChecks: [
+              {
+                proxy: "http://proxy.acme.example:3128",
+                error: "ECONNREFUSED",
+              },
+            ],
+            paths: [
+              {
+                label: "identity",
+                host: "idp.acme.example",
+                code: "GATEWAY_UNREACHABLE",
+                error:
+                  "GATEWAY_UNREACHABLE: doctor request to idp.acme.example failed at the proxy http://proxy.acme.example:3128: ECONNREFUSED",
+              },
+              { label: "gateway", host: "gateway.acme.example", status: 404 },
+            ],
+          },
+        }),
+      }),
+    );
+    expect(report.failed).toBe(true);
+    const lines = group(report.render(), "Network");
+    expect(lines).toContain(
+      `  ✗ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128); cannot connect to http://proxy.acme.example:3128 (ECONNREFUSED): check that the proxy is running and that HTTPS_PROXY and HTTP_PROXY name it`,
+    );
+    expect(lines).toContain(
+      `  ✗ ${"path identity".padEnd(20)} idp.acme.example: GATEWAY_UNREACHABLE: doctor request to idp.acme.example failed at the proxy http://proxy.acme.example:3128: ECONNREFUSED`,
+    );
+    expect(lines).toContain(
+      `  ✓ ${"path gateway".padEnd(20)} gateway.acme.example answered (HTTP 404)`,
+    );
+    expect(lines.join("\n")).not.toContain("proxy-pass-8812");
+    expect(lines.join("\n")).not.toContain("proxyuser");
+  });
+
+  it("says the proxy accepts connections and how many CA certificates loaded", () => {
+    const approved = approvedNetworkEnvironment(policy, {
+      HTTPS_PROXY: "http://proxy.acme.example:3128",
+    });
+    const base = accessData();
+    const lines = group(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            network: {
+              ...base.network,
+              approved,
+              caBundles: 2,
+              caCertificates: 3,
+              proxyChecks: [{ proxy: "http://proxy.acme.example:3128" }],
+            },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(lines).toContain(
+      `  ✓ ${"proxy".padEnd(20)} active (https http://proxy.acme.example:3128); accepts connections`,
+    );
+    expect(lines).toContain(
+      `  ✓ ${"enterprise CA".padEnd(20)} 2 additional bundle(s) declared; 3 certificate(s) loaded`,
+    );
+  });
+
+  it("fails on a CA bundle that does not load, and warns when none is declared but a chain is untrusted", () => {
+    const base = accessData();
+    const broken = group(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            network: {
+              ...base.network,
+              caBundles: 1,
+              caError:
+                "CONFIG_INVALID: Enterprise CA bundle contains no PEM certificate: /etc/acme/root.pem",
+            },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(broken).toContain(
+      `  ✗ ${"enterprise CA".padEnd(20)} CONFIG_INVALID: Enterprise CA bundle contains no PEM certificate: /etc/acme/root.pem`,
+    );
+    const untrusted = group(
+      renderDoctor(
+        doctorData("managed", {
+          access: accessData({
+            network: {
+              ...base.network,
+              paths: [
+                {
+                  label: "gateway",
+                  host: "gateway.acme.example",
+                  code: "TLS_POLICY_VIOLATION",
+                  error: "TLS_POLICY_VIOLATION: untrusted",
+                },
+              ],
+            },
+          }),
+        }),
+      ).render(),
+      "Network",
+    );
+    expect(untrusted).toContain(
+      `  ! ${"enterprise CA".padEnd(20)} none declared; default trust roots, and an endpoint failed TLS verification: if it uses an enterprise or private CA, declare that CA in network.tls.additionalCA`,
+    );
   });
 
   it("says that a personal distribution does not restrict the agent commands' environment", () => {
@@ -1154,7 +1372,7 @@ describe("Audit group", () => {
       state: "failed",
       rejected: 1,
       sinks: [
-        okStatus.sinks[0],
+        ...okStatus.sinks,
         {
           id: "siem",
           type: "http",
@@ -1329,7 +1547,7 @@ describe("doctor secret scan", () => {
               required: false,
               reason: `401 for token ${opaque}`,
             },
-          ] as unknown as GovernanceData["mcp"],
+          ] as unknown as NonNullable<GovernanceData["mcp"]>,
           audit: {
             status,
             targets: [{ id: "siem", target: "host audit.acme.example" }],

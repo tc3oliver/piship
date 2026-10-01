@@ -217,18 +217,25 @@ export class SecretLedger {
   observeFileStore(secretsDirectory: string): void {
     this.add(...fileStoreSecrets(secretsDirectory));
   }
-  /** What the local fixture services have issued so far. */
+  /**
+   * What the local fixture services have issued so far: credentials, access
+   * and refresh tokens, and ID tokens. ID tokens enter here, not only through
+   * a file-store snapshot, so a run on the system secret store (which no
+   * snapshot reads) still scans for them.
+   */
   observeServices(services: {
     state: {
       credentials: Map<string, unknown>;
       accessTokens: Map<string, unknown>;
       refreshTokens: Map<string, unknown>;
+      idTokens: Set<string>;
     };
   }): void {
     this.add(
       ...services.state.credentials.keys(),
       ...services.state.accessTokens.keys(),
       ...services.state.refreshTokens.keys(),
+      ...services.state.idTokens,
     );
   }
   all(): string[] {

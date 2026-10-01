@@ -94,7 +94,7 @@ describe("Linux Secret Service store", () => {
       beforeStore: () => {},
     };
     let stores = 0;
-    const attributesOf = (args: string[]): Record<string, string> => {
+    const attributesOf = (args: readonly string[]): Record<string, string> => {
       const words = args.slice(1).filter((word) => !word.startsWith("--"));
       const attrs: Record<string, string> = {};
       for (let index = 0; index + 1 < words.length; index += 2)

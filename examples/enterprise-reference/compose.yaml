@@ -4,7 +4,9 @@
 #
 # Secrets and ports come from `.env` beside this file, which
 # `node scripts/generate-env.mjs` creates with random values. It is git-ignored;
-# this file holds no secret. Every port is published on 127.0.0.1 only.
+# this file holds no secret. Every port is published on 127.0.0.1 only. A port
+# of 0 lets Docker choose a free one when the service starts, as the tests do
+# (README, "Ports"); `docker compose port <service> <port>` tells which.
 #
 #   node scripts/generate-env.mjs
 #   docker compose up --wait
@@ -23,11 +25,14 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/generate-env.mjs}
-      # One issuer for the host and for other containers: tokens always carry
-      # iss=http://127.0.0.1:<KEYCLOAK_PORT>/realms/piship-reference, while
-      # back-channel calls (token, JWKS) also work at http://keycloak:8080.
-      KC_HOSTNAME: http://127.0.0.1:${KEYCLOAK_PORT:-18080}
-      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      # The host is pinned to 127.0.0.1 whatever a request names; the scheme
+      # and the port come from the request. Asked on the published port, the
+      # issuer is http://127.0.0.1:<published port>/realms/piship-reference,
+      # so it follows a port Docker chose (KEYCLOAK_PORT=0) without Keycloak
+      # knowing it in advance. Containers read the JWKS at
+      # http://keycloak:8080; a token requested there would carry port 8080,
+      # and the broker refuses it.
+      KC_HOSTNAME: 127.0.0.1
       KC_HEALTH_ENABLED: "true"
       # Placeholders in the realm import.
       REFERENCE_ALICE_PASSWORD: ${REFERENCE_ALICE_PASSWORD:?run scripts/generate-env.mjs}
@@ -136,7 +141,10 @@ services:
       BROKER_LISTEN_HOST: 0.0.0.0
       BROKER_LISTEN_PORT: "8080"
       # Tokens carry the loopback issuer; the JWKS is read on the back channel.
-      BROKER_ISSUER: http://127.0.0.1:${KEYCLOAK_PORT:-18080}/realms/piship-reference
+      # KEYCLOAK_PUBLISHED_PORT and LITELLM_PUBLISHED_PORT name the ports
+      # Docker chose when KEYCLOAK_PORT or LITELLM_PORT is 0; the broker then
+      # starts after Keycloak and LiteLLM, once they are known.
+      BROKER_ISSUER: http://127.0.0.1:${KEYCLOAK_PUBLISHED_PORT:-${KEYCLOAK_PORT:-18080}}/realms/piship-reference
       BROKER_JWKS_URL: http://keycloak:8080/realms/piship-reference/protocol/openid-connect/certs
       BROKER_LITELLM_URL: http://litellm:4000
       # Both back-channel URLs are plain http on the compose network. The
@@ -147,7 +155,7 @@ services:
       BROKER_DISTRIBUTION: acmecode-reference
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?run scripts/generate-env.mjs}
       # What PiShip declares as inference.baseUrl; returned as base_url.
-      BROKER_GATEWAY_BASE_URL: http://127.0.0.1:${LITELLM_PORT:-14000}/v1
+      BROKER_GATEWAY_BASE_URL: http://127.0.0.1:${LITELLM_PUBLISHED_PORT:-${LITELLM_PORT:-14000}}/v1
     volumes:
       - ./broker:/srv/broker:ro
     ports:

@@ -2,11 +2,22 @@
 
 The production lifecycle for `piship/v1alpha4` distributions consists of a verifiable release archive per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. It wraps the [portable payload](portable-artifact.md) unchanged. Its current status and evidence are on the [status page](status.md); nothing is published to npm or through a signed channel.
 
-The guide has three parts:
+The guide has four parts:
 
 - [Owner workflow](release/owner-workflow.md): the owner's flow and commands, building a release and its gates, supported platforms, reviewing a change with `piship diff`, signing a channel, and the release checklist.
 - [Artifact contract](release/artifact-contract.md): the archive layout, `verify-release`, reproducibility, the SBOM, notices, and vulnerability scan, build provenance, and the artifact limitations.
+- [Release trust root](release/trust-root.md): release key custody, the first trust root, rotation, compromised and lost keys, channel hosting and atomic publish, GitHub Releases versus signed channels, and the examples decision.
 - [Update lifecycle](release/update-lifecycle.md): the channel trust model, `update` and `rollback`, the migration check and local data, the install layout and atomic activation, the failure policy, and the update limitations.
+
+## Start here
+
+| You want to | Read |
+| --- | --- |
+| Build, review, sign, and ship a release of your distribution | [Owner workflow](release/owner-workflow.md), and its [release checklist](release/owner-workflow.md#release-checklist) |
+| Generate, pin, rotate, or recover a release key, or host a channel | [Release trust root](release/trust-root.md) for the design, the [key and rollback runbook](release/key-runbook.md) for the steps |
+| Take a bad release back from every machine | [Company-wide rollback](release/key-runbook.md#company-wide-rollback) |
+| Verify an archive someone gave you | [Verifying a release](release/artifact-contract.md#verifying-a-release) |
+| Know what `update` and `rollback` do on a user's machine | [Update lifecycle](release/update-lifecycle.md) |
 
 ## Where each former section moved
 

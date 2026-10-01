@@ -38,6 +38,8 @@ export function buildDistribution(
   outputRoot = resolve("dist"),
   options: {
     readonly supplyChainGates?: boolean;
+    /** Receives a short line as each long step starts. */
+    readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},
 ): string {
   const lock = requireCurrentLock(manifestPath);
@@ -72,6 +74,7 @@ export function buildDistribution(
     }
     debugTiming("build input copy", phase);
     phase = process.hrtime.bigint();
+    options.progress?.("Installing the runtime packages (npm ci)");
     const install =
       process.platform === "win32"
         ? spawnSync(
@@ -102,6 +105,7 @@ export function buildDistribution(
     rmSync(join(stage, "packages"), { recursive: true, force: true });
     debugTiming("PiShip/build-input copying", phase);
     phase = process.hrtime.bigint();
+    options.progress?.("Assembling and verifying the payload");
     removeNpmBins(join(stage, "node_modules"));
     removeForeignPlatformPackages(stage);
     debugTiming("removeNpmBins/foreign platform packages", phase);

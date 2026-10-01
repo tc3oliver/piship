@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,11 +15,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
+  acceptanceFailure,
   governModelRuntime,
   isCredentialRejection,
   isModelDenial,
   requestFailure,
-  acceptanceFailure,
 } from "./governance.js";
 
 const model = (id: string) => ({
@@ -64,7 +66,14 @@ afterEach(async () => {
 });
 
 async function managedSession(
-  options: { keys: string[]; tools?: boolean } = { keys: [] },
+  options: {
+    keys: string[];
+    tools?: boolean;
+    fail?: () => Error;
+    baseUrl?: string;
+  } = {
+    keys: [],
+  },
 ) {
   const runtime = await ModelRuntime.create({
     credentials: memoryCredentials() as never,
@@ -74,7 +83,7 @@ async function managedSession(
   });
   runtime.registerProvider("acmecode", {
     name: "AcmeCode",
-    baseUrl: services.gatewayUrl,
+    baseUrl: options.baseUrl ?? services.gatewayUrl,
     api: "openai-completions",
     models: [model("acme/coder"), model("acme/general")],
   });
@@ -84,8 +93,10 @@ async function managedSession(
     kind: "managed-endpoint",
     providerId: "acmecode",
     allowedModelIds: ["acme/coder"],
+    command: "acme",
     apiKey: async ({ force }) => {
       calls += 1;
+      if (options.fail) throw options.fail();
       const key =
         options.keys[
           force
@@ -117,6 +128,10 @@ async function managedSession(
           pi.on("message_end", (event) => {
             if (isCredentialRejection(event.message))
               governed.markCredentialRejected();
+            const message = governed.withAccessAction(event.message);
+            return message
+              ? { message: message as typeof event.message }
+              : undefined;
           });
         },
       },
@@ -132,7 +147,7 @@ async function managedSession(
     settingsManager,
     sessionManager: SessionManager.inMemory(temp),
     resourceLoader,
-    ...(options.tools === false ? { noTools: true } : {}),
+    ...(options.tools === false ? { noTools: "all" as const } : {}),
   });
   return { runtime, session, governed, calls: () => calls, issued };
 }
@@ -240,6 +255,85 @@ describe("managed model governance on the pinned Pi runtime", () => {
       "sk-revoked-credential-1",
       "sk-rotated-credential-2",
     ]);
+    session.dispose();
+  });
+
+  it("offers no upstream provider login on /login, only where to sign in", async () => {
+    const { runtime, session } = await managedSession({ keys: ["sk-1"] });
+    // Pi's /login picker lists `getProviders()` and starts the login of the
+    // chosen provider's method; a method without `login` is shown as
+    // configured outside Pi, under its name.
+    const providers = runtime.getProviders();
+    expect(providers.map((provider) => provider.id)).toEqual(["acmecode"]);
+    expect(providers[0]?.auth.oauth).toBeUndefined();
+    expect(providers[0]?.auth.apiKey?.login).toBeUndefined();
+    expect(providers[0]?.auth.apiKey?.name).toBe(
+      "AcmeCode sign-in (run acme login in a terminal)",
+    );
+    session.dispose();
+  });
+
+  it.each([
+    [
+      "an expired refresh token",
+      new PiShipError(
+        "IDENTITY_EXPIRED",
+        "Identity refresh failed: token endpoint returned invalid_grant",
+        { component: "identity", userAction: "Run login again" },
+      ),
+      "Identity refresh failed: token endpoint returned invalid_grant\nAction: In a terminal, run acme login again",
+    ],
+    [
+      "a changed principal",
+      new PiShipError(
+        "IDENTITY_REQUIRED",
+        "The signed-in user changed; restart the session",
+        {
+          component: "identity",
+          userAction: "Start acme again to continue as the signed-in user",
+        },
+      ),
+      "The signed-in user changed; restart the session\nAction: Start acme again to continue as the signed-in user",
+    ],
+    [
+      "a missing credential",
+      new PiShipError("CREDENTIAL_REQUIRED", "No runtime credential"),
+      "No runtime credential\nAction: In a terminal, run acme login",
+    ],
+  ])(
+    "shows the PiShip action for %s mid-session",
+    async (_name, error, text) => {
+      const { session } = await managedSession({
+        keys: [],
+        fail: () => error,
+      });
+      await session.prompt("hello");
+      expect(last(session)).toMatchObject({
+        stopReason: "error",
+        errorMessage: text,
+      });
+      session.dispose();
+    },
+  );
+
+  it("does not attach an access action to an ordinary failure", async () => {
+    services.knobs.acceptedKeys = ["sk-managed-credential-1"];
+    services.knobs.gatewayMode = "malformed";
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+    });
+    await session.prompt("hello");
+    expect(last(session)?.errorMessage).not.toContain("Action:");
+    session.dispose();
+  });
+
+  it("shows the PiShip action after a gateway 401", async () => {
+    services.knobs.acceptedKeys = [];
+    const { session } = await managedSession({ keys: ["sk-revoked-1"] });
+    await session.prompt("hello");
+    expect(last(session)?.errorMessage).toMatch(
+      /\nAction: Send the message again; if it fails again, run acme login in a terminal$/,
+    );
     session.dispose();
   });
 
@@ -485,8 +579,100 @@ describe("personal Pi-native governance", () => {
     expect(cut.message).toBe(
       "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
     );
+    // Pi sets "aborted" only when the caller's signal aborted the request.
     expect(
-      acceptanceFailure({ role: "assistant", stopReason: "aborted" }).code,
-    ).toBe("GATEWAY_PROTOCOL_ERROR");
+      acceptanceFailure({
+        role: "assistant",
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      }),
+    ).toMatchObject({ code: "REQUEST_CANCELLED", retryable: false });
+  });
+});
+
+describe("acceptance request failures without a status (#85)", () => {
+  let hanging: Server | undefined;
+  afterEach(async () => {
+    const server = hanging;
+    hanging = undefined;
+    if (!server) return;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  // A gateway that accepts the connection and never answers.
+  async function hangingGateway(): Promise<string> {
+    const server = createServer(() => {});
+    hanging = server;
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  }
+  // A loopback port with nothing listening: the connection is refused.
+  async function closedPort(): Promise<string> {
+    const server = createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    await new Promise((resolve) => server.close(resolve));
+    return `http://127.0.0.1:${port}/v1`;
+  }
+
+  it("reports a refused connection as an unreachable gateway with its system code", async () => {
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl: await closedPort(),
+    });
+    await session.prompt("hello");
+    const message = session.messages.at(-1);
+    expect(requestFailure(message)?.status).toBeUndefined();
+    const error = acceptanceFailure(message);
+    expect(error).toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      sanitizedDetail: { transport: "ECONNREFUSED" },
+    });
+    expect(error.message).toMatch(/\(ECONNREFUSED\)$/);
+    session.dispose();
+  });
+
+  it("reports a request that ran past its deadline as an unreachable gateway", async () => {
+    const { runtime } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl: await hangingGateway(),
+    });
+    const selected = runtime.getModel("acmecode", "acme/coder");
+    if (!selected) throw new Error("no model");
+    const message = await runtime
+      .streamSimple(
+        selected,
+        { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        { timeoutMs: 200, maxRetries: 0 },
+      )
+      .result();
+    expect(message.stopReason).toBe("error");
+    expect(acceptanceFailure(message)).toMatchObject({
+      code: "GATEWAY_UNREACHABLE",
+      retryable: true,
+      sanitizedDetail: { transport: "timeout" },
+    });
+  });
+
+  it("reports a request the caller aborted as cancelled, not a protocol error", async () => {
+    const baseUrl = await hangingGateway();
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl,
+    });
+    hanging?.once("request", () => void session.abort());
+    await session.prompt("hello");
+    const message = session.messages.at(-1);
+    expect(message).toMatchObject({ stopReason: "aborted" });
+    expect(acceptanceFailure(message)).toMatchObject({
+      code: "REQUEST_CANCELLED",
+      retryable: false,
+    });
+    session.dispose();
   });
 });

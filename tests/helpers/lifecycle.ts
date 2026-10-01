@@ -813,6 +813,7 @@ async function createScenario<Releases extends ReleaseFixtures>(
           });
       expect(installed.status, installed.stderr).toBe(0);
       expect(installed.stdout).toContain(`Installed ${id}@1.0.0`);
+      expect(installed.stdout).toContain(`Next: run ${id} --help`);
       rmSync(extracted, { recursive: true, force: true });
       expect((await run(["version"])).stdout).toContain(
         `${distribution.name} 1.0.0`,

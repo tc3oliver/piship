@@ -108,7 +108,9 @@ describe("CLI", () => {
       expect(cli("migrate", manifest).stdout).toContain(
         `Already ${LATEST_SCHEMA}`,
       );
-      expect(cli("inspect", manifest).stdout).toContain('"id": "new-agent"');
+      expect(cli("inspect", manifest, "--json").stdout).toContain(
+        '"id": "new-agent"',
+      );
     },
     180000,
   );
@@ -384,7 +386,7 @@ describe("CLI", () => {
     expect(brandedHelp.stdout).toContain(
       "start mypi, then use /login and /logout, and /model",
     );
-    expect(brandedHelp.stdout).toContain("doctor | models | version");
+    expect(brandedHelp.stdout).toContain("doctor [--json] | models | version");
     expect(brandedHelp.stdout).toContain("config explain [--json]");
     expect(brandedHelp.stdout).toContain("update [--channel <name>]");
     const firstResult = JSON.parse(first.stdout) as {

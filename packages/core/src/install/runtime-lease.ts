@@ -122,6 +122,20 @@ export interface RuntimeLeaseStatus {
   readonly version: string;
   readonly live: boolean;
   readonly path: string;
+  /** Held by this process, such as the launcher running doctor. */
+  readonly self: boolean;
+}
+
+/** Whether a lease record names this very process. */
+function ownLease(
+  record:
+    | { readonly pid: number; readonly identity: string | null }
+    | undefined,
+): boolean {
+  if (record?.pid !== process.pid) return false;
+  return (
+    record.identity === null || record.identity === processIdentity(process.pid)
+  );
 }
 
 /** Inspect known leases; optionally remove only stale records. */
@@ -173,7 +187,7 @@ export function runtimeLeases(id: string, sweep = false): RuntimeLeaseStatus[] {
           /* stale */
         }
         const live = record ? alive(record, path) : recentUnverified(path);
-        result.push({ version: "*", live, path });
+        result.push({ version: "*", live, path, self: ownLease(record) });
         if (sweep && !live) rmSync(path, { force: true });
       }
       // Keep the launching directory: a new launcher can create a marker
@@ -192,7 +206,7 @@ export function runtimeLeases(id: string, sweep = false): RuntimeLeaseStatus[] {
       const path = join(directory, name);
       const record = parseLease(path, version);
       const live = record ? alive(record, path) : recentUnverified(path);
-      result.push({ version, live, path });
+      result.push({ version, live, path, self: ownLease(record) });
       if (sweep && !live) rmSync(path, { force: true });
     }
     // Keep the directory: removing it could race a launcher between mkdir

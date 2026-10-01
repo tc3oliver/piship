@@ -27,7 +27,7 @@ import {
 import { startLocalServices } from "../../examples/demo-company/fixtures/local-services.mjs";
 import { branded, launcher, type Result } from "../helpers/distribution.js";
 
-// Security cases 1-3, 8 and 13 (spec 30.3) at the launcher: the six mandatory
+// Security cases 1-3, 8 and 13 (docs/security.md, security test map) at the launcher: the six mandatory
 // controls (identity, credential, sandbox, policy, integrity, audit) each stop
 // the launch, or the action, when their configuration or implementation is
 // missing or broken, and a user, project, or team policy cannot widen what the
@@ -91,6 +91,8 @@ interface Session {
   readonly state: string;
   run(args: string[], extra?: NodeJS.ProcessEnv, cwd?: string): Promise<Result>;
   login(): Promise<Result>;
+  /** `login`, approved in the fixture browser, then Ctrl-C. */
+  loginInterrupted(): Promise<Result>;
   /** One scripted model turn with `steps` as the agent's tool calls. */
   script(
     steps: { name: string; arguments: Record<string, unknown> }[],
@@ -298,6 +300,14 @@ function build(services: Services, auditUrl: string): Fixture {
           expect(done.status, done.stderr).toBe(0);
           return done;
         },
+        loginInterrupted: () =>
+          branded(command, ["login"], {
+            cwd: project,
+            env: { ...baseEnv, PISHIP_STATE_HOME: state, ...extra },
+            approve: (url) => services.approve(url),
+            interruptAfterApprove: true,
+            timeoutMs: 60_000,
+          }),
         async script(steps, cwd = project, more = {}) {
           services.knobs.gatewayMode = "script";
           services.knobs.toolScript = steps;
@@ -391,12 +401,8 @@ describe("identity: an invalid sign-in is refused and stores nothing (cases 1-3)
       "replayed-nonce",
       "IDENTITY_INVALID",
     ],
-    [
-      "a callback with another state",
-      "stateOverride",
-      "attacker-state",
-      "IDENTITY_INVALID",
-    ],
+    // A callback with another state is its own case below: the listener
+    // refuses it and the login keeps waiting, so the case ends it with Ctrl-C.
     [
       "an ID token signed with an unpublished key",
       "signWithRogueKey",
@@ -428,6 +434,52 @@ describe("identity: an invalid sign-in is refused and stores nothing (cases 1-3)
       expect(existsSync(secrets) ? readdirSync(secrets) : []).toEqual([]);
       // The next launch is still signed out, and the ambient key is not used.
       services.knobs[knob as string] = defaults[knob as string];
+      const launch = await session.run(["--smoke"]);
+      expect(launch.status).toBe(1);
+      expect(launch.stderr).toMatch(/IDENTITY_REQUIRED/);
+      expectAmbientKeyUnused(services);
+    },
+  );
+
+  // Ctrl-C cannot be delivered to a Windows child; the refusal itself is
+  // covered there by tests/security/oidc-invalid.test.ts.
+  it.skipIf(windows)(
+    "refuses a callback with another state, keeps waiting, and stores nothing when cancelled",
+    async () => {
+      const { services } = fixture;
+      const session = fixture.session();
+      services.knobs.stateOverride = "attacker-state";
+      const before = (services.state.requests as { path: string }[]).length;
+      const refused = await session.loginInterrupted();
+      // The listener answered the forged callback with 400 and went on
+      // waiting until Ctrl-C, which ends the login as a cancelled sign-in
+      // that names the refusal.
+      expect(refused.approval).toBe(400);
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("IDENTITY_REQUIRED");
+      expect(refused.stderr).toMatch(
+        /cancelled; refused 1 callback without this sign-in's state/,
+      );
+      expect(refused.stderr).not.toMatch(/demo-(at|rt|code)-/);
+      // The forged callback's code was never exchanged.
+      expect(
+        (services.state.requests as { path: string }[])
+          .slice(before)
+          .filter((request) => request.path === "/idp/token"),
+      ).toEqual([]);
+      expect(brokerCalls(services)).toEqual([]);
+      expect(gatewayCalls(services)).toEqual([]);
+      expect(existsSync(join(session.state, "identity", "session.json"))).toBe(
+        false,
+      );
+      expect(
+        existsSync(
+          join(session.state, "credentials-metadata", "inference.json"),
+        ),
+      ).toBe(false);
+      const secrets = join(session.state, "secrets");
+      expect(existsSync(secrets) ? readdirSync(secrets) : []).toEqual([]);
+      services.knobs.stateOverride = defaults.stateOverride;
       const launch = await session.run(["--smoke"]);
       expect(launch.status).toBe(1);
       expect(launch.stderr).toMatch(/IDENTITY_REQUIRED/);

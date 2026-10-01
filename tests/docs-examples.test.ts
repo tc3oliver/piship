@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
@@ -14,7 +15,11 @@ import {
   capabilityMismatch,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
-import { readManifest } from "@piship/schema";
+import {
+  DEFAULT_SANDBOX_ENVIRONMENT,
+  DEFAULT_SANDBOX_READ_DENY,
+  readManifest,
+} from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -76,6 +81,7 @@ describe("documented examples", () => {
       router: "http://127.0.0.1:9",
       namespace: config?.namespace ?? "default",
       template: config?.template ?? "",
+      fetch: createManagedFetch(DEFAULT_NETWORK_POLICY, "sandbox"),
     });
     expect(
       capabilityMismatch(
@@ -117,5 +123,32 @@ describe("documented examples", () => {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
     }
+  });
+
+  // A declared `sandbox.filesystem.read.deny` or `sandbox.environment.allow`
+  // replaces the default list, so an example that declares one must still
+  // carry every default it does not mean to drop.
+  it.each([
+    "examples/demo-company/piship.yaml",
+    "examples/enterprise-reference/piship.yaml",
+    "examples/enterprise-reference/sandbox/piship.yaml",
+  ])("%s keeps every default sandbox read denial", (file) => {
+    const sandbox = readManifest(join(root, file)).governance?.sandbox;
+    expect(sandbox?.required).toBe(true);
+    expect(sandbox?.filesystem.read.deny).toEqual(
+      expect.arrayContaining([...DEFAULT_SANDBOX_READ_DENY]),
+    );
+    expect(sandbox?.environment.allow).toEqual(
+      expect.arrayContaining([...DEFAULT_SANDBOX_ENVIRONMENT]),
+    );
+  });
+
+  it("the README manifest is a complete manifest PiShip accepts on its own", () => {
+    const snippet = block("README.md", "yaml", "schema: piship/v1alpha4");
+    const directory = temporary();
+    writeFileSync(join(directory, "piship.yaml"), snippet);
+    const manifest = readManifest(join(directory, "piship.yaml"));
+    expect(manifest.deployment.mode).toBe("managed");
+    expect(manifest.governance?.sandbox?.required).toBe(true);
   });
 });

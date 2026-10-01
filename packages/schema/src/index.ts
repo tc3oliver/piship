@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { systemError } from "@piship/contracts";
 import { parseDocument } from "yaml";
 import { valid as validSemver } from "semver";
 import {
@@ -9,6 +11,7 @@ import {
   type DeploymentMode,
 } from "./access.js";
 import type { GovernanceManifest } from "./governance.js";
+import { assertLaunchable } from "./launch.js";
 import {
   GOVERNANCE_KEYS,
   governanceReferences,
@@ -28,6 +31,7 @@ export * from "./variables.js";
 export * from "./governance.js";
 export * from "./governance-parse.js";
 export * from "./lifecycle.js";
+export * from "./launch.js";
 
 /** The v0.1 personal alpha schema; still accepted for personal pi-native distributions. */
 export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
@@ -363,6 +367,7 @@ export function parseManifest(value: unknown): Manifest {
         ...(governance ? governanceReferences(governance) : []),
         ...(lifecycle ? lifecycleReferences(lifecycle) : []),
       ]);
+      assertLaunchable({ mode, access, governance });
     } catch (error) {
       if (error instanceof AccessFieldError)
         throw new ManifestError(error.kind, error.field, error.message);
@@ -437,11 +442,14 @@ function flatResources(governance: GovernanceManifest): Manifest["resources"] {
 export function readManifest(path: string): Manifest {
   return parseManifest(readManifestDocument(path));
 }
-/** Read and parse YAML without schema validation (used by migration). */
-export function readManifestDocument(path: string): unknown {
-  let source: string;
+/**
+ * The text of a manifest file. A missing file is a ManifestError; a
+ * directory or another file system failure is a PiShip error that names the
+ * path and what to pass instead.
+ */
+export function readManifestSource(path: string): string {
   try {
-    source = readFileSync(path, "utf8");
+    return readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new ManifestError(
@@ -449,8 +457,20 @@ export function readManifestDocument(path: string): unknown {
         path,
         "Manifest does not exist",
       );
-    throw error;
+    throw (
+      systemError(
+        error,
+        path,
+        (error as NodeJS.ErrnoException).code === "EISDIR"
+          ? `Pass the manifest file, such as ${join(path, "piship.yaml")}`
+          : undefined,
+      ) ?? error
+    );
   }
+}
+/** Read and parse YAML without schema validation (used by migration). */
+export function readManifestDocument(path: string): unknown {
+  const source = readManifestSource(path);
   const document = parseDocument(source, { uniqueKeys: true });
   if (document.errors.length)
     throw new ManifestError(

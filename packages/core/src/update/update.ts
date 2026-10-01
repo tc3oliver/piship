@@ -21,6 +21,7 @@ import {
   syncTree,
   type InstallReceipt,
   type LifecycleOptions,
+  type RetiredKey,
 } from "../install/receipt.js";
 import {
   checkStateMigration,
@@ -29,6 +30,7 @@ import {
 } from "../migration.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
+import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
   checkUpdateSource,
@@ -174,9 +176,11 @@ export async function updateDistribution(
     const notices = [...selection.notices];
     const source = resolveSource(lock, options.source, env);
     const minSequence = receipt.channelSequences?.[channel] ?? 0;
+    options.progress?.(`Checking the ${channel} channel`);
     const { metadata, keyId } = await readChannel(source, channel, {
       distribution: id,
       trusted: updates.trust.keys,
+      retired: receipt.retiredKeys ?? [],
       minSequence,
       now,
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
@@ -223,8 +227,12 @@ export async function updateDistribution(
     const staging = temporary.path;
     try {
       const archive = join(staging, entry.archive);
+      options.progress?.(
+        `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
+      );
       await downloadArchive(source, entry, archive, options.fetcher);
       options.faults?.("staged");
+      options.progress?.(`Verifying the ${entry.version} release`);
       const verified = await verifyRelease(archive, {
         requireTarget: true,
         expectedSha256: entry.sha256,
@@ -327,6 +335,7 @@ export async function updateDistribution(
             `Cannot update ${id} to ${entry.version} while ${live.length} runtime session(s) still use its retained payload; close them and retry`,
           );
       }
+      options.progress?.(`Switching to ${entry.version}`);
       const snapshot = snapshotState(
         stateDir,
         receipt.active,
@@ -346,6 +355,24 @@ export async function updateDistribution(
       const keepPrevious =
         updates.rollback && verified.lock.updates?.rollback !== false;
       const current = readInstallReceipt(id);
+      // Keys the active release pins and the new one drops are retired for
+      // good on this installation, so a rollback cannot trust them again; a
+      // key the new release pins (again) is not retired.
+      const pinned = new Set(
+        (verified.lock.updates?.trust.keys ?? []).map((key) =>
+          keyFingerprint(key.publicKey),
+        ),
+      );
+      const retiredKeys: RetiredKey[] = [...(current.retiredKeys ?? [])];
+      for (const key of updates.trust.keys) {
+        const fingerprint = keyFingerprint(key.publicKey);
+        if (!retiredKeys.some((item) => item.fingerprint === fingerprint))
+          retiredKeys.push({
+            id: key.id,
+            fingerprint,
+            release: entry.version,
+          });
+      }
       const next: InstallReceipt = {
         ...current,
         app: verified.lock.app,
@@ -368,6 +395,7 @@ export async function updateDistribution(
           ...(current.channelSequences ?? {}),
           [channel]: metadata.sequence,
         },
+        retiredKeys: retiredKeys.filter((key) => !pinned.has(key.fingerprint)),
         lastCheck: {
           time: now().toISOString(),
           channel,
@@ -375,6 +403,8 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
+      if (!next.retiredKeys?.length)
+        delete (next as { retiredKeys?: unknown }).retiredKeys;
       lifecycle.commit(next);
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");

@@ -4,7 +4,7 @@ This page is for the infrastructure or platform team that connects a managed PiS
 
 ## At a glance
 
-You provide three services. Their URLs are `${NAME}` [runtime references](manifest.md#runtime-references) in `piship.yaml`, resolved from the launch environment; the manifest and lock never hold secrets.
+You provide three services. Their URLs go in `piship.yaml` either as plain `https` URLs, which are locked and shipped with every release, or as `${NAME}` [runtime references](manifest.md#runtime-references) resolved from the launch environment ([company setup](#company-setup) compares the two); the manifest and lock never hold secrets.
 
 | Service | Manifest field | Called by | When |
 | --- | --- | --- | --- |
@@ -62,6 +62,52 @@ network:
   privateOnly: true
   allowHosts: []
 ```
+
+## Company setup
+
+### Running the CLI from your own repository
+
+Keep the distribution (`piship.yaml`, `piship.lock`, resources, and adapters) in a repository of your own. The PiShip CLI is not published to npm: clone PiShip, run `npm ci` and `npm run build` once, then run its CLI by path against your manifest. Relative paths in the manifest resolve from the manifest's directory, not from the PiShip clone.
+
+```bash
+node ~/src/piship/packages/cli/dist/bin.js validate ./piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js lock ./piship.yaml
+node ~/src/piship/packages/cli/dist/bin.js release ./piship.yaml
+```
+
+`validate` fails on any setting that is certain to fail on every employee's machine, and prints a `Warning:` for one that fails only in some environments or has no effect. Treat the warnings as release blockers unless you know why they do not apply.
+
+| `validate` | When |
+| --- | --- |
+| Fails | A required HTTP audit sink on a host outside `network.allowHosts` and the endpoint hosts (managed mode is always private-only, so every launch fails with `AUDIT_UNAVAILABLE`) |
+| Fails | `sandbox.credential: runtime` with a plain `sandbox.endpoint` or `sandbox.router` on another origin than `inference.baseUrl`, or with no runtime credential at all (`pi-native` inference or `credential.provider: none`); the required sandbox fails every launch with `SANDBOX_UNAVAILABLE` |
+| Warns | The same audit or sandbox URL as a runtime variable, or an optional audit sink whose events would be dropped |
+| Warns | A relative `network.tls.additionalCA` path ([CA bundles](#ca-bundles)) |
+| Warns | `sandbox.network.mode: deny` without `sandbox.required: true`; the sandbox is activated only when required, so nothing enforces it |
+
+### Plain URLs or runtime variables
+
+| | Plain URL (`baseUrl: https://llm.corp.example/v1`) | Runtime variable (`baseUrl: ${ACMECODE_LLM_GATEWAY_URL}`) |
+| --- | --- | --- |
+| Where the value lives | In `piship.yaml` and the lock, shipped in every release | In the environment of every process that starts the branded command |
+| Employee setup | None | Each variable set on each machine, for every way the command is started |
+| Changing it | A new release, which users get with `update` | Changing the environment on every machine; no release |
+| Checked by `validate` | Fully, including the cross-field checks above | Syntax only; the value is checked at launch |
+| Fits | Production endpoints that are the same for everyone | One build used against several environments, such as a staging and a production gateway, or local fixtures |
+
+Prefer plain URLs for production. Endpoint URLs are not secrets, and a plain URL removes the per-machine setup. Use a variable only where the value differs between machines that run the same release.
+
+The branded command reads variables only from its own process environment. A variable exported in a shell profile reaches commands started from that shell, but not ones started by an IDE, a desktop launcher, or a scheduled job, which then fail with `CONFIG_UNAVAILABLE`. Deliver variables the way you deliver other machine configuration (device management, a login script, or the environment of the launching tool), and check them on a real machine with `<command> config explain` or `<command> doctor`.
+
+`validate` lists the variables in two groups. Variables needed at launch are read by the branded command: the access endpoints, CA bundles, and MCP, audit, and sandbox URLs. A variable referenced only by `updates.source` is read only by `<command> update`; launch works without it. `validate` notes which of each group are unset in the shell it runs in.
+
+### CA bundles
+
+Give each `network.tls.additionalCA` entry as an absolute path that your device management installs at the same place on every machine, such as `/etc/acme/ca.pem` or `C:\ProgramData\Acme\ca.pem`. The bundle is not packaged into the release or recorded in the lock; it is read on the employee's machine at launch. A relative path is read from whatever directory the command is started in, so it works only by accident. When the location differs between platforms or machines, use a runtime variable for the whole path (`${ACMECODE_CA_BUNDLE}`). A missing or unreadable bundle fails the launch with `CONFIG_UNAVAILABLE`.
+
+### How changes reach employees
+
+An installed release runs the `piship.yaml` and `piship.lock` it was built from; nothing reads your repository at launch. A change to policy, allowed models, endpoints, allowed hosts, sandbox, or audit therefore reaches employees only as a new release: lock, `release`, `sign-channel`, and serve the channel ([owner workflow](release/owner-workflow.md)). Employees get it with `<command> update`, which verifies and activates it ([update lifecycle](release/update-lifecycle.md)); until they run it they keep the previous settings. Only runtime variables and the employee's own permitted preferences and policy narrowing (`config/policy.json`) change without a release.
 
 ## Identity provider (OIDC)
 
@@ -130,11 +176,12 @@ Authorization: Bearer <identity access token>
 Content-Type: application/json
 Accept: application/json
 Idempotency-Key: 0b8f5a4e-3c1d-4e2f-9a6b-7c8d9e0f1a2b
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
 
 {"distribution": "acmecode", "purpose": "inference"}
 ```
 
-`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). Success is any 2xx with a JSON body:
+`distribution` is `app.id`; `purpose` is always `inference`. `Idempotency-Key` names one logical acquire or renewal; see [idempotency and retries](#idempotency-and-retries). `PiShip-Client` says which distribution release and PiShip sent the request ([client identification](#client-identification-piship-client)). Success is any 2xx with a JSON body:
 
 ```json
 {
@@ -230,6 +277,7 @@ Only when `credential.broker.revokeEndpoint` is declared:
 POST {credential.broker.revokeEndpoint}
 Authorization: Bearer <runtime credential>
 Content-Type: application/json
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
 
 {"credential_id": "vk_1234", "distribution": "acmecode"}
 ```
@@ -415,6 +463,27 @@ audit:
 
 `user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). v0.6 wrote the bare subject under the same `piship-audit/v1`; from v0.7 this form is fixed, and changing it again needs a new schema ([decision 29](decisions.md)). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
 
+## Client identification (`PiShip-Client`)
+
+Every request PiShip sends to the credential broker (acquire, renewal, and revoke) and to the LLM gateway (the model list and every inference request) carries a `PiShip-Client` header, so a broker or gateway can see which distribution release, built with which PiShip, is calling, and apply a minimum version of its own:
+
+```http
+PiShip-Client: distribution="acmecode", version="1.4.0", piship="0.7.0", protocol=1
+```
+
+| Member | Value |
+| --- | --- |
+| `distribution` | `app.id` |
+| `version` | `app.version` of the active release |
+| `piship` | The PiShip version the release was built with |
+| `protocol` | An integer for the broker and gateway wire behavior this client speaks. `1` is this contract as of v0.7.x; it increases only when PiShip's requests, or its reading of answers, change in a way a service must know about, and that change is listed in the changelog |
+
+The value is an [RFC 8941](https://www.rfc-editor.org/rfc/rfc8941) structured field dictionary. Parse it as one, ignore members you do not know (members may be added, never removed or redefined while `protocol` stays the same), and treat a missing header as a client from before v0.7.x.
+
+**Enforcing a minimum version.** The header is how a company retires a release that carries old policy: the broker refuses to issue credentials below a version, and the gateway refuses requests, and employees then run `<command> update`. Answer the broker acquire with 403 (PiShip reports `CREDENTIAL_DENIED`, not retryable) and the gateway with 403 (at launch, `MODEL_DENIED`; during a session, Pi reports the error in the conversation; see [gateway status mapping](#gateway-status-mapping)), and tell employees out of band why: PiShip does not read or show an error body. Do not answer 401, which PiShip reads as an expired sign-in and retries once after a refresh, or 426, which it treats as any other refusal.
+
+**It is a label, not a proof.** The header is self-reported and unauthenticated: anyone holding a valid token or credential can send any value. Use it to steer well-behaved clients onto supported releases, never as an authorization decision on its own; who may get a credential is still decided by the identity token. PiShip itself never makes a decision from it: it sends it and nothing else. An identity provider, an MCP server, an audit collector, a sandbox service, and the update source do not receive it.
+
 ## Network and TLS
 
 Applies to every PiShip-managed request above and to Pi's in-process requests ([security](security.md#network-and-tls)).
@@ -422,12 +491,12 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 | Rule | Detail |
 | --- | --- |
 | HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION` |
-| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots. A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
+| Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots, read on the employee's machine at launch; use absolute paths ([CA bundles](#ca-bundles)). A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
 | Proxy | `HTTP(S)_PROXY` and `NO_PROXY` (either case) are honored unless `network.proxy.inheritEnvironment: false`. A host in `NO_PROXY` is contacted directly; every other request, including to a private endpoint, goes through the proxy |
 | Child processes | In a managed distribution, commands the agent runs receive only the proxy variables the policy approves (never a proxy URL that embeds credentials) and, for a single declared bundle, `NODE_EXTRA_CA_CERTS`. Other proxy, CA, and TLS-verification variables are dropped ([security](security.md#child-process-network-environment)) |
-| Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The match is on the hostname only: a declared host admits every port and scheme on it, and PiShip does not check that the host is a private address. The authorization page opens in the browser and is not subject to this rule |
+| Private-only | Always in effect in managed mode (`network.publicFallback` must be `deny`, and that is enforced whatever `network.privateOnly` says). Only the hosts of the issuer, broker, revoke, and gateway URLs, `network.allowHosts`, and, for update commands, the `updates.source` host may be contacted; others fail with `NETWORK_DENIED`. Add to `allowHosts` any OIDC endpoint that discovery returns on another host (token, JWKS, revocation) and every Streamable HTTP MCP server or HTTP audit sink host; `doctor` warns about undeclared ones. The match is on the exact hostname only: a declared host admits every port and scheme on it but no other name, so list every host by its full name (there are no wildcards or domain suffixes; see [`network.allowHosts`](manifest.md#access-fields-v1alpha2-and-later)), and PiShip does not check that the host is a private address. The authorization page opens in the browser and is not subject to this rule |
 | MCP and the runtime credential | A `credential: runtime` Streamable HTTP MCP server must have the same origin (scheme, host, port) as `inference.baseUrl`; otherwise it fails to start with `MCP_UNHEALTHY` and never receives the credential |
-| Redirects | Not followed; serve each endpoint directly |
+| Redirects | Not followed; serve each endpoint directly. The update source is the one exception: a redirect within its own origin is followed, at most five times ([update lifecycle](release/update-lifecycle.md)) |
 | Ambient keys | In managed mode, provider keys such as `OPENAI_*` are removed from the runtime environment |
 
 ## Token semantics
@@ -469,10 +538,62 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 - **Extra metadata is needed.** LiteLLM's model list does not supply the capability fields PiShip uses; declare them in `models.catalog`.
 - **The broker is yours.** LiteLLM has no endpoint that accepts an OIDC access token and returns the http-broker response. Put a small broker in front of it that:
   1. Validates the identity access token against your IdP and decides the user's models.
-  2. Calls LiteLLM `POST /key/generate` with the master key, for example `{"models": ["acme/coder"], "duration": "8h", "user_id": "<sub>", "key_alias": "<unique id>"}`.
+  2. Calls LiteLLM `POST /key/generate` with the master key, for example `{"models": ["acme/coder"], "duration": "8h", "user_id": "<principal user ID>", "key_alias": "<unique id>"}`. Derive `user_id` from the principal, the issuer **and** the subject, as PiShip does ([principal](identity.md#principal)), never from `sub` alone: a subject is unique only within its issuer, so two identity providers (or a migrated realm) can issue the same `sub` to different people, who would then share one LiteLLM user and its budget, rate limits, and spend. A stable hash of both works, such as the reference broker's `oidc-` plus 40 hex characters of SHA-256 over `[iss, sub]` ([one LiteLLM user per principal](../examples/enterprise-reference/broker/README.md#principal-budget-and-keys)). Do not use the username or email either: they can change or be reused.
   3. Returns `{"credential_type": "api_key", "credential": <key>, "credential_id": <key_alias>, "expires_at": <expiry as ISO 8601 with Z>, "models": [...]}`.
   4. For revocation, accepts the virtual key as the bearer and calls LiteLLM `POST /key/delete` with `{"keys": ["<that key>"]}`; holding the key is the proof.
 - **Keep the master key in the broker.** Never put it or a shared virtual key in `piship.yaml`, a runtime variable, or the user's environment. Budgets, rate limits, and spend tracking are LiteLLM key settings you choose in step 2.
+
+## Testing your own broker and audit collector
+
+Before employees depend on them, run your own credential broker and audit collector, ideally staging instances, against PiShip itself. Two tests do this, and neither uses PiShip's test fixtures or reference services.
+
+**1. PiShip's real client: your own distribution.** A build of your distribution is the client employees will run, with its real `http-broker` provider, `http` audit sink, managed fetch, proxy, and CA settings. Build it from a copy of your manifest whose endpoints point at staging (runtime variables make this one build; [plain URLs or runtime variables](#plain-urls-or-runtime-variables)), install it under a throwaway install home, and drive it with a test user:
+
+```bash
+node ~/src/piship/packages/cli/dist/bin.js build ./piship.yaml
+node dist/<id>/piship.mjs install dist/<id>
+<command> login           # acquire: Authorization, Idempotency-Key, the response contract
+<command> doctor          # identity, credential, gateway, sandbox, and audit sink state
+<command> --smoke         # a gateway request with the credential; a required audit sink is probed and receives the session's events
+<command> models          # the entitlement (`models`) narrows the catalog
+<command> logout          # revoke: the runtime credential as the bearer
+```
+
+Then check your side: the broker logged one issuance per `Idempotency-Key` and the revocation of the same `credential_id`; the collector stored the `identity.login`, `credential.acquire`, `session.start`, `session.end`, and `credential.revoke` events, each once, with `user` in the `<issuer>#<subject>` form. Every PiShip failure names its code, and [troubleshooting](troubleshooting.md) says what to do.
+
+**2. The contract edges: the service kits.** A real client exercises the normal path; it does not, on demand, send a request again with a used `Idempotency-Key`, resend a batch, or present an invalid token. `@piship/adapter-conformance` has two kits for that, the other direction from its [adapter kits](adapter-sdk.md#credential-conformance-kit): they send your service the requests PiShip sends and hold its answers to this contract. They import only `@piship/adapter-sdk` and Node built-ins.
+
+| Kit | Checks |
+| --- | --- |
+| `testCredentialBroker` | `acquire` (2xx and the [response fields](#acquire-and-renew); a redirect fails), `idempotent replay` (the same request with the same key returns the same credential and `credential_id`), `key reuse` (a different request with a used key answers 422 or 409 `idempotency_key_reused`, never a credential; a broker that refuses the changed request first is reported `skipped`), `authentication` (no bearer and an invalid bearer answer 401), and `revoke` (2xx, 401, or 404 for each credential the kit obtained; `skipped` without `revokeEndpoint`) |
+| `testAuditCollector` | `readiness probe` (the empty batch answers 2xx), `batch`, `duplicate batch` (a resent batch answers 2xx and is stored once), `conflicting id` (an ID resent with other content answers 2xx and both are kept), and `unknown property` (an optional property the collector does not know answers 2xx). With `stored`, the kit also reads back what the collector kept |
+
+The package is private and unpublished: run the kits from a checkout of PiShip, in a test file inside the workspace, as for the adapter kits. The identity token is a live credential of a test user: give it to the test from your secret manager or an environment variable, never on a command line or in a file in the repository, and never print it. The kits never put a credential or token in a report.
+
+```ts
+import { testAuditCollector, testCredentialBroker } from "@piship/adapter-conformance";
+import { expect, it } from "vitest";
+
+it("our staging broker follows the http-broker contract", async () => {
+  const report = await testCredentialBroker({
+    endpoint: "https://broker.staging.acme.example/v1/llm-credential",
+    revokeEndpoint: "https://broker.staging.acme.example/v1/revoke",
+    distribution: "acmecode",
+    identityToken: () => process.env.ACME_TEST_USER_TOKEN ?? "",
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+
+it("our staging collector follows piship-audit-batch/v1", async () => {
+  const report = await testAuditCollector({
+    url: "https://audit.staging.acme.example/v1/batches",
+    distribution: "acmecode",
+  });
+  expect(report.results.filter((result) => result.status === "failed")).toEqual([]);
+});
+```
+
+The broker kit obtains up to two credentials for the test user and revokes them at the end when `revokeEndpoint` is given; otherwise they stay valid until they expire. The collector kit stores test events with the user `piship-conformance` and `detail.conformance: true`, so run it against staging or filter them out. The broker kit passes against the [reference broker](../examples/enterprise-reference/broker/README.md) (`examples/enterprise-reference/broker/test/conformance-kit.test.mjs`). A pass means these requests got conforming answers; it does not show that the broker validates tokens correctly for every issuer, scopes keys per principal (that needs a second test user), or keeps keys for 24 hours across a restart ([what a broker must do](#what-a-broker-must-do)).
 
 ## Reference implementation
 

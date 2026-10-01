@@ -59,10 +59,15 @@ export function loadConfig(env) {
   const listenHost = env.SANDBOX_LISTEN_HOST || "127.0.0.1";
   if (!LOOPBACK_HOSTS.has(listenHost))
     throw new Error("SANDBOX_LISTEN_HOST must be 127.0.0.1 or ::1");
+  // 0 lets the system choose a free port; the service logs the one it got
+  // (`service.listening`). Such a service needs a SANDBOX_INSTANCE of its own:
+  // the default name is made of the port.
   const listenPort = number("SANDBOX_LISTEN_PORT", 18075, {
-    min: 1,
+    min: 0,
     max: 65535,
   });
+  if (listenPort === 0 && !env.SANDBOX_INSTANCE)
+    throw new Error("SANDBOX_LISTEN_PORT=0 requires SANDBOX_INSTANCE");
 
   const rootsText = env.SANDBOX_WORKSPACE_ROOTS;
   if (!rootsText) throw new Error("SANDBOX_WORKSPACE_ROOTS is required");
@@ -100,6 +105,19 @@ export function loadConfig(env) {
   // interfaces it must not share; `none` is what `deny` already means.
   if (allowNetwork === "host" || allowNetwork === "none")
     throw new Error("SANDBOX_ALLOW_NETWORK must not be host or none");
+
+  // Whether every mount is compared, by device and inode, between what the
+  // service checked on the host and what the container got. Only a runtime
+  // that shares the host's kernel and filesystems (a Linux Docker Engine)
+  // reports the same numbers; one in a virtual machine (Docker Desktop,
+  // OrbStack, Colima) shares files through a layer with its own numbers, so
+  // there it can only be switched off, which the operator does by name.
+  const mountIdentity = text(
+    "SANDBOX_MOUNT_IDENTITY",
+    "verify",
+    /^(?:verify|unverified)$/,
+    "verify or unverified",
+  );
 
   const listenAddress =
     listenHost === "::1"
@@ -148,6 +166,7 @@ export function loadConfig(env) {
     ),
     docker: env.SANDBOX_DOCKER || "docker",
     allowNetwork,
+    mountIdentity,
     memory: text(
       "SANDBOX_MEMORY",
       "1g",

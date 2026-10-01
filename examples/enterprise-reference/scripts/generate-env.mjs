@@ -7,7 +7,11 @@
 //   node scripts/generate-env.mjs --out <path>
 //
 // Ports default to the values below; set KEYCLOAK_PORT, LITELLM_PORT,
-// MOCK_UPSTREAM_PORT or POSTGRES_PORT in the environment to choose others.
+// MOCK_UPSTREAM_PORT, POSTGRES_PORT or BROKER_PORT in the environment to
+// choose others. 0 lets Docker choose a free port when the service starts;
+// a stack whose KEYCLOAK_PORT or LITELLM_PORT is 0 then needs the port Docker
+// chose as KEYCLOAK_PUBLISHED_PORT or LITELLM_PUBLISHED_PORT before the
+// broker starts (README, "Ports"), which the tests do.
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -33,8 +37,14 @@ const PORTS = {
 function port(name) {
   const value = process.env[name] ?? String(PORTS[name]);
   const number = Number(value);
-  if (!/^\d+$/.test(value) || number < 1024 || number > 65535) {
-    process.stderr.write(`${name} must be a port from 1024 to 65535\n`);
+  if (
+    !/^\d+$/.test(value) ||
+    (number !== 0 && number < 1024) ||
+    number > 65535
+  ) {
+    process.stderr.write(
+      `${name} must be a port from 1024 to 65535, or 0 for one Docker chooses\n`,
+    );
     process.exit(2);
   }
   return number;

@@ -37,12 +37,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
   type AccessEvent,
-  type AccessPhase,
   AdapterSandboxCredential,
   DistributionAccess,
   SandboxCredential,
   type SandboxCredentialOptions,
+  type SignedInGuard,
 } from "./access/index.js";
+import type { AccessPhase } from "./access/types.js";
 import { purgeDistributionState } from "./install/purge.js";
 import { checkStateMigration, STATE_SCHEMAS } from "./migration.js";
 import { clearCredentials, snapshotState } from "./update/state.js";
@@ -117,6 +118,16 @@ const metadataFile = () =>
   join(stateDir(), "credentials-metadata", "sandbox.json");
 const readMetadata = () =>
   JSON.parse(readFileSync(metadataFile(), "utf8")) as Record<string, unknown>;
+
+/** The signed-in guard of `access` for `principal`, which must have one. */
+async function guardOf(
+  access: DistributionAccess,
+  principal: PrincipalKey,
+): Promise<SignedInGuard> {
+  const guard = await access.signedInGuard(principal);
+  if (!guard) throw new Error("expected a signed-in guard");
+  return guard;
+}
 
 function slot(
   principal: PrincipalKey | null,
@@ -785,19 +796,19 @@ describe("sandbox credential across user switches (fixtures)", () => {
     const aliceKey = { issuer, subject: "alice-0001" };
     const bob = await login("bob-0002");
     const bobKey = { issuer, subject: "bob-0002" };
-    await slot(bobKey, { signedIn: await bob.signedInGuard(bobKey) }).save(
+    await slot(bobKey, { signedIn: await guardOf(bob, bobKey) }).save(
       enter(SECRET_2),
     );
     // Alice's process still runs: her launch builds a sandbox backend now.
     const stale = slot(aliceKey, {
-      signedIn: await alice.signedInGuard(aliceKey),
+      signedIn: await guardOf(alice, aliceKey),
     });
     expect(await code(stale.access())).toBe("IDENTITY_REQUIRED");
     expect(readMetadata().principal).toEqual(bobKey);
     expect(store.sandboxRefs()).toEqual([`piship:${ID}:sandbox#1`]);
     // Bob's own launch uses it.
     const active = await slot(bobKey, {
-      signedIn: await bob.signedInGuard(bobKey),
+      signedIn: await guardOf(bob, bobKey),
     }).access();
     expect((await active.secret()).reveal()).toBe(SECRET_2);
   });
@@ -807,7 +818,7 @@ describe("sandbox credential across user switches (fixtures)", () => {
     const issuer = alice.readIdentityMetadata()?.issuer ?? "";
     const aliceKey = { issuer, subject: "alice-0001" };
     const entering = slot(aliceKey, {
-      signedIn: await alice.signedInGuard(aliceKey),
+      signedIn: await guardOf(alice, aliceKey),
     });
     await alice.logout();
     expect(await code(entering.save(enter(SECRET)))).toBe("IDENTITY_REQUIRED");
@@ -816,7 +827,7 @@ describe("sandbox credential across user switches (fixtures)", () => {
     // Nor after another user signed in meanwhile.
     const again = await login("alice-0001");
     const waiting = slot(aliceKey, {
-      signedIn: await again.signedInGuard(aliceKey),
+      signedIn: await guardOf(again, aliceKey),
     });
     await login("bob-0002");
     expect(await code(waiting.save(enter(SECRET)))).toBe("IDENTITY_REQUIRED");
@@ -828,7 +839,7 @@ describe("sandbox credential across user switches (fixtures)", () => {
     const issuer = alice.readIdentityMetadata()?.issuer ?? "";
     const aliceKey = { issuer, subject: "alice-0001" };
     const pending = slot(aliceKey, {
-      signedIn: await alice.signedInGuard(aliceKey),
+      signedIn: await guardOf(alice, aliceKey),
     });
     // Between Bob's clear of the sandbox credential and his identity write,
     // Alice's `sandbox login` finishes: she is still the stored user.

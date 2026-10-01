@@ -8,6 +8,7 @@ export {
   writeIdentityDiscardedMarker,
 } from "./distribution-access.js";
 export {
+  type ExplainOptions,
   type ExplainRow,
   explainConfiguration,
   formatExplanation,

@@ -83,6 +83,8 @@ afterEach(async () => {
 function context(sandbox: Partial<SandboxConfig> | null = {}) {
   const lock = resolveLock(DEMO);
   const access = lock.access as AccessManifest;
+  if (access.identity.mode !== "oidc")
+    throw new Error("the demo signs in with OIDC");
   const governance = lock.governance;
   if (!governance) throw new Error("the demo declares governance");
   const out: string[] = [];
@@ -96,7 +98,7 @@ function context(sandbox: Partial<SandboxConfig> | null = {}) {
         identity: {
           ...access.identity,
           oidc: {
-            ...(access.identity as { oidc: object }).oidc,
+            ...access.identity.oidc,
             redirectUri: "http://127.0.0.1/callback",
           },
         },

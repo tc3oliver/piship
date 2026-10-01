@@ -65,6 +65,7 @@ export async function rollbackDistribution(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} is newer than the active ${receipt.active}; use update instead`,
       );
+    options.progress?.(`Verifying the retained ${receipt.previous} release`);
     let target: DistributionLock;
     try {
       target = verifyPayload(previous.payload);
@@ -73,8 +74,7 @@ export async function rollbackDistribution(
         "ROLLBACK_FAILED",
         `The retained release ${receipt.previous} failed verification: ${(error as Error).message}`,
         {
-          userAction:
-            "Reinstall a trusted release; the damaged one is not activated",
+          userAction: `The damaged release is not activated. Restore it with: piship repair ${id} <release archive of ${receipt.previous}>, then roll back again`,
         },
       );
     }
@@ -117,6 +117,7 @@ export async function rollbackDistribution(
     const notices = migration.items
       .filter((item) => item.verdict === "requires-review")
       .map((item) => item.reason);
+    options.progress?.(`Switching to ${receipt.previous}`);
     notices.push(...(await clearCredentials(stateDir, id, migration, options)));
     lifecycle.commit({
       ...readInstallReceipt(id),

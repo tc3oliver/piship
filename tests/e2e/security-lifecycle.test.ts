@@ -26,7 +26,7 @@ import {
 } from "../helpers/security.js";
 import { selfSignedLoopbackCertificate } from "../helpers/x509.js";
 
-// Security cases 6, 9, 10 and 11 (spec 30.3) over the lifecycle of one
+// Security cases 6, 9, 10 and 11 (docs/security.md, security test map) over the lifecycle of one
 // installed distribution: credential leakage in the reports of update and
 // rollback and in the rollback snapshots, and the network policy and TLS
 // that the update transport keeps. The credential-class matrix of
@@ -184,7 +184,7 @@ describe("update and rollback keep secrets out of their reports and snapshots (l
 });
 
 describe("the update transport keeps the network policy and TLS (local fixtures)", () => {
-  it("contacts only the declared update host, over verified TLS, and follows no redirect", async () => {
+  it("contacts only the declared update host, over verified TLS, and follows no redirect to another origin", async () => {
     const s = await lifecycleScenario("security-update-network");
     ownTemp(s);
     await s.installFirst();
@@ -260,7 +260,8 @@ describe("the update transport keeps the network policy and TLS (local fixtures)
       await untrusted.close();
     }
 
-    // A redirect is not followed, not even to a host the policy allows.
+    // A redirect to another origin (here another port) is not followed,
+    // not even to a host the policy allows.
     const target = await watch();
     const redirecting = createHttpServer((_request, response) => {
       response.writeHead(302, {
@@ -278,6 +279,7 @@ describe("the update transport keeps the network policy and TLS (local fixtures)
         `http://127.0.0.1:${port}/`,
       ]);
       expect(redirected.status).toBe(1);
+      expect(redirected.stderr).toContain("to another origin");
       expect(target.requests).toEqual([]);
     } finally {
       await new Promise<void>((done) => {

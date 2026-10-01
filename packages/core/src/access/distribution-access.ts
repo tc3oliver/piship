@@ -15,6 +15,7 @@ import {
   type NetworkPolicy,
   PiShipError,
   type PrincipalKey,
+  pishipClientHeader,
   principalKey,
   redact,
   type SecretStore,
@@ -62,6 +63,7 @@ import {
 } from "@piship/inference";
 import { incompatibleCapabilities } from "@piship/policy";
 import type { AccessManifest } from "@piship/schema";
+import { PISHIP_VERSION } from "../compatibility.js";
 import { readPreferences, resolveEffectiveConfig } from "../config.js";
 import {
   type AdapterContext,
@@ -599,6 +601,7 @@ export class DistributionAccess {
           ? { expectedBaseUrl: this.endpoints.baseUrl }
           : {}),
         fetch: this.#fetch,
+        client: this.#client(),
       });
     else if (mode === "local-secret")
       provider = new LocalSecretCredentialProvider();
@@ -671,6 +674,16 @@ export class DistributionAccess {
       liveCatalog: access.inference.liveCatalog,
       fetch: this.#fetch,
       secret: () => this.#secret,
+      client: this.#client(),
+    });
+  }
+
+  /** The `PiShip-Client` header the broker and the gateway receive. */
+  #client(): string {
+    return pishipClientHeader({
+      distribution: this.options.app.id,
+      version: this.options.app.version,
+      piship: PISHIP_VERSION,
     });
   }
 

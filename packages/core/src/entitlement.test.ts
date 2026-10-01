@@ -21,7 +21,7 @@ import {
 } from "./access/index.js";
 import { resolveEffectiveConfig, setPreference } from "./config.js";
 
-// The effective model catalog (spec §10): the distribution allowlist is the
+// The effective model catalog (docs/inference.md): the distribution allowlist is the
 // ceiling; the credential entitlement, the live gateway listing, and the
 // user's preference can only remove models from it. Entitlement freshness
 // (F25): a credential without `expires_at` is never renewed on its own, so

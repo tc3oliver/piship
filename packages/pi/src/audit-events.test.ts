@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   type ExtensionContext,
+  type ExtensionFactory,
+  type InlineExtension,
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -163,13 +165,17 @@ function context(): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
+/** The factory of an inline extension, in either of its public shapes. */
+const factoryOf = (extension: InlineExtension): ExtensionFactory =>
+  typeof extension === "function" ? extension : extension.factory;
+
 /** What an inline extension registers, through the public API shape. */
 function handlers(gov: GovernanceSession) {
   const registered = new Map<
     string,
     (event: unknown, ctx: unknown) => unknown
   >();
-  governanceHooks(gov).factory({
+  factoryOf(governanceHooks(gov))({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       registered.set(event, handler),
   } as never);
@@ -254,6 +260,7 @@ describe("governed session audit events (real flows)", () => {
       context(),
     );
     const policy = await modelPolicy(session, "unit/allowed");
+    if (!policy.denied) throw new Error("the model policy reports no denial");
     policy.denied("unit", "other");
     await expect(modelPolicy(session, "unit/denied")).rejects.toMatchObject({
       code: "MODEL_DENIED",

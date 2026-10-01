@@ -11,13 +11,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
+import {
+  EPHEMERAL_PORTS,
+  publishedPorts,
+  type StackPorts,
+  startWithPublishedPorts,
+} from "./ports.js";
 import { registerTeardown } from "./teardown.js";
 
 // The enterprise reference stack (Keycloak, PostgreSQL, LiteLLM, the broker and
 // the mock upstream) started with Docker Compose for one test file. The stack
-// has its own compose project and loopback ports, and its secrets live in a
-// generated env file in a temporary directory: nothing is written into the
-// repository, and `stop()` leaves no container, network, or file behind.
+// has its own compose project and loopback ports that Docker chooses
+// (./ports.ts), and its secrets live in a generated env file in a temporary
+// directory: nothing is written into the repository, and `stop()` leaves no
+// container, network, or file behind.
 //
 // The project and the directory are named `piship-reftest-<pid>-...` like
 // those of tests/enterprise-reference/stack.ts: a run never touches another
@@ -29,21 +36,12 @@ export const referenceDirectory = fileURLToPath(
 );
 const composeFile = join(referenceDirectory, "compose.yaml");
 
-// Beside the stack's own defaults (18xxx), so a developer's running copy and
-// this one do not collide. Each port can be set in the environment.
-const DEFAULT_PORTS = {
-  KEYCLOAK_PORT: 38080,
-  LITELLM_PORT: 34000,
-  MOCK_UPSTREAM_PORT: 38090,
-  POSTGRES_PORT: 35432,
-  BROKER_PORT: 38070,
-} as const;
-
 export type ReferenceUser = "alice" | "bob";
 
 export interface Stack {
   readonly project: string;
-  readonly ports: Readonly<Record<keyof typeof DEFAULT_PORTS, number>>;
+  /** The host ports Docker chose on 127.0.0.1. */
+  readonly ports: Readonly<StackPorts>;
   readonly issuer: string;
   readonly brokerUrl: string;
   readonly revokeUrl: string;
@@ -115,12 +113,6 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     ...(options.overrides ?? []).map((file) => join(referenceDirectory, file)),
   ];
   const project = `${PROJECT_PREFIX}${process.pid}-distribution-${randomBytes(3).toString("hex")}`;
-  const ports = Object.fromEntries(
-    Object.entries(DEFAULT_PORTS).map(([name, fallback]) => [
-      name,
-      Number(process.env[name] ?? fallback),
-    ]),
-  ) as Stack["ports"];
   const directory = mkdtempSync(
     join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`),
   );
@@ -129,12 +121,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     process.execPath,
     [join(referenceDirectory, "scripts", "generate-env.mjs"), "--out", envFile],
     {
-      env: {
-        ...process.env,
-        ...Object.fromEntries(
-          Object.entries(ports).map(([name, port]) => [name, String(port)]),
-        ),
-      },
+      env: { ...process.env, ...EPHEMERAL_PORTS },
       encoding: "utf8",
     },
   );
@@ -145,7 +132,13 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
   chmodSync(envFile, 0o600);
   if (statSync(envFile).mode & 0o077)
     throw new Error("the generated env file is not owner-only");
-  const environment = parseEnv(readFileSync(envFile, "utf8"));
+  // The variables the start adds to the env file must not come from the
+  // shell either.
+  const environment: Record<string, string> = {
+    ...parseEnv(readFileSync(envFile, "utf8")),
+    KEYCLOAK_PUBLISHED_PORT: "",
+    LITELLM_PUBLISHED_PORT: "",
+  };
 
   const compose = (args: readonly string[]) =>
     docker(project, envFile, environment, args, files);
@@ -160,8 +153,21 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
     // No `-v`: the stack keeps no volume, and a volume is never pruned here.
     downArguments: ["down", "--timeout", "10"],
   });
-  const up = compose(["up", "--wait", "--wait-timeout", "300"]);
-  if (up.status !== 0) {
+  const up = startWithPublishedPorts(compose, envFile, [
+    "up",
+    "--wait",
+    "--wait-timeout",
+    "300",
+  ]);
+  let ports: StackPorts | undefined;
+  let failure = up.status === 0 ? undefined : (up.stderr ?? "").slice(-2000);
+  if (failure === undefined)
+    try {
+      ports = publishedPorts(compose);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+  if (failure !== undefined || !ports) {
     const status = compose(["ps", "--all"]);
     try {
       stop();
@@ -169,7 +175,7 @@ export async function startStack(options: StackOptions = {}): Promise<Stack> {
       // Report the start failure, not the cleanup one.
     }
     throw new Error(
-      `docker compose up failed (exit ${up.status}):\n${up.stderr.slice(-2000)}\n${status.stdout}`,
+      `docker compose up failed (exit ${up.status}):\n${failure}\n${status.stdout}`,
     );
   }
 

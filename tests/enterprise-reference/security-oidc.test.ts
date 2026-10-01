@@ -9,7 +9,7 @@ import { authorizeAtKeycloak } from "../../examples/enterprise-reference/tests/s
 import { ATTACKS, browser, type Follow } from "../helpers/oidc-attacks.js";
 import { type ReferenceStack, request, startReferenceStack } from "./stack.js";
 
-// Security cases 1-3 (spec 30.3) against a live Keycloak: invalid issuer,
+// Security cases 1-3 (docs/security.md, security test map) against a live Keycloak: invalid issuer,
 // audience, state, nonce. The real OIDC client runs against the reference
 // realm and a hostile browser changes one thing between the authorization
 // request PiShip prints and the callback it receives (the same attacks
@@ -26,8 +26,8 @@ import { type ReferenceStack, request, startReferenceStack } from "./stack.js";
 // the wrong audience.
 //
 // Needs Docker; run with `npm run test:reference` after `npm run build`. The
-// stack takes its ports from KEYCLOAK_PORT and the other variables of
-// tests/enterprise-reference/stack.ts, so a run beside another one sets them.
+// stack publishes on ports Docker chooses (tests/enterprise-reference/
+// stack.ts), so a run beside another one needs no setting.
 
 const CLIENT_ID = "acmecode";
 const REDIRECT = "http://127.0.0.1/callback";
@@ -83,8 +83,13 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
 
   it.each(ATTACKS)("rejects $name", async (attack) => {
     const hostile = browser(at("alice"), attack);
+    // A refused callback leaves the sign-in waiting until its timeout: long
+    // enough for Keycloak to deliver the callback, short enough to end.
     const error = await rejection(
-      provider().login({ openUrl: hostile.openUrl, timeoutMs: 60_000 }),
+      provider().login({
+        openUrl: hostile.openUrl,
+        timeoutMs: attack.refused ? 20_000 : 60_000,
+      }),
     );
     expect(await hostile.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
@@ -154,8 +159,9 @@ describe("hostile browser against the OIDC client (live Keycloak)", () => {
   });
 
   it("refuses an issuer whose discovery document names another issuer", async () => {
-    // The stack pins Keycloak's frontend URL to 127.0.0.1, so asking through
-    // `localhost` gets a document whose `issuer` is not the one asked for.
+    // The stack pins Keycloak's frontend host to 127.0.0.1, so asking
+    // through `localhost` gets a document whose `issuer` is not the one asked
+    // for.
     const other = `http://localhost:${stack.ports.KEYCLOAK_PORT}/realms/piship-reference`;
     const discovery = (await (
       await fetch(`${other}/.well-known/openid-configuration`)

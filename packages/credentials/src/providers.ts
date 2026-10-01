@@ -3,6 +3,7 @@ import {
   type CredentialProvider,
   type IdentitySession,
   type ManagedFetch,
+  PISHIP_CLIENT_HEADER,
   PiShipError,
   parseRetryAfter,
   type RuntimeCredential,
@@ -18,6 +19,11 @@ export interface HttpBrokerOptions {
   /** Declared gateway; a broker-returned base_url must match it. */
   readonly expectedBaseUrl?: string;
   readonly timeoutMs?: number;
+  /**
+   * The `PiShip-Client` header value sent on acquire and revoke
+   * (`pishipClientHeader`); none is sent without it.
+   */
+  readonly client?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -270,6 +276,33 @@ function transportCode(error: unknown): string {
 }
 
 /**
+ * The proxy the managed fetch reports a failure on, from its structured
+ * detail: the proxy as `scheme://host:port` and a bare code (or `timeout`).
+ */
+function proxyHop(
+  error: unknown,
+):
+  | { proxy: string; transport: string; userAction: string | undefined }
+  | undefined {
+  if (!(error instanceof PiShipError) || error.code !== "GATEWAY_UNREACHABLE")
+    return undefined;
+  const detail = error.sanitizedDetail;
+  if (detail?.hop !== "proxy") return undefined;
+  const { proxy, transport } = detail;
+  if (typeof proxy !== "string" || !/^https?:\/\/[^\s/@]+$/.test(proxy))
+    return undefined;
+  return {
+    proxy,
+    transport:
+      typeof transport === "string" &&
+      /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(transport)
+        ? transport
+        : "network error",
+    userAction: error.userAction,
+  };
+}
+
+/**
  * System errors raised while connecting, before any request byte reaches the
  * broker: the broker cannot have acted on the request. Any other transport
  * failure may come after the request was sent.
@@ -374,6 +407,27 @@ async function brokerRequest(
     if (options.signal?.aborted) return cancelled("unknown");
     if (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE")
       return error;
+    // The managed fetch says when the proxy failed, not the broker: a
+    // connection to the proxy, or a tunnel still opening at the deadline.
+    const hop = proxyHop(error);
+    if (hop) {
+      const code = systemCode(error);
+      return brokerFailure(
+        operation,
+        "unreachable",
+        `${subject} is unreachable through the proxy ${hop.proxy} (${hop.transport})`,
+        {
+          retryable: true,
+          outcome: failedBeforeSend(error) ? "not-sent" : "unknown",
+          detail: {
+            ...detail,
+            proxy: hop.proxy,
+            ...(code ? { transport: code } : {}),
+          },
+          ...(hop.userAction ? { userAction: hop.userAction } : {}),
+        },
+      );
+    }
     if (
       deadline.aborted ||
       (error as Error)?.name === "AbortError" ||
@@ -533,6 +587,9 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
           "content-type": "application/json",
           accept: "application/json",
           ...(key === undefined ? {} : { "idempotency-key": key }),
+          ...(this.options.client
+            ? { [PISHIP_CLIENT_HEADER]: this.options.client }
+            : {}),
         },
         body: JSON.stringify({
           distribution: ctx.distributionId,
@@ -776,6 +833,9 @@ export class HttpBrokerCredentialProvider implements CredentialProvider {
         headers: {
           authorization: `Bearer ${credential.secret.reveal()}`,
           "content-type": "application/json",
+          ...(this.options.client
+            ? { [PISHIP_CLIENT_HEADER]: this.options.client }
+            : {}),
         },
         body: JSON.stringify({
           credential_id: credential.credentialId ?? null,

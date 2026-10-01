@@ -199,7 +199,19 @@ sandbox:
   required: true
   filesystem:
     read:
-      deny: [~/.ssh, ~/.aws, ~/.gnupg]
+      # A declared list replaces PiShip's default list rather than adding to
+      # it, so this one restates every default and then adds its own.
+      deny:
+        - ~/.ssh
+        - ~/.aws
+        - ~/.gnupg
+        - ~/.config/gcloud
+        - ~/.azure
+        - ~/.kube
+        - ~/.docker
+        - ~/.netrc
+        - ~/.npmrc
+        - ~/.pi
     write:
       allow: [workspace, tmp]
   network:

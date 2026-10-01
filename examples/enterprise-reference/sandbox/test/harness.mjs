@@ -79,7 +79,8 @@ export async function startService(extraEnv = {}, options = {}) {
   );
   const env = {
     PATH: process.env.PATH ?? "",
-    SANDBOX_LISTEN_PORT: "1",
+    // A free port the system chooses, as the live test asks for.
+    SANDBOX_LISTEN_PORT: "0",
     SANDBOX_INSTANCE: "contract",
     SANDBOX_REGISTRY: registry,
     SANDBOX_WORKSPACE_ROOTS: workspaces,
@@ -91,7 +92,6 @@ export async function startService(extraEnv = {}, options = {}) {
     ...extraEnv,
   };
   const config = loadConfig(env);
-  config.listenPort = 0;
   const lines = [];
   const service = createSandboxServer(config, {
     write: (line) => lines.push(line),
@@ -99,7 +99,6 @@ export async function startService(extraEnv = {}, options = {}) {
     ...(options.owner ? { owner: options.owner } : {}),
   });
   const port = await service.start();
-  config.allowedHosts.add(`127.0.0.1:${port}`);
   const base = `http://127.0.0.1:${port}`;
 
   return {
@@ -126,7 +125,8 @@ export async function startService(extraEnv = {}, options = {}) {
       ),
     /**
      * Turn a fault of the fake docker on or off: `DOWN`, `RUN_FAIL`, `NO_MAIN`,
-     * or `CANCEL_DELAY` (its `content` is the milliseconds).
+     * `NO_STAT`, `CANCEL_DELAY` (its `content` is the milliseconds), or `SWAP`
+     * (its `content` is `{"path", "to"}` as JSON).
      */
     fault(name, on = true, content = "") {
       const file = join(docker, name);

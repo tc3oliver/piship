@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -287,11 +288,11 @@ function caught(fn: () => unknown): Error & { code?: string } {
 }
 async function rejection(
   promise: Promise<unknown>,
-): Promise<Error & { code?: string }> {
+): Promise<Error & { code?: string; userAction?: string }> {
   try {
     await promise;
   } catch (error) {
-    return error as Error & { code?: string };
+    return error as Error & { code?: string; userAction?: string };
   }
   throw new Error("expected a rejection");
 }
@@ -491,6 +492,16 @@ describe("lock piship-lock/v1alpha4", () => {
 });
 
 // ------------------------------------------------------------------- gates
+
+// The release and lifecycle suites run only on an evidenced target. Every CI
+// runner (ubuntu-latest, macos-latest, windows-latest) is one, so there a
+// target that is not must fail rather than silently skip those suites.
+it.runIf(process.env.CI === "true")(
+  "runs the evidenced-target suites on every CI runner",
+  () => {
+    expect(EVIDENCED_TARGETS, currentTarget()).toContain(currentTarget());
+  },
+);
 
 describe.runIf(HOST_EVIDENCED)("release gates", () => {
   it("accepts a current v1alpha4 lock with only reviewed install scripts", () => {
@@ -2134,6 +2145,110 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     ]);
   });
 
+  it("changes nothing when signing fails, and leaves no temporary files", async () => {
+    const { channelDir, built } = await channel();
+    const files = () =>
+      readdirSync(channelDir)
+        .sort()
+        .map((name) => [name, readFileSync(join(channelDir, name))]);
+    const before = files();
+    for (const signer of [
+      { privateKeyPem: KEY.privateKeyPem, keyId: "Not A Key Id" },
+      { privateKeyPem: "not a pem", keyId: KEY.id },
+    ])
+      await expect(
+        signChannel({
+          directory: channelDir,
+          channel: "stable",
+          archives: [built.archive],
+          ...signer,
+        }),
+      ).rejects.toThrow();
+    expect(files()).toEqual(before);
+    await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      privateKeyPem: KEY.privateKeyPem,
+      keyId: KEY.id,
+    });
+    expect(readdirSync(channelDir).sort()).toEqual([
+      basename(built.archive),
+      "stable.json",
+      "stable.json.sig",
+    ]);
+    // Published files keep the default mode, not the owner-only state mode.
+    if (process.platform !== "win32")
+      for (const name of ["stable.json", "stable.json.sig"])
+        expect(statSync(join(channelDir, name)).mode & 0o777).toBe(
+          0o666 & ~process.umask(),
+        );
+  });
+
+  it("extends existing metadata only when its signature verifies", async () => {
+    const { channelDir, built } = await channel();
+    const path = join(channelDir, "stable.json");
+    const resign = (key = KEY) =>
+      signChannel({
+        directory: channelDir,
+        channel: "stable",
+        archives: [built.archive],
+        privateKeyPem: key.privateKeyPem,
+        keyId: key.id,
+      });
+    // Rotation: a new signing key may extend metadata signed by a key the
+    // added release pins.
+    const next = generateSigningKey("test-release-next");
+    expect((await resign(next)).metadata.sequence).toBe(2);
+    // Metadata signed by a key neither the signer nor the release vouches
+    // for is refused.
+    const stranger = generateSigningKey("someone-else");
+    const valid = readFileSync(`${path}.sig`);
+    writeFileSync(
+      `${path}.sig`,
+      JSON.stringify(
+        signBytes(readFileSync(path), stranger.privateKeyPem, stranger.id),
+      ),
+    );
+    const unknown = await rejection(resign());
+    expect(unknown.code).toBe("INTEGRITY_FAILED");
+    expect(unknown.message).toMatch(
+      /Existing channel metadata .*stable\.json does not verify: Signature key someone-else is not trusted/,
+    );
+    writeFileSync(`${path}.sig`, valid);
+    expect((await resign(next)).metadata.sequence).toBe(3);
+    // The old key cannot extend it with a release that does not pin the new.
+    await expect(resign()).rejects.toThrow(
+      /does not verify: Signature key test-release-next is not trusted; trusted keys: test-release;/,
+    );
+    // ... unless the owner names the key that signed it.
+    const back = await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      privateKeyPem: KEY.privateKeyPem,
+      keyId: KEY.id,
+      previousKeys: [{ id: next.id, publicKey: next.publicKey }],
+    });
+    expect(back.metadata.sequence).toBe(4);
+    expect((await resign(next)).metadata.sequence).toBe(5);
+    // Metadata changed after it was signed, or without its signature.
+    const signed = readFileSync(path, "utf8");
+    writeFileSync(path, signed.replace('"sequence": 5', '"sequence": 50'));
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json does not verify: Signature does not verify/,
+    );
+    writeFileSync(path, signed);
+    rmSync(`${path}.sig`);
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json has no signature/,
+    );
+    writeFileSync(path, "{");
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json is not valid channel metadata/,
+    );
+  });
+
   it("refuses archives of another distribution and unverified archives", async () => {
     const { dir, channelDir } = await channel();
     const other = project({ id: "otherpi" });
@@ -2223,6 +2338,86 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       fetcher,
     );
     expect(readFileSync(out).length).toBe(entry.bytes);
+  });
+
+  it("follows redirects only within the source origin, honors 429 Retry-After, and names a clock that is ahead", async () => {
+    const { channelDir } = await channel();
+    const serve = (url: URL, headers: Record<string, string> = {}) => {
+      const file = join(channelDir, url.pathname.split("/").pop() as string);
+      return new Response(readFileSync(file), { headers });
+    };
+    const base = "https://updates.example.test/acmepi";
+    const requested: string[] = [];
+    // Same origin: /acmepi/x -> /mirror/x is followed.
+    const sameOrigin = (async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requested.push(url.href);
+      expect(init?.redirect).toBe("manual");
+      return url.pathname.startsWith("/acmepi/")
+        ? new Response(null, {
+            status: 302,
+            headers: { location: `/mirror/${url.pathname.split("/").pop()}` },
+          })
+        : serve(url);
+    }) as typeof fetch;
+    await expect(
+      readChannel(base, "stable", { ...options, fetcher: sameOrigin }),
+    ).resolves.toBeTruthy();
+    expect(requested).toContain(
+      "https://updates.example.test/mirror/stable.json",
+    );
+    // Another origin is never contacted.
+    const contacted: string[] = [];
+    const crossOrigin = (async (input: URL | string) => {
+      const url = new URL(String(input));
+      contacted.push(url.host);
+      return url.host === "updates.example.test"
+        ? new Response(null, {
+            status: 301,
+            headers: { location: "https://cdn.example.test/stable.json" },
+          })
+        : serve(url);
+    }) as typeof fetch;
+    const redirected = await rejection(
+      readChannel(base, "stable", { ...options, fetcher: crossOrigin }),
+    );
+    expect(redirected.code).toBe("UPDATE_FAILED");
+    expect(redirected.message).toContain(
+      "redirected stable.json to another origin (https://cdn.example.test)",
+    );
+    expect(contacted).toEqual(["updates.example.test"]);
+    // 429 is retryable and carries Retry-After.
+    const limited = (async () =>
+      new Response("slow down", {
+        status: 429,
+        headers: { "retry-after": "120" },
+      })) as unknown as typeof fetch;
+    const rateLimited = await rejection(
+      readChannel(base, "stable", { ...options, fetcher: limited }),
+    );
+    expect(rateLimited).toMatchObject({
+      code: "UPDATE_FAILED",
+      retryable: true,
+      retryAfterMs: 120_000,
+    });
+    // The source's clock says the metadata is still valid: this computer's
+    // clock is ahead, and the publisher is not blamed.
+    const dated = (async (input: URL | string) =>
+      serve(new URL(String(input)), {
+        date: "Tue, 02 Jun 2026 00:00:00 GMT",
+      })) as typeof fetch;
+    const ahead = await rejection(
+      readChannel(base, "stable", {
+        ...options,
+        fetcher: dated,
+        now: () => new Date("2026-08-01T00:00:00Z"),
+      }),
+    );
+    expect(ahead.code).toBe("UPDATE_FAILED");
+    expect(ahead.message).toContain(
+      "This computer's clock (2026-08-01T00:00:00.000Z) is ahead of the update source's (2026-06-02T00:00:00.000Z)",
+    );
+    expect(ahead.userAction).toContain("Correct this computer's date and time");
   });
 
   it("downloadArchive refuses unsafe names and digest mismatches", async () => {

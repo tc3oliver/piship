@@ -21,7 +21,8 @@ import {
 } from "../access/index.js";
 import {
   type AccessEvent,
-  formatMigrationReport,
+  formatMigrationSummary,
+  progressReporter,
   readInstallReceipt,
   rollbackDistribution,
   updateDistribution,
@@ -243,8 +244,10 @@ export async function runUpdate(
   ) as typeof fetch;
   let result: Awaited<ReturnType<typeof updateDistribution>>;
   try {
+    const progress = progressReporter(ctx.err);
     result = await updateDistribution(app.id, {
       ...options,
+      ...(progress ? { progress } : {}),
       check,
       acceptReview: flags.has("--accept-review"),
       fetcher,
@@ -267,7 +270,7 @@ export async function runUpdate(
     );
     return;
   }
-  if (result.migration) ctx.out(formatMigrationReport(result.migration));
+  if (result.migration) ctx.out(formatMigrationSummary(result.migration));
   if (result.status === "available") {
     ctx.out(
       `${app.name} ${result.to} is available on the ${result.channel} channel (signed by ${result.keyId}); run ${app.command} update to install it.`,
@@ -291,7 +294,9 @@ export async function runRollback(ctx: BrandedContext): Promise<void> {
   const revokeCredential = credentialRevoker(ctx);
   let result: Awaited<ReturnType<typeof rollbackDistribution>>;
   try {
+    const progress = progressReporter(ctx.err);
     result = await rollbackDistribution(app.id, {
+      ...(progress ? { progress } : {}),
       secretStore: secretStore(ctx),
       secretStoreFor: (provider) => storeOf(ctx, provider),
       ...(revokeCredential ? { revokeCredential } : {}),

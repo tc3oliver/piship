@@ -17,7 +17,7 @@ import { startLocalServices } from "../../examples/demo-company/fixtures/local-s
 import { ATTACKS, browser, followFixture } from "../helpers/oidc-attacks.js";
 import { SecretLedger, scanTree } from "../helpers/security.js";
 
-// Security case 1-3 (spec 30.3): invalid OIDC issuer, audience, state, nonce.
+// Security case 1-3 (docs/security.md, security test map): invalid OIDC issuer, audience, state, nonce.
 //
 // The real OIDC client (`OidcPkceIdentityProvider`, and `DistributionAccess`
 // around it) runs against the fixture provider over loopback HTTP. Two things
@@ -123,7 +123,10 @@ describe("hostile browser against the OIDC client (fixture provider)", () => {
   it.each(ATTACKS)("rejects $name", async (attack) => {
     const hostile = browser(followFixture, attack);
     const error = await rejection(
-      provider().login({ openUrl: hostile.openUrl, timeoutMs: 15_000 }),
+      provider().login({
+        openUrl: hostile.openUrl,
+        timeoutMs: attack.refused ? 2_000 : 15_000,
+      }),
     );
     expect(await hostile.finished()).toBeUndefined();
     expect(error).toBeInstanceOf(PiShipError);
@@ -184,6 +187,8 @@ const PROVIDER_FAULTS: readonly {
   code?: string;
   /** Whether PiShip exchanged the code, so the provider issued tokens before the rejection. */
   exchanged?: false;
+  /** The listener refused the callback and the sign-in waited (see ATTACKS). */
+  waits?: true;
 }[] = [
   {
     name: "an ID token from another issuer",
@@ -226,8 +231,10 @@ const PROVIDER_FAULTS: readonly {
     name: "a callback whose state is another one",
     knob: "stateOverride",
     value: "attacker-state",
-    message: /state/,
+    message: /refused 1 callback without this sign-in's state/,
+    code: "IDENTITY_REQUIRED",
     exchanged: false,
+    waits: true,
   },
 ];
 
@@ -259,7 +266,7 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const error = await rejection(
         distribution.login({
           openUrl: approve,
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(fault.waits ? 2_000 : 15_000),
         }),
       );
       expect(error).toBeInstanceOf(PiShipError);
@@ -317,7 +324,7 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const error = await rejection(
         distribution.login({
           openUrl: approve,
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(fault.waits ? 2_000 : 15_000),
         }),
       );
       expect(error.code).toBe(fault.code ?? "IDENTITY_INVALID");
@@ -370,7 +377,7 @@ describe("a rejected sign-in changes nothing (fixture provider, DistributionAcce
       const error = await rejection(
         distribution.login({
           openUrl: hostile.openUrl,
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(attack.refused ? 2_000 : 15_000),
         }),
       );
       expect(await hostile.finished()).toBeUndefined();

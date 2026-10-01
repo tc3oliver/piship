@@ -17,7 +17,7 @@ v0.6 makes the documentation match `main`, fixes known contract problems, and sp
 4. **Error and capability contracts.** Error codes without a runtime path are removed or justified, with a test that every code has a producer; one shared function decides model compatibility for both launch and the `capabilities` report.
 5. **Observability and audit retention.** Every local metrics recorder is wired to its runtime call site, and `logs/audit.jsonl` is rotated by size with fixed defaults.
 6. **Module split and boundaries.** Large files in `core`, `pi`, and `schema` are split into modules with no behavior change, Pi-independent branded commands move out of `packages/pi`, and the boundary check discovers packages automatically and reads the Pi version from one source.
-7. **Compatibility and examples.** A `governance` surface is added to `compatibility/pi.json` and to the weaker-of-surfaces rule in `release.json`; a read-only latest-Pi canary; the examples and README quickstart are checked against the current CLI; the Release candidate workflow also qualifies the personal example.
+7. **Compatibility and examples.** A `governance` surface is added to `compatibility/pi.json` and to the weaker-of-surfaces rule in `release.json`; a read-only latest-Pi canary; documented commands are checked for the two mistakes that broke a reader before (resolving `piship` through `npm exec` or `npx`, and installing after `piship test` without adopting its state, `tests/docs-commands.test.ts`), the README manifest is validated as written (`tests/docs-examples.test.ts`), and the E2E builds and installs the examples; the README quickstart is not run end to end; the Release candidate workflow also qualifies the personal example.
 
 ## v0.7 — Enterprise Integration and Qualification (implemented)
 
@@ -41,7 +41,7 @@ Out of scope for v0.6 and, unless listed above, for v0.7; candidates for later:
 - The remaining git control-file hardening listed in [security](security.md#limits).
 - Verification against live identity providers, gateways, and platform secret stores; macOS and Windows code signing; a Windows sandbox adapter.
 - Runtime hooks for actions that have none yet: `network.connect`, `web.request`, `browser.execute`, `agent.invoke`, and `memory.*`.
-- Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([release checklist](release/owner-workflow.md#release-checklist)); more targets once each has installed lifecycle evidence.
+- Publish automation (for example GitHub Releases or npm Trusted Publishing with provenance), only after package ownership and release policy are settled and with the maintainer's explicit approval ([maintainer release checklist](maintainers/release-checklist.md)); more targets once each has installed lifecycle evidence.
 
 ## Remote execution backends
 

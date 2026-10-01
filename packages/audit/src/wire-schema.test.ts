@@ -272,7 +272,8 @@ describe("piship-audit-batch/v1 wire schema", () => {
     const batch = JSON.parse(bodies[1] as string) as {
       events: Record<string, unknown>[];
     };
-    const [sent] = batch.events as [AuditEvent];
+    const sent = batch.events[0];
+    if (!sent) throw new Error("the batch carries no event");
     const variants: unknown[] = [
       { ...batch, schema: "piship-audit-batch/v2" },
       { ...batch, events: [{ ...sent, event: "made.up" }] },

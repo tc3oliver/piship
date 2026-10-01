@@ -46,20 +46,42 @@ export function networkGroup(data: DoctorData, out: DoctorSection): void {
       ...(http ? [`http ${http}`] : []),
       ...(https ? [`https ${https}`] : []),
     ];
-    out.ok(
-      "proxy",
-      proxies.length
-        ? `active (${proxies.join(", ")})`
-        : "none set in the environment",
-    );
+    const checks = network.proxyChecks ?? [];
+    const refused = checks.filter((check) => check.error);
+    if (!proxies.length) out.ok("proxy", "none set in the environment");
+    else if (refused.length)
+      out.bad(
+        "proxy",
+        `active (${proxies.join(", ")}); cannot connect to ${refused.map((check) => `${check.proxy} (${check.error})`).join(", ")}: check that the proxy is running and that HTTPS_PROXY and HTTP_PROXY name it`,
+      );
+    else
+      out.ok(
+        "proxy",
+        `active (${proxies.join(", ")})${checks.length ? "; accepts connections" : ""}`,
+      );
     out.ok("NO_PROXY", noProxy ? "set" : "not set");
   }
-  out.ok(
-    "enterprise CA",
-    network.caBundles
-      ? `${network.caBundles} additional bundle(s) declared`
-      : "none declared; default trust roots",
-  );
+  const paths = network.paths ?? [];
+  if (network.caError) out.bad("enterprise CA", network.caError);
+  else if (network.caBundles)
+    out.ok(
+      "enterprise CA",
+      `${network.caBundles} additional bundle(s) declared${network.caCertificates === undefined ? "" : `; ${network.caCertificates} certificate(s) loaded`}`,
+    );
+  else if (paths.some((path) => path.code === "TLS_POLICY_VIOLATION"))
+    out.warn(
+      "enterprise CA",
+      "none declared; default trust roots, and an endpoint failed TLS verification: if it uses an enterprise or private CA, declare that CA in network.tls.additionalCA",
+    );
+  else out.ok("enterprise CA", "none declared; default trust roots");
+  for (const path of paths)
+    if (path.error)
+      out.bad(`path ${path.label}`, `${path.host}: ${path.error}`);
+    else
+      out.ok(
+        `path ${path.label}`,
+        `${path.host} answered (HTTP ${path.status})`,
+      );
   if (!network.childrenRestricted) {
     out.info(
       "agent commands",

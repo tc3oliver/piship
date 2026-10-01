@@ -221,7 +221,7 @@ describe("TLS is never downgraded or disabled", () => {
       createManagedFetch({ ...direct, additionalCA: [wrong] })(
         `https://127.0.0.1:${port}/`,
       ),
-    ).rejects.toMatchObject({ code: "GATEWAY_UNREACHABLE" });
+    ).rejects.toMatchObject({ code: "TLS_POLICY_VIOLATION" });
     expect(served).toBe(0);
     const right = join(directory, "server-ca.pem");
     writeFileSync(right, server.certificate);
@@ -250,6 +250,18 @@ describe("private-only destinations", () => {
     expect(() =>
       checkDestination(new URL("https://other.internal.example/v1"), policy),
     ).toThrow(expect.objectContaining({ code: "NETWORK_DENIED" }));
+  });
+
+  it("matches the exact hostname: never a subdomain, a parent, or a spelling with a trailing dot", () => {
+    for (const url of [
+      "https://api.llm.internal.example/v1",
+      "https://internal.example/v1",
+      "https://llm.internal.example./v1",
+      "https://203.0.113.8/",
+    ])
+      expect(() => checkDestination(new URL(url), policy), url).toThrow(
+        expect.objectContaining({ code: "NETWORK_DENIED" }),
+      );
   });
 
   it("does not check that an allowed address is private", () => {

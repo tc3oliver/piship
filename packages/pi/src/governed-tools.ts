@@ -1,8 +1,10 @@
 // Governed replacements for Pi's built-in tools. Pi's own tool definitions are
 // reused through their public operation hooks, so rendering, truncation and
 // diff behavior stay upstream; PiShip only decides each file access and each
-// command before it happens. Custom tools passed to the SDK take precedence
-// over any extension tool of the same name.
+// command before it happens. The one exception is bash's execute, which
+// PiShip runs so the full output is owned by the session (governedBashTool).
+// Custom tools passed to the SDK take precedence over any extension tool of
+// the same name.
 import { constants } from "node:fs";
 import {
   access,
@@ -12,14 +14,17 @@ import {
   readlink,
   stat,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import {
   type BashOperations,
+  type BashToolDetails,
   createBashToolDefinition,
   createEditToolDefinition,
   createLocalBashOperations,
   createReadToolDefinition,
   createWriteToolDefinition,
+  DEFAULT_MAX_BYTES,
   type ExtensionContext,
   formatSize,
   type ToolDefinition,
@@ -45,6 +50,7 @@ import {
   withApprovedNetwork,
 } from "@piship/sandbox";
 import type { GovernanceSession } from "./governance-session.js";
+import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
 /** True when `path` is `root` or below it. */
 const inside = (root: string, path: string) => isWithin(path, root);
@@ -270,13 +276,16 @@ const NONBLOCK = constants.O_NONBLOCK ?? 0;
 export const GOVERNED_READ_LIMIT_BYTES = 16 * 1024 * 1024;
 
 /**
- * The most output one governed shell command may produce. Pi keeps only a
- * bounded tail in memory but copies the complete output to a temp file with
- * no limit, so a runaway command would write until the disk is full. Past
- * this budget the command is stopped and its process tree killed.
+ * The most output one governed shell command may produce. Only a bounded
+ * tail is kept in memory, but the complete output is copied to a temp file
+ * (the session's for the agent's tool, Pi's for a `!` command), so a runaway
+ * command would write until the disk is full. Past this budget the command
+ * is stopped and its process tree killed.
  */
 export const SHELL_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024;
 const OUTPUT_LIMIT_NOTICE = `\n[output exceeded the ${SHELL_OUTPUT_LIMIT_BYTES / 1024 / 1024} MiB shell output limit; PiShip stopped the command. Redirect large output to a file and inspect it with head, tail, or grep.]\n`;
+const lowDiskNotice = (budget: number) =>
+  `\n[output reached ${formatSize(budget)}, all the temporary disk can spare; PiShip stopped the command. Free temporary disk space or redirect large output to a file.]\n`;
 
 /** The path the kernel reports for an open file, where the platform has one. */
 async function openedPath(handle: FileHandle): Promise<string | undefined> {
@@ -437,16 +446,16 @@ async function gateCommand(
 type ExecOptions = Parameters<BashOperations["exec"]>[2];
 
 /**
- * Pass at most SHELL_OUTPUT_LIMIT_BYTES of output through, then one notice,
- * and abort the returned signal so the runner kills the process tree.
+ * Pass at most `budget` bytes of output through, then one notice, and abort
+ * the returned signal so the runner kills the process tree.
  */
-function boundedOutput(options: ExecOptions) {
+function boundedOutput(options: ExecOptions, budget: number, notice: string) {
   const limit = new AbortController();
   let passed = 0;
   let exceeded = false;
   const onData = (data: Buffer) => {
     if (exceeded) return;
-    const room = SHELL_OUTPUT_LIMIT_BYTES - passed;
+    const room = budget - passed;
     if (data.length <= room) {
       passed += data.length;
       options.onData(data);
@@ -454,7 +463,7 @@ function boundedOutput(options: ExecOptions) {
     }
     exceeded = true;
     if (room > 0) options.onData(data.subarray(0, room));
-    options.onData(Buffer.from(OUTPUT_LIMIT_NOTICE));
+    options.onData(Buffer.from(notice));
     limit.abort();
   };
   const signal = options.signal
@@ -467,7 +476,9 @@ function boundedOutput(options: ExecOptions) {
  * Shell operations: policy first, then the OS sandbox when it is enforced.
  * Without an enforced sandbox the command runs as Pi would run it, and the
  * decision was control-plane only. Either way the command's output is
- * bounded by SHELL_OUTPUT_LIMIT_BYTES.
+ * bounded by SHELL_OUTPUT_LIMIT_BYTES. A user's `!` command runs through Pi,
+ * which copies its full output to a temp file PiShip cannot configure, so
+ * its budget is also lowered to the free temp space minus a reserve.
  */
 export function governedBashOperations(
   gov: GovernanceSession,
@@ -512,7 +523,17 @@ export function governedBashOperations(
         options.onData(Buffer.from(`${refusal}\n`));
         return { exitCode: 126 };
       }
-      const output = boundedOutput(options);
+      const budget =
+        source === "user-bash"
+          ? userBashBudget(SHELL_OUTPUT_LIMIT_BYTES, freeBytes(tmpdir()))
+          : SHELL_OUTPUT_LIMIT_BYTES;
+      const output = boundedOutput(
+        options,
+        budget,
+        budget < SHELL_OUTPUT_LIMIT_BYTES
+          ? lowDiskNotice(budget)
+          : OUTPUT_LIMIT_NOTICE,
+      );
       try {
         const result = await run(command, cwd, {
           ...options,
@@ -529,6 +550,179 @@ export function governedBashOperations(
       }
     },
   };
+}
+
+/** Pi's live-update throttle for the shell tool (renderers/bash.js). */
+const BASH_UPDATE_THROTTLE_MS = 100;
+
+/**
+ * The governed `bash` tool: Pi's definition (name, schema, prompt text,
+ * renderers) with PiShip's execute. Pi's execute persists the full output to
+ * an unbounded, unowned `pi-bash-*.log` whose write stream has no error
+ * handler; this one keeps the same display tail, live updates, footer, and
+ * error semantics, and persists through the session's output store.
+ */
+function governedBashTool(gov: GovernanceSession, cwd: string) {
+  const definition = createBashToolDefinition(cwd);
+  const operations = governedBashOperations(gov, "bash");
+  const tool: typeof definition = {
+    ...definition,
+    async execute(id, params, signal, onUpdate, ctx) {
+      // Pi builds the command, cwd, and environment (PATH and the PI_*
+      // session variables) in execute. Its own execute is run once with
+      // operations that only capture them: nothing is spawned, and with no
+      // output it opens no file.
+      let spawn: { command: string; cwd: string; env?: NodeJS.ProcessEnv } = {
+        command: params.command,
+        cwd: ctx?.cwd || cwd,
+      };
+      await createBashToolDefinition(cwd, {
+        operations: {
+          exec: async (command, dir, options) => {
+            spawn = {
+              command,
+              cwd: dir,
+              ...(options.env ? { env: options.env } : {}),
+            };
+            return { exitCode: 0 };
+          },
+        },
+      }).execute(id, params, undefined, undefined, ctx);
+      const output = new ShellOutput(gov.outputStore);
+      let acceptingOutput = true;
+      let updateTimer: NodeJS.Timeout | undefined;
+      let updateDirty = false;
+      let lastUpdateAt = 0;
+      const emitOutputUpdate = () => {
+        if (!onUpdate || !updateDirty) return;
+        updateDirty = false;
+        lastUpdateAt = Date.now();
+        const snapshot = output.snapshot();
+        onUpdate({
+          content: [{ type: "text", text: snapshot.content || "" }],
+          details: {
+            truncation: snapshot.truncation.truncated
+              ? snapshot.truncation
+              : undefined,
+            fullOutputPath: snapshot.fullOutputPath,
+          } as BashToolDetails,
+        });
+      };
+      const clearUpdateTimer = () => {
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+          updateTimer = undefined;
+        }
+      };
+      const scheduleOutputUpdate = () => {
+        if (!onUpdate) return;
+        updateDirty = true;
+        const delay = BASH_UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+        if (delay <= 0) {
+          clearUpdateTimer();
+          emitOutputUpdate();
+          return;
+        }
+        updateTimer ??= setTimeout(() => {
+          updateTimer = undefined;
+          emitOutputUpdate();
+        }, delay);
+      };
+      onUpdate?.({ content: [], details: undefined });
+      const finishOutput = async () => {
+        acceptingOutput = false;
+        output.finish();
+        clearUpdateTimer();
+        emitOutputUpdate();
+        const snapshot = output.snapshot();
+        await output.close();
+        return snapshot;
+      };
+      // Pi's footer, byte for byte when the output is saved: its renderer
+      // drops the footer by finding fullOutputPath in it.
+      const formatOutput = (
+        snapshot: ReturnType<ShellOutput["snapshot"]>,
+        emptyText = "(no output)",
+      ) => {
+        const truncation = snapshot.truncation;
+        let text = snapshot.content || emptyText;
+        let details: BashToolDetails | undefined;
+        if (truncation.truncated) {
+          // Pi's shape: fullOutputPath is present, undefined when not saved.
+          details = {
+            truncation,
+            fullOutputPath: snapshot.fullOutputPath,
+          } as BashToolDetails;
+          const file = output.file;
+          const saved = snapshot.fullOutputPath
+            ? file?.capped
+              ? `Full output (first ${formatSize(file.limit)}): ${snapshot.fullOutputPath}`
+              : `Full output: ${snapshot.fullOutputPath}`
+            : `Full output not saved: ${file?.failure ?? "unavailable"}`;
+          const startLine = truncation.totalLines - truncation.outputLines + 1;
+          const endLine = truncation.totalLines;
+          if (truncation.lastLinePartial) {
+            const lastLineSize = formatSize(output.lastLineBytes);
+            text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). ${saved}]`;
+          } else if (truncation.truncatedBy === "lines") {
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${saved}]`;
+          } else {
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). ${saved}]`;
+          }
+        }
+        return { text, details };
+      };
+      const appendStatus = (text: string, status: string) =>
+        `${text ? `${text}\n\n` : ""}${status}`;
+      try {
+        let exitCode: number | null;
+        try {
+          const result = await operations.exec(spawn.command, spawn.cwd, {
+            onData: (data) => {
+              if (!acceptingOutput) return;
+              output.append(data);
+              scheduleOutputUpdate();
+            },
+            ...(signal ? { signal } : {}),
+            ...(params.timeout !== undefined
+              ? { timeout: params.timeout }
+              : {}),
+            ...(spawn.env ? { env: spawn.env } : {}),
+          });
+          exitCode = result.exitCode;
+        } catch (err) {
+          const snapshot = await finishOutput();
+          const { text } = formatOutput(snapshot, "");
+          if (err instanceof Error && err.message === "aborted")
+            throw new Error(appendStatus(text, "Command aborted"));
+          if (err instanceof Error && err.message.startsWith("timeout:")) {
+            const timeoutSecs = err.message.split(":")[1];
+            throw new Error(
+              appendStatus(
+                text,
+                `Command timed out after ${timeoutSecs} seconds`,
+              ),
+            );
+          }
+          throw err;
+        }
+        const snapshot = await finishOutput();
+        const { text: outputText, details } = formatOutput(snapshot);
+        if (exitCode === null)
+          throw new Error(
+            appendStatus(outputText, "Command terminated without an exit code"),
+          );
+        if (exitCode !== 0)
+          throw new Error(
+            appendStatus(outputText, `Command exited with code ${exitCode}`),
+          );
+        return { content: [{ type: "text", text: outputText }], details };
+      } finally {
+        clearUpdateTimer();
+      }
+    },
+  };
+  return tool;
 }
 
 function withChannel<T extends ToolDefinition>(
@@ -641,9 +835,7 @@ export function governedTools(
         writeFile: (path, content) => write(path, content, "edit"),
       },
     }) as ToolDefinition,
-    createBashToolDefinition(cwd, {
-      operations: governedBashOperations(gov, "bash"),
-    }) as ToolDefinition,
+    governedBashTool(gov, cwd) as ToolDefinition,
     ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
   return tools.map((tool) => withChannel(gov, tool));

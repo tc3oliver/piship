@@ -42,8 +42,6 @@ export interface DoctorSection {
   info(label: string, value: string): void;
 }
 
-const MARKS = { ok: "✓", warn: "!", bad: "✗", info: "-" } as const;
-
 // scheme://[userinfo@]authority[path][?query][#fragment]. The userinfo is
 // matched up to the last `@` before the path, as URL parsers do.
 const URL_PATTERN =
@@ -67,8 +65,18 @@ export function sanitizeDoctorText(text: string): string {
   return redact(withoutUrlSecrets).replace(CONTROL, "");
 }
 
+/** One doctor line as `doctor --json` prints it, sanitized. */
+export interface DoctorCheck {
+  readonly status: "ok" | "warn" | "fail" | "info";
+  readonly label: string;
+  readonly value: string;
+}
+
+const STATUS = { ok: "ok", warn: "warn", bad: "fail", info: "info" } as const;
+const MARKS = { ok: "✓", warn: "!", fail: "✗", info: "-" } as const;
+
 export class DoctorReport {
-  readonly #groups = new Map<DoctorGroup, string[]>();
+  readonly #groups = new Map<DoctorGroup, DoctorCheck[]>();
   #failed = false;
 
   constructor(readonly title: string) {}
@@ -80,13 +88,15 @@ export class DoctorReport {
 
   section(group: DoctorGroup): DoctorSection {
     const line =
-      (mark: keyof typeof MARKS) => (label: string, value: string) => {
+      (mark: keyof typeof STATUS) => (label: string, value: string) => {
         if (mark === "bad") this.#failed = true;
-        const lines = this.#groups.get(group) ?? [];
-        lines.push(
-          `  ${MARKS[mark]} ${sanitizeDoctorText(label).padEnd(20)} ${sanitizeDoctorText(value)}`,
-        );
-        this.#groups.set(group, lines);
+        const checks = this.#groups.get(group) ?? [];
+        checks.push({
+          status: STATUS[mark],
+          label: sanitizeDoctorText(label),
+          value: sanitizeDoctorText(value),
+        });
+        this.#groups.set(group, checks);
       };
     return {
       ok: line("ok"),
@@ -98,10 +108,31 @@ export class DoctorReport {
 
   render(): string {
     const output = [sanitizeDoctorText(this.title)];
-    for (const group of DOCTOR_GROUPS) {
-      const lines = this.#groups.get(group);
-      if (lines?.length) output.push("", group, ...lines);
-    }
+    for (const { group, checks } of this.toJSON().groups)
+      output.push(
+        "",
+        group,
+        ...checks.map(
+          (check) =>
+            `  ${MARKS[check.status]} ${check.label.padEnd(20)} ${check.value}`,
+        ),
+      );
     return output.join("\n");
+  }
+
+  /** The report for `doctor --json`, in the same group order. */
+  toJSON(): {
+    title: string;
+    failed: boolean;
+    groups: { group: DoctorGroup; checks: DoctorCheck[] }[];
+  } {
+    return {
+      title: sanitizeDoctorText(this.title),
+      failed: this.#failed,
+      groups: DOCTOR_GROUPS.flatMap((group) => {
+        const checks = this.#groups.get(group);
+        return checks?.length ? [{ group, checks }] : [];
+      }),
+    };
   }
 }

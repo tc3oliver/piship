@@ -13,8 +13,13 @@ import {
   applyProcessNetworkPolicy,
   approvedNetworkEnvironment,
   assertTlsVerificationEnabled,
+  checkProxyConnection,
+  countCertificates,
+  createManagedFetch,
   formatError,
   isNetworkEnvironmentName,
+  type ManagedFetch,
+  type NetworkPolicy,
   PiShipError,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
@@ -126,6 +131,114 @@ export interface NetworkData {
    * children do not receive and that `approved.withheld` does not name.
    */
   readonly notApproved: readonly string[];
+  /**
+   * Each proxy PiShip's clients use, as `scheme://host:port`, and the code
+   * when a connection to it did not open. Absent when not checked.
+   */
+  readonly proxyChecks?: readonly NetworkProxyCheck[];
+  /** Certificates loaded from the declared CA bundles. */
+  readonly caCertificates?: number;
+  /** Why the declared CA bundles could not be loaded. */
+  readonly caError?: string;
+  /**
+   * Each managed endpoint requested through the network policy (proxy, CA,
+   * private-only): the HTTP status it answered with, or the failure, which
+   * names the hop (proxy, TLS chain, or endpoint). By host only. Empty
+   * unless activation or the gateway probe failed.
+   */
+  readonly paths?: readonly NetworkPathCheck[];
+}
+
+export interface NetworkProxyCheck {
+  readonly proxy: string;
+  readonly error?: string;
+}
+
+export interface NetworkPathCheck {
+  readonly label: string;
+  readonly host: string;
+  readonly status?: number;
+  /** The PiShip error code of the failure, when there is one. */
+  readonly code?: string;
+  readonly error?: string;
+}
+
+const PATH_TIMEOUT_MS = 5_000;
+
+/**
+ * Check the network path doctor reports: whether each proxy accepts a
+ * connection, whether the declared CA bundles load, and whether each managed
+ * endpoint answers through the same managed fetch PiShip's clients use. Any
+ * HTTP answer proves the proxy, the TLS chain, and the route; nothing is sent
+ * but an unauthenticated GET.
+ */
+export async function networkChecks(
+  policy: NetworkPolicy,
+  endpoints: readonly { label: string; url: string | undefined }[],
+): Promise<
+  Pick<NetworkData, "proxyChecks" | "caCertificates" | "caError" | "paths">
+> {
+  const { http, https } = approvedNetworkEnvironment(policy).proxy;
+  const proxies = [
+    ...new Set([http, https].filter((proxy): proxy is string => !!proxy)),
+  ];
+  const proxyChecks = await Promise.all(
+    proxies.map(async (proxy) => {
+      const error = await checkProxyConnection(proxy);
+      return error ? { proxy, error } : { proxy };
+    }),
+  );
+  let caCertificates: number | undefined;
+  try {
+    if (policy.additionalCA.length)
+      caCertificates = countCertificates(policy.additionalCA);
+  } catch (error) {
+    return { proxyChecks, caError: formatError(error) };
+  }
+  const fetch = createManagedFetch(policy, "doctor");
+  const paths = await Promise.all(
+    endpoints.flatMap(({ label, url }) =>
+      url ? [checkPath(fetch, label, url)] : [],
+    ),
+  );
+  return {
+    proxyChecks,
+    ...(caCertificates === undefined ? {} : { caCertificates }),
+    paths,
+  };
+}
+
+async function checkPath(
+  fetch: ManagedFetch,
+  label: string,
+  url: string,
+): Promise<NetworkPathCheck> {
+  let host: string;
+  try {
+    host = new URL(url).host;
+  } catch {
+    return { label, host: "(invalid URL)", error: "not a valid URL" };
+  }
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(PATH_TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => {});
+    return { label, host, status: response.status };
+  } catch (error) {
+    if ((error as Error)?.name === "TimeoutError")
+      return {
+        label,
+        host,
+        error: `no answer within ${PATH_TIMEOUT_MS / 1000} s`,
+      };
+    return {
+      label,
+      host,
+      ...(error instanceof PiShipError ? { code: error.code } : {}),
+      error: formatError(error),
+    };
+  }
 }
 
 export interface GovernanceData {
@@ -320,6 +433,33 @@ async function collectAccess(
       if (error instanceof PiShipError && error.component === "identity")
         identityError = activationError;
     }
+  // The proxy and the CA bundles are always checked. The endpoint paths only
+  // when activation or the gateway probe failed, to say which hop (the
+  // proxy, a TLS chain, an endpoint) is at fault: a working activation has
+  // already reached them, and the extra unauthenticated requests would only
+  // reach the services' logs.
+  // The OIDC issuer is the exception: it serves its discovery document to
+  // anyone, and a stored session hides a dead issuer from activation until
+  // the next refresh, so it is always checked.
+  const checks =
+    opened && !tlsError
+      ? await networkChecks(
+          opened.network,
+          activationError || gateway?.error
+            ? [
+                { label: "identity", url: opened.endpoints.issuer },
+                { label: "broker", url: opened.endpoints.brokerEndpoint },
+                {
+                  label: "broker revoke",
+                  url: opened.endpoints.brokerRevokeEndpoint,
+                },
+                { label: "gateway", url: opened.endpoints.baseUrl },
+              ]
+            : manifest.identity.mode === "oidc" && !workload
+              ? [{ label: "identity", url: opened.endpoints.issuer }]
+              : [],
+        )
+      : {};
   if (opened) saveMetrics(metrics);
   const gatewayOrigin = origin(activated?.runtime.baseUrl);
   const data: AccessData = {
@@ -371,7 +511,7 @@ async function collectAccess(
       : {}),
     ...(activationError ? { activationError } : {}),
     ...(gateway ? { gateway } : {}),
-    network: networkData(ctx, manifest, opened),
+    network: { ...networkData(ctx, manifest, opened), ...checks },
     removedEnvironment,
   };
   return {

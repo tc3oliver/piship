@@ -690,7 +690,7 @@ describe("rollback to a release before the Linux Secret Service part layout", ()
     const items: Record<string, string>[] = [];
     const texts = new Map<Record<string, string>, string>();
     const knobs = { failClear: false };
-    const attributesOf = (args: string[]) => {
+    const attributesOf = (args: readonly string[]) => {
       const words = args.slice(1).filter((word) => !word.startsWith("--"));
       const attrs: Record<string, string> = {};
       for (let index = 0; index + 1 < words.length; index += 2)

@@ -8,7 +8,7 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { PiShipError, type SecretStore } from "@piship/contracts";
+import { PiShipError } from "@piship/contracts";
 import {
   assertDisjointRoots,
   binHome,

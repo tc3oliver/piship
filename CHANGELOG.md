@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
-Changes on `main` after v0.7.0. Not released.
+Changes on `main` after v0.7.0. Not released. The signed update channel's trust root, rotation, and hosting are described in [trust root](docs/release/trust-root.md).
 
 ### Security
 
@@ -12,14 +12,47 @@ Changes on `main` after v0.7.0. Not released.
 
 ### Behavior and contract changes
 
+- `piship inspect` prints a summary by default; its JSON now needs `--json`. `piship test` and `piship doctor` print human summaries and take `--json` (#161).
+- Update sources: redirects are followed only within the same origin (at most 5), HTTP 429 is retryable with `Retry-After`, and a local clock that is ahead is named (#161).
+- Broker requests (acquire, renewal, revoke) and gateway requests carry an additive `PiShip-Client` header with the distribution, its version, the PiShip version, and the protocol version, so a broker or gateway can refuse releases it no longer supports; PiShip itself never decides anything from it (decision 31, #162).
+- An explicit sandbox filesystem or environment list replaces the defaults, as before; the example manifests now restate every default they need (#162).
+- A cancelled `--smoke-model` request reports the new, additive error code `REQUEST_CANCELLED`; a managed endpoint's request that got no answer (refused or reset connection, DNS failure, deadline) is `GATEWAY_UNREACHABLE`, retryable, instead of `GATEWAY_PROTOCOL_ERROR` (#85).
+- `rollback` no longer re-trusts a release key that a later update removed: the install receipt records retired keys (`retiredKeys`, optional) and channel metadata signed by one is refused (#167).
+- `sign-channel` verifies existing channel metadata before extending it and replaces it atomically; signing on top of metadata from a rotated-out key takes `--previous-key <id>=<public-key>` (#167).
+- `npm run typecheck` also type-checks the test files (`tsconfig.tests.json`) (#160).
+- A login callback without this sign-in's `state` (a stray request, a stale tab) is answered 400 and ignored; the login keeps waiting instead of failing (#149).
+- A required HTTP audit sink whose host the private-only network refuses, and a `sandbox.credential: runtime` that can never be sent, now fail `validate` and `lock` when every URL involved is plain; with a variable involved they warn (#142).
+- Managed request failures name the hop: a dead, blackholed, or 407/403 proxy is reported as the proxy's failure with a proxy action, and an untrusted, expired, or mismatched TLS chain is a non-retryable `TLS_POLICY_VIOLATION` with an `additionalCA` action (#148).
+- A Kubernetes sandbox command is no longer cut off by undici's 300-second timeouts. A command whose outcome is unknown (the router connection drops or a 5xx after it was sent) fails as non-retryable `SANDBOX_UNAVAILABLE` and is never sent again (#146).
+- The reference credential broker never replays a revoked or out-of-entitlement credential; the reference Keycloak realm has brute-force detection and a password policy (#159).
 - A broker `409` to an acquire or renewal that sent an idempotency key is a final key conflict only when its JSON body is `{"error":"idempotency_key_reused"}`. Any other `409` now means the request is still in progress: the key is kept, `Retry-After` is honored, and the failure is retryable, so PiShip never issues a second credential for it (#157).
 - A renewal that fails with a retryable broker or network error keeps `CREDENTIAL_ACQUIRE_FAILED`, its `retryAfterMs`, and the action "try again later"; it is no longer reported as `CREDENTIAL_REVOKED` with "run login" (#157).
 - The lifecycle lock, the launch gate, and the `.launching` marker record the holder's process ID, start identity, host, and instance. A holder from this host whose process is gone or was replaced is reclaimed at once; a live matching holder is never reclaimed; a holder from another host is kept until its 24-hour lease ends. `update` and `rollback` wait up to 3 seconds for the launch gate, then fail as retryable (#144).
 - Every call into distribution-owned adapter code (identity, credential, custom sandbox `available`, `prepare`, `dispose`, and adapter loading) has a deadline and receives an optional `AbortSignal`. A timeout is retryable and names the adapter and the call; a hung credential adapter releases the credential lock (#145).
 - `/resume` is refused when the session inspection itself fails; session owner records from another host or PID namespace are reported as unverifiable instead of live or dead (#158).
 
+### Added
+
+- `testCredentialBroker` and `testAuditCollector` in `@piship/adapter-conformance` send a company's own credential broker or audit collector the requests PiShip sends (a repeated and a reused `Idempotency-Key`, a missing and an invalid bearer, the readiness probe, a resent batch, a conflicting event ID, an unknown property) and report where the answers break the contract. [Enterprise integration](docs/enterprise-integration.md#testing-your-own-broker-and-audit-collector) describes how to test a broker and a collector against PiShip's real client, a build of the company's own distribution, and these kits (#162).
+- A [release key and rollback runbook](docs/release/key-runbook.md) for distribution owners: preparation (a backup key, key and release records), planned rotation over three releases, a compromised or lost key, recovering clients that can no longer verify the channel, and taking a bad release back from every machine. It is the operational side of the release trust root design (#162).
+
 ### Fixed
 
+- Every command takes `--help`; raw EISDIR, ENOENT, and EEXIST failures become PiShip errors with actions; `config explain` shows the manifest schema and governance rows; `doctor` no longer reports an unusable session, a dead issuer, or itself as healthy; `update`, `rollback`, and `build` show progress on a terminal; an invalid user policy names its file; `init`, `build`, and `install` end with the next step and a PATH line (#161).
+- `@piship/adapter-conformance` adds `testCredentialBroker` and `testAuditCollector`, to check a company's own broker and audit collector against what PiShip sends (#162).
+- Documentation: a key rotation and compromised-key runbook, a separate maintainer release checklist, one migration table, exact `network.allowHosts` semantics, one `AuditSink` definition, an onboarding path in the README, and the reference README's services and prerequisites (#162).
+- The agent's `bash` tool keeps its full output in a session-owned directory that is removed at close, and a full temp filesystem no longer crashes the session; a user's `!` command output files are removed at close and kept within free temp space (#64).
+- Two Reference E2E runs can share a host: Docker chooses the host ports, and the reference sandbox service accepts port `0` (#79).
+- `doctor` lists each trusted release key's ID and fingerprint and any key this installation retired (#167).
+- Test coverage: sandbox probe mutants, #49 refusal at launch, update and rollback, killed Compose project recovery, CI guards on self-skipping tests, ID tokens in the secret ledger, stronger boundary controls, and shared malformed `networkProbe` cases (#160).
+- `piship repair <id> <release archive>` restores a damaged installed release from a verified copy without running it; `INTEGRITY_FAILED` names each unexpected, modified, or missing path. Integrity checking is unchanged: no file is exempt (#136).
+- A PiShip identity or credential failure inside the TUI shows a PiShip action (`<command> login` in a terminal, or restart for a changed principal), and managed `/login` names the distribution's sign-in instead of upstream provider logins (#139).
+- `validate` warns about a relative `additionalCA`, an ignored `network: deny` on an optional sandbox, and lists the variables needed at launch separately from those only `update` needs (#142).
+- `network.tls.additionalCA` is trusted for hosts reached through a proxy tunnel (#148).
+- `doctor` checks that each proxy accepts connections, that each CA bundle loads, and, when activation fails, which endpoint path fails (#148).
+- Login names a busy callback port and how to free it, fails at once on a provider client error, says what it waits for, cancels on Ctrl-C, and prints SSH port-forward guidance (#149).
+- The reference sandbox service compares each mount with the file it checked before running a command (#159).
+- `docs/security.md` states exactly which session-file content PiShip scrubs (#159).
 - An empty or cut-short `state.json` is rebuilt; a torn final audit line is skipped; a damaged `preferences.json` is refused with its path and how to recover (#143).
 - The audit sink starts a new event on its own line after a torn final line, so the event is not lost (#143).
 - A failed credential lock write no longer leaves an empty lock file behind (#157).
@@ -30,6 +63,16 @@ Changes on `main` after v0.7.0. Not released.
 - The abandoned-temporary sweep at launch is bounded to a short budget and continues on the next start (#158).
 - An edited command shim can be removed with `piship uninstall <id> --remove-edited-shim`; a foreign file is never removed (#158).
 - The adapter conformance kits no longer hang on an adapter factory or `available()` that never settles (#145).
+- `examples/demo-company` and the enterprise reference distribution (and its sandbox variant) declared a `sandbox.filesystem.read.deny` list that replaced the defaults and silently left `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, and `~/.pi` (and, in the demo, `~/.netrc` and `~/.npmrc`) readable in the sandbox. They now restate every default, a test keeps them doing so, and the manifest reference says that a declared list replaces its default (#162).
+- `docs/release/update-lifecycle.md` listed the state marker, identity session, and runtime credential metadata twice with different text, and left out four state classes. It now has one row per class, which a test checks against the migration check's class list (#162).
+- `docs/adapter-sdk.md` described `AuditSink` both as the collector's receiving side and as a sink that delivers onward. It now has one definition (anything a batch is written to, as PiShip's own `file` and `http` sinks are) and names the two places a company writes one (#162).
+- The LiteLLM recipe in the enterprise integration contract keyed a broker's LiteLLM user, and with it the budget, on `sub` alone, so two principals from different issuers with the same subject would share one budget. It now derives the user from the issuer and the subject, as the reference broker already does (#162).
+- The reference READMEs, tests, and the identity conformance kit cited decisions D-01, D-07, and D-11 and sections of a maintainer-local specification, none of which a reader can find; `docs/decisions.md` numbers its decisions 1 to 30. Each reference now names what it meant, or the public document or test that holds it (#162).
+- The enterprise reference README described four services (there are five, with the broker), did not list the Linux sandbox prerequisites the reference distribution needs (bubblewrap with unprivileged user namespaces, and the Secret Service), and did not say which broker variables (`BROKER_DISTRIBUTION`, `BROKER_AUTHORIZED_PARTY`) to change for another `app.id` (#162).
+- The manifest reference now states what `network.allowHosts` accepts and matches: exact hostnames or IP literals only, with no wildcard, suffix, port, path, or range, and tests hold both the parser and the destination check to it (#162).
+- The owner workflow's release checklist was the PiShip project's own (its CI workflows, the example distributions, its maintainer's approval). It moved to the [maintainer release checklist](docs/maintainers/release-checklist.md), and the owner workflow now has a checklist for a company releasing its own distribution (#162).
+- The README now gives the clone URL, a `piship init` path to start your own distribution, and a complete managed manifest that a test validates on its own (the excerpt before was not a valid manifest); `docs/release.md` opens with a task table instead of only the former-anchor table (#162).
+- `docs/security.md` gave the audit rotation size as 10 MB and 60 MB; it is 10 MiB per file (about 60 MiB in all). The roadmap claimed the README quickstart is checked against the current CLI; it now says which documentation checks exist (#162).
 
 ## v0.7.0
 

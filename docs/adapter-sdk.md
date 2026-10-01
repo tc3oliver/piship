@@ -27,7 +27,12 @@ The payload's SDK is the one built with the PiShip version that built the distri
 
 `defineSandboxAdapter` builds a sandbox *backend* (`SandboxBackend`), where the service or mechanism runs each command. It is not the native OS mechanism that `@piship/sandbox` calls a `SandboxAdapter` (bubblewrap or Seatbelt), which a distribution does not supply.
 
-A distribution cannot declare its own audit sink type: the manifest accepts `file` and `http` sinks only. `defineAuditSink` types the receiving side of the `http` sink, the collector that stores `piship-audit-batch/v1` batches ([wire contract](enterprise-integration.md#audit-collector-piship-audit-batchv1)), or a test double. A collector hands each request body to `write(batch, signal)` and answers 2xx only once it resolved; a resent batch repeats event IDs it may already have stored.
+An `AuditSink` is anything a `piship-audit-batch/v1` batch is written to: `write(batch, signal)` resolves only once the batch is stored or delivered, and rejects otherwise. PiShip's own `file` and `http` sinks implement it. A distribution cannot declare its own audit sink type (the manifest accepts `file` and `http` sinks only), so a company writes an `AuditSink` in one of two places, both typed by `defineAuditSink`:
+
+- **Behind a collector.** The collector that receives the `http` sink's POSTs ([wire contract](enterprise-integration.md#audit-collector-piship-audit-batchv1)) hands each request body to `write(batch, signal)` and answers 2xx only once it resolved. A resent batch repeats event IDs it may already have stored. `packages/adapter-sdk/examples/audit-sink.mjs` is this shape.
+- **Delivering onward.** A relay, a forwarder into a SIEM, or a test double takes the position of PiShip's `http` sink and delivers each batch to a collector. This is the shape the [audit sink conformance kit](#audit-sink-conformance-kit) tests.
+
+To test a collector itself, see [testing your own broker and audit collector](enterprise-integration.md#testing-your-own-broker-and-audit-collector).
 
 ## Surface
 
@@ -97,7 +102,7 @@ A custom sandbox backend gets its credential through `CustomBackendContext`, fro
 
 ## Audit sink conformance kit
 
-`testAuditSink` in `@piship/adapter-conformance` checks an `AuditSink` against the [`piship-audit-batch/v1` contract](enterprise-integration.md#audit-collector-piship-audit-batchv1). It is for a sink that delivers batches onward to a collector, in the position of PiShip's own `http` sink: a relay, a forwarder into a SIEM, or a test double. The kit imports only `@piship/adapter-sdk`, so it tests a sink the way a company would. The package is private and unpublished: run it from a checkout of this repository, in a test file inside the workspace.
+`testAuditSink` in `@piship/adapter-conformance` checks an `AuditSink` that delivers onward ([above](#helpers)) against the [`piship-audit-batch/v1` contract](enterprise-integration.md#audit-collector-piship-audit-batchv1). The kit imports only `@piship/adapter-sdk`, so it tests a sink the way a company would. The package is private and unpublished: run it from a checkout of this repository, in a test file inside the workspace.
 
 The kit builds a new sink for each check through a factory, and connects it to a fake collector the kit controls. The collector checks the batch shape, stores an event only if its `id` is new, compares a resent `id` with its first delivery in canonical form (the de-duplication guidance of the contract), and answers, fails, holds, or stores and then fails as each check needs. The factory receives:
 

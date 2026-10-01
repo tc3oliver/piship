@@ -23,3 +23,4 @@ export * from "./audit.js";
 export * from "./credential.js";
 export * from "./identity.js";
 export * from "./sandbox.js";
+export * from "./services.js";

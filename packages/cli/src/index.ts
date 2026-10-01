@@ -1,4 +1,9 @@
-import { spawnSync } from "node:child_process";
+import {
+  type ChildProcess,
+  type SpawnOptions,
+  spawn,
+  spawnSync,
+} from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -14,17 +19,23 @@ import {
   explainConfiguration,
   formatDiff,
   formatExplanation,
+  formatInspection,
+  formatSmokeSummary,
   formatMigrationReport,
   generateSigningKey,
   initDistribution,
+  inspection,
   installDistribution,
   keyFingerprint,
   lockManifest,
   payloadApp,
   payloadStateSchemas,
   PISHIP_VERSION,
+  pathHint,
+  progressReporter,
   purgeDistributionState,
   readInstallReceipt,
+  repairDistribution,
   requireCurrentLock,
   resolveResources,
   runtimeStateDirectory,
@@ -40,36 +51,57 @@ import {
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
 import {
+  launchWarnings,
+  runtimeVariableUse,
   readManifest,
   ManifestError,
   migrateManifestSource,
+  readManifestSource,
 } from "@piship/schema";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 
-const commands = [
-  "init",
-  "dev",
-  "validate",
-  "lock",
-  "build",
-  "test",
-  "inspect",
-  "doctor",
-  "install",
-  "uninstall",
-  "purge",
-  "migrate",
-  "config",
-  "release",
-  "verify-release",
-  "diff",
-  "update",
-  "rollback",
-  "migrate-check",
-  "keygen",
-  "sign-channel",
-  "reproducibility",
-] as const;
+/** Every command with a one-line summary, in help order. */
+const summaries = {
+  init: "Create a new distribution repository",
+  dev: "Build and start the branded command from a manifest",
+  validate: "Check a manifest without writing a lock",
+  lock: "Resolve a manifest and write piship.lock",
+  build: "Assemble the distribution payload",
+  test: "Build and run the branded acceptance smoke",
+  inspect: "Show a distribution's locked configuration",
+  doctor: "Check an artifact or installed distribution",
+  install: "Install an artifact, release, or archive for this user",
+  uninstall: "Remove an installed distribution",
+  purge: "Delete an installed distribution's state",
+  migrate: "Migrate a manifest to the current schema",
+  config: "Explain the effective configuration and its sources",
+  release: "Build a local release archive",
+  "verify-release": "Verify a release archive or directory",
+  diff: "Compare two locks, payloads, releases, or installs",
+  update: "Update an installed distribution",
+  rollback: "Return an installed distribution to its previous release",
+  repair: "Restore a damaged installed release from a trusted source",
+  "migrate-check": "Check whether a release can take over the current state",
+  keygen: "Create a channel signing key",
+  "sign-channel": "Sign channel metadata for release archives",
+  reproducibility: "Compare two builds of the same release",
+} as const;
+const commands = Object.keys(summaries) as (keyof typeof summaries)[];
+/** Usage of the commands that take one target and fixed options. */
+const simpleUsage: Record<string, string> = {
+  init: "init <directory> [--managed]",
+  dev: "dev <manifest> [--smoke]",
+  validate: "validate <manifest>",
+  lock: "lock <manifest>",
+  build: "build <manifest> [--reclaim-staging]",
+  test: "test <manifest> [--model-request] [--json]",
+  inspect: "inspect <manifest|artifact|id> [--json]",
+  doctor: "doctor <artifact|id> [--json]",
+  install: "install <artifact|release-dir|archive> [--use-existing-state]",
+  purge: "purge <id> --yes [--without-logout]",
+  migrate: "migrate <manifest> [--write]",
+  config: "config explain <manifest|artifact|id>",
+};
 /** Commands with named options: positional count and accepted flags. */
 const lifecycleCommands: Record<
   string,
@@ -119,6 +151,12 @@ const lifecycleCommands: Record<
     values: [],
     flags: [],
   },
+  repair: {
+    usage: "repair <id> <archive|release-dir|payload>",
+    positional: [2, 2],
+    values: [],
+    flags: [],
+  },
   "migrate-check": {
     usage: "migrate-check <id> <archive|release-dir|payload>",
     positional: [2, 2],
@@ -133,9 +171,16 @@ const lifecycleCommands: Record<
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--sequence <n>] [--expires-days <n>]",
+      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
     positional: [2, 64],
-    values: ["--channel", "--key", "--key-id", "--sequence", "--expires-days"],
+    values: [
+      "--channel",
+      "--key",
+      "--key-id",
+      "--previous-key",
+      "--sequence",
+      "--expires-days",
+    ],
     flags: [],
   },
   reproducibility: {
@@ -201,7 +246,14 @@ const allowedOptions: Record<string, readonly string[]> = {
   install: ["--use-existing-state"],
   init: ["--managed"],
   migrate: ["--write"],
-  test: ["--model-request"],
+  test: [
+    "--model-request",
+    "--json",
+    "--model-request --json",
+    "--json --model-request",
+  ],
+  inspect: ["--json"],
+  doctor: ["--json"],
   dev: ["--smoke"],
 };
 export interface CliOutput {
@@ -251,6 +303,46 @@ function runLauncher(
     stderr: result.stderr ?? result.error?.message ?? "",
   };
 }
+/**
+ * Run the installed release's command while showing its stderr (progress
+ * and notices) as it arrives; stdout is collected. Used only when someone
+ * watches a terminal; it tells the release so with PISHIP_PROGRESS=1.
+ */
+function runLauncherLive(
+  artifact: string,
+  command: string,
+  args: string[],
+  stderr: (message: string) => void,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const target = join(artifact, "bin", command);
+  const options: SpawnOptions = {
+    stdio: ["inherit", "pipe", "pipe"],
+    env: { ...process.env, PISHIP_PROGRESS: "1" },
+  };
+  const child: ChildProcess =
+    process.platform === "win32"
+      ? spawn(process.execPath, [target, ...args], options)
+      : spawn(target, args, options);
+  let stdout = "";
+  let pending = "";
+  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) stderr(line);
+  });
+  return new Promise((done) => {
+    child.on("error", (error: Error) =>
+      done({ status: null, stdout, stderr: error.message }),
+    );
+    child.on("close", (status: number | null) => {
+      if (pending) stderr(pending);
+      done({ status, stdout, stderr: "" });
+    });
+  });
+}
 function artifactFor(target: string): string {
   const path = resolve(target);
   if (existsSync(path) && statSync(path).isDirectory()) return path;
@@ -262,8 +354,9 @@ export async function runCli(
 ): Promise<number> {
   const [command, target, ...rest] = args;
   if (command === undefined || command === "--help" || command === "-h") {
+    const width = Math.max(...commands.map((item) => item.length)) + 2;
     output.stdout(
-      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> <target>\n\nCommands:\n${commands.map((item) => `  ${item}`).join("\n")}\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  --help     Show this help\n  --version  Show PiShip version`,
+      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  --help     Show this help\n  --version  Show PiShip version`,
     );
     return 0;
   }
@@ -276,6 +369,13 @@ export async function runCli(
     return 2;
   }
   const lifecycle = lifecycleCommands[command];
+  // --help anywhere after the command asks for help; it is never a target.
+  if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+    output.stdout(
+      `Usage: piship ${lifecycle?.usage ?? simpleUsage[command]}\n\n${summaries[command as keyof typeof summaries]}.`,
+    );
+    return 0;
+  }
   if (lifecycle) {
     const parsed = parseArguments(lifecycle, args.slice(1));
     if (!parsed) {
@@ -295,40 +395,68 @@ export async function runCli(
   }
   if (command === "config") {
     if (target !== "explain" || rest.length !== 1) {
-      output.stderr("Usage: piship config explain <manifest|artifact|id>");
+      output.stderr(`Usage: piship ${simpleUsage.config}`);
       return 2;
     }
   } else if (
     !target ||
     (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
   ) {
-    output.stderr(
-      `Usage: piship ${command} <target>${allowedOptions[command] ? ` [${allowedOptions[command].join("|")}]` : ""}`,
-    );
+    output.stderr(`Usage: piship ${simpleUsage[command]}`);
     return 2;
   }
   if (!target) return 2;
   try {
-    if (command === "init")
+    if (command === "init") {
+      const created = initDistribution(target, {
+        managed: rest[0] === "--managed",
+      });
       output.stdout(
-        `Created ${initDistribution(target, { managed: rest[0] === "--managed" })}`,
+        `Created ${created}\nNext: piship validate ${created}, then piship test ${created}.`,
       );
-    else if (command === "validate") {
+    } else if (command === "validate") {
       const manifest = readManifest(target);
       checkPiVersion(manifest);
       // The same resource and governance checks as lock, without writing it.
       checkGovernance(manifest, target, resolveResources(manifest, target));
-      const variables = manifest.access?.variables ?? [];
-      const missing = variables.filter((name) => !process.env[name]);
+      // updates.source is read only by update; launch never needs it.
+      const variables = runtimeVariableUse(manifest);
+      const unset = (names: readonly string[]) =>
+        names.filter((name) => !process.env[name]);
+      const missingLaunch = unset(variables.launch);
+      const missingUpdate = unset(variables.update);
       output.stdout(
-        `Manifest is valid.\nSchema ${manifest.schema}, mode ${manifest.deployment.mode}.${variables.length ? `\nRuntime variables (resolved at launch, never locked): ${variables.join(", ")}` : ""}`,
+        [
+          "Manifest is valid.",
+          `Schema ${manifest.schema}, mode ${manifest.deployment.mode}.`,
+          ...(variables.launch.length
+            ? [
+                `Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ${variables.launch.join(", ")}`,
+              ]
+            : []),
+          ...(variables.update.length
+            ? [
+                `Runtime variables needed only by update: ${variables.update.join(", ")}`,
+              ]
+            : []),
+        ].join("\n"),
       );
-      if (missing.length)
+      for (const warning of launchWarnings(manifest))
+        output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+      const theyAre = (names: readonly string[]) =>
+        names.length > 1 ? "they are" : "it is";
+      const them = (names: readonly string[]) =>
+        names.length > 1 ? "them" : "it";
+      if (missingLaunch.length)
         output.stderr(
-          `Note: ${missing.join(", ")} not set in this shell; the branded command fails visibly until they are set at launch.`,
+          `Note: ${missingLaunch.join(", ")} not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until ${theyAre(missingLaunch)} set in the environment it is started from. An IDE or desktop launcher does not read your shell profile; a plain https URL in piship.yaml needs no variable.`,
+        );
+      if (missingUpdate.length)
+        output.stderr(
+          `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
         );
     } else if (command === "migrate") {
-      const plan = migrateManifestSource(readFileSync(target, "utf8"));
+      const plan = migrateManifestSource(readManifestSource(target));
       if (!plan.changes.length)
         output.stdout(`Already ${plan.to}; nothing to migrate.`);
       else if (rest[0] === "--write") {
@@ -356,6 +484,10 @@ export async function runCli(
               access: manifest.access,
               stateDir: runtimeStateDirectory({ value: manifest.app.id }),
               distributionDir: dirname(path),
+              schema: manifest.schema,
+              ...(manifest.governance
+                ? { governance: manifest.governance }
+                : {}),
             }),
           ),
         );
@@ -372,20 +504,29 @@ export async function runCli(
       }
     } else if (command === "lock")
       output.stdout(`Wrote ${lockManifest(target)}`);
-    else if (command === "build")
+    else if (command === "build") {
+      const progress = progressReporter(output.stderr);
+      const built = buildDistribution(target, undefined, {
+        reclaimStaging: rest[0] === "--reclaim-staging",
+        abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+        ...(progress ? { progress } : {}),
+      });
       output.stdout(
-        `Built ${buildDistribution(target, undefined, {
-          reclaimStaging: rest[0] === "--reclaim-staging",
-          abandonedStaging: (found) => output.stderr(stagingNotice(found)),
-        })}`,
+        `Built ${built}\nNext: node ${join(built, "piship.mjs")} install ${built} to install it for this user.`,
       );
-    else if (command === "install") {
+    } else if (command === "install") {
       const receipt = await installDistribution(
         target,
         rest[0] === "--use-existing-state",
       );
       output.stdout(
-        `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}\nAdd ${binHome()} to PATH if needed.`,
+        [
+          `Installed ${receipt.app.id}@${receipt.app.version}: ${receipt.commandPath}`,
+          pathHint(dirname(receipt.commandPath)),
+          `Next: run ${receipt.app.command} --help to see its commands, then ${receipt.app.command} to start.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
@@ -401,43 +542,30 @@ export async function runCli(
         ),
       );
     } else if (command === "inspect") {
-      if (existsSync(resolve(target)) && statSync(resolve(target)).isFile()) {
-        const lock = requireCurrentLock(target);
-        output.stdout(
-          JSON.stringify(
-            {
-              app: lock.app,
-              deployment: lock.deployment,
-              runtime: lock.runtime,
-              resources: lock.resources,
-              ...(lock.access ? { access: lock.access } : {}),
-              ...(lock.governance ? { governance: lock.governance } : {}),
-              state: runtimeStateDirectory({ value: lock.app.id }),
-            },
-            null,
-            2,
-          ),
-        );
-      } else {
-        const artifact = artifactFor(target);
-        const lock = verifyPayload(artifact);
-        output.stdout(
-          JSON.stringify(
-            {
-              app: lock.app,
-              deployment: lock.deployment,
-              runtime: lock.runtime,
-              resources: lock.resources,
-              ...(lock.access ? { access: lock.access } : {}),
-              ...(lock.governance ? { governance: lock.governance } : {}),
-              artifact,
-              state: runtimeStateDirectory({ value: lock.app.id }),
-            },
-            null,
-            2,
-          ),
-        );
-      }
+      const path = resolve(target);
+      const info =
+        existsSync(path) && statSync(path).isFile()
+          ? (() => {
+              const lock = requireCurrentLock(target);
+              return inspection(
+                lock,
+                runtimeStateDirectory({ value: lock.app.id }),
+              );
+            })()
+          : (() => {
+              const artifact = artifactFor(target);
+              const lock = verifyPayload(artifact);
+              return inspection(
+                lock,
+                runtimeStateDirectory({ value: lock.app.id }),
+                artifact,
+              );
+            })();
+      output.stdout(
+        rest.includes("--json")
+          ? JSON.stringify(info, null, 2)
+          : `${formatInspection(info)}\nRun piship inspect ${target} --json for the full locked configuration.`,
+      );
     } else if (command === "dev" || command === "test") {
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
@@ -451,7 +579,7 @@ export async function runCli(
         artifact,
         lock.app.command,
         command === "test"
-          ? [rest[0] === "--model-request" ? "--smoke-model" : "--smoke"]
+          ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
           : interactive
             ? []
             : ["--smoke"],
@@ -461,25 +589,57 @@ export async function runCli(
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
       if (command === "test")
         output.stdout(
-          `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed: ${result.stdout.trim()}`,
+          rest.includes("--json")
+            ? result.stdout.trim()
+            : `${lock.deployment.mode === "managed" ? "Managed" : "Personal"} acceptance passed\n${formatSmokeSummary(result.stdout.trim())}`,
         );
       else if (!interactive) output.stdout(result.stdout.trim());
     } else if (command === "doctor") {
       const artifact = artifactFor(target);
       const app = payloadApp(artifact);
       const lock = verifyPayload(artifact);
+      const json = rest[0] === "--json";
+      const distribution = { id: app.id, version: app.version };
+      let report: string[] | undefined;
       if (lock.access || lock.governance) {
-        const report = runLauncher(artifact, app.command, ["doctor"]);
-        output.stdout(report.stdout.trimEnd());
-        if (report.status !== 0)
-          throw new Error(report.stderr.trim() || "doctor found problems");
+        const result = runLauncher(artifact, app.command, ["doctor"]);
+        report = result.stdout.trimEnd().split("\n");
+        if (!json) output.stdout(result.stdout.trimEnd());
+        if (result.status !== 0) {
+          if (json)
+            output.stdout(
+              JSON.stringify({ distribution, healthy: false, report }, null, 2),
+            );
+          throw new Error(result.stderr.trim() || "doctor found problems");
+        }
       }
       const result = runLauncher(artifact, app.command, ["--smoke"]);
       if (result.status !== 0)
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
-      output.stdout(
-        `Healthy ${app.id}@${app.version}: ${result.stdout.trim()}`,
-      );
+      const smoke = result.stdout.trim();
+      if (json) {
+        let parsed: unknown = smoke;
+        try {
+          parsed = JSON.parse(smoke);
+        } catch {
+          // Kept as text.
+        }
+        output.stdout(
+          JSON.stringify(
+            {
+              distribution,
+              healthy: true,
+              ...(report ? { report } : {}),
+              smoke: parsed,
+            },
+            null,
+            2,
+          ),
+        );
+      } else
+        output.stdout(
+          `Healthy ${app.id}@${app.version}\n${formatSmokeSummary(smoke)}`,
+        );
     }
     return 0;
   } catch (error) {
@@ -564,13 +724,34 @@ async function runLifecycle(
     // handling apply.
     const receipt = readInstallReceipt(first);
     const args = [command, ...Object.entries(options).flat(), ...[...flags]];
-    const result = runLauncher(receipt.payload, receipt.app.command, args);
+    // From a terminal, the release's progress and notices are shown as
+    // they come; otherwise its stderr is printed once it is done.
+    const live = !!progressReporter(output.stderr);
+    const result = live
+      ? await runLauncherLive(
+          receipt.payload,
+          receipt.app.command,
+          args,
+          output.stderr,
+        )
+      : runLauncher(receipt.payload, receipt.app.command, args);
     if (result.stdout.trim()) output.stdout(result.stdout.trimEnd());
     if (result.status !== 0) {
-      output.stderr(result.stderr.trim() || `${command} failed`);
+      // Shown live already, unless the release did not start.
+      if (!live || result.stderr.trim())
+        output.stderr(result.stderr.trim() || `${command} failed`);
       return 1;
     }
     if (result.stderr.trim()) output.stderr(result.stderr.trimEnd());
+  } else if (command === "repair") {
+    // Runs here, not through the installed release: the payload it restores
+    // may be the active one, which refuses to run.
+    const result = await repairDistribution(first, second);
+    output.stdout(
+      result.status === "intact"
+        ? `${result.id} ${result.version} is intact; nothing to repair`
+        : `Repaired ${result.id} ${result.version} from ${second}\n  was: ${result.problem}`,
+    );
   } else if (command === "migrate-check") {
     const receipt = readInstallReceipt(first);
     const current = verifyPayload(receipt.payload);
@@ -633,12 +814,26 @@ async function runLifecycle(
     };
     const sequence = number(options["--sequence"], "--sequence");
     const expiresDays = number(options["--expires-days"], "--expires-days");
+    const previous = options["--previous-key"];
+    const split = previous?.indexOf("=") ?? -1;
+    if (previous !== undefined && split < 1)
+      throw new Error("--previous-key must be <id>=<public-key>");
     const signed = await signChannel({
       directory: first,
       channel,
       archives: positional.slice(1),
       privateKeyPem: readFileSync(key, "utf8"),
       keyId,
+      ...(previous
+        ? {
+            previousKeys: [
+              {
+                id: previous.slice(0, split),
+                publicKey: previous.slice(split + 1),
+              },
+            ],
+          }
+        : {}),
       ...(sequence ? { sequence } : {}),
       ...(expiresDays ? { expiresDays } : {}),
     });

@@ -181,8 +181,11 @@ describe("secret-named unknown fields", () => {
       identity: { mode: "none" },
       credential: { provider: "pi-native" },
       inference: { provider: "pi-native" },
-    } as Record<string, object>;
-    input[section] = { ...input[section], [key]: "plain-value-123" };
+    } as Record<string, unknown>;
+    input[section] = {
+      ...(input[section] as object),
+      [key]: "plain-value-123",
+    };
     const message = redact(messageOf(() => parseManifest(input)));
     expect(message).toContain(`${section}.${key}`);
     expect(message).toContain(

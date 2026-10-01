@@ -339,7 +339,7 @@ describe("managed distribution (local fixtures)", () => {
       /Gateway\n(?:.*\n)*? {2}✓ gateway\s+reachable/,
     );
     expect(doctor.stdout).toMatch(
-      /Identity\n {2}✓ mode\s+oidc\n {2}✓ session\s+signed in/,
+      /Identity\n {2}✓ mode\s+oidc\n {2}✓ session\s+signed in\n {2}✓ issuer\s+\S+ answers/,
     );
     expect(doctor.stdout).toMatch(
       /Secret Store\n {2}! backend\s+restricted plaintext file/,
@@ -375,7 +375,9 @@ describe("managed distribution (local fixtures)", () => {
       child.on("close", (status) => resolve({ status, stdout, stderr }));
     });
     expect(cliDoctor.status, cliDoctor.stdout + cliDoctor.stderr).toBe(0);
-    const inspected = JSON.parse(cli(env, "inspect", artifact).stdout);
+    const inspected = JSON.parse(
+      cli(env, "inspect", artifact, "--json").stdout,
+    );
     expect(inspected.access.credential.provider).toBe("http-broker");
 
     // A gateway-rejected runtime credential is renewed once automatically.

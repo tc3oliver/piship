@@ -39,6 +39,11 @@ export async function kubernetesServer(
     stdout?: string;
     exit_code?: number;
     hang?: boolean;
+    /**
+     * Close the connection without an answer, as a proxy or router that
+     * gives up on a long request does, while the command keeps running.
+     */
+    drop?: boolean;
     /** Answer only once this resolves. */
     after?: Promise<void>;
     /** An HTTP error status from the router instead of a result. */
@@ -133,7 +138,8 @@ export async function kubernetesServer(
         );
       const answer = execute?.(command) ?? { stdout: "", exit_code: 0 };
       if (answer.hang) return;
-      const { after, status, ...body } = answer;
+      if (answer.drop) return void response.socket?.destroy();
+      const { after, status, drop: _drop, ...body } = answer;
       if (status !== undefined) {
         response.statusCode = status;
         return void response.end(

@@ -9,7 +9,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,10 +33,13 @@ import { keepLogs } from "./logs.js";
 // A killed run leaves no service behind either: the service is started with a
 // pipe as its standard input and `SANDBOX_EXIT_ON_STDIN_END=1`, so it stops,
 // removing its containers, when the pipe's other end (this process) is gone.
-// It answers `/health` with its instance name and a start does not count an
-// answer that names another instance, so a service some other run left on the
-// port is never taken for this one (the start waits for the port and then
-// fails, naming the port).
+//
+// The service listens on port 0, so the system gives it a free port, and the
+// start reads that port from the service's `service.listening` log line: two
+// runs on one host never ask for the same port, and no port is picked,
+// released, and bound later. It answers `/health` with its instance name and
+// a start does not count an answer that names another instance, so a service
+// that holds a port given explicitly is never taken for this one.
 
 export const sandboxDirectory = fileURLToPath(
   new URL("../../sandbox/", import.meta.url),
@@ -57,13 +59,6 @@ export const distribution = (() => {
   ) as { app: { id: string; command: string } };
   return { id: app.id, command: app.command };
 })();
-
-/** Beside the stack's own ports (18xxx, 28xxx, 38xxx, 58xxx). */
-const DEFAULT_PORT = 48075;
-
-/** The port of the service a file starts, and of a second one beside it. */
-export const sandboxPort = () =>
-  Number(process.env.SANDBOX_PORT ?? DEFAULT_PORT);
 
 export type SandboxUser = "alice" | "bob";
 
@@ -165,30 +160,18 @@ export function containersOf(instance: string): string[] {
   return listed.stdout.split("\n").filter(Boolean);
 }
 
-/** Whether nothing is listening on the loopback port (it can be bound now). */
-function portFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const probe = createServer();
-    probe.once("error", () => resolve(false));
-    probe.listen(port, "127.0.0.1", () => probe.close(() => resolve(true)));
-  });
-}
-
 export interface StartOptions {
   /**
-   * How long to wait for the port to be free. A service a killed run left is
-   * stopping itself (it exits when its supervisor's pipe closes) and takes a
-   * moment to let go; another run's service keeps it, and the start then
-   * fails, saying so. Default 20 s.
+   * A port to listen on instead of one the system chooses: a test that needs
+   * the port another service holds.
    */
-  readonly portWaitMs?: number;
-  /** A port of its own (a second service in one file); default SANDBOX_PORT. */
   readonly port?: number;
 }
 
 /**
  * Issue the two users' keys with the administrator's script, start the
- * service on a loopback port, and return once it answers as itself.
+ * service on a loopback port the system chooses, and return once it answers
+ * as itself.
  *
  * alice's key is bound to the user running the tests, whose projects the tests
  * make, and bob's to another user, so bob cannot mount alice's projects.
@@ -197,16 +180,6 @@ export async function startSandboxService(
   options: StartOptions = {},
 ): Promise<SandboxService> {
   const instance = `${PROJECT_PREFIX}${process.pid}-sandbox-${Math.random().toString(16).slice(2, 8)}`;
-  const port = options.port ?? sandboxPort();
-  // The port before anything else is made, so a refusal leaves nothing behind.
-  const waited = Date.now() + (options.portWaitMs ?? 20_000);
-  while (!(await portFree(port))) {
-    if (Date.now() > waited)
-      throw new Error(
-        `127.0.0.1:${port} is in use by another process, perhaps another run of these tests (set SANDBOX_PORT to use another port)`,
-      );
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
   const temp = realpathSync(mkdtempSync(join(tmpdir(), `${instance}-`)));
   const root = join(temp, "workspaces");
   const keys = join(temp, "keys");
@@ -258,12 +231,18 @@ export async function startSandboxService(
   Object.assign(environment, {
     // Where the service would write a file, if it ever did.
     TMPDIR: scratch,
-    SANDBOX_LISTEN_PORT: String(port),
+    SANDBOX_LISTEN_PORT: String(options.port ?? 0),
     SANDBOX_INSTANCE: instance,
     SANDBOX_REGISTRY: join(keys, "registry.json"),
     SANDBOX_WORKSPACE_ROOTS: root,
     SANDBOX_IMAGE: image,
     SANDBOX_SHELL: "/bin/bash",
+    // A Linux Docker Engine shares the host's filesystems, so every mount is
+    // compared with the file the service checked; elsewhere Docker runs in a
+    // VM whose file sharing reports other numbers, and the comparison cannot
+    // be made.
+    SANDBOX_MOUNT_IDENTITY:
+      process.platform === "linux" ? "verify" : "unverified",
     // The test owns the service: its standard input is a pipe that closes
     // when this process is gone, even killed, and the service then removes
     // its containers and exits, instead of keeping its port for the next run.
@@ -329,25 +308,33 @@ export async function startSandboxService(
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
 
-  const url = `http://127.0.0.1:${port}`;
+  // The port the service logged it listens on, once it has.
+  const listening = () => {
+    const found =
+      /"event":"service\.listening","listen":"127\.0\.0\.1:(\d+)"/.exec(logs);
+    return found?.[1] ? Number(found[1]) : undefined;
+  };
+  // The instance name says whose answer it is: a service that holds the port
+  // answers too, with keys this run does not know.
+  const answersAsItself = async (candidate: number) => {
+    try {
+      const health = await fetch(`http://127.0.0.1:${candidate}/health`, {
+        headers: { connection: "close" },
+      });
+      const answered = (await health.json()) as { instance?: unknown };
+      return health.ok && answered.instance === instance;
+    } catch {
+      return false; // not listening yet
+    }
+  };
   const deadline = Date.now() + 30_000;
-  for (;;) {
+  let port = options.port;
+  while (port === undefined || !(await answersAsItself(port))) {
     if (exited !== undefined) {
       await stop();
       throw new Error(
         `the sandbox service exited (${exited}) at start:\n${logs.slice(-2000)}`,
       );
-    }
-    try {
-      // The instance name says whose answer it is: a service another run left
-      // on the port answers too, with keys this run does not know.
-      const health = await fetch(`${url}/health`, {
-        headers: { connection: "close" },
-      });
-      const answered = (await health.json()) as { instance?: unknown };
-      if (health.ok && answered.instance === instance) break;
-    } catch {
-      // not listening yet
     }
     if (Date.now() > deadline) {
       await stop();
@@ -356,7 +343,9 @@ export async function startSandboxService(
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
+    port ??= listening();
   }
+  const url = `http://127.0.0.1:${port}`;
 
   const key = (user: SandboxUser) => {
     const value = secrets.get(user);

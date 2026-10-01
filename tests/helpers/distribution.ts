@@ -5,6 +5,8 @@ export interface Result {
   status: number | null;
   stdout: string;
   stderr: string;
+  /** What `approve` resolved with, when the command printed a sign-in URL. */
+  approval?: unknown;
 }
 
 export function launcher(artifact: string, command: string): string {
@@ -39,6 +41,11 @@ export function branded(
     approve?: (url: string) => Promise<unknown>;
     input?: string;
     timeoutMs?: number;
+    /**
+     * Send SIGINT (Ctrl-C) once `approve` has finished, as a person who gave
+     * up on the sign-in would. POSIX only: Windows cannot deliver it.
+     */
+    interruptAfterApprove?: boolean;
   },
 ): Promise<Result> {
   return new Promise((resolve, reject) => {
@@ -57,6 +64,8 @@ export function branded(
     let stdout = "";
     let stderr = "";
     let approved = false;
+    let approval: unknown;
+    let approving: Promise<unknown> = Promise.resolve();
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
@@ -67,7 +76,12 @@ export function branded(
       );
       if (match?.[1] && options.approve && !approved) {
         approved = true;
-        void options.approve(match[1]);
+        approving = options.approve(match[1]).then((value) => {
+          approval = value;
+          if (options.interruptAfterApprove) child.kill("SIGINT");
+          return value;
+        });
+        approving.catch(() => {});
       }
     });
     child.stdin.end(options.input ?? "");
@@ -84,7 +98,16 @@ export function branded(
           }, options.timeoutMs);
     child.on("close", (status) => {
       clearTimeout(timer);
-      resolve({ status, stdout, stderr });
+      void approving
+        .catch(() => {})
+        .then(() =>
+          resolve({
+            status,
+            stdout,
+            stderr,
+            ...(approved ? { approval } : {}),
+          }),
+        );
     });
   });
 }

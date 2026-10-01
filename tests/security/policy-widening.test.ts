@@ -21,7 +21,7 @@ import {
 import type { PolicyConfig, PolicyRule } from "@piship/schema";
 import { afterAll, describe, expect, it } from "vitest";
 
-// Security case 8 (spec 30.3), policy widening, at the policy engine that
+// Security case 8 (docs/security.md, security test map), policy widening, at the policy engine that
 // decides every governed action. A team, project, or user rule can only make a
 // decision stricter than the distribution's own (enforced and default) rules;
 // in personal mode a user rule may take the place of a default but never of an

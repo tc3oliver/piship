@@ -53,6 +53,7 @@ import type {
 import { resolveProject } from "./governance/project.js";
 import { resolveResources } from "./governance/resources.js";
 import { sandboxBackend } from "./governance/sandbox.js";
+import { SessionOutputStore } from "./shell-output.js";
 
 export { terminalApproval } from "./governance/approval.js";
 export {
@@ -104,6 +105,8 @@ export class GovernanceSession {
   capabilities: CapabilityState[] = [];
   mcpReports: readonly McpServerReport[] = [];
   mcp: McpGovernor | null = null;
+  /** Full shell output of this session; removed at close(). */
+  outputStore = new SessionOutputStore();
   #closed = false;
 
   private constructor(
@@ -126,6 +129,8 @@ export class GovernanceSession {
     const homeDir = options.homeDir ?? homedir();
     let audit: AuditLog | undefined;
     let sandbox: ActiveSandbox | undefined;
+    // Output left by PiShip processes that died before closing their session.
+    SessionOutputStore.sweep();
     try {
       audit = await AuditLog.open({
         config: manifest.audit,
@@ -386,11 +391,12 @@ export class GovernanceSession {
 
   /**
    * End the session: record `session.end`, stop MCP servers, dispose the
-   * sandbox, and flush audit. Audit is flushed and metrics saved even when a
-   * cleanup step fails; a failed metrics save never fails the close. Throws
-   * AUDIT_UNAVAILABLE, after cleanup, when a required sink did not take every
-   * event of the session (that error wins over a cleanup error); otherwise
-   * returns the final audit status.
+   * sandbox, remove the session's shell output, and flush audit. Audit is
+   * flushed and metrics saved even when a cleanup step fails; a failed
+   * metrics save never fails the close. Throws AUDIT_UNAVAILABLE, after
+   * cleanup, when a required sink did not take every event of the session
+   * (that error wins over a cleanup error); otherwise returns the final audit
+   * status.
    */
   async close(): Promise<AuditStatus> {
     if (this.#closed) return this.audit.status();
@@ -401,7 +407,11 @@ export class GovernanceSession {
       try {
         await this.mcp?.close();
       } finally {
-        await this.sandbox.dispose();
+        try {
+          await this.sandbox.dispose();
+        } finally {
+          await this.outputStore.dispose();
+        }
       }
     } finally {
       try {

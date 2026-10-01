@@ -145,13 +145,20 @@ async function startRuntime(
     name: "piship-governance",
     factory: (pi) => {
       pi.on("message_end", async (event) => {
+        // Pi shows the failed request's error text in the TUI; a failure on
+        // the managed credential also gets the PiShip action.
+        const withAction = governedRef?.withAccessAction(event.message);
+        const replaced = withAction
+          ? { message: withAction as typeof event.message }
+          : undefined;
         // A message that reads as both ("403 invalid api key") is a rejected
         // credential first.
         if (isCredentialRejection(event.message)) {
           governedRef?.markCredentialRejected();
           await access?.markCredentialRejected();
-          return;
+          return replaced;
         }
+        if (replaced) return replaced;
         if (!isModelDenial(event.message)) return;
         // The gateway refused the model with 403: what the credential is
         // entitled to may have changed, so re-read it once. The rejected

@@ -10,7 +10,7 @@ import {
 } from "node:crypto";
 import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, systemError } from "@piship/contracts";
 
 /** A release key a distribution trusts: base64 of the 44-byte Ed25519 SPKI DER. */
 export interface TrustedKey {
@@ -162,7 +162,19 @@ export function writePrivateKey(
           "Write the key outside the repository, add the path to .gitignore, or pass --force-in-worktree",
       },
     );
-  writeFileSync(path, privateKeyPem, { mode: 0o600, flag: "wx" });
+  try {
+    writeFileSync(path, privateKeyPem, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    throw (
+      systemError(
+        error,
+        path,
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+          ? "keygen never overwrites a key: write the new key to another file, or move the existing key away first if you mean to replace it"
+          : undefined,
+      ) ?? error
+    );
+  }
   return location;
 }
 

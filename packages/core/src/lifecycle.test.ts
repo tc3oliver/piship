@@ -3,60 +3,60 @@ import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
-  watch,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  watch,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type SecretStore, SecretValue } from "@piship/contracts";
+import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
 } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PiShipError } from "@piship/contracts";
+import { deadPid } from "../../../tests/helpers/processes.js";
 import { PISHIP_VERSION } from "./compatibility.js";
 import {
-  EVIDENCED_TARGETS,
   currentTarget,
+  EVIDENCED_TARGETS,
   lockManifest,
   payloadInventory,
   type requireCurrentLock,
   verifyPayload,
 } from "./index.js";
 import {
-  RECEIPT_SCHEMA,
-  installDistribution,
   holdRuntimeLease,
+  installDistribution,
   lifecycleStatus,
   purgeDistributionState,
+  RECEIPT_SCHEMA,
   readInstallReceipt,
   recoverInstallation,
   runtimeLeases,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { deadPid } from "../../../tests/helpers/processes.js";
 import { readStateMarker } from "./migration.js";
 import {
-  type CommandResult,
   buildRelease,
+  type CommandResult,
   signChannel,
 } from "./release/index.js";
-import { generateSigningKey } from "./signing.js";
+import { generateSigningKey, keyFingerprint } from "./signing.js";
 import {
-  type UpdateOptions,
+  repairDistribution,
   rollbackDistribution,
   selectChannel,
+  type UpdateOptions,
   updateDistribution,
 } from "./update/index.js";
 
@@ -104,10 +104,13 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
+type Key = { readonly id: string; readonly publicKey: string };
+
 function manifestSource(
   version: string,
   rollback: boolean,
   storage?: "file" | "system",
+  keys: readonly Key[] = [KEY],
 ): string {
   // With a storage provider, a personal access section whose runtime
   // credential (a local secret) lives in that store.
@@ -153,20 +156,19 @@ updates:
   rollback: ${rollback}
   trust:
     keys:
-      - id: ${KEY.id}
-        publicKey: ${KEY.publicKey}
-`;
+${keys.map((key) => `      - id: ${key.id}\n        publicKey: ${key.publicKey}\n`).join("")}`;
 }
 
 function project(
   version: string,
   rollback = true,
   storage?: "file" | "system",
+  keys?: readonly Key[],
 ): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version, rollback, storage));
+  writeFileSync(path, manifestSource(version, rollback, storage, keys));
   lockManifest(path);
   return path;
 }
@@ -259,8 +261,9 @@ async function release(
   version: string,
   rollback = true,
   storage?: "file" | "system",
+  keys?: readonly Key[],
 ) {
-  const path = project(version, rollback, storage);
+  const path = project(version, rollback, storage, keys);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -270,13 +273,24 @@ async function release(
   });
 }
 
-function sign(directory: string, archives: string[], channel = "stable") {
+function sign(
+  directory: string,
+  archives: string[],
+  channel = "stable",
+  key: typeof KEY = KEY,
+  previous?: typeof KEY,
+) {
   return signChannel({
     directory,
     channel,
     archives,
-    privateKeyPem: KEY.privateKeyPem,
-    keyId: KEY.id,
+    privateKeyPem: key.privateKeyPem,
+    keyId: key.id,
+    ...(previous
+      ? {
+          previousKeys: [{ id: previous.id, publicKey: previous.publicKey }],
+        }
+      : {}),
   });
 }
 
@@ -472,10 +486,22 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       channels: ["stable", "candidate"],
       source: `\${ACMEPI_UPDATE_SOURCE}`,
       trustedKeys: 1,
+      keys: [{ id: KEY.id, fingerprint: keyFingerprint(KEY.publicKey) }],
       rollback: true,
       fromRelease: true,
       leftovers: [],
     });
+    // doctor runs inside a launcher that holds a lease: its own lease is
+    // not another live session.
+    const releaseLease = holdRuntimeLease(ID, "1.0.0");
+    try {
+      expect(runtimeLeases(ID).map((lease) => lease.self)).toEqual([true]);
+      expect(
+        lifecycleStatus(ID, verifyPayload(payload)).runtimeLeases,
+      ).toBeUndefined();
+    } finally {
+      releaseLease();
+    }
   });
 
   it("installs a release directory without an archive digest", async () => {
@@ -988,6 +1014,28 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
   });
 
+  it("reports each long step of update and rollback to a progress callback", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    const steps: string[] = [];
+    await updateDistribution(ID, {
+      ...opts,
+      progress: (step) => steps.push(step),
+    });
+    await rollbackDistribution(ID, {
+      runCheck: fakeRun,
+      progress: (step) => steps.push(step),
+    });
+    expect(steps.map((step) => step.replace(/\(.*\)/, "(size)"))).toEqual([
+      "Checking the stable channel",
+      "Downloading 1.1.0 (size)",
+      "Verifying the 1.1.0 release",
+      "Switching to 1.1.0",
+      "Verifying the retained 1.0.0 release",
+      "Switching to 1.0.0",
+    ]);
+  });
+
   it("does not replace a retained release that a running session still uses", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive, true);
@@ -1153,6 +1201,138 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       /sequence 1 is older than the 2 already seen/,
     );
     expect(readInstallReceipt(ID).channelSequences).toEqual({ stable: 2 });
+  });
+
+  // The trusted keys are the active release's locked updates.trust.keys, so
+  // a rotation's overlap window is the releases that pin both keys.
+  it("rotates the release key through an overlap release and then refuses the retired key", async () => {
+    const next = generateSigningKey("test-release-next");
+    const a = await release("1.0.0", true, undefined, [KEY]);
+    const b = await release("1.1.0", true, undefined, [KEY, next]);
+    const c = await release("1.2.0", true, undefined, [next]);
+    const channelDir = temp("piship-channel-");
+    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    await installDistribution(a.archive);
+    // A trusts only the current key: the next key is not yet trusted.
+    await sign(channelDir, [b.archive], "stable", next);
+    const early = await rejection(updateDistribution(ID, opts));
+    expect(early.code).toBe("INTEGRITY_FAILED");
+    expect(early.message).toMatch(
+      /Signature key test-release-next is not trusted; trusted keys: test-release$/,
+    );
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // The overlap release B, signed with the current key.
+    await sign(channelDir, [b.archive]);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: KEY.id,
+    });
+    // B pins both keys and accepts the next one. C pins only the next key,
+    // so the owner names the key that signed the existing metadata.
+    await sign(channelDir, [c.archive], "stable", next, KEY);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.2.0",
+      keyId: next.id,
+    });
+    // C pins only the next key: the retired key is refused, even with a
+    // higher sequence.
+    await sign(channelDir, [c.archive]);
+    const retired = await rejection(updateDistribution(ID, opts));
+    expect(retired.code).toBe("INTEGRITY_FAILED");
+    expect(retired.message).toMatch(
+      /Signature key test-release is not trusted; trusted keys: test-release-next$/,
+    );
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.2.0",
+      channelSequences: { stable: 3 },
+    });
+  });
+
+  it("keeps a key retired by an update retired after a rollback", async () => {
+    const backup = generateSigningKey("test-release-backup");
+    const a = await release("1.0.0", true, undefined, [KEY, backup]);
+    const b = await release("1.1.0", true, undefined, [backup]);
+    const channelDir = temp("piship-channel-");
+    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
+    await installDistribution(a.archive);
+    // A fresh install of A has no history: both of its keys are trusted.
+    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
+    await sign(channelDir, [b.archive], "stable", backup);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: backup.id,
+    });
+    // B dropped KEY: the installation records it as retired.
+    expect(readInstallReceipt(ID).retiredKeys).toEqual([
+      {
+        id: KEY.id,
+        fingerprint: keyFingerprint(KEY.publicKey),
+        release: "1.1.0",
+      },
+    ]);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // doctor's status shows the pinned key as retired, not trusted.
+    expect(
+      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.0.0"))),
+    ).toMatchObject({
+      trustedKeys: 1,
+      keys: [
+        {
+          id: KEY.id,
+          fingerprint: keyFingerprint(KEY.publicKey),
+          retiredBy: "1.1.0",
+        },
+        { id: backup.id, fingerprint: keyFingerprint(backup.publicKey) },
+      ],
+    });
+    // A still pins KEY, but metadata signed by it is refused, even newer.
+    await sign(channelDir, [b.archive]);
+    const retired = await rejection(updateDistribution(ID, opts));
+    expect(retired.code).toBe("INTEGRITY_FAILED");
+    expect(retired.message).toMatch(
+      /Signature key test-release was retired by the 1\.1\.0 release of this installation/,
+    );
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.0.0",
+      channelSequences: { stable: 1 },
+    });
+    // The key A shares with B is still trusted.
+    await sign(channelDir, [b.archive], "stable", backup, KEY);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: backup.id,
+    });
+    // A fresh install of A starts without history and trusts KEY again.
+    uninstallDistribution(ID);
+    await installDistribution(a.archive, true);
+    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
+    await sign(channelDir, [b.archive]);
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+      to: "1.1.0",
+      keyId: KEY.id,
+    });
+    // A damaged retired-key record is refused, not read as "none retired".
+    const receiptFile = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `${ID}.json`,
+    );
+    writeFileSync(
+      receiptFile,
+      JSON.stringify({
+        ...readInstallReceipt(ID),
+        retiredKeys: [{ id: KEY.id, fingerprint: "sha256:x", release: "1" }],
+      }),
+    );
+    expect(() => readInstallReceipt(ID)).toThrow(
+      /records invalid retired release keys/,
+    );
   });
 
   it("refuses a release whose launch check fails", async () => {
@@ -2035,6 +2215,164 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
   });
 });
 
+// ------------------------------------------------------------------ repair
+
+describe.runIf(HOST_EVIDENCED)("repair", () => {
+  /** A installed, updated to B: B active, A retained. */
+  async function updated() {
+    const f = await fixture();
+    seedState();
+    await installDistribution(f.a.archive, true);
+    await updateDistribution(ID, f.opts);
+    return f;
+  }
+
+  it("restores an active release with a stray file, so rollback and update work again", async () => {
+    const f = await updated();
+    const active = join(appsDir(), "1.1.0");
+    write(join(active, ".DS_Store"), "finder metadata");
+    // Still refused, naming the file and the command that repairs it.
+    const refused = (() => {
+      try {
+        verifyPayload(active);
+      } catch (error) {
+        return error as PiShipError;
+      }
+      throw new Error("expected a throw");
+    })();
+    expect(refused.code).toBe("INTEGRITY_FAILED");
+    expect(refused.message).toContain(
+      "unexpected (not in the inventory): .DS_Store",
+    );
+    expect(refused.userAction).toContain(
+      `piship repair ${ID} <release archive>`,
+    );
+    expect(
+      (await rejection(rollbackDistribution(ID, { runCheck: fakeRun }))).code,
+    ).toBe("INTEGRITY_FAILED");
+    expect(
+      (await rejection(updateDistribution(ID, { ...f.opts, check: true })))
+        .code,
+    ).toBe("INTEGRITY_FAILED");
+    const receipt = readInstallReceipt(ID);
+
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result).toMatchObject({
+      status: "repaired",
+      id: ID,
+      version: "1.1.0",
+    });
+    expect(result.problem).toContain(".DS_Store");
+    expect(existsSync(join(active, ".DS_Store"))).toBe(false);
+    expect(verifyPayload(active).app.version).toBe("1.1.0");
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+
+    // Neither is blocked any longer.
+    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
+      "1.0.0",
+    );
+    expect((await updateDistribution(ID, f.opts)).status).toBe("updated");
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+  });
+
+  it("restores a modified file in the retained release, so rollback works again", async () => {
+    const f = await updated();
+    write(
+      join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
+      "# tampered\n",
+    );
+    const blocked = await rejection(
+      rollbackDistribution(ID, { runCheck: fakeRun }),
+    );
+    expect(blocked.code).toBe("ROLLBACK_FAILED");
+    expect(blocked.message).toContain(
+      "modified: resources/resources/AGENTS.md",
+    );
+    expect((blocked as PiShipError).userAction).toContain(
+      `piship repair ${ID} <release archive of 1.0.0>`,
+    );
+    const result = await repairDistribution(ID, f.a.archive);
+    expect(result).toMatchObject({ status: "repaired", version: "1.0.0" });
+    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
+      "1.0.0",
+    );
+  });
+
+  it("restores a release whose directory is missing", async () => {
+    const f = await updated();
+    rmSync(join(appsDir(), "1.1.0"), { recursive: true, force: true });
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result.status).toBe("repaired");
+    expect(verifyPayload(join(appsDir(), "1.1.0")).app.version).toBe("1.1.0");
+  });
+
+  it("reports an intact release and changes nothing", async () => {
+    const f = await updated();
+    const before = treeHash(appsDir());
+    const result = await repairDistribution(ID, f.b.archive);
+    expect(result).toMatchObject({ status: "intact", version: "1.1.0" });
+    expect(treeHash(appsDir())).toEqual(before);
+  });
+
+  it("refuses a source that is not the recorded release, and changes nothing", async () => {
+    const a = await release("1.0.0");
+    const b = await release("1.1.0");
+    await installDistribution(a.archive);
+    const active = join(appsDir(), "1.0.0");
+    write(join(active, ".DS_Store"), "finder metadata");
+    const before = treeHash(appsDir());
+    const receipt = readInstallReceipt(ID);
+
+    // A version this installation does not record.
+    const other = await rejection(repairDistribution(ID, b.archive));
+    expect(other.code).toBe("UPDATE_FAILED");
+    expect(other.message).toMatch(
+      /acmepi 1.1.0, which is not a release of acmepi this installation records \(1.0.0\)/,
+    );
+
+    // The same version built from different content.
+    const path = project("1.0.0");
+    write(join(dirname(path), "resources", "AGENTS.md"), "# impostor\n");
+    lockManifest(path);
+    const impostor = await buildRelease(path, {
+      outputRoot: join(dirname(path), "dist"),
+      assemble: fakeAssemble,
+      runTest: fakeRun,
+      scanner: () => ({ auditReportVersion: 2, vulnerabilities: {} }),
+      signatureAuditor,
+    });
+    const mismatch = await rejection(repairDistribution(ID, impostor.archive));
+    expect(mismatch.code).toBe("INTEGRITY_FAILED");
+    expect(mismatch.message).toMatch(/does not match the 1.0.0 release/);
+
+    // A damaged archive.
+    const copy = join(temp(), basename(a.archive));
+    cpSync(a.archive, copy);
+    flipByte(copy);
+    expect((await rejection(repairDistribution(ID, copy))).code).toBe(
+      "INTEGRITY_FAILED",
+    );
+
+    expect(treeHash(appsDir())).toEqual(before);
+    expect(readInstallReceipt(ID)).toEqual(receipt);
+  });
+
+  it("does not replace a release a running session still uses", async () => {
+    const f = await updated();
+    write(join(appsDir(), "1.1.0", ".DS_Store"), "finder metadata");
+    const release = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(repairDistribution(ID, f.b.archive));
+      expect(error.code).toBe("UPDATE_FAILED");
+      expect(error.message).toMatch(/runtime session/);
+      expect(existsSync(join(appsDir(), "1.1.0", ".DS_Store"))).toBe(true);
+    } finally {
+      release();
+    }
+  });
+});
+
 // --------------------------------------------------------------- uninstall
 
 describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
@@ -2204,6 +2542,51 @@ describe.runIf(HOST_EVIDENCED)("uninstall and purge", () => {
     await expect(purgeDistributionState(ID)).rejects.toThrow(/overlap/);
     expect(existsSync(join(stateDir(), "bin", "otherpi"))).toBe(true);
     process.env.PISHIP_BIN_HOME = bin;
+  });
+
+  it("refuses update when the roots overlap, changing nothing", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    const before = readInstallReceipt(ID);
+    const state = process.env.PISHIP_STATE_HOME as string;
+    // A state home inside the install home. The receipt records the payload
+    // and command paths, not the state home, so only the overlap check can
+    // refuse this layout.
+    const nested = join(process.env.PISHIP_INSTALL_HOME as string, "state");
+    process.env.PISHIP_STATE_HOME = nested;
+    const error = await rejection(updateDistribution(ID, opts));
+    expect(error.message).toMatch(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(readInstallReceipt(ID)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(existsSync(nested)).toBe(false);
+    // With separate roots again the same update goes through.
+    process.env.PISHIP_STATE_HOME = state;
+    await updateDistribution(ID, opts);
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+  });
+
+  it("refuses rollback when the roots overlap, changing nothing", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    await updateDistribution(ID, opts);
+    const before = readInstallReceipt(ID);
+    const state = process.env.PISHIP_STATE_HOME as string;
+    const nested = join(process.env.PISHIP_INSTALL_HOME as string, "state");
+    process.env.PISHIP_STATE_HOME = nested;
+    const error = await rejection(
+      rollbackDistribution(ID, { runCheck: fakeRun }),
+    );
+    expect(error.message).toMatch(
+      /PISHIP_STATE_HOME .* and PISHIP_INSTALL_HOME .* overlap/,
+    );
+    expect(readInstallReceipt(ID)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(existsSync(nested)).toBe(false);
+    process.env.PISHIP_STATE_HOME = state;
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
   it("uninstall with purge removes the install, the secrets, and the state in one operation, or nothing", async () => {
@@ -2989,6 +3372,44 @@ describe("launch-time payload verification", () => {
     expect(error).toBeInstanceOf(PiShipError);
     expect(error.code).toBe("INTEGRITY_FAILED");
     expect(error.message).toMatch(/payload integrity mismatch/);
+    expect(error.message).toContain("modified: resources/resources/AGENTS.md");
+    expect((error as PiShipError).sanitizedDetail).toMatchObject({
+      added: [],
+      modified: ["resources/resources/AGENTS.md"],
+      missing: [],
+    });
+  });
+
+  it("names an unexpected added file, still refusing the payload", () => {
+    const directory = payload();
+    write(join(directory, ".DS_Store"), "finder metadata");
+    write(join(directory, "resources", "._AGENTS.md"), "resource fork");
+    const error = thrown(() => verifyPayload(directory)) as PiShipError;
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(
+      "unexpected (not in the inventory): .DS_Store, resources/._AGENTS.md",
+    );
+    expect(error.message).not.toContain("modified:");
+    expect(error.sanitizedDetail).toMatchObject({
+      added: [".DS_Store", "resources/._AGENTS.md"],
+      modified: [],
+      missing: [],
+    });
+    expect(error.userAction).toContain("piship repair <id> <release archive>");
+  });
+
+  it("names a missing file and caps a long list", () => {
+    const directory = payload();
+    rmSync(join(directory, "bin", ID));
+    for (let index = 0; index < 12; index += 1)
+      write(join(directory, "extra", `file-${index}`), "x");
+    const error = thrown(() => verifyPayload(directory)) as PiShipError;
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain(`missing: bin/${ID}`);
+    expect(error.message).toContain("and 7 more");
+    expect(error.sanitizedDetail).toMatchObject({ missing: [`bin/${ID}`] });
+    expect(error.sanitizedDetail?.added).toHaveLength(12);
   });
 
   it("reports a lock tampered behind a rewritten inventory as LOCK_INVALID", () => {
@@ -3011,5 +3432,6 @@ describe("launch-time payload verification", () => {
     const error = thrown(() => verifyPayload(directory));
     expect(error.code).toBe("LOCK_INVALID");
     expect(error.message).toMatch(/npm lock mismatch/);
+    expect((error as PiShipError).userAction).toContain("piship repair <id>");
   });
 });

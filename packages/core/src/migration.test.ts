@@ -3,8 +3,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,14 +13,15 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  LEGACY_STATE_SCHEMAS,
-  STATE_DATA_CLASSES,
-  STATE_SCHEMAS,
   checkStateMigration,
   compareVersions,
   formatMigrationReport,
-  readStateMarker,
+  formatMigrationSummary,
+  LEGACY_STATE_SCHEMAS,
   type MigrationReport,
+  readStateMarker,
+  STATE_DATA_CLASSES,
+  STATE_SCHEMAS,
 } from "./migration.js";
 
 const roots: string[] = [];
@@ -165,6 +166,29 @@ describe("STATE_DATA_CLASSES", () => {
         row,
       ).toBe(true);
   });
+
+  it("has one row per class in the docs/release/update-lifecycle.md migration table", () => {
+    const doc = readFileSync(
+      new URL("../../../docs/release/update-lifecycle.md", import.meta.url),
+      "utf8",
+    );
+    const section = doc.slice(
+      doc.indexOf("| Class | Path under the state directory |"),
+      doc.indexOf("Verdicts are"),
+    );
+    // A row names its class's path or a path inside it
+    // (`migration/snapshots/` for `migration`).
+    const rows = [...section.matchAll(/^\| [^|]+ \| `([^`]+)`/gm)].map(
+      (match) =>
+        STATE_DATA_CLASSES.find(
+          (entry) =>
+            match[1] === entry.path || match[1]?.startsWith(`${entry.path}/`),
+        )?.path ?? match[1],
+    );
+    expect(rows.sort()).toEqual(
+      STATE_DATA_CLASSES.map((entry) => entry.path).sort(),
+    );
+  });
 });
 
 describe("checkStateMigration", () => {
@@ -216,6 +240,22 @@ describe("checkStateMigration", () => {
     );
     expect(formatMigrationReport(report)).toMatch(
       /^Migration check 1.1.0 -> 1.0.0 \(Pi 0.87.1 -> 0.87.1\): safe/,
+    );
+  });
+
+  it("summarizes a no-op migration in one line and lists only what changes", () => {
+    const kept = checkStateMigration(populated(), target(), current);
+    const brief = formatMigrationSummary(kept);
+    expect(brief.split("\n")).toHaveLength(1);
+    expect(brief).toContain(
+      `every state item (${STATE_DATA_CLASSES.length}) is kept unchanged`,
+    );
+    const review = checkStateMigration(populated(), target("0.86.0"), current);
+    const lines = formatMigrationSummary(review).split("\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toMatch(/^ {2}! sessions\s+review/);
+    expect(lines[2]).toContain(
+      `${STATE_DATA_CLASSES.length - 1} other state item(s) are kept unchanged`,
     );
   });
 

@@ -51,6 +51,18 @@ export interface InstalledRelease {
   };
 }
 
+/**
+ * A release key that a release activated on this installation stopped
+ * pinning. It stays refused after a rollback to a release that still pins it.
+ */
+export interface RetiredKey {
+  readonly id: string;
+  /** `keyFingerprint` of the public key: retirement follows the key, not the id. */
+  readonly fingerprint: string;
+  /** The version whose activation retired the key. */
+  readonly release: string;
+}
+
 export interface InstallReceipt {
   readonly schema?: typeof RECEIPT_SCHEMA;
   readonly app: DistributionLock["app"];
@@ -67,6 +79,8 @@ export interface InstallReceipt {
   readonly channel?: string;
   /** Highest verified channel metadata sequence per channel (replay guard). */
   readonly channelSequences?: Readonly<Record<string, number>>;
+  /** Keys retired by an update; absent (none) in older receipts. */
+  readonly retiredKeys?: readonly RetiredKey[];
   readonly lastCheck?: {
     readonly time: string;
     readonly channel: string;
@@ -87,6 +101,8 @@ export type LifecyclePhase =
   | "cleaned";
 
 export interface LifecycleOptions {
+  /** Receives a short line as each long step starts (see `progressReporter`). */
+  readonly progress?: (step: string) => void;
   /** Test seam: throw at a phase to simulate interruption. */
   readonly faults?: (phase: LifecyclePhase) => void;
   /** Runs a candidate payload's launcher check; defaults to Node. */
@@ -310,6 +326,19 @@ export function readInstallReceipt(id: string): InstallReceipt {
     !releases.some((item) => item.version === raw.previous)
   )
     throw fail(`does not record its previous release ${raw.previous}`);
+  if (
+    raw.retiredKeys !== undefined &&
+    (!Array.isArray(raw.retiredKeys) ||
+      !raw.retiredKeys.every(
+        (key) =>
+          key &&
+          typeof key.id === "string" &&
+          typeof key.fingerprint === "string" &&
+          /^sha256:[a-f0-9]{64}$/.test(key.fingerprint) &&
+          typeof key.release === "string",
+      ))
+  )
+    throw fail("records invalid retired release keys");
   return raw as InstallReceipt;
 }
 

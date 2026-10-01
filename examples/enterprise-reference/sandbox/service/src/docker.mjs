@@ -235,6 +235,15 @@ export function mainProcessArguments(config, container) {
 }
 
 /**
+ * Prints `device:inode` of each path, one line each, as the container sees
+ * it: for a mount point, the file the runtime mounted there. `stat` is run
+ * directly, with no shell, before any command of the caller's.
+ */
+export function mountIdentityArguments(container, targets) {
+  return ["exec", container, "stat", "-c", "%d:%i", "--", ...targets];
+}
+
+/**
  * The docker CLI as the service uses it. `run` collects a short command's
  * output; `start` hands back the child of a long one (a command's `exec`).
  * Neither rejects: a CLI that cannot start is `{code: null, error: true}`.

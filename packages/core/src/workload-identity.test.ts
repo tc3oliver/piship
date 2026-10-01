@@ -295,7 +295,6 @@ describe("workload identity (fixtures)", () => {
     });
     source().swallowBrowser = false;
     // A session without an expiry is refused.
-    const expiry = source().expiresAt;
     delete source().expiresAt;
     await expect(
       open(new MemorySecretStore()).activate(),
@@ -303,7 +302,6 @@ describe("workload identity (fixtures)", () => {
       code: "IDENTITY_INVALID",
       message: expect.stringContaining("without an expiry"),
     });
-    source().expiresAt = expiry;
     source().expiresAt = new Date(clock - 1000).toISOString();
     await expect(
       open(new MemorySecretStore()).activate(),

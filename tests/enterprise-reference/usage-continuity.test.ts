@@ -9,7 +9,8 @@ import {
   sum,
 } from "./stack.js";
 
-// Section 9.1 of the v0.7 plan, decision D-01: one employee's credentials A,
+// The reference broker's budget model (one LiteLLM user per principal,
+// examples/enterprise-reference/broker/README.md): one employee's credentials A,
 // B and C, and every rotation, accrue ONE spend total against ONE budget, and
 // a second employee has their own. Every spend figure is read from LiteLLM's
 // own records (`/spend/users`, `/spend/logs`, `/key/info`), never counted by
@@ -98,7 +99,7 @@ describe("usage continuity across credential rotation (live reference stack)", (
     const infos = await Promise.all(
       [a, b, c].map((key) => stack.keyInfo(key.hash)),
     );
-    alice = String(infos[0].user_id);
+    alice = String(infos[0]?.user_id);
     expect(alice).toMatch(/^oidc-[0-9a-f]{40}$/);
     for (const info of infos) {
       // One LiteLLM user, no team (a team key ignores the user's budget), and

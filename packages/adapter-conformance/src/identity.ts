@@ -202,7 +202,7 @@ export interface IdentityMintedTokens {
 }
 
 /**
- * Token-minting hooks from the adapter author (decision D-07). With a
+ * Token-minting hooks from the adapter author. With a
  * harness, every session the service issues carries tokens `mint` made, so
  * an adapter that validates tokens accepts the kit's sessions, and the kit
  * checks it refuses invalid ones.
@@ -254,7 +254,7 @@ export interface IdentityKitOptions {
     request: IdentityServiceRequest,
     answer: IdentityServiceAnswer,
   ) => Response | Promise<Response>;
-  /** Token-minting hooks; without them the D-07 behaviors are skipped. */
+  /** Token-minting hooks; without them the token validation behaviors are skipped. */
   readonly harness?: IdentityTokenHarness;
   /** Merged over the kit's placeholder endpoints in the adapter's context. */
   readonly endpoints?: Partial<ResolvedEndpoints>;
@@ -669,7 +669,7 @@ async function operations(
   return list;
 }
 
-/** A D-07 check: the harness mints `kinds`; the adapter must refuse each. */
+/** A token validation check: the harness mints `kinds`; the adapter must refuse each. */
 function tokenCheck(
   kinds: readonly IdentityTokenKind[],
   codes: readonly PiShipErrorCode[],

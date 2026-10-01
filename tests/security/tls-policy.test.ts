@@ -15,7 +15,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { selfSignedLoopbackCertificate } from "../helpers/x509.js";
 
-// Security case 10 (spec 30.3), TLS downgrade: a broken trust configuration
+// Security case 10 (docs/security.md, security test map), TLS downgrade: a broken trust configuration
 // stops the client instead of relaxing verification, and switching
 // verification off after a client exists does not reach it either. The
 // transport-level cases (plain HTTP to a public name, https to http redirect,

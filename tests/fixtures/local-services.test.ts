@@ -33,6 +33,22 @@ function form(values: Record<string, string>) {
 const tokenEndpoint = (values: Record<string, string>) =>
   fetch(`${services.issuer}/token`, form(values));
 
+/** The fields of a token endpoint answer that the tests read. */
+interface TokenSet {
+  access_token: string;
+  refresh_token: string;
+  id_token: string;
+}
+/** The fields of a broker credential answer that the tests read. */
+interface IssuedCredential {
+  credential: string;
+  credential_id: string;
+}
+const tokensOf = async (response: Response) =>
+  (await response.json()) as TokenSet;
+const issuedOf = async (response: Response) =>
+  (await response.json()) as IssuedCredential;
+
 const claimsOf = (idToken: string) =>
   JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString());
 
@@ -68,7 +84,7 @@ const exchange = ({ code, verifier }: { code: string; verifier: string }) =>
 async function login() {
   const response = await exchange(await authorize());
   expect(response.status).toBe(200);
-  const tokens = await response.json();
+  const tokens = await tokensOf(response);
   return { tokens, claims: claimsOf(tokens.id_token) };
 }
 
@@ -171,7 +187,7 @@ describe("subject and identity attributes", () => {
     services.knobs.subject = "alice";
     const pending = await authorize();
     services.knobs.subject = "bob";
-    const tokens = await (await exchange(pending)).json();
+    const tokens = await tokensOf(await exchange(pending));
     expect(claimsOf(tokens.id_token).sub).toBe("alice");
   });
 
@@ -179,7 +195,7 @@ describe("subject and identity attributes", () => {
     services.knobs.subject = "alice";
     const { tokens } = await login();
     services.knobs.subject = "bob";
-    const refreshed = await (await refresh(tokens.refresh_token)).json();
+    const refreshed = await tokensOf(await refresh(tokens.refresh_token));
     expect(claimsOf(refreshed.id_token).sub).toBe("alice");
   });
 
@@ -187,19 +203,19 @@ describe("subject and identity attributes", () => {
     services.knobs.subject = "alice";
     const { tokens } = await login();
     services.knobs.refreshSubject = "mallory";
-    const refreshed = await (await refresh(tokens.refresh_token)).json();
+    const refreshed = await tokensOf(await refresh(tokens.refresh_token));
     expect(claimsOf(refreshed.id_token).sub).toBe("mallory");
     await acquire(refreshed.access_token);
     expect(credentialSubjects()).toEqual(["mallory"]);
     services.knobs.refreshSubject = undefined;
-    const again = await (await refresh(refreshed.refresh_token)).json();
+    const again = await tokensOf(await refresh(refreshed.refresh_token));
     expect(claimsOf(again.id_token).sub).toBe("mallory");
   });
 
   it("issues refreshed tokens under an issuer set after sign-in", async () => {
     const { tokens } = await login();
     services.knobs.idTokenIssuer = "https://other-issuer.example";
-    const refreshed = await (await refresh(tokens.refresh_token)).json();
+    const refreshed = await tokensOf(await refresh(tokens.refresh_token));
     expect(claimsOf(refreshed.id_token).iss).toBe(
       "https://other-issuer.example",
     );
@@ -209,12 +225,12 @@ describe("subject and identity attributes", () => {
 describe("broker idempotency", () => {
   it("is off by default: a repeated key issues a second credential and records nothing", async () => {
     const { tokens } = await login();
-    const first = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
-    const second = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
+    const first = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
+    const second = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
     expect(second.credential).not.toBe(first.credential);
     expect(services.state.credentialCount).toBe(2);
     expect(services.state.idempotencyKeys).toEqual([]);
@@ -251,13 +267,13 @@ describe("broker idempotency", () => {
   it("replays the original result even when the access token was refreshed in between", async () => {
     services.knobs.brokerIdempotency = true;
     const { tokens } = await login();
-    const first = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
-    const refreshed = await (await refresh(tokens.refresh_token)).json();
-    const second = await (
-      await acquire(refreshed.access_token, { key: "key-1" })
-    ).json();
+    const first = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
+    const refreshed = await tokensOf(await refresh(tokens.refresh_token));
+    const second = await issuedOf(
+      await acquire(refreshed.access_token, { key: "key-1" }),
+    );
     expect(second).toEqual(first);
   });
 
@@ -279,18 +295,18 @@ describe("broker idempotency", () => {
   it("rejects a repeated key with different input as 409 and issues nothing", async () => {
     services.knobs.brokerIdempotency = true;
     const { tokens } = await login();
-    const first = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
+    const first = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
     const conflict = await acquire(tokens.access_token, {
       key: "key-1",
       body: { ...PAYLOAD, distribution: "othercode" },
     });
     expect(conflict.status).toBe(409);
     expect(services.state.credentialCount).toBe(1);
-    const replay = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
+    const replay = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
     expect(replay).toEqual(first);
   });
 
@@ -309,12 +325,12 @@ describe("broker idempotency", () => {
   it("issues a new credential for a new key", async () => {
     services.knobs.brokerIdempotency = true;
     const { tokens } = await login();
-    const first = await (
-      await acquire(tokens.access_token, { key: "key-1" })
-    ).json();
-    const second = await (
-      await acquire(tokens.access_token, { key: "key-2" })
-    ).json();
+    const first = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-1" }),
+    );
+    const second = await issuedOf(
+      await acquire(tokens.access_token, { key: "key-2" }),
+    );
     expect(second.credential).not.toBe(first.credential);
     expect(services.state.credentialCount).toBe(2);
   });
@@ -591,7 +607,7 @@ describe("timed-out requests the service still served", () => {
     });
     const retry = await acquire(tokens.access_token, { key: "key-1" });
     expect(retry.headers.get("idempotent-replayed")).toBe("true");
-    expect((await retry.json()).credential).toBe(
+    expect((await issuedOf(retry)).credential).toBe(
       [...services.state.credentials.keys()][0],
     );
     expect(services.state.credentialCount).toBe(1);
@@ -610,7 +626,7 @@ describe("timed-out requests the service still served", () => {
 
   it("revokes the credential but withholds the answer when revokeTimeoutServes is set", async () => {
     const { tokens } = await login();
-    const issued = await (await acquire(tokens.access_token)).json();
+    const issued = await issuedOf(await acquire(tokens.access_token));
     Object.assign(services.knobs, {
       revokeTimeoutMs: 5_000,
       revokeTimeoutServes: true,
@@ -623,7 +639,7 @@ describe("timed-out requests the service still served", () => {
 
   it("does not revoke when revokeTimeoutMs alone holds the request", async () => {
     const { tokens } = await login();
-    const issued = await (await acquire(tokens.access_token)).json();
+    const issued = await issuedOf(await acquire(tokens.access_token));
     services.knobs.revokeTimeoutMs = 5_000;
     await expect(
       revoke(issued.credential, AbortSignal.timeout(100)),
@@ -659,7 +675,7 @@ describe("token endpoint faults", () => {
     expect((await exchange(pending)).status).toBe(503);
     const retry = await exchange(pending);
     expect(retry.status).toBe(200);
-    expect(claimsOf((await retry.json()).id_token).sub).toBe("demo-user-1");
+    expect(claimsOf((await tokensOf(retry)).id_token).sub).toBe("demo-user-1");
   });
 
   it("fails every refresh with a 5xx while tokenStatus is set, then recovers", async () => {
@@ -738,7 +754,7 @@ describe("fixture state and defaults", () => {
 
   it("exposes issued and revoked credentials for inspection", async () => {
     const { tokens } = await login();
-    const issued = await (await acquire(tokens.access_token)).json();
+    const issued = await issuedOf(await acquire(tokens.access_token));
     expect(services.state.credentialCount).toBe(1);
     expect(services.state.revokedCredentials).toEqual([]);
     await revoke(issued.credential);

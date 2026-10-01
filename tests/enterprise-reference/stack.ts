@@ -4,12 +4,21 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  EPHEMERAL_PORTS,
+  type PortName,
+  publishedPorts,
+  type StackPorts,
+  startWithPublishedPorts,
+} from "../../examples/enterprise-reference/tests/support/ports.js";
 import { registerTeardown } from "../../examples/enterprise-reference/tests/support/teardown.js";
 
 // The live enterprise reference stack (examples/enterprise-reference) for
 // `npm run test:reference`. Each test file starts its own copy under its own
-// Compose project, with its own `.env` in a temporary directory (never the
-// git-ignored one beside compose.yaml), and stops it in afterAll.
+// Compose project, on host ports Docker chooses (the example's
+// tests/support/ports.ts), with its own `.env` in a temporary directory (never
+// the git-ignored one beside compose.yaml), and stops it in afterAll. Two runs
+// on one host never meet.
 //
 // Everything this module returns that is a secret (tokens, keys, the master
 // key) stays in memory. Response bodies are scrubbed of key and token shapes
@@ -21,15 +30,6 @@ const reference = fileURLToPath(
 
 /** Every Compose project and temporary directory of these tests starts with this, then the owning PID. */
 export const PROJECT_PREFIX = "piship-reftest-";
-
-/** Host ports on 127.0.0.1. KEYCLOAK_PORT and the others in the environment override them. */
-export const DEFAULT_TEST_PORTS = {
-  KEYCLOAK_PORT: 28080,
-  LITELLM_PORT: 24000,
-  MOCK_UPSTREAM_PORT: 28090,
-  POSTGRES_PORT: 25432,
-  BROKER_PORT: 28070,
-} as const;
 
 export interface HttpResult {
   status: number;
@@ -73,11 +73,11 @@ export function scrub(text: string): string {
     );
 }
 
-function run(args: string[], env?: NodeJS.ProcessEnv) {
+function run(args: string[], env: NodeJS.ProcessEnv) {
   return spawnSync("docker", args, {
     cwd: reference,
     encoding: "utf8",
-    env: env ?? process.env,
+    env,
     maxBuffer: 16 * 1024 * 1024,
   });
 }
@@ -86,7 +86,7 @@ function readEnvFile(path: string): Record<string, string> {
   const values: Record<string, string> = {};
   for (const line of readFileSync(path, "utf8").split("\n")) {
     const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match) values[match[1]] = match[2];
+    if (match?.[1] !== undefined) values[match[1]] = match[2] ?? "";
   }
   return values;
 }
@@ -104,7 +104,7 @@ export async function request(
         ? {}
         : { "content-type": "application/json" }),
     },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
   const text = await response.text();
   let body: unknown = text;
@@ -147,16 +147,19 @@ export async function poll<T>(
   }
 }
 
-export type TestPorts = Record<keyof typeof DEFAULT_TEST_PORTS, number>;
+export type TestPorts = StackPorts;
 
 export interface ReferenceStack {
   project: string;
-  /** The host ports the stack publishes on 127.0.0.1. */
-  ports: TestPorts;
-  gateway: string;
-  broker: string;
+  /**
+   * The host ports Docker chose on 127.0.0.1, read again by
+   * `service("start")`: a container started again gets a new port.
+   */
+  readonly ports: TestPorts;
+  readonly gateway: string;
+  readonly broker: string;
   /** The mock upstream, for its `/__mock` control endpoints. */
-  mock: string;
+  readonly mock: string;
   /** Seconds `docker compose up --wait` took. */
   startupSeconds: number;
   /** A Keycloak access token for alice or bob, by the Authorization Code + PKCE flow. */
@@ -197,7 +200,11 @@ export interface ReferenceStack {
     row: Record<string, unknown>;
     logs: SpendLog[];
   }>;
-  /** Stop one service of this stack, or start it again and wait for its healthcheck. */
+  /**
+   * Stop one service of this stack, or start it again and wait for its
+   * healthcheck. A start reads the ports again, and the URLs follow. Keycloak
+   * and LiteLLM are never started again: the broker holds their ports.
+   */
   service(action: "stop" | "start", name: string): void;
   stop(): void;
 }
@@ -206,17 +213,13 @@ export interface ReferenceStack {
  * Start the reference stack under a Compose project of its own and wait for
  * every healthcheck (`up --wait`, no sleeps). `brokerEnv` adds broker
  * settings (budget, limits) through an override file beside the `.env`.
- * `ports` replaces DEFAULT_TEST_PORTS for this stack; a variable set in the
- * environment still wins.
  */
 export function startReferenceStack({
   name,
   brokerEnv = {},
-  ports: portDefaults = {},
 }: {
   name: string;
   brokerEnv?: Record<string, string>;
-  ports?: Partial<TestPorts>;
 }): ReferenceStack {
   // The owning process's PID is part of both names, so global-setup.ts can
   // remove what a killed run left behind without touching a live one.
@@ -225,17 +228,10 @@ export function startReferenceStack({
     join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`),
   );
   const envFile = join(directory, ".env");
-  const ports = Object.fromEntries(
-    Object.entries(DEFAULT_TEST_PORTS).map(([variable, fallback]) => [
-      variable,
-      process.env[variable] ??
-        String(portDefaults[variable as keyof TestPorts] ?? fallback),
-    ]),
-  );
   const generated = spawnSync(
     process.execPath,
     [join(reference, "scripts/generate-env.mjs"), "--out", envFile],
-    { env: { ...process.env, ...ports }, encoding: "utf8" },
+    { env: { ...process.env, ...EPHEMERAL_PORTS }, encoding: "utf8" },
   );
   if (generated.status !== 0) {
     rmSync(directory, { recursive: true, force: true });
@@ -259,6 +255,18 @@ export function startReferenceStack({
     files.push("-f", override);
   }
   const compose = ["compose", "-p", project, "--env-file", envFile, ...files];
+  // Compose prefers the shell over the env file, so a variable of the same
+  // name in the developer's shell must not replace a generated value or a
+  // port Docker chose.
+  const dockerEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const variable of [
+    ...Object.keys(readEnvFile(envFile)),
+    "KEYCLOAK_PUBLISHED_PORT",
+    "LITELLM_PUBLISHED_PORT",
+  ])
+    delete dockerEnv[variable];
+  const composeRun = (args: readonly string[]) =>
+    run([...compose, ...args], dockerEnv);
 
   // The worker's exit, Ctrl-C, or termination between start and afterAll still
   // stops the stack, and a stop that failed can be called again (see
@@ -268,18 +276,31 @@ export function startReferenceStack({
     project,
     envFile,
     directory,
-    compose: (args) => run([...compose, ...args]),
+    compose: composeRun,
     // No `-v`: the stack has no named volume and keeps its data on tmpfs.
     downArguments: ["down", "--remove-orphans"],
   });
 
   const started = performance.now();
-  const up = run([...compose, "up", "-d", "--wait", "--wait-timeout", "300"]);
+  const up = startWithPublishedPorts(composeRun, envFile, [
+    "up",
+    "-d",
+    "--wait",
+    "--wait-timeout",
+    "300",
+  ]);
   const startupSeconds = Math.round((performance.now() - started) / 100) / 10;
-  if (up.status !== 0) {
+  let ports: TestPorts | undefined;
+  let failure = up.status === 0 ? undefined : (up.stderr ?? "").trim();
+  if (failure === undefined)
+    try {
+      ports = publishedPorts(composeRun);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+  if (failure !== undefined || !ports) {
     // Service states only: container logs can hold configuration values.
-    const ps = run([
-      ...compose,
+    const ps = composeRun([
       "ps",
       "-a",
       "--format",
@@ -291,22 +312,28 @@ export function startReferenceStack({
       // Report the start failure, not the cleanup one.
     }
     throw new Error(
-      `docker compose up failed for ${project}:\n${scrub(up.stderr.trim())}\n${ps.stdout}`,
+      `docker compose up failed for ${project}:\n${scrub(failure ?? "")}\n${ps.stdout}`,
     );
   }
+  let current: TestPorts = ports;
+  const url = (name: PortName) => `http://127.0.0.1:${current[name]}`;
 
   const env = readEnvFile(envFile);
   const masterKey = env.LITELLM_MASTER_KEY;
-  const gateway = `http://127.0.0.1:${env.LITELLM_PORT}`;
-  const broker = `http://127.0.0.1:${env.BROKER_PORT}`;
-  const mock = `http://127.0.0.1:${env.MOCK_UPSTREAM_PORT}`;
 
   const getToken = (user: "alice" | "bob", args: string[] = []) => {
     // The helper prints the token on stdout; it is captured, never shown.
     const result = spawnSync(
       process.execPath,
       [join(reference, "scripts/get-token.mjs"), user, ...args],
-      { env: { ...process.env, ...env }, encoding: "utf8" },
+      {
+        env: {
+          ...process.env,
+          ...env,
+          KEYCLOAK_PORT: String(current.KEYCLOAK_PORT),
+        },
+        encoding: "utf8",
+      },
     );
     if (result.status !== 0)
       throw new Error(
@@ -319,19 +346,25 @@ export function startReferenceStack({
     JSON.parse(getToken(user, ["--response"]));
 
   const admin = (path: string, body?: unknown) =>
-    request(`${gateway}${path}`, { bearer: masterKey, body });
+    request(`${url("LITELLM_PORT")}${path}`, {
+      ...(masterKey === undefined ? {} : { bearer: masterKey }),
+      body,
+    });
 
   return {
     project,
-    ports: Object.fromEntries(
-      Object.keys(DEFAULT_TEST_PORTS).map((variable) => [
-        variable,
-        Number(env[variable]),
-      ]),
-    ) as TestPorts,
-    gateway,
-    broker,
-    mock,
+    get ports() {
+      return { ...current };
+    },
+    get gateway() {
+      return url("LITELLM_PORT");
+    },
+    get broker() {
+      return url("BROKER_PORT");
+    },
+    get mock() {
+      return url("MOCK_UPSTREAM_PORT");
+    },
     startupSeconds,
     accessToken,
     tokenResponse,
@@ -341,7 +374,7 @@ export function startReferenceStack({
       return value;
     },
     async acquire(user) {
-      const response = await request(`${broker}/v1/credential`, {
+      const response = await request(`${url("BROKER_PORT")}/v1/credential`, {
         bearer: accessToken(user),
         body: { distribution: "acmecode-reference", purpose: "inference" },
       });
@@ -362,7 +395,7 @@ export function startReferenceStack({
       };
     },
     revoke(credential) {
-      return request(`${broker}/v1/revoke`, {
+      return request(`${url("BROKER_PORT")}/v1/revoke`, {
         bearer: credential.key,
         body: {
           credential_id: credential.credentialId,
@@ -376,7 +409,7 @@ export function startReferenceStack({
       // holds a request that carries `[mock:delay=MS]`.
       const content = Array(words).fill("word");
       if (delayMs !== undefined) content.push(`[mock:delay=${delayMs}]`);
-      return request(`${gateway}/v1/chat/completions`, {
+      return request(`${url("LITELLM_PORT")}/v1/chat/completions`, {
         bearer: key,
         body: {
           model,
@@ -385,10 +418,12 @@ export function startReferenceStack({
       });
     },
     models(key) {
-      return request(`${gateway}/v1/models`, { bearer: key });
+      return request(`${url("LITELLM_PORT")}/v1/models`, { bearer: key });
     },
     async upstreamRequests() {
-      const response = await request(`${mock}/__mock/requests`);
+      const response = await request(
+        `${url("MOCK_UPSTREAM_PORT")}/__mock/requests`,
+      );
       return (
         response.body as { requests: { model: string; status: number }[] }
       ).requests;
@@ -416,22 +451,19 @@ export function startReferenceStack({
       };
     },
     service(action, name) {
+      if (action === "start" && (name === "keycloak" || name === "litellm"))
+        throw new Error(
+          `${name} cannot be started again: the broker holds its host port`,
+        );
       const done =
         action === "stop"
-          ? run([...compose, "stop", name])
-          : run([
-              ...compose,
-              "up",
-              "-d",
-              "--wait",
-              "--wait-timeout",
-              "120",
-              name,
-            ]);
+          ? composeRun(["stop", name])
+          : composeRun(["up", "-d", "--wait", "--wait-timeout", "120", name]);
       if (done.status !== 0)
         throw new Error(
           `docker compose ${action} ${name} failed for ${project}: ${scrub(done.stderr.trim())}`,
         );
+      if (action === "start") current = publishedPorts(composeRun);
     },
     stop,
   };

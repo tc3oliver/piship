@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
@@ -90,8 +90,13 @@ export function verifyPayloadContents(
     string
   >;
   const actual = inventory(root);
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
-    throw payloadIntegrityError();
+  const added = Object.keys(actual).filter((key) => !(key in expected));
+  const missing = Object.keys(expected).filter((key) => !(key in actual));
+  const modified = Object.keys(actual).filter(
+    (key) => key in expected && expected[key] !== actual[key],
+  );
+  if (added.length || missing.length || modified.length)
+    throw payloadIntegrityError(root, { added, modified, missing });
   const target = JSON.parse(
     readFileSync(join(root, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
@@ -112,8 +117,8 @@ export function verifyPayloadContents(
   )
     throw new PiShipError(
       "LOCK_INVALID",
-      "Installed manifest and lock mismatch; reinstall this distribution",
-      { component: "payload" },
+      `Installed manifest and lock mismatch in ${root}`,
+      { component: "payload", userAction: repairAction(root) },
     );
   if (
     lock.runtime.npmLockSha256 !==
@@ -121,8 +126,8 @@ export function verifyPayloadContents(
   )
     throw new PiShipError(
       "LOCK_INVALID",
-      "Installed npm lock mismatch; reinstall this distribution",
-      { component: "payload" },
+      `Installed npm lock mismatch in ${root}`,
+      { component: "payload", userAction: repairAction(root) },
     );
   if (process.env.PISHIP_DEBUG_TIMING === "1")
     process.stderr.write(
@@ -145,13 +150,53 @@ export function payloadApp(directory: string): DistributionLock["app"] {
   }
   throw payloadIntegrityError();
 }
-// A payload file whose digest differs from the inventory: the same
-// INTEGRITY_FAILED a release artifact reports. A lock that no longer describes
-// the payload's manifest or npm lock is LOCK_INVALID, as at the release gate.
-function payloadIntegrityError(): PiShipError {
+// A payload that differs from its inventory: the same INTEGRITY_FAILED a
+// release artifact reports, naming each offending path as unexpected (not in
+// the inventory), modified, or missing. A lock that no longer describes the
+// payload's manifest or npm lock is LOCK_INVALID, as at the release gate.
+function payloadIntegrityError(
+  root?: string,
+  diff?: Readonly<Record<"added" | "modified" | "missing", string[]>>,
+): PiShipError {
+  const shown = (label: string, paths: readonly string[]) =>
+    paths.length
+      ? `${label}: ${paths.slice(0, 5).join(", ")}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}`
+      : undefined;
+  const parts = diff
+    ? [
+        shown("unexpected (not in the inventory)", diff.added),
+        shown("modified", diff.modified),
+        shown("missing", diff.missing),
+      ].filter(Boolean)
+    : [];
   return new PiShipError(
     "INTEGRITY_FAILED",
-    "Installed payload integrity mismatch; reinstall this distribution",
-    { component: "payload" },
+    `Installed payload integrity mismatch${root ? ` in ${root}` : ""}${parts.length ? `; ${parts.join("; ")}` : ""}`,
+    {
+      component: "payload",
+      userAction: repairAction(root),
+      ...(diff
+        ? {
+            sanitizedDetail: {
+              payload: root,
+              added: diff.added.slice(0, 50),
+              modified: diff.modified.slice(0, 50),
+              missing: diff.missing.slice(0, 50),
+            },
+          }
+        : {}),
+    },
   );
+}
+/**
+ * How to recover a payload that fails verification without running it. The
+ * id is named when the payload is an installed release, `apps/<id>/<version>`.
+ */
+function repairAction(root?: string): string {
+  const id = root && basename(dirname(root));
+  const installed =
+    root &&
+    basename(dirname(dirname(root))) === "apps" &&
+    /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
+  return `Do not run it. Restore it from a trusted release of the same version with: piship repair ${installed ? id : "<id>"} <release archive> (repair does not run this payload). A payload that is not installed must be rebuilt or downloaded again`;
 }

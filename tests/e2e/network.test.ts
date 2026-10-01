@@ -446,7 +446,8 @@ describe("enterprise networking through the launcher (loopback fixtures)", () =>
       ACMECODE_CA_BUNDLE: join(s.project, "wrong-ca.pem"),
     });
     expect(untrusted.status).toBe(1);
-    expect(untrusted.stderr).toContain("GATEWAY_UNREACHABLE");
+    expect(untrusted.stderr).toContain("TLS_POLICY_VIOLATION");
+    expect(untrusted.stderr).toContain("network.tls.additionalCA");
     // No request completed a TLS handshake, and verification was never turned off.
     expect(s.front.hits.length).toBe(before);
     expect(untrusted.stderr).not.toContain("NODE_TLS_REJECT_UNAUTHORIZED");

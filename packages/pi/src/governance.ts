@@ -12,6 +12,8 @@ export interface ManagedEndpointGovernance {
   readonly allowedModelIds: readonly string[];
   /** Request-time key; `force` re-acquires after a gateway rejection. */
   readonly apiKey: (options: { force: boolean }) => Promise<string>;
+  /** The distribution's command, named where Pi asks the user to sign in. */
+  readonly command?: string;
 }
 
 export interface PiNativeGovernance {
@@ -41,6 +43,14 @@ export interface GovernedRuntime {
   isAllowed(provider: string, id: string): boolean;
   /** Mark the current credential as rejected so the next request re-acquires. */
   markCredentialRejected(): void;
+  /**
+   * The failed request message with the PiShip action appended, when the
+   * request failed on the managed credential: PiShip refused to issue it
+   * (identity or credential failure, changed principal) or the gateway
+   * rejected it. Undefined for any other message. Pi shows only the error
+   * text in the TUI, so without it the user gets no instruction.
+   */
+  withAccessAction(message: unknown): unknown;
 }
 
 function denied(provider: string, id: string): PiShipError {
@@ -72,6 +82,7 @@ export function governModelRuntime(
     getAvailable: runtime.getAvailable.bind(runtime),
     getAvailableSnapshot: runtime.getAvailableSnapshot.bind(runtime),
     checkAuth: runtime.checkAuth.bind(runtime),
+    getProviders: runtime.getProviders.bind(runtime),
     getAuth: runtime.getAuth.bind(runtime) as (
       model: unknown,
       overrides?: unknown,
@@ -82,6 +93,8 @@ export function governModelRuntime(
     completeSimple: runtime.completeSimple.bind(runtime),
   };
   let force = false;
+  /** The PiShip error the last managed key request failed with. */
+  let accessFailure: PiShipError | undefined;
   const managed =
     governance.kind === "managed-endpoint" ? governance : undefined;
   const unrestricted =
@@ -152,6 +165,31 @@ export function governModelRuntime(
       return { type: "api_key", source: "PiShip managed credential" };
     return original.checkAuth(providerId, options);
   };
+  if (managed) {
+    // Pi's `/login` offers the login methods of `getProviders()`. A managed
+    // distribution signs in with its own command, so only its provider is
+    // listed, with a method that has no `login`: Pi shows it as configured
+    // outside Pi, under a name that says where to sign in.
+    const signIn = managed.command
+      ? ` (run ${managed.command} login in a terminal)`
+      : "";
+    target.getProviders = () =>
+      original.getProviders().flatMap((provider) =>
+        provider.id === managed.providerId
+          ? [
+              {
+                ...provider,
+                auth: {
+                  apiKey: {
+                    name: `${provider.name} sign-in${signIn}`,
+                    resolve: async () => undefined,
+                  },
+                },
+              },
+            ]
+          : [],
+      );
+  }
   target.getAuth = async (
     model: string | Model,
     overrides?: unknown,
@@ -161,7 +199,13 @@ export function governModelRuntime(
       return undefined;
     if (!providerHasAllowed(provider)) return undefined;
     if (managed) {
-      const apiKey = await managed.apiKey({ force });
+      let apiKey: string;
+      try {
+        apiKey = await managed.apiKey({ force });
+      } catch (error) {
+        if (error instanceof PiShipError) accessFailure = error;
+        throw error;
+      }
       force = false;
       return {
         auth: { apiKey },
@@ -172,13 +216,20 @@ export function governModelRuntime(
   };
   target.stream = ((model: Model, ...rest: unknown[]) => {
     guard(model);
-    return (original.stream as (...args: unknown[]) => unknown)(model, ...rest);
+    return observeTransport(
+      original.stream as (...args: unknown[]) => unknown,
+      model,
+      rest,
+      !!managed,
+    );
   }) as unknown;
   target.streamSimple = ((model: Model, ...rest: unknown[]) => {
     guard(model);
-    return (original.streamSimple as (...args: unknown[]) => unknown)(
+    return observeTransport(
+      original.streamSimple as (...args: unknown[]) => unknown,
       model,
-      ...rest,
+      rest,
+      !!managed,
     );
   }) as unknown;
   target.complete = ((model: Model, ...rest: unknown[]) => {
@@ -220,7 +271,98 @@ export function governModelRuntime(
     markCredentialRejected: () => {
       force = true;
     },
+    withAccessAction: (message) => {
+      const pending = accessFailure;
+      accessFailure = undefined;
+      const failure = requestFailure(message);
+      const command = managed?.command;
+      if (!failure || !command) return undefined;
+      let action: string | undefined;
+      if (pending && failure.message.includes(pending.message)) {
+        // PiShip's actions say "run login"; in the TUI that reads as Pi's
+        // `/login`, so the action names the command and where to run it.
+        const named = (pending.userAction ?? "Run login").replace(
+          /\b(run) login\b/gi,
+          `$1 ${command} login`,
+        );
+        action = named.includes(`${command} login`)
+          ? `In a terminal, ${named[0]?.toLowerCase()}${named.slice(1)}`
+          : named;
+      } else if (isCredentialRejection(message))
+        action = `Send the message again; if it fails again, run ${command} login in a terminal`;
+      if (!action) return undefined;
+      return {
+        ...(message as object),
+        errorMessage: `${failure.message}\nAction: ${action}`,
+      };
+    },
   };
+}
+
+/**
+ * How a failed request's fetch failed before any response arrived, by the
+ * message Pi reported for it: a system error code (`ECONNREFUSED`), `timeout`,
+ * or `network error`. Pi's message keeps only the SDK's text ("Connection
+ * error."), so PiShip records what its own fetch saw.
+ */
+const transportFailures = new WeakMap<object, string>();
+
+/**
+ * Call a managed endpoint's stream through a fetch PiShip owns (Pi's public
+ * `fetch` request option, which the OpenAI-compatible adapters a managed
+ * endpoint uses accept), so a request that never got an answer keeps the
+ * structured reason: the system error code, or that the client's deadline
+ * aborted it. The fetch forwards to the caller's fetch or the global one
+ * unchanged. Only the last attempt counts: a later answer clears an earlier
+ * failure. A Pi-native provider's request is left as it is, because some of
+ * Pi's adapters refuse a custom fetch.
+ */
+function observeTransport(
+  call: (...args: unknown[]) => unknown,
+  model: Model,
+  rest: unknown[],
+  managed: boolean,
+): unknown {
+  if (!managed) return call(model, ...rest);
+  const [context, options] = rest as [
+    unknown,
+    { fetch?: typeof fetch; signal?: AbortSignal } | undefined,
+  ];
+  let failure: string | undefined;
+  const fetchThrough: typeof fetch = async (input, init) => {
+    try {
+      const response = await (options?.fetch ?? globalThis.fetch)(input, init);
+      failure = undefined;
+      return response;
+    } catch (error) {
+      failure = transportFailure(error, options?.signal);
+      throw error;
+    }
+  };
+  const stream = call(model, context, { ...options, fetch: fetchThrough }) as {
+    result?: () => Promise<{ stopReason?: string }>;
+  };
+  void stream.result?.().then((message) => {
+    if (failure && message?.stopReason === "error")
+      transportFailures.set(message, failure);
+  });
+  return stream;
+}
+
+function transportFailure(
+  error: unknown,
+  signal: AbortSignal | undefined,
+): string | undefined {
+  // The caller cancelled: Pi reports that itself as "aborted".
+  if (signal?.aborted) return undefined;
+  const name = (error as { name?: unknown })?.name;
+  // Aborted although the caller did not: the client's request deadline.
+  if (name === "AbortError" || name === "TimeoutError") return "timeout";
+  const code = (error as { cause?: { code?: unknown } })?.cause?.code;
+  // Only a system error code, never a message, which may quote a header.
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)
+    ? code
+    : "network error";
 }
 
 /** A failed request as Pi reports it: the status and error body, when its message carries them. */
@@ -295,8 +437,12 @@ export function isModelDenial(message: unknown): boolean {
  * The error a failed acceptance request (`--smoke-model`) is reported with.
  * When Pi's message carries the gateway's status, it is classified as the
  * model list check classifies that status (with the error body, so a
- * provider's refusal relayed by the gateway reads as such); an interrupted
- * stream, an abort, or a message without a status is a protocol error.
+ * provider's refusal relayed by the gateway reads as such). A request to a
+ * managed endpoint that got no answer (a refused or reset connection, a DNS
+ * failure, the client's deadline) is an unreachable gateway, by what PiShip's
+ * fetch saw. Pi's "aborted" stop reason, which it sets only when the caller's
+ * signal aborted the request, is a cancellation. Anything else without a
+ * status (a stream that failed after it started) is a protocol error.
  * Pi's message carries no response headers, so there is no retry time.
  */
 export function acceptanceFailure(message: unknown): PiShipError {
@@ -304,7 +450,27 @@ export function acceptanceFailure(message: unknown): PiShipError {
     | { stopReason?: string; errorMessage?: string }
     | undefined;
   const detail = redact(value?.errorMessage ?? value?.stopReason ?? "unknown");
+  if (value?.stopReason === "aborted")
+    return new PiShipError(
+      "REQUEST_CANCELLED",
+      `The acceptance model request was cancelled: ${detail}`,
+      { component: "inference" },
+    );
   const failure = requestFailure(message);
+  const transport =
+    failure && failure.status === undefined
+      ? transportFailures.get(message as object)
+      : undefined;
+  if (transport)
+    return new PiShipError(
+      "GATEWAY_UNREACHABLE",
+      `The acceptance model request failed: ${detail} (${transport})`,
+      {
+        component: "inference",
+        retryable: true,
+        sanitizedDetail: { transport },
+      },
+    );
   const classified =
     failure?.status === undefined
       ? null

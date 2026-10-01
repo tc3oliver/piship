@@ -86,8 +86,22 @@ function updateDoctor(
     );
     if (status.source) ok("source", status.source);
     else warn("source", "none declared; update needs --from");
-    if (status.trustedKeys) ok("trusted keys", String(status.trustedKeys));
+    const keys = status.keys ?? [];
+    const trusted = keys.filter((key) => !key.retiredBy);
+    const retired = keys.filter((key) => key.retiredBy);
+    if (trusted.length)
+      ok(
+        "trusted keys",
+        `${trusted.length} (${trusted.map((key) => `${key.id} ${key.fingerprint}`).join(", ")})`,
+      );
     else warn("trusted keys", "none; updates cannot be verified");
+    if (retired.length)
+      ok(
+        "retired keys",
+        retired
+          .map((key) => `${key.id} ${key.fingerprint} (by ${key.retiredBy})`)
+          .join(", "),
+      );
   }
   if (status.previous) ok("rollback", `${status.previous} retained`);
   else ok("rollback", "no retained release");

@@ -5,54 +5,7 @@ import {
   formatExplanation,
   setPreference,
 } from "../index.js";
-import { type BrandedContext, governedLock } from "./context.js";
-
-/** Governance settings as `config explain` rows; all distribution-enforced. */
-function governanceRows(ctx: BrandedContext) {
-  const lock = governedLock(ctx);
-  if (!lock) return [];
-  const { policy, mcp, sandbox, audit } = lock.governance.manifest;
-  const row = (key: string, value: unknown, note?: string) => ({
-    key,
-    value,
-    source: "distribution-enforced" as const,
-    overridable: false,
-    ...(note ? { note } : {}),
-  });
-  // The same precedence the policy engine applies to config/policy.json.
-  const userRules =
-    ctx.mode === "managed"
-      ? "user rules in config/policy.json are narrowing only: they may tighten a default, never relax a default or an enforced rule (allow rules are ignored)"
-      : "user rules in config/policy.json take a matching default's place, so they may relax it, but never override an enforced rule";
-  return [
-    row(
-      "policy",
-      `${policy.id}@${policy.version}`,
-      `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); ${userRules}`,
-    ),
-    row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
-    row(
-      "sandbox.required",
-      sandbox.required,
-      "run doctor for the effective containment level",
-    ),
-    row("sandbox.provider", sandbox.provider ?? "native"),
-    ...(sandbox.user ? [row("sandbox.user", sandbox.user)] : []),
-    row("sandbox.network", sandbox.network.mode),
-    row(
-      "audit.sinks",
-      audit.enabled
-        ? audit.sinks.map(
-            (sink) =>
-              `${sink.id} (${sink.type}${sink.required ? ", required" : ""})`,
-          )
-        : [],
-      audit.enabled
-        ? "metadata only unless content capture is opted in"
-        : "disabled",
-    ),
-  ];
-}
+import type { BrandedContext } from "./context.js";
 
 export async function runConfig(
   ctx: BrandedContext,
@@ -61,16 +14,16 @@ export async function runConfig(
   const [action, key, ...rest] = args;
   const paths = accessStatePaths(ctx.stateDir);
   if (action === "explain") {
-    const rows = [
-      ...(await explainConfiguration({
-        app: ctx.metadata.app,
-        mode: ctx.mode,
-        access: ctx.metadata.access,
-        stateDir: ctx.stateDir,
-        distributionDir: ctx.distributionDir,
-      })),
-      ...governanceRows(ctx),
-    ];
+    const governance = ctx.metadata.governance?.manifest;
+    const rows = await explainConfiguration({
+      app: ctx.metadata.app,
+      mode: ctx.mode,
+      access: ctx.metadata.access,
+      stateDir: ctx.stateDir,
+      distributionDir: ctx.distributionDir,
+      schema: ctx.metadata.manifest.schema,
+      ...(governance ? { governance } : {}),
+    });
     if (key === "--json") ctx.out(redact(JSON.stringify(rows, null, 2)));
     else ctx.out(formatExplanation(ctx.metadata.app.name, rows));
     return;

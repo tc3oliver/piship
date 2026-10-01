@@ -30,11 +30,21 @@ The built-in provider uses the maintained `openid-client` library as a native pu
 - Discovery from `issuer`/.well-known/openid-configuration. A provider that advertises PKCE methods without `S256` is rejected.
 - Authorization Code with PKCE `S256`, `state`, and `nonce`. `audience` is sent when configured.
 - ID token checks: issuer, audience, authorized party, signature (`enableNonRepudiationChecks`), expiry and not-before with 30 seconds of clock tolerance, and nonce.
-- A loopback redirect (RFC 8252). PiShip listens on the registered `redirectUri`, for example `http://127.0.0.1:8765/callback`, answers only that path, accepts the first callback, and closes the listener after completion, a 5-minute timeout, or cancellation. Register the exact URI with the provider.
+- A loopback redirect (RFC 8252). PiShip listens on the registered `redirectUri`, for example `http://127.0.0.1:8765/callback`, answers only that path, and closes the listener after completion, a 5-minute timeout, or cancellation. Only a callback that carries the `state` of the sign-in in progress completes it, and the first such callback wins. Any other request is refused and the sign-in keeps waiting, so a favicon request, a browser tab left from an earlier login, or a forged or stateless callback cannot end it; the timeout or cancellation names how many callbacks were refused and an OAuth error code one of them carried, such as `unauthorized_client`. The `state` is checked again with the code exchange. Register the exact URI with the provider.
 - Refresh with the refresh token when the session expires within 60 seconds. A refreshed ID token must keep the same subject and issuer; otherwise the refresh fails with `IDENTITY_INVALID` and the stored session is kept. Refresh is serialized across processes with a lock beside `identity/session.json`, and a session another process already refreshed is reused. Refreshes are audited as `identity.refresh`.
 - On `logout`, refresh and access tokens are revoked when the provider advertises a revocation endpoint.
 
-The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
+The branded `login` prints the authorization URL and tries to open a browser; set `PISHIP_NO_BROWSER=1` to only print it. Below the URL it says where the browser must return (the redirect), how long it waits (5 minutes), and that Ctrl-C cancels; Ctrl-C ends the wait as a cancelled sign-in (`IDENTITY_REQUIRED`) and closes the listener, and a second Ctrl-C ends the process. An identity provider that does not know the client ID or the redirect URI shows its own error page and, as OAuth requires, never redirects back, so `login` cannot detect it: the hint says to press Ctrl-C and have the client registration checked when the browser shows a provider error instead of a sign-in page.
+
+### Remote shells
+
+The redirect is a loopback address on the machine that runs `login`, so the browser must run there or reach it. In a remote shell (`SSH_CONNECTION`, `SSH_CLIENT`, or `SSH_TTY` set), `login` says so and prints the port forward to run, in another terminal, on the computer with the browser, for example:
+
+```sh
+ssh -N -L 8765:127.0.0.1:8765 <remote host>
+```
+
+Then open the printed URL in that browser: the provider redirects it to `127.0.0.1:8765`, which the forward carries to the waiting `login`. The local port must be free on the browser's computer too. With a redirect that has no port (an ephemeral port), the port is known only once `login` prints the URL; start the forward then. Otherwise run `login` on the computer with the browser. All OIDC requests use the managed fetch, so TLS, proxy, CA, and private-only rules in [security](security.md#network-and-tls) apply.
 
 Only non-secret, display-relevant claims (`sub`, `iss`, `aud`, `azp`, `exp`, `iat`, `auth_time`, `name`, `preferred_username`, `email`, `email_verified`, `groups`) are kept in `identity/session.json` (`piship-identity-metadata/v1`), with scalar or string-array values only. Claims returned by an identity adapter are filtered to the same allowlist. The allowlist is `RETAINED_CLAIMS`, defined in `@piship/contracts` (and exported by `@piship/adapter-sdk`); `@piship/identity` re-exports it unchanged with `retainClaims`, the filter. The tokens are one secret in the configured secret store, under a generation reference.
 
@@ -105,8 +115,9 @@ The runtime credential still comes from `credential.provider: http-broker`, with
 
 | Situation | Code |
 | --- | --- |
-| Not signed in, sign-in cancelled or timed out, redirect port unavailable | `IDENTITY_REQUIRED` |
-| Denied or rejected authorization, failed ID token or discovery check, revocation failure | `IDENTITY_INVALID` |
+| Not signed in, sign-in cancelled or timed out | `IDENTITY_REQUIRED` |
+| The registered redirect port is in use (another `login` still running, say) or cannot be bound | `CONFIG_UNAVAILABLE`, naming the port and how to find what holds it |
+| Denied or rejected authorization, failed ID token or discovery check, revocation failure. A provider error that names the client registration (`unauthorized_client`, `invalid_client`, `invalid_request`, `invalid_scope`, `unsupported_response_type`) says to check the client ID, redirect URI, and scopes | `IDENTITY_INVALID` |
 | Refresh rejected (`invalid_grant`), no refresh token, token outside its validity window | `IDENTITY_EXPIRED` |
 
 Network failures keep their network codes (`GATEWAY_UNREACHABLE`, `NETWORK_DENIED`, `TLS_POLICY_VIOLATION`); an OIDC request that times out (30 s) is a retryable `GATEWAY_UNREACHABLE`. A token endpoint answer of 5xx (including an HTML error page from a proxy), `server_error`, or `temporarily_unavailable` is also a retryable `GATEWAY_UNREACHABLE`, and a 429 is a retryable `GATEWAY_RATE_LIMITED`; both carry the server's `Retry-After` when it sends one. `invalid_grant` stays `IDENTITY_EXPIRED`. When the broker rejects an expired identity access token, PiShip refreshes the identity once and retries.

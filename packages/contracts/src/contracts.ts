@@ -259,6 +259,8 @@ export interface RuntimeProviderConfiguration {
   readonly api?: "openai-completions" | "openai-responses";
   readonly models: readonly ModelDefinition[];
   readonly requiresCredential: boolean;
+  /** Extra headers every inference request carries, such as `PiShip-Client`. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface InferenceProvider {

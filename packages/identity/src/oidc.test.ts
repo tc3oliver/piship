@@ -131,7 +131,6 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
     ],
     ["idTokenExpired", true, "IDENTITY_EXPIRED", /exp/],
     ["idTokenNotBefore", true, "IDENTITY_EXPIRED", /nbf/],
-    ["stateOverride", "attacker-state", "IDENTITY_INVALID", /state/],
   ])("rejects a response with %s", async (knob, value, code, message) => {
     services.knobs[knob] = value;
     const error = await provider()
@@ -139,6 +138,26 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code });
     expect((error as Error).message).toMatch(message);
+  });
+
+  it("refuses a callback with another state and never exchanges its code", async () => {
+    // The callback is refused, not trusted to end the sign-in: it keeps
+    // waiting for the genuine one and names the refusal when it ends.
+    services.knobs.stateOverride = "attacker-state";
+    const error = await provider()
+      .login({ openUrl: approve, timeoutMs: 1_000 })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: expect.stringMatching(
+        /^Sign-in timed out; refused 1 callback without this sign-in's state$/,
+      ),
+    });
+    expect(
+      services.state.requests.filter(
+        (item: { path: string }) => item.path === "/idp/token",
+      ),
+    ).toEqual([]);
   });
 
   it("reports an identity provider that does not answer in time as retryable", async () => {
@@ -198,7 +217,7 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
         const session = await identity.login({ openUrl: approve });
         services.knobs.tokenFaults.push({
           ...fault,
-          ...(fault.retryAfter === "date"
+          ...("retryAfter" in fault && fault.retryAfter === "date"
             ? { retryAfter: inThirtySeconds() }
             : {}),
         });
@@ -284,6 +303,61 @@ describe("OIDC Authorization Code + PKCE (deterministic fixture, not live eviden
       ]);
     });
   });
+
+  it("keeps waiting through a stray callback and signs in with the genuine one", async () => {
+    const statuses: number[] = [];
+    const session = await provider().login({
+      openUrl: async (url) => {
+        const redirect = new URL(
+          new URL(url).searchParams.get("redirect_uri") ?? "",
+        );
+        for (const query of ["?code=stale&state=other", "?code=stale", ""]) {
+          const stray = new URL(redirect);
+          stray.search = query;
+          if (!query) stray.pathname = "/favicon.ico";
+          statuses.push((await fetch(stray)).status);
+        }
+        approve(url);
+      },
+      timeoutMs: 10_000,
+    });
+    expect(statuses).toEqual([400, 400, 404]);
+    expect(session.subject).toBe("demo-user-1");
+  });
+
+  it.each([
+    "unauthorized_client",
+    "invalid_client",
+    "invalid_scope",
+    "invalid_request",
+  ])(
+    "fails at once when the provider redirects with %s, naming the client registration",
+    async (code) => {
+      const started = Date.now();
+      const error = await provider()
+        .login({
+          openUrl: async (url) => {
+            const authorization = new URL(url);
+            const callback = new URL(
+              authorization.searchParams.get("redirect_uri") ?? "",
+            );
+            callback.searchParams.set("error", code);
+            callback.searchParams.set(
+              "state",
+              authorization.searchParams.get("state") ?? "",
+            );
+            await fetch(callback);
+          },
+        })
+        .catch((caught: unknown) => caught);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(error).toMatchObject({
+        code: "IDENTITY_INVALID",
+        message: expect.stringContaining(`rejected the request (${code})`),
+        userAction: expect.stringContaining("client ID"),
+      });
+    },
+  );
 
   it("reports a denied sign-in, cancellation, and timeout visibly", async () => {
     services.knobs.denyLogin = true;

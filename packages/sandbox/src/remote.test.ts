@@ -1,7 +1,11 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createManagedFetch, DEFAULT_NETWORK_POLICY } from "@piship/contracts";
+import {
+  createManagedFetch,
+  DEFAULT_NETWORK_POLICY,
+  PiShipError,
+} from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activateSandbox, describeContainment } from "./activate.js";
 import type { SandboxPolicy, SandboxProfile } from "./profile.js";
@@ -1016,6 +1020,116 @@ describe("kubernetes-agent-sandbox backend against a mock cluster", () => {
       { sandbox: `pool-${names[1]}`, one: false, two: true },
     ]);
     await sandbox.dispose();
+  });
+
+  describe("a command whose outcome is unknown", () => {
+    const request = {
+      command: "deploy",
+      cwd: workspace,
+      workspacePath: ".",
+      env: {},
+    };
+    const io = () => ({
+      signal: new AbortController().signal,
+      onStdout: () => {},
+      onStderr: () => {},
+    });
+
+    it.each([
+      ["the router connection drops", { drop: true }],
+      ["the router answers 502", { status: 502 }],
+      ["the router answers 504", { status: 504 }],
+    ])(
+      "is never retryable when %s, and its sandbox is deleted",
+      async (_case, answer) => {
+        const mock = await kubernetesServer((command) =>
+          command.includes("deploy") ? answer : { stdout: "ok\n" },
+        );
+        const instance = await kubernetes(mock.url).prepare({
+          profile: {} as SandboxProfile,
+        });
+        const error = await instance.exec(request, io()).then(
+          () => undefined,
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(PiShipError);
+        expect(error).toMatchObject({
+          code: "SANDBOX_UNAVAILABLE",
+          retryable: false,
+          message: expect.stringContaining("outcome is unknown"),
+        });
+        // The claim is deleted before the failure is reported: a command still
+        // running in its pod ends with it.
+        const [first] = claimNames(mock.requests);
+        expect(
+          mock.requests.some(
+            (recorded) =>
+              recorded.method === "DELETE" &&
+              recorded.path === `${CLAIMS}/${first}`,
+          ),
+        ).toBe(true);
+        // Never sent again; the next command runs in a fresh claim.
+        await instance.exec({ ...request, command: "echo next" }, io());
+        const names = claimNames(mock.requests);
+        expect(names).toHaveLength(2);
+        const execute = mock.requests.filter(
+          (recorded) => recorded.path === "/execute",
+        );
+        expect(
+          execute.filter((recorded) =>
+            recorded.body.toString().includes("deploy"),
+          ),
+        ).toHaveLength(1);
+        expect(execute.at(-1)?.headers["x-sandbox-id"]).toBe(
+          `pool-${names[1]}`,
+        );
+        await instance.dispose();
+      },
+    );
+
+    it("tells the agent not to run it again blindly", async () => {
+      const mock = await kubernetesServer((command) =>
+        command.includes("deploy") ? { drop: true } : { stdout: "ok\n" },
+      );
+      const sandbox = await activate(kubernetes(mock.url));
+      const error = await run(sandbox, "deploy").then(
+        () => undefined,
+        (failure: unknown) => failure as Error,
+      );
+      expect(error?.message).toMatch(/outcome is unknown/);
+      expect(error?.message).toMatch(/before running it again/);
+      expect(error?.message).not.toMatch(/GATEWAY_UNREACHABLE/);
+      expect((await run(sandbox, "echo ok")).output).toBe("ok\n");
+      await sandbox.dispose();
+    });
+
+    it("still reports a cancelled command as cancelled", async () => {
+      const mock = await kubernetesServer((command) =>
+        command.includes("deploy") ? { hang: true } : { stdout: "ok\n" },
+      );
+      const instance = await kubernetes(mock.url).prepare({
+        profile: {} as SandboxProfile,
+      });
+      const controller = new AbortController();
+      const pending = instance.exec(request, {
+        ...io(),
+        signal: controller.signal,
+      });
+      while (
+        !mock.requests.some((recorded) =>
+          recorded.body.toString().includes("deploy"),
+        )
+      )
+        await new Promise((done) => setTimeout(done, 10));
+      controller.abort();
+      const error = await pending.then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+      expect(error).not.toBeInstanceOf(PiShipError);
+      expect((error as Error).name).toBe("AbortError");
+      await instance.dispose();
+    });
   });
 
   it("retires a claim that disappears while a command runs, without replaying it", async () => {

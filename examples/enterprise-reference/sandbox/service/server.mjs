@@ -44,15 +44,24 @@ export function createSandboxServer(
      * removed that one's sandboxes. Resolves with the port.
      */
     async start() {
-      await new Promise((resolveListen, rejectListen) => {
+      const port = await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
         server.listen(config.listenPort, config.listenHost, () => {
           server.off("error", rejectListen);
-          resolveListen(undefined);
+          const address = server.address();
+          const bound =
+            typeof address === "object" && address ? address.port : 0;
+          // With port 0 the configured host names carry port 0: the service
+          // answers for the port it got, from before any request is read.
+          config.allowedHosts.add(
+            config.listenHost === "::1"
+              ? `[::1]:${bound}`
+              : `${config.listenHost}:${bound}`,
+          );
+          config.allowedHosts.add(`localhost:${bound}`);
+          resolveListen(bound);
         });
       });
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
       log("service.listening", { listen: `${config.listenHost}:${port}` });
       await sandboxes.start();
       return port;

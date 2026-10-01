@@ -1,6 +1,7 @@
 // Installed lifecycle status for doctor.
 import { existsSync, readdirSync } from "node:fs";
 import type { DistributionLock } from "../index.js";
+import { keyFingerprint } from "../signing.js";
 import {
   appDirectory,
   readInstallReceipt,
@@ -16,7 +17,14 @@ export interface LifecycleStatus {
   readonly channel?: string;
   readonly channels?: readonly string[];
   readonly source?: string;
+  /** Pinned keys the installation has not retired. */
   readonly trustedKeys?: number;
+  /** Every key the active lock pins; `retiredBy` names the retiring release. */
+  readonly keys?: readonly {
+    readonly id: string;
+    readonly fingerprint: string;
+    readonly retiredBy?: string;
+  }[];
   readonly rollback?: boolean;
   readonly fromRelease?: boolean;
   readonly lastCheck?: InstallReceipt["lastCheck"];
@@ -48,7 +56,20 @@ export function lifecycleStatus(
   const active = receipt.releases.find(
     (item) => item.version === receipt.active,
   );
-  const leases = runtimeLeases(id);
+  const keys = (lock.updates?.trust.keys ?? []).map((key) => {
+    const fingerprint = keyFingerprint(key.publicKey);
+    const retired = receipt.retiredKeys?.find(
+      (item) => item.fingerprint === fingerprint,
+    );
+    return {
+      id: key.id,
+      fingerprint,
+      ...(retired ? { retiredBy: retired.release } : {}),
+    };
+  });
+  // The process asking (doctor runs in a launcher that holds a lease) is
+  // not another session.
+  const leases = runtimeLeases(id).filter((lease) => !lease.self);
   const live = leases.filter((lease) => lease.live).length;
   const stale = leases.length - live;
   return {
@@ -67,7 +88,8 @@ export function lifecycleStatus(
               : lock.updates.channel,
           channels: lock.updates.channels,
           ...(lock.updates.source ? { source: lock.updates.source } : {}),
-          trustedKeys: lock.updates.trust.keys.length,
+          trustedKeys: keys.filter((key) => !key.retiredBy).length,
+          keys,
           rollback: lock.updates.rollback,
         }
       : {}),

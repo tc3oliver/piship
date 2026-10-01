@@ -108,7 +108,7 @@ export interface AuditRotation {
   readonly lockStaleMs?: number;
 }
 
-/** 10 MB per file, five rotated files: at most about 60 MB of local audit. */
+/** 10 MiB per file, five rotated files: at most about 60 MiB of local audit. */
 export const AUDIT_ROTATION: AuditRotation = Object.freeze({
   maxBytes: 10 * 1024 * 1024,
   files: 5,

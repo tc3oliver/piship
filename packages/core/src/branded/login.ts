@@ -7,6 +7,7 @@ import {
   applyProcessNetworkPolicy,
   assertTlsVerificationEnabled,
   formatError,
+  isLoopbackHost,
   principalId,
   redact,
   sanitizeManagedEnvironment,
@@ -23,7 +24,11 @@ import {
   storeForRecorded,
   withFileLock,
 } from "@piship/credentials";
-import { type IdentityMetadata, parseIdentityMetadata } from "@piship/identity";
+import {
+  DEFAULT_LOGIN_TIMEOUT_MS,
+  type IdentityMetadata,
+  parseIdentityMetadata,
+} from "@piship/identity";
 import type { AccessManifest } from "@piship/schema";
 import {
   type AccessEvent,
@@ -59,6 +64,66 @@ function openBrowser(url: string): void {
     child.unref();
   } catch {
     // The URL is always printed; opening a browser is a convenience.
+  }
+}
+
+/**
+ * What `login` prints under the authorization URL while it waits. A loopback
+ * `redirect_uri` in the URL names where the browser must return; in a remote
+ * shell (SSH) that address is on this machine, not the browser's, so the
+ * port must be forwarded. The timeout is named only when it is known.
+ */
+export function loginWaitingHint(
+  url: string,
+  options: { timeoutMs?: number; env: NodeJS.ProcessEnv },
+): string {
+  const plain =
+    "Waiting for sign-in to complete in the browser. Press Ctrl-C to cancel.";
+  let redirect: URL;
+  try {
+    redirect = new URL(new URL(url).searchParams.get("redirect_uri") ?? "");
+  } catch {
+    return plain;
+  }
+  if (redirect.protocol !== "http:" || !isLoopbackHost(redirect.hostname))
+    return plain;
+  const minutes =
+    options.timeoutMs === undefined
+      ? undefined
+      : Math.round(options.timeoutMs / 60_000);
+  const lines = [
+    `Waiting${minutes ? ` up to ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} for the browser to return to ${redirect.origin}${redirect.pathname}. Press Ctrl-C to cancel.`,
+    "If the browser shows an error from the identity provider instead of a sign-in page, sign-in cannot complete: press Ctrl-C and ask your administrator to check the client ID and its registered redirect URI.",
+  ];
+  const { env } = options;
+  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) {
+    const port = redirect.port || "80";
+    lines.push(
+      `This is a remote shell: the browser must reach ${redirect.host} on this machine. On the computer with the browser, forward the port in another terminal, then open the URL there:`,
+      `  ssh -N -L ${port}:${redirect.hostname}:${port} <this host>`,
+      "Or run login on the computer with the browser.",
+    );
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Run `work` with a signal that Ctrl-C aborts, so a login waiting for the
+ * browser ends as a cancelled sign-in and closes its listener. The handler is
+ * there once, so a second Ctrl-C gets Node's default and ends the process.
+ * After the browser part only the identity wait honors the signal: a Ctrl-C
+ * while the credential is replaced under its lock lets that finish.
+ */
+export async function untilInterrupted<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort();
+  process.once("SIGINT", interrupt);
+  try {
+    return await work(controller.signal);
+  } finally {
+    process.off("SIGINT", interrupt);
   }
 }
 
@@ -131,16 +196,26 @@ export async function runLogin(ctx: BrandedContext): Promise<void> {
     );
   applyProcessNetworkPolicy(access.network);
   let result: Awaited<ReturnType<typeof access.login>>;
+  // The built-in OIDC login waits for the default timeout; an identity
+  // adapter's own wait is not known here.
+  const builtIn = ctx.metadata.access.identity.mode === "oidc";
   try {
-    result = await access
-      .login({
+    result = await untilInterrupted((signal) =>
+      access.login({
         openUrl: (url) => {
           ctx.err(`Open this URL in your browser to sign in:\n${url}`);
+          ctx.err(
+            loginWaitingHint(url, {
+              ...(builtIn ? { timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS } : {}),
+              env: process.env,
+            }),
+          );
           openBrowser(url);
         },
         readSecret: readSecretInput,
-      })
-      .finally(() => saveMetrics(metrics));
+        signal,
+      }),
+    ).finally(() => saveMetrics(metrics));
   } catch (error) {
     // A login can fail after it stored the new identity or revoked the
     // previous credential (a broker refusal, say): what happened is still

@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./index.js";
 
@@ -87,10 +88,77 @@ describe("forwarding update and rollback to the installed release", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("shows the release's progress as it comes when someone watches", async () => {
+    const { payload } = installRecorder();
+    const command = join(payload, "bin", ID);
+    writeFileSync(
+      command,
+      `#!/usr/bin/env node\nprocess.stderr.write("Downloading 1.1.0...\\n" + "progress=" + process.env.PISHIP_PROGRESS + "\\n");\nprocess.stdout.write("Updated\\n");\n`,
+    );
+    const lines: string[] = [];
+    const output = {
+      stdout: (message: string) => lines.push(`out:${message}`),
+      stderr: (message: string) => lines.push(`err:${message}`),
+    };
+    process.env.PISHIP_PROGRESS = "1";
+    try {
+      expect(await runCli(["rollback", ID], output)).toBe(0);
+    } finally {
+      delete process.env.PISHIP_PROGRESS;
+    }
+    // stderr lines arrive before the result, each once.
+    expect(lines).toEqual([
+      "err:Downloading 1.1.0...",
+      "err:progress=1",
+      "out:Updated",
+    ]);
+    // Without a terminal the release is not asked for progress.
+    lines.length = 0;
+    expect(await runCli(["rollback", ID], output)).toBe(0);
+    expect(lines).toContain("err:Downloading 1.1.0...\nprogress=undefined");
+  });
+
   it("forwards rollback unchanged", async () => {
     const { received } = installRecorder();
     expect(await cli(["rollback", ID])).toBe(0);
     expect(JSON.parse(readFileSync(received, "utf8"))).toEqual(["rollback"]);
+  });
+});
+
+describe("repair", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-repair-"));
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_INSTALL_HOME;
+    delete process.env.PISHIP_BIN_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  async function repair(args: string[]) {
+    const errors: string[] = [];
+    const status = await runCli(["repair", ...args], {
+      stdout: () => {},
+      stderr: (message) => errors.push(message),
+    });
+    return { status, stderr: errors.join("\n") };
+  }
+
+  it("runs in PiShip and never runs the installed release it repairs", async () => {
+    const { received } = installRecorder();
+    const source = join(temp, "not-a-release");
+    mkdirSync(source);
+    const result = await repair([ID, source]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("inventory.json");
+    expect(existsSync(received)).toBe(false);
+  });
+
+  it("needs the distribution and the trusted source", async () => {
+    expect(await repair([ID])).toEqual({
+      status: 2,
+      stderr: "Usage: piship repair <id> <archive|release-dir|payload>",
+    });
   });
 });
 
@@ -216,5 +284,294 @@ describe("uninstall --purge", () => {
     );
     expect(existsSync(payload)).toBe(false);
     expect(existsSync(state)).toBe(false);
+  });
+});
+
+describe("validate", () => {
+  const base = {
+    schema: "piship/v1alpha4",
+    app: {
+      id: "acmecode",
+      name: "AcmeCode",
+      command: "acmecode",
+      version: "1.0.0",
+    },
+    runtime: { pi: "0.87.1" },
+    deployment: { mode: "managed" },
+    identity: {
+      mode: "oidc",
+      oidc: {
+        issuer: "https://login.acme.example",
+        clientId: "acmecode",
+        redirectUri: "http://127.0.0.1:8765/callback",
+      },
+    },
+    credential: {
+      provider: "http-broker",
+      broker: { endpoint: "https://broker.acme.example/token" },
+    },
+    inference: {
+      provider: "openai-compatible",
+      baseUrl: "https://gateway.acme.example/v1",
+    },
+    models: {
+      default: "acme/coder",
+      allowed: ["acme/coder"],
+      catalog: {
+        "acme/coder": {
+          name: "Acme Coder",
+          contextWindow: 128000,
+          maxOutputTokens: 8192,
+        },
+      },
+    },
+    updates: { channel: "stable", channels: ["stable"] },
+  };
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-validate-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+  async function validate(extra: Record<string, unknown>) {
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(manifest, JSON.stringify({ ...base, ...extra }));
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(["validate", manifest], {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  it("prints a warning for a setting that fails on some machines", async () => {
+    const result = await validate({
+      network: { tls: { additionalCA: ["certs/acme.pem"] } },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Manifest is valid.");
+    expect(result.stderr).toContain(
+      "Warning: network.tls.additionalCA[0]: A relative CA bundle path",
+    );
+  });
+
+  it("separates the variables launch needs from the ones only update reads", async () => {
+    delete process.env.ACME_GATEWAY_URL;
+    delete process.env.ACME_UPDATE_URL;
+    const result = await validate({
+      variables: ["ACME_GATEWAY_URL", "ACME_UPDATE_URL"],
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: `\${ACME_GATEWAY_URL}`,
+      },
+      updates: {
+        channel: "stable",
+        channels: ["stable"],
+        source: `\${ACME_UPDATE_URL}`,
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ACME_GATEWAY_URL",
+    );
+    expect(result.stdout).toContain(
+      "Runtime variables needed only by update: ACME_UPDATE_URL",
+    );
+    const [launch, update] = result.stderr.split("\n");
+    expect(launch).toContain(
+      "Note: ACME_GATEWAY_URL not set in this shell; the branded command fails with CONFIG_UNAVAILABLE until it is set",
+    );
+    expect(launch).not.toContain("ACME_UPDATE_URL");
+    expect(launch).toContain("a plain https URL");
+    expect(update).toBe(
+      "Note: ACME_UPDATE_URL not set in this shell; only update reads it, and update fails until it is set. Launch does not need it.",
+    );
+  });
+
+  it("prints no variable lines for plain URLs", async () => {
+    const result = await validate({});
+    expect(result.stdout).not.toContain("Runtime variables");
+    expect(result.stderr).toBe("");
+  });
+});
+
+describe("help", () => {
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  it("summarizes every command in the top-level help", async () => {
+    const result = await run(["--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^ {2}validate\s+Check a manifest/m);
+    expect(result.stdout).toContain("piship <command> --help");
+  });
+
+  it.each([
+    ["validate", "validate <manifest>"],
+    ["install", "install <artifact|release-dir|archive>"],
+    ["doctor", "doctor <artifact|id>"],
+    ["config", "config explain <manifest|artifact|id>"],
+    ["update", "update <id>"],
+    ["keygen", "keygen <private-key-file> --id <key-id>"],
+  ])(
+    "prints usage for %s --help instead of reading a file named --help",
+    async (command, usage) => {
+      for (const args of [
+        [command, "--help"],
+        [command, "-h"],
+        [command, "explain", "--help"],
+      ]) {
+        const result = await run(args);
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(`Usage: piship ${usage}`);
+        expect(result.stderr).toBe("");
+      }
+    },
+  );
+});
+
+describe("file system errors", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-fs-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+  async function run(args: string[]) {
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stderr: stderr.join("\n") };
+  }
+
+  it("names a directory passed as a manifest and the file to pass", async () => {
+    for (const command of ["validate", "migrate"]) {
+      const result = await run([command, temp]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `CONFIG_INVALID: ${temp} is a directory where a file was expected (EISDIR`,
+      );
+      expect(result.stderr).toContain(
+        `Action: Pass the manifest file, such as ${join(temp, "piship.yaml")}`,
+      );
+    }
+  });
+
+  it("names a missing install source and what install accepts", async () => {
+    const missing = join(temp, "missing");
+    const result = await run(["install", missing]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `CONFIG_INVALID: ${missing} does not exist (ENOENT`,
+    );
+    expect(result.stderr).toContain("Action: Pass the artifact directory");
+  });
+
+  it("refuses to overwrite a key with an action instead of EEXIST", async () => {
+    const key = join(temp, "signing.pem");
+    expect((await run(["keygen", key, "--id", "k1"])).status).toBe(0);
+    const before = readFileSync(key, "utf8");
+    const result = await run(["keygen", key, "--id", "k1"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `CONFIG_INVALID: ${key} already exists (EEXIST`,
+    );
+    expect(result.stderr).toContain("Action: keygen never overwrites a key");
+    expect(readFileSync(key, "utf8")).toBe(before);
+  });
+});
+
+describe("inspect", () => {
+  const manifest = fileURLToPath(
+    new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
+  );
+  async function inspect(args: string[]) {
+    const stdout: string[] = [];
+    const status = await runCli(["inspect", manifest, ...args], {
+      stdout: (message) => stdout.push(message),
+      stderr: () => {},
+    });
+    return { status, stdout: stdout.join("\n") };
+  }
+
+  it("prints a human summary by default", async () => {
+    const result = await inspect([]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^\S.* \(\S+, command \S+\)$/m);
+    expect(result.stdout).toMatch(/^ {2}mode\s+managed$/m);
+    expect(result.stdout).toMatch(/^ {2}policy\s+\S+@\d+/m);
+    expect(result.stdout).toContain("--json for the full locked configuration");
+    expect(() => JSON.parse(result.stdout)).toThrow();
+  });
+
+  it("keeps the full JSON behind --json", async () => {
+    const result = await inspect(["--json"]);
+    expect(result.status).toBe(0);
+    const info = JSON.parse(result.stdout);
+    expect(info.deployment.mode).toBe("managed");
+    expect(info.access).toBeDefined();
+    expect(info.governance).toBeDefined();
+    expect(typeof info.state).toBe("string");
+  });
+});
+
+describe("init", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-init-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("ends with the next command to run", async () => {
+    const stdout: string[] = [];
+    const directory = join(temp, "agent");
+    expect(
+      await runCli(["init", directory], {
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+      }),
+    ).toBe(0);
+    const manifest = join(directory, "piship.yaml");
+    expect(stdout.join("\n")).toBe(
+      `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest}.`,
+    );
+  });
+});
+
+describe("config explain from a manifest", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));
+    process.env.PISHIP_STATE_HOME = join(temp, "state");
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_STATE_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("shows the manifest schema and the governance rows", async () => {
+    const out: string[] = [];
+    const manifest = fileURLToPath(
+      new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
+    );
+    const status = await runCli(["config", "explain", manifest], {
+      stdout: (message) => out.push(message),
+      stderr: () => {},
+    });
+    expect(status).toBe(0);
+    const text = out.join("\n");
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha4"/m);
+    for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
+      expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
   });
 });
