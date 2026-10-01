@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,11 +15,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
+  acceptanceFailure,
   governModelRuntime,
   isCredentialRejection,
   isModelDenial,
   requestFailure,
-  acceptanceFailure,
 } from "./governance.js";
 
 const model = (id: string) => ({
@@ -64,7 +66,12 @@ afterEach(async () => {
 });
 
 async function managedSession(
-  options: { keys: string[]; tools?: boolean; fail?: () => Error } = {
+  options: {
+    keys: string[];
+    tools?: boolean;
+    fail?: () => Error;
+    baseUrl?: string;
+  } = {
     keys: [],
   },
 ) {
@@ -76,7 +83,7 @@ async function managedSession(
   });
   runtime.registerProvider("acmecode", {
     name: "AcmeCode",
-    baseUrl: services.gatewayUrl,
+    baseUrl: options.baseUrl ?? services.gatewayUrl,
     api: "openai-completions",
     models: [model("acme/coder"), model("acme/general")],
   });
@@ -572,8 +579,50 @@ describe("personal Pi-native governance", () => {
     expect(cut.message).toBe(
       "The acceptance model request failed: litellm.APIConnectionError: APIConnectionError: OpenAIException - Response payload is not completed",
     );
+    // Pi sets "aborted" only when the caller's signal aborted the request.
     expect(
-      acceptanceFailure({ role: "assistant", stopReason: "aborted" }).code,
-    ).toBe("GATEWAY_PROTOCOL_ERROR");
+      acceptanceFailure({
+        role: "assistant",
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      }),
+    ).toMatchObject({ code: "REQUEST_CANCELLED", retryable: false });
+  });
+});
+
+describe("acceptance request failures without a status (#85)", () => {
+  let hanging: Server | undefined;
+  afterEach(async () => {
+    const server = hanging;
+    hanging = undefined;
+    if (!server) return;
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  // A gateway that accepts the connection and never answers.
+  async function hangingGateway(): Promise<string> {
+    const server = createServer(() => {});
+    hanging = server;
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  }
+
+  it("reports a request the caller aborted as cancelled, not a protocol error", async () => {
+    const baseUrl = await hangingGateway();
+    const { session } = await managedSession({
+      keys: ["sk-managed-credential-1"],
+      baseUrl,
+    });
+    hanging?.once("request", () => void session.abort());
+    await session.prompt("hello");
+    const message = session.messages.at(-1);
+    expect(message).toMatchObject({ stopReason: "aborted" });
+    expect(acceptanceFailure(message)).toMatchObject({
+      code: "REQUEST_CANCELLED",
+      retryable: false,
+    });
+    session.dispose();
   });
 });

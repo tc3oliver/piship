@@ -364,8 +364,10 @@ export function isModelDenial(message: unknown): boolean {
  * The error a failed acceptance request (`--smoke-model`) is reported with.
  * When Pi's message carries the gateway's status, it is classified as the
  * model list check classifies that status (with the error body, so a
- * provider's refusal relayed by the gateway reads as such); an interrupted
- * stream, an abort, or a message without a status is a protocol error.
+ * provider's refusal relayed by the gateway reads as such). Pi's "aborted"
+ * stop reason, which it sets only when the caller's signal aborted the
+ * request, is a cancellation. Anything else without a status (an
+ * interrupted stream, a failed connection) is a protocol error.
  * Pi's message carries no response headers, so there is no retry time.
  */
 export function acceptanceFailure(message: unknown): PiShipError {
@@ -373,6 +375,12 @@ export function acceptanceFailure(message: unknown): PiShipError {
     | { stopReason?: string; errorMessage?: string }
     | undefined;
   const detail = redact(value?.errorMessage ?? value?.stopReason ?? "unknown");
+  if (value?.stopReason === "aborted")
+    return new PiShipError(
+      "REQUEST_CANCELLED",
+      `The acceptance model request was cancelled: ${detail}`,
+      { component: "inference" },
+    );
   const failure = requestFailure(message);
   const classified =
     failure?.status === undefined

@@ -65,7 +65,14 @@ The model is chosen from `--model <id>`, then the configuration layers: an enfor
 | 5xx, network failure, timeout (15 s, including the body) | `GATEWAY_UNREACHABLE`, retryable |
 | Other 4xx, malformed list | `GATEWAY_PROTOCOL_ERROR` |
 
-During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). A 401 or 403 that LiteLLM relays from its model provider (Pi's message carries the status and the gateway's error object, whose message starts with `litellm.`) is neither: the credential is not marked and the entitlement is not re-read. `--smoke-model` reports a failed acceptance request with the code the table above gives for the status and error body in Pi's message (a 503 is `GATEWAY_UNREACHABLE`, a gateway 401 `CREDENTIAL_REVOKED`) with its retry flag (Pi's message carries no headers, so no retry time), and as `GATEWAY_PROTOCOL_ERROR` when the message carries no status: a stream that failed after it started, or an aborted request.
+During a session, Pi performs the request. PiShip recognizes an authentication rejection (401, unauthorized, invalid API key) on Pi's error message, marks the credential rejected, and renews it before the next request. The rejected request is not replayed. Other in-session gateway errors are reported by Pi in the conversation; after a model denial (403), PiShip also re-reads the credential entitlement once, as described in [entitlement freshness](#entitlement-freshness). A 401 or 403 that LiteLLM relays from its model provider (Pi's message carries the status and the gateway's error object, whose message starts with `litellm.`) is neither: the credential is not marked and the entitlement is not re-read. `--smoke-model` reports a failed acceptance request with the code the table above gives for the status and error body in Pi's message (a 503 is `GATEWAY_UNREACHABLE`, a gateway 401 `CREDENTIAL_REVOKED`) with its retry flag (Pi's message carries no headers, so no retry time). A request without a status is classified by structured information only, never by the provider's text:
+
+| Failure | Code |
+| --- | --- |
+| Aborted by the caller (Pi's stop reason `aborted`, which Pi sets only when the caller's signal aborted the request) | `REQUEST_CANCELLED`, not retryable |
+| A stream that failed after it started, or a request that got no answer | `GATEWAY_PROTOCOL_ERROR` |
+
+`REQUEST_CANCELLED` is an additive error code (#85): a cancellation is not a gateway failure, and no earlier code described it.
 
 ## Failure policy
 
