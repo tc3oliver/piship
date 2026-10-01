@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./index.js";
 
@@ -362,5 +363,32 @@ describe("validate", () => {
     const result = await validate({});
     expect(result.stdout).not.toContain("Runtime variables");
     expect(result.stderr).toBe("");
+  });
+});
+
+describe("config explain from a manifest", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));
+    process.env.PISHIP_STATE_HOME = join(temp, "state");
+  });
+  afterEach(() => {
+    delete process.env.PISHIP_STATE_HOME;
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it("shows the manifest schema and the governance rows", async () => {
+    const out: string[] = [];
+    const manifest = fileURLToPath(
+      new URL("../../../examples/demo-company/piship.yaml", import.meta.url),
+    );
+    const status = await runCli(["config", "explain", manifest], {
+      stdout: (message) => out.push(message),
+      stderr: () => {},
+    });
+    expect(status).toBe(0);
+    const text = out.join("\n");
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha4"/m);
+    for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
+      expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
   });
 });

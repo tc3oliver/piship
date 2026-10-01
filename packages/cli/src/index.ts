@@ -400,6 +400,10 @@ export async function runCli(
               access: manifest.access,
               stateDir: runtimeStateDirectory({ value: manifest.app.id }),
               distributionDir: dirname(path),
+              schema: manifest.schema,
+              ...(manifest.governance
+                ? { governance: manifest.governance }
+                : {}),
             }),
           ),
         );

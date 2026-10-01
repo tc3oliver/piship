@@ -1,5 +1,5 @@
 import { redact } from "@piship/contracts";
-import { resolveTemplate } from "@piship/schema";
+import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
 import { readPreferences, resolveEffectiveConfig } from "../config.js";
 import { DistributionAccess } from "./distribution-access.js";
 import { effectivePrivateOnly } from "./network.js";
@@ -14,20 +14,75 @@ export interface ExplainRow {
   readonly note?: string;
 }
 
+export interface ExplainOptions extends AccessOptions {
+  /** The manifest schema; defaults to the oldest schema that has `access`. */
+  readonly schema?: string;
+  /** v1alpha3 governance; adds its distribution-enforced rows. */
+  readonly governance?: GovernanceManifest;
+}
+
+/** Governance settings as `config explain` rows; all distribution-enforced. */
+function governanceRows(
+  governance: GovernanceManifest,
+  mode: AccessOptions["mode"],
+): ExplainRow[] {
+  const { policy, mcp, sandbox, audit } = governance;
+  const row = (key: string, value: unknown, note?: string): ExplainRow => ({
+    key,
+    value,
+    source: "distribution-enforced",
+    overridable: false,
+    ...(note ? { note } : {}),
+  });
+  // The same precedence the policy engine applies to config/policy.json.
+  const userRules =
+    mode === "managed"
+      ? "user rules in config/policy.json are narrowing only: they may tighten a default, never relax a default or an enforced rule (allow rules are ignored)"
+      : "user rules in config/policy.json take a matching default's place, so they may relax it, but never override an enforced rule";
+  return [
+    row(
+      "policy",
+      `${policy.id}@${policy.version}`,
+      `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); ${userRules}`,
+    ),
+    row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
+    row(
+      "sandbox.required",
+      sandbox.required,
+      "run doctor for the effective containment level",
+    ),
+    row("sandbox.provider", sandbox.provider ?? "native"),
+    ...(sandbox.user ? [row("sandbox.user", sandbox.user)] : []),
+    row("sandbox.network", sandbox.network.mode),
+    row(
+      "audit.sinks",
+      audit.enabled
+        ? audit.sinks.map(
+            (sink) =>
+              `${sink.id} (${sink.type}${sink.required ? ", required" : ""})`,
+          )
+        : [],
+      audit.enabled
+        ? "metadata only unless content capture is opted in"
+        : "disabled",
+    ),
+  ];
+}
+
 /**
  * Explain every effective value and its source without secrets. Runtime
  * references show the template and whether it currently resolves; credential
  * state shows only references, identifiers, and expiry.
  */
 export async function explainConfiguration(
-  options: AccessOptions,
+  options: ExplainOptions,
 ): Promise<ExplainRow[]> {
   const access = options.access;
   const env = options.env ?? process.env;
   const rows: ExplainRow[] = [
     {
       key: "schema",
-      value: access ? "piship/v1alpha2" : "piship/v1alpha1",
+      value: options.schema ?? (access ? "piship/v1alpha2" : "piship/v1alpha1"),
       source: "manifest",
       overridable: false,
     },
@@ -201,6 +256,8 @@ export async function explainConfiguration(
     for (const [index, path] of access.network.tls.additionalCA.entries())
       reference(`network.tls.additionalCA[${index}]`, path);
   }
+  if (options.governance)
+    rows.push(...governanceRows(options.governance, options.mode));
   const paths = accessStatePaths(options.stateDir);
   let preferences: ReturnType<typeof readPreferences> = {
     schema: "piship-preferences/v1",
@@ -278,7 +335,7 @@ export function formatExplanation(
   rows: readonly ExplainRow[],
 ): string {
   return [
-    `${appName} configuration (Distribution Enforced > Distribution Defaults > User Preferences; enforced values cannot be overridden, permitted user preferences replace defaults)`,
+    `${appName} configuration (precedence, highest first: Distribution Enforced > User Preferences > Distribution Defaults; enforced values cannot be overridden, and a permitted user preference replaces a default)`,
     ...rows.map((row) =>
       redact(
         `${row.key.padEnd(34)} ${JSON.stringify(row.value)}  [${row.source}${row.overridable ? ", user-overridable" : ""}]${row.note ? ` — ${row.note}` : ""}`,

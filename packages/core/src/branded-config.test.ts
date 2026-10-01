@@ -64,3 +64,35 @@ describe("config explain policy guidance", () => {
     expect(note).not.toContain("narrowing only");
   });
 });
+
+describe("config explain header and schema", () => {
+  async function explain(name: string): Promise<string> {
+    const manifest = example(name);
+    const out: string[] = [];
+    await runConfig(
+      {
+        metadata: resolveLock(manifest),
+        distributionDir: dirname(manifest),
+        stateDir: temp,
+        mode: "managed",
+        out: (message) => out.push(message),
+        err: () => {},
+      },
+      ["explain"],
+    );
+    return out.join("\n");
+  }
+
+  it("shows the manifest's own schema, not v1alpha2 for every managed manifest", async () => {
+    const text = await explain("demo-company");
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha4"/m);
+    expect(text).not.toContain("piship/v1alpha2");
+  });
+
+  it("states precedence highest first, with user preferences above defaults", async () => {
+    const header = (await explain("demo-company")).split("\n")[0];
+    expect(header).toContain(
+      "Distribution Enforced > User Preferences > Distribution Defaults",
+    );
+  });
+});
