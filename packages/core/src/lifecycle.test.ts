@@ -278,6 +278,7 @@ function sign(
   archives: string[],
   channel = "stable",
   key: typeof KEY = KEY,
+  previous?: typeof KEY,
 ) {
   return signChannel({
     directory,
@@ -285,6 +286,11 @@ function sign(
     archives,
     privateKeyPem: key.privateKeyPem,
     keyId: key.id,
+    ...(previous
+      ? {
+          previousKeys: [{ id: previous.id, publicKey: previous.publicKey }],
+        }
+      : {}),
   });
 }
 
@@ -1188,8 +1194,9 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       to: "1.1.0",
       keyId: KEY.id,
     });
-    // B pins both keys and accepts the next one.
-    await sign(channelDir, [c.archive], "stable", next);
+    // B pins both keys and accepts the next one. C pins only the next key,
+    // so the owner names the key that signed the existing metadata.
+    await sign(channelDir, [c.archive], "stable", next, KEY);
     expect(await updateDistribution(ID, opts)).toMatchObject({
       status: "updated",
       to: "1.2.0",
@@ -1246,7 +1253,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       channelSequences: { stable: 1 },
     });
     // The key A shares with B is still trusted.
-    await sign(channelDir, [b.archive], "stable", backup);
+    await sign(channelDir, [b.archive], "stable", backup, KEY);
     expect(await updateDistribution(ID, opts)).toMatchObject({
       status: "updated",
       to: "1.1.0",

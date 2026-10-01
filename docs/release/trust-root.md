@@ -125,14 +125,14 @@ The channel names are fixed: `stable`, `candidate`, and `dev` (`RELEASE_CHANNELS
 
 To keep that availability window short, publish in this order:
 
-1. Run `piship sign-channel` in a local staging copy of the source directory. It verifies each archive, copies it in, and writes the metadata and signature.
+1. Run `piship sign-channel` in a local staging copy of the source directory. It verifies each archive, verifies the existing metadata's signature, copies the archives in, and writes the metadata and signature.
 2. Upload new archives first. Archive names include version and target, so they are new files; never overwrite an existing archive with different bytes.
 3. Upload `<channel>.json.sig` and `<channel>.json` together. Where the host supports it, use one atomic operation: an object-store batch, or a directory rename or symlink swap on a web server.
 4. Remove an archive only after no published channel lists it.
 
 Re-sign every channel before `expires` (30 days by default). Expired metadata stops updates. That bounds how long a host can freeze clients on old metadata, but it also stops updates if the owner forgets.
 
-`sign-channel` itself writes the metadata and then the signature in place, and it extends the existing metadata without verifying its signature first. That is acceptable for a local staging directory the owner controls, and both are listed as follow-ups.
+`sign-channel` extends existing metadata only when it is valid channel metadata for that channel and its signature verifies with the signing key, with a key pinned by one of the releases being added, or with the key given as `--previous-key <id>=<public-key>`. Adding the overlap release, which pins both keys, lets the new key extend metadata the old key signed. Adding a release that pins only the new key (rotation step 4) on top of metadata the old key signed needs `--previous-key` with the old key's `updates.trust.keys` entry, so the owner states which key they expect to have signed it. Metadata that was edited after signing, has no signature, or was signed by any other key is refused with `INTEGRITY_FAILED` (`Existing channel metadata <path> ... refusing to extend it`), and nothing is written. Restore the published pair, or name the key that signed it with `--previous-key`. The signature is computed before anything is written, so an unusable key or key ID changes nothing. The metadata and then the signature are each written to a temporary file next to it, flushed, and renamed into place, so neither file is ever seen truncated. They keep the default file mode, because a web server serves them. A crash between the two renames leaves a new metadata file with the old signature: clients refuse that pair, and so does the next `sign-channel`, until the pair is restored from the published copy.
 
 ## GitHub Releases and signed channels
 
@@ -167,6 +167,7 @@ If the maintainer later decides to operate an official channel, key generation, 
 | Signed metadata verification | `channel-trust.test.ts` "accepts metadata signed by any pinned key"; build-backed: `release.test.ts` "signed channels" |
 | Rotation: overlap accepted, retired key refused after it | `channel-trust.test.ts` "rotation"; build-backed through real updates: `lifecycle.test.ts` "rotates the release key through an overlap release and then refuses the retired key" |
 | Revoked and unknown key refusal | `channel-trust.test.ts` "refuses a revoked key however the signature names it", "refuses unknown keys and an empty trust root"; `signing.test.ts` |
+| `sign-channel` refuses to extend unverified metadata and changes nothing when signing fails | `release.test.ts` "extends existing metadata only when its signature verifies", "changes nothing when signing fails, and leaves no temporary files" |
 | Tamper rejection | Metadata byte change, half-published pairs, another channel's metadata, and archive digest or size mismatch: `channel-trust.test.ts`. Tampered archive in a channel: `lifecycle.test.ts`. Release contents: `release.test.ts` |
 | Retired key refused after a rollback; fresh install has no history | `channel-trust.test.ts` "refuses a retired key that the active lock still pins"; build-backed: `lifecycle.test.ts` "keeps a key retired by an update retired after a rollback" |
 | Rollback compatibility (replay, downgrade) | `channel-trust.test.ts` "rollback protection" (sequence floor, also across a key change); `lifecycle.test.ts` "refuses replayed older channel metadata", "refuses a downgrade offered by the channel" |
@@ -178,8 +179,8 @@ The `channel-trust.test.ts` cases build no release and run on every target in th
 None of these weakens the current guarantees. Each one is a separate change that needs maintainer review:
 
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
-2. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
-3. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
-4. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
-5. **`sign-channel` writes.** Write the metadata and signature through a temporary file and rename, and verify the existing metadata's signature against the signing key before extending it.
+2. **Revocation before activation.** Retired keys are recorded per installation, only once it activates the release that drops a key. A client that never activated that release still trusts the key, as in [Compromised-key recovery](#compromised-key-recovery). Refusing a key earlier needs a revocation list the client can authenticate.
+3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
+4. **Bootstrap verification at install.** Add `install --sha256 <hex>` and/or `--expect-key <fingerprint>`, and show the pinned key IDs and fingerprints in `doctor` and `inspect`.
+5. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
 6. **Official channel.** Only if the maintainer reverses the [examples recommendation](#examples).

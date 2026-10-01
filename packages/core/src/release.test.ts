@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2142,6 +2143,110 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       "1.0.0",
       "1.1.0",
     ]);
+  });
+
+  it("changes nothing when signing fails, and leaves no temporary files", async () => {
+    const { channelDir, built } = await channel();
+    const files = () =>
+      readdirSync(channelDir)
+        .sort()
+        .map((name) => [name, readFileSync(join(channelDir, name))]);
+    const before = files();
+    for (const signer of [
+      { privateKeyPem: KEY.privateKeyPem, keyId: "Not A Key Id" },
+      { privateKeyPem: "not a pem", keyId: KEY.id },
+    ])
+      await expect(
+        signChannel({
+          directory: channelDir,
+          channel: "stable",
+          archives: [built.archive],
+          ...signer,
+        }),
+      ).rejects.toThrow();
+    expect(files()).toEqual(before);
+    await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      privateKeyPem: KEY.privateKeyPem,
+      keyId: KEY.id,
+    });
+    expect(readdirSync(channelDir).sort()).toEqual([
+      basename(built.archive),
+      "stable.json",
+      "stable.json.sig",
+    ]);
+    // Published files keep the default mode, not the owner-only state mode.
+    if (process.platform !== "win32")
+      for (const name of ["stable.json", "stable.json.sig"])
+        expect(statSync(join(channelDir, name)).mode & 0o777).toBe(
+          0o666 & ~process.umask(),
+        );
+  });
+
+  it("extends existing metadata only when its signature verifies", async () => {
+    const { channelDir, built } = await channel();
+    const path = join(channelDir, "stable.json");
+    const resign = (key = KEY) =>
+      signChannel({
+        directory: channelDir,
+        channel: "stable",
+        archives: [built.archive],
+        privateKeyPem: key.privateKeyPem,
+        keyId: key.id,
+      });
+    // Rotation: a new signing key may extend metadata signed by a key the
+    // added release pins.
+    const next = generateSigningKey("test-release-next");
+    expect((await resign(next)).metadata.sequence).toBe(2);
+    // Metadata signed by a key neither the signer nor the release vouches
+    // for is refused.
+    const stranger = generateSigningKey("someone-else");
+    const valid = readFileSync(`${path}.sig`);
+    writeFileSync(
+      `${path}.sig`,
+      JSON.stringify(
+        signBytes(readFileSync(path), stranger.privateKeyPem, stranger.id),
+      ),
+    );
+    const unknown = await rejection(resign());
+    expect(unknown.code).toBe("INTEGRITY_FAILED");
+    expect(unknown.message).toMatch(
+      /Existing channel metadata .*stable\.json does not verify: Signature key someone-else is not trusted/,
+    );
+    writeFileSync(`${path}.sig`, valid);
+    expect((await resign(next)).metadata.sequence).toBe(3);
+    // The old key cannot extend it with a release that does not pin the new.
+    await expect(resign()).rejects.toThrow(
+      /does not verify: Signature key test-release-next is not trusted; trusted keys: test-release;/,
+    );
+    // ... unless the owner names the key that signed it.
+    const back = await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      privateKeyPem: KEY.privateKeyPem,
+      keyId: KEY.id,
+      previousKeys: [{ id: next.id, publicKey: next.publicKey }],
+    });
+    expect(back.metadata.sequence).toBe(4);
+    expect((await resign(next)).metadata.sequence).toBe(5);
+    // Metadata changed after it was signed, or without its signature.
+    const signed = readFileSync(path, "utf8");
+    writeFileSync(path, signed.replace('"sequence": 5', '"sequence": 50'));
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json does not verify: Signature does not verify/,
+    );
+    writeFileSync(path, signed);
+    rmSync(`${path}.sig`);
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json has no signature/,
+    );
+    writeFileSync(path, "{");
+    await expect(resign(next)).rejects.toThrow(
+      /Existing channel metadata .*stable\.json is not valid channel metadata/,
+    );
   });
 
   it("refuses archives of another distribution and unverified archives", async () => {

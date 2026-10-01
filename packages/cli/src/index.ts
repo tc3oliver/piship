@@ -143,9 +143,16 @@ const lifecycleCommands: Record<
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--sequence <n>] [--expires-days <n>]",
+      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
     positional: [2, 64],
-    values: ["--channel", "--key", "--key-id", "--sequence", "--expires-days"],
+    values: [
+      "--channel",
+      "--key",
+      "--key-id",
+      "--previous-key",
+      "--sequence",
+      "--expires-days",
+    ],
     flags: [],
   },
   reproducibility: {
@@ -679,12 +686,26 @@ async function runLifecycle(
     };
     const sequence = number(options["--sequence"], "--sequence");
     const expiresDays = number(options["--expires-days"], "--expires-days");
+    const previous = options["--previous-key"];
+    const split = previous?.indexOf("=") ?? -1;
+    if (previous !== undefined && split < 1)
+      throw new Error("--previous-key must be <id>=<public-key>");
     const signed = await signChannel({
       directory: first,
       channel,
       archives: positional.slice(1),
       privateKeyPem: readFileSync(key, "utf8"),
       keyId,
+      ...(previous
+        ? {
+            previousKeys: [
+              {
+                id: previous.slice(0, split),
+                publicKey: previous.slice(split + 1),
+              },
+            ],
+          }
+        : {}),
       ...(sequence ? { sequence } : {}),
       ...(expiresDays ? { expiresDays } : {}),
     });

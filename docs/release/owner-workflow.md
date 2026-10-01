@@ -21,7 +21,7 @@ node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.1.0-linux-
 node packages/cli/dist/bin.js reproducibility <release-a> <release-b> [--out report.json]
 node packages/cli/dist/bin.js diff <before> <after> [--json]
 node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64.tar.gz \
-  --channel stable --key ~/keys/acme-release.pem --key-id acme-release-2026 [--sequence <n>] [--expires-days <n>]
+  --channel stable --key ~/keys/acme-release.pem --key-id acme-release-2026 [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]
 ```
 
 ## Building a release
@@ -65,7 +65,7 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 Channel names, the channel directory layout, and how clients accept signed metadata are described in the [update lifecycle](update-lifecycle.md#channels-and-signed-metadata). The owner's commands:
 
 - `piship keygen <file> --id <key-id> [--force-in-worktree]` writes a new Ed25519 private key (PKCS#8 PEM, mode 0600, refusing to overwrite, and refusing a path inside a git work tree that is not git-ignored unless `--force-in-worktree` is given) and prints the `updates.trust.keys` entry and the key's `sha256:` fingerprint. Keep the private key out of the repository, CI logs, and the manifest; only the public key is pinned.
-- `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id>` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution. `sign-channel` does not check that the key is pinned by the distribution; an update with an unpinned key fails.
+- `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id>` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. It extends existing metadata only when its signature verifies with the signing key, a key pinned by a release being added, or the key given with `--previous-key <id>=<public-key>` (the `updates.trust.keys` entry of the key that signed it), and it replaces the metadata and signature each through a temporary file and a rename ([trust root](trust-root.md#channel-hosting)). The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution. `sign-channel` does not check that the key is pinned by the distribution; an update with an unpinned key fails.
 - Rotation: pin the new key next to the old one, ship a release with both, then sign with the new key and remove the old key in a later release. Key IDs are unique within `updates.trust.keys`.
 
 Key custody, a backup key, the first trust root a client installs, rotation timing, compromised and lost keys, channel hosting and atomic publish, and why a GitHub Release is not a signed channel are covered in [release trust root](trust-root.md).

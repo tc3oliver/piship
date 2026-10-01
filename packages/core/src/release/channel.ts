@@ -5,24 +5,27 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { syncDirectory, temporarySibling } from "@piship/credentials";
 import { RELEASE_CHANNELS } from "@piship/schema";
 import { sha256File } from "../archive.js";
 import {
   keyFingerprint,
+  publicKeyFromPrivate,
   signBytes,
   verifySignature,
   type SignatureEnvelope,
   type TrustedKey,
 } from "../signing.js";
 import { CHANNEL_SCHEMA } from "./metadata.js";
-import { writeJson } from "./shared.js";
 import { readSourceFile } from "./source.js";
-import { verifyRelease } from "./verify.js";
+import { type VerifiedRelease, verifyRelease } from "./verify.js";
 
 export interface ChannelRelease {
   readonly version: string;
@@ -96,14 +99,82 @@ export interface SignChannelOptions {
   readonly archives: readonly string[];
   readonly privateKeyPem: string;
   readonly keyId: string;
+  /**
+   * Further public keys the existing metadata may be signed with, such as
+   * the retiring key once signing has moved to its successor.
+   */
+  readonly previousKeys?: readonly TrustedKey[];
   readonly sequence?: number;
   readonly expiresDays?: number;
   readonly now?: () => Date;
 }
 
 /**
+ * Replace a published channel file through a flushed temporary sibling and a
+ * rename, so it is never seen truncated. Unlike the owner-only state files,
+ * it keeps the default mode: a web server serves it.
+ */
+function replaceFile(path: string, content: string): void {
+  const temporary = temporarySibling(path);
+  try {
+    writeFileSync(temporary, content, { flag: "wx", flush: true });
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+  syncDirectory(dirname(path));
+}
+
+/**
+ * The channel's existing metadata, which `sign-channel` extends only when it
+ * is intact and its signature verifies with one of `accepted`.
+ */
+function existingChannel(
+  path: string,
+  channel: string,
+  accepted: readonly TrustedKey[],
+): ChannelMetadata {
+  const refuse = (problem: string) =>
+    new PiShipError(
+      "INTEGRITY_FAILED",
+      `Existing channel metadata ${path} ${problem}; refusing to extend it`,
+      {
+        userAction:
+          "Restore the published metadata and its signature; if a key you trust signed it, pass that key with --previous-key <id>=<public-key>",
+      },
+    );
+  const bytes = readFileSync(path);
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    metadata = undefined;
+  }
+  if (!validChannel(metadata) || metadata.channel !== channel)
+    throw refuse("is not valid channel metadata");
+  if (!existsSync(`${path}.sig`)) throw refuse("has no signature");
+  try {
+    verifySignature(
+      bytes,
+      JSON.parse(readFileSync(`${path}.sig`, "utf8")) as unknown,
+      accepted,
+    );
+  } catch (error) {
+    throw refuse(
+      `does not verify: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return metadata;
+}
+
+/**
  * Add verified release archives to a channel directory and sign its
- * metadata. Existing entries for other versions or targets are kept.
+ * metadata. Existing entries for other versions or targets are kept once the
+ * existing metadata verifies with the signing key, a `previousKeys` key, or a
+ * key an added release pins. Nothing is written until the
+ * new metadata is signed; then the metadata and its signature are each
+ * replaced through a temporary file and a rename.
  */
 export async function signChannel(
   options: SignChannelOptions,
@@ -113,29 +184,54 @@ export async function signChannel(
       "CONFIG_INVALID",
       `Unknown channel ${options.channel}`,
     );
-  const directory = resolve(options.directory);
-  mkdirSync(directory, { recursive: true });
-  const path = join(directory, `${options.channel}.json`);
-  const previous = existsSync(path)
-    ? (JSON.parse(readFileSync(path, "utf8")) as ChannelMetadata)
-    : undefined;
-  const entries = new Map(
-    (previous?.releases ?? []).map((item) => [
-      `${item.version} ${item.target}`,
-      item,
-    ]),
-  );
-  let distribution = previous?.distribution;
-  for (const archive of options.archives) {
-    const verified = await verifyRelease(archive);
-    try {
-      const { metadata } = verified;
-      if (distribution && distribution !== metadata.distribution.id)
+  // An unreadable or non-Ed25519 key fails here, before anything is written.
+  const accepted: TrustedKey[] = [];
+  const accept = (key: TrustedKey) => {
+    if (
+      !accepted.some(
+        (item) => item.id === key.id && item.publicKey === key.publicKey,
+      )
+    )
+      accepted.push(key);
+  };
+  accept({
+    id: options.keyId,
+    publicKey: publicKeyFromPrivate(options.privateKeyPem),
+  });
+  for (const key of options.previousKeys ?? []) accept(key);
+  const verified: { archive: string; release: VerifiedRelease }[] = [];
+  try {
+    for (const archive of options.archives) {
+      const release = await verifyRelease(archive);
+      verified.push({ archive, release });
+      for (const key of release.lock.updates?.trust.keys ?? []) accept(key);
+    }
+    const directory = resolve(options.directory);
+    const path = join(directory, `${options.channel}.json`);
+    const previous = existsSync(path)
+      ? existingChannel(path, options.channel, accepted)
+      : undefined;
+    const entries = new Map(
+      (previous?.releases ?? []).map((item) => [
+        `${item.version} ${item.target}`,
+        item,
+      ]),
+    );
+    let distribution = previous?.distribution;
+    for (const { release } of verified) {
+      const id = release.metadata.distribution.id;
+      if (distribution && distribution !== id)
         throw new PiShipError(
           "CONFIG_INVALID",
-          `Channel ${options.channel} belongs to ${distribution}, not ${metadata.distribution.id}`,
+          `Channel ${options.channel} belongs to ${distribution}, not ${id}`,
         );
-      distribution = metadata.distribution.id;
+      distribution = id;
+    }
+    if (!distribution)
+      throw new PiShipError("CONFIG_INVALID", "No release archives were given");
+    mkdirSync(directory, { recursive: true });
+    for (const { archive, release } of verified) {
+      const { metadata } = release;
       const name = basename(archive);
       const destination = join(directory, name);
       if (resolve(archive) !== destination) copyFileSync(archive, destination);
@@ -149,37 +245,40 @@ export async function signChannel(
         piship: metadata.piship.version,
         lockSha256: metadata.lockSha256,
       });
-    } finally {
-      verified.cleanup();
     }
-  }
-  if (!distribution)
-    throw new PiShipError("CONFIG_INVALID", "No release archives were given");
-  const now = (options.now ?? (() => new Date()))();
-  const metadata: ChannelMetadata = {
-    schema: CHANNEL_SCHEMA,
-    distribution,
-    channel: options.channel,
-    sequence: options.sequence ?? (previous?.sequence ?? 0) + 1,
-    expires: new Date(
-      now.getTime() + (options.expiresDays ?? 30) * 86_400_000,
-    ).toISOString(),
-    releases: [...entries.values()].sort((a, b) =>
-      `${a.target} ${a.version}`.localeCompare(`${b.target} ${b.version}`),
-    ),
-  };
-  if (previous && metadata.sequence <= previous.sequence)
-    throw new PiShipError(
-      "CONFIG_INVALID",
-      `Channel sequence must increase (current ${previous.sequence})`,
+    const now = (options.now ?? (() => new Date()))();
+    const metadata: ChannelMetadata = {
+      schema: CHANNEL_SCHEMA,
+      distribution,
+      channel: options.channel,
+      sequence: options.sequence ?? (previous?.sequence ?? 0) + 1,
+      expires: new Date(
+        now.getTime() + (options.expiresDays ?? 30) * 86_400_000,
+      ).toISOString(),
+      releases: [...entries.values()].sort((a, b) =>
+        `${a.target} ${a.version}`.localeCompare(`${b.target} ${b.version}`),
+      ),
+    };
+    if (previous && metadata.sequence <= previous.sequence)
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `Channel sequence must increase (current ${previous.sequence})`,
+      );
+    const text = `${JSON.stringify(metadata, null, 2)}\n`;
+    const signature = signBytes(
+      Buffer.from(text),
+      options.privateKeyPem,
+      options.keyId,
     );
-  const bytes = Buffer.from(`${JSON.stringify(metadata, null, 2)}\n`);
-  writeFileSync(path, bytes);
-  writeJson(
-    `${path}.sig`,
-    signBytes(bytes, options.privateKeyPem, options.keyId),
-  );
-  return { path, metadata };
+    // Each file is replaced whole, so neither is ever seen truncated. A
+    // reader that gets a mismatched pair between the two replacements
+    // refuses it, as does the next sign-channel.
+    replaceFile(path, text);
+    replaceFile(`${path}.sig`, `${JSON.stringify(signature, null, 2)}\n`);
+    return { path, metadata };
+  } finally {
+    for (const { release } of verified) release.cleanup();
+  }
 }
 
 /**
