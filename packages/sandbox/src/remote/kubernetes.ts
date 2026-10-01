@@ -4,6 +4,7 @@
 // sandbox router, and deletes the claim when the session ends. Scheduling,
 // images, NetworkPolicy, and isolation stay with the cluster.
 import { randomBytes } from "node:crypto";
+import { PiShipError } from "@piship/contracts";
 import type { AdapterAvailability } from "../adapter.js";
 import {
   HOST_FILESYSTEM_ISOLATION,
@@ -104,6 +105,23 @@ interface Claim {
 
 /** The claim no longer exists (deleted or expired). */
 class ClaimGone extends Error {}
+
+/**
+ * A command was sent, and whether it ran, is running, or finished is
+ * unknown: the connection to the router failed, or a gateway in front of it
+ * answered 5xx, before the result arrived. Its claim is retired, so it is
+ * deleted with whatever still runs in it once no other command uses it; the
+ * command is never repeated and never reported as retryable.
+ */
+class OutcomeUnknown extends PiShipError {
+  constructor(reason: string) {
+    super(
+      "SANDBOX_UNAVAILABLE",
+      `The command's outcome is unknown: ${reason} before its result arrived. It may have run in part or in full, or still be running; PiShip retired its sandbox, which is deleted once no other command runs in it, and runs the next command in a new one. Check the command's effects before running it again`,
+      { component: "sandbox", retryable: false },
+    );
+  }
+}
 
 /** Rounded up to the second, so the lifetime is never shorter. */
 function wholeSecond(ms: number): number {
@@ -342,7 +360,7 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
           if (error instanceof ClaimGone) {
             entry.gone = true;
             retire(entry);
-          }
+          } else if (error instanceof OutcomeUnknown) retire(entry);
           throw error;
         } finally {
           io.signal.removeEventListener("abort", onAbort);
@@ -582,6 +600,14 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
     request: SandboxExecRequest,
     io: SandboxExecIO,
   ): Promise<SandboxExecResult> {
+    /** A transport failure once the command may have been sent. */
+    const unknown = (error: unknown): unknown =>
+      io.signal.aborted ||
+      (error instanceof PiShipError && error.code !== "GATEWAY_UNREACHABLE")
+        ? error
+        : new OutcomeUnknown(
+            `the connection to the sandbox router failed (${errorText(error)})`,
+          );
     const response = await this.#request(
       `${this.#router}/execute`,
       {
@@ -598,16 +624,30 @@ export class KubernetesAgentSandboxBackend implements SandboxBackend {
         signal: io.signal,
       },
       0,
-    );
+    ).catch((error: unknown) => {
+      throw unknown(error);
+    });
     if (response.status === 404) {
       await response.body?.cancel().catch(() => undefined);
       throw new ClaimGone("the sandbox router no longer knows this sandbox");
     }
+    // A 5xx comes from the router or a gateway in front of it, such as one
+    // that stopped waiting for a long command: the command may still run.
+    if (response.status >= 500)
+      throw new OutcomeUnknown(
+        `the sandbox router answered ${await describeFailure(response)}`,
+      );
     if (!response.ok)
       throw new Error(
         `running the command failed: ${await describeFailure(response)}`,
       );
-    const body = await readJson(response, MAX_OUTPUT_BYTES);
+    const body = await readJson(response, MAX_OUTPUT_BYTES).catch(
+      (error: unknown) => {
+        // A body that ends early is a transport failure (undici's
+        // TypeError); one that is too large or not JSON came complete.
+        throw error instanceof TypeError ? unknown(error) : error;
+      },
+    );
     if (typeof body.stdout === "string" && body.stdout)
       io.onStdout(Buffer.from(body.stdout, "utf8"));
     if (typeof body.stderr === "string" && body.stderr)
