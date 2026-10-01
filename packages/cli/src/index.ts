@@ -49,31 +49,48 @@ import {
 } from "@piship/schema";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const commands = [
-  "init",
-  "dev",
-  "validate",
-  "lock",
-  "build",
-  "test",
-  "inspect",
-  "doctor",
-  "install",
-  "uninstall",
-  "purge",
-  "migrate",
-  "config",
-  "release",
-  "verify-release",
-  "diff",
-  "update",
-  "rollback",
-  "repair",
-  "migrate-check",
-  "keygen",
-  "sign-channel",
-  "reproducibility",
-] as const;
+/** Every command with a one-line summary, in help order. */
+const summaries = {
+  init: "Create a new distribution repository",
+  dev: "Build and start the branded command from a manifest",
+  validate: "Check a manifest without writing a lock",
+  lock: "Resolve a manifest and write piship.lock",
+  build: "Assemble the distribution payload",
+  test: "Build and run the branded acceptance smoke",
+  inspect: "Show a distribution's locked configuration",
+  doctor: "Check an artifact or installed distribution",
+  install: "Install an artifact, release, or archive for this user",
+  uninstall: "Remove an installed distribution",
+  purge: "Delete an installed distribution's state",
+  migrate: "Migrate a manifest to the current schema",
+  config: "Explain the effective configuration and its sources",
+  release: "Build a local release archive",
+  "verify-release": "Verify a release archive or directory",
+  diff: "Compare two locks, payloads, releases, or installs",
+  update: "Update an installed distribution",
+  rollback: "Return an installed distribution to its previous release",
+  repair: "Restore a damaged installed release from a trusted source",
+  "migrate-check": "Check whether a release can take over the current state",
+  keygen: "Create a channel signing key",
+  "sign-channel": "Sign channel metadata for release archives",
+  reproducibility: "Compare two builds of the same release",
+} as const;
+const commands = Object.keys(summaries) as (keyof typeof summaries)[];
+/** Usage of the commands that take one target and fixed options. */
+const simpleUsage: Record<string, string> = {
+  init: "init <directory> [--managed]",
+  dev: "dev <manifest> [--smoke]",
+  validate: "validate <manifest>",
+  lock: "lock <manifest>",
+  build: "build <manifest> [--reclaim-staging]",
+  test: "test <manifest> [--model-request]",
+  inspect: "inspect <manifest|artifact|id>",
+  doctor: "doctor <artifact|id>",
+  install: "install <artifact|release-dir|archive> [--use-existing-state]",
+  purge: "purge <id> --yes [--without-logout]",
+  migrate: "migrate <manifest> [--write]",
+  config: "config explain <manifest|artifact|id>",
+};
 /** Commands with named options: positional count and accepted flags. */
 const lifecycleCommands: Record<
   string,
@@ -279,8 +296,9 @@ export async function runCli(
 ): Promise<number> {
   const [command, target, ...rest] = args;
   if (command === undefined || command === "--help" || command === "-h") {
+    const width = Math.max(...commands.map((item) => item.length)) + 2;
     output.stdout(
-      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> <target>\n\nCommands:\n${commands.map((item) => `  ${item}`).join("\n")}\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  --help     Show this help\n  --version  Show PiShip version`,
+      `PiShip ${PISHIP_VERSION}\n\nUsage: piship <command> [arguments]\n\nCommands:\n${commands.map((item) => `  ${item.padEnd(width)}${summaries[item]}`).join("\n")}\n\nRun piship <command> --help for a command's arguments and options.\n\nInstall defaults: ${binHome()} (add to PATH yourself)\n\nOptions:\n  --help     Show this help\n  --version  Show PiShip version`,
     );
     return 0;
   }
@@ -293,6 +311,13 @@ export async function runCli(
     return 2;
   }
   const lifecycle = lifecycleCommands[command];
+  // --help anywhere after the command asks for help; it is never a target.
+  if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
+    output.stdout(
+      `Usage: piship ${lifecycle?.usage ?? simpleUsage[command]}\n\n${summaries[command as keyof typeof summaries]}.`,
+    );
+    return 0;
+  }
   if (lifecycle) {
     const parsed = parseArguments(lifecycle, args.slice(1));
     if (!parsed) {
@@ -312,16 +337,14 @@ export async function runCli(
   }
   if (command === "config") {
     if (target !== "explain" || rest.length !== 1) {
-      output.stderr("Usage: piship config explain <manifest|artifact|id>");
+      output.stderr(`Usage: piship ${simpleUsage.config}`);
       return 2;
     }
   } else if (
     !target ||
     (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
   ) {
-    output.stderr(
-      `Usage: piship ${command} <target>${allowedOptions[command] ? ` [${allowedOptions[command].join("|")}]` : ""}`,
-    );
+    output.stderr(`Usage: piship ${simpleUsage[command]}`);
     return 2;
   }
   if (!target) return 2;

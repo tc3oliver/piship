@@ -366,6 +366,48 @@ describe("validate", () => {
   });
 });
 
+describe("help", () => {
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  it("summarizes every command in the top-level help", async () => {
+    const result = await run(["--help"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/^ {2}validate\s+Check a manifest/m);
+    expect(result.stdout).toContain("piship <command> --help");
+  });
+
+  it.each([
+    ["validate", "validate <manifest>"],
+    ["install", "install <artifact|release-dir|archive>"],
+    ["doctor", "doctor <artifact|id>"],
+    ["config", "config explain <manifest|artifact|id>"],
+    ["update", "update <id>"],
+    ["keygen", "keygen <private-key-file> --id <key-id>"],
+  ])(
+    "prints usage for %s --help instead of reading a file named --help",
+    async (command, usage) => {
+      for (const args of [
+        [command, "--help"],
+        [command, "-h"],
+        [command, "explain", "--help"],
+      ]) {
+        const result = await run(args);
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(`Usage: piship ${usage}`);
+        expect(result.stderr).toBe("");
+      }
+    },
+  );
+});
+
 describe("config explain from a manifest", () => {
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), "piship-cli-explain-"));
