@@ -262,6 +262,175 @@ describe("sandbox.credential: runtime", () => {
   });
 });
 
+describe("Streamable HTTP MCP servers", () => {
+  const server = (url: string, extra: Json = {}): Json => ({
+    mcp: {
+      mode: "allowlist",
+      servers: {
+        docs: {
+          transport: "streamable-http",
+          url,
+          required: true,
+          ...extra,
+        },
+      },
+    },
+  });
+  const personal = (extra: Json): Json => ({
+    ...managed(extra),
+    deployment: { mode: "personal" },
+    identity: { mode: "none" },
+    credential: { provider: "local-secret" },
+    models: { allowed: ["acme/coder"], catalog },
+  });
+  const runtime = { credential: "runtime" };
+  it("accepts a runtime-credential server on the gateway origin and an allowed host", () => {
+    for (const extra of [
+      server("https://gateway.acme.example/mcp", runtime),
+      {
+        ...server("https://mcp.acme.example/mcp"),
+        network: { allowHosts: ["mcp.acme.example"] },
+      },
+    ])
+      expect(warnings(managed(extra))).toEqual([]);
+    // Personal mode is not private-only unless it says so.
+    expect(warnings(personal(server("https://mcp.acme.example/mcp")))).toEqual(
+      [],
+    );
+  });
+  it("rejects credential: runtime on another origin than inference.baseUrl", () => {
+    rejects(
+      managed({
+        ...server("https://mcp.acme.example/mcp", runtime),
+        network: { allowHosts: ["mcp.acme.example"] },
+      }),
+      "mcp.servers.docs.url",
+      "https://gateway.acme.example",
+    );
+    rejects(
+      managed(server("https://gateway.acme.example:8443/mcp", runtime)),
+      "mcp.servers.docs.url",
+      "MCP_UNHEALTHY",
+    );
+  });
+  it("rejects credential: runtime when the launch has no runtime credential", () => {
+    const base = personal(server("https://gateway.acme.example/mcp", runtime));
+    rejects(
+      { ...base, credential: { provider: "none" } },
+      "mcp.servers.docs.credential",
+      "no runtime credential",
+    );
+    rejects(
+      {
+        ...base,
+        credential: { provider: "pi-native" },
+        inference: { provider: "pi-native" },
+        models: { allowed: ["acme/coder"] },
+      },
+      "mcp.servers.docs.credential",
+      "no runtime credential",
+    );
+  });
+  it("rejects a host the private-only network policy refuses", () => {
+    rejects(
+      managed(server("https://mcp.acme.example/mcp")),
+      "mcp.servers.docs.url",
+      "mcp.acme.example is not in network.allowHosts",
+    );
+    rejects(
+      personal({
+        ...server("https://mcp.acme.example/mcp"),
+        network: { privateOnly: true },
+      }),
+      "mcp.servers.docs.url",
+      "MCP_UNHEALTHY",
+    );
+  });
+  it("warns when a runtime variable is involved", () => {
+    expect(
+      warnings(
+        managed({
+          variables: ["ACME_MCP_URL"],
+          ...server(`\${ACME_MCP_URL}`, runtime),
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers.docs.url",
+        message: expect.stringContaining("inference.baseUrl"),
+      }),
+    ]);
+    expect(
+      warnings(
+        managed({
+          variables: ["ACME_MCP_URL"],
+          ...server(`\${ACME_MCP_URL}`),
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers.docs.url",
+        message: expect.stringContaining("network.allowHosts"),
+      }),
+    ]);
+    // A templated gateway may be the server's origin and host.
+    const templated = managed({
+      variables: ["ACME_GATEWAY_URL"],
+      ...server("https://mcp.acme.example/mcp", runtime),
+    });
+    (templated.inference as Json).baseUrl = `\${ACME_GATEWAY_URL}`;
+    expect(warnings(templated).map((item) => item.path)).toEqual([
+      "mcp.servers.docs.url",
+    ]);
+  });
+  it("only warns about an optional server", () => {
+    for (const extra of [
+      server("https://mcp.acme.example/mcp", { required: false }),
+      {
+        ...server("https://mcp.acme.example/mcp", {
+          ...runtime,
+          required: false,
+        }),
+        network: { allowHosts: ["mcp.acme.example"] },
+      },
+    ])
+      expect(warnings(managed(extra))).toEqual([
+        expect.objectContaining({
+          path: "mcp.servers.docs.url",
+          message: expect.stringContaining("optional"),
+        }),
+      ]);
+    expect(
+      warnings({
+        ...personal(
+          server("https://gateway.acme.example/mcp", {
+            ...runtime,
+            required: false,
+          }),
+        ),
+        credential: { provider: "none" },
+      }).map((item) => item.path),
+    ).toEqual(["mcp.servers.docs.credential"]);
+  });
+  it("ignores stdio servers", () => {
+    expect(
+      warnings(
+        managed({
+          mcp: {
+            servers: {
+              local: {
+                transport: "stdio",
+                command: "acme-mcp",
+                required: true,
+              },
+            },
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("sandbox.network.mode", () => {
   it("warns that deny is not enforced by a sandbox that is not required", () => {
     for (const sandbox of [
