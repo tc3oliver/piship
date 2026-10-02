@@ -83,6 +83,25 @@ acmecode policy explain shell.execute "git status"
 
 CLI 沒有發佈到 npm，請用 `node packages/cli/dist/bin.js` 執行；用 `npx` 或 `npm exec` 會跑去公開的 registry 找。遇到錯誤可以查 [troubleshooting](docs/troubleshooting.md)，每個錯誤代碼和處理方式都在裡面。完整步驟見 [公司 demo](examples/demo-company/README.md)。
 
+## 交給你的 coding agent 設定
+
+把下面這段貼進 Claude Code、Codex、Pi，或任何能執行指令的 coding agent。它會先問你幾個問題，再幫你寫好設定、建置並檢查。
+
+```text
+幫我設定一個 PiShip 發行版。PiShip（https://github.com/tc3oliver/piship）
+可以在上游 Pi 之上做出自己品牌的 coding agent。
+
+1. 把 https://github.com/tc3oliver/piship clone 到 ~/src/piship（想放別的地方
+   請先問我），在裡面執行 `npm ci && npm run build`，然後讀那份 clone 裡的
+   docs/agent-setup.md，照著一步一步做。
+2. 動手寫任何檔案之前，先把文件列出的問題問我。網址、client ID、模型名稱都
+   不要自己猜。
+3. 任何機密都不能寫進檔案、指令或你的回覆，也不要動 ~/.pi。
+4. 要安裝東西到 ~/.local/bin 之前先問我。
+```
+
+agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以先打開看它會做哪些事。
+
 ## 一份檔案就夠
 
 這就是 AcmeCode 發行版的全部設定，`piship validate` 可以直接通過。
@@ -209,7 +228,7 @@ PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還
 | [Enterprise integration](docs/enterprise-integration.md)：IdP、broker、gateway 要提供什麼 | [Identity](docs/identity.md)、[Credentials](docs/credentials.md)、[Inference](docs/inference.md) |
 | [Sandbox](docs/sandbox.md)：各種沙箱與工作目錄檢查 | [Adapter SDK](docs/adapter-sdk.md) |
 | [Release](docs/release.md)：建置、簽章、更新、rollback | [Compatibility](docs/compatibility.md)、[Roadmap](docs/roadmap.md) |
-| [Troubleshooting](docs/troubleshooting.md)：錯誤代碼 | |
+| [Troubleshooting](docs/troubleshooting.md)：錯誤代碼 | [Agent setup](docs/agent-setup.md)：給 coding agent 的設定步驟 |
 
 ## 參與貢獻
 

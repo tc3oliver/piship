@@ -83,6 +83,25 @@ Clean up with `acmecode logout`, then `node dist/acmecode/piship.mjs uninstall a
 
 The CLI is not on npm, so run it as `node packages/cli/dist/bin.js`; `npx` and `npm exec` would look it up on the public registry instead. If something fails, [troubleshooting](docs/troubleshooting.md) lists every error code and what to do. The full walkthrough is in the [company demo](examples/demo-company/README.md).
 
+## Set it up with your coding agent
+
+Paste this into Claude Code, Codex, Pi, or any coding agent that can run commands. It asks you a few questions, then writes, builds, and checks your distribution.
+
+```text
+Set up a PiShip distribution for me. PiShip (https://github.com/tc3oliver/piship)
+builds a branded coding agent on top of upstream Pi.
+
+1. Clone https://github.com/tc3oliver/piship to ~/src/piship (ask me first if I
+   want it elsewhere), run `npm ci && npm run build` there, then read
+   docs/agent-setup.md in that clone and follow it step by step.
+2. Ask me the questions it lists before you write anything. Never guess a URL,
+   client ID, or model name.
+3. Never put a secret in a file, a command, or your reply, and do not touch ~/.pi.
+4. Ask me before you install anything into ~/.local/bin.
+```
+
+The steps it follows are in [docs/agent-setup.md](docs/agent-setup.md), so you can read exactly what it will do first.
+
 ## One file
 
 This is the whole AcmeCode distribution. `piship validate` accepts it as is.
@@ -207,7 +226,7 @@ The [status page](docs/status.md) has the evidence behind every claim.
 | [Enterprise integration](docs/enterprise-integration.md): what your IdP, broker, and gateway must do | [Identity](docs/identity.md), [Credentials](docs/credentials.md), [Inference](docs/inference.md) |
 | [Sandbox](docs/sandbox.md): backends and the workspace check | [Adapter SDK](docs/adapter-sdk.md) |
 | [Release](docs/release.md): build, sign, update, roll back | [Compatibility](docs/compatibility.md), [Roadmap](docs/roadmap.md) |
-| [Troubleshooting](docs/troubleshooting.md): error codes | |
+| [Troubleshooting](docs/troubleshooting.md): error codes | [Agent setup](docs/agent-setup.md): steps for a coding agent |
 
 ## Contributing
 
