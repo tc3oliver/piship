@@ -1,4 +1,8 @@
-# PiShip
+<h1 align="center">PiShip</h1>
+
+<p align="center">
+  <strong>Ship Pi as your company's own coding agent. No fork.</strong>
+</p>
 
 <p align="center">
   English · <a href="README.zh-TW.md">繁體中文</a>
@@ -11,37 +15,80 @@
   <img src="https://img.shields.io/github/license/tc3oliver/piship" alt="License">
 </p>
 
-PiShip builds your own branded coding agent on top of upstream [Pi](https://github.com/earendil-works/pi), without forking or patching it. You describe the distribution in one `piship.yaml`: which Pi version, how users sign in, which LLM gateway and models they get, what policy and sandbox apply, which instructions, skills, and extensions ship with it, and how it is released and updated. PiShip turns that into an installable command such as `acmecode`.
-
-Pi keeps the agent loop, tools, sessions, TUI, and model runtime. PiShip handles everything around it that a company needs before it can hand the agent to its developers.
-
 <p align="center">
   <img src="docs/assets/piship-demo.gif" alt="Animation: upstream Pi is wrapped by PiShip, connected to company identity, credential broker, LLM gateway and sandbox, and becomes your company coding agent" width="720">
 </p>
 
-## What it covers
+Your developers want [Pi](https://github.com/earendil-works/pi). Your security team wants single sign-on, no provider API keys on laptops, a sandbox around every command the agent runs, and a record of what it did.
 
-| Area | What PiShip does |
-| --- | --- |
-| Identity | OIDC sign-in (Authorization Code + PKCE) |
-| Credentials | Exchanges the identity at your credential broker for a short-lived gateway credential, keeps it in the OS secret store, renews and revokes it. Developers never hold upstream provider keys |
-| Models | Talks to an OpenAI-compatible company gateway; default model, allowlist, and per-model metadata |
-| Resources | Ships instructions, skills, extensions, prompts, and themes with the distribution, each with a trust class |
-| Policy | Decides tool calls, file access, shell commands, MCP servers and tools, and resource loading before they happen; project trust changes what is allowed per repository |
-| Sandbox | Runs agent commands in bubblewrap (Linux), Seatbelt (macOS), or a remote backend: your own adapter, an E2B-compatible service such as CubeSandbox, or Kubernetes Agent Sandbox |
-| Audit | Metadata-only policy and runtime events to a local file or your collector |
-| Release | One reproducible artifact per platform, with SPDX SBOM, third-party notices, vulnerability gate, and checksums |
-| Updates | Signed channels, verified update with atomic activation, and rollback that keeps sessions |
+You can fork Pi, build all of that in, and merge upstream every week for as long as you use it. Or you can write one `piship.yaml` and get a command like `acmecode` that your developers install and run. Pi stays upstream and untouched.
 
-PiShip is not an identity provider, gateway, or sandbox service. It connects the ones you already run. The wire protocols they must speak are in the [enterprise integration contract](docs/enterprise-integration.md); a LiteLLM gateway works.
+## Fork vs. PiShip
+
+| | Forking Pi | PiShip |
+| --- | --- | --- |
+| A new Pi release | Merge it into your fork | Bump the pin, run the compatibility tests |
+| Sign-in | Build it | OIDC with PKCE, configured in YAML |
+| Provider keys | On every laptop, or build a proxy | Stay in your gateway; laptops get a short-lived credential |
+| Which models people can use | Patch the code | An allowlist in the manifest |
+| Sandbox | Build it | bubblewrap, Seatbelt, or your remote sandbox |
+| Rules for tools, files, shell, MCP | Build it | Declared, enforced, and explainable |
+| Getting it onto 500 laptops | Your own build and update tooling | Signed releases, verified updates, rollback |
+
+## What you get
+
+- **Your brand, your command.** `acmecode`, `teampi`, whatever you call it, with your instructions, skills, extensions, prompts, and themes built in.
+- **Company sign-in.** Developers log in with SSO. PiShip trades that identity at your credential broker for a short-lived gateway credential, keeps it in the OS keychain, renews it, and revokes it on logout.
+- **Your gateway, your models.** Requests go to your OpenAI-compatible gateway (LiteLLM works) and only to the models you allow.
+- **Policy that actually runs.** Tool calls, file access, shell commands, and MCP tools are checked before they happen. `acmecode policy explain` tells you why.
+- **A sandbox, or nothing runs.** If you require one and it is not there, the command does not run on the host. No silent fallback.
+- **Releases you can trust.** Reproducible builds per platform with an SBOM, license notices, a vulnerability gate, signed update channels, and one-command rollback.
+
+PiShip does not replace your identity provider, gateway, or sandbox. It connects the ones you already have to Pi.
 
 <p align="center">
   <img src="docs/assets/diagram-login-flow.svg" alt="OIDC login, company identity, credential broker, short-lived gateway credential, Pi runtime, company LLM gateway" width="1000">
 </p>
 
-## A managed manifest
+## Try it in two minutes
 
-This is a complete manifest; `piship validate` accepts it as is.
+You need Node.js 22.19.0 or newer. On Linux the demo also needs bubblewrap with unprivileged user namespaces; macOS has its sandbox built in.
+
+```bash
+git clone https://github.com/tc3oliver/piship.git
+cd piship && npm ci && npm run build
+
+# Terminal 1: a fake company (OIDC provider, credential broker, LLM gateway)
+node examples/demo-company/fixtures/local-services.mjs
+```
+
+It prints a few `ACMECODE_*` variables. Export them in a second terminal, then build, install, and sign in:
+
+```bash
+node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
+node dist/acmecode/piship.mjs install dist/acmecode
+~/.local/bin/acmecode login
+~/.local/bin/acmecode
+```
+
+That is a branded Pi with company sign-in, a governed model list, policy, and a sandbox. Poke at it:
+
+```bash
+acmecode doctor                                             # what is actually in force
+acmecode policy explain filesystem.read ~/.ssh/id_ed25519   # allowed? which rule decided?
+acmecode policy explain shell.execute "git status"
+```
+
+Clean up with `acmecode logout`, then `node dist/acmecode/piship.mjs uninstall acmecode --purge --yes`.
+
+The CLI is not on npm, so run it as `node packages/cli/dist/bin.js`; `npx` and `npm exec` would look it up on the public registry instead. If something fails, [troubleshooting](docs/troubleshooting.md) lists every error code and what to do. The full walkthrough is in the [company demo](examples/demo-company/README.md).
+
+## One file
+
+This is the whole AcmeCode distribution. `piship validate` accepts it as is.
+
+<details>
+<summary><b>Show piship.yaml</b></summary>
 
 ```yaml
 schema: piship/v1alpha4
@@ -112,78 +159,15 @@ updates:
   rollback: true
 ```
 
-The manifest holds no secrets; the schema rejects secret-looking fields. Policy, resources, MCP servers, audit, and release gates are optional and have defaults. Every field is in the [manifest reference](docs/manifest.md), and the [demo company manifest](examples/demo-company/piship.yaml) uses most of them.
+</details>
 
-## Quickstart
+No secrets go in it; the schema rejects anything that looks like one. Policy, resources, MCP servers, audit, and release gates are optional. Every field is in the [manifest reference](docs/manifest.md).
 
-PiShip is built from source and needs Node.js 22.19.0 or newer. The managed demo also needs an OS sandbox (Seatbelt on macOS, bubblewrap with unprivileged user namespaces on Linux) and a platform secret store. [Troubleshooting](docs/troubleshooting.md) lists the prerequisites and every error code.
+To start your own, run `node packages/cli/dist/bin.js init ./my-agent --managed` (leave out `--managed` for a personal one), keep it in its own repository, and see [running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository).
 
-```bash
-git clone https://github.com/tc3oliver/piship.git
-cd piship
-npm ci
-npm run build
-```
+## Not a company? Still useful
 
-The CLI is `node packages/cli/dist/bin.js`. It is not on npm, so `npx` and `npm exec` would look it up on the public registry instead.
-
-### Run the company demo
-
-AcmeCode is a managed distribution that runs against local stand-ins for an OIDC provider, a credential broker, and a gateway:
-
-```bash
-node examples/demo-company/fixtures/local-services.mjs
-```
-
-It prints the `ACMECODE_*` variables to export. In another terminal, with those set:
-
-```bash
-node packages/cli/dist/bin.js build examples/demo-company/piship.yaml
-node dist/acmecode/piship.mjs install dist/acmecode
-~/.local/bin/acmecode login
-~/.local/bin/acmecode
-```
-
-Then look at what is actually in force:
-
-```bash
-acmecode doctor
-acmecode models
-acmecode capabilities
-acmecode config explain
-acmecode policy explain shell.execute "git status"
-acmecode policy explain filesystem.read ~/.ssh/id_ed25519
-```
-
-To remove it, sign out first (`logout` revokes the credential at the broker; purge does not, so it refuses while you are signed in):
-
-```bash
-acmecode logout
-node dist/acmecode/piship.mjs uninstall acmecode --purge --yes
-```
-
-The fixtures are deterministic test services, not a real company integration. Full walkthrough: [company demo](examples/demo-company/README.md).
-
-### Start your own
-
-Keep your distribution in its own repository and run the CLI by path ([details](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)):
-
-```bash
-node ~/src/piship/packages/cli/dist/bin.js init ./my-agent              # personal: Pi's own providers and sign-in
-node ~/src/piship/packages/cli/dist/bin.js init ./my-agent --managed    # managed: OIDC, broker, gateway
-
-# edit my-agent/piship.yaml and my-agent/resources/AGENTS.md, then:
-node ~/src/piship/packages/cli/dist/bin.js validate ./my-agent/piship.yaml
-node ~/src/piship/packages/cli/dist/bin.js lock ./my-agent/piship.yaml
-node ~/src/piship/packages/cli/dist/bin.js build ./my-agent/piship.yaml
-node dist/my-agent/piship.mjs install dist/my-agent
-```
-
-Commit `piship.yaml`, `piship.lock`, and `resources/`. To ship releases and updates to other people, follow the [release guide](docs/release.md).
-
-### Personal use
-
-The same machinery works without a company: no IdP, broker, or gateway. The MyPi example pins Pi, keeps its state away from `~/.pi`, and uses Pi's own sign-in or a local OpenAI-compatible server.
+Personal mode needs no identity provider, broker, or gateway. The MyPi example pins Pi, keeps its state out of `~/.pi`, ships your own instructions and skills, and works with Pi's normal sign-in or a local model server.
 
 ```bash
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
@@ -193,68 +177,43 @@ node dist/mypi/piship.mjs install dist/mypi
 
 See the [personal example](examples/personal/README.md).
 
-## How enforcement works
+## How it fits together
 
-Policy is checked at runtime, not just written down. When something the manifest requires cannot be switched on, the launch stops instead of running with less: a required sandbox that is not available ends in `SANDBOX_UNAVAILABLE`, and the command never runs on the host. `doctor`, `capabilities`, `config explain`, and `policy explain` show the effective state. Company policy is layered, and project or user configuration can only narrow it.
+<p align="center">
+  <img src="docs/assets/diagram-overview.svg" alt="Upstream Pi plus PiShip plus your distribution manifest becomes your coding agent: AcmeCode, CompanyCode, TeamPi, MyPi" width="800">
+</p>
 
-PiShip makes the policy decision; the sandbox backend does the isolation. The native sandboxes are probed at every launch, and their tests cover denied reads, writes outside the allowlist, network denial, environment filtering, protected git files, process cleanup, and macOS launchd escapes. In a remote sandbox only shell commands run remotely; Pi's file tools still work on the local checkout, so the backend has to mount or sync the workspace for both to see the same files ([sandbox](docs/sandbox.md#workspace)).
+Pi owns the agent: the agent loop, tools, sessions, TUI, and model runtime. PiShip owns the distribution around it: the manifest, the pinned Pi version, sign-in and credentials, the gateway, model governance, policy, sandbox, audit, and build, release, and update. PiShip uses only Pi's public API and never patches it.
 
-Details and known limits: [security](docs/security.md) and [sandbox](docs/sandbox.md).
-
-## Releases and updates
-
-`piship release` turns a locked distribution into one artifact per target with the pinned runtime, exact dependencies, SBOM, notices, the vulnerability scan result, and checksums. You publish it to signed `stable`, `candidate`, or `dev` channels; users run `acmecode update` and `acmecode rollback`. Rollback keeps sessions and settings and never snapshots credentials.
-
-```bash
-piship release piship.yaml
-piship verify-release <artifact>
-piship sign-channel <channel-dir> <artifact> --channel stable --key <private-key> --key-id <key-id>
-```
-
-See [release](docs/release.md).
+The sandbox follows the same split: PiShip decides whether a command may run, the sandbox isolates it. The native sandboxes are probed at every launch. With a remote sandbox only shell commands run remotely, and Pi's file tools still edit the local checkout, so the sandbox has to mount or sync the workspace for both to see the same files ([details](docs/sandbox.md#workspace)).
 
 ## Status
 
-PiShip is pre-release and not published to npm.
+PiShip is pre-release and not on npm. What is proven, and what is not:
 
-- **v0.7.1** is the [production-validation baseline](docs/status.md#v071-production-validation-baseline): tag `v0.7.1` (commit `bd4bc09`) on Pi 0.87.1, with six attested example archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1). A production consumer pins it instead of tracking `main`.
-- **`main`** pins Pi 1.0.0. Changes since v0.7.1 are in the [changelog](CHANGELOG.md).
-- The personal distribution core is supported. Managed access, governance, and the release lifecycle are candidates. The native Linux and macOS sandboxes are candidates, Windows has no native sandbox, and the remote backends are a preview ([per backend](docs/status.md#sandbox-backends)).
-- Managed flows are tested against local fixtures on all three platforms, and on Ubuntu against a reference stack of Keycloak, a reference broker, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack ([run](https://github.com/tc3oliver/piship/actions/runs/36877709332)).
-- Not yet shown: a production company IdP or gateway, and live E2B, CubeSandbox, or Kubernetes Agent Sandbox deployments.
-- The project runs no signed update channel; keys and channels belong to each distribution owner.
+- **v0.7.1** is the [production-validation baseline](docs/status.md#v071-production-validation-baseline) on Pi 0.87.1, with six attested archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1). **`main`** runs Pi 1.0.0 ([changelog](CHANGELOG.md)).
+- Personal distributions are supported. Managed access, governance, and the release lifecycle are candidates.
+- Managed flows pass on Linux, macOS, and Windows against local fixtures, and on Ubuntu against Keycloak, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack.
+- Not proven yet: a production company identity provider or gateway; live E2B, CubeSandbox, or Kubernetes Agent Sandbox; a native sandbox on Windows (use a remote one there).
 
-The [status page](docs/status.md) is the source of truth, with the evidence for each claim.
-
-| Platform | Distribution | Native sandbox |
-| --- | --- | --- |
-| Linux x64 | Yes | bubblewrap |
-| macOS arm64 | Yes | Seatbelt |
-| Windows x64 | Yes | None; use a remote backend or leave the sandbox optional |
+The [status page](docs/status.md) has the evidence behind every claim.
 
 ## Documentation
 
-| Topic | Document |
+| Start here | Then |
 | --- | --- |
-| What works today | [Status](docs/status.md) |
-| Design | [Architecture](docs/architecture.md), [Decisions](docs/decisions.md) |
-| Manifest fields | [Manifest](docs/manifest.md) |
-| Connecting company services | [Enterprise integration](docs/enterprise-integration.md) |
-| Identity, credentials, models | [Identity](docs/identity.md), [Credentials](docs/credentials.md), [Inference](docs/inference.md) |
-| Policy and limits | [Security](docs/security.md) |
-| Sandbox backends | [Sandbox](docs/sandbox.md), [Adapter SDK](docs/adapter-sdk.md) |
-| Release, update, rollback | [Release](docs/release.md) |
-| Pi versions | [Compatibility](docs/compatibility.md) |
-| Errors and prerequisites | [Troubleshooting](docs/troubleshooting.md) |
-| Direction | [Roadmap](docs/roadmap.md) |
+| [Status](docs/status.md): what works today | [Architecture](docs/architecture.md), [Decisions](docs/decisions.md) |
+| [Manifest](docs/manifest.md): every field | [Security](docs/security.md): policy and known limits |
+| [Enterprise integration](docs/enterprise-integration.md): what your IdP, broker, and gateway must do | [Identity](docs/identity.md), [Credentials](docs/credentials.md), [Inference](docs/inference.md) |
+| [Sandbox](docs/sandbox.md): backends and the workspace check | [Adapter SDK](docs/adapter-sdk.md) |
+| [Release](docs/release.md): build, sign, update, roll back | [Compatibility](docs/compatibility.md), [Roadmap](docs/roadmap.md) |
+| [Troubleshooting](docs/troubleshooting.md): error codes | |
 
-## Development
+## Contributing
 
 ```bash
 npm run check
 npm run test:compatibility
 ```
 
-CI has separate tiers for merging, installed cross-platform runs, and release qualification; see [status](docs/status.md#ci-evidence-tiers).
-
-Security reports: [SECURITY.md](SECURITY.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). License: MIT.
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through [SECURITY.md](SECURITY.md). MIT licensed.
