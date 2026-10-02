@@ -16,7 +16,7 @@ app:
   banner: AcmeCode enterprise reference distribution (fictional)
 
 runtime:
-  pi: "0.87.1"
+  pi: "1.0.0"
 
 deployment:
   mode: managed

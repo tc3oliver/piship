@@ -127,7 +127,7 @@ app:
   command: ${id}
   version: ${options.version ?? "1.0.0"}
 runtime:
-  pi: "0.87.1"
+  pi: "1.0.0"
 deployment:
   mode: personal
 ${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
@@ -441,6 +441,8 @@ describe("lock piship-lock/v1alpha4", () => {
       "chord",
       "pi-agent-core",
       "pi-ai",
+      "pi-codemode",
+      "pi-mcp",
       "pi-telemetry",
       "pi-tui",
     ]);
@@ -575,13 +577,13 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
 
   it("pi: refuses a pinned Pi this PiShip records as unsupported", () => {
     const { path } = project();
-    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const known = PI_COMPATIBILITY["1.0.0"] as Record<string, string>;
     const saved = { ...known };
     try {
       for (const surface of Object.keys(known)) known[surface] = "unsupported";
       const error = caught(() => checkReleaseInputs(path));
       expect(error.message).toMatch(/Release gate pi: /);
-      expect(error.message).toMatch(/0\.87\.1/);
+      expect(error.message).toMatch(/1\.0\.0/);
     } finally {
       Object.assign(known, saved);
     }
@@ -593,7 +595,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     // The schema-valid manifest pins Pi; changing it fails the build-pin check first.
     writeFileSync(
       path,
-      readFileSync(path, "utf8").replace('pi: "0.87.1"', 'pi: "0.86.0"'),
+      readFileSync(path, "utf8").replace('pi: "1.0.0"', 'pi: "0.86.0"'),
     );
     expect(() => lockManifest(path)).toThrow(/Pi 0.86.0 is not available/);
     const error = caught(() => checkReleaseInputs(path));
@@ -605,7 +607,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     writeFileSync(
       lockPath,
       readFileSync(lockPath, "utf8").replace(
-        '"version": "0.87.1"',
+        '"version": "1.0.0"',
         '"version": "0.86.0"',
       ),
     );
@@ -820,7 +822,7 @@ policy:
         source: https://example.org/notes
         integrity: sha256-${"0".repeat(64)}
         license: MIT
-        pi: ["0.87.1"]
+        pi: ["1.0.0"]
 `,
     });
     write(
@@ -1213,7 +1215,7 @@ server.listen(0, "127.0.0.1", () => console.log(server.address().port));`,
 describe("release Pi compatibility", () => {
   const lockFor = (
     mode: "personal" | "managed",
-    version = "0.87.1",
+    version = "1.0.0",
     governance = false,
   ) => ({
     deployment: { mode },
@@ -1222,7 +1224,7 @@ describe("release Pi compatibility", () => {
   });
 
   it("records the weakest of the deployment and lifecycle surfaces", () => {
-    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const known = PI_COMPATIBILITY["1.0.0"] as Record<string, string>;
     const saved = { ...known };
     try {
       const cases: [Record<string, string>, string, string][] = [
@@ -1277,7 +1279,7 @@ describe("release Pi compatibility", () => {
   });
 
   it("includes the governance surface when the distribution declares governance", () => {
-    const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+    const known = PI_COMPATIBILITY["1.0.0"] as Record<string, string>;
     const saved = { ...known };
     try {
       const cases: [Record<string, string>, string, string][] = [
@@ -1320,7 +1322,7 @@ describe("release Pi compatibility", () => {
       ];
       for (const [statuses, mode, expected] of cases) {
         Object.assign(known, saved, statuses);
-        const lock = lockFor(mode as "personal" | "managed", "0.87.1", true);
+        const lock = lockFor(mode as "personal" | "managed", "1.0.0", true);
         expect(piCompatibility(lock)).toBe(expected);
         expect(piCompatibilitySurfaces(lock)).toEqual({
           [mode]: statuses[mode],
@@ -1354,13 +1356,13 @@ describe("release Pi compatibility", () => {
     "pi: refuses a release when only the governance surface is unsupported",
     () => {
       const { path } = project();
-      const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+      const known = PI_COMPATIBILITY["1.0.0"] as Record<string, string>;
       const saved = { ...known };
       try {
         for (const surface of Object.keys(known)) known[surface] = "supported";
         known.governance = "unsupported";
         const error = caught(() => checkReleaseInputs(path));
-        expect(error.message).toMatch(/Release gate pi: Pi 0\.87\.1/);
+        expect(error.message).toMatch(/Release gate pi: Pi 1\.0\.0/);
       } finally {
         Object.assign(known, saved);
       }
@@ -1371,13 +1373,13 @@ describe("release Pi compatibility", () => {
     "pi: refuses a release when only the lifecycle surface is unsupported",
     () => {
       const { path } = project();
-      const known = PI_COMPATIBILITY["0.87.1"] as Record<string, string>;
+      const known = PI_COMPATIBILITY["1.0.0"] as Record<string, string>;
       const saved = { ...known };
       try {
         known.personal = "supported";
         known.lifecycle = "unsupported";
         const error = caught(() => checkReleaseInputs(path));
-        expect(error.message).toMatch(/Release gate pi: Pi 0\.87\.1/);
+        expect(error.message).toMatch(/Release gate pi: Pi 1\.0\.0/);
       } finally {
         Object.assign(known, saved);
       }
@@ -1699,16 +1701,16 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       },
       // The weakest of the personal, governance, and lifecycle surfaces.
       pi: {
-        version: "0.87.1",
+        version: "1.0.0",
         compatibility: piCompatibility({
           deployment: { mode: "personal" },
-          runtime: { version: "0.87.1" } as never,
+          runtime: { version: "1.0.0" } as never,
           governance: {} as never,
         }),
         surfaces: {
-          personal: PI_COMPATIBILITY["0.87.1"]?.personal,
-          governance: PI_COMPATIBILITY["0.87.1"]?.governance,
-          lifecycle: PI_COMPATIBILITY["0.87.1"]?.lifecycle,
+          personal: PI_COMPATIBILITY["1.0.0"]?.personal,
+          governance: PI_COMPATIBILITY["1.0.0"]?.governance,
+          lifecycle: PI_COMPATIBILITY["1.0.0"]?.lifecycle,
         },
       },
       manifestSchema: "piship/v1alpha4",
@@ -1965,7 +1967,7 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         target: currentTarget(),
         archive: `acmepi-1.0.0-${currentTarget()}.tar.gz`,
         sha256: built.sha256,
-        pi: "0.87.1",
+        pi: "1.0.0",
         lockSha256: built.metadata.lockSha256,
       }),
     ]);

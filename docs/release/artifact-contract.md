@@ -86,6 +86,6 @@ The attestation proves which workflow run built the archive and for which ref. I
 ## Known limitations
 
 - There is no macOS notarization or code signing, and no Windows Authenticode signing. Release archives and their scripts may be flagged or quarantined by the operating system.
-- The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 0.87.1's own shrinkwrap omits integrity for five nested `@earendil-works` packages; the root npm lock records their registry integrity so `npm ci` verifies them, and a Pi upgrade must re-check this.
+- The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 1.0.0's own shrinkwrap omits integrity for its seven `@earendil-works` packages other than `pi-coding-agent` (`chord`, `pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-mcp`, `pi-telemetry`, and `pi-tui`); the root npm lock records the registry's published sha512 for them, which `npm ci` verifies, and a Pi upgrade must re-check this.
 - Packages that ship no license or notice file are listed with their declared license only.
 - The vulnerability verdict reflects `npm audit` and its advisory database at build time; it is not rechecked at install or update.

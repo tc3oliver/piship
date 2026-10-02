@@ -4,7 +4,7 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 ## Current baseline
 
-v0.7.1 is the production-validation baseline: tag `v0.7.1` at commit `bd4bc09`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) with six attested archives, Pi 0.87.1, and the schemas `piship/v1alpha4` and `piship-lock/v1alpha4`. A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v071-production-validation-baseline) of the status page; changes on `main` since then are under `Unreleased` in the [changelog](../CHANGELOG.md).
+v0.7.1 is the production-validation baseline: tag `v0.7.1` at commit `bd4bc09`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) with six attested archives, Pi 0.87.1, and the schemas `piship/v1alpha4` and `piship-lock/v1alpha4`. A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v071-production-validation-baseline) of the status page; changes on `main` since then are under `Unreleased` in the [changelog](../CHANGELOG.md). They include the upgrade to Pi 1.0.0, which completes the Pi upgrade review ([#176](https://github.com/tc3oliver/piship/issues/176)): the new `AssistantMessage.thinkingLevel` field is classified, and the governance review of Pi's built-in MCP, codemode, tool search, and llama extensions found that a PiShip session loads none of them ([compatibility](compatibility.md#upgrade-to-pi-100)).
 
 ## Production validation
 
@@ -17,9 +17,8 @@ So far the project has manual real-provider evidence for the reference stack onl
 These must be resolved before PiShip is rolled out broadly, beyond production validation:
 
 - **Signed channel hardening ([#181](https://github.com/tc3oliver/piship/issues/181)).** Time-bounded key validity, revocation before activation, multiple signatures per channel, and signer hardening. A broad rollout that relies on a signed update channel needs these; see the [trust root gaps](release/trust-root.md#gaps-and-follow-ups).
-- **The `brace-expansion` exception ([#129](https://github.com/tc3oliver/piship/issues/129)).** The reviewed vulnerability exception for the version Pi 0.87.1 pins expires on 2026-12-31, after which the release vulnerability gate fails again. It goes when upstream Pi ships a fixed version.
-- **Pi upgrade review ([#176](https://github.com/tc3oliver/piship/issues/176)).** Any Pi upgrade first classifies the new `AssistantMessage.thinkingLevel` field, and any other new field, in the redaction map, and runs the governance review for newer Pi's built-in MCP, codemode, and tool search.
-- **Upstream Pi gaps ([#64](https://github.com/tc3oliver/piship/issues/64), [#139](https://github.com/tc3oliver/piship/issues/139)).** A user's `!` command output still goes through Pi's own temp file, and Pi still adds its `/bug` hint to a PiShip identity or credential failure in the TUI. Each needs a public Pi API or a Pi change; PiShip does not patch Pi.
+- **The `brace-expansion` exception ([#129](https://github.com/tc3oliver/piship/issues/129)).** The reviewed vulnerability exception for the version Pi pins (5.0.9 in both 0.87.1 and 1.0.0) expires on 2026-12-31, after which the release vulnerability gate fails again. It goes when upstream Pi ships a fixed version.
+- **Upstream Pi gaps ([#64](https://github.com/tc3oliver/piship/issues/64), [#139](https://github.com/tc3oliver/piship/issues/139)).** A user's `!` command output still goes through Pi's own temp file, and Pi still adds its `/bug` hint to a PiShip identity or credential failure in the TUI. Pi 1.0 also keeps its "π" terminal title, its `pi --session-dir` exit hint, and the built-in `/share` command, which uploads the session file as a GitHub gist through the user's `gh` CLI ([security](security.md#limits)). Each needs a public Pi API or a Pi change; PiShip does not patch Pi.
 
 ## Later
 

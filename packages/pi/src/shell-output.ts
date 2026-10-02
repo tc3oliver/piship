@@ -19,6 +19,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Writable } from "node:stream";
@@ -407,6 +408,56 @@ export class ShellOutput {
 
   close(): Promise<void> {
     return this.#file?.close() ?? Promise.resolve();
+  }
+
+  /**
+   * The output programmatic callers receive (Pi's `structuredContent.output`):
+   * all of it up to `maxBytes`, else its first and last halves, cut as Pi's
+   * output accumulator cuts them. Called after `close()`. Output the file
+   * dropped past its limit, or a file that could not be saved, marks it
+   * truncated; without a saved file only the display tail is left.
+   */
+  async readFullOutput(
+    maxBytes: number,
+  ): Promise<{ content: string; truncated: boolean }> {
+    const file = this.#file;
+    if (!file)
+      return {
+        content: new TextDecoder().decode(Buffer.concat(this.#rawChunks)),
+        truncated: false,
+      };
+    if (!file.savedPath)
+      return { content: this.snapshot().content, truncated: true };
+    const handle = await open(file.savedPath, "r");
+    try {
+      const size = (await handle.stat()).size;
+      if (size <= maxBytes)
+        return {
+          content: new TextDecoder().decode(await handle.readFile()),
+          truncated: file.capped,
+        };
+      const headBytes = Math.floor(maxBytes / 2);
+      const tailBytes = maxBytes - headBytes;
+      const head = Buffer.alloc(headBytes);
+      const tail = Buffer.alloc(tailBytes);
+      await handle.read(head, 0, headBytes, 0);
+      await handle.read(tail, 0, tailBytes, size - tailBytes);
+      const headText = new TextDecoder().decode(head, { stream: true });
+      let tailStart = 0;
+      while (
+        tailStart < tail.length &&
+        ((tail[tailStart] ?? 0) & 0xc0) === 0x80
+      )
+        tailStart++;
+      const tailText = new TextDecoder().decode(tail.subarray(tailStart));
+      const omitted = size - headBytes - tailBytes;
+      return {
+        content: `${headText}\n\n[... ${omitted} bytes omitted ...]\n\n${tailText}`,
+        truncated: true,
+      };
+    } finally {
+      await handle.close();
+    }
   }
 
   #ensureFile(): OutputFile {

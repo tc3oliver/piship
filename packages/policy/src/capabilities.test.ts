@@ -34,7 +34,7 @@ function certified(
       source: "https://example.org/workflow-plus",
       integrity: `sha256-${"a".repeat(64)}`,
       license: "MIT",
-      pi: ["0.87.1"],
+      pi: ["1.0.0"],
       platforms: ["linux", "darwin"],
     },
     ...overrides,
@@ -55,7 +55,7 @@ function input(
   return {
     capabilities: [capability("permissions", true, builtinPermissions)],
     policy: makePolicy(),
-    piVersion: "0.87.1",
+    piVersion: "1.0.0",
     platform: "linux",
     ...overrides,
   };
@@ -256,7 +256,7 @@ describe("computeCapabilityStates", () => {
       "workflow",
     );
     expect(pi.axes.compatible.reason).toContain(
-      "reviewed for Pi 0.87.1, not 0.88.0",
+      "reviewed for Pi 1.0.0, not 0.88.0",
     );
     expect(pi.axes.healthy.value).toBe("yes");
     expect(pi.axes.effective.value).toBe("no");

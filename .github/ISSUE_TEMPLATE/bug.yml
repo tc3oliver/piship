@@ -25,7 +25,7 @@ body:
     attributes:
       label: Versions and operating system
       description: "PiShip commit/version, Pi version, Node version, OS, and distribution mode if relevant."
-      placeholder: "PiShip commit, Pi 0.87.1, Node 22.19, macOS, personal"
+      placeholder: "PiShip commit, Pi 1.0.0, Node 22.19, macOS, personal"
     validations:
       required: true
   - type: textarea

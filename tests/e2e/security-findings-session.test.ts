@@ -30,7 +30,7 @@ const MANIFEST = [
   "  command: mypi",
   "  version: 1.0.0",
   "runtime:",
-  '  pi: "0.87.1"',
+  '  pi: "1.0.0"',
   "deployment:",
   "  mode: personal",
   "variables:",

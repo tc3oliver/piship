@@ -555,6 +555,9 @@ export function governedBashOperations(
 /** Pi's live-update throttle for the shell tool (renderers/bash.js). */
 const BASH_UPDATE_THROTTLE_MS = 100;
 
+/** Pi's limit for `structuredContent.output` (tools/bash.js). */
+const STRUCTURED_OUTPUT_MAX_BYTES = 1024 * 1024;
+
 /**
  * The governed `bash` tool: Pi's definition (name, schema, prompt text,
  * renderers) with PiShip's execute. Pi's execute persists the full output to
@@ -674,6 +677,7 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
       };
       const appendStatus = (text: string, status: string) =>
         `${text ? `${text}\n\n` : ""}${status}`;
+      const startedAt = performance.now();
       try {
         let exitCode: number | null;
         try {
@@ -712,11 +716,41 @@ function governedBashTool(gov: GovernanceSession, cwd: string) {
           throw new Error(
             appendStatus(outputText, "Command terminated without an exit code"),
           );
+        const wallTimeSeconds =
+          Math.round((performance.now() - startedAt) / 100) / 10;
+        // Pi's structured result, which codemode scripts receive.
+        const fullOutput = await output.readFullOutput(
+          STRUCTURED_OUTPUT_MAX_BYTES,
+        );
+        const structuredContent = {
+          output: fullOutput.content,
+          truncated: fullOutput.truncated,
+          ...(fullOutput.truncated && snapshot.fullOutputPath
+            ? { full_output_path: snapshot.fullOutputPath }
+            : {}),
+          exit_code: exitCode,
+          wall_time_seconds: wallTimeSeconds,
+        };
         if (exitCode !== 0)
-          throw new Error(
-            appendStatus(outputText, `Command exited with code ${exitCode}`),
-          );
-        return { content: [{ type: "text", text: outputText }], details };
+          return {
+            content: [
+              {
+                type: "text",
+                text: appendStatus(
+                  outputText,
+                  `Command exited with code ${exitCode}`,
+                ),
+              },
+            ],
+            details,
+            structuredContent,
+            isError: true,
+          };
+        return {
+          content: [{ type: "text", text: outputText }],
+          details,
+          structuredContent,
+        };
       } finally {
         clearUpdateTimer();
       }

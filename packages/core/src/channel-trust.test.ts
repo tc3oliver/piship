@@ -45,7 +45,7 @@ const entry: ChannelRelease = {
   archive: "acmepi-1.1.0-linux-x64.tar.gz",
   sha256: createHash("sha256").update(ARCHIVE).digest("hex"),
   bytes: ARCHIVE.length,
-  pi: "0.87.1",
+  pi: "1.0.0",
   piship: "0.7.0",
   lockSha256: "a".repeat(64),
 };

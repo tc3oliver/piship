@@ -75,7 +75,7 @@ resources:
         source: https://example.org/acme/release-notes
         integrity: sha256-<64 hex characters>
         license: MIT
-        pi: ["0.87.1"]
+        pi: ["1.0.0"]
         platforms: [linux, darwin]   # optional; empty means any
   extensions:
     builtin: [piship-ask-user, piship-workflow]

@@ -437,7 +437,11 @@ describe("Pi tool definitions route through their operations overrides", () => {
           (result) => ({ result }),
           (error: Error) => ({ error: error.message }),
         );
-      const json = JSON.stringify({ outcome, updates });
+      // Wall time differs between two runs of the same command.
+      const json = JSON.stringify({ outcome, updates }).replace(
+        /"wall_time_seconds":[0-9.]+/g,
+        '"wall_time_seconds":0',
+      );
       const path = savedPath(json);
       return {
         path,
@@ -621,6 +625,14 @@ describe("DefaultResourceLoader with ambient discovery disabled", () => {
       agentsFiles: ["explicit distribution instructions"],
       commands: ["explicit-ext"],
     });
+    // Pi 0.99 and later add MCP, codemode, tool search, and llama.cpp as
+    // built-in extensions; only Pi's CLI loads them, never this loader.
+    expect(
+      loader
+        .getExtensions()
+        .extensions.map((item) => item.path)
+        .filter((path) => path.startsWith("builtin:")),
+    ).toEqual([]);
   });
 });
 

@@ -63,7 +63,7 @@ describe.runIf(HOST_EVIDENCED)(
         // The marker 1.0.0 wrote when it last activated.
         write(
           markerFile(),
-          `${JSON.stringify({ schema: "piship-state/v1", distribution: ID, version: "1.0.0", pi: "0.87.1", piship: "0.1.0" })}\n`,
+          `${JSON.stringify({ schema: "piship-state/v1", distribution: ID, version: "1.0.0", pi: "1.0.0", piship: "0.1.0" })}\n`,
         );
         injectFault(MARKER, fault);
         const result = await updateDistribution(ID, opts);

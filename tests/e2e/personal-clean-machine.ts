@@ -149,7 +149,7 @@ export function myPiFlow(): void {
     });
     await s.installFirst();
     expect(existsSync(s.command)).toBe(true);
-    expect((await s.run(["version"])).stdout).toContain("Pi 0.87.1");
+    expect((await s.run(["version"])).stdout).toContain("Pi 1.0.0");
 
     // Launch: Pi starts on its pinned version with the declared resources
     // and no credential; the Pi-native access mode is reported.
@@ -158,7 +158,7 @@ export function myPiFlow(): void {
     const first = JSON.parse(launch.stdout) as Smoke;
     expect(first).toMatchObject({
       initialized: true,
-      piVersion: "0.87.1",
+      piVersion: "1.0.0",
       resumed: false,
       skills: ["demo-skill"],
       access: {
@@ -363,7 +363,7 @@ export function myPiLocalFlow(): void {
       target,
     });
     await s.installFirst();
-    expect((await s.run(["version"])).stdout).toContain("Pi 0.87.1");
+    expect((await s.run(["version"])).stdout).toContain("Pi 1.0.0");
 
     // Launch: without a stored key the launch is refused before the endpoint
     // is contacted.
@@ -386,7 +386,7 @@ export function myPiLocalFlow(): void {
     const first = JSON.parse(launch.stdout) as Smoke;
     expect(first).toMatchObject({
       initialized: true,
-      piVersion: "0.87.1",
+      piVersion: "1.0.0",
       resumed: false,
       instructions: [expect.stringContaining("AGENTS.md")],
       access: {

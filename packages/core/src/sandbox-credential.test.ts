@@ -543,8 +543,8 @@ describe("sandbox credential: every deletion path", () => {
     const { sandboxCredential: _absent, ...older } = STATE_SCHEMAS;
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "0.87.1", schemas: older },
-      { version: "1.1.0", pi: "0.87.1" },
+      { version: "1.0.0", pi: "1.0.0", schemas: older },
+      { version: "1.1.0", pi: "1.0.0" },
     );
     expect(
       report.items.find((item) => item.name === "sandbox credential metadata"),
@@ -580,8 +580,8 @@ describe("sandbox credential: every deletion path", () => {
     const { sandboxCredential: _absent, ...older } = STATE_SCHEMAS;
     const report = checkStateMigration(
       stateDir(),
-      { version: "1.0.0", pi: "0.87.1", schemas: older },
-      { version: "1.1.0", pi: "0.87.1" },
+      { version: "1.0.0", pi: "1.0.0", schemas: older },
+      { version: "1.1.0", pi: "1.0.0" },
     );
     store.failDeletes = /sandbox#/;
     await expect(

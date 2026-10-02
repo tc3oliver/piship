@@ -28,6 +28,7 @@ import { governedTools } from "../governed-tools.js";
 import { saveMetrics } from "../launch-metrics.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceExtensions, modelPolicy } from "./governance.js";
+import { PI_SETTINGS } from "./pi-defaults.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
 import {
@@ -204,7 +205,7 @@ async function startRuntime(
           component: "session",
         },
       );
-    const settingsManager = SettingsManager.inMemory();
+    const settingsManager = SettingsManager.inMemory({ ...PI_SETTINGS });
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,
       prepared,

@@ -164,7 +164,7 @@ export function semver(value: unknown, path: string): string {
 export function exactPiVersion(value: unknown, path: string): string {
   const text = plainString(value, path, 64);
   if (!/^\d+\.\d+\.\d+$/.test(text))
-    fail(path, "Expected an exact Pi version such as 0.87.1");
+    fail(path, "Expected an exact Pi version such as 1.0.0");
   return text;
 }
 export function envName(value: unknown, path: string): string {

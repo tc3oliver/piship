@@ -2,8 +2,8 @@
 
 MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
-- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's interactive mode can still write tool binaries there ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
-- **An exact pinned Pi**, 0.87.1.
+- **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's crash log and the `fd` and `rg` binaries it downloads go to MyPi's state too ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
+- **An exact pinned Pi**, 1.0.0.
 - **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
 - **A user-managed MCP server.** `mcp.mode: explicit` declares `notes`, a tiny stdio server in `resources/mcp/notes-server.mjs`. It serves two in-memory notes as `mcp__notes__list_notes` and `mcp__notes__read_note`, uses no network and no credential, and must report `serverInfo.name` `mypi-notes`.
@@ -37,13 +37,14 @@ node dist/mypi/piship.mjs uninstall mypi
 
 ### Interactive launch
 
-The interactive `mypi` is Pi's own interactive mode, and Pi does a few things on start that PiShip does not change:
+The interactive `mypi` is Pi's own interactive mode. PiShip sets Pi's defaults on every launch: Pi does not ask pi.dev for a newer Pi version (so there is no "Update Available ... Run `pi update`" notice, and a newer Pi comes only with a new MyPi release; MyPi pins Pi 1.0.0), sends no install report or telemetry, keeps its crash log (`crashes.json`) in MyPi's state, starts without the Pi logo, key hints, or resource listing, and leaves the terminal's own scrollback in place instead of taking over the screen. A few things stay Pi's, and PiShip does not change them:
 
-- If `fd` or `rg` is neither on `PATH` nor in `~/.pi/agent/bin/`, Pi downloads it from github.com into `~/.pi/agent/bin/`. That is Pi's agent directory, not MyPi's state, so `uninstall` and `purge` leave it.
-- Pi asks pi.dev for the latest Pi version and, when a newer one exists, shows "Update Available ... Run `pi update`". It may also refresh model catalogs over the network. MyPi pins Pi 0.87.1; a newer Pi comes only with a new MyPi release.
-- On exit Pi prints "To resume this session: pi --session-dir ... --session ...". `mypi` continues the project's most recent session by itself, and `mypi --new-session` starts a new one.
+- If `fd` or `rg` is neither on `PATH` nor in `~/.piship/mypi/agent/bin/` (or `$PISHIP_STATE_HOME/mypi/agent/bin/`), Pi downloads it from github.com into that directory. That is MyPi's state, not your `~/.pi`, so `purge` removes it and `uninstall` keeps it; each distribution downloads its own copies.
+- Pi may refresh model catalogs over the network.
+- On exit Pi prints "To resume this session: pi --session-dir ... --session ...", and the terminal title is "π". `mypi` continues the project's most recent session by itself, and `mypi --new-session` starts a new one.
+- Pi's `/share` command uploads the session file as a GitHub gist through your own `gh` CLI.
 
-Start it with `PI_OFFLINE=1` set to stop the download and the network checks. Pi then warns that `fd` and `rg` were not found, unless they are on `PATH`; the resume hint is still printed. Installing `fd` and `rg` on `PATH` avoids the download without going offline.
+Start it with `PI_OFFLINE=1` set to stop the download and Pi's other network requests. Pi then warns that `fd` and `rg` were not found, unless they are on `PATH`; the resume hint is still printed. Installing `fd` and `rg` on `PATH` avoids the download without going offline.
 
 ## Release, update, and rollback
 
