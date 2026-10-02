@@ -6,7 +6,7 @@ Work through the steps in order. Stop and ask the person whenever a step needs a
 
 ## Rules
 
-- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain `https` URLs. Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`), never by you.
+- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain URLs (`https`, or `http` on loopback). Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`), never by you.
 - **Leave the person's existing setup alone.** Do not read, change, or delete `~/.pi`, and do not uninstall or overwrite another installed distribution. A distribution keeps its own state under `~/.piship/<id>`.
 - **Ask before installing.** `install` writes a command into `~/.local/bin`. Say what it will add and get a yes first. The same goes for `uninstall`, `purge`, and editing a shell profile.
 - **Run the CLI by path.** PiShip is not on npm. Use `node <piship>/packages/cli/dist/bin.js`; npx or `npm exec` would fetch an unrelated package from the public registry.
@@ -78,22 +78,22 @@ piship init <directory> --managed   # managed
 | --- | --- | --- |
 | 2 Name, command | `app.id`, `app.name`, `app.command`; optional `app.banner`, `app.theme` | Keep `app.version: 1.0.0` for the first release |
 | 4 Instructions | `resources/AGENTS.md` | Write it in the person's words |
-| 5 Skills, extensions, prompts | Copy them under `resources/`, then list them in `resources.skills`, `resources.extensions`, `resources.prompts` | Managed: under the `company` class. Personal: under `user`. Paths start with `./` and stay inside the repository |
+| 5 Skills, extensions, prompts | Copy them under `resources/`, then list them in `resources.skills`, `resources.extensions`, `resources.prompts` | Managed: under the `company` class. Personal: under `user`. Paths start with `./` and stay inside the repository. Managed: the template's `policy.default` is `ask` and it only allows instructions, so also add `policy.defaults` allow rules for `skill.load`, `extension.load`, and `resource.load` (prompts, themes) on `company:**`, as the demo does; otherwise each one asks at every launch and is denied in headless runs |
 | 7 Personal, Pi providers | `credential.provider: pi-native`, `inference.provider: pi-native` (the personal template's default) | The person signs in with Pi's `/login` inside the command; the key stays in the distribution's state |
 | 7 Personal, local server | `inference.provider: openai-compatible`, `inference.baseUrl`, `models`; `credential.provider: local-secret` with a key, `none` without | Copy [`examples/personal/local-model`](../examples/personal/local-model/piship.yaml) |
 | 7 OIDC | `identity.oidc.issuer`, `clientId`, `redirectUri`, `scopes`, `audience` | `scopes` must include `openid`; no `clientSecret` |
 | 8 Broker | `credential.broker.endpoint`, `revokeEndpoint` | It must follow the [broker contract](enterprise-integration.md#credential-broker-http-broker) |
 | 9 Gateway | `inference.baseUrl`, `inference.api` | |
-| 10 Models | `models.default`, `models.allowed`, `models.catalog.<id>` | Every allowed ID needs a catalog entry with `name`, `contextWindow`, `maxOutputTokens`; `tools: true` for tool-calling models. Update the template's `distribution.models` rule to match |
-| 11 Endpoints | `variables` plus `${NAME}`, or plain `https` URLs | Every `${NAME}` used must be listed in `variables` |
+| 10 Models | `models.default`, `models.allowed`, `models.catalog.<id>` | Every allowed ID needs a catalog entry with `name`, `contextWindow`, `maxOutputTokens`; `tools: true` for tool-calling models. The template's `distribution.models` rule (`model.use` on `<app.id>/**`) already covers them; to narrow it, write `<app.id>/<model>` |
+| 11 Endpoints | `variables` plus `${NAME}`, or plain URLs (`https`, or `http` on loopback) | Every `${NAME}` used must be listed in `variables` |
 | 12 CA, proxy | `network.tls.additionalCA`, `network.proxy.inheritEnvironment` | An absolute path on each machine |
 | 13 Company repositories | `policy.projectTrust.company.match` with `remote` and `path` | `remote` alone is only a claim; pair it with `path` |
 | 14 Shell rules | `policy.enforced` (cannot be relaxed) or `policy.defaults`, action `shell.execute` | `allow` rules do not match commands with `;`, `&&`, pipes, or `$`; `deny` rules always match |
 | 15 OS sandbox | `sandbox.required` | `true` stops the launch when the sandbox is missing, which on Windows is always |
 | 15 Remote sandbox | `sandbox.provider`, `endpoint`, `template`, `workdir`, `user`, `credential` | CubeSandbox: `provider: e2b-compatible`, `user: root`, a `workdir` under `/root`. Only shell commands run remotely; the sandbox must mount or sync the workspace ([sandbox](sandbox.md#workspace)) |
 | 16 Sandbox network, paths | `sandbox.network.mode`, `sandbox.filesystem.write.allow`, `sandbox.filesystem.read.deny` | A declared list replaces the defaults: restate them, as the demo manifest does |
-| 17 MCP | `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, `tools.allow` | Only servers the person named |
-| 18 Audit | `audit.sinks` with `type: http`, `url`, `required` | |
+| 17 MCP | `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, `tools.allow` | Only servers the person named. Managed: also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does |
+| 18 Audit | `audit.sinks` entry with `id`, `type: http`, `url`, `required` | |
 | 19 Rollout | `updates.source`, `updates.trust.keys` | Public keys only. See step 6 |
 
 ## 4. Validate, lock, and build

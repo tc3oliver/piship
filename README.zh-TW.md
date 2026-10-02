@@ -71,7 +71,7 @@ node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode
 ```
 
-這樣就有一個掛著自己品牌的 Pi：公司帳號登入、受管控的模型清單、政策和沙箱都有了。玩玩看：
+這樣就有一個掛著自己品牌的 Pi：公司帳號登入、受管控的模型清單、政策和沙箱都有了。玩玩看（`~/.local/bin` 要在你的 `PATH` 裡）：
 
 ```bash
 acmecode doctor                                             # 實際生效的是什麼
@@ -104,7 +104,7 @@ agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以
 
 ## 一份檔案就夠
 
-這就是 AcmeCode 發行版的全部設定，`piship validate` 可以直接通過。
+一份最精簡的 managed 發行版，`piship validate` 可以直接通過；demo 自己的 manifest 在這之上又加了政策、資源、MCP 和稽核。
 
 <details>
 <summary><b>展開 piship.yaml</b></summary>
@@ -186,7 +186,7 @@ updates:
 
 ## 不是公司也能用
 
-personal 模式不需要 IdP、broker 或 gateway。MyPi 範例會釘住 Pi 版本，狀態跟 `~/.pi` 分開存，附上你自己的 instructions 和 skills，登入照 Pi 原本的方式，或接本機的模型服務。
+personal 模式不需要 IdP、broker 或 gateway。MyPi 範例會鎖定 Pi 版本，狀態跟 `~/.pi` 分開存，附上你自己的 instructions 和 skills，登入照 Pi 原本的方式，或接本機的模型服務。
 
 ```bash
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
@@ -202,7 +202,7 @@ node dist/mypi/piship.mjs install dist/mypi
   <img src="docs/assets/diagram-overview.svg" alt="上游 Pi 加上 PiShip 和你的發行版 manifest，變成你的 coding agent：AcmeCode、CompanyCode、TeamPi、MyPi" width="800">
 </p>
 
-agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。外圍的發行版歸 PiShip：manifest、釘住的 Pi 版本、登入和憑證、gateway、模型管控、政策、沙箱、稽核，以及建置、發版和更新。PiShip 只用 Pi 的公開 API，從不修改 Pi。
+agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。外圍的發行版歸 PiShip：manifest、鎖定的 Pi 版本、登入和憑證、gateway、模型管控、政策、沙箱、稽核，以及建置、發版和更新。PiShip 只用 Pi 的公開 API，從不修改 Pi。
 
 沙箱也是一樣的分工：能不能跑由 PiShip 判斷，隔離交給沙箱。本機沙箱每次啟動都會實際探測。用遠端沙箱時，只有 shell 指令會送到遠端，Pi 的檔案工具還是改本機的檔案，所以沙箱那邊要掛載或同步工作目錄，兩邊才會看到同一份檔案（[細節](docs/sandbox.md#workspace)）。
 

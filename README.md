@@ -71,7 +71,7 @@ node dist/acmecode/piship.mjs install dist/acmecode
 ~/.local/bin/acmecode
 ```
 
-That is a branded Pi with company sign-in, a governed model list, policy, and a sandbox. Poke at it:
+That is a branded Pi with company sign-in, a governed model list, policy, and a sandbox. Poke at it (with `~/.local/bin` on your `PATH`):
 
 ```bash
 acmecode doctor                                             # what is actually in force
@@ -104,7 +104,7 @@ The steps it follows are in [docs/agent-setup.md](docs/agent-setup.md), so you c
 
 ## One file
 
-This is the whole AcmeCode distribution. `piship validate` accepts it as is.
+A minimal managed distribution. `piship validate` accepts it as is; the demo's own manifest adds policy, resources, MCP, and audit on top.
 
 <details>
 <summary><b>Show piship.yaml</b></summary>
