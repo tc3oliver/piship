@@ -19,16 +19,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import {
-  type ExtensionContext,
   type ExtensionFactory,
+  type ExtensionToolContext,
   type InlineExtension,
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { LocalMetrics } from "@piship/audit";
-import { normalizePathResource } from "@piship/policy";
 import { type ManagedFetch, PiShipError } from "@piship/contracts";
 import { resolveLock, treeDigest } from "@piship/core";
+import { normalizePathResource } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -112,7 +112,7 @@ async function open(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "0.87.1" }',
+      'runtime: { pi: "1.0.0" }',
       "deployment: { mode: personal }",
       ...POLICY,
       ...extra,
@@ -133,7 +133,7 @@ async function open(
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "0.87.1",
+    piVersion: "1.0.0",
     interactive: false,
     fetch:
       options.fetch ??
@@ -151,7 +151,7 @@ async function open(
 function context(
   answer?: boolean | string,
   confirm?: (title: string, message: string) => Promise<boolean>,
-): ExtensionContext {
+): ExtensionToolContext {
   const hasUI = answer !== undefined;
   return {
     hasUI,
@@ -165,7 +165,7 @@ function context(
       setStatus: () => {},
       notify: () => {},
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 function tool(tools: ToolDefinition[], name: string): ToolDefinition {
@@ -1118,7 +1118,7 @@ describe("piship-ask-user", () => {
     const { session } = await open();
     const [ask] = load(askUserExtension(session)).tools;
     if (!ask) throw new Error("ask_user was not registered");
-    const answer = async (params: unknown, ctx: ExtensionContext) =>
+    const answer = async (params: unknown, ctx: ExtensionToolContext) =>
       (await run(ask, params, ctx)).details as { outcome: string };
     expect(await answer({ question: "Ship it?" }, context(true))).toEqual({
       outcome: "approved",
@@ -1343,7 +1343,7 @@ describe("launch metrics", () => {
           "        source: https://example.org/cite",
           `        integrity: ${integrity}`,
           "        license: MIT",
-          '        pi: ["0.87.1"]',
+          '        pi: ["1.0.0"]',
         ],
         {
           files: {

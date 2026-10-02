@@ -14,7 +14,7 @@ import {
 const valid = {
   schema: PISHIP_SCHEMA_VERSION,
   app: { id: "mypi", name: "My Pi", command: "mypi", version: "0.1.0" },
-  runtime: { pi: "0.87.1" },
+  runtime: { pi: "1.0.0" },
   deployment: { mode: "personal" },
 };
 describe("alpha manifest", () => {

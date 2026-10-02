@@ -12,8 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  type ExtensionContext,
   type ExtensionFactory,
+  type ExtensionToolContext,
   type InlineExtension,
   SessionManager,
   type ToolDefinition,
@@ -114,7 +114,7 @@ async function open(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "0.87.1" }',
+      'runtime: { pi: "1.0.0" }',
       "deployment: { mode: personal }",
       ...lines,
       "",
@@ -132,7 +132,7 @@ async function open(
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "0.87.1",
+    piVersion: "1.0.0",
     interactive: false,
     fetch:
       options.fetch ??
@@ -156,13 +156,13 @@ async function open(
   return { session, workspace, root, events };
 }
 
-function context(): ExtensionContext {
+function context(): ExtensionToolContext {
   return {
     hasUI: false,
     model: { provider: "unit", id: "allowed", input: ["text"] },
     sessionManager: SessionManager.inMemory(tmpdir()),
     ui: { setStatus: () => {}, notify: () => {} },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 /** The factory of an inline extension, in either of its public shapes. */

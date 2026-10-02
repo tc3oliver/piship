@@ -14,7 +14,7 @@ afterEach(() => {
 const HEADER = [
   "schema: piship/v1alpha3",
   "app: { id: mypi, name: My Pi, command: mypi, version: 0.1.0 }",
-  'runtime: { pi: "0.87.1" }',
+  'runtime: { pi: "1.0.0" }',
   "deployment: { mode: personal }",
 ];
 
@@ -55,7 +55,7 @@ const CERTIFIED = [
   "        source: https://example.org/notes",
   "        integrity: @DIGEST@",
   "        license: MIT",
-  '        pi: ["0.87.1"]',
+  '        pi: ["1.0.0"]',
   "  extensions:",
   "    builtin: [piship-workflow]",
   "    user: [./extensions/mine]",

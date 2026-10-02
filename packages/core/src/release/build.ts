@@ -125,9 +125,16 @@ function runReleaseTests(
     [
       "launch-version",
       ["version"],
+      // The Pi line on its own: "AcmePi 1.0.0" names the app, not Pi 1.0.0.
       (out) =>
         out.includes(`${lock.app.name} ${lock.app.version}`) &&
-        out.includes(`Pi ${lock.runtime.version}`),
+        out
+          .split(/\r?\n/)
+          .some(
+            (line) =>
+              line === `Pi ${lock.runtime.version}` ||
+              line.startsWith(`Pi ${lock.runtime.version} `),
+          ),
     ],
   ];
   const needsSignIn =

@@ -26,7 +26,7 @@ function managed(extra: Json = {}): Json {
       command: "acmecode",
       version: "1.0.0",
     },
-    runtime: { pi: "0.87.1" },
+    runtime: { pi: "1.0.0" },
     deployment: { mode: "managed" },
     identity: {
       mode: "oidc",

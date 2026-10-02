@@ -29,6 +29,7 @@ export const ASSISTANT_MESSAGE_FIELDS: Record<
   responseModel: "metadata",
   responseId: "metadata",
   providerThinkingLevel: "metadata",
+  thinkingLevel: "metadata",
   diagnostics: "redacted",
   usage: "metadata",
   stopReason: "metadata",

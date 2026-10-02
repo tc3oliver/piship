@@ -14,6 +14,7 @@ import {
 import type { LocalMetrics } from "@piship/audit";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { launchMetrics, saveMetrics } from "../launch-metrics.js";
+import { applyPiEnvironment } from "./pi-defaults.js";
 
 export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
@@ -80,6 +81,8 @@ export async function prepareAccess(
       access.network,
       ctx.metadata.access.variables,
     );
+  // The managed cleanup above removed Pi's switches with every other PI_*.
+  applyPiEnvironment(ctx.agentDir, ctx.mode);
   // Only a managed distribution narrows what child processes inherit; a
   // personal one keeps the environment of the user's shell.
   applyProcessNetworkPolicy(access.network, {

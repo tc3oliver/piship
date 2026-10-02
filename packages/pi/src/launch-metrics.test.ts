@@ -20,28 +20,28 @@ const metadata = (extra: object) =>
 
 describe("launch metrics", () => {
   it("records the distribution, PiShip, Pi, and Node versions at startup", () => {
-    const metrics = launchMetrics(metadata({ access: {} }), temp, "0.87.1");
+    const metrics = launchMetrics(metadata({ access: {} }), temp, "1.0.0");
     saveMetrics(metrics);
     const saved = JSON.parse(readFileSync(join(temp, METRICS_FILE), "utf8"));
     expect(saved.versions).toMatchObject({
       distribution: "1.2.3",
       piship: "0.1.0",
-      pi: "0.87.1",
+      pi: "1.0.0",
       node: process.versions.node,
     });
   });
 
   it("keeps counts already on disk and keeps none for a plain personal distribution", () => {
-    const first = launchMetrics(metadata({ governance: {} }), temp, "0.87.1");
+    const first = launchMetrics(metadata({ governance: {} }), temp, "1.0.0");
     first?.recordPolicyDenial("tool.execute");
     saveMetrics(first);
-    const second = launchMetrics(metadata({ governance: {} }), temp, "0.87.1");
+    const second = launchMetrics(metadata({ governance: {} }), temp, "1.0.0");
     expect(second?.snapshot().policyDenials).toEqual({ "tool.execute": 1 });
-    expect(launchMetrics(metadata({}), temp, "0.87.1")).toBeUndefined();
+    expect(launchMetrics(metadata({}), temp, "1.0.0")).toBeUndefined();
   });
 
   it("never throws when the metrics cannot be saved", () => {
-    const metrics = launchMetrics(metadata({ access: {} }), temp, "0.87.1");
+    const metrics = launchMetrics(metadata({ access: {} }), temp, "1.0.0");
     // A file where the logs directory should be makes the save fail.
     writeFileSync(join(temp, "logs"), "");
     expect(() => saveMetrics(metrics)).not.toThrow();

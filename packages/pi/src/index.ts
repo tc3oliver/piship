@@ -24,6 +24,7 @@ import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
 import type { LaunchContext } from "./launch/context.js";
+import { applyPiEnvironment } from "./launch/pi-defaults.js";
 
 export {
   governModelRuntime,
@@ -41,7 +42,7 @@ export {
 } from "./governance-session.js";
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 
-export const PINNED_PI_VERSION = "0.87.1" as const;
+export const PINNED_PI_VERSION = "1.0.0" as const;
 export type PiVersion = typeof PINNED_PI_VERSION;
 export type PiSessionFactory = typeof createAgentSession;
 export interface LaunchOptions {
@@ -99,6 +100,7 @@ export async function launchPiDistribution(
   const agentDir = join(stateDir, "agent");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  applyPiEnvironment(agentDir, metadata.deployment.mode);
   // Temporaries of state writers killed before their rename.
   sweepStateTemporaries(stateDir);
   // Directories of PiShip operations killed before they cleaned up: session

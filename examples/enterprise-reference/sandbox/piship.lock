@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha4",
   "manifest": {
     "schema": "piship/v1alpha4",
-    "sha256": "e84a7d937e4445f8a33563ff74c990e8edfba4408fe0e983f34a64e839437029"
+    "sha256": "ce24f5707408f15265a880e1810bd39f2570673c84e41f347216e87e57411b07"
   },
   "app": {
     "id": "acmecode-reference",
@@ -16,15 +16,15 @@
   },
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "0.87.1",
+    "version": "1.0.0",
     "pishipVersion": "0.7.1",
-    "npmLockSha256": "2f3778a75f491cf97601c7e1021bf7bfead140a1bd04d7ca2c00d61cecae102a",
+    "npmLockSha256": "390cbf58ef553e81ee5c1324f095c97f9153a27b1405ea8cf1c12673d75f9e3f",
     "packages": [
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",
-        "version": "0.87.1",
-        "integrity": "sha512-m8ArJUtVcQMSe1lLE/Ei7vX/JV7O39sWmWBsXV2NOU70F0qCp8GubA24pT3LnwTmM6LL2xV80/h6sQg85n69ew==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
@@ -160,21 +160,21 @@
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/chord",
-        "version": "0.87.1",
-        "integrity": "sha512-bg7IkJGFcEaMqqYgOGUiq5Ky9RghpRfrlZ8I/v/1b4bBZ02A7t3E+6uhPRbadwWb/kWsnVFbZsqOKRN4a3LLCg==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-BIfWfrByM0pKq6tfKYXuwx0ed2CvaqIM3EDA7Dps+fP+d3CiPWdlHi1cDsJC05llqKJoRz5//G0hz0yQwwjISQ==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core",
-        "version": "0.87.1",
-        "integrity": "sha512-Zev3B0HK7YS5A4EZQ2XnEqiJuirx6QBiltJ+LpmjV5a/+2IU0cfKtIfnkNkORK707XOvKBY2WRtk7cAwHpbh2Q==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-bHFONjtEBDqiV+g1DmmtkSlfAaqHELr+XO+6I5Nah4gswwZrLJO4yZB/JjsnlI4AKWTayBLfgS6DCbeBBz9e2Q==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai",
-        "version": "0.87.1",
-        "integrity": "sha512-X/3PfQBnnoeVdO9Cv8zHghUMglzlgNZYGNzoPnbRoGnHl3Rw3TlA2UKSUB7BRHUOxMryHXYa8dnjWZlbRheDZA==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-3/W1vdDaVtpeMd23ElvJC12HLA5yS/BGqqcXF+0SK082dN7cbgNcCwguTBRBC258Ke8SzSvUW1B75iAf8w8IxA==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/node_modules/agent-base",
@@ -189,16 +189,34 @@
         "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.1.0.tgz"
       },
       {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/node_modules/openai",
+        "version": "7.19.0",
+        "integrity": "sha512-MX2s3u2L5racTO0CC/SWpCOasJQBCJrqLKXK+l82cAhdeF8mPMBEe/gxMm0ZFa2xpKpOFLRjxv5afYEZbBXmbQ==",
+        "resolved": "https://registry.npmjs.org/openai/-/openai-7.19.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-codemode",
+        "version": "1.0.0",
+        "integrity": "sha512-LPpFI4+T9NzDnhBDs15izWAolaoM8xnwqdziRd6Zx8BQeoEPvzefD2vMMzSyF0rOtq34TfQqkZ0ki16f6cGdMg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.0.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-mcp",
+        "version": "1.0.0",
+        "integrity": "sha512-rYra0aF5iPmJd+fsB+VBuqxWNABGJ3Iiyhg0CqIc/91ta2n7IvQmCp0Cac/YkUTNnvRsVZnjgAiBkRi6+ouWuw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.0.0.tgz"
+      },
+      {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-telemetry",
-        "version": "0.87.1",
-        "integrity": "sha512-MC6TRQH5lgMXpcN+Vku2WMI2T8BsiUPzMQHGo81uqFZD3/9O79WWJAysEDGuzduP6R4tvtgwMLwmqIxynM10JQ==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-WjNBj5TYIiPZFQEz2WlULcDwPLaKwIlmsKjVeYM+LJSbnSp38kWsHUJysIDGnu23IcLbKoPtywsvYfUJCeZePA==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui",
-        "version": "0.87.1",
-        "integrity": "sha512-YEH2vRyOeiO7hhN6j6AE6YwKSq2Kz2f3XR8bj1TbR+aGE/JsnY1hLPMI2pvaZfRM1n9Y00tejxFQ4zbzvF7nkQ==",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.87.1.tgz"
+        "version": "1.0.0",
+        "integrity": "sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.0.0.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@esbuild/aix-ppc64",
@@ -737,12 +755,6 @@
         "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz"
       },
       {
-        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/openai",
-        "version": "6.40.0",
-        "integrity": "sha512-MWtTjd/gQt4jpbji61NTgFWJLoY/PdRJ6wG9/ZDRMYNMlBKrCrSlkLI+KgHP1vR1qT6LKSAyAqIxno6lcK9JiA==",
-        "resolved": "https://registry.npmjs.org/openai/-/openai-6.40.0.tgz"
-      },
-      {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/p-retry",
         "version": "4.6.2",
         "integrity": "sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==",
@@ -790,6 +802,12 @@
         "version": "1.1.0",
         "integrity": "sha512-N8IBcM3UgCVzz2L2Lqv8DVntDnnC8/hiV4nEDUPkqq72TPUgYWjQc+bdZlBPZK9LzPAvOY//gAt0S0DApoOXWQ==",
         "resolved": "https://registry.npmjs.org/proxy-agent-negotiate/-/proxy-agent-negotiate-1.1.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/quickjs-wasi",
+        "version": "3.6.2",
+        "integrity": "sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==",
+        "resolved": "https://registry.npmjs.org/quickjs-wasi/-/quickjs-wasi-3.6.2.tgz"
       },
       {
         "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/retry",
