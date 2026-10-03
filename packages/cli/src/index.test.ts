@@ -613,6 +613,72 @@ describe("init", () => {
       `Created ${manifest}\nNext: piship validate ${manifest}, then piship test ${manifest}.`,
     );
   });
+
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  it.each([
+    ["--personal", "personal"],
+    ["--managed", "managed"],
+  ])(
+    "%s writes a %s manifest that validates as generated",
+    async (flag, mode) => {
+      const directory = join(temp, `${mode}-agent`);
+      expect((await run(["init", directory, flag])).status).toBe(0);
+      const validated = await run(["validate", join(directory, "piship.yaml")]);
+      expect(validated.status).toBe(0);
+      expect(validated.stdout).toContain(`mode ${mode}.`);
+      if (mode === "managed")
+        expect(validated.stdout).toContain(
+          "MANAGED_AGENT_OIDC_ISSUER, MANAGED_AGENT_OIDC_CLIENT_ID, MANAGED_AGENT_CREDENTIAL_BROKER_URL, MANAGED_AGENT_CREDENTIAL_REVOKE_URL, MANAGED_AGENT_LLM_GATEWAY_URL",
+        );
+    },
+  );
+
+  it("refuses --personal with --managed in either order", async () => {
+    for (const flags of [
+      ["--personal", "--managed"],
+      ["--managed", "--personal"],
+    ]) {
+      const directory = join(temp, "both");
+      const result = await run(["init", directory, ...flags]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(
+        "Choose one of --personal or --managed, not both.",
+      );
+      expect(existsSync(directory)).toBe(false);
+    }
+  });
+});
+
+describe("docs/agent-setup.md", () => {
+  it("names only piship commands and options the CLI has", async () => {
+    const text = readFileSync(
+      fileURLToPath(new URL("../../../docs/agent-setup.md", import.meta.url)),
+      "utf8",
+    );
+    const uses = [...text.matchAll(/\bpiship ([a-z][a-z-]*)([^`\n]*)/g)];
+    expect(uses.length).toBeGreaterThan(10);
+    for (const [, command, rest] of uses) {
+      const help: string[] = [];
+      const status = await runCli([command ?? "", "--help"], {
+        stdout: (message) => help.push(message),
+        stderr: () => {},
+      });
+      expect(status, `piship ${command}`).toBe(0);
+      for (const option of rest?.match(/--[a-z][a-z-]*/g) ?? [])
+        expect(help.join("\n"), `piship ${command} ${option}`).toContain(
+          option,
+        );
+    }
+  });
 });
 
 describe("config explain from a manifest", () => {

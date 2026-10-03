@@ -89,7 +89,7 @@ const summaries = {
 const commands = Object.keys(summaries) as (keyof typeof summaries)[];
 /** Usage of the commands that take one target and fixed options. */
 const simpleUsage: Record<string, string> = {
-  init: "init <directory> [--managed]",
+  init: "init <directory> [--personal | --managed]",
   dev: "dev <manifest> [--smoke]",
   validate: "validate <manifest>",
   lock: "lock <manifest>",
@@ -259,7 +259,7 @@ async function lockFor(target: string): Promise<DistributionLock> {
 const allowedOptions: Record<string, readonly string[]> = {
   build: ["--reclaim-staging"],
   purge: ["--yes", "--yes --without-logout"],
-  init: ["--managed"],
+  init: ["--personal", "--managed"],
   migrate: ["--write"],
   test: [
     "--model-request",
@@ -414,6 +414,15 @@ export async function runCli(
       return 2;
     }
   } else if (
+    command === "init" &&
+    rest.includes("--personal") &&
+    rest.includes("--managed")
+  ) {
+    output.stderr(
+      `Choose one of --personal or --managed, not both.\nUsage: piship ${simpleUsage.init}`,
+    );
+    return 2;
+  } else if (
     !target ||
     (rest.length && !allowedOptions[command]?.includes(rest.join(" ")))
   ) {
@@ -423,11 +432,12 @@ export async function runCli(
   if (!target) return 2;
   try {
     if (command === "init") {
-      const created = initDistribution(target, {
-        managed: rest[0] === "--managed",
-      });
+      const managed = rest[0] === "--managed";
+      const created = initDistribution(target, { managed });
       output.stdout(
-        `Created ${created}\nNext: piship validate ${created}, then piship test ${created}.`,
+        managed
+          ? `Created ${created}\nNext: piship validate ${created}; it lists the runtime variables to set on each machine. Replace example/coder with your gateway's model IDs before you build.`
+          : `Created ${created}\nNext: piship validate ${created}, then piship test ${created}.`,
       );
     } else if (command === "validate") {
       const manifest = readManifest(target);
