@@ -235,9 +235,15 @@ function publicKey(value: unknown, path: string): string {
 }
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 const UPDATE_SOURCE_FORMS = `Expected an https URL, an http URL on 127.0.0.1, localhost, or [::1], or a \${NAME} runtime reference (which may also resolve to an absolute local directory)`;
-/** What `updates.transport: http-allowed` accepts as a plain-HTTP update host. */
+/**
+ * What `updates.transport: http-allowed` accepts as a plain-HTTP update host
+ * (`isPrivateNetworkHost`). Only the name is judged, never DNS: a single
+ * label is completed with the machine's DNS search domains, so it reaches
+ * whatever those domains resolve it to, and an internal-looking name that
+ * resolves to a public address is the owner's to prevent.
+ */
 export const PRIVATE_UPDATE_HOSTS =
-  "loopback, a private IP address (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, fe80::/10), a single-label name, or a name ending in .internal, .local, .lan, .corp, .home.arpa, or .intranet";
+  "loopback, a private IP address (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, fe80::/10), a single-label name that is not a public top-level domain, or a name ending in .internal, .local, .lan, .corp, .home.arpa, or .intranet";
 
 /**
  * Whether `updates.transport` lets the update channel use plain HTTP to

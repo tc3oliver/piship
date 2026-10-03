@@ -130,11 +130,46 @@ const INTERNAL_SUFFIXES = [
 ];
 
 /**
+ * Single labels that are public top-level domains, never an intranet host:
+ * a sample of common generic ones. Every two-letter label (a country code
+ * TLD) is refused as well. The list is deliberately short, not the public
+ * suffix list: a name that is not here is still only as internal as DNS
+ * makes it (see `isPrivateNetworkHost`).
+ */
+const PUBLIC_TLD_LABELS = new Set([
+  "app",
+  "arpa",
+  "biz",
+  "cloud",
+  "com",
+  "dev",
+  "edu",
+  "gov",
+  "info",
+  "int",
+  "mil",
+  "mobi",
+  "name",
+  "net",
+  "online",
+  "org",
+  "page",
+  "pro",
+  "shop",
+  "site",
+  "tech",
+  "top",
+  "xyz",
+]);
+
+/**
  * Whether `hostname` (a URL hostname, IPv6 in brackets or not) names a
  * private or internal host: loopback; an IPv4 literal in 10/8, 172.16/12,
  * 192.168/16, or 100.64/10; an IPv6 literal in fc00::/7 or fe80::/10; a
- * single-label name; or a name ending in .internal, .local, .lan, .corp,
- * .home.arpa, or .intranet. Only the text is judged, never DNS: an internal
+ * single-label name that is not a public TLD (two letters, or one of
+ * `PUBLIC_TLD_LABELS`); or a name ending in .internal, .local, .lan, .corp,
+ * .home.arpa, or .intranet. Only the text is judged, never DNS: a single
+ * label is resolved through the machine's search domains, and an internal
  * looking name that resolves to a public address is the owner's to prevent.
  */
 export function isPrivateNetworkHost(hostname: string): boolean {
@@ -158,7 +193,12 @@ export function isPrivateNetworkHost(hostname: string): boolean {
   // A first group of four digits: `fc::1` is 00fc::1, not fc00::/7.
   if (host.includes(":"))
     return /^(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/.test(host);
-  if (!host.includes(".")) return /^[a-z0-9-]+$/.test(host);
+  if (!host.includes("."))
+    return (
+      /^[a-z0-9-]+$/.test(host) &&
+      !/^[a-z]{2}$/.test(host) &&
+      !PUBLIC_TLD_LABELS.has(host)
+    );
   return INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 

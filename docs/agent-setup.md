@@ -109,7 +109,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | P1 Self-hosted model | As above; `inference.baseUrl` is the server's `https` URL, or a runtime variable | Every allowed model needs a catalog entry with `name`, `contextWindow`, `maxOutputTokens`; `tools: true` for tool-calling models |
 | P3 Sandbox | `sandbox.required: false` (best effort) or `true` | |
 | P4 Personal MCP | `mcp.mode: allowlist`, `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, `tools.allow` | Only servers the person named |
-| P5 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name, or a name such as `*.internal`, `*.lan`, `*.local`); a public host fails `validate`. It changes nothing for any other endpoint |
+| P5 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.lan`, `*.local`); a public host fails `validate`. It changes nothing for any other endpoint |
 
 ### Managed
 
@@ -128,7 +128,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M10 Governed MCP | `mcp.servers.<id>` (the template's `mcp.mode` is already `allowlist`) | Also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does. A server host must be allowed by the private-only network policy |
 | M11 Audit | an `audit.sinks` entry with `id`, `type: http`, `url`, `required` | The template keeps a local file sink and shows the collector entry as a comment |
 | M12 Update source | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
-| M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. OIDC, the broker, the gateway, MCP, and audit still need HTTPS ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
+| M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. OIDC, the broker, the gateway, MCP, and audit still need HTTPS ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
 
 Then `piship config explain <directory>/piship.yaml` shows the effective configuration and where each value comes from.
 
