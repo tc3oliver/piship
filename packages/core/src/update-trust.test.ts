@@ -601,6 +601,35 @@ describe("installation trust state", () => {
     ).toBeUndefined();
   });
 
+  it("refuses a malformed lock bootstrap or lock key instead of trusting it", () => {
+    const updates = {
+      channel: "stable" as const,
+      channels: ["stable" as const],
+      rollback: true,
+    };
+    const malformed: unknown[] = [
+      { bootstrap: { ...bootstrap, version: 0 } },
+      {
+        bootstrap: {
+          ...bootstrap,
+          roles: { ...bootstrap.roles, channel: { keyIds: [], threshold: 1 } },
+        },
+      },
+      { bootstrap: { ...bootstrap, keys: [] } },
+      { keys: [{ id: "bad", publicKey: "not a key" }] },
+      { keys: [pub(CHANNEL_A), { ...pub(CHANNEL_B), id: CHANNEL_A.id }] },
+    ];
+    for (const trust of malformed)
+      expect(() =>
+        initialTrustState({ updates: { ...updates, trust } as never }, ID, NOW),
+      ).toThrow(
+        expect.objectContaining({
+          code: "LOCK_INVALID",
+          message: expect.stringMatching(/records invalid update trust/),
+        }),
+      );
+  });
+
   // A migrated v0.7 installation (legacy root 1) and a fresh v0.8 install
   // (bootstrap root 1) both accept one root 2 signed by the legacy key and
   // the new root key.

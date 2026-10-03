@@ -85,8 +85,12 @@ piship trust-root next <source> --manifest piship.yaml \
 
 3. **Re-sign every channel** with the replacement key at a sequence above every sequence ever published, including any the attacker may have published (`sign-channel ... --sequence <far above>`).
 4. **Upload** the root pair, then the channels. A client that fetches the root refuses the compromised key before it reads the channel, so nothing it signed is downloaded or activated. `rollback` does not restore the key.
-5. **Find what was signed.** Compare every archive the key may have signed with your release record; reinstall machines that activated one you did not build ([stranded clients](#stranded-clients)).
+5. **Find what was signed.** Compare every archive the key may have signed with your release record; reinstall machines that activated one you did not build ([stranded clients](#stranded-clients)). The emergency root cannot fix those machines: a channel signature also authorizes code, and an activated malicious release ships the CLI that manages the installation, which can rewrite its trust state. Root rotation recovers only installations that have not yet activated a release signed with the compromised key; the others need the out-of-band reinstall.
 6. **Know the limit.** This works for a client that obtains the new root. An attacker who controls what a client receives from the update source can withhold the root (answer 404) and keep serving channels signed with the compromised key; that client stays exposed until it reaches the authentic source, or until its current root or the attacker's channel metadata expires and it fails closed ([security boundary](trust-root.md#security-boundary)). Short root and channel expiries bound that window. Where you can reach machines out of band, tell users to update from the authentic source now.
+
+## Compromised legacy key
+
+An installation whose trust originated from v1alpha4 legacy keys (`doctor` shows origin `legacy`) holds those keys in both the root and the channel role at threshold 1, and keeps that authority until it accepts a root whose root role no longer lists them. A compromised legacy key therefore also has root authority over it: the attacker can publish roots that installation accepts, so root rotation cannot recover it. The recovery is a reinstall from an archive verified out of band ([stranded clients](#stranded-clients)). Do not wait for this: move legacy installations to a split root and channel bootstrap promptly ([v0.7 to v0.8 bridge](trust-root.md#v07-to-v08-bridge)).
 
 ## Compromised root keys
 

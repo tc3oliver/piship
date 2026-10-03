@@ -58,13 +58,14 @@ The current root of an installation lives in `<install home>/trust/<id>.json` (`
 }
 ```
 
-- **Fresh install.** `piship install` (and `install.sh` / `install.ps1`) verifies the release and writes the trust state from its lock's bootstrap, replacing any leftover of an earlier install. The receipt records that the installation has trust state (`trustState: true`).
+- **Fresh install.** `piship install` (and `install.sh` / `install.ps1`) verifies the release and writes the trust state from its lock's bootstrap, replacing any leftover of an earlier install. A lock whose bootstrap (or v1alpha4 key list) is not a valid root is refused with `LOCK_INVALID`, and no trust state is written; the same check applies when a pre-v0.8 receipt is migrated. The receipt records that the installation has trust state (`trustState: true`).
 - **Monotonic.** Only a verified root refresh writes it. Each accepted version is written whole (temporary sibling, flush, rename, directory flush) before the next version is fetched or the channel is read. An interruption leaves the previous root or the new one, never a mix.
 - **Never lowered.** Activating a release whose lock has an older (or newer) bootstrap, rolling back to a release that pins a removed key, or switching channels does not change it.
 - **Fails closed.** A trust state that cannot be parsed, names another distribution or schema, holds an invalid root, or whose root does not match its digest stops `update` with `INTEGRITY_FAILED`, as does a missing one when the receipt says it should exist. PiShip never rebuilds it from the active release lock, because that lock may predate a revocation. `doctor` reports the problem.
 - **Recovery** is an explicit re-bootstrap from a release verified out of band: `piship uninstall <id>` (state is kept), then `piship install <archive> --sha256 <published digest> --use-existing-state`. The new installation starts from that release's bootstrap, then catches up through the published roots on its next update.
 - **Receipts written before v0.8** have no trust state. The first v0.8 update takes it once from the active lock, leaving out keys that v0.7 had retired, and marks the receipt; after that the rules above apply.
-- **v1alpha4 releases** (`updates.trust.keys`) have no roles. Their keys become root version 1 with every key in both roles at threshold 1, and an expiry that never arrives (`9999-12-31T23:59:59Z`). That is exactly what v1alpha4 already trusted, no stronger: any one legacy key can sign a channel or the next root.
+- **v1alpha4 releases** (`updates.trust.keys`) have no roles. Their keys become root version 1 with every key in both roles at threshold 1, and an expiry that never arrives (`9999-12-31T23:59:59Z`). That is exactly what v1alpha4 already trusted, no stronger: any one legacy key can sign a channel or the next root. A compromised legacy key therefore also holds root authority over such an installation (`origin: "legacy"`): root rotation cannot recover it, because the attacker can publish roots too. Recovery is a reinstall from an archive verified out of band. Owners should move these installations to a split root and channel bootstrap promptly ([bridge](#v07-to-v08-bridge)).
+- **Removed channel keys reach the receipt.** When a root removes a key from the channel role, the update also records it in the receipt's `retiredKeys` (`release: "root <N>"`). A PiShip v0.7 CLI, which a rollback to a release it installed brings back, trusts its lock's keys minus those retired keys, so it does not trust the removed key again.
 - The per-channel sequence floor stays in the install receipt (`channelSequences`), which `rollback` also keeps.
 
 ## Root refresh
@@ -111,6 +112,8 @@ A distribution whose installed base runs v0.7 (v1alpha4 `updates.trust.keys`) mo
 2. Publish `root/2.json` with the same body, signed by a legacy key **and** the new root key or keys: `piship trust-root next ... --sign <legacy>=<pem> --sign <root>=<pem>`. A v0.8 client migrated from v0.7 (legacy root 1) accepts it through the legacy key; a fresh v0.8 install (bootstrap root 1) accepts it through the new root key. Both end on the same root 2. (`trust-root next` checks the transition against the manifest's bootstrap; it does not know the legacy root, so include a legacy key yourself.)
 3. Sign channels with the legacy key first and the channel key second: `sign-channel ... --key <legacy.pem> --key-id <legacy> --key <channel.pem> --key-id <channel>`. The top-level signature is the legacy key, which v0.7 clients verify; v0.8 clients verify the set against the channel role.
 4. When no v0.7 client remains, stop signing with the legacy key and remove it from the root (`trust-root next --remove-key <legacy>`).
+
+Do not stay on legacy trust longer than the installed base needs: until root 2 is accepted, a migrated installation's legacy keys hold both roles at threshold 1, so a stolen legacy key can sign roots as well as channels, and only an out-of-band reinstall recovers that installation ([Installation trust state](#installation-trust-state)).
 
 ## Key lifecycle and custody
 
@@ -159,6 +162,10 @@ Publish the next root without the compromised key, signed by the root role, and 
 
 This recovers from a compromised channel key **once the client obtains the authentic newer root**. It does not guarantee remote revocation. An attacker who can serve the client's update source (or whom a user names with `update --from`) can withhold `root/<N+1>.json` by answering 404, and if that attacker also holds a channel key the client still trusts, the client accepts a channel that attacker signs. That is a security exposure, not only an availability problem: the compromised key stays usable against that client until the client learns the revocation through a source the attacker does not control, or the client's current root (or the attacker's channel metadata) expires and the client fails closed. Limit it by keeping root and channel expiries short enough to bound the window, serving the update source over HTTPS from a host the attacker does not control, and telling users not to run `update --from` with a source they were sent.
 
+A channel signature also authorizes code. A release the compromised key signed and a client activated ships the PiShip CLI that manages that installation from then on, and that code can rewrite the trust state, the receipt, or anything else the user can write. Root rotation therefore recovers only installations that have **not yet activated** a release signed with the compromised key. Installations that have need a reinstall from an archive verified out of band ([stranded clients](key-runbook.md#stranded-clients)); compare every archive the key may have signed with your release record to find them.
+
+An installation whose trust came from v1alpha4 legacy keys (`origin: "legacy"`: the legacy keys hold both roles at threshold 1) gives a compromised legacy key root authority too, so no root rotation can recover it; reinstall it from an archive verified out of band, and move such installations to a split root and channel bootstrap promptly ([bridge](#v07-to-v08-bridge)).
+
 A compromised **root** key, below the root threshold, is handled the same way: the remaining root keys publish a root without it. At or above the threshold, the attacker can publish roots; installations must be re-bootstrapped from a verified release (see the [key runbook](key-runbook.md#compromised-root-keys)).
 
 ## Channel hosting
@@ -205,9 +212,10 @@ An installed client never consults GitHub, attestations, or checksum files when 
 | --- | --- |
 | Threshold signatures: legacy single, multi, top-level must match, duplicate IDs, unknown and invalid entries, v0.7 fixture, v0.7 / v0.8 bridge | `update-trust.test.ts` "threshold signatures" |
 | Root refresh: N+1, skipped version, old and new thresholds, sequential catch-up, expired intermediate, missing signature, other distribution, bounds, 404 versus 5xx, 403, and transport failure over HTTP | `update-trust.test.ts` "root refresh" |
-| Trust state: bootstrap, legacy keys, damaged state fails closed, interrupted write | `update-trust.test.ts` "installation trust state" |
+| Trust state: bootstrap, legacy keys, malformed lock trust refused, damaged state fails closed, interrupted write | `update-trust.test.ts` "installation trust state" |
+| Malformed lock bootstrap refused at install and at pre-v0.8 migration, writing no trust state | `lifecycle.test.ts` "refuses to install a lock whose update trust bootstrap is malformed", "refuses to migrate an installation from before v0.8 onto a malformed bootstrap" |
 | Owner tooling: `trust-root init`, `trust-root next`, root-key rotation, signer failure writes nothing | `update-trust.test.ts` "trust-root owner tooling"; `cli/src/index.test.ts` |
-| A release lock never widens trust; channel key rotation through a root; removed key refused; rollback does not restore it | `lifecycle.test.ts` "rotates the channel key only through a signed root" |
+| A release lock never widens trust; channel key rotation through a root; removed key refused and retired in the receipt for a v0.7 CLI; rollback does not restore it | `lifecycle.test.ts` "rotates the channel key only through a signed root" |
 | Emergency removal before any download | `lifecycle.test.ts` "an emergency root removes a compromised channel key before anything is downloaded" |
 | Expired final root; expired intermediate root | `lifecycle.test.ts` "an expired final root cannot authorize the channel" |
 | Transport failure stops before the channel | `lifecycle.test.ts` "a failed root fetch stops the update before the channel" |

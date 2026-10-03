@@ -21,6 +21,7 @@ import {
   syncTree,
   type InstallReceipt,
   type LifecycleOptions,
+  type RetiredKey,
 } from "../install/receipt.js";
 import {
   advanceTrustState,
@@ -234,6 +235,25 @@ export async function updateDistribution(
       accept: (root) => {
         state = advanceTrustState(state, root, updateTime);
         persist(state);
+        // A PiShip v0.7 CLI (after a rollback to a release it installed)
+        // trusts its lock keys minus the receipt's retired keys, so a
+        // channel key a root removed is retired there too. Every removed
+        // channel key is carried, so a retirement an interrupted earlier
+        // refresh did not record is recorded now.
+        const current = readInstallReceipt(id);
+        const retiredKeys: RetiredKey[] = [...(current.retiredKeys ?? [])];
+        for (const key of state.removedKeys)
+          if (
+            key.role === "channel" &&
+            !retiredKeys.some((item) => item.fingerprint === key.fingerprint)
+          )
+            retiredKeys.push({
+              id: key.id,
+              fingerprint: key.fingerprint,
+              release: `root ${key.version}`,
+            });
+        if (retiredKeys.length !== (current.retiredKeys ?? []).length)
+          lifecycle.commit({ ...current, trustState: true, retiredKeys });
         options.faults?.("root-accepted");
       },
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
