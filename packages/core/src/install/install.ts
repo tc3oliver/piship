@@ -18,7 +18,9 @@ import { sha256File } from "../archive.js";
 import {
   assertDisjointRoots,
   installHome,
+  isTestCreatedState,
   runtimeStateDirectory,
+  testStateMarker,
   verifyPayload,
   type DistributionLock,
 } from "../index.js";
@@ -509,9 +511,12 @@ export async function installDistribution(
             throw new Error(
               `Install collision for ${id}/${command}: ${path} exists but no PiShip installation of ${id} is recorded; move it aside if it is not in use, then install again`,
             );
+        // State that `piship test` or `dev` created for this distribution
+        // before its first install is adopted; any other state is not.
         if (
           !useExistingState &&
-          existsSync(runtimeStateDirectory({ value: id }))
+          existsSync(runtimeStateDirectory({ value: id })) &&
+          !isTestCreatedState({ value: id })
         )
           throw new Error(
             `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
@@ -563,6 +568,9 @@ export async function installDistribution(
           writeShim(commandPath, launcher);
           syncDirectory(dirname(commandPath));
           rmSync(installMarker(apps), { force: true });
+          // The state belongs to this install now: installing again after an
+          // uninstall must adopt it explicitly.
+          rmSync(testStateMarker({ value: id }), { force: true });
           return receipt;
         } catch (error) {
           if (!existsSync(receiptPath(id))) {

@@ -30,10 +30,13 @@ import {
   EVIDENCED_TARGETS,
   formatInspection,
   inspection,
+  isTestCreatedState,
   lockManifest,
   payloadInventory,
   type requireCurrentLock,
+  testStateMarker,
   verifyPayload,
+  withTestState,
 } from "./index.js";
 import {
   holdRuntimeLease,
@@ -633,6 +636,43 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await expect(installDistribution(a.archive, true)).resolves.toMatchObject({
       active: "1.0.0",
     });
+  });
+
+  it("adopts state that a pre-install test launch created, once", async () => {
+    const a = await release("1.0.0");
+    // `piship test` launches the payload, which creates the state.
+    withTestState({ value: ID }, () =>
+      mkdirSync(stateDir(), { recursive: true }),
+    );
+    expect(isTestCreatedState({ value: ID })).toBe(true);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+    // The install owns the state now; it is not test-created any more.
+    expect(existsSync(testStateMarker({ value: ID }))).toBe(false);
+    uninstallDistribution(ID);
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+  });
+
+  it("still refuses state that existed before a test launch", async () => {
+    const a = await release("1.0.0");
+    mkdirSync(stateDir(), { recursive: true });
+    withTestState({ value: ID }, () => undefined);
+    expect(existsSync(testStateMarker({ value: ID }))).toBe(false);
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+    // A marker naming another distribution is not this one's.
+    writeFileSync(
+      testStateMarker({ value: ID }),
+      JSON.stringify({ schema: "piship-test-state/v1", id: "other" }),
+    );
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+    expect(apps()).toEqual([]);
   });
 
   it("recovers a marked first install interrupted before its receipt", async () => {

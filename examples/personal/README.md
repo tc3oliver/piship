@@ -21,7 +21,7 @@ node packages/cli/dist/bin.js validate examples/personal/piship.yaml
 node packages/cli/dist/bin.js lock examples/personal/piship.yaml
 node packages/cli/dist/bin.js test examples/personal/piship.yaml
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
-node dist/mypi/piship.mjs install dist/mypi --use-existing-state
+node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi --version
 ~/.local/bin/mypi --smoke
 ~/.local/bin/mypi doctor
@@ -31,7 +31,7 @@ node dist/mypi/piship.mjs inspect mypi
 node dist/mypi/piship.mjs uninstall mypi
 ```
 
-`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state. Install refuses existing state unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and the headless commands (`--version`, `--smoke`, `doctor`, `capabilities`) do not fetch packages.
+`piship test` runs its acceptance launch against MyPi's real state directory (`~/.piship/mypi`, or `$PISHIP_STATE_HOME/mypi`), so it creates that state and marks it as created by `piship test`; the first install adopts it. Install refuses any other existing state (for example after an uninstall) unless `--use-existing-state` adopts it; without the flag it fails with `State already exists for mypi`. On Windows, use the installed `mypi.cmd` in the bin directory. The installed payload is independent of this checkout; installation and the headless commands (`--version`, `--smoke`, `doctor`, `capabilities`) do not fetch packages.
 
 `--smoke` uses Pi's real SDK, the declared TypeScript extension, the read tool, and a separate persisted acceptance session without a model request. It reports the declared resources, `access` (`identity: null`, `pi-native` credential and inference), and a `governance` summary in which the `notes` MCP server is `healthy` with its two tools. It reports the same session ID with `resumed: true` on every run after the first, and the first `mypi --smoke` here already resumes the session that `piship test` created. `doctor` shows `mcp notes healthy (stdio; 2 tool(s))`, identity mode `none`, and the Pi-native credential as `delegated (no PiShip secret)`. The interactive command uses its own session directory; sign in to a model provider there as with plain Pi, and the credential stays in MyPi's state. Uninstall retains state; `node dist/mypi/piship.mjs purge mypi --yes` explicitly removes it after uninstall, and `node dist/mypi/piship.mjs uninstall mypi --purge --yes` does both in one command.
 

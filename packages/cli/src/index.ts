@@ -47,6 +47,7 @@ import {
   uninstallDistribution,
   verifyPayload,
   verifyRelease,
+  withTestState,
   writePrivateKey,
   type AbandonedStaging,
   type DistributionLock,
@@ -554,7 +555,7 @@ export async function runCli(
         ...(progress ? { progress } : {}),
       });
       output.stdout(
-        `Built ${built}\nNext: node ${join(built, "piship.mjs")} install ${built} to install it for this user.`,
+        `Built ${built}\nNext: piship test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
       );
     } else if (command === "purge") {
       if (rest[0] !== "--yes")
@@ -603,15 +604,18 @@ export async function runCli(
       const lock = requireCurrentLock(target);
       // `dev --smoke` runs the same isolated launch headlessly, for scripts.
       const interactive = command === "dev" && rest[0] !== "--smoke";
-      const result = runLauncher(
-        artifact,
-        lock.app.command,
-        command === "test"
-          ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
-          : interactive
-            ? []
-            : ["--smoke"],
-        interactive,
+      // State this launch creates is marked, so the first install adopts it.
+      const result = withTestState({ value: lock.app.id }, () =>
+        runLauncher(
+          artifact,
+          lock.app.command,
+          command === "test"
+            ? [rest.includes("--model-request") ? "--smoke-model" : "--smoke"]
+            : interactive
+              ? []
+              : ["--smoke"],
+          interactive,
+        ),
       );
       if (result.status !== 0)
         throw new Error(`Pi launch failed: ${result.stderr || result.status}`);
