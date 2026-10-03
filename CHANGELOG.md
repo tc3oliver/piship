@@ -38,6 +38,7 @@ Changes on `main` after v0.7.1, collected for v0.8.0 (pre-production trust and v
 
 - Installing a distribution that is already installed names the installed version and the exact uninstall command (the installed release's own `piship.mjs`; the branded command has none), says that state is kept, and says to install again with `--use-existing-state`. A damaged receipt keeps the previous message (#184).
 - `INTEGRITY_FAILED` for an installed release also names the recoveries a user without a PiShip CLI can run: the copy inside the downloaded release (`node <extracted release>/payload/piship.mjs repair <id> <extracted release>`) and, when the message lists only unexpected files such as a Finder `.DS_Store`, removing them ([repairing an installed release](docs/troubleshooting.md#repairing-an-installed-release), #186).
+- The documented first run (`init`, `validate`, `lock`, `build`, `test`, `install`) no longer fails with `State already exists`. When `piship test` or `dev` creates a distribution's state, it marks it (`piship-test-state/v1`), and the first install of that distribution adopts it without `--use-existing-state` and removes the marker. State that existed before, or that an earlier install owned, still requires the flag. `build` now points to `piship test` before `install`.
 
 ## v0.7.1
 

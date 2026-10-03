@@ -1,4 +1,10 @@
-import { existsSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import {
   basename,
@@ -28,6 +34,49 @@ export function runtimeStateDirectory(
 ): string {
   distributionStateDirectory(id);
   return join(resolve(home), id.value);
+}
+
+const TEST_STATE_SCHEMA = "piship-test-state/v1";
+
+/** The marker `piship test` and `dev` leave in state they created. */
+export function testStateMarker(id: DistributionId): string {
+  return join(runtimeStateDirectory(id), ".piship-test-state.json");
+}
+
+/**
+ * Run a pre-install launch (`piship test` or `dev`). When it creates the
+ * distribution's state, that state is marked as created by it, so the first
+ * install of the same distribution adopts it without `--use-existing-state`.
+ * State that existed before the launch is never marked.
+ */
+export function withTestState<T>(id: DistributionId, run: () => T): T {
+  const state = runtimeStateDirectory(id);
+  const existed = existsSync(state);
+  try {
+    return run();
+  } finally {
+    if (!existed && lstatSync(state, { throwIfNoEntry: false })?.isDirectory())
+      writeFileSync(
+        testStateMarker(id),
+        `${JSON.stringify({ schema: TEST_STATE_SCHEMA, id: id.value })}\n`,
+        { flag: "wx", mode: 0o600 },
+      );
+  }
+}
+
+/** Whether the distribution's state carries the marker of `withTestState`. */
+export function isTestCreatedState(id: DistributionId): boolean {
+  const marker = testStateMarker(id);
+  if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile()) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(marker, "utf8")) as {
+      schema?: unknown;
+      id?: unknown;
+    } | null;
+    return parsed?.schema === TEST_STATE_SCHEMA && parsed.id === id.value;
+  } catch {
+    return false;
+  }
 }
 
 export function installHome(): string {

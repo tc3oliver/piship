@@ -138,7 +138,7 @@ piship build <directory>/piship.yaml
 
 Fix what `validate` reports and run it again until it says the manifest is valid. For a managed distribution it lists the runtime variables the command needs at launch; it only notes, and does not fail, when they are unset in your shell. `build` writes the payload to `dist/<id>` under the **current directory**, so run it from the distribution repository, not from the PiShip clone. Add `dist/` to that repository's `.gitignore`.
 
-`piship test <directory>/piship.yaml` builds and runs the branded offline smoke before anything is installed. It creates the distribution's state directory, so an `install` after it needs `--use-existing-state` (step 6).
+`piship test <directory>/piship.yaml` builds and runs the branded offline smoke before anything is installed. It creates the distribution's state directory and marks it as created by `test`, so the first `install` after it adopts that state without extra flags.
 
 ## 6. Setup completion checklist
 
@@ -153,7 +153,7 @@ Setup is not complete until each applicable check below passes. Report each one 
    node dist/<id>/piship.mjs install dist/<id>
    ```
 
-   If `piship test` ran before, add `--use-existing-state`. If `~/.local/bin` is not on the person's `PATH`, tell them; do not edit their shell profile without asking.
+   State that `piship test` created is adopted automatically. If install fails with `State already exists`, that state was not created by `piship test` (an earlier install, say): ask the person before adding `--use-existing-state` to keep it. If `~/.local/bin` is not on the person's `PATH`, tell them; do not edit their shell profile without asking.
 5. **Runtime auth and configuration:**
    - **Managed:** set every variable `validate` listed in the environment that starts the command, then the person signs in in their browser with `~/.local/bin/<command> login`. With `sandbox.credential: stored`, the person also runs `~/.local/bin/<command> sandbox login` and types the sandbox key there. An IDE or desktop launcher does not read the shell profile.
    - **Personal with a key (`local-secret`):** the person runs `~/.local/bin/<command> login` and types the key.

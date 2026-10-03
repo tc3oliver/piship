@@ -71,8 +71,11 @@ export {
   binHome,
   distributionStateDirectory,
   installHome,
+  isTestCreatedState,
   runtimeStateDirectory,
   stateHome,
+  testStateMarker,
+  withTestState,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
 export {

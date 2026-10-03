@@ -216,6 +216,45 @@ describe("CLI", () => {
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("Lockfile is stale");
   }, 360000);
+  it("installs after piship test without --use-existing-state, and only once", () => {
+    const temp = mkdtempSync(join(tmpdir(), "piship-first-run-"));
+    temporary.push(temp);
+    const directory = join(temp, "first-run");
+    const manifest = join(directory, "piship.yaml");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PISHIP_STATE_HOME: join(temp, "state"),
+      PISHIP_INSTALL_HOME: join(temp, "install"),
+      PISHIP_BIN_HOME: join(temp, "bin"),
+      HOME: join(temp, "home"),
+      USERPROFILE: join(temp, "home"),
+    };
+    delete env.PISHIP_BUILD_INPUT;
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, args, { cwd: temp, env, encoding: "utf8" });
+    // The documented first run: init, lock, build, test, install.
+    expect(run(bin, "init", directory, "--personal").status).toBe(0);
+    expect(run(bin, "lock", manifest).status).toBe(0);
+    const built = run(bin, "build", manifest);
+    expect(built.status, built.stderr).toBe(0);
+    expect(built.stdout).toContain(`Next: piship test ${manifest}`);
+    const tested = run(bin, "test", manifest);
+    expect(tested.status, tested.stderr).toBe(0);
+    expect(existsSync(join(temp, "state", "first-run"))).toBe(true);
+    const payload = join(temp, "dist", "first-run");
+    const manager = join(payload, "piship.mjs");
+    const installed = run(manager, "install", payload);
+    expect(installed.status, installed.stderr).toBe(0);
+    // Once installed, the state is the install's: after an uninstall it is
+    // pre-existing state like any other and must be adopted explicitly.
+    expect(run(manager, "uninstall", "first-run").status).toBe(0);
+    const again = run(manager, "install", payload);
+    expect(again.status).toBe(1);
+    expect(again.stderr).toContain("State already exists");
+    expect(
+      run(manager, "install", payload, "--use-existing-state").status,
+    ).toBe(0);
+  }, 360000);
   it("installs a relocated payload, resumes Pi, diagnoses tampering, and removes only owned files", () => {
     const qualification = process.env.PISHIP_E2E_QUALIFICATION === "1";
     const temp = mkdtempSync(join(tmpdir(), "piship-install-"));
