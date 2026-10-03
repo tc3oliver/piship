@@ -445,6 +445,8 @@ describe.skipIf(process.platform === "win32")(
       // The update host was asked for the signed channel and its archive only.
       expect(new Set(acme.updateRequests())).toEqual(
         new Set([
+          // The root refresh asks for the next root first; its 404 ends it.
+          "root/2.json",
           "stable.json",
           "stable.json.sig",
           `${ID}-1.1.0-${process.platform}-${process.arch}.tar.gz`,
