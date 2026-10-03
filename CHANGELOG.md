@@ -1,10 +1,14 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, and v0.8.0 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0)); every package is versioned `0.8.1`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, and v0.8.1 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1)); every package is versioned `0.8.1`.
+
+## Unreleased
+
+Changes on `main` after v0.8.1. Not released.
 
 ## v0.8.1
 
-Preview milestone, to be published as a GitHub pre-release from tag `v0.8.1` after Release qualification; not published to npm. v0.8.1 collects the changes made on `main` after v0.8.0: an administrator-allowed user auto mode, an administrator-allowed plain-HTTP update channel, handling of a secret store that cannot be reached, and the fixes from the review of those changes. The manifest and lock schemas stay `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. The production-validation baseline stays [v0.8.0](docs/status.md#v080-production-validation-baseline) until v0.8.1 is qualified and published ([status](docs/status.md#v081-release-candidate)).
+Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.1) from tag `v0.8.1` (commit `d069104`, the squash of #203); not published to npm. Release qualification passed on that exact commit ([run 37127974973](https://github.com/tc3oliver/piship/actions/runs/37127974973)). v0.8.1 collects the changes made on `main` after v0.8.0: an administrator-allowed user auto mode, an administrator-allowed plain-HTTP update channel, handling of a secret store that cannot be reached, and the fixes from the review of those changes. The manifest and lock schemas stay `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. v0.8.1 is the production-validation baseline, replacing [v0.8.0](docs/status.md#v080-previous-production-validation-baseline) ([baseline](docs/status.md#v081-production-validation-baseline)).
 
 ### Added
 
@@ -21,7 +25,7 @@ Preview milestone, to be published as a GitHub pre-release from tag `v0.8.1` aft
 
 ## v0.8.0
 
-Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0) from tag `v0.8.0` (commit `8550282`, the squash of #193); not published to npm. Release qualification passed on that exact commit ([run 37108519783](https://github.com/tc3oliver/piship/actions/runs/37108519783)). v0.8.0 is pre-production trust and validation hardening: it collects the changes made on `main` after v0.7.1 and freezes the update-trust contracts before real installations exist (its scope is in the [roadmap](docs/roadmap.md)). The manifest and lock schemas move to `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. v0.8.0 is the production-validation baseline, replacing [v0.7.1](docs/status.md#v071-previous-production-validation-baseline) ([baseline](docs/status.md#v080-production-validation-baseline)).
+Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0) from tag `v0.8.0` (commit `8550282`, the squash of #193); not published to npm. Release qualification passed on that exact commit ([run 37108519783](https://github.com/tc3oliver/piship/actions/runs/37108519783)). v0.8.0 is pre-production trust and validation hardening: it collects the changes made on `main` after v0.7.1 and freezes the update-trust contracts before real installations exist (its scope is in the [roadmap](docs/roadmap.md)). The manifest and lock schemas move to `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. v0.8.0 was the production-validation baseline until v0.8.1, replacing [v0.7.1](docs/status.md#v071-previous-production-validation-baseline) ([previous baseline](docs/status.md#v080-previous-production-validation-baseline)).
 
 ### Added
 
@@ -48,7 +52,7 @@ Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oli
 - **Behavior change:** every launch sets Pi's startup defaults in its in-memory settings: `quietStartup: true` (no Pi logo, key hints, or resource listing) and `tuiMode: "regular"` (Pi 1.0 defaults to fullscreen; a distribution keeps the terminal's scrollback).
 - Docs: the terminal title ("π", Pi's `APP_TITLE`), the exit hint (`pi --session-dir`), the `/bug` hint (#139), and Pi's built-in `/share` command, which uploads the session file as a GitHub gist through the user's `gh` CLI, have no public Pi switch. They are recorded as known limits, and `/share` as a path by which a session can leave the machine, in managed mode too ([security](docs/security.md#limits)).
 - `CodeQL` cancels a superseded pull request run, as `CI` does: only an older run of the same pull request is cancelled, never a `main`, scheduled, or Release qualification run.
-- Docs: the [status page](docs/status.md#v080-production-validation-baseline) and the [roadmap](docs/roadmap.md) record v0.8.0 and its qualification, the first production consumer row links to the production validation protocol, and the roadmap's later schema candidates now follow `piship/v1alpha5`.
+- Docs: the [status page](docs/status.md#v080-previous-production-validation-baseline) and the [roadmap](docs/roadmap.md) record v0.8.0 and its qualification, the first production consumer row links to the production validation protocol, and the roadmap's later schema candidates now follow `piship/v1alpha5`.
 
 ### Security
 
