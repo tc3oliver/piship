@@ -10,9 +10,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AuditConfig } from "@piship/audit";
 import { type AuditEvent, PiShipError } from "@piship/contracts";
 import type { UserAutoSetting } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -169,6 +171,62 @@ describe("<command> auto", () => {
         "acme-engineering@1",
         { source: "command" },
       ],
+    ]);
+  });
+
+  it("turns off even when a required audit sink is down, and stays off when on cannot be audited", async () => {
+    const { ctx, out } = context("allowed");
+    const err: string[] = [];
+    // A local port nothing listens on.
+    const server = createServer();
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as { port: number };
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const governance = ctx.metadata.governance as NonNullable<
+      typeof ctx.metadata.governance
+    >;
+    const down: BrandedContext = {
+      ...ctx,
+      err: (message) => err.push(message),
+      auditCloseDeadlineMs: 300,
+      metadata: {
+        ...ctx.metadata,
+        governance: {
+          ...governance,
+          manifest: {
+            ...governance.manifest,
+            audit: {
+              ...governance.manifest.audit,
+              enabled: true,
+              sinks: [
+                {
+                  id: "company",
+                  type: "http",
+                  url: `http://127.0.0.1:${port}/ingest`,
+                  required: true,
+                },
+              ] as AuditConfig["sinks"],
+            },
+          },
+        },
+      },
+    };
+    const error = await runAuto(down, ["on"]).catch((caught) => caught);
+    expect(error).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    expect(error.message).toMatch(
+      /^Auto mode was not switched on, because its audit was not recorded: /,
+    );
+    expect(existsSync(userAutoPath(ctx.stateDir))).toBe(false);
+    setUserAuto(ctx.stateDir, true);
+    await runAuto(down, ["off"]);
+    expect(existsSync(userAutoPath(ctx.stateDir))).toBe(false);
+    expect(out.at(-1)).toMatch(
+      /^Auto mode is off from the next acmecode start/,
+    );
+    expect(err).toEqual([
+      expect.stringMatching(/^Warning: AUDIT_UNAVAILABLE: /),
     ]);
   });
 

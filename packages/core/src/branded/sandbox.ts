@@ -148,6 +148,7 @@ async function sandboxLogin(ctx: BrandedContext): Promise<void> {
     throw error;
   }
   await audit(ctx, network, principal, events);
+  for (const notice of saved.notices ?? []) ctx.err(`Notice: ${notice}`);
   ctx.out(
     `Sandbox ${saved.kind === "bearer" ? "token" : "API key"} stored in ${saved.store}. It is sent only to the sandbox endpoint it was stored for${principal ? ", and only for the signed-in user" : ""}; the next launch uses it.`,
   );

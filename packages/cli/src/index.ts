@@ -392,6 +392,10 @@ function purgeReport(purged: PurgeResult, output: CliOutput): string {
     output.stderr(
       `Warning: purged without logout: ${purged.notRevoked.join(", ")} ${purged.notRevoked.length > 1 ? "were" : "was"} deleted locally but not revoked, and stays live at the identity provider or broker until it expires`,
     );
+  if (purged.droppedSecrets)
+    output.stderr(
+      `Note: ${purged.droppedSecrets.length} secret reference(s) that an interrupted sign-in left (${purged.droppedSecrets.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`,
+    );
   const count = purged.deletedSecrets.length;
   return `Purged ${purged.state}${count ? `\nDeleted ${count} secret-store entr${count === 1 ? "y" : "ies"}` : ""}`;
 }

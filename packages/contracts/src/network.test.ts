@@ -314,6 +314,17 @@ describe("plain HTTP beyond loopback (updates.transport: http-allowed)", () => {
       "[fc::1]",
       "[::ffff:10.0.0.1]",
       "evil.internal.example",
+      // A single label that is a public TLD: two letters, or a common one.
+      "com",
+      "net",
+      "org",
+      "io",
+      "ai",
+      "dev",
+      "app",
+      "co",
+      "uk",
+      "COM.",
     ])
       expect(isPrivateNetworkHost(host), host).toBe(false);
   });

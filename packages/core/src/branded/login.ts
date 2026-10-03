@@ -16,6 +16,7 @@ import {
   CredentialManager,
   createSecretStore,
   deleteSecretsVerified,
+  droppedReferencesNotice,
   isLockTimeout,
   metadataFileSecretRefs,
   metadataFileSecretStore,
@@ -320,9 +321,15 @@ async function logoutLocally(
   // a refresh in another process that holds the identity lock finishes
   // first, and cannot store the session again after this deleted it.
   return manager.exclusive(async () => {
-    const problems = (await manager.logout({ distributionId: id })).map(
-      (problem) => redact(problem),
-    );
+    let dropped: readonly string[] = [];
+    const problems = (
+      await manager.logout(
+        { distributionId: id },
+        { onDiscard: (result) => (dropped = result.dropped) },
+      )
+    ).map((problem) => redact(problem));
+    // Shown with the warnings: nothing was deleted for these references.
+    if (dropped.length) problems.push(droppedReferencesNotice(dropped));
     if (existsSync(paths.identity))
       await withFileLock(paths.identity, async () => {
         if (!existsSync(paths.identity)) return;

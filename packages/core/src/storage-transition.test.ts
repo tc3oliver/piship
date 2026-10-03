@@ -507,6 +507,59 @@ describe("purge after a storage provider change", () => {
     expect(existsSync(stateDir())).toBe(false);
   });
 
+  describe("with a discarded marker whose system store is not installed", () => {
+    const missing = new SecretServiceSecretStore(() => ({
+      status: null,
+      stdout: "",
+      stderr: "spawnSync secret-tool ENOENT",
+      missing: true,
+    }));
+    const marker = (fields: Record<string, unknown>) => {
+      mkdirSync(dirname(credentialFile()), { recursive: true });
+      writeFileSync(
+        credentialFile(),
+        JSON.stringify({
+          schema: "piship-credential-discarded/v1",
+          secret_store: "system",
+          ...fields,
+        }),
+      );
+    };
+
+    it("drops a v0.8.0 marker's references and reports them", async () => {
+      marker({ orphans: [`piship:${ID}:inference#1`] });
+      const result = await purgeDistributionState(ID, {
+        secretStore: missing,
+      });
+      expect(result.droppedSecrets).toEqual([`piship:${ID}:inference#1`]);
+      expect(result.deletedSecrets).toEqual([]);
+      expect(existsSync(stateDir())).toBe(false);
+    });
+
+    it("drops only unconfirmed references, and keeps state for a confirmed one", async () => {
+      marker({
+        orphans: [`piship:${ID}:inference#1`, `piship:${ID}:inference#2`],
+        unconfirmed: [`piship:${ID}:inference#2`],
+      });
+      await expect(
+        purgeDistributionState(ID, { secretStore: missing }),
+      ).rejects.toMatchObject({
+        code: "SECRET_STORE_UNAVAILABLE",
+        sanitizedDetail: { refs: [`piship:${ID}:inference#1`] },
+      });
+      expect(existsSync(credentialFile())).toBe(true);
+      marker({
+        orphans: [`piship:${ID}:inference#2`],
+        unconfirmed: [`piship:${ID}:inference#2`],
+      });
+      const result = await purgeDistributionState(ID, {
+        secretStore: missing,
+      });
+      expect(result.droppedSecrets).toEqual([`piship:${ID}:inference#2`]);
+      expect(existsSync(stateDir())).toBe(false);
+    });
+  });
+
   it("still guesses the file store for metadata that records no store, as before", async () => {
     await login(open("file"));
     for (const file of [identityFile(), credentialFile()]) {

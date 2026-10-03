@@ -42,10 +42,11 @@ async function autoCommand(
     message = `Auto mode: ${describeUserAuto(gov.userAuto)}`;
   else if (action === "on" || action === "off")
     try {
-      const status = gov.switchUserAuto(action === "on");
+      const status = await gov.switchUserAuto(action === "on");
       message = status.active
         ? "Auto mode is on: asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply."
-        : "Auto mode is off.";
+        : (status.warning ?? "Auto mode is off.");
+      if (status.warning) level = "warning";
     } catch (error) {
       message = formatError(error);
       level = "error";

@@ -337,6 +337,66 @@ describe("precedence", () => {
       e.evaluate({ action: "shell.execute", resource: "git log | sh; x" }),
     ).toMatchObject({ effect: "ask", ruleId: "d.all" });
   });
+  it.each([
+    "git push origin main; true",
+    "git push origin main && echo ok",
+    "git push origin main || true",
+    "git push $(echo origin) main",
+  ])(
+    "keeps an enforced, team, project, or managed user ask on the chained command %j",
+    (command) => {
+      const ask = rule("x.push", "shell.execute", "git push**", "ask");
+      const layers = [
+        { policy: makePolicy({ default: "allow", enforced: [ask] }) },
+        { teamRules: [ask] },
+        { projectRules: [ask] },
+        { userRuleMode: "narrowing" as const, userRules: [ask] },
+      ];
+      for (const layer of layers) {
+        const e = engine({
+          policy: makePolicy({
+            default: "allow",
+            // A wider default allow and a later deny must not be hidden.
+            defaults: [rule("d.git", "shell.execute", "git **", "allow")],
+          }),
+          ...layer,
+        });
+        const request = { action: "shell.execute" as const, resource: command };
+        expect(e.evaluate(request)).toMatchObject({
+          effect: "ask",
+          ruleId: "x.push",
+        });
+        expect(e.keepsPrompt(request)).toBe(true);
+      }
+    },
+  );
+  it("a chained ask never hides a stricter rule or applies outside its own layers", () => {
+    const e = engine({
+      policy: makePolicy({
+        default: "allow",
+        enforced: [
+          rule("e.push", "shell.execute", "git push**", "ask"),
+          rule("e.rm", "shell.execute", "**rm -rf**", "deny"),
+        ],
+        defaults: [rule("d.npm", "shell.execute", "npm **", "ask")],
+      }),
+      // A personal user rule replaces defaults; it is not a narrowing ask.
+      userRules: [rule("u.ls", "shell.execute", "ls**", "ask")],
+    });
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git push; rm -rf ~" }),
+    ).toMatchObject({ effect: "deny", ruleId: "e.rm" });
+    expect(
+      e.keepsPrompt({ action: "shell.execute", resource: "npm test; true" }),
+    ).toBe(false);
+    expect(
+      e.keepsPrompt({ action: "shell.execute", resource: "ls; true" }),
+    ).toBe(false);
+    // Unchained commands keep first-match semantics.
+    expect(
+      e.evaluate({ action: "shell.execute", resource: "git status" }),
+    ).toMatchObject({ effect: "allow", ruleId: "builtin:default" });
+  });
   it("ignores team and project allow rules with diagnostics", () => {
     const e = engine({
       policy: makePolicy({ default: "deny" }),
