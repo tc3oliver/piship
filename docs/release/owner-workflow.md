@@ -2,7 +2,7 @@
 
 How a distribution owner builds, reviews, signs, and approves a release. This page is part of the [release guide](../release.md); the artifact format and its verification are in the [artifact contract](artifact-contract.md), and what users' installations do with a release is in the [update lifecycle](update-lifecycle.md).
 
-The production lifecycle for `piship/v1alpha4` distributions (added in v0.4) consists of a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. Its current status and evidence are on the [status page](../status.md); nothing is published to npm or through a signed channel. It wraps the v0.1 [portable payload](../portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
+The production lifecycle for `piship/v1alpha4` and later distributions (added in v0.4) consists of a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. Its current status and evidence are on the [status page](../status.md); nothing is published to npm or through a signed channel. It wraps the v0.1 [portable payload](../portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
 
 The flow for a distribution owner:
 

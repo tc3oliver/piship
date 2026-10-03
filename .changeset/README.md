@@ -1,6 +1,6 @@
 # Changesets
 
-All `@piship/*` packages are `private: true`, versioned `0.7.1`, and not published to npm. There is no publish policy yet, and publishing needs the maintainer's explicit approval ([release checklist](../docs/release/owner-workflow.md#release-checklist)).
+All `@piship/*` packages are `private: true`, versioned `0.8.0`, and not published to npm. There is no publish policy yet, and publishing needs the maintainer's explicit approval ([release checklist](../docs/release/owner-workflow.md#release-checklist)).
 
 ## Decision while packages are unpublished
 

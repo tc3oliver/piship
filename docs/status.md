@@ -2,7 +2,7 @@
 
 This page is the single source of truth for what current `main` supports and what evidence backs each claim. Other documents describe how things work and link here for status. When this page and another document disagree, this page wins; please report the mismatch.
 
-v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. v0.7.1 is published the same way as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) and is the [production-validation baseline](#v071-production-validation-baseline). Every milestone below is a preview milestone.
+v0.7.0 is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.0): the six example release archives from its Release qualification run, unchanged, with their SHA-256 files and GitHub artifact attestations. There is no npm release and no signed update channel operated by the project; no release key is pinned. v0.7.1 is published the same way as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) and is the [production-validation baseline](#v071-production-validation-baseline). v0.8.0 is the [release candidate](#v080-release-candidate) for the next baseline and is not tagged. Every milestone below is a preview milestone.
 
 ## v0.7.1 production-validation baseline
 
@@ -35,9 +35,14 @@ v0.7.1 is the one PiShip baseline a production consumer pins for production vali
 - The governed `bash` follows Pi 1.0's result shape: it returns Pi's `structuredContent` (`output` up to 1 MiB, and the first and last 512 KiB when longer; `truncated`; `full_output_path` when truncated and saved; `exit_code`; `wall_time_seconds`), which codemode scripts receive, and a non-zero exit returns an `isError: true` result instead of throwing. The full output file still lives in PiShip's session-owned output store.
 - Every launch sets Pi's defaults ([security](security.md#secrets)): no pi.dev version check and no update notice, no Pi telemetry or install report, Pi's agent directory (its crash log and the `fd` and `rg` it downloads) in the distribution's state instead of `~/.pi/agent`, a quiet startup, and the terminal's own scrollback instead of Pi 1.0's fullscreen. A managed launch also runs Pi offline.
 
-### v0.8.0 (in progress)
+### v0.8.0 (release candidate)
 
-v0.8.0, pre-production trust and validation hardening, is in progress and not released: it has no tag, no pre-release, and no Release qualification. Until it is qualified on its exact commit and published, v0.7.1 stays the baseline above. It freezes the contracts that are expensive to change once real installations exist: manifest `piship/v1alpha5` with a bootstrap trust root, an installation trust state with root refresh, multiple signatures with root rotation and emergency channel-key revocation, encrypted PEM signing keys, explicit `piship init --personal` and `--managed`, and the [production validation protocol](production-validation.md). The scope is in the [roadmap](roadmap.md).
+v0.8.0, pre-production trust and validation hardening, is a release candidate and not released: the version is set to 0.8.0, and it has no tag, no pre-release, and no Release qualification. Until it is qualified on its exact commit and published, v0.7.1 stays the baseline above. It freezes the contracts that are expensive to change once real installations exist: manifest `piship/v1alpha5` with a bootstrap trust root, an installation trust state with root refresh, multiple signatures with root rotation and emergency channel-key revocation, encrypted PEM signing keys, explicit `piship init --personal` and `--managed`, and the [production validation protocol](production-validation.md). The scope is in the [roadmap](roadmap.md).
+
+- PiShip version: `0.8.0` (every `@piship/*` package and `PISHIP_VERSION` in [`compatibility.ts`](../packages/core/src/compatibility.ts)).
+- Schemas: manifest `piship/v1alpha5`, lock `piship-lock/v1alpha5`, update root `piship-update-root/v1`. Channel metadata stays `piship-channel/v1`, and `piship-signature/v1` gains an optional `signatures[]` ([version map](#version-map)).
+- Pinned Pi: `@earendil-works/pi-coding-agent` 1.0.0, exact-pinned in `packages/pi/package.json`, reviewed on 2026-10-03 and deliberately kept. 1.0.0 is still the newest published Pi, and its `npm-shrinkwrap.json` still pins `brace-expansion` 5.0.9, so the reviewed exception ([#129](https://github.com/tc3oliver/piship/issues/129)) is not cleared and is not extended: it expires on 2026-12-31 as before.
+- Qualification: not run. Release qualification is dispatched manually on the exact candidate commit; this line records the run when it passes.
 
 ## Status terms
 
@@ -244,6 +249,6 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.5 | Gap closure across governance, access, supply chain, and the personal profile | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.6 (implemented, frozen and qualified at `ab3e7f2`) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.7 (v0.7.0 at `4994eee`, the squash of #165; v0.7.1 at `bd4bc09`, the squash of #174) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
-| v0.8 (in progress, not released) | Pre-production trust and validation hardening | `piship/v1alpha5` | `piship-lock/v1alpha5` |
+| v0.8 (release candidate, not tagged) | Pre-production trust and validation hardening | `piship/v1alpha5` | `piship-lock/v1alpha5` |
 
-All four manifest schemas are still accepted and all are experimental; only v1alpha4 can build a release. Both examples use `piship/v1alpha4`. The v0.8 row is in progress: `piship/v1alpha5` is not accepted until it lands. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).
+All five manifest schemas are still accepted and all are experimental; only `piship/v1alpha5` can build a release, and `piship migrate` takes a v1alpha4 manifest to it ([migration](manifest.md#migration)). Every example uses `piship/v1alpha5`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).

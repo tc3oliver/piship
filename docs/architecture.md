@@ -2,7 +2,7 @@
 
 PiShip is an open-source, company-first distribution and governance framework for branded Pi-based coding agents. Pi owns the agent loop, TUI, sessions, tools, model/runtime behavior, and extension execution. PiShip owns the distribution layer: manifest/configuration, pinned runtime, resources, reproducible payload, identity/credential/inference integration, and progressively policy/trust and lifecycle/release. Distribution repositories own their brand and declared resources. Pi source is neither forked nor patched.
 
-The layers arrived in order. The personal distribution core came first (`piship/v1alpha1`). `piship/v1alpha2` added managed access and layered configuration. `piship/v1alpha3` added governance: policy, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses, and audit. `piship/v1alpha4` added the production lifecycle: verifiable per-target release artifacts, signed update channels, verified update with atomic activation, rollback, and a migration check for local data ([release](release.md)). The [status page](status.md) records what current `main` supports, the evidence for each area, and how project milestones map to these schemas; see [compatibility](compatibility.md) for the Pi integration contract.
+The layers arrived in order. The personal distribution core came first (`piship/v1alpha1`). `piship/v1alpha2` added managed access and layered configuration. `piship/v1alpha3` added governance: policy, resource, provider, and project trust, capabilities, governed MCP, an OS sandbox for tool subprocesses, and audit. `piship/v1alpha4` added the production lifecycle: verifiable per-target release artifacts, signed update channels, verified update with atomic activation, rollback, and a migration check for local data ([release](release.md)). `piship/v1alpha5` added bootstrap update trust: a root role and a channel role with thresholds, kept by each installation as monotonic state and advanced by a sequential root refresh ([trust root](release/trust-root.md)). The [status page](status.md) records what current `main` supports, the evidence for each area, and how project milestones map to these schemas; see [compatibility](compatibility.md) for the Pi integration contract.
 
 | Change | Home |
 | --- | --- |
@@ -15,7 +15,7 @@ The layers arrived in order. The personal distribution core came first (`piship/
 
 | Package | Responsibility |
 | --- | --- |
-| `@piship/schema` | Validates `piship/v1alpha1` through `piship/v1alpha4`, including the v1alpha4 `updates` and `release` sections, runtime references, and step-wise alpha migration |
+| `@piship/schema` | Validates `piship/v1alpha1` through `piship/v1alpha5`, including the v1alpha4 `updates` and `release` sections, the v1alpha5 update trust bootstrap, runtime references, and step-wise alpha migration |
 | `@piship/contracts` | Separate `IdentityProvider`, `CredentialProvider`, `SecretStore`, and `InferenceProvider` contracts; the policy decision and audit event contracts; `SecretValue` redaction; `PiShipError` codes; managed network policy; the owned temporary directories every package creates and reclaims ([below](#temporary-directories)) |
 | `@piship/policy` | Policy engine and rule precedence, glob and path matching, `policy explain` rendering, project identification and resource discovery, resource and provider trust, capability state |
 | `@piship/audit` | Metadata-first audit log with file and HTTP sinks, the failure matrix, and local metrics, including update and rollback outcome counters |
@@ -70,7 +70,7 @@ For a `piship/v1alpha2` payload the branded command:
 
 ## Governed launch flow
 
-A `piship/v1alpha3` or `piship/v1alpha4` payload runs the access steps above for its deployment mode, then `GovernanceSession.open` establishes the controls in this order before Pi starts. Any mandatory control that fails stops the launch.
+A `piship/v1alpha3` or later payload runs the access steps above for its deployment mode, then `GovernanceSession.open` establishes the controls in this order before Pi starts. Any mandatory control that fails stops the launch.
 
 1. Audit: opens the sinks; an unreachable required sink fails with `AUDIT_UNAVAILABLE`.
 2. Project: finds the project root and origin remote, classifies the origin, and discovers project resource candidates.

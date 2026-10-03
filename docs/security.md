@@ -10,7 +10,7 @@ Temporary directories (a release's extraction, launch-check scratch, sandbox ses
 
 Pi receives a dedicated agent directory (`<state>/agent`, which also holds Pi's crash log and the tools Pi downloads), user and acceptance session directories, in-memory settings, and a loader with ambient extension, skill, prompt, theme, and context discovery disabled. Only declared resources are packaged. PiShip checks the session file a launch would continue before Pi reads it: a damaged one, or one over 64 MiB, is not resumed (`--new-session` starts a new session and leaves the file alone; the `--smoke` acceptance session, which holds no user work, is replaced by a new one instead), and a session another live process owns is never appended to; an owner on another host or in another PID namespace (a container sharing the home directory) cannot be verified, so its session is neither resumed nor taken over until the user deletes its owner record ([sessions](architecture.md#sessions)). Packaging rejects symlinks in resource roots, nested files, and adapter paths. For v1alpha1 and v1alpha2 distributions, project files remain accessible to Pi tools and trusted extensions, and PiShip does not enforce project trust or tool policy.
 
-The SHA-256 inventory detects accidental or unauthorized file changes only while the inventory itself is trusted. For `piship/v1alpha4` releases, signed channel metadata and build provenance establish where an artifact came from ([Releases and updates](#releases-and-updates)). Nothing here is a security boundary against a malicious local user who can rewrite both files and inventory.
+The SHA-256 inventory detects accidental or unauthorized file changes only while the inventory itself is trusted. For `piship/v1alpha4` and later releases, signed channel metadata and build provenance establish where an artifact came from ([Releases and updates](#releases-and-updates)). Nothing here is a security boundary against a malicious local user who can rewrite both files and inventory.
 
 ## Secrets
 
@@ -71,7 +71,7 @@ This is environment hygiene, not enforcement: a child can ignore or unset the va
 
 ## Governance
 
-A `piship/v1alpha3` or `piship/v1alpha4` launch opens a governance session before Pi starts (see [architecture](architecture.md#governed-launch-flow)). Every mandatory control that cannot be established fails the launch; nothing silently falls back to an ungoverned run. Every decision names its enforcement plane:
+A `piship/v1alpha3` or later launch opens a governance session before Pi starts (see [architecture](architecture.md#governed-launch-flow)). Every mandatory control that cannot be established fails the launch; nothing silently falls back to an ungoverned run. Every decision names its enforcement plane:
 
 | Plane | Meaning | Actions |
 | --- | --- | --- |
