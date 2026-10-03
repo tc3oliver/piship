@@ -555,6 +555,13 @@ export async function runCli(
         [
           "Manifest is valid.",
           `Schema ${manifest.schema}, mode ${manifest.deployment.mode}.`,
+          ...(manifest.governance?.policy.userAuto
+            ? [
+                manifest.governance.policy.userAuto === "allowed"
+                  ? "policy.userAuto: allowed (each user may switch on auto mode, which approves asks from the distribution defaults without a prompt; deny and enforced rules still apply)."
+                  : "policy.userAuto: off (users cannot switch on auto mode).",
+              ]
+            : []),
           ...(variables.launch.length
             ? [
                 `Runtime variables needed at launch (read from the environment of the process that starts the command, never locked): ${variables.launch.join(", ")}`,

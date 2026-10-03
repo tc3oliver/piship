@@ -413,6 +413,26 @@ describe("validate", () => {
     );
   });
 
+  it("shows policy.userAuto when a v1alpha5 manifest declares it", async () => {
+    const allowed = await validate({
+      schema: "piship/v1alpha5",
+      policy: { userAuto: "allowed" },
+    });
+    expect(allowed.status).toBe(0);
+    expect(allowed.stdout).toContain(
+      "policy.userAuto: allowed (each user may switch on auto mode",
+    );
+    const off = await validate({
+      schema: "piship/v1alpha5",
+      policy: { userAuto: "off" },
+    });
+    expect(off.stdout).toContain("policy.userAuto: off (users cannot");
+    expect((await validate({})).stdout).not.toContain("userAuto");
+    const older = await validate({ policy: { userAuto: "allowed" } });
+    expect(older.status).not.toBe(0);
+    expect(older.stderr).toContain("policy.userAuto");
+  });
+
   it("prints no variable lines for plain URLs", async () => {
     const result = await validate({});
     expect(result.stdout).not.toContain("Runtime variables");
