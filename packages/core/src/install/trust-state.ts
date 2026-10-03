@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { writeFileAtomic } from "@piship/credentials";
 import {
+  AccessFieldError,
   parseUpdateRoot,
   type UpdateRoot,
   type UpdateRoleName,
@@ -74,25 +75,33 @@ export function initialTrustState(
 ): UpdateTrustState | undefined {
   const trust = lock.updates?.trust;
   if (!trust) return undefined;
-  let root: UpdateRoot;
-  if ("keys" in trust) {
-    const keys: UpdateTrustKey[] = [];
-    for (const key of trust.keys)
-      if (
-        !retired.includes(keyFingerprint(key.publicKey)) &&
-        !keys.some((item) => item.publicKey === key.publicKey)
-      )
-        keys.push({ id: key.id, publicKey: key.publicKey });
-    if (!keys.length) return undefined;
-    const role = { keyIds: keys.map((key) => key.id), threshold: 1 };
-    root = {
-      version: 1,
-      expires: LEGACY_ROOT_EXPIRES,
-      keys,
-      roles: { root: role, channel: role },
-    };
-  } else if (trust.bootstrap) root = trust.bootstrap;
-  else return undefined;
+  let root: UpdateRoot | undefined;
+  if ("keys" in trust)
+    root = lockRoot(distribution, () => {
+      const keys: UpdateTrustKey[] = [];
+      for (const key of trust.keys)
+        if (
+          !retired.includes(keyFingerprint(key.publicKey)) &&
+          !keys.some((item) => item.publicKey === key.publicKey)
+        )
+          keys.push({ id: key.id, publicKey: key.publicKey });
+      if (!keys.length) return undefined;
+      const role = { keyIds: keys.map((key) => key.id), threshold: 1 };
+      return parseUpdateRoot(
+        {
+          version: 1,
+          expires: LEGACY_ROOT_EXPIRES,
+          keys,
+          roles: { root: role, channel: role },
+        },
+        "updates.trust",
+      );
+    });
+  else if (trust.bootstrap)
+    root = lockRoot(distribution, () =>
+      parseUpdateRoot(trust.bootstrap, "updates.trust.bootstrap"),
+    );
+  if (!root) return undefined;
   return {
     schema: TRUST_STATE_SCHEMA,
     distribution,
@@ -102,6 +111,30 @@ export function initialTrustState(
     removedKeys: [],
     updatedAt: now.toISOString(),
   };
+}
+
+/**
+ * The root a release lock seeds trust with, validated. The lock is read
+ * without schema validation, so a malformed one fails closed here instead of
+ * becoming the installation's trust.
+ */
+function lockRoot(
+  distribution: string,
+  read: () => UpdateRoot | undefined,
+): UpdateRoot | undefined {
+  try {
+    return read();
+  } catch (error) {
+    throw new PiShipError(
+      "LOCK_INVALID",
+      `The release lock of ${distribution} records invalid update trust: ${error instanceof AccessFieldError ? `${error.field}: ` : ""}${error instanceof Error ? error.message : String(error)}`,
+      {
+        component: "update",
+        userAction:
+          "Do not install this release; obtain it again from the trusted source, or ask the distribution owner for a release with valid updates.trust",
+      },
+    );
+  }
 }
 
 /** The state after a verified transition to `next`. */

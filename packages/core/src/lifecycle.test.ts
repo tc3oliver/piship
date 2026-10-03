@@ -1509,6 +1509,27 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
         },
       ],
     });
+    // The receipt retires the removed channel key too, so a PiShip v0.7 CLI
+    // (which trusts its lock keys minus the retired keys) never trusts it
+    // again after a rollback to a release it installed.
+    const retired = readInstallReceipt(ID).retiredKeys ?? [];
+    expect(retired).toEqual([
+      {
+        id: KEY.id,
+        fingerprint: keyFingerprint(KEY.publicKey),
+        release: "root 2",
+      },
+    ]);
+    expect(
+      [KEY, next]
+        .filter(
+          (key) =>
+            !retired.some(
+              (item) => item.fingerprint === keyFingerprint(key.publicKey),
+            ),
+        )
+        .map((key) => key.id),
+    ).toEqual([next.id]);
     // The removed key no longer counts, even at a higher sequence.
     forgeChannel(channelDir, KEY);
     expect((await rejection(updateDistribution(ID, opts))).message).toMatch(
@@ -1670,6 +1691,47 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       origin: "bootstrap",
       root: { version: 1 },
     });
+  });
+
+  /** Replace the lock's update trust bootstrap behind a rewritten inventory. */
+  function corruptBootstrap(payload: string): void {
+    const path = join(payload, "piship.lock");
+    const lock = JSON.parse(readFileSync(path, "utf8"));
+    lock.updates.trust.bootstrap.roles.channel.keyIds = ["nobody"];
+    writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
+    write(
+      join(payload, "metadata", "inventory.json"),
+      `${JSON.stringify(payloadInventory(payload), null, 2)}\n`,
+    );
+  }
+
+  it("refuses to install a lock whose update trust bootstrap is malformed", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    corruptBootstrap(payload);
+    const error = await rejection(installDistribution(payload));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(error.message).toMatch(
+      /invalid update trust: .*updates\.trust\.bootstrap\.roles\.channel/,
+    );
+    expect(existsSync(trustStatePath(ID))).toBe(false);
+    expect(existsSync(appsDir())).toBe(false);
+  });
+
+  it("refuses to migrate an installation from before v0.8 onto a malformed bootstrap", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    rmSync(trustStatePath(ID));
+    const { trustState: _marker, ...earlier } = readInstallReceipt(ID);
+    writeFileSync(
+      join(process.env.PISHIP_INSTALL_HOME as string, "receipts", `${ID}.json`),
+      JSON.stringify(earlier),
+    );
+    corruptBootstrap(join(appsDir(), "1.0.0"));
+    const error = await rejection(updateDistribution(ID, opts));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(existsSync(trustStatePath(ID))).toBe(false);
+    expect(readInstallReceipt(ID).trustState).toBeUndefined();
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
   it("an update interrupted between root versions keeps each accepted root whole", async () => {
