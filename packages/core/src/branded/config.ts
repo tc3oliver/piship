@@ -23,6 +23,7 @@ export async function runConfig(
       distributionDir: ctx.distributionDir,
       schema: ctx.metadata.manifest.schema,
       ...(governance ? { governance } : {}),
+      ...(ctx.metadata.updates ? { updates: ctx.metadata.updates } : {}),
     });
     if (key === "--json") ctx.out(redact(JSON.stringify(rows, null, 2)));
     else ctx.out(formatExplanation(ctx.metadata.app.name, rows));

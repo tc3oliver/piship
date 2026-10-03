@@ -12,6 +12,8 @@ import { readManifest } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   channelTrustFromLock,
+  diffLocks,
+  formatDiff,
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
   lockManifest,
@@ -199,5 +201,43 @@ describe("older locks", () => {
       { id: "acme-release", publicKey: CHANNEL },
     ]);
     expect(channelTrustFromLock({})).toEqual([]);
+  });
+});
+
+describe("updates.transport in the lock", () => {
+  const HTTP = MANIFEST.replace(
+    "  source: https://updates.acme.example\n",
+    "  source: http://updates.corp.internal/acmepi\n  transport: http-allowed\n",
+  );
+
+  it("is locked only when declared, and diff reports the change", () => {
+    const before = resolveLock(project(MANIFEST));
+    expect(before.updates).not.toHaveProperty("transport");
+    const after = resolveLock(project(HTTP));
+    expect(after.updates?.transport).toBe("http-allowed");
+    expect(after.updates?.source).toBe("http://updates.corp.internal/acmepi");
+    const report = diffLocks(before, after);
+    expect(report.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          area: "updates",
+          item: "update transport",
+          kind: "added",
+          risk: "high",
+          after: "http-allowed",
+        }),
+      ]),
+    );
+    expect(formatDiff(report)).toContain("update transport");
+  });
+
+  it("does not change the digest of a manifest whose comments mention it", () => {
+    const commented = MANIFEST.replace(
+      "  source: https://updates.acme.example\n",
+      "  source: https://updates.acme.example\n  # transport: http-allowed\n",
+    );
+    expect(manifestDigest(readManifest(project(commented)))).toBe(
+      manifestDigest(readManifest(project(MANIFEST))),
+    );
   });
 });

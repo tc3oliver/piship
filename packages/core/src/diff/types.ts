@@ -77,6 +77,8 @@ interface UpdatesLock {
   readonly channel?: string;
   readonly channels?: readonly string[];
   readonly source?: string;
+  /** v1alpha5 `https` or `http-allowed`; absent means https. */
+  readonly transport?: string;
   readonly rollback?: boolean;
   readonly trust?: {
     readonly keys?: readonly TrustKeyLock[];

@@ -1,5 +1,6 @@
 // The doctor groups that need no Pi runtime or governed session.
 import { LocalMetrics } from "@piship/audit";
+import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import { abandonedTemporaryCount, lifecycleStatus } from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
@@ -84,8 +85,15 @@ function updateDoctor(
       "channel",
       `${status.channel} (allowed: ${(status.channels ?? []).join(", ")})`,
     );
-    if (status.source) ok("source", status.source);
+    if (status.source && plainHttpSource(ctx, status.source))
+      warn("source", `http (integrity by signature only): ${status.source}`);
+    else if (status.source) ok("source", status.source);
     else warn("source", "none declared; update needs --from");
+    if (metadata.updates.transport === "http-allowed")
+      ok(
+        "transport",
+        "http-allowed (plain HTTP to a private or internal update host; signatures, digests, and sequence checks still apply)",
+      );
     if (status.trustProblem)
       warn(
         "update trust",
@@ -139,6 +147,23 @@ function updateDoctor(
         .map(([key, count]) => `${key}=${count}`)
         .join(", "),
     );
+}
+
+/** Whether the update source resolves to plain HTTP on a non-loopback host. */
+function plainHttpSource(ctx: BrandedContext, template: string): boolean {
+  try {
+    const url = new URL(
+      resolveTemplate(
+        "updates.source",
+        template,
+        ctx.metadata.access?.variables ?? [],
+        process.env,
+      ),
+    );
+    return url.protocol === "http:" && !isLoopbackHost(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 /**

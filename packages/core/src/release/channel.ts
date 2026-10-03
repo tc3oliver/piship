@@ -13,7 +13,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { syncDirectory, temporarySibling } from "@piship/credentials";
-import { RELEASE_CHANNELS } from "@piship/schema";
+import { RELEASE_CHANNELS, type UpdateTransport } from "@piship/schema";
 import { sha256File } from "../archive.js";
 import { channelTrustFromLock } from "../lock.js";
 import {
@@ -443,6 +443,8 @@ export async function readChannel(
     readonly minSequence?: number;
     readonly now?: () => Date;
     readonly fetcher?: typeof fetch;
+    /** The installation's `updates.transport`; absent means https. */
+    readonly transport?: UpdateTransport;
   },
 ): Promise<{
   readonly metadata: ChannelMetadata;
@@ -457,11 +459,14 @@ export async function readChannel(
     `${channel}.json`,
     options.fetcher,
     answer,
+    options.transport,
   );
   const signature = await readSourceFile(
     source,
     `${channel}.json.sig`,
     options.fetcher,
+    undefined,
+    options.transport,
   );
   let envelope: SignatureEnvelope;
   try {

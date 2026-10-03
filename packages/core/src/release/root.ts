@@ -6,6 +6,7 @@ import {
   parseUpdateRoot,
   type UpdateRoot,
   type UpdateRoleName,
+  type UpdateTransport,
   updateRoleKeys,
 } from "@piship/schema";
 import { digest } from "../digest.js";
@@ -150,6 +151,8 @@ export async function refreshRoot(options: {
   readonly current: UpdateRoot;
   readonly accept: (root: UpdateRoot) => void;
   readonly fetcher?: typeof fetch;
+  /** The installation's `updates.transport`; absent means https. */
+  readonly transport?: UpdateTransport;
 }): Promise<{ readonly root: UpdateRoot; readonly transitions: number }> {
   let current = options.current;
   let transitions = 0;
@@ -161,6 +164,7 @@ export async function refreshRoot(options: {
       name,
       MAX_ROOT_BYTES,
       options.fetcher,
+      options.transport,
     );
     if (!bytes) return { root: current, transitions };
     if (transitions >= MAX_ROOT_TRANSITIONS)
@@ -178,6 +182,7 @@ export async function refreshRoot(options: {
       `${name}.sig`,
       MAX_ROOT_SIGNATURE_BYTES,
       options.fetcher,
+      options.transport,
     );
     if (!signature)
       throw integrity(

@@ -119,6 +119,49 @@ export function isLoopbackHost(hostname: string): boolean {
   );
 }
 
+/** Name suffixes that mark an internal (never publicly delegated) host. */
+const INTERNAL_SUFFIXES = [
+  ".internal",
+  ".local",
+  ".lan",
+  ".corp",
+  ".home.arpa",
+  ".intranet",
+];
+
+/**
+ * Whether `hostname` (a URL hostname, IPv6 in brackets or not) names a
+ * private or internal host: loopback; an IPv4 literal in 10/8, 172.16/12,
+ * 192.168/16, or 100.64/10; an IPv6 literal in fc00::/7 or fe80::/10; a
+ * single-label name; or a name ending in .internal, .local, .lan, .corp,
+ * .home.arpa, or .intranet. Only the text is judged, never DNS: an internal
+ * looking name that resolves to a public address is the owner's to prevent.
+ */
+export function isPrivateNetworkHost(hostname: string): boolean {
+  const host = hostname
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase()
+    .replace(/\.$/, "");
+  if (!host) return false;
+  if (isLoopbackHost(host)) return true;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (ipv4) {
+    const [a, b] = ipv4.slice(1, 3).map(Number) as [number, number];
+    if (ipv4.slice(1).some((part) => Number(part) > 255)) return false;
+    return (
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  // A first group of four digits: `fc::1` is 00fc::1, not fc00::/7.
+  if (host.includes(":"))
+    return /^(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/.test(host);
+  if (!host.includes(".")) return /^[a-z0-9-]+$/.test(host);
+  return INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
 /** Refuse to run managed network flows when TLS verification was disabled. */
 export function assertTlsVerificationEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -245,6 +288,8 @@ export interface DispatcherOptions {
    * request ends only when its response does or its signal aborts.
    */
   readonly inactivityTimeouts?: boolean;
+  /** Plain HTTP destinations the private-only check also accepts; see checkDestination. */
+  readonly plainHttp?: (target: URL) => boolean;
 }
 
 export function createDispatcher(
@@ -414,6 +459,7 @@ function buildDispatcher(
     : new Agent({ connect, ...pooling, ...timeouts, factory });
   const pendingTunnel = (hostPort: string) => tunnels.get(hostPort)?.proxy;
   if (!policy.privateOnly) return { dispatcher: base, pendingTunnel };
+  const { plainHttp } = options;
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
   // fetch calls. Raw sockets and child processes are not covered.
@@ -423,7 +469,8 @@ function buildDispatcher(
         typeof options.origin === "string"
           ? options.origin
           : options.origin?.toString();
-      if (origin) checkDestination(new URL(origin), policy, "network");
+      if (origin)
+        checkDestination(new URL(origin), policy, "network", plainHttp);
       return dispatch(options, handler);
     }),
     pendingTunnel,
@@ -587,11 +634,17 @@ function transportFailure(
   );
 }
 
-/** Validate a destination against transport and private-only policy. */
+/**
+ * Validate a destination against transport and private-only policy.
+ * `plainHttp` may permit plain HTTP to a non-loopback destination; only the
+ * update channel passes it (`updates.transport: http-allowed`), so every
+ * other endpoint keeps the loopback-only rule.
+ */
 export function checkDestination(
   target: URL,
   policy: NetworkPolicy,
   component = "network",
+  plainHttp?: (target: URL) => boolean,
 ): void {
   if (target.username || target.password)
     throw new PiShipError(
@@ -601,7 +654,10 @@ export function checkDestination(
     );
   if (
     target.protocol !== "https:" &&
-    !(target.protocol === "http:" && isLoopbackHost(target.hostname))
+    !(
+      target.protocol === "http:" &&
+      (isLoopbackHost(target.hostname) || plainHttp?.(target) === true)
+    )
   )
     throw new PiShipError(
       "NETWORK_DENIED",
@@ -631,6 +687,13 @@ export function checkDestination(
 export function createManagedFetch(
   policy: NetworkPolicy,
   component = "network",
+  options: {
+    /**
+     * Permit plain HTTP to a non-loopback destination it accepts. Only the
+     * update channel's fetch passes it; see checkDestination.
+     */
+    readonly plainHttp?: (target: URL) => boolean;
+  } = {},
 ): ManagedFetch {
   // Platform secret store calls block the process (PowerShell on Windows
   // for seconds), and a pooled connection the server closed meanwhile still
@@ -640,8 +703,10 @@ export function createManagedFetch(
   // and is never retried. Managed requests (identity, broker, gateway probes,
   // the audit sinks and update downloads) are few and small, so each opens its
   // own connection.
+  const plainHttp = options.plainHttp ? { plainHttp: options.plainHttp } : {};
   const { dispatcher, pendingTunnel } = buildDispatcher(policy, {
     keepAlive: false,
+    ...plainHttp,
   });
   // A long-running request has a dispatcher of its own, without undici's
   // header and body timeouts, created on first use.
@@ -650,13 +715,14 @@ export function createManagedFetch(
     untimed ??= buildDispatcher(policy, {
       keepAlive: false,
       inactivityTimeouts: false,
+      ...plainHttp,
     });
     return untimed;
   };
   return async (url, { longRunning, ...init } = {}) => {
     assertTlsVerificationEnabled();
     const target = new URL(url.toString());
-    checkDestination(target, policy, component);
+    checkDestination(target, policy, component, options.plainHttp);
     try {
       const response = await undiciFetch(target, {
         ...(init as Record<string, unknown>),

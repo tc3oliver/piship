@@ -1,5 +1,9 @@
 import { redact } from "@piship/contracts";
-import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
+import {
+  type GovernanceManifest,
+  resolveTemplate,
+  type UpdatesManifest,
+} from "@piship/schema";
 import { readPreferences, resolveEffectiveConfig } from "../config.js";
 import { describeUserAuto, userAutoStatus } from "../user-auto.js";
 import { DistributionAccess } from "./distribution-access.js";
@@ -20,6 +24,8 @@ export interface ExplainOptions extends AccessOptions {
   readonly schema?: string;
   /** v1alpha3 governance; adds its distribution-enforced rows. */
   readonly governance?: GovernanceManifest;
+  /** v1alpha4+ update policy; adds the update transport row. */
+  readonly updates?: UpdatesManifest;
 }
 
 /** Governance settings as `config explain` rows; all distribution-enforced. */
@@ -271,6 +277,19 @@ export async function explainConfiguration(
     rows.push(
       ...governanceRows(options.governance, options.mode, options.stateDir),
     );
+  if (options.updates)
+    rows.push({
+      key: "updates.transport",
+      value: options.updates.transport ?? "https",
+      source: options.updates.transport
+        ? "distribution-enforced"
+        : "builtin-default",
+      overridable: false,
+      note:
+        options.updates.transport === "http-allowed"
+          ? "the update channel may use plain HTTP to a private or internal host; integrity by signature only. Every other endpoint still needs https"
+          : "plain HTTP only to loopback",
+    });
   const paths = accessStatePaths(options.stateDir);
   let preferences: ReturnType<typeof readPreferences> = {
     schema: "piship-preferences/v1",

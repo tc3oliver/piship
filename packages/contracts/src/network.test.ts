@@ -17,6 +17,7 @@ import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   isNetworkEnvironmentName,
+  isPrivateNetworkHost,
   type NetworkPolicy,
   processNetworkEnvironment,
 } from "./network.js";
@@ -270,6 +271,99 @@ describe("private-only destinations", () => {
     expect(() =>
       checkDestination(new URL("https://203.0.113.7:9/"), policy),
     ).not.toThrow();
+  });
+});
+
+describe("plain HTTP beyond loopback (updates.transport: http-allowed)", () => {
+  it("recognizes private and internal hosts by their text", () => {
+    for (const host of [
+      "localhost",
+      "127.0.0.1",
+      "[::1]",
+      "10.0.0.5",
+      "172.16.0.1",
+      "172.31.255.255",
+      "192.168.1.10",
+      "100.64.0.1",
+      "100.127.255.254",
+      "[fd12:3456::1]",
+      "[fc00::1]",
+      "[fe80::1]",
+      "updates",
+      "updates.corp.internal",
+      "nas.local",
+      "files.lan",
+      "updates.corp",
+      "router.home.arpa",
+      "portal.intranet",
+      "UPDATES.Corp.Internal.",
+    ])
+      expect(isPrivateNetworkHost(host), host).toBe(true);
+    for (const host of [
+      "",
+      "updates.acme.example",
+      "internal.example.com",
+      "8.8.8.8",
+      "172.32.0.1",
+      "172.15.0.1",
+      "192.169.0.1",
+      "100.128.0.1",
+      "169.254.169.254",
+      "11.0.0.1",
+      "[2001:db8::1]",
+      "[fc::1]",
+      "[::ffff:10.0.0.1]",
+      "evil.internal.example",
+    ])
+      expect(isPrivateNetworkHost(host), host).toBe(false);
+  });
+
+  it("is permitted only where a caller passes plainHttp; every other endpoint keeps the loopback-only rule", async () => {
+    const target = "http://updates.corp.internal/acmepi/stable.json";
+    for (const component of [
+      "identity",
+      "credential",
+      "gateway",
+      "inference",
+      "mcp",
+      "audit",
+      "sandbox",
+      "update",
+    ]) {
+      const fetcher = createManagedFetch(DEFAULT_NETWORK_POLICY, component);
+      await expect(fetcher(target)).rejects.toMatchObject({
+        code: "NETWORK_DENIED",
+        message: expect.stringContaining(
+          "plain HTTP is only allowed for loopback",
+        ),
+      });
+    }
+    const allow = (url: URL) => url.hostname === "updates.corp.internal";
+    expect(() =>
+      checkDestination(
+        new URL(target),
+        DEFAULT_NETWORK_POLICY,
+        "update",
+        allow,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      checkDestination(
+        new URL("http://other.corp.internal/"),
+        DEFAULT_NETWORK_POLICY,
+        "update",
+        allow,
+      ),
+    ).toThrow(expect.objectContaining({ code: "NETWORK_DENIED" }));
+    // plainHttp never widens a private-only policy's hosts.
+    expect(() =>
+      checkDestination(
+        new URL(target),
+        { ...DEFAULT_NETWORK_POLICY, privateOnly: true, allowHosts: [] },
+        "update",
+        allow,
+      ),
+    ).toThrow(/Private-only network policy denies/);
   });
 });
 

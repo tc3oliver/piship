@@ -246,7 +246,8 @@ release:
 | --- | --- | --- |
 | `updates.channel` | `stable` | Channel for new installs: `stable`, `candidate`, or `dev` |
 | `updates.channels` | `[<channel>]` | Channels a user may select with `update --channel`; unique and must include `updates.channel` |
-| `updates.source` | none | Where channel metadata and archives are read: an `https` URL, an `http` URL on `127.0.0.1`, `localhost`, or `[::1]`, or a `${NAME}` runtime reference. Resolved only when `update` runs; without it, `update` needs `--from`. No credentials, query string, or fragment |
+| `updates.source` | none | Where channel metadata and archives are read: an `https` URL, an `http` URL on `127.0.0.1`, `localhost`, or `[::1]` (or, with `updates.transport: http-allowed`, on a private or internal host), or a `${NAME}` runtime reference. Resolved only when `update` runs; without it, `update` needs `--from`. No credentials, query string, or fragment |
+| `updates.transport` | `https` | v1alpha5: `https` or `http-allowed` ([below](#plain-http-update-channel-v1alpha5)). Locked only when declared |
 | `updates.rollback` | `true` | Retain the previous release on update so `rollback` can return to it |
 | `updates.trust.bootstrap` | none | v1alpha5: the update root a fresh installation starts from ([below](#update-trust-bootstrap-v1alpha5)). Without it the distribution is update-disabled |
 | `updates.trust.keys` | `[]` | v1alpha4 only: pinned release keys: `id` (lowercase letters, digits, dots, and hyphens, unique) and `publicKey` (base64 of the 44-byte Ed25519 SubjectPublicKeyInfo DER). Any one key signs channels. With no keys, no update can be verified, so `update` fails |
@@ -274,6 +275,16 @@ Rules beyond the field checks:
 - With `updates.source` set and no bootstrap, no update can be verified. `piship validate` warns and `update` fails closed; `piship release` still builds the release, which is update-disabled, as it would be with no source.
 - With neither `updates.source` nor a bootstrap, the distribution is update-disabled.
 - A managed distribution whose root and channel roles name the same key gets a `piship validate` warning, and `piship release` refuses it (gate `trust`) until the roles use distinct keys. A managed production distribution keeps its root key offline, separate from the channel release key. A personal distribution may share one key between both roles.
+
+### Plain-HTTP update channel (v1alpha5)
+
+`updates.transport: http-allowed` lets the update channel be served over plain HTTP from an internal host, such as an intranet nginx without a certificate. It is off by default: with `https` (or the field absent), plain HTTP is accepted only on loopback, as before.
+
+- It covers only the update channel: channel metadata and signatures, `root/<N>.json` files, and release archives, read by `update` (including `update --from <url>`). OIDC, the credential broker, the gateway, MCP servers, audit sinks, and remote sandboxes keep the `https`-only rule (plain HTTP only on loopback) whatever this field says.
+- The host must be private or internal: loopback, an IP address in 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, or fe80::/10, a single-label name, or a name ending in `.internal`, `.local`, `.lan`, `.corp`, `.home.arpa`, or `.intranet`. A public host is a `piship validate` error, and a `${NAME}` source (or `--from` URL) that resolves to one fails with `NETWORK_DENIED` before any request. Only the name is judged, not DNS: making sure an internal-looking name resolves to an internal address is the owner's responsibility.
+- It requires `updates.trust.bootstrap`; without it `piship validate` fails. Signature thresholds, archive digests, the channel sequence floor, expiry, and root refresh are verified exactly as over HTTPS ([security](security.md#releases-and-updates)).
+- The configured proxy policy still applies; plain HTTP needs no CA setting. Redirects stay within the source's origin, and an `https` source is never redirected to plain HTTP.
+- `piship validate` and `config explain` show the transport, `piship diff` reports a change to it as high risk, `doctor` warns `source  http (integrity by signature only)`, and an update or check over plain HTTP is audited with `transport: http`.
 
 ### Update trust from v1alpha4
 
@@ -400,7 +411,7 @@ A maintainer-local product specification (v1.0) guided the design; it is not req
 | Trust sections | `policy.resourceTrust`, `policy.providerTrust`, and `policy.projectTrust`, nested under `policy` | Top-level trust sections |
 | Policy rules | `policy.enforced` and `policy.defaults` rule lists, plus `policy.default` | `permissions.rules` |
 | Project origins | `policy.projectTrust.company`, `external`, and `unknown` | `companyRepo` and `externalRepo` |
-| Update source | `updates.source`: an `https` URL, a loopback `http` URL, or a `${NAME}` runtime reference; `update --from` also accepts a directory | A symbolic `company` or `self` source |
+| Update source | `updates.source`: an `https` URL, a loopback `http` URL (a private-host `http` URL with `updates.transport: http-allowed`), or a `${NAME}` runtime reference; `update --from` also accepts a directory | A symbolic `company` or `self` source |
 | State location | `~/.piship/<id>` (or `PISHIP_STATE_HOME`); project restrictions in `.piship/policy.json`; no `app.configDir` or `branding` section | A branded configuration directory |
 | Data retention | No `data` section; `logs/audit.jsonl` is rotated by size with fixed limits (10 MiB per file, five rotated files) | A `data` section with retention settings |
 | Pi packages as resources | No `resources.packages` class | `resources.packages` |

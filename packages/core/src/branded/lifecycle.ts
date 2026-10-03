@@ -3,6 +3,7 @@ import { LocalMetrics } from "@piship/audit";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  isLoopbackHost,
   type NetworkPolicy,
   PiShipError,
   type ResolvedEndpoints,
@@ -13,7 +14,7 @@ import {
   createSecretStore,
   type SecretStoreProvider,
 } from "@piship/credentials";
-import { resolveTemplate } from "@piship/schema";
+import { plainHttpUpdateAllowed, resolveTemplate } from "@piship/schema";
 import {
   accessStatePaths,
   networkPolicyFor,
@@ -180,8 +181,8 @@ function recordLifecycleMetric(
   }
 }
 
-/** Host of the declared update source, when it resolves to a URL. */
-function updateSourceHost(ctx: BrandedContext): string | null {
+/** The declared update source, when it resolves to a URL. */
+function declaredSourceUrl(ctx: BrandedContext): URL | null {
   const template = ctx.metadata.updates?.source;
   if (!template) return null;
   try {
@@ -191,10 +192,25 @@ function updateSourceHost(ctx: BrandedContext): string | null {
       ctx.metadata.access?.variables ?? [],
       process.env,
     );
-    return /^https?:\/\//.test(source) ? new URL(source).hostname : null;
+    return /^https?:\/\//.test(source) ? new URL(source) : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether this update reads its channel over plain HTTP from a non-loopback
+ * host (`updates.transport: http-allowed`), from `--from` or the declared
+ * source. Audit records it as `transport: http`.
+ */
+function overPlainHttp(ctx: BrandedContext, from: string | undefined): boolean {
+  let url: URL | null;
+  try {
+    url = from === undefined ? declaredSourceUrl(ctx) : new URL(from);
+  } catch {
+    return false;
+  }
+  return url?.protocol === "http:" && !isLoopbackHost(url.hostname);
 }
 
 export async function runUpdate(
@@ -221,7 +237,10 @@ export async function runUpdate(
   const network = lifecycleNetwork(ctx);
   // Proxy, CA, and TLS policy apply. Only the update host the distribution
   // declares is added to the allowed hosts; a --from URL gets no exception.
-  const declaredHost = updateSourceHost(ctx);
+  // Plain HTTP beyond loopback only for updates.transport: http-allowed, to
+  // a private or internal host, and only on this fetch.
+  const declaredHost = declaredSourceUrl(ctx)?.hostname;
+  const transport = ctx.metadata.updates?.transport;
   const fetcher = createManagedFetch(
     {
       ...network,
@@ -230,7 +249,11 @@ export async function runUpdate(
         : network.allowHosts,
     },
     "update",
+    { plainHttp: (target) => plainHttpUpdateAllowed(target, transport) },
   ) as typeof fetch;
+  // Checks are audited only when they read the channel over plain HTTP.
+  const http = overPlainHttp(ctx, options.source);
+  const viaHttp: Record<string, string> = http ? { transport: "http" } : {};
   let result: Awaited<ReturnType<typeof updateDistribution>>;
   try {
     const progress = progressReporter(ctx.err);
@@ -247,12 +270,26 @@ export async function runUpdate(
   } catch (error) {
     const code = error instanceof PiShipError ? error.code : "UPDATE_FAILED";
     recordLifecycleMetric(ctx, check ? "check" : "update", code);
-    if (!check)
-      await auditRefusal(ctx, "runtime.update", { from: app.version, code });
+    if (!check || http)
+      await auditRefusal(ctx, "runtime.update", {
+        from: app.version,
+        code,
+        ...(check ? { check: "failed" } : {}),
+        ...viaHttp,
+      });
     throw error;
   }
   recordLifecycleMetric(ctx, check ? "check" : "update", "ok");
   for (const notice of result.notices) ctx.err(`Notice: ${notice}`);
+  if (check && http)
+    await auditLifecycle(ctx, "runtime.update", "allowed", {
+      from: result.from,
+      ...(result.to ? { to: result.to } : {}),
+      channel: result.channel,
+      key: result.keyId ?? "",
+      check: result.status,
+      ...viaHttp,
+    });
   if (result.status === "up-to-date") {
     ctx.out(
       `${app.name} ${result.from} is up to date on the ${result.channel} channel.`,
@@ -271,6 +308,7 @@ export async function runUpdate(
     to: result.to ?? "",
     channel: result.channel,
     key: result.keyId ?? "",
+    ...viaHttp,
   });
   ctx.out(
     `Updated ${app.name} ${result.from} -> ${result.to} (${result.channel}, signed by ${result.keyId}). ${result.from} is kept for ${app.command} rollback; sessions and settings were preserved.`,
