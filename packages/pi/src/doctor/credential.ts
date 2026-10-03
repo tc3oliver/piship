@@ -26,7 +26,11 @@ export function credentialGroup(data: DoctorData, out: DoctorSection): void {
       out.ok("state", "delegated (no PiShip secret)");
     else if (credential?.state === "rejected")
       out.warn("state", "rejected by the gateway; renewed on next use");
-    else out.bad("state", `${credential?.state ?? "unknown"}; ${login}`);
+    else
+      out.bad(
+        "state",
+        `${credential?.state ?? "unknown"}; ${credential?.notice ? `${credential.notice}; ` : ""}${login}`,
+      );
     const pending = access.pendingIssuance;
     if (pending?.stale)
       out.warn(

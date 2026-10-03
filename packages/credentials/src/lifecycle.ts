@@ -31,6 +31,7 @@ import {
   secretStoreProvider,
   storeForRecorded,
 } from "./store-owner.js";
+import { secretStoreUnreachable } from "./stores.js";
 
 export const CREDENTIAL_METADATA_SCHEMA = "piship-credential-metadata/v1";
 /**
@@ -621,6 +622,14 @@ export function normalizeCredential(value: unknown): RuntimeCredential {
   };
 }
 
+/** A secret whose deletion was not confirmed, and the error, when one was thrown. */
+export interface UndeletedSecret {
+  readonly ref: string;
+  /** Redacted. */
+  readonly problem: string;
+  readonly error?: unknown;
+}
+
 /**
  * Delete each reference and confirm it is gone. A delete that throws, or a
  * secret still readable (or unreadable) afterwards, is a failure: an
@@ -632,8 +641,8 @@ export async function deleteSecretsVerified(
   refs: readonly string[],
   /** Called after each confirmed deletion (crash-safety tests). */
   afterDelete?: (ref: string) => void | Promise<void>,
-): Promise<{ ref: string; problem: string }[]> {
-  const failed: { ref: string; problem: string }[] = [];
+): Promise<UndeletedSecret[]> {
+  const failed: UndeletedSecret[] = [];
   for (const ref of refs) {
     let deleted = false;
     try {
@@ -648,6 +657,7 @@ export async function deleteSecretsVerified(
           error instanceof PiShipError
             ? `${error.code}: ${redact(error.message)}`
             : redact(error instanceof Error ? error.message : String(error)),
+        error,
       });
     }
     // Outside the try: a hook that throws stops here, as a crash would.
@@ -775,6 +785,16 @@ export class CredentialManager {
   }
 
   /**
+   * Whether the metadata file is a discarded marker: references still to be
+   * deleted, left by a logout or replacement whose deletion failed, or by a
+   * first sign-in that stopped before its secret was confirmed stored. None
+   * of them is a usable credential, and some may never have held a secret.
+   */
+  hasDiscardedReferences(): boolean {
+    return this.#discardedPending();
+  }
+
+  /**
    * Whether the metadata file is no longer JSON (`damaged`), and then whether
    * its text still names a reference (`unrecoverable` when it names none).
    */
@@ -813,8 +833,7 @@ export class CredentialManager {
       return {
         state: "absent",
         metadata: null,
-        notice:
-          "A discarded credential is still being deleted from the secret store; it is never used",
+        notice: `Secret references that a discarded credential or an interrupted sign-in left in the ${this.#foreignStore() ?? this.#storeProvider} secret store are still to be deleted; they are never used, and login or logout deletes them once that store works (or drops them when it is not installed)`,
       };
     const foreign = this.#foreignStore();
     if (foreign && this.#incompatibleMetadataPresent())
@@ -1280,7 +1299,11 @@ export class CredentialManager {
     // Without metadata nothing would name the new secret if the process
     // stopped between writing it and committing metadata: a discarded
     // marker names it first, so the next command deletes it, never uses it.
-    if (!previous)
+    let before: string | null | undefined;
+    if (!previous) {
+      before = existsSync(this.options.metadataPath)
+        ? readFileSync(this.options.metadataPath, "utf8")
+        : null;
       this.#writeDiscarded([
         ...metadataFileSecretRefs(
           this.options.metadataPath,
@@ -1289,7 +1312,21 @@ export class CredentialManager {
         ),
         ref,
       ]);
-    await store.put(ref, credential.secret);
+    }
+    try {
+      await store.put(ref, credential.secret);
+    } catch (error) {
+      // A store that could not be reached at all (its command is not
+      // installed) wrote nothing, so the marker's new reference tracks no
+      // secret: the file goes back to what it was, or every later login
+      // would fail to delete a secret that never existed. A write that
+      // failed any other way may have stored it, and the marker stays.
+      if (before !== undefined && secretStoreUnreachable(error)) {
+        if (before === null) rmSync(this.options.metadataPath, { force: true });
+        else writeAtomic(this.options.metadataPath, before);
+      }
+      throw error;
+    }
     await this.options.onPhase?.("secret-written");
     const orphans = new Set(previous?.orphans ?? []);
     if (previous) orphans.add(previous.credential_ref);
@@ -1402,10 +1439,19 @@ export class CredentialManager {
    * the metadata is replaced by a discarded marker listing the references
    * still to delete, so the secret stays tracked and is never used, and the
    * failures are returned.
+   *
+   * A discarded marker whose store cannot be reached at all (its command is
+   * not installed) is dropped instead, and its references are added to
+   * `dropped`: nothing can have been stored through a store that cannot be
+   * started, and kept, the marker would stop every later login, also after
+   * the storage provider changed. Credential metadata, and a marker whose
+   * store answers but fails, stay tracked.
    */
   async #discardMetadata(
     raw: unknown = this.#readRaw(),
-  ): Promise<{ ref: string; problem: string }[]> {
+    dropped?: string[],
+  ): Promise<UndeletedSecret[]> {
+    const marker = this.#discardedPending();
     const refs = [
       ...new Set([
         ...metadataSecretRefs(raw, this.options.distributionId),
@@ -1435,9 +1481,16 @@ export class CredentialManager {
           ref,
           problem: `the ${recorded} secret store that holds it is not available`,
         }));
-    if (!failed.length) {
+    const unreachable =
+      marker &&
+      failed.length > 0 &&
+      failed.every((item) =>
+        secretStoreUnreachable((item as UndeletedSecret).error),
+      );
+    if (!failed.length || unreachable) {
       rmSync(this.options.metadataPath, { force: true });
-      return failed;
+      if (unreachable) dropped?.push(...failed.map((item) => item.ref));
+      return [];
     }
     this.#writeDiscarded(
       failed.map((item) => item.ref),
@@ -1450,8 +1503,8 @@ export class CredentialManager {
    * Discard metadata that must not be used, failing closed when a secret it
    * references could not be deleted.
    */
-  async #clearMetadata(raw?: unknown): Promise<void> {
-    const failed = await this.#discardMetadata(raw);
+  async #clearMetadata(raw?: unknown, dropped?: string[]): Promise<void> {
+    const failed = await this.#discardMetadata(raw, dropped);
     if (failed.length) throw deletionFailure(failed);
   }
 
@@ -1578,17 +1631,20 @@ export class CredentialManager {
             `The credential in the ${foreign} secret store could not be revoked; it is recorded for follow-up: ${revoked.problem}`,
           );
       }
-      await this.#clearMetadata();
+      const dropped: string[] = [];
+      await this.#clearMetadata(undefined, dropped);
       notices.push(
-        discarded
-          ? "The secrets of a discarded credential were deleted"
-          : foreign
-            ? `The credential stored in the ${foreign} secret store was deleted from it: this distribution now stores credentials in the ${this.#storeProvider} store. A new credential is required`
-            : damaged === "unrecoverable"
-              ? "Damaged credential metadata named no secret reference that could be recovered and was cleared; a secret it referenced may remain in the secret store. A new credential is required"
-              : damaged === "damaged"
-                ? "Damaged credential metadata was cleared after the secrets it names were deleted; a new credential is required"
-                : "Incompatible credential metadata was cleared; a new credential is required",
+        dropped.length
+          ? `Secret references left in the ${foreign ?? this.#storeProvider} secret store were dropped without deleting anything: that store is not installed here, so nothing was stored through it`
+          : discarded
+            ? "The secrets of a discarded credential were deleted"
+            : foreign
+              ? `The credential stored in the ${foreign} secret store was deleted from it: this distribution now stores credentials in the ${this.#storeProvider} store. A new credential is required`
+              : damaged === "unrecoverable"
+                ? "Damaged credential metadata named no secret reference that could be recovered and was cleared; a secret it referenced may remain in the secret store. A new credential is required"
+                : damaged === "damaged"
+                  ? "Damaged credential metadata was cleared after the secrets it names were deleted; a new credential is required"
+                  : "Incompatible credential metadata was cleared; a new credential is required",
       );
     }
     let metadata = this.readMetadata();
@@ -1837,11 +1893,25 @@ export class CredentialManager {
     options: {
       readonly reason?: CredentialRevokeReason;
       readonly keepIssuanceFor?: PrincipalKey | null;
+      /**
+       * Receives the secrets whose deletion failed, with the store's errors,
+       * and the references of a discarded marker dropped because its store
+       * is not installed.
+       */
+      readonly onDiscard?: (result: {
+        readonly failed: readonly UndeletedSecret[];
+        readonly dropped: readonly string[];
+      }) => void;
     } = {},
   ): Promise<string[]> {
     if (!this.storesSecrets) return [];
     return this.#exclusive(() =>
-      this.#logout(ctx, options.reason ?? "logout", options.keepIssuanceFor),
+      this.#logout(
+        ctx,
+        options.reason ?? "logout",
+        options.keepIssuanceFor,
+        options.onDiscard,
+      ),
     );
   }
 
@@ -2040,6 +2110,10 @@ export class CredentialManager {
     ctx: CredentialContext,
     reason: CredentialRevokeReason,
     keepIssuanceFor?: PrincipalKey | null,
+    onDiscard?: (result: {
+      readonly failed: readonly UndeletedSecret[];
+      readonly dropped: readonly string[];
+    }) => void,
   ): Promise<string[]> {
     const problems: string[] = [];
     // First, while the credential a commit may have resolved it with is
@@ -2067,8 +2141,11 @@ export class CredentialManager {
     // next generation may hold a secret written before a crash that never
     // reached metadata; delete all of them so logout leaves nothing behind.
     // What cannot be deleted stays tracked by a discarded marker.
-    for (const failed of await this.#discardMetadata())
+    const dropped: string[] = [];
+    const undeleted = await this.#discardMetadata(undefined, dropped);
+    for (const failed of undeleted)
       problems.push(`delete ${failed.ref}: ${failed.problem}`);
+    onDiscard?.({ failed: undeleted, dropped });
     return problems;
   }
 }

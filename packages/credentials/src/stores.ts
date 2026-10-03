@@ -10,6 +10,8 @@ export interface CommandResult {
   readonly status: number | null;
   readonly stdout: string;
   readonly stderr: string;
+  /** The command could not be started: it is not installed or not on PATH. */
+  readonly missing?: boolean;
 }
 /** Runs a command with secret material only on stdin, never in argv. */
 export type CommandRunner = (
@@ -32,6 +34,9 @@ export const runCommand: CommandRunner = (command, args, stdin) => {
     status: result.error ? null : result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? result.error?.message ?? "",
+    ...((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+      ? { missing: true }
+      : {}),
   };
 };
 
@@ -50,12 +55,50 @@ function unavailable(
   kind: string,
   detail: string,
   userAction = "Unlock or install the platform secret store, or explicitly opt in to the restricted file fallback",
+  unreachable = false,
 ): PiShipError {
   return new PiShipError(
     "SECRET_STORE_UNAVAILABLE",
-    `${kind} secret store failed: ${detail.trim().split("\n")[0] || "unknown error"}`,
-    { component: "secret-store", userAction },
+    `${kind} secret store ${unreachable ? "is unavailable" : "failed"}: ${detail.trim().split("\n")[0] || "unknown error"}`,
+    {
+      component: "secret-store",
+      userAction,
+      ...(unreachable ? { sanitizedDetail: { reachable: false } } : {}),
+    },
   );
+}
+
+/**
+ * Whether `error` says the secret store could not be reached at all: the
+ * command that serves it is not installed, so nothing was read, written, or
+ * deleted. Any other failure leaves the outcome of a write unknown.
+ */
+export function secretStoreUnreachable(error: unknown): boolean {
+  return (
+    error instanceof PiShipError &&
+    error.code === "SECRET_STORE_UNAVAILABLE" &&
+    error.sanitizedDetail?.reachable === false
+  );
+}
+
+/** Run a store command; a command that is not installed is an unreachable store. */
+function invoke(
+  run: CommandRunner,
+  description: string,
+  userAction: string | undefined,
+  command: string,
+  args: readonly string[],
+  stdin?: string,
+): CommandResult {
+  const result = run(command, args, stdin);
+  if (result.missing)
+    throw unavailable(
+      description,
+      `${command} was not found (${result.stderr.trim() || "ENOENT"})`,
+      userAction,
+      true,
+    );
+  return result;
 }
 // Secrets are stored base64url-encoded so every backend handles them as
 // printable text without shell or quoting concerns.
@@ -191,12 +234,27 @@ export class MacKeychainSecretStore implements SecretStore {
 // with libsecret 0.21.4). Larger values are split into parts below that limit;
 // anything that already fit stays one item, so stored values keep their form.
 const SECRET_SERVICE_CHUNK = 8000;
+const SECRET_SERVICE_ACTION =
+  "Install and unlock a Secret Service keyring (such as GNOME Keyring) and libsecret's secret-tool (on Debian and Ubuntu, the gnome-keyring and libsecret-tools packages), or set credential.storage.provider to file in piship.yaml, then lock and build the distribution again";
 
 /** Linux Secret Service (GNOME Keyring, KWallet) through libsecret's secret-tool. */
 export class SecretServiceSecretStore implements SecretStore {
   readonly kind = "secret-service";
   readonly description = "Linux Secret Service";
   constructor(private readonly run: CommandRunner = runCommand) {}
+  #run(args: readonly string[], stdin?: string): CommandResult {
+    return invoke(
+      this.run,
+      this.description,
+      SECRET_SERVICE_ACTION,
+      "secret-tool",
+      args,
+      stdin,
+    );
+  }
+  #unavailable(detail: string): PiShipError {
+    return unavailable(this.description, detail, SECRET_SERVICE_ACTION);
+  }
   /**
    * A lookup that finds nothing exits 1 with no message, and so does one on a
    * locked keyring (libsecret 0.21.4): a locked keyring would read as an
@@ -204,38 +262,24 @@ export class SecretServiceSecretStore implements SecretStore {
    * item even when the keyring is locked, so a miss is confirmed with it.
    */
   #confirmAbsent(attributes: readonly string[]): void {
-    const result = this.run("secret-tool", [
-      "search",
-      "service",
-      SERVICE,
-      ...attributes,
-    ]);
+    const result = this.#run(["search", "service", SERVICE, ...attributes]);
     if (result.status !== 0 && result.stderr.trim())
-      throw unavailable(this.description, result.stderr);
+      throw this.#unavailable(result.stderr);
     if (result.stdout.trim())
-      throw unavailable(
-        this.description,
-        "the keyring is locked; unlock it and try again",
-      );
+      throw this.#unavailable("the keyring is locked; unlock it and try again");
   }
   #read(account: string, extra: readonly string[] = []): string | null {
     const attributes = ["account", account, ...extra];
-    const result = this.run("secret-tool", [
-      "lookup",
-      "service",
-      SERVICE,
-      ...attributes,
-    ]);
+    const result = this.#run(["lookup", "service", SERVICE, ...attributes]);
     if (result.status === 1 && !result.stderr.trim()) {
       this.#confirmAbsent(attributes);
       return null;
     }
-    if (result.status !== 0) throw unavailable(this.description, result.stderr);
+    if (result.status !== 0) throw this.#unavailable(result.stderr);
     return result.stdout.trim() || null;
   }
   #write(account: string, text: string, extra: readonly string[] = []): void {
-    const result = this.run(
-      "secret-tool",
+    const result = this.#run(
       [
         "store",
         `--label=PiShip ${account}`,
@@ -249,18 +293,12 @@ export class SecretServiceSecretStore implements SecretStore {
     );
     // A truncated store still exits 0, so the warning is the only signal.
     if (result.status !== 0 || /too long/i.test(result.stderr))
-      throw unavailable(this.description, result.stderr);
+      throw this.#unavailable(result.stderr);
   }
   #remove(account: string): void {
-    const result = this.run("secret-tool", [
-      "clear",
-      "service",
-      SERVICE,
-      "account",
-      account,
-    ]);
+    const result = this.#run(["clear", "service", SERVICE, "account", account]);
     if (result.status !== 0 && result.stderr.trim())
-      throw unavailable(this.description, result.stderr);
+      throw this.#unavailable(result.stderr);
   }
   // Every part carries its primary's reference as a `parent` attribute and a
   // random `write` id, which the primary also records. Parts are found and
@@ -270,17 +308,12 @@ export class SecretServiceSecretStore implements SecretStore {
   // primary has neither attribute.
   #hasParts(parent: string): boolean {
     const attributes = ["parent", parent];
-    const result = this.run("secret-tool", [
-      "lookup",
-      "service",
-      SERVICE,
-      ...attributes,
-    ]);
+    const result = this.#run(["lookup", "service", SERVICE, ...attributes]);
     if (result.status === 1 && !result.stderr.trim()) {
       this.#confirmAbsent(attributes);
       return false;
     }
-    if (result.status !== 0) throw unavailable(this.description, result.stderr);
+    if (result.status !== 0) throw this.#unavailable(result.stderr);
     return true;
   }
   #clearParts(parent: string): void {
@@ -288,18 +321,12 @@ export class SecretServiceSecretStore implements SecretStore {
     // parts of one parent, and with parts of two writes). The repeat is only a
     // guard: a store that keeps answering with parts is broken, not slow.
     for (let attempt = 0; attempt < MAX_CLEAR_ATTEMPTS; attempt += 1) {
-      const result = this.run("secret-tool", [
-        "clear",
-        "service",
-        SERVICE,
-        "parent",
-        parent,
-      ]);
+      const result = this.#run(["clear", "service", SERVICE, "parent", parent]);
       if (result.status !== 0 && result.stderr.trim())
-        throw unavailable(this.description, result.stderr);
+        throw this.#unavailable(result.stderr);
       if (!this.#hasParts(parent)) return;
     }
-    throw unavailable(this.description, "the stored secret parts remain");
+    throw this.#unavailable("the stored secret parts remain");
   }
   async put(ref: string, value: SecretValue): Promise<void> {
     checkRef(ref);
@@ -342,17 +369,17 @@ export class SecretServiceSecretStore implements SecretStore {
     const count = Number(marker?.[1]);
     const write = marker?.[2];
     if (!write || count > MAX_CHUNKS)
-      throw unavailable(this.description, "a stored secret part is missing");
+      throw this.#unavailable("a stored secret part is missing");
     const scope = ["parent", ref, "write", write];
     let joined = "";
     for (let index = 0; index < count; index += 1) {
       const part = this.#read(partRef(ref, index), scope);
       if (part === null)
-        throw unavailable(this.description, "a stored secret part is missing");
+        throw this.#unavailable("a stored secret part is missing");
       joined += part;
     }
     if (this.#read(partRef(ref, count), scope) !== null)
-      throw unavailable(this.description, "a stored secret has an extra part");
+      throw this.#unavailable("a stored secret has an extra part");
     return decode(joined);
   }
   async delete(ref: string): Promise<void> {
@@ -360,10 +387,7 @@ export class SecretServiceSecretStore implements SecretStore {
     this.#clearParts(ref);
     this.#remove(ref);
     if (this.#read(ref) !== null || this.#hasParts(ref))
-      throw unavailable(
-        this.description,
-        "the stored secret could not be deleted",
-      );
+      throw this.#unavailable("the stored secret could not be deleted");
   }
 }
 
@@ -441,7 +465,10 @@ export class WindowsCredentialSecretStore implements SecretStore {
   constructor(private readonly run: CommandRunner = runCommand) {}
   #invoke(lines: readonly string[]): CommandResult {
     const encoded = Buffer.from(WINDOWS_CREDMAN, "utf16le").toString("base64");
-    return this.run(
+    return invoke(
+      this.run,
+      this.description,
+      undefined,
       "powershell.exe",
       [
         "-NoProfile",

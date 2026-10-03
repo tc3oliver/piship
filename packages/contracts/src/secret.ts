@@ -101,8 +101,13 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   // A key, header, or query parameter whose name ends in a credential word,
   // with any separator or none (`X-Api-Key`, `client_secret`, `?token=`,
   // `secretAccessKey`), quoted, escaped (`\"`), or bare. The match starts at
-  // the word, so the rest of the name is never rescanned.
-  /((?:token|secret|passw(?:or)?d|credentials?|(?:api|access|secret|private)[-_]?key)(?:\\*")?\s*[:=]\s*(?:\\*")?)((?:\\[^"\s]|[^"\s,}&\\])+)/gi,
+  // the word, so the rest of the name is never rescanned. Prose that ends a
+  // label in a credential word before a problem PiShip reports
+  // ("sandbox credential: delete <ref>: ...") is not a value: the words such
+  // a problem starts with ("delete", "the", "revocation:") are kept when more
+  // text follows them. A value that is only such a word, or one that starts
+  // with it, is still redacted.
+  /((?:token|secret|passw(?:or)?d|credentials?|(?:api|access|secret|private)[-_]?key)(?:\\*")?\s*[:=]\s*(?:\\*")?)((?!(?:delete|the|revocation:)\s)(?:\\[^"\s]|[^"\s,}&\\])+)/gi,
 ];
 
 /**

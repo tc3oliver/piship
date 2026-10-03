@@ -44,8 +44,10 @@ import {
   REVOCATION_RETRY_SCHEMA,
   RestrictedFileSecretStore,
   readPendingRevocations,
+  runCommand,
   SANDBOX_CREDENTIAL_METADATA_SCHEMA,
   SecretServiceSecretStore,
+  secretStoreUnreachable,
   toSecretValue,
   WindowsCredentialSecretStore,
   withFileLock,
@@ -3454,5 +3456,139 @@ describe("Windows file fallback permissions", () => {
       expect(posix.calls).toEqual([]);
       expect(statSync(join(temp, "posix")).mode & 0o777).toBe(0o700);
     }
+  });
+});
+
+describe("a secret store that cannot be reached (#196)", () => {
+  const path = () => join(temp, "credentials-metadata", "inference.json");
+  const notInstalled: CommandRunner = () => ({
+    status: null,
+    stdout: "",
+    stderr: "spawnSync secret-tool ENOENT",
+    missing: true,
+  });
+  const manager = (store: SecretServiceSecretStore | MemorySecretStore) =>
+    new CredentialManager({
+      distributionId: "acmecode",
+      provider: new LocalSecretCredentialProvider(),
+      store,
+      metadataPath: path(),
+      beforeExpirySeconds: 0,
+    });
+  const acquire = (credentials: CredentialManager) =>
+    credentials.ensure(
+      null,
+      { ...ctx, readSecret: async () => "sk-unreachable-store-0001" },
+      { allowAcquire: true },
+    );
+  const marker = (ref = "piship:acmecode:inference#1") => {
+    mkdirSync(join(temp, "credentials-metadata"), { recursive: true });
+    writeFileSync(
+      path(),
+      JSON.stringify({
+        schema: CREDENTIAL_DISCARDED_SCHEMA,
+        orphans: [ref],
+        secret_store: "system",
+        discarded_at: "2026-10-03T10:48:43.000Z",
+      }),
+    );
+  };
+
+  it("marks a store command that is not installed as unreachable, with the Linux way out", async () => {
+    const store = new SecretServiceSecretStore(notInstalled);
+    const error = await store
+      .put("piship:acmecode:inference#1", new SecretValue("sk-unreachable-1"))
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(secretStoreUnreachable(error)).toBe(true);
+    expect((error as PiShipError).message).toBe(
+      "Linux Secret Service secret store is unavailable: secret-tool was not found (spawnSync secret-tool ENOENT)",
+    );
+    expect((error as PiShipError).userAction).toMatch(
+      /secret-tool .*or set credential\.storage\.provider to file in piship\.yaml, then lock and build the distribution again$/,
+    );
+    // A store that answers and fails is not unreachable.
+    const locked = new SecretServiceSecretStore(() => ({
+      status: 1,
+      stdout: "",
+      stderr: "Cannot create an item in a locked collection",
+    }));
+    const failed = await locked
+      .delete("piship:acmecode:inference#1")
+      .catch((caught: unknown) => caught);
+    expect(failed).toBeInstanceOf(PiShipError);
+    expect(secretStoreUnreachable(failed)).toBe(false);
+  });
+
+  it("runCommand reports a command that is not installed as missing", () => {
+    const result = runCommand("piship-no-such-command-196", []);
+    expect(result.missing).toBe(true);
+    expect(result.status).toBeNull();
+  });
+
+  it("a first acquire through an unreachable store leaves no reference behind", async () => {
+    const credentials = manager(new SecretServiceSecretStore(notInstalled));
+    const error = await acquire(credentials).catch((caught: unknown) => caught);
+    expect(secretStoreUnreachable(error)).toBe(true);
+    expect(existsSync(path())).toBe(false);
+    expect(credentials.hasStoredCredential()).toBe(false);
+  });
+
+  it("a write whose outcome is unknown keeps its reference tracked", async () => {
+    const store = new MemorySecretStore();
+    store.put = async () => {
+      throw new PiShipError("SECRET_STORE_UNAVAILABLE", "write timed out");
+    };
+    await expect(acquire(manager(store))).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE",
+    });
+    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({
+      schema: CREDENTIAL_DISCARDED_SCHEMA,
+      orphans: ["piship:acmecode:inference#1"],
+    });
+  });
+
+  it("drops a discarded marker whose store is not installed, and reports it", async () => {
+    marker();
+    const credentials = manager(new SecretServiceSecretStore(notInstalled));
+    const results: {
+      failed: readonly unknown[];
+      dropped: readonly string[];
+    }[] = [];
+    expect(
+      await credentials.logout(ctx, {
+        onDiscard: (result) => results.push(result),
+      }),
+    ).toEqual([]);
+    expect(results).toEqual([
+      { failed: [], dropped: ["piship:acmecode:inference#1"] },
+    ]);
+    expect(existsSync(path())).toBe(false);
+  });
+
+  it("keeps a discarded marker whose store answers but fails", async () => {
+    marker();
+    const store = new MemorySecretStore();
+    store.delete = async () => {
+      throw new PiShipError("SECRET_STORE_UNAVAILABLE", "keyring is locked");
+    };
+    const credentials = manager(store);
+    expect(credentials.hasDiscardedReferences()).toBe(true);
+    const problems = await credentials.logout(ctx);
+    expect(problems).toEqual([
+      "delete piship:acmecode:inference#1: SECRET_STORE_UNAVAILABLE: keyring is locked",
+    ]);
+    expect(credentials.hasDiscardedReferences()).toBe(true);
+    expect(credentials.status().notice).toMatch(
+      /left in the system secret store are still to be deleted/,
+    );
+  });
+
+  it("keeps credential metadata whose store is not installed", async () => {
+    await acquire(manager(new MemorySecretStore()));
+    const credentials = manager(new SecretServiceSecretStore(notInstalled));
+    const problems = await credentials.logout(ctx);
+    expect(problems.join("; ")).toMatch(/secret-tool was not found/);
+    expect(credentials.hasStoredCredential()).toBe(true);
   });
 });
