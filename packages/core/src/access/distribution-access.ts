@@ -43,6 +43,7 @@ import {
   type SecretStoreProvider,
   type SecretStoreResolver,
   storeForRecorded,
+  type UndeletedSecret,
   withFileLock,
 } from "@piship/credentials";
 import {
@@ -1301,6 +1302,38 @@ export class DistributionAccess {
   }
 
   /**
+   * Why sign-in cannot replace what the runtime credential metadata names.
+   * An unavailable store leads, with its own problem and action, and a
+   * discarded marker is not called a previous credential: it may name a
+   * reference whose secret was never stored.
+   */
+  #replaceBlocked(blocked: {
+    leftover: boolean;
+    undeleted: readonly UndeletedSecret[];
+    problems: readonly string[];
+    before: string;
+  }): PiShipError {
+    const cause = blocked.undeleted
+      .map((item) => item.error)
+      .find(
+        (error): error is PiShipError =>
+          error instanceof PiShipError &&
+          error.code === "SECRET_STORE_UNAVAILABLE",
+      );
+    const refs = blocked.undeleted.map((item) => item.ref).join(", ");
+    const subject = blocked.leftover
+      ? "a secret reference that an earlier sign-in or sign-out left behind"
+      : "the previous credential";
+    const message = cause
+      ? `${cause.message}. Until it is available, ${subject} (${refs}) cannot be deleted from it, so sign-in stopped before ${blocked.before}`
+      : `${subject[0]?.toUpperCase()}${subject.slice(1)} could not be deleted from the secret store, so sign-in stopped before ${blocked.before} (${blocked.problems.join("; ")})`;
+    return new PiShipError("SECRET_STORE_UNAVAILABLE", message, {
+      component: "credential",
+      userAction: `${cause?.userAction ?? "Unlock or repair the secret store"}, then run login again${blocked.leftover ? "; it deletes the reference first" : ""}`,
+    });
+  }
+
+  /**
    * Interactive login: identity (when configured), then the runtime
    * credential. The previous runtime credential is revoked where supported
    * and deleted, and its deletion confirmed, before the new identity is
@@ -1358,22 +1391,33 @@ export class DistributionAccess {
         // previous one where supported (audited as credential.revoke). A
         // request of the signing-in principal whose answer was lost stays
         // pending, so the acquire below repeats its idempotency key.
+        // A discarded marker names references a failed deletion or a first
+        // sign-in that stopped before its secret was stored left behind:
+        // never a previous credential, and maybe never a stored secret.
+        const leftover = manager.hasDiscardedReferences();
+        let undeleted: readonly UndeletedSecret[] = [];
         const problems = (
           await manager.logout(this.#credentialContext(), {
             reason: "replace",
             keepIssuanceFor: principal,
+            onDiscard: ({ failed, dropped }) => {
+              undeleted = failed;
+              if (dropped.length)
+                notices.push(
+                  `Secret references an earlier sign-in or sign-out left behind (${dropped.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, so nothing was stored through it`,
+                );
+            },
           })
         ).map((problem) => redact(problem));
         if (manager.hasStoredCredential())
-          throw new PiShipError(
-            "SECRET_STORE_UNAVAILABLE",
-            `The previous credential could not be deleted from the secret store, so sign-in stopped before ${provider ? "storing the new identity" : "acquiring a new credential"}: ${problems.join("; ")}`,
-            {
-              component: "credential",
-              userAction:
-                "Unlock or repair the secret store, then run login again",
-            },
-          );
+          throw this.#replaceBlocked({
+            leftover,
+            undeleted,
+            problems,
+            before: provider
+              ? "storing the new identity"
+              : "acquiring a new credential",
+          });
         for (const problem of problems)
           notices.push(
             `The previous credential was deleted locally but not revoked: ${problem}`,

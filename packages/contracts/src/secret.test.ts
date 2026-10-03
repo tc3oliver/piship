@@ -212,4 +212,24 @@ describe("redaction of common secret forms", () => {
     ])
       expect(redact(text)).toBe(text);
   });
+
+  it("keeps a problem that follows a label ending in a credential word (#196)", () => {
+    for (const text of [
+      "sign-in stopped before acquiring a new credential: delete piship:op:inference#1: SECRET_STORE_UNAVAILABLE: secret-tool was not found",
+      "sandbox credential: delete piship:op:sandbox#2: the keyring is locked",
+      "sandbox credential: revocation: the broker refused",
+      "sandbox credential: the pending credential request record could not be removed",
+    ])
+      expect(redact(text)).toBe(text);
+    // The same words as a whole value, or as the start of one, still go.
+    for (const [text, expected] of <[string, string][]>[
+      ["credential: delete", `credential: ${REDACTED}`],
+      ["password=delete", `password=${REDACTED}`],
+      ["secret: deleteme123 rest", `secret: ${REDACTED} rest`],
+      ["token: the-real-token next", `token: ${REDACTED} next`],
+      ['{"credential":"delete"}', `{"credential":"${REDACTED}"}`],
+      ["credential: sk_live_abcdef", `credential: ${REDACTED}`],
+    ])
+      expect(redact(text)).toBe(expected);
+  });
 });

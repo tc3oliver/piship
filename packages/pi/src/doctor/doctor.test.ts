@@ -352,6 +352,20 @@ describe("renderDoctor", () => {
     );
   });
 
+  it("says what stale credential state remains and which command clears it (#196)", () => {
+    const notice =
+      "Secret references that a discarded credential or an interrupted sign-in left in the system secret store are still to be deleted; they are never used, and login or logout deletes them once that store works (or drops them when it is not installed)";
+    const report = renderDoctor(
+      doctorData("managed", {
+        access: accessData({ credential: { state: "absent", notice } }),
+      }),
+    );
+    expect(report.failed).toBe(true);
+    expect(group(report.render(), "Credential")).toContain(
+      `  ✗ ${"state".padEnd(20)} absent; ${notice}; run acmecode login`,
+    );
+  });
+
   it("reports a workload identity as obtained per run, whatever session is stored", () => {
     for (const signedIn of [false, true]) {
       const report = renderDoctor(

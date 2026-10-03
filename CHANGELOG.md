@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. Each section is
 
 Changes on `main` after v0.8.0. Not released.
 
+### Fixed
+
+- A login through a system secret store that cannot be reached (Linux without `secret-tool`, as on WSL or a headless server) no longer leaves a secret reference behind: the first login wrote a discarded marker naming the new reference before the write, the write failed, and every later login reported `The previous credential could not be deleted` for a secret that never existed. Such a write now restores the metadata file, and a marker whose store command is not installed is dropped at the next login or logout, also after switching to the file store; a write that fails any other way keeps its reference tracked. The error leads with the store's problem (`secret-tool was not found`), its action names installing `secret-tool` and a keyring or switching to `storage: {provider: file}`, a discarded marker is no longer called a previous credential, and `doctor` says what stale references remain and which command clears them (#196).
+- Redaction no longer hides the first word of a problem that follows a label ending in a credential word (`new credential: delete <ref>` showed `[REDACTED] <ref>`); the same word as a whole value is still redacted (#196).
+
 ## v0.8.0
 
 Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0) from tag `v0.8.0` (commit `8550282`, the squash of #193); not published to npm. Release qualification passed on that exact commit ([run 37108519783](https://github.com/tc3oliver/piship/actions/runs/37108519783)). v0.8.0 is pre-production trust and validation hardening: it collects the changes made on `main` after v0.7.1 and freezes the update-trust contracts before real installations exist (its scope is in the [roadmap](docs/roadmap.md)). The manifest and lock schemas move to `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. v0.8.0 is the production-validation baseline, replacing [v0.7.1](docs/status.md#v071-previous-production-validation-baseline) ([baseline](docs/status.md#v080-production-validation-baseline)).

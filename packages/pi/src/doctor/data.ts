@@ -82,7 +82,7 @@ export interface AccessData {
   readonly store?: { readonly kind: string; readonly description: string };
   readonly credential?: Pick<
     AccessStatus["credential"],
-    "state" | "remainingSeconds"
+    "state" | "remainingSeconds" | "notice"
   >;
   /**
    * The runtime credential's unresolved acquire or renewal, when one is
@@ -493,6 +493,9 @@ async function collectAccess(
             state: status.credential.state,
             ...(status.credential.remainingSeconds !== undefined
               ? { remainingSeconds: status.credential.remainingSeconds }
+              : {}),
+            ...(status.credential.notice
+              ? { notice: status.credential.notice }
               : {}),
           },
         }
