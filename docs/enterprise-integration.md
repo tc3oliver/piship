@@ -492,7 +492,7 @@ Applies to every PiShip-managed request above and to Pi's in-process requests ([
 
 | Rule | Detail |
 | --- | --- |
-| HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION` |
+| HTTPS | Required; plain HTTP only for loopback fixtures. TLS verification cannot be disabled; `NODE_TLS_REJECT_UNAUTHORIZED=0` fails with `TLS_POLICY_VIOLATION`. The update channel alone may use plain HTTP to a private or internal host when the manifest sets `updates.transport: http-allowed`, for an intranet without a certificate: no CA bundle is needed, the proxy rule below still applies, and update integrity comes from the signed update metadata ([manifest](manifest.md#plain-http-update-channel-v1alpha5)). OIDC, the broker, the gateway, MCP servers, and audit sinks still need HTTPS |
 | Enterprise CA | `network.tls.additionalCA`: PEM bundles added to the default roots, read on the employee's machine at launch; use absolute paths ([CA bundles](#ca-bundles)). A bundle that does not contain the server's certificate fails the request; verification is never relaxed to make it pass |
 | Proxy | `HTTP(S)_PROXY` and `NO_PROXY` (either case) are honored unless `network.proxy.inheritEnvironment: false`. A host in `NO_PROXY` is contacted directly; every other request, including to a private endpoint, goes through the proxy |
 | Child processes | In a managed distribution, commands the agent runs receive only the proxy variables the policy approves (never a proxy URL that embeds credentials) and, for a single declared bundle, `NODE_EXTRA_CA_CERTS`. Other proxy, CA, and TLS-verification variables are dropped ([security](security.md#child-process-network-environment)) |

@@ -9,7 +9,7 @@ The flow for a distribution owner:
 1. Migrate the manifest to `piship/v1alpha5`, add the update trust bootstrap (root and channel keys), and lock ([manifest](../manifest.md#update-trust-bootstrap-v1alpha5)).
 2. Build a release on each target with `piship release`.
 3. Verify it with `piship verify-release` and, in CI, check reproducibility and build provenance.
-4. Add the archives to a channel with `piship sign-channel` and serve the channel directory.
+4. Add the archives to a channel with `piship sign-channel` and serve the channel directory over HTTPS, or over plain HTTP from an internal host when the manifest sets `updates.transport: http-allowed` ([channel hosting](trust-root.md#channel-hosting)).
 5. Users install the release, then run `<command> update` and `<command> rollback`.
 6. Change trust later only by publishing the next root with `piship trust-root next`, never by editing a release's bootstrap.
 

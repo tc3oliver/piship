@@ -57,7 +57,7 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **P2. Personal resources.** Answers S4 to S7 go under the `user` class.
 - **P3. Sandbox.** Off, best effort, or required (S10).
 - **P4. MCP.** The personal servers from S9, if any.
-- **P5. Signed updates** (optional, only if S11 asked for them): where the channel will be hosted. The person runs their own signing key.
+- **P5. Signed updates** (optional, only if S11 asked for them): where the channel will be hosted. The person runs their own signing key. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway still need HTTPS.
 
 ### Managed branch
 
@@ -73,7 +73,7 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **M9. Sandbox.** The OS sandbox on each machine, or a remote one (a CubeSandbox or other E2B-compatible service, Kubernetes Agent Sandbox, or the company's own adapter)? For a remote one: its API URL, template or pool, working directory, and how it authenticates. Should commands in it reach the network (with `deny`, `npm install`, `pip install`, and `git fetch` fail inside it)? Extra paths the agent may write, or must never read?
 - **M10. Governed MCP.** The approved servers from S9 and the tools each may expose.
 - **M11. Audit.** An audit collector URL, and whether a launch must fail when it is unreachable.
-- **M12. Managed update source** (can wait until the first version works): where releases will be hosted, and who holds the release signing keys.
+- **M12. Managed update source** (can wait until the first version works): where releases will be hosted, and who holds the release signing keys. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway still need HTTPS.
 
 ## 3. Create the repository
 
@@ -109,6 +109,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | P1 Self-hosted model | As above; `inference.baseUrl` is the server's `https` URL, or a runtime variable | Every allowed model needs a catalog entry with `name`, `contextWindow`, `maxOutputTokens`; `tools: true` for tool-calling models |
 | P3 Sandbox | `sandbox.required: false` (best effort) or `true` | |
 | P4 Personal MCP | `mcp.mode: allowlist`, `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, `tools.allow` | Only servers the person named |
+| P5 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name, or a name such as `*.internal`, `*.lan`, `*.local`); a public host fails `validate`. It changes nothing for any other endpoint |
 
 ### Managed
 
@@ -127,6 +128,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M10 Governed MCP | `mcp.servers.<id>` (the template's `mcp.mode` is already `allowlist`) | Also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does. A server host must be allowed by the private-only network policy |
 | M11 Audit | an `audit.sinks` entry with `id`, `type: http`, `url`, `required` | The template keeps a local file sink and shows the collector entry as a comment |
 | M12 Update source | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
+| M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. OIDC, the broker, the gateway, MCP, and audit still need HTTPS ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
 
 Then `piship config explain <directory>/piship.yaml` shows the effective configuration and where each value comes from.
 
