@@ -182,7 +182,7 @@ updates:
 
 裡面不放任何機密，看起來像機密的欄位會被 schema 直接擋掉。政策、資源、MCP server、稽核和發版關卡都是選填。所有欄位都在 [manifest 說明](docs/manifest.md)。
 
-要做自己的發行版，執行 `node packages/cli/dist/bin.js init ./my-agent --managed`（個人用就不加 `--managed`），放在自己的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。
+要做自己公司的發行版，執行 `node packages/cli/dist/bin.js init ./company-agent --managed`，放在自己的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。每個要填的值，[設定指南](docs/agent-setup.md) 都有說明。
 
 ## 不是公司也能用
 
@@ -194,7 +194,7 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
-見 [personal 範例](examples/personal/README.md)。
+要做自己的，執行 `node packages/cli/dist/bin.js init ./my-agent --personal`。見 [personal 範例](examples/personal/README.md) 和 [設定指南](docs/agent-setup.md)。
 
 ## 各自負責什麼
 

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -201,6 +202,64 @@ describe("init", () => {
     },
     180000,
   );
+});
+
+describe("init mode", () => {
+  it("writes the personal template with --personal and with no flag", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-mode-"));
+    roots.push(root);
+    const explicit = initDistribution(join(root, "explicit"), {
+      personal: true,
+    });
+    const implicit = initDistribution(join(root, "implicit"));
+    for (const path of [explicit, implicit])
+      expect(readManifest(path).deployment.mode).toBe("personal");
+    expect(readFileSync(explicit, "utf8").replaceAll("explicit", "id")).toBe(
+      readFileSync(implicit, "utf8").replaceAll("implicit", "id"),
+    );
+  });
+
+  it("refuses --personal together with --managed and writes nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-mode-"));
+    roots.push(root);
+    const directory = join(root, "both");
+    expect(() =>
+      initDistribution(directory, { personal: true, managed: true }),
+    ).toThrow(/--personal or --managed/);
+    expect(existsSync(directory)).toBe(false);
+  });
+
+  it("templates every company-specific managed value as a runtime variable", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-mode-"));
+    roots.push(root);
+    const manifest = readManifest(
+      initDistribution(join(root, "acme-agent"), { managed: true }),
+    );
+    expect(manifest.access?.variables).toEqual([
+      "ACME_AGENT_OIDC_ISSUER",
+      "ACME_AGENT_OIDC_CLIENT_ID",
+      "ACME_AGENT_CREDENTIAL_BROKER_URL",
+      "ACME_AGENT_CREDENTIAL_REVOKE_URL",
+      "ACME_AGENT_LLM_GATEWAY_URL",
+    ]);
+    expect(manifest.access?.identity).toMatchObject({
+      mode: "oidc",
+      oidc: {
+        issuer: `\${ACME_AGENT_OIDC_ISSUER}`,
+        clientId: `\${ACME_AGENT_OIDC_CLIENT_ID}`,
+      },
+    });
+    expect(manifest.access?.credential.broker).toEqual({
+      endpoint: `\${ACME_AGENT_CREDENTIAL_BROKER_URL}`,
+      revokeEndpoint: `\${ACME_AGENT_CREDENTIAL_REVOKE_URL}`,
+    });
+    expect(manifest.access?.inference).toMatchObject({
+      provider: "openai-compatible",
+      baseUrl: `\${ACME_AGENT_LLM_GATEWAY_URL}`,
+      api: "openai-completions",
+    });
+    expect(manifest.access?.network.proxy.inheritEnvironment).toBe(true);
+  });
 });
 
 describe("managed init", () => {
