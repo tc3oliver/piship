@@ -23,6 +23,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
@@ -324,7 +325,8 @@ export interface InstallChecks {
   readonly expectedSha256?: string;
   /**
    * Update-key fingerprints (`sha256:<hex>`) the release lock must pin. Each
-   * given key must be among `updates.trust.keys`; the lock may pin others.
+   * given key must be among the lock's channel trust keys
+   * (`channelTrustFromLock`); the lock may pin others.
    */
   readonly expectedKeys?: readonly string[];
 }
@@ -403,9 +405,7 @@ export async function installDistribution(
       );
     } else lock = verifyPayload(source);
     const pinned = new Set(
-      (lock.updates?.trust.keys ?? []).map((key) =>
-        keyFingerprint(key.publicKey),
-      ),
+      channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
     );
     const unpinned = expectedKeys.filter((key) => !pinned.has(key));
     if (unpinned.length)

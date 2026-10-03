@@ -15,6 +15,7 @@ import { PiShipError } from "@piship/contracts";
 import { syncDirectory, temporarySibling } from "@piship/credentials";
 import { RELEASE_CHANNELS } from "@piship/schema";
 import { sha256File } from "../archive.js";
+import { channelTrustFromLock } from "../lock.js";
 import {
   keyFingerprint,
   publicKeyFromPrivate,
@@ -204,7 +205,7 @@ export async function signChannel(
     for (const archive of options.archives) {
       const release = await verifyRelease(archive);
       verified.push({ archive, release });
-      for (const key of release.lock.updates?.trust.keys ?? []) accept(key);
+      for (const key of channelTrustFromLock(release.lock)) accept(key);
     }
     const directory = resolve(options.directory);
     const path = join(directory, `${options.channel}.json`);

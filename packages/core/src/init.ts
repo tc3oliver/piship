@@ -63,7 +63,7 @@ ${
 `
     : `  enabled: false
 `
-}# Updates stay disabled until updates.source and updates.trust.keys are set.
+}# Updates stay disabled until updates.source and updates.trust.bootstrap are set.
 updates:
   channel: stable
   channels: [stable]

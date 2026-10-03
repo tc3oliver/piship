@@ -1,5 +1,6 @@
 // Human-readable summaries of what `piship inspect`, `test`, and `doctor`
 // report. Their full JSON stays available behind `--json`.
+import { channelTrustFromLock } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
 import { keyFingerprint } from "./signing.js";
 
@@ -37,7 +38,7 @@ export function inspection(
     ...(lock.updates
       ? {
           trust: {
-            keys: lock.updates.trust.keys.map((key) => ({
+            keys: channelTrustFromLock(lock).map((key) => ({
               id: key.id,
               fingerprint: keyFingerprint(key.publicKey),
             })),

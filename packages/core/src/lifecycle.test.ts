@@ -136,7 +136,8 @@ models:
       tools: true
 `
     : "";
-  return `schema: piship/v1alpha4
+  const ids = keys.map((key) => key.id).join(", ");
+  return `schema: piship/v1alpha5
 app:
   id: ${ID}
   name: AcmePi
@@ -157,8 +158,14 @@ updates:
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: ${rollback}
   trust:
-    keys:
-${keys.map((key) => `      - id: ${key.id}\n        publicKey: ${key.publicKey}\n`).join("")}`;
+    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+${keys.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicKey}\n`).join("")}      roles:
+        root: { keyIds: [${ids}], threshold: 1 }
+        channel: { keyIds: [${ids}], threshold: 1 }
+`;
 }
 
 function project(
@@ -1306,7 +1313,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(readInstallReceipt(ID).channelSequences).toEqual({ stable: 2 });
   });
 
-  // The trusted keys are the active release's locked updates.trust.keys, so
+  // The trusted keys are the channel role of the active release's locked
+  // update bootstrap, so
   // a rotation's overlap window is the releases that pin both keys.
   it("rotates the release key through an overlap release and then refuses the retired key", async () => {
     const next = generateSigningKey("test-release-next");

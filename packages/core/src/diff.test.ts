@@ -81,7 +81,7 @@ afterAll(() => {
 
 describe("diffLocks", () => {
   it("reports nothing for identical locks", () => {
-    expect(base.schema).toBe("piship-lock/v1alpha4");
+    expect(base.schema).toBe("piship-lock/v1alpha5");
     const report = diffLocks(base, clone(base));
     expect(report.risk).toBe("none");
     expect(report.changes).toEqual([]);
@@ -355,6 +355,47 @@ describe("diffLocks", () => {
     expect(report.changes[1]?.after).toMatch(/^sha256:[0-9a-f]{12}$/);
     expect(JSON.stringify(report)).not.toContain(keyB);
     expect(report.requiredTests).toContain(DIFF_TESTS.release);
+  });
+
+  it("flags v1alpha5 bootstrap root changes as changes to who can publish", () => {
+    const keyA = `MCowBQYDK2VwAyEA${Buffer.alloc(32, 1).toString("base64")}`;
+    const keyB = `MCowBQYDK2VwAyEA${Buffer.alloc(32, 2).toString("base64")}`;
+    const updates = (channel: string[], version: number) => ({
+      channel: "stable",
+      channels: ["stable"],
+      rollback: true,
+      trust: {
+        bootstrap: {
+          version,
+          expires: "2027-10-01T00:00:00Z",
+          keys: [
+            { id: "acme-root", publicKey: keyA },
+            { id: "acme-channel", publicKey: keyB },
+          ],
+          roles: {
+            root: { keyIds: ["acme-root"], threshold: 1 },
+            channel: { keyIds: channel, threshold: 1 },
+          },
+        },
+      },
+    });
+    const report = diffLocks(
+      { ...clone(base), updates: updates(["acme-channel"], 1) },
+      { ...clone(base), updates: updates(["acme-channel", "acme-root"], 2) },
+    );
+    expect(report.changes).toEqual([
+      expect.objectContaining({
+        item: "update bootstrap root version",
+        kind: "changed",
+        risk: "high",
+      }),
+      expect.objectContaining({
+        item: "update channel role key acme-root",
+        kind: "added",
+        risk: "high",
+      }),
+    ]);
+    expect(JSON.stringify(report)).not.toContain(keyA);
   });
 
   it("formats a report deterministically", () => {

@@ -38,9 +38,50 @@ export function updates(out: Collector, b: AnyLock, a: AnyLock): void {
       ? ["medium", "The previous known-good release is no longer kept."]
       : ["low", "Keeps the previous known-good release."],
   );
-  const before = byKey(x?.trust?.keys, (item) => item.id);
-  const after = byKey(y?.trust?.keys, (item) => item.id);
+  const before = byKey(
+    x?.trust?.keys ?? x?.trust?.bootstrap?.keys,
+    (item) => item.id,
+  );
+  const after = byKey(
+    y?.trust?.keys ?? y?.trust?.bootstrap?.keys,
+    (item) => item.id,
+  );
   const publish: Verdict = ["high", "Changes who can publish updates."];
+  const rootBefore = x?.trust?.bootstrap;
+  const rootAfter = y?.trust?.bootstrap;
+  out.scalar(
+    "updates",
+    "update bootstrap root version",
+    rootBefore?.version,
+    rootAfter?.version,
+    publish,
+  );
+  out.scalar(
+    "updates",
+    "update bootstrap root expiry",
+    rootBefore?.expires,
+    rootAfter?.expires,
+    ["medium", "Changes how long the bootstrap update root is trusted."],
+  );
+  for (const role of ["root", "channel"]) {
+    const b = rootBefore?.roles?.[role];
+    const a = rootAfter?.roles?.[role];
+    out.set(
+      "updates",
+      `update ${role} role key`,
+      b?.keyIds,
+      a?.keyIds,
+      publish,
+      publish,
+    );
+    out.scalar(
+      "updates",
+      `update ${role} role threshold`,
+      b?.threshold,
+      a?.threshold,
+      publish,
+    );
+  }
   for (const id of keys(before, after)) {
     const bk = before.get(id)?.publicKey;
     const ak = after.get(id)?.publicKey;

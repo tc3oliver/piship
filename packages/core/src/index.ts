@@ -26,6 +26,7 @@ export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./update/index.js";
 export {
+  channelTrustFromLock,
   checkPiVersion,
   lockManifest,
   requireCurrentLock,
@@ -37,6 +38,7 @@ export {
   LOCK_SCHEMA_V1ALPHA2,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_VERSION,
   type LockDigests,
   type LockedPackage,

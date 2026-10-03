@@ -30,6 +30,7 @@ import {
 } from "../migration.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
+import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
@@ -166,10 +167,11 @@ export async function updateDistribution(
         "UPDATE_FAILED",
         `${lock.app.name} ${lock.app.version} has no update policy (manifest ${lock.manifest.schema}); install a piship/v1alpha4 release`,
       );
-    if (!updates.trust.keys.length)
+    const trusted = channelTrustFromLock(lock);
+    if (!trusted.length)
       throw new PiShipError(
         "UPDATE_FAILED",
-        `${lock.app.name} trusts no release keys (updates.trust.keys), so no update can be verified`,
+        `${lock.app.name} trusts no release keys (updates.trust), so no update can be verified`,
       );
     const selection = selectChannel(updates, options.channel, receipt.channel);
     const { channel } = selection;
@@ -179,7 +181,7 @@ export async function updateDistribution(
     options.progress?.(`Checking the ${channel} channel`);
     const { metadata, keyId } = await readChannel(source, channel, {
       distribution: id,
-      trusted: updates.trust.keys,
+      trusted,
       retired: receipt.retiredKeys ?? [],
       minSequence,
       now,
@@ -359,12 +361,12 @@ export async function updateDistribution(
       // good on this installation, so a rollback cannot trust them again; a
       // key the new release pins (again) is not retired.
       const pinned = new Set(
-        (verified.lock.updates?.trust.keys ?? []).map((key) =>
+        channelTrustFromLock(verified.lock).map((key) =>
           keyFingerprint(key.publicKey),
         ),
       );
       const retiredKeys: RetiredKey[] = [...(current.retiredKeys ?? [])];
-      for (const key of updates.trust.keys) {
+      for (const key of trusted) {
         const fingerprint = keyFingerprint(key.publicKey);
         if (!retiredKeys.some((item) => item.fingerprint === fingerprint))
           retiredKeys.push({
