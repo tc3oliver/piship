@@ -212,6 +212,7 @@ PiShip is pre-release and not on npm. What is proven, and what is not:
 
 - **v0.7.1** is the [previous baseline](docs/status.md#v071-previous-production-validation-baseline) on Pi 0.87.1, with six attested archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1).
 - **v0.8.0** is the [production-validation baseline](docs/status.md#v080-production-validation-baseline) on Pi 1.0.0, with six attested archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0): `piship/v1alpha5`, an installation-level update trust root with root refresh, and multi-signature channels ([changelog](CHANGELOG.md)).
+- **v0.8.1** is the [release candidate](docs/status.md#v081-release-candidate) for the next baseline, on Pi 1.0.0: an administrator-allowed user auto mode, an administrator-allowed plain-HTTP update channel, and sign-in that fails cleanly when the secret store cannot be reached. It is not yet tagged, and v0.8.0 stays the baseline until v0.8.1 is qualified and published.
 - Personal distributions are supported. Managed access, governance, and the release lifecycle are candidates.
 - Managed flows pass on Linux, macOS, and Windows against local fixtures, and on Ubuntu against Keycloak, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack.
 - Not proven yet: a production company identity provider or gateway; live E2B, CubeSandbox, or Kubernetes Agent Sandbox; a native sandbox on Windows (use a remote one there).
