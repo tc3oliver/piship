@@ -461,6 +461,8 @@ describe(`managed clean-machine flow: ${PRIMARY_STORAGE} storage (local fixtures
     expect((await run(["version"])).stdout).toContain("AcmeCode 1.1.0");
     expect(new Set(s.hostRequests)).toEqual(
       new Set([
+        // The root refresh asks for the next root first; its 404 ends it.
+        "root/2.json",
         "stable.json",
         "stable.json.sig",
         `${s.id}-1.1.0-${target}.tar.gz`,
