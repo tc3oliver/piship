@@ -936,6 +936,18 @@ describe("docs/agent-setup.md", () => {
         );
     }
   });
+
+  it("places the built command relative to where piship test ran", () => {
+    const text = readFileSync(
+      fileURLToPath(new URL("../../../docs/agent-setup.md", import.meta.url)),
+      "utf8",
+    );
+    // `dist/` is written under the directory build or test runs in, which
+    // is not necessarily the directory that holds piship.yaml.
+    expect(text).toContain(
+      "`dist/<id>/bin/<command> login`, run in the directory where you ran `piship test`",
+    );
+  });
 });
 
 describe("config explain from a manifest", () => {
