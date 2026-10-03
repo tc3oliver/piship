@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -961,5 +962,57 @@ describe("config explain from a manifest", () => {
     expect(text).toMatch(/^schema\s+"piship\/v1alpha5"/m);
     for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
       expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
+    expect(text).toMatch(
+      /^updates\.transport\s+"https"\s+\[builtin-default\]/m,
+    );
+  });
+
+  it("shows updates.transport http-allowed, which validate also reports", async () => {
+    const key = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "der" })
+      .toString("base64");
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        schema: "piship/v1alpha5",
+        app: { id: ID, name: "MyPi", command: ID, version: "1.0.0" },
+        runtime: { pi: "1.0.0" },
+        deployment: { mode: "personal" },
+        updates: {
+          source: "http://updates.corp.internal/mypi",
+          transport: "http-allowed",
+          trust: {
+            bootstrap: {
+              version: 1,
+              expires: "2099-01-01T00:00:00Z",
+              keys: [{ id: "release", publicKey: key }],
+              roles: {
+                root: { keyIds: ["release"], threshold: 1 },
+                channel: { keyIds: ["release"], threshold: 1 },
+              },
+            },
+          },
+        },
+      }),
+    );
+    const run = async (args: string[]) => {
+      const out: string[] = [];
+      const status = await runCli(args, {
+        stdout: (message) => out.push(message),
+        stderr: () => {},
+      });
+      return { status, text: out.join("\n") };
+    };
+    const explained = await run(["config", "explain", manifest]);
+    expect(explained.status).toBe(0);
+    expect(explained.text).toMatch(
+      /^updates\.transport\s+"http-allowed"\s+\[distribution-enforced\] — the update channel may use plain HTTP/m,
+    );
+    const validated = await run(["validate", manifest]);
+    expect(validated.status).toBe(0);
+    expect(validated.text).toContain(
+      "Update transport http-allowed: the update channel may use plain HTTP to a private or internal host; integrity by signature only.",
+    );
   });
 });

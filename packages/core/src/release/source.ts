@@ -3,6 +3,11 @@
 import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, parseRetryAfter, redact } from "@piship/contracts";
+import {
+  PRIVATE_UPDATE_HOSTS,
+  plainHttpUpdateAllowed,
+  type UpdateTransport,
+} from "@piship/schema";
 import { sha256File } from "../archive.js";
 import type { ChannelRelease } from "./channel.js";
 
@@ -63,18 +68,21 @@ const MAX_REDIRECTS = 5;
  * source's origin (same scheme, host, and port), at most five times: another
  * origin is never contacted, because only the declared source host is let
  * through a private-only network and the channel's trust is pinned to it.
+ * An https source is never redirected to plain HTTP.
  */
 async function fetchSource(
   url: URL,
   name: string,
   fetcher: typeof fetch,
   timeout: number,
+  transport: UpdateTransport | undefined,
 ): Promise<Response>;
 async function fetchSource(
   url: URL,
   name: string,
   fetcher: typeof fetch,
   timeout: number,
+  transport: UpdateTransport | undefined,
   notFound: "absent",
 ): Promise<Response | undefined>;
 async function fetchSource(
@@ -82,9 +90,10 @@ async function fetchSource(
   name: string,
   fetcher: typeof fetch,
   timeout: number,
+  transport: UpdateTransport | undefined,
   notFound?: "absent",
 ): Promise<Response | undefined> {
-  checkSourceUrl(url);
+  checkSourceUrl(url, transport);
   const signal = AbortSignal.timeout(timeout);
   let target = url;
   for (let hop = 0; ; hop += 1) {
@@ -114,6 +123,11 @@ async function fetchSource(
           "UPDATE_FAILED",
           `Update source answered HTTP ${response.status} for ${name} without a valid Location`,
         );
+      if (url.protocol === "https:" && next.protocol === "http:")
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `Update source redirected ${name} from https to http://${next.host}; PiShip never follows an https update source to plain HTTP`,
+        );
       if (next.origin !== url.origin)
         throw new PiShipError(
           "UPDATE_FAILED",
@@ -128,7 +142,7 @@ async function fetchSource(
           "UPDATE_FAILED",
           `Update source redirected ${name} more than ${MAX_REDIRECTS} times`,
         );
-      checkSourceUrl(next);
+      checkSourceUrl(next, transport);
       target = next;
       continue;
     }
@@ -159,18 +173,26 @@ async function fetchSource(
 }
 
 /**
- * Reads a small file from a directory or an https (or loopback http) source.
- * `answer.date` receives the source's HTTP `Date`, when it sent one.
+ * Reads a small file from a directory or an https (or loopback http, or with
+ * `transport` http-allowed private http) source. `answer.date` receives the
+ * source's HTTP `Date`, when it sent one.
  */
 export async function readSourceFile(
   source: string,
   name: string,
   fetcher: typeof fetch = fetch,
   answer?: { date?: number },
+  transport?: UpdateTransport,
 ): Promise<Buffer> {
   if (isUrlSource(source)) {
     const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
-    const response = await fetchSource(url, name, fetcher, METADATA_TIMEOUT_MS);
+    const response = await fetchSource(
+      url,
+      name,
+      fetcher,
+      METADATA_TIMEOUT_MS,
+      transport,
+    );
     const date = Date.parse(response.headers.get("date") ?? "");
     if (answer && !Number.isNaN(date)) answer.date = date;
     return readBody(response, name, MAX_METADATA_BYTES);
@@ -214,6 +236,7 @@ export async function readOptionalSourceFile(
   name: string,
   limit: number,
   fetcher: typeof fetch = fetch,
+  transport?: UpdateTransport,
 ): Promise<Buffer | undefined> {
   if (isUrlSource(source)) {
     const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
@@ -222,6 +245,7 @@ export async function readOptionalSourceFile(
       name,
       fetcher,
       METADATA_TIMEOUT_MS,
+      transport,
       "absent",
     );
     return response && readBody(response, name, limit);
@@ -253,8 +277,9 @@ function isUrlSource(source: string): boolean {
 
 /**
  * Validate an update source after `${NAME}` resolution or from `--from`, with
- * the same URL rules as the manifest: https, or http to a loopback host, with
- * no credentials, query string, or fragment. Any other value is a local
+ * the same URL rules as the manifest: https, or http to a loopback host (or,
+ * with `transport` http-allowed, to a private or internal host), with no
+ * credentials, query string, or fragment. Any other value is a local
  * directory; one resolved from `updates.source` must be absolute, while a
  * `--from` directory may be relative to the working directory. Returns the
  * URL unchanged or the absolute directory path.
@@ -262,6 +287,7 @@ function isUrlSource(source: string): boolean {
 export function checkUpdateSource(
   source: string,
   origin: "updates.source" | "--from",
+  transport?: UpdateTransport,
 ): string {
   if (isUrlSource(source)) {
     let url: URL;
@@ -273,7 +299,7 @@ export function checkUpdateSource(
         `${origin} is not a valid URL: ${redact(source)}`,
       );
     }
-    checkSourceUrl(url);
+    checkSourceUrl(url, transport);
     if (url.search || url.hash)
       throw new PiShipError(
         "CONFIG_INVALID",
@@ -295,10 +321,25 @@ export function checkUpdateSource(
   return directory;
 }
 
-/** Only https, or http to a loopback host, may serve updates. */
-export function checkSourceUrl(url: URL): void {
-  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+/**
+ * Only https, or http to a loopback host, may serve updates; with
+ * `transport` http-allowed, also http to a private or internal host. The
+ * host is judged by its text, never by DNS.
+ */
+export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
+  if (
+    transport === "http-allowed" &&
+    url.protocol === "http:" &&
+    !plainHttpUpdateAllowed(url, transport)
+  )
+    throw new PiShipError(
+      "NETWORK_DENIED",
+      `updates.transport http-allowed permits plain HTTP only to a private or internal update host; ${url.host} is public`,
+      {
+        userAction: `Serve the update channel over https, or from ${PRIVATE_UPDATE_HOSTS}`,
+      },
+    );
+  if (url.protocol !== "https:" && !plainHttpUpdateAllowed(url, transport))
     throw new PiShipError(
       "NETWORK_DENIED",
       `Update sources must use https (got ${url.protocol}//${url.host})`,
@@ -316,6 +357,7 @@ export async function downloadArchive(
   entry: ChannelRelease,
   destination: string,
   fetcher: typeof fetch = fetch,
+  transport?: UpdateTransport,
 ): Promise<void> {
   if (
     basename(entry.archive) !== entry.archive ||
@@ -335,6 +377,7 @@ export async function downloadArchive(
       entry.archive,
       fetcher,
       ARCHIVE_TIMEOUT_MS,
+      transport,
     );
     await saveBody(response, destination, entry.archive, entry.bytes);
   } else {

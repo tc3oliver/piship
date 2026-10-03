@@ -572,6 +572,11 @@ export async function runCli(
                 `Runtime variables needed only by update: ${variables.update.join(", ")}`,
               ]
             : []),
+          ...(manifest.lifecycle?.updates.transport
+            ? [
+                `Update transport ${manifest.lifecycle.updates.transport}${manifest.lifecycle.updates.transport === "http-allowed" ? ": the update channel may use plain HTTP to a private or internal host; integrity by signature only" : ""}.`,
+              ]
+            : []),
         ].join("\n"),
       );
       for (const warning of launchWarnings(manifest))
@@ -620,6 +625,9 @@ export async function runCli(
               schema: manifest.schema,
               ...(manifest.governance
                 ? { governance: manifest.governance }
+                : {}),
+              ...(manifest.lifecycle
+                ? { updates: manifest.lifecycle.updates }
                 : {}),
             }),
           ),

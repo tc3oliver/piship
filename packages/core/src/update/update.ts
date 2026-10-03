@@ -91,7 +91,8 @@ function resolveSource(
   override: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string {
-  if (override) return checkUpdateSource(override, "--from");
+  const transport = lock.updates?.transport;
+  if (override) return checkUpdateSource(override, "--from", transport);
   const template = lock.updates?.source;
   if (!template)
     throw new PiShipError(
@@ -114,7 +115,7 @@ function resolveSource(
   }
   // The static check sees only the template; the resolved value gets the
   // same URL rules at run time.
-  return checkUpdateSource(resolved, "updates.source");
+  return checkUpdateSource(resolved, "updates.source", transport);
 }
 
 export interface UpdateOptions extends LifecycleOptions {
@@ -209,6 +210,7 @@ export async function updateDistribution(
     const { channel } = selection;
     const notices = [...selection.notices];
     const source = resolveSource(lock, options.source, env);
+    const transport = updates.transport;
     const persist = (state: UpdateTrustState) => {
       if (!lifecycle.stillHeld())
         throw new PiShipError(
@@ -257,6 +259,7 @@ export async function updateDistribution(
         options.faults?.("root-accepted");
       },
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+      ...(transport ? { transport } : {}),
     });
     if (refreshed.transitions)
       notices.push(
@@ -282,6 +285,7 @@ export async function updateDistribution(
       minSequence,
       now: () => updateTime,
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+      ...(transport ? { transport } : {}),
     });
     const record = (result: string, extra: Partial<InstallReceipt> = {}) =>
       lifecycle.commit({
@@ -329,7 +333,7 @@ export async function updateDistribution(
       options.progress?.(
         `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
       );
-      await downloadArchive(source, entry, archive, options.fetcher);
+      await downloadArchive(source, entry, archive, options.fetcher, transport);
       options.faults?.("staged");
       options.progress?.(`Verifying the ${entry.version} release`);
       const verified = await verifyRelease(archive, {

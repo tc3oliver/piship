@@ -33,6 +33,20 @@ export function updates(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(y?.source),
     ["high", "Updates come from a different source."],
   );
+  // An absent transport is https.
+  out.scalar(
+    "updates",
+    "update transport",
+    x?.transport,
+    y?.transport,
+    (_, v) =>
+      v === "http-allowed"
+        ? [
+            "high",
+            "Updates may come over plain HTTP from a private or internal host; their integrity rests on the update signatures alone.",
+          ]
+        : ["low", "Updates come over https only."],
+  );
   out.scalar("updates", "update rollback", x?.rollback, y?.rollback, (_, v) =>
     v === "false"
       ? ["medium", "The previous known-good release is no longer kept."]
