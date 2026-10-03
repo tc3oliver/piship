@@ -403,7 +403,7 @@ async function assemble(
       cli("keygen", keyFile, "--id", KEY_ID),
       "piship keygen",
     );
-    const publicKey = /publicKey: (\S+)/.exec(keygen.stdout)?.[1];
+    const publicKey = /Public key: (\S+)/.exec(keygen.stdout)?.[1];
     if (!publicKey) throw new Error("keygen printed no public key");
     releaseKey = { id: KEY_ID, publicKey };
     channel = await serveChannel(channelDirectory);
