@@ -1,10 +1,11 @@
-// Static release gates: lock, schema, target, Pi compatibility surfaces,
-// package sources and install scripts, policy, certification, and sandbox.
+// Static release gates: lock, schema, update trust, target, Pi compatibility
+// surfaces, package sources and install scripts, policy, certification, and
+// sandbox.
 import { PiShipError } from "@piship/contracts";
-import type { ReleaseManifest } from "@piship/schema";
+import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
 import {
   EVIDENCED_TARGETS,
-  LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   PI_COMPATIBILITY,
   REVIEWED_INSTALL_SCRIPTS,
   currentTarget,
@@ -177,8 +178,39 @@ export function checkPackageSources(
 }
 
 /**
+ * The `trust` gate over the locked update bootstrap: an update source needs
+ * bootstrap trust (update would fail closed), and a managed distribution
+ * needs distinct root and channel keys. A migrated v1alpha4 key set shares
+ * its keys between both roles, so a managed release waits for the owner's
+ * explicit root / channel split.
+ */
+function checkUpdateTrust(lock: DistributionLock): void {
+  const updates = lock.updates;
+  if (!updates || "keys" in updates.trust) return;
+  const bootstrap = updates.trust.bootstrap;
+  if (!bootstrap) {
+    if (updates.source !== undefined)
+      throw gate(
+        "CONFIG_INVALID",
+        "trust",
+        "updates.source is set without updates.trust.bootstrap, so no update could be verified",
+        "Add updates.trust.bootstrap with root and channel keys, or remove updates.source, then lock again",
+      );
+    return;
+  }
+  const shared = sharedRoleKeyIds(bootstrap);
+  if (lock.deployment.mode === "managed" && shared.length)
+    throw gate(
+      "POLICY_DENIED",
+      "trust",
+      `the update root and channel roles share ${shared.join(", ")}; a managed distribution needs distinct root and channel keys`,
+      "Add an offline root key to updates.trust.bootstrap.roles.root, keep the release key only in roles.channel, and lock again",
+    );
+}
+
+/**
  * Static release gates, checked before anything is assembled. Each failure
- * names its gate: lock, schema, target, pi, source, install-script,
+ * names its gate: lock, schema, trust, target, pi, source, install-script,
  * policy, certification, or sandbox.
  */
 export function checkReleaseInputs(
@@ -197,13 +229,14 @@ export function checkReleaseInputs(
       "Review the manifest and resource changes, then run piship lock",
     );
   }
-  if (lock.schema !== LOCK_SCHEMA_V1ALPHA4 || !lock.release || !lock.updates)
+  if (lock.schema !== LOCK_SCHEMA_V1ALPHA5 || !lock.release || !lock.updates)
     throw gate(
       "CONFIG_INVALID",
       "schema",
-      `production releases need a piship/v1alpha4 manifest (found ${lock.manifest.schema})`,
-      "Run piship migrate --write, review the updates section, and lock again",
+      `production releases need a piship/v1alpha5 manifest (found ${lock.manifest.schema})`,
+      "Run piship migrate --write, review updates.trust.bootstrap, and lock again",
     );
+  checkUpdateTrust(lock);
   const release: ReleaseManifest = lock.release;
   if (!release.targets.includes(target as never))
     throw gate(

@@ -1,6 +1,7 @@
 // Installed lifecycle status for doctor.
 import { existsSync, readdirSync } from "node:fs";
 import type { DistributionLock } from "../index.js";
+import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import {
   appDirectory,
@@ -56,7 +57,7 @@ export function lifecycleStatus(
   const active = receipt.releases.find(
     (item) => item.version === receipt.active,
   );
-  const keys = (lock.updates?.trust.keys ?? []).map((key) => {
+  const keys = channelTrustFromLock(lock).map((key) => {
     const fingerprint = keyFingerprint(key.publicKey);
     const retired = receipt.retiredKeys?.find(
       (item) => item.fingerprint === fingerprint,

@@ -1,4 +1,4 @@
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: acmecode
@@ -225,16 +225,15 @@ audit:
       required: false
 
 # Signed release channels. Users may pick stable or candidate; production
-# stays on stable. Updates are verified with the pinned Ed25519 keys; the
-# demo ships none, so a distribution owner adds its own key (piship keygen)
-# before any update can be verified.
+# stays on stable. Updates are verified against the Ed25519 keys of
+# updates.trust.bootstrap (an offline root key and a channel release key);
+# the demo ships none, so update fails closed until a distribution owner adds
+# its own keys (piship keygen).
 updates:
   channel: stable
   channels: [stable, candidate]
   source: ${ACMECODE_UPDATE_SOURCE}
   rollback: true
-  trust:
-    keys: []
 
 release:
   targets: [linux-x64, darwin-arm64, win32-x64]

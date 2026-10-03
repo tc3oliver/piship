@@ -1,4 +1,4 @@
-// Parser for the piship/v1alpha4 lifecycle sections: signed update channels
+// Parser for the piship/v1alpha4 and v1alpha5 lifecycle sections: signed update channels
 // (`updates`) and release policy (`release`).
 import { Buffer } from "node:buffer";
 import { AccessFieldError } from "./access.js";
@@ -8,7 +8,7 @@ import {
   referencedVariables,
 } from "./variables.js";
 
-/** Top-level manifest sections added by piship/v1alpha4. */
+/** Top-level manifest sections added by piship/v1alpha4 (kept by v1alpha5). */
 export const LIFECYCLE_KEYS = ["updates", "release"] as const;
 
 /** Lifecycle fields that accept `${NAME}` runtime references. */
@@ -49,6 +49,41 @@ export interface UpdateTrustKey {
   /** Base64 Ed25519 SubjectPublicKeyInfo DER (44 bytes). */
   readonly publicKey: string;
 }
+/** The signing roles of an update root. */
+export const UPDATE_ROLES = ["root", "channel"] as const;
+export type UpdateRoleName = (typeof UPDATE_ROLES)[number];
+export interface UpdateRole {
+  /** Ids of `keys` entries that may sign for this role, without duplicates. */
+  readonly keyIds: readonly string[];
+  /** Signatures required, from 1 to the number of `keyIds`. */
+  readonly threshold: number;
+}
+/**
+ * An update root: the trusted keys and the root / channel role thresholds.
+ * The piship/v1alpha5 `updates.trust.bootstrap` is the root a fresh
+ * installation starts from; hosted `piship-update-root/v1` metadata carries
+ * the same body plus `schema` and `distribution`.
+ */
+export interface UpdateRoot {
+  /** Root version, an integer from 1. */
+  readonly version: number;
+  /** UTC timestamp, `YYYY-MM-DDTHH:MM:SS[.fraction]Z`. */
+  readonly expires: string;
+  readonly keys: readonly UpdateTrustKey[];
+  readonly roles: { readonly [role in UpdateRoleName]: UpdateRole };
+}
+/** piship/v1alpha4 update trust: any one listed key signs channels. */
+export interface LegacyUpdateTrust {
+  readonly keys: readonly UpdateTrustKey[];
+}
+/**
+ * piship/v1alpha5 update trust. Without `bootstrap` the distribution is
+ * update-disabled.
+ */
+export interface BootstrapUpdateTrust {
+  readonly bootstrap?: UpdateRoot;
+}
+export type UpdatesTrust = LegacyUpdateTrust | BootstrapUpdateTrust;
 export interface UpdatesManifest {
   /** Default channel for new installs. */
   readonly channel: ReleaseChannel;
@@ -58,7 +93,8 @@ export interface UpdatesManifest {
   readonly source?: string;
   /** Keep the previous known-good release for rollback. */
   readonly rollback: boolean;
-  readonly trust: { readonly keys: readonly UpdateTrustKey[] };
+  /** `keys` for piship/v1alpha4; an optional `bootstrap` root for piship/v1alpha5. */
+  readonly trust: UpdatesTrust;
 }
 export interface VulnerabilityException {
   readonly id: string;
@@ -212,14 +248,207 @@ function updateSource(
     fail(path, UPDATE_SOURCE_FORMS);
   return text;
 }
+// Bounds that keep a root small enough to read and verify in one step.
+const MAX_ROOT_KEYS = 32;
+const TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/;
+
+function timestamp(value: unknown, path: string): string {
+  const match = typeof value === "string" ? TIMESTAMP.exec(value) : null;
+  if (!match)
+    fail(path, "Expected a UTC timestamp such as 2027-10-01T00:00:00Z");
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number) as [number, number, number, number, number, number];
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== minute ||
+    date.getUTCSeconds() !== second
+  )
+    fail(path, "Expected a valid UTC timestamp such as 2027-10-01T00:00:00Z");
+  return match[0];
+}
+function integer(value: unknown, path: string, min: number, max?: number) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < min ||
+    (max !== undefined && value > max)
+  )
+    fail(
+      path,
+      max === undefined
+        ? `Expected an integer of at least ${min}`
+        : `Expected an integer from ${min} to ${max}`,
+    );
+  return value;
+}
+function trustKeys(value: unknown, path: string): UpdateTrustKey[] {
+  const keys = list(value, path).map((entry, index) => {
+    const at = `${path}[${index}]`;
+    const key = record(entry, at, ["id", "publicKey"]);
+    return {
+      id: keyId(key.id, `${at}.id`),
+      publicKey: publicKey(key.publicKey, `${at}.publicKey`),
+    } satisfies UpdateTrustKey;
+  });
+  for (const [index, key] of keys.entries()) {
+    const first = keys.findIndex((other) => other.id === key.id);
+    if (first !== index)
+      fail(
+        `${path}[${index}].id`,
+        keys[first]?.publicKey === key.publicKey
+          ? `Duplicate key id ${key.id}; key ids are unique`
+          : `Duplicate key id ${key.id}; key ids are unique, and one id cannot name two different public keys`,
+      );
+  }
+  return keys;
+}
+function role(
+  value: unknown,
+  path: string,
+  keys: readonly UpdateTrustKey[],
+): UpdateRole {
+  const entry = record(value, path, ["keyIds", "threshold"]);
+  const keyIds = list(entry.keyIds, `${path}.keyIds`).map((item, index) => {
+    const at = `${path}.keyIds[${index}]`;
+    const id = keyId(item, at);
+    if (!keys.some((key) => key.id === id))
+      fail(at, `Key id ${id} is not listed in keys`);
+    return id;
+  });
+  if (keyIds.length === 0)
+    fail(`${path}.keyIds`, "Expected at least one key id");
+  unique(keyIds, `${path}.keyIds`);
+  return {
+    keyIds,
+    threshold: integer(entry.threshold, `${path}.threshold`, 1, keyIds.length),
+  };
+}
+
+/**
+ * Validate an update root body: `version`, `expires`, `keys`, and the root
+ * and channel `roles`. Every role key id must be listed in `keys`, each
+ * threshold is an integer from 1 to the role's key count, key ids are
+ * unique, and one public key is listed under one id only (so a threshold
+ * counts distinct keys). `extraKeys` names additional top-level fields the
+ * caller validates itself, such as `schema` and `distribution` of hosted
+ * `piship-update-root/v1` metadata; they are not part of the result.
+ * Throws AccessFieldError naming the offending field under `path`.
+ */
+export function parseUpdateRoot(
+  value: unknown,
+  path: string,
+  extraKeys: readonly string[] = [],
+): UpdateRoot {
+  const root = record(value, path, [
+    ...extraKeys,
+    "version",
+    "expires",
+    "keys",
+    "roles",
+  ]);
+  const version = integer(root.version, `${path}.version`, 1);
+  const expires = timestamp(root.expires, `${path}.expires`);
+  const keys = trustKeys(root.keys, `${path}.keys`);
+  if (keys.length === 0) fail(`${path}.keys`, "Expected at least one key");
+  if (keys.length > MAX_ROOT_KEYS)
+    fail(`${path}.keys`, `Expected at most ${MAX_ROOT_KEYS} keys`);
+  for (const [index, key] of keys.entries()) {
+    const first = keys.findIndex((other) => other.publicKey === key.publicKey);
+    if (first !== index)
+      fail(
+        `${path}.keys[${index}].publicKey`,
+        `The public key of ${key.id} is already listed as ${keys[first]?.id}; list each key once and name it in every role it signs for`,
+      );
+  }
+  const roles = record(root.roles, `${path}.roles`, UPDATE_ROLES);
+  return {
+    version,
+    expires,
+    keys,
+    roles: {
+      root: role(roles.root, `${path}.roles.root`, keys),
+      channel: role(roles.channel, `${path}.roles.channel`, keys),
+    },
+  };
+}
+
+/** The keys of one role of an update root, in `keyIds` order. */
+export function updateRoleKeys(
+  root: UpdateRoot,
+  name: UpdateRoleName,
+): UpdateTrustKey[] {
+  return root.roles[name].keyIds.flatMap((id) =>
+    root.keys.filter((key) => key.id === id),
+  );
+}
+
+/**
+ * Key ids the root and channel roles share. Each listed public key has one
+ * id, so these are exactly the public keys both roles reuse.
+ */
+export function sharedRoleKeyIds(root: UpdateRoot): string[] {
+  return root.roles.root.keyIds.filter((id) =>
+    root.roles.channel.keyIds.includes(id),
+  );
+}
+
+/**
+ * The keys that sign update channels: the channel role of a piship/v1alpha5
+ * bootstrap, or every piship/v1alpha4 key. Empty when updates are disabled.
+ */
+export function channelTrustKeys(
+  updates: UpdatesManifest | undefined,
+): readonly UpdateTrustKey[] {
+  const trust = updates?.trust;
+  if (!trust) return [];
+  if ("keys" in trust) return trust.keys;
+  return trust.bootstrap ? updateRoleKeys(trust.bootstrap, "channel") : [];
+}
+
+/**
+ * Owner-facing piship/v1alpha5 update trust warnings: an update source
+ * without bootstrap trust (update fails closed), and a managed distribution
+ * whose root and channel roles reuse a public key, as the compatibility
+ * trust set of a migrated v1alpha4 manifest does. `piship release` refuses
+ * both for a managed distribution.
+ */
+export function updateTrustWarnings(
+  mode: "personal" | "managed",
+  updates: UpdatesManifest,
+): { path: string; message: string }[] {
+  const warnings: { path: string; message: string }[] = [];
+  if ("keys" in updates.trust) return warnings;
+  const bootstrap = updates.trust.bootstrap;
+  if (!bootstrap && updates.source !== undefined)
+    warnings.push({
+      path: "updates.trust.bootstrap",
+      message:
+        "updates.source is set without bootstrap trust, so update fails closed and piship release refuses the distribution; add updates.trust.bootstrap or remove updates.source",
+    });
+  const shared = bootstrap ? sharedRoleKeyIds(bootstrap) : [];
+  if (mode === "managed" && shared.length)
+    warnings.push({
+      path: "updates.trust.bootstrap.roles",
+      message: `the root and channel roles share ${shared.join(", ")}; a managed distribution needs distinct root and channel keys (an offline root key), and piship release refuses it until the roles are split`,
+    });
+  return warnings;
+}
+
 function parseUpdates(
   value: unknown,
   variables: readonly string[],
+  bootstrap: boolean,
 ): UpdatesManifest {
   if (value === undefined)
     fail(
       "updates",
-      "piship/v1alpha4 requires an updates section; run piship migrate to add one",
+      `${bootstrap ? "piship/v1alpha5" : "piship/v1alpha4"} requires an updates section; run piship migrate to add one`,
     );
   const updates = record(value, "updates", [
     "channel",
@@ -243,24 +472,14 @@ function parseUpdates(
     fail("updates.channels", `Must include the default channel ${channel}`);
   if (updates.rollback !== undefined && typeof updates.rollback !== "boolean")
     fail("updates.rollback", "Expected true or false");
-  const trust = optionalRecord(updates.trust, "updates.trust", ["keys"]);
-  const keys =
-    trust.keys === undefined
-      ? []
-      : list(trust.keys, "updates.trust.keys").map((entry, index) => {
-          const at = `updates.trust.keys[${index}]`;
-          const key = record(entry, at, ["id", "publicKey"]);
-          return {
-            id: keyId(key.id, `${at}.id`),
-            publicKey: publicKey(key.publicKey, `${at}.publicKey`),
-          } satisfies UpdateTrustKey;
-        });
-  for (const [index, key] of keys.entries())
-    if (keys.findIndex((other) => other.id === key.id) !== index)
-      fail(
-        `updates.trust.keys[${index}].id`,
-        `Duplicate key id ${key.id}; key ids are unique`,
-      );
+  if (bootstrap && isRecord(updates.trust) && "keys" in updates.trust)
+    fail(
+      "updates.trust.keys",
+      "piship/v1alpha5 replaces updates.trust.keys with updates.trust.bootstrap (version, expires, keys, and root and channel roles); run piship migrate on the v1alpha4 manifest",
+    );
+  const trust = optionalRecord(updates.trust, "updates.trust", [
+    bootstrap ? "bootstrap" : "keys",
+  ]);
   return {
     channel,
     channels,
@@ -268,7 +487,21 @@ function parseUpdates(
       ? {}
       : { source: updateSource(updates.source, "updates.source", variables) }),
     rollback: updates.rollback ?? true,
-    trust: { keys },
+    trust: bootstrap
+      ? trust.bootstrap === undefined
+        ? {}
+        : {
+            bootstrap: parseUpdateRoot(
+              trust.bootstrap,
+              "updates.trust.bootstrap",
+            ),
+          }
+      : {
+          keys:
+            trust.keys === undefined
+              ? []
+              : trustKeys(trust.keys, "updates.trust.keys"),
+        },
   };
 }
 
@@ -389,16 +622,19 @@ function parseRelease(value: unknown): ReleaseManifest {
 // --------------------------------------------------------------- lifecycle
 
 /**
- * Parse the piship/v1alpha4 lifecycle sections of a manifest root.
- * `variables` are the declared runtime variable names. Throws
- * AccessFieldError with the offending field path.
+ * Parse the piship/v1alpha4 or piship/v1alpha5 lifecycle sections of a
+ * manifest root. `variables` are the declared runtime variable names;
+ * `bootstrap` selects v1alpha5 update trust (`updates.trust.bootstrap`)
+ * instead of v1alpha4 `updates.trust.keys`. Throws AccessFieldError with the
+ * offending field path.
  */
 export function parseLifecycle(
   root: Readonly<Record<string, unknown>>,
   variables: readonly string[],
+  bootstrap = false,
 ): LifecycleManifest {
   return {
-    updates: parseUpdates(root.updates, variables),
+    updates: parseUpdates(root.updates, variables, bootstrap),
     release: parseRelease(root.release),
   };
 }

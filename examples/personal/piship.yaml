@@ -1,4 +1,4 @@
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: mypi
@@ -79,14 +79,12 @@ audit:
   enabled: false
 
 # Signed release channels. The example pins no key: add your own
-# (piship keygen) before `update` can verify anything.
+# updates.trust.bootstrap (piship keygen) before `update` can verify anything.
 updates:
   channel: stable
   channels: [stable, candidate]
   source: ${MYPI_UPDATE_SOURCE}
   rollback: true
-  trust:
-    keys: []
 
 release:
   targets: [linux-x64, darwin-arm64, win32-x64]

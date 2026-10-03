@@ -82,8 +82,7 @@ ${
 `
     : `  enabled: false
 `
-}# Updates stay disabled until an update source and its signing trust are
-# configured; see docs/release.md.
+}# Updates stay disabled until updates.source and updates.trust.bootstrap are set.
 updates:
   channel: stable
   channels: [stable]

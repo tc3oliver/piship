@@ -110,7 +110,7 @@ A minimal managed distribution. `piship validate` accepts it as is; the demo's o
 <summary><b>Show piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: acmecode

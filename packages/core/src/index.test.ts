@@ -171,7 +171,7 @@ describe("init", () => {
         channel: "stable",
         channels: ["stable"],
         rollback: true,
-        trust: { keys: [] },
+        trust: {},
       });
       expect(manifest.lifecycle?.updates.source).toBeUndefined();
       if (managed) {
@@ -196,9 +196,9 @@ describe("init", () => {
       }
       lockManifest(path);
       const lock = requireCurrentLock(path);
-      expect(lock.schema).toBe("piship-lock/v1alpha4");
+      expect(lock.schema).toBe("piship-lock/v1alpha5");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
-      expect(lock.updates?.trust.keys).toEqual([]);
+      expect(lock.updates?.trust).toEqual({});
     },
     180000,
   );

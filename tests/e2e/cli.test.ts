@@ -98,12 +98,12 @@ describe("CLI", () => {
         schema: string;
         manifest: { schema: string };
         governance?: unknown;
-        updates?: { trust: { keys: unknown[] }; source?: string };
+        updates?: { trust: Record<string, unknown>; source?: string };
       };
-      expect(lock.schema).toBe("piship-lock/v1alpha4");
+      expect(lock.schema).toBe("piship-lock/v1alpha5");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
       expect(lock.governance).toBeDefined();
-      expect(lock.updates?.trust.keys).toEqual([]);
+      expect(lock.updates?.trust).toEqual({});
       expect(lock.updates?.source).toBeUndefined();
       expect(cli("migrate", manifest).stdout).toContain(
         `Already ${LATEST_SCHEMA}`,

@@ -34,6 +34,7 @@ import {
   shareKeychainSearchList,
 } from "./secret-store.js";
 import { acquireLease, runAll, storeScenarioTeardown } from "./teardown.js";
+import { bootstrapTrust } from "./update-trust.js";
 import { describeSightings, scanTree } from "./security.js";
 
 // Shared, immutable release fixtures for the production lifecycle scenarios.
@@ -92,11 +93,17 @@ interface Distribution {
   patch(source: string, publicKey: string, version: string): string;
 }
 
+/**
+ * The owner's update trust: a bootstrap root under `updates`, after its
+ * `rollback: true`, with the release key in the channel role.
+ */
 function pinKey(source: string, publicKey: string, version: string): string {
+  if (source.includes("\n  trust:\n"))
+    throw new Error("the manifest already has updates.trust");
   return source
     .replace(
-      "    keys: []",
-      `    keys:\n      - id: ${KEY_ID}\n        publicKey: ${publicKey}`,
+      "  rollback: true\n",
+      `  rollback: true\n${bootstrapTrust({ id: KEY_ID, publicKey })}`,
     )
     .replace(/^ {2}version: \d+\.\d+\.\d+$/m, `  version: ${version}`);
 }
@@ -206,7 +213,7 @@ const PERSONAL_LOCAL: Distribution = {
       ],
       [
         "  rollback: true\n",
-        `  rollback: true\n  source: \${MYPI_LOCAL_UPDATE_SOURCE}\n  trust:\n    keys: []\n`,
+        `  rollback: true\n  source: \${MYPI_LOCAL_UPDATE_SOURCE}\n`,
       ],
     ] as const) {
       if (!patched.includes(from))

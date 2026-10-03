@@ -6,7 +6,10 @@ import {
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
+  PISHIP_SCHEMA_V1ALPHA5,
   readManifest,
+  type UpdateTrustKey,
+  channelTrustKeys,
 } from "@piship/schema";
 import { PI_VERSION } from "./compatibility.js";
 import { digest, hash } from "./digest.js";
@@ -16,6 +19,7 @@ import {
   LOCK_SCHEMA_V1ALPHA2,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_VERSION,
 } from "./lock-schema.js";
 import { resolveResources } from "./resources.js";
@@ -27,8 +31,27 @@ export function debugTiming(label: string, started: bigint): void {
       `${label}: ${(Number(process.hrtime.bigint() - started) / 1e6).toFixed(1)} ms\n`,
     );
 }
+/**
+ * The lock's manifest digest. From piship/v1alpha5 it is the canonical
+ * `sha256-<hex>` of the parsed manifest, so YAML comments, key order, and
+ * line endings never change it; older schemas keep the bare hex their locks
+ * already record.
+ */
 export function manifestDigest(manifest: Manifest): string {
-  return hash(JSON.stringify(manifest));
+  return manifest.schema === PISHIP_SCHEMA_V1ALPHA5
+    ? digest(manifest)
+    : hash(JSON.stringify(manifest));
+}
+
+/**
+ * The keys a lock trusts to sign update channels: the channel role of a
+ * v1alpha5 bootstrap root, or every v1alpha4 `updates.trust.keys` entry.
+ * Empty when updates are disabled.
+ */
+export function channelTrustFromLock(
+  lock: Pick<DistributionLock, "updates">,
+): readonly UpdateTrustKey[] {
+  return channelTrustKeys(lock.updates);
 }
 export function checkPiVersion(manifest: Manifest): void {
   if (manifest.runtime.pi !== PI_VERSION)
@@ -48,16 +71,19 @@ export function resolveLock(manifestPath: string): DistributionLock {
     dirname(resolve(manifestPath)),
     resources,
   );
-  const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4;
+  const v5 = manifest.schema === PISHIP_SCHEMA_V1ALPHA5;
+  const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const policy = governance?.manifest;
   return {
-    schema: v4
-      ? LOCK_SCHEMA_V1ALPHA4
-      : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
-        ? LOCK_SCHEMA_V1ALPHA3
-        : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
-          ? LOCK_SCHEMA_V1ALPHA2
-          : LOCK_SCHEMA_VERSION,
+    schema: v5
+      ? LOCK_SCHEMA_V1ALPHA5
+      : v4
+        ? LOCK_SCHEMA_V1ALPHA4
+        : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
+          ? LOCK_SCHEMA_V1ALPHA3
+          : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
+            ? LOCK_SCHEMA_V1ALPHA2
+            : LOCK_SCHEMA_VERSION,
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,

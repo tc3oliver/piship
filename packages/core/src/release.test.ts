@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -26,7 +27,7 @@ import {
   currentTarget,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
-  LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   lockManifest,
   PI_COMPATIBILITY,
   payloadInventory,
@@ -105,7 +106,34 @@ interface ProjectOptions {
   /** Replaces the default `resources:` section. */
   readonly resources?: string;
   readonly lock?: boolean;
+  /** A managed distribution with plain https access endpoints. */
+  readonly managed?: boolean;
+  /** Replaces the v1alpha5 `updates.trust` body (indented four spaces). */
+  readonly trust?: string;
 }
+
+const COMPANY_RESOURCES = `resources:
+  instructions:
+    company: [./resources/AGENTS.md]
+`;
+const MANAGED_ACCESS = `identity:
+  mode: oidc
+  oidc:
+    issuer: https://login.acme.example
+    clientId: acmepi
+    redirectUri: http://127.0.0.1:8765/callback
+credential:
+  provider: http-broker
+  broker: { endpoint: https://broker.acme.example/token }
+inference:
+  provider: openai-compatible
+  baseUrl: https://gateway.acme.example/v1
+models:
+  default: acme/coder
+  allowed: [acme/coder]
+  catalog:
+    acme/coder: { name: Acme Coder, contextWindow: 128000, maxOutputTokens: 8192 }
+`;
 
 const DEFAULT_RELEASE = `release:
   vulnerabilities:
@@ -118,8 +146,9 @@ const DEFAULT_RELEASE = `release:
 
 function manifestSource(options: ProjectOptions = {}): string {
   const id = options.id ?? "acmepi";
-  const schema = options.schema ?? "piship/v1alpha4";
-  const v4 = schema === "piship/v1alpha4";
+  const schema = options.schema ?? "piship/v1alpha5";
+  const v5 = schema === "piship/v1alpha5";
+  const v4 = schema === "piship/v1alpha4" || v5;
   return `schema: ${schema}
 app:
   id: ${id}
@@ -129,8 +158,8 @@ app:
 runtime:
   pi: "1.0.0"
 deployment:
-  mode: personal
-${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
+  mode: ${options.managed ? "managed" : "personal"}
+${options.managed ? MANAGED_ACCESS : ""}${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
   options.resources ??
   `resources:
   instructions:
@@ -144,10 +173,25 @@ ${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: true
   trust:
-    keys:
+${
+  options.trust !== undefined
+    ? options.trust
+    : v5
+      ? `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [${KEY.id}], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`
+      : `    keys:
       - id: ${KEY.id}
         publicKey: ${KEY.publicKey}
-${options.release ?? DEFAULT_RELEASE}`
+`
+}${options.release ?? DEFAULT_RELEASE}`
     : ""
 }${options.extra ?? ""}`;
 }
@@ -336,14 +380,15 @@ async function withNpmLock<T>(
 
 // --------------------------------------------------------------------- lock
 
-describe("lock piship-lock/v1alpha4", () => {
+describe("lock piship-lock/v1alpha5", () => {
   it("is deterministic and records sources, digests, updates, release, and state schemas", () => {
     const { path } = project({ lock: false });
     const first = readFileSync(lockManifest(path), "utf8");
     const second = readFileSync(lockManifest(path), "utf8");
     expect(second).toBe(first);
     const lock = requireCurrentLock(path);
-    expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA4);
+    expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA5);
+    expect(lock.manifest.sha256).toMatch(/^sha256-[0-9a-f]{64}$/);
     expect(lock.runtime.stateSchemas).toEqual(STATE_SCHEMAS);
     for (const item of lock.runtime.packages) {
       expect(item.resolved).toMatch(/^https:\/\//);
@@ -374,7 +419,17 @@ describe("lock piship-lock/v1alpha4", () => {
       channels: ["stable", "candidate"],
       source: `\${ACMEPI_UPDATE_SOURCE}`,
       rollback: true,
-      trust: { keys: TRUSTED },
+      trust: {
+        bootstrap: {
+          version: 1,
+          expires: "2099-01-01T00:00:00Z",
+          keys: TRUSTED,
+          roles: {
+            root: { keyIds: [KEY.id], threshold: 1 },
+            channel: { keyIds: [KEY.id], threshold: 1 },
+          },
+        },
+      },
     });
     expect(lock.release).toEqual({
       targets: ["linux-x64", "darwin-arm64", "win32-x64"],
@@ -506,9 +561,9 @@ it.runIf(process.env.CI === "true")(
 );
 
 describe.runIf(HOST_EVIDENCED)("release gates", () => {
-  it("accepts a current v1alpha4 lock with only reviewed install scripts", () => {
+  it("accepts a current v1alpha5 lock with only reviewed install scripts", () => {
     const { path } = project();
-    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA4);
+    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA5);
   });
 
   it("lock: refuses a stale lock after a resource edit", () => {
@@ -542,6 +597,65 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     const error = caught(() => checkReleaseInputs(path));
     expect(error.code).toBe("CONFIG_INVALID");
     expect(error.message).toMatch(/Release gate schema: .*piship\/v1alpha3/);
+  });
+
+  it("schema: refuses a v1alpha4 manifest; v0.8 releases need v1alpha5", () => {
+    const { path } = project({ schema: "piship/v1alpha4" });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(
+      /Release gate schema: production releases need a piship\/v1alpha5 manifest \(found piship\/v1alpha4\)/,
+    );
+  });
+
+  it("trust: refuses an update source without bootstrap trust", () => {
+    const { path } = project({ trust: "    {}\n" });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(
+      /Release gate trust: updates.source is set without updates.trust.bootstrap/,
+    );
+  });
+
+  it("trust: refuses a managed distribution whose root and channel roles share a key", () => {
+    // What piship migrate makes of a v1alpha4 key set: the legacy key in
+    // both roles. The owner must split the roles before a managed release.
+    const { path } = project({ managed: true, resources: COMPANY_RESOURCES });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toMatch(
+      new RegExp(
+        `Release gate trust: the update root and channel roles share ${KEY.id}`,
+      ),
+    );
+  });
+
+  it("trust: accepts a managed distribution with distinct root and channel keys", () => {
+    const root = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "der" })
+      .toString("base64");
+    const { path } = project({
+      managed: true,
+      resources: COMPANY_RESOURCES,
+      trust: `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: acme-root
+          publicKey: ${root}
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [acme-root], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`,
+    });
+    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA5);
+  });
+
+  it("trust: accepts a personal distribution whose roles share a key", () => {
+    const { path } = project();
+    expect(checkReleaseInputs(path).deployment.mode).toBe("personal");
   });
 
   it("target: refuses a target outside release.targets", () => {
@@ -1713,8 +1827,8 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
           lifecycle: PI_COMPATIBILITY["1.0.0"]?.lifecycle,
         },
       },
-      manifestSchema: "piship/v1alpha4",
-      lockSchema: LOCK_SCHEMA_V1ALPHA4,
+      manifestSchema: "piship/v1alpha5",
+      lockSchema: LOCK_SCHEMA_V1ALPHA5,
       target,
       channel: "stable",
       created: "2026-01-01T00:00:00Z",

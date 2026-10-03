@@ -1,6 +1,6 @@
 # Personal distribution example
 
-MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
+MyPi is the neutral personal reference distribution on `piship/v1alpha5`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
 - **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's crash log and the `fd` and `rg` binaries it downloads go to MyPi's state too ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
 - **An exact pinned Pi**, 1.0.0.
@@ -8,7 +8,7 @@ MyPi is the neutral personal reference distribution on `piship/v1alpha4`. It nee
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
 - **A user-managed MCP server.** `mcp.mode: explicit` declares `notes`, a tiny stdio server in `resources/mcp/notes-server.mjs`. It serves two in-memory notes as `mcp__notes__list_notes` and `mcp__notes__read_note`, uses no network and no credential, and must report `serverInfo.name` `mypi-notes`.
 - **Optional sandbox and no audit.** `sandbox.required: false` and `audit.enabled: false`. Set `sandbox.required: true` in a copy on Linux or macOS to contain `bash`, `!` commands, and the MCP server.
-- **Signed releases, update, and rollback.** `updates` offers the `stable` and `candidate` channels and reads the channel from `${MYPI_UPDATE_SOURCE}`, which is resolved only when `update` runs. The example pins no release key (`updates.trust.keys: []`), so `update` fails until you add your own.
+- **Signed releases, update, and rollback.** `updates` offers the `stable` and `candidate` channels and reads the channel from `${MYPI_UPDATE_SOURCE}`, which is resolved only when `update` runs. The example pins no update trust (no `updates.trust.bootstrap`), so `update` fails closed and `piship release` refuses it until you add your own key.
 
 ## Build, install, and run
 
@@ -50,7 +50,7 @@ Start it with `PI_OFFLINE=1` set to stop the download and Pi's other network req
 
 The lifecycle works as for the demo company ([release](../../docs/release.md)), with nothing to sign in to. Work in a copy so the example stays unchanged:
 
-1. Create a release key outside the repository, then replace `keys: []` in the copy with the printed entry:
+1. Create a release key outside the repository, then add it under `updates` in the copy as `trust.bootstrap` with `version: 1`, an `expires` timestamp, the printed entry in `keys`, and its ID in both `roles.root` and `roles.channel` (threshold 1). A personal distribution may use one key for both roles ([manifest](../../docs/manifest.md#update-trust-bootstrap-v1alpha5)):
 
    ```bash
    cp -r examples/personal /tmp/mypi

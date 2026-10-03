@@ -1,4 +1,4 @@
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 # AcmeCode wired to the enterprise reference stack in this directory: the
 # Keycloak realm `piship-reference`, the reference credential broker, and the
@@ -208,8 +208,6 @@ updates:
   channels: [stable, candidate]
   source: ${ACMECODE_UPDATE_SOURCE}
   rollback: true
-  trust:
-    keys: []
 
 # The reference stack runs in Linux containers, and the required sandbox has
 # an adapter on Linux and macOS only, so the release targets are those two.

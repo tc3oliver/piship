@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha4",
+  "schema": "piship-lock/v1alpha5",
   "manifest": {
-    "schema": "piship/v1alpha4",
-    "sha256": "659b7d5b75571e04ab051827c80f8bd4fd883e45b780a75420f957beca5b17a3"
+    "schema": "piship/v1alpha5",
+    "sha256": "sha256-a77de20d5c3f4f0ae90cb86613db3c86660584ef9d8017d03d40edf9407038a7"
   },
   "app": {
     "id": "acmecode",
@@ -1526,9 +1526,7 @@
     ],
     "source": "${ACMECODE_UPDATE_SOURCE}",
     "rollback": true,
-    "trust": {
-      "keys": []
-    }
+    "trust": {}
   },
   "release": {
     "targets": [

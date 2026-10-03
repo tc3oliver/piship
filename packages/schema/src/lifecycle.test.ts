@@ -68,8 +68,9 @@ describe("piship/v1alpha4 schema", () => {
       "piship/v1alpha2",
       "piship/v1alpha3",
       "piship/v1alpha4",
+      "piship/v1alpha5",
     ]);
-    expect(LATEST_SCHEMA).toBe("piship/v1alpha4");
+    expect(LATEST_SCHEMA).toBe("piship/v1alpha5");
     expect(parseManifestHeader(personal())).toEqual({
       schema: PISHIP_SCHEMA_V1ALPHA4,
     });
@@ -572,8 +573,8 @@ describe("migration to piship/v1alpha4", () => {
     "release defaults apply: targets linux-x64, darwin-arm64, win32-x64; package sources https://registry.npmjs.org; vulnerabilities.failOn high",
     "Regenerate piship.lock with piship lock, then rebuild",
   ];
-  it("migrates v1alpha3 to v1alpha4 by default", () => {
-    const plan = migrateManifestSource(v3);
+  it("migrates v1alpha3 to v1alpha4", () => {
+    const plan = migrateManifestSource(v3, PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.from).toBe(PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.changes).toEqual(changes);
@@ -589,7 +590,7 @@ describe("migration to piship/v1alpha4", () => {
     expect(manifest.lifecycle?.release.targets).toEqual(
       DEFAULT_RELEASE_TARGETS,
     );
-    expect(migrateManifestSource(plan.source)).toEqual({
+    expect(migrateManifestSource(plan.source, PISHIP_SCHEMA_V1ALPHA4)).toEqual({
       from: PISHIP_SCHEMA_V1ALPHA4,
       to: PISHIP_SCHEMA_V1ALPHA4,
       changes: [],
@@ -599,7 +600,7 @@ describe("migration to piship/v1alpha4", () => {
   it("migrates v1alpha1 to v1alpha4 in steps", () => {
     const v1 =
       'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.0"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n';
-    const plan = migrateManifestSource(v1);
+    const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.from).toBe("piship/v1alpha1");
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.changes[0]).toBe("schema: piship/v1alpha1 -> piship/v1alpha2");
@@ -622,7 +623,7 @@ describe("migration to piship/v1alpha4", () => {
     expect(migrateManifestSource(v3, PISHIP_SCHEMA_V1ALPHA3).changes).toEqual(
       [],
     );
-    const v4 = migrateManifestSource(v3).source;
+    const v4 = migrateManifestSource(v3, PISHIP_SCHEMA_V1ALPHA4).source;
     expect(() => migrateManifestSource(v4, PISHIP_SCHEMA_V1ALPHA3)).toThrow(
       "downgrades are not supported",
     );
