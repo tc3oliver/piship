@@ -16,9 +16,11 @@ import { syncDirectory, temporarySibling } from "@piship/credentials";
 import { RELEASE_CHANNELS } from "@piship/schema";
 import { sha256File } from "../archive.js";
 import {
+  buildSignatureEnvelope,
+  type KeyedSigner,
   keyFingerprint,
-  publicKeyFromPrivate,
-  signBytes,
+  pemSigner,
+  signVerified,
   verifySignature,
   type SignatureEnvelope,
   type TrustedKey,
@@ -93,12 +95,25 @@ function validChannel(value: unknown): value is ChannelMetadata {
   });
 }
 
-export interface SignChannelOptions {
+export type SignChannelOptions = SignChannelCommon &
+  (
+    | {
+        /** A plaintext PKCS#8 PEM key; use `signer` for an encrypted one. */
+        readonly privateKeyPem: string;
+        readonly keyId: string;
+        readonly signer?: undefined;
+      }
+    | {
+        readonly signer: KeyedSigner;
+        readonly privateKeyPem?: undefined;
+        readonly keyId?: undefined;
+      }
+  );
+
+interface SignChannelCommon {
   readonly directory: string;
   readonly channel: string;
   readonly archives: readonly string[];
-  readonly privateKeyPem: string;
-  readonly keyId: string;
   /**
    * Further public keys the existing metadata may be signed with, such as
    * the retiring key once signing has moved to its successor.
@@ -194,10 +209,10 @@ export async function signChannel(
     )
       accepted.push(key);
   };
-  accept({
-    id: options.keyId,
-    publicKey: publicKeyFromPrivate(options.privateKeyPem),
-  });
+  const signer =
+    options.signer ??
+    pemSigner({ keyId: options.keyId, privateKeyPem: options.privateKeyPem });
+  accept({ id: signer.keyId, publicKey: signer.publicKey });
   for (const key of options.previousKeys ?? []) accept(key);
   const verified: { archive: string; release: VerifiedRelease }[] = [];
   try {
@@ -229,18 +244,14 @@ export async function signChannel(
     }
     if (!distribution)
       throw new PiShipError("CONFIG_INVALID", "No release archives were given");
-    mkdirSync(directory, { recursive: true });
     for (const { archive, release } of verified) {
       const { metadata } = release;
-      const name = basename(archive);
-      const destination = join(directory, name);
-      if (resolve(archive) !== destination) copyFileSync(archive, destination);
       entries.set(`${metadata.distribution.version} ${metadata.target}`, {
         version: metadata.distribution.version,
         target: metadata.target,
-        archive: name,
-        sha256: await sha256File(destination),
-        bytes: statSync(destination).size,
+        archive: basename(archive),
+        sha256: await sha256File(archive),
+        bytes: statSync(archive).size,
         pi: metadata.pi.version,
         piship: metadata.piship.version,
         lockSha256: metadata.lockSha256,
@@ -264,17 +275,33 @@ export async function signChannel(
         "CONFIG_INVALID",
         `Channel sequence must increase (current ${previous.sequence})`,
       );
+    // Both files are prepared, and the signature checked against the
+    // signer's public key, before the channel directory is touched: a
+    // failing or faulty signer changes nothing.
     const text = `${JSON.stringify(metadata, null, 2)}\n`;
-    const signature = signBytes(
-      Buffer.from(text),
-      options.privateKeyPem,
-      options.keyId,
-    );
+    const signature = buildSignatureEnvelope([
+      await signVerified(signer, Buffer.from(text)),
+    ]);
+    const signatureText = `${JSON.stringify(signature, null, 2)}\n`;
+    mkdirSync(directory, { recursive: true });
+    for (const { archive } of verified) {
+      const destination = join(directory, basename(archive));
+      if (resolve(archive) === destination) continue;
+      copyFileSync(archive, destination);
+      const entry = metadata.releases.find(
+        (item) => item.archive === basename(archive),
+      );
+      if ((await sha256File(destination)) !== entry?.sha256)
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `${archive} changed while the channel was being signed`,
+        );
+    }
     // Each file is replaced whole, so neither is ever seen truncated. A
     // reader that gets a mismatched pair between the two replacements
     // refuses it, as does the next sign-channel.
     replaceFile(path, text);
-    replaceFile(`${path}.sig`, `${JSON.stringify(signature, null, 2)}\n`);
+    replaceFile(`${path}.sig`, signatureText);
     return { path, metadata };
   } finally {
     for (const { release } of verified) release.cleanup();

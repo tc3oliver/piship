@@ -52,7 +52,7 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
-import { generateSigningKey, signBytes } from "./signing.js";
+import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -2185,6 +2185,75 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         expect(statSync(join(channelDir, name)).mode & 0o777).toBe(
           0o666 & ~process.umask(),
         );
+  });
+
+  it("rejects a faulty signer before publishing and changes no files", async () => {
+    const { dir, channelDir, built } = await channel();
+    // Every file under the channel directory and the fresh one, with bytes.
+    const snapshot = () =>
+      [channelDir, join(dir, "fresh")].map((root) =>
+        existsSync(root)
+          ? readdirSync(root)
+              .sort()
+              .map((name) => [name, readFileSync(join(root, name))])
+          : null,
+      );
+    const before = snapshot();
+    expect(before[1]).toBeNull();
+    const next = project({ version: "1.1.0" });
+    const added = await build(next.path, { outputRoot: join(dir, "next") });
+    const faulty = (sign: () => Promise<Uint8Array>) => ({
+      keyId: KEY.id,
+      algorithm: "ed25519" as const,
+      publicKey: KEY.publicKey,
+      sign,
+    });
+    for (const signer of [
+      faulty(async () => new Uint8Array(64)),
+      faulty(async () => {
+        throw new Error("hardware token unplugged");
+      }),
+    ])
+      for (const directory of [channelDir, join(dir, "fresh")]) {
+        const error = await rejection(
+          signChannel({
+            directory,
+            channel: "stable",
+            archives: [built.archive, added.archive],
+            signer,
+          }),
+        );
+        expect(error.code).toBe("INTEGRITY_FAILED");
+        expect(error.message).not.toContain("unplugged");
+        expect(snapshot()).toEqual(before);
+      }
+  });
+
+  it("publishes with an encrypted key through a PEM signer", async () => {
+    const { dir, path } = project();
+    const built = await build(path);
+    const channelDir = join(dir, "channel");
+    const encrypted = generateSigningKey(KEY.id, { passphrase: "hunter2" });
+    const signed = await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      signer: pemSigner({
+        keyId: KEY.id,
+        privateKeyPem: encrypted.privateKeyPem,
+        passphrase: "hunter2",
+      }),
+      now: () => new Date("2026-06-01T00:00:00Z"),
+    });
+    const read = await readChannel(channelDir, "stable", {
+      distribution: "acmepi",
+      trusted: [{ id: KEY.id, publicKey: encrypted.publicKey }],
+      now: () => new Date("2026-06-02T00:00:00Z"),
+    });
+    expect(read.metadata).toEqual(signed.metadata);
+    expect(
+      JSON.parse(readFileSync(join(channelDir, "stable.json.sig"), "utf8")),
+    ).not.toHaveProperty("signatures");
   });
 
   it("extends existing metadata only when its signature verifies", async () => {
