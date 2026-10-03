@@ -144,6 +144,21 @@ const DEFAULT_RELEASE = `release:
         expires: 2026-12-31
 `;
 
+/** `updates.trust` YAML whose root and channel roles are `keys` at threshold 1. */
+function bootstrapTrust(
+  keys: readonly { id: string; publicKey: string }[],
+): string {
+  const ids = keys.map((key) => key.id).join(", ");
+  return `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+${keys.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicKey}\n`).join("")}      roles:
+        root: { keyIds: [${ids}], threshold: 1 }
+        channel: { keyIds: [${ids}], threshold: 1 }
+`;
+}
+
 function manifestSource(options: ProjectOptions = {}): string {
   const id = options.id ?? "acmepi";
   const schema = options.schema ?? "piship/v1alpha5";
@@ -2344,10 +2359,10 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
   });
 
   it("publishes with an encrypted key through a PEM signer", async () => {
-    const { dir, path } = project();
+    const encrypted = generateSigningKey(KEY.id, { passphrase: "hunter2" });
+    const { dir, path } = project({ trust: bootstrapTrust([encrypted]) });
     const built = await build(path);
     const channelDir = join(dir, "channel");
-    const encrypted = generateSigningKey(KEY.id, { passphrase: "hunter2" });
     const signed = await signChannel({
       directory: channelDir,
       channel: "stable",
@@ -2371,19 +2386,22 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
   });
 
   it("extends existing metadata only when its signature verifies", async () => {
-    const { channelDir, built } = await channel();
+    const { channelDir, built: first } = await channel();
     const path = join(channelDir, "stable.json");
+    // A release whose channel role also trusts the next key.
+    const next = generateSigningKey("test-release-next");
+    const overlap = project({ trust: bootstrapTrust([KEY, next]) });
+    const both = await build(overlap.path);
     const resign = (key = KEY) =>
       signChannel({
         directory: channelDir,
         channel: "stable",
-        archives: [built.archive],
+        archives: [key === KEY ? first.archive : both.archive],
         privateKeyPem: key.privateKeyPem,
         keyId: key.id,
       });
     // Rotation: a new signing key may extend metadata signed by a key the
     // added release pins.
-    const next = generateSigningKey("test-release-next");
     expect((await resign(next)).metadata.sequence).toBe(2);
     // Metadata signed by a key neither the signer nor the release vouches
     // for is refused.
@@ -2410,7 +2428,7 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     const back = await signChannel({
       directory: channelDir,
       channel: "stable",
-      archives: [built.archive],
+      archives: [first.archive],
       privateKeyPem: KEY.privateKeyPem,
       keyId: KEY.id,
       previousKeys: [{ id: next.id, publicKey: next.publicKey }],

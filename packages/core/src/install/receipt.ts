@@ -79,8 +79,14 @@ export interface InstallReceipt {
   readonly channel?: string;
   /** Highest verified channel metadata sequence per channel (replay guard). */
   readonly channelSequences?: Readonly<Record<string, number>>;
-  /** Keys retired by an update; absent (none) in older receipts. */
+  /** Keys retired by a v0.7 update; absent (none) in other receipts. */
   readonly retiredKeys?: readonly RetiredKey[];
+  /**
+   * The installation keeps its update trust in `trust/<id>.json`. Once set,
+   * a missing trust state fails closed instead of being rebuilt from the
+   * active release lock; absent on receipts written before v0.8.
+   */
+  readonly trustState?: true;
   readonly lastCheck?: {
     readonly time: string;
     readonly channel: string;
@@ -89,6 +95,7 @@ export interface InstallReceipt {
 }
 
 export type LifecyclePhase =
+  | "root-accepted"
   | "staged"
   | "verified"
   | "snapshot-directory"
@@ -339,6 +346,8 @@ export function readInstallReceipt(id: string): InstallReceipt {
       ))
   )
     throw fail("records invalid retired release keys");
+  if (raw.trustState !== undefined && raw.trustState !== true)
+    throw fail("records an invalid trust state marker");
   return raw as InstallReceipt;
 }
 

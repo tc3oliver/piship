@@ -49,6 +49,28 @@ export {
   npmSignatureAuditor,
 } from "./scans.js";
 export {
+  MAX_ROOT_BYTES,
+  MAX_ROOT_SIGNATURE_BYTES,
+  MAX_ROOT_TRANSITIONS,
+  ROOT_SCHEMA,
+  hostedRootText,
+  parseHostedRoot,
+  refreshRoot,
+  rootDigest,
+  rootExpired,
+  rootFileName,
+  verifyRootTransition,
+} from "./root.js";
+export {
+  bootstrapYaml,
+  describeTrustRoot,
+  initTrustRoot,
+  nextTrustRoot,
+  type TrustRootDescription,
+  type TrustRootNextOptions,
+  type TrustRootNextResult,
+} from "./trust-root.js";
+export {
   checkSourceUrl,
   checkUpdateSource,
   downloadArchive,

@@ -27,6 +27,11 @@ import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
+  initialTrustState,
+  removeTrustState,
+  writeTrustState,
+} from "./trust-state.js";
+import {
   RECEIPT_SCHEMA,
   VERSION_NAME,
   appDirectory,
@@ -538,6 +543,12 @@ export async function installDistribution(
           writeFileSync(launcher, launcherSource(id));
           syncTree(apps);
           syncDirectory(dirname(apps));
+          // A fresh install is the one point where a release lock sets the
+          // installation's update trust; a leftover state of an earlier
+          // install is replaced, never merged.
+          const trust = initialTrustState(lock, id, new Date());
+          if (trust) writeTrustState(trust);
+          else removeTrustState(id);
           const receipt: InstallReceipt = {
             schema: RECEIPT_SCHEMA,
             app: lock.app,
@@ -556,6 +567,7 @@ export async function installDistribution(
             // Users start on the distribution's default channel, whatever
             // channel the installed archive was built for.
             ...(lock.updates ? { channel: lock.updates.channel } : {}),
+            ...(trust ? { trustState: true } : {}),
           };
           if (!hold.stillHeld())
             throw new Error(`Initial install lock for ${id} was lost; retry`);
@@ -569,6 +581,7 @@ export async function installDistribution(
             if (ownsCommandShim(commandPath, launcher))
               rmSync(commandPath, { force: true });
             rmSync(apps, { recursive: true, force: true });
+            removeTrustState(id);
           }
           throw error;
         }

@@ -15,6 +15,7 @@ import {
   runtimeStateDirectory,
 } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
+import { removeTrustState } from "./trust-state.js";
 import { ownsCommandShim } from "./install.js";
 import {
   assertSignedOut,
@@ -206,6 +207,7 @@ function holdDamagedForUninstall(id: string): {
       verify();
       for (const shim of shims) rmSync(shim, { force: true });
       rmSync(apps, { recursive: true, force: true });
+      removeTrustState(id);
       rmSync(receiptPath(id), { force: true });
     };
     return { verify, remove, release };
@@ -263,6 +265,7 @@ function removeInstall(id: string, receipt: InstallReceipt): void {
   if (existsSync(receipt.commandPath))
     rmSync(receipt.commandPath, { force: true });
   rmSync(appDirectory(id), { recursive: true, force: true });
+  removeTrustState(id);
   rmSync(receiptPath(id), { force: true });
 }
 

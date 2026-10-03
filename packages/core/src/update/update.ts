@@ -21,8 +21,15 @@ import {
   syncTree,
   type InstallReceipt,
   type LifecycleOptions,
-  type RetiredKey,
 } from "../install/receipt.js";
+import {
+  advanceTrustState,
+  damagedTrustState,
+  initialTrustState,
+  readTrustState,
+  writeTrustState,
+  type UpdateTrustState,
+} from "../install/trust-state.js";
 import {
   checkStateMigration,
   compareVersions,
@@ -30,8 +37,7 @@ import {
 } from "../migration.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
-import { channelTrustFromLock } from "../lock.js";
-import { keyFingerprint } from "../signing.js";
+import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import {
   checkUpdateSource,
@@ -121,6 +127,35 @@ export interface UpdateOptions extends LifecycleOptions {
   readonly fetcher?: typeof fetch;
 }
 
+/**
+ * The installation's current update trust. A receipt written before v0.8
+ * has none yet: its trust is taken once from the active release lock (its
+ * v0.7 retired keys excluded) and recorded. Once recorded, a missing or
+ * damaged state fails closed and is never rebuilt from a release lock.
+ */
+function installationTrust(
+  id: string,
+  receipt: InstallReceipt,
+  lock: DistributionLock,
+  time: Date,
+): { readonly state: UpdateTrustState; readonly migrated: boolean } {
+  const existing = readTrustState(id);
+  if (existing) return { state: existing, migrated: false };
+  if (receipt.trustState) throw damagedTrustState(id, "is missing");
+  const state = initialTrustState(
+    lock,
+    id,
+    time,
+    (receipt.retiredKeys ?? []).map((key) => key.fingerprint),
+  );
+  if (!state)
+    throw new PiShipError(
+      "UPDATE_FAILED",
+      `${lock.app.name} trusts no release keys (updates.trust), so no update can be verified`,
+    );
+  return { state, migrated: true };
+}
+
 export interface UpdateResult {
   readonly status: "up-to-date" | "available" | "updated";
   readonly id: string;
@@ -154,6 +189,8 @@ export async function updateDistribution(
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
+  // One fixed time for every expiry check of this attempt.
+  const updateTime = now();
   const lifecycle = acquireLock(id);
   try {
     // Read under the lock, so a concurrent commit cannot leave it stale.
@@ -167,24 +204,63 @@ export async function updateDistribution(
         "UPDATE_FAILED",
         `${lock.app.name} ${lock.app.version} has no update policy (manifest ${lock.manifest.schema}); install a piship/v1alpha4 release`,
       );
-    const trusted = channelTrustFromLock(lock);
-    if (!trusted.length)
-      throw new PiShipError(
-        "UPDATE_FAILED",
-        `${lock.app.name} trusts no release keys (updates.trust), so no update can be verified`,
-      );
     const selection = selectChannel(updates, options.channel, receipt.channel);
     const { channel } = selection;
     const notices = [...selection.notices];
     const source = resolveSource(lock, options.source, env);
+    const persist = (state: UpdateTrustState) => {
+      if (!lifecycle.stillHeld())
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `The lock on ${id} was taken over while the update ran; the update trust was not changed`,
+          { retryable: true },
+        );
+      writeTrustState(state);
+    };
+    const trust = installationTrust(id, receipt, lock, updateTime);
+    let state = trust.state;
+    if (trust.migrated) {
+      persist(state);
+      lifecycle.commit({ ...readInstallReceipt(id), trustState: true });
+    }
+    // Mandatory order: refresh the root and persist each accepted version,
+    // then verify the channel with the newest root's channel role, then
+    // download, verify, and activate. A key a newer root removed stops
+    // counting before any release is fetched.
+    const refreshed = await refreshRoot({
+      source,
+      distribution: id,
+      current: state.root,
+      accept: (root) => {
+        state = advanceTrustState(state, root, updateTime);
+        persist(state);
+        options.faults?.("root-accepted");
+      },
+      ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+    });
+    if (refreshed.transitions)
+      notices.push(
+        `Update trust advanced to root version ${refreshed.root.version}`,
+      );
+    if (rootExpired(refreshed.root, updateTime))
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `Update root version ${refreshed.root.version} expired at ${refreshed.root.expires} (this computer's clock reads ${updateTime.toISOString()}); it no longer authorizes channel metadata`,
+        {
+          component: "update",
+          userAction:
+            "If this computer's clock is wrong, correct it; otherwise ask the distribution owner to publish the next root (piship trust-root next)",
+        },
+      );
+    const role = roleTrust(refreshed.root, "channel");
     const minSequence = receipt.channelSequences?.[channel] ?? 0;
     options.progress?.(`Checking the ${channel} channel`);
     const { metadata, keyId } = await readChannel(source, channel, {
       distribution: id,
-      trusted,
-      retired: receipt.retiredKeys ?? [],
+      trusted: role.keys,
+      threshold: role.threshold,
       minSequence,
-      now,
+      now: () => updateTime,
       ...(options.fetcher ? { fetcher: options.fetcher } : {}),
     });
     const record = (result: string, extra: Partial<InstallReceipt> = {}) =>
@@ -193,6 +269,7 @@ export async function updateDistribution(
         ...extra,
         // A check reports on the requested channel without switching to it.
         ...(options.check ? {} : { channel }),
+        trustState: true,
         channelSequences: {
           ...(receipt.channelSequences ?? {}),
           [channel]: metadata.sequence,
@@ -357,24 +434,9 @@ export async function updateDistribution(
       const keepPrevious =
         updates.rollback && verified.lock.updates?.rollback !== false;
       const current = readInstallReceipt(id);
-      // Keys the active release pins and the new one drops are retired for
-      // good on this installation, so a rollback cannot trust them again; a
-      // key the new release pins (again) is not retired.
-      const pinned = new Set(
-        channelTrustFromLock(verified.lock).map((key) =>
-          keyFingerprint(key.publicKey),
-        ),
-      );
-      const retiredKeys: RetiredKey[] = [...(current.retiredKeys ?? [])];
-      for (const key of trusted) {
-        const fingerprint = keyFingerprint(key.publicKey);
-        if (!retiredKeys.some((item) => item.fingerprint === fingerprint))
-          retiredKeys.push({
-            id: key.id,
-            fingerprint,
-            release: entry.version,
-          });
-      }
+      // The new release's lock does not touch the installation's update
+      // trust: only a verified root can, so a channel signer cannot widen
+      // its own authority by publishing a release with another bootstrap.
       const next: InstallReceipt = {
         ...current,
         app: verified.lock.app,
@@ -393,11 +455,11 @@ export async function updateDistribution(
             : []),
         ],
         channel,
+        trustState: true,
         channelSequences: {
           ...(current.channelSequences ?? {}),
           [channel]: metadata.sequence,
         },
-        retiredKeys: retiredKeys.filter((key) => !pinned.has(key.fingerprint)),
         lastCheck: {
           time: now().toISOString(),
           channel,
@@ -405,8 +467,6 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
-      if (!next.retiredKeys?.length)
-        delete (next as { retiredKeys?: unknown }).retiredKeys;
       lifecycle.commit(next);
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");

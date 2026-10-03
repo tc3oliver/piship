@@ -21,12 +21,16 @@ import {
   type KeyedSigner,
   keyFingerprint,
   pemSigner,
+  type SignatureEntry,
   signVerified,
   verifySignature,
+  verifyThreshold,
   type SignatureEnvelope,
   type TrustedKey,
 } from "../signing.js";
+import { canonicalJson } from "../digest.js";
 import { CHANNEL_SCHEMA } from "./metadata.js";
+import { refreshRoot, roleTrust, rootExpired } from "./root.js";
 import { readSourceFile } from "./source.js";
 import { type VerifiedRelease, verifyRelease } from "./verify.js";
 
@@ -116,6 +120,12 @@ interface SignChannelCommon {
   readonly channel: string;
   readonly archives: readonly string[];
   /**
+   * Further signers. Their signatures join the first signer's in
+   * `signatures`; the first signer's stays the top-level signature that
+   * v0.7 clients check.
+   */
+  readonly additionalSigners?: readonly KeyedSigner[];
+  /**
    * Further public keys the existing metadata may be signed with, such as
    * the retiring key once signing has moved to its successor.
    */
@@ -130,7 +140,7 @@ interface SignChannelCommon {
  * rename, so it is never seen truncated. Unlike the owner-only state files,
  * it keeps the default mode: a web server serves it.
  */
-function replaceFile(path: string, content: string): void {
+export function replaceFile(path: string, content: string): void {
   const temporary = temporarySibling(path);
   try {
     writeFileSync(temporary, content, { flag: "wx", flush: true });
@@ -171,10 +181,11 @@ function existingChannel(
     throw refuse("is not valid channel metadata");
   if (!existsSync(`${path}.sig`)) throw refuse("has no signature");
   try {
-    verifySignature(
+    verifyThreshold(
       bytes,
       JSON.parse(readFileSync(`${path}.sig`, "utf8")) as unknown,
       accepted,
+      1,
     );
   } catch (error) {
     throw refuse(
@@ -182,6 +193,62 @@ function existingChannel(
     );
   }
   return metadata;
+}
+
+/** The channel trust a release declares, as its clients will check it. */
+interface DeclaredTrust {
+  readonly label: string;
+  readonly keys: readonly TrustedKey[];
+  readonly threshold: number;
+  /** v1alpha4 keys: a v0.7 client checks only the top-level signature. */
+  readonly legacy: boolean;
+}
+
+/**
+ * The channel role a release's clients trust today: the newest root in the
+ * channel directory's `root/` reached from the lock's bootstrap (each
+ * transition verified as a client would), or the v1alpha4 keys.
+ */
+async function declaredTrust(
+  directory: string,
+  lock: VerifiedRelease["lock"],
+  distribution: string,
+  now: Date,
+): Promise<DeclaredTrust | undefined> {
+  const trust = lock.updates?.trust;
+  if (!trust) return undefined;
+  if ("keys" in trust)
+    return trust.keys.length
+      ? {
+          label: "the release's updates.trust.keys",
+          keys: trust.keys,
+          threshold: 1,
+          legacy: true,
+        }
+      : undefined;
+  if (!trust.bootstrap) return undefined;
+  const { root } = await refreshRoot({
+    source: directory,
+    distribution,
+    current: trust.bootstrap,
+    accept: () => {},
+  });
+  if (rootExpired(root, now))
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Update root version ${root.version} expired at ${root.expires}; clients refuse any channel under it`,
+      {
+        userAction:
+          "Publish the next root with a later expiry (piship trust-root next), then sign the channel",
+      },
+    );
+  const role = roleTrust(root, "channel");
+  return {
+    label: `the channel role of update root ${root.version}`,
+    keys: role.keys,
+    threshold: role.threshold,
+    legacy: false,
+  };
 }
 
 /**
@@ -210,19 +277,37 @@ export async function signChannel(
     )
       accepted.push(key);
   };
-  const signer =
+  const signers = [
     options.signer ??
-    pemSigner({ keyId: options.keyId, privateKeyPem: options.privateKeyPem });
-  accept({ id: signer.keyId, publicKey: signer.publicKey });
+      pemSigner({ keyId: options.keyId, privateKeyPem: options.privateKeyPem }),
+    ...(options.additionalSigners ?? []),
+  ];
+  for (const signer of signers)
+    accept({ id: signer.keyId, publicKey: signer.publicKey });
   for (const key of options.previousKeys ?? []) accept(key);
+  const now = (options.now ?? (() => new Date()))();
+  const directory = resolve(options.directory);
   const verified: { archive: string; release: VerifiedRelease }[] = [];
+  const declared: DeclaredTrust[] = [];
   try {
     for (const archive of options.archives) {
       const release = await verifyRelease(archive);
       verified.push({ archive, release });
       for (const key of channelTrustFromLock(release.lock)) accept(key);
+      const trust = await declaredTrust(
+        directory,
+        release.lock,
+        release.metadata.distribution.id,
+        now,
+      );
+      if (
+        trust &&
+        !declared.some((item) => canonicalJson(item) === canonicalJson(trust))
+      ) {
+        declared.push(trust);
+        for (const key of trust.keys) accept(key);
+      }
     }
-    const directory = resolve(options.directory);
     const path = join(directory, `${options.channel}.json`);
     const previous = existsSync(path)
       ? existingChannel(path, options.channel, accepted)
@@ -258,7 +343,6 @@ export async function signChannel(
         lockSha256: metadata.lockSha256,
       });
     }
-    const now = (options.now ?? (() => new Date()))();
     const metadata: ChannelMetadata = {
       schema: CHANNEL_SCHEMA,
       distribution,
@@ -280,9 +364,34 @@ export async function signChannel(
     // signer's public key, before the channel directory is touched: a
     // failing or faulty signer changes nothing.
     const text = `${JSON.stringify(metadata, null, 2)}\n`;
-    const signature = buildSignatureEnvelope([
-      await signVerified(signer, Buffer.from(text)),
-    ]);
+    const signed: SignatureEntry[] = [];
+    for (const signer of signers)
+      signed.push(await signVerified(signer, Buffer.from(text)));
+    const signature = buildSignatureEnvelope(signed);
+    // The signatures must satisfy the trust the releases declare, as their
+    // clients will check it; otherwise nothing is published.
+    for (const trust of declared)
+      try {
+        if (trust.legacy)
+          verifySignature(Buffer.from(text), signature, trust.keys);
+        else
+          verifyThreshold(
+            Buffer.from(text),
+            signature,
+            trust.keys,
+            trust.threshold,
+          );
+      } catch (error) {
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `The signing keys do not satisfy ${trust.label}: ${error instanceof Error ? error.message : String(error)}; nothing was written`,
+          {
+            userAction: trust.legacy
+              ? "Sign with a key the release pins in updates.trust.keys as the first --key"
+              : "Sign with enough keys of the current root's channel role (piship trust-root next changes the role)",
+          },
+        );
+      }
     const signatureText = `${JSON.stringify(signature, null, 2)}\n`;
     mkdirSync(directory, { recursive: true });
     for (const { archive } of verified) {
@@ -329,11 +438,19 @@ export async function readChannel(
       readonly fingerprint: string;
       readonly release: string;
     }[];
+    /** Distinct `trusted` keys whose signatures are required; default 1. */
+    readonly threshold?: number;
     readonly minSequence?: number;
     readonly now?: () => Date;
     readonly fetcher?: typeof fetch;
   },
-): Promise<{ readonly metadata: ChannelMetadata; readonly keyId: string }> {
+): Promise<{
+  readonly metadata: ChannelMetadata;
+  /** The first key whose signature counted. */
+  readonly keyId: string;
+  /** Every key whose signature counted toward the threshold. */
+  readonly keyIds: readonly string[];
+}> {
   const answer: { date?: number } = {};
   const bytes = await readSourceFile(
     source,
@@ -376,7 +493,13 @@ export async function readChannel(
         },
       );
   }
-  const keyId = verifySignature(bytes, envelope, trusted);
+  const keyIds = verifyThreshold(
+    bytes,
+    envelope,
+    trusted,
+    options.threshold ?? 1,
+  );
+  const keyId = keyIds[0] as string;
   let metadata: unknown;
   try {
     metadata = JSON.parse(bytes.toString("utf8")) as unknown;
@@ -440,5 +563,5 @@ export async function readChannel(
       "INTEGRITY_FAILED",
       `Channel metadata sequence ${metadata.sequence} is older than the ${options.minSequence} already seen; refusing a replayed channel`,
     );
-  return { metadata, keyId };
+  return { metadata, keyId, keyIds };
 }

@@ -86,6 +86,16 @@ function updateDoctor(
     );
     if (status.source) ok("source", status.source);
     else warn("source", "none declared; update needs --from");
+    if (status.trustProblem)
+      warn(
+        "update trust",
+        `${status.trustProblem}; update fails until trust is re-established by reinstalling a verified release`,
+      );
+    else if (status.updateRoot)
+      ok(
+        "update root",
+        `version ${status.updateRoot.version} (${status.updateRoot.origin}), expires ${status.updateRoot.expires}, channel threshold ${status.updateRoot.channelThreshold}`,
+      );
     const keys = status.keys ?? [];
     const trusted = keys.filter((key) => !key.retiredBy);
     const retired = keys.filter((key) => key.retiredBy);
