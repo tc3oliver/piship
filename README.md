@@ -182,7 +182,7 @@ updates:
 
 No secrets go in it; the schema rejects anything that looks like one. Policy, resources, MCP servers, audit, and release gates are optional. Every field is in the [manifest reference](docs/manifest.md).
 
-To start your own, run `node packages/cli/dist/bin.js init ./my-agent --managed` (leave out `--managed` for a personal one), keep it in its own repository, and see [running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository).
+To start your own company distribution, run `node packages/cli/dist/bin.js init ./company-agent --managed`, keep it in its own repository, and see [running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository). The [setup guide](docs/agent-setup.md) walks through every value it asks for.
 
 ## Not a company? Still useful
 
@@ -194,7 +194,7 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
-See the [personal example](examples/personal/README.md).
+To start your own, run `node packages/cli/dist/bin.js init ./my-agent --personal`. See the [personal example](examples/personal/README.md) and the [setup guide](docs/agent-setup.md).
 
 ## How it fits together
 
