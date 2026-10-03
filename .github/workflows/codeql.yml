@@ -8,6 +8,12 @@ on:
   workflow_call:
 permissions:
   contents: read
+concurrency:
+  # Same rule as CI: only a superseded pull request run is cancelled. Called
+  # from Release qualification, github.workflow names the caller; the literal
+  # prefix keeps this group apart from its sibling reusable workflows.
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   analyze:
     runs-on: ubuntu-latest

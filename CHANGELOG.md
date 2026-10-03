@@ -4,13 +4,14 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
-Changes on `main` after v0.7.1. Not released.
+Changes on `main` after v0.7.1, collected for v0.8.0 (pre-production trust and validation hardening, in progress; its scope is in the [roadmap](docs/roadmap.md)). Not released.
 
 ### Added
 
 - `piship install --sha256 <hex>` refuses a release archive whose SHA-256 differs from the published digest; with a release or payload directory it is refused, because a directory has no archive digest. `--expect-key sha256:<fingerprint>`, repeatable, refuses a release whose lock does not pin each given update key; the lock may pin further keys. Either refusal installs nothing ([distribution bootstrap](docs/release/trust-root.md#distribution-bootstrap), #178, #167).
 - `piship inspect` shows the pinned update keys by ID and `sha256:` fingerprint, in the summary and as an additive `trust` field in `--json` (#178, #167).
 - The manual `Live provider` workflow takes an optional `model` input that replaces the `LIVE_PROVIDER_MODEL` secret for one run, and a failed run's job summary shows the gateway's HTTP status and PiShip's error code, never provider text (#182).
+- The [production validation protocol](docs/production-validation.md): the managed sequence from install to purge, the command that runs each step and what a pass proves, and the only fields a report may carry. The [production evidence issue form](.github/ISSUE_TEMPLATE/production-evidence.yml) asks for exactly those fields and requires a confirmation that a report holds no raw credentials, tokens, claims, internal URLs or hosts, usernames or email addresses, model names or IDs, raw logs, or company-identifying fields. The protocol calls out `/share` as an endpoint and egress-control requirement for an organization that prohibits public session export.
 
 ### Changed
 
@@ -21,6 +22,8 @@ Changes on `main` after v0.7.1. Not released.
 - **Behavior change:** the governed `bash` follows Pi 1.0's result shape. It returns Pi's `structuredContent` (`output` up to 1 MiB, with the first and last 512 KiB when longer, `truncated`, `full_output_path` when the output was truncated and saved, `exit_code`, and `wall_time_seconds`), which codemode scripts receive, and a non-zero exit returns an `isError: true` result instead of throwing. The full output file still lives in the session-owned output store.
 - **Behavior change:** every launch sets Pi's startup defaults in its in-memory settings: `quietStartup: true` (no Pi logo, key hints, or resource listing) and `tuiMode: "regular"` (Pi 1.0 defaults to fullscreen; a distribution keeps the terminal's scrollback).
 - Docs: the terminal title ("π", Pi's `APP_TITLE`), the exit hint (`pi --session-dir`), the `/bug` hint (#139), and Pi's built-in `/share` command, which uploads the session file as a GitHub gist through the user's `gh` CLI, have no public Pi switch. They are recorded as known limits, and `/share` as a path by which a session can leave the machine, in managed mode too ([security](docs/security.md#limits)).
+- `CodeQL` cancels a superseded pull request run, as `CI` does: only an older run of the same pull request is cancelled, never a `main`, scheduled, or Release qualification run.
+- Docs: the [status page](docs/status.md#v080-in-progress) and the [roadmap](docs/roadmap.md) record v0.8.0 as in progress and not released, the first production consumer row links to the production validation protocol, and the roadmap's later schema candidates now follow `piship/v1alpha5`.
 
 ### Security
 
