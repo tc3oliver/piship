@@ -433,6 +433,7 @@ export function recoverInstallation(
   try {
     const receipt = readInstallReceipt(id);
     removeStaleTemporaries(join(installHome(), "receipts"), [`${id}.json`]);
+    removeStaleTemporaries(join(installHome(), "trust"), [`${id}.json`]);
     const apps = appDirectory(id);
     const keep = new Set([
       ...receipt.releases.map((item) => item.version),

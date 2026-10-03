@@ -303,7 +303,7 @@ async function buildReleases(
   const key = join(directory, "keys", "release.pem");
   mkdirSync(join(directory, "keys"));
   const keygen = await succeed(["keygen", key, "--id", KEY_ID], options);
-  const publicKey = /publicKey: (\S+)/.exec(keygen.stdout)?.[1];
+  const publicKey = /Public key: (\S+)/.exec(keygen.stdout)?.[1];
   if (!publicKey) throw new Error(`keygen printed no public key`);
   const manifests = Object.fromEntries(
     await Promise.all(

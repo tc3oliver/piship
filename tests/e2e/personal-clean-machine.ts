@@ -319,6 +319,7 @@ export function myPiFlow(): void {
     for (const item of requests)
       expect(item.authorization).toBe(`Bearer ${key}`);
     const channelFiles = new Set([
+      "root/2.json",
       "stable.json",
       "stable.json.sig",
       `mypi-1.1.0-${target}.tar.gz`,
@@ -493,6 +494,7 @@ export function myPiLocalFlow(): void {
     for (const item of requests)
       expect(item.authorization).toBe(`Bearer ${key}`);
     const channelFiles = new Set([
+      "root/2.json",
       "stable.json",
       "stable.json.sig",
       `mypi-local-1.1.0-${target}.tar.gz`,

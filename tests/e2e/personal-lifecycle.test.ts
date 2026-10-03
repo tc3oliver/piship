@@ -274,6 +274,7 @@ describe("personal lifecycle (no enterprise infrastructure)", () => {
 
     // Nothing but the channel was contacted, and no enterprise state exists.
     const channelFiles = new Set([
+      "root/2.json",
       "stable.json",
       "stable.json.sig",
       `mypi-1.1.0-${target}.tar.gz`,
