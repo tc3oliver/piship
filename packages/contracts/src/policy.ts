@@ -59,7 +59,16 @@ export interface PolicyDecision {
 export interface ResolvedDecision extends PolicyDecision {
   /** Final effect: `ask` never survives resolution. */
   readonly outcome: "allow" | "deny";
-  readonly approval?: "approved" | "denied" | "cancelled" | "unavailable";
+  /**
+   * How an `ask` was resolved. `auto`: the user's auto mode, which the
+   * distribution allows (`policy.userAuto`), approved it without a prompt.
+   */
+  readonly approval?:
+    | "approved"
+    | "denied"
+    | "cancelled"
+    | "unavailable"
+    | "auto";
 }
 
 export interface PolicyRequest {

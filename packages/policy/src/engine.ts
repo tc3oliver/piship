@@ -538,6 +538,26 @@ export class PolicyEngine {
     };
   }
 
+  /**
+   * Whether an explicit `ask` keeps the prompt for `request` even while the
+   * user's auto mode (`policy.userAuto`) is on: a matching `ask` rule in
+   * `policy.enforced`, the team adapter, the project restrictions, or the
+   * managed user's own rules. Auto mode approves only an `ask` that comes
+   * from the distribution defaults (`policy.defaults` or `policy.default`).
+   */
+  keepsPrompt(request: PolicyRequest): boolean {
+    const resource = this.normalizeResource(request);
+    const { action } = request;
+    return [
+      this.#firstMatch("distribution-enforced", action, resource),
+      this.#firstMatch("team-project", action, resource, "team"),
+      this.#firstMatch("team-project", action, resource, "project"),
+      this.#userNarrowing
+        ? this.#firstMatch("user-preference", action, resource)
+        : undefined,
+    ].some((entry) => entry?.rule.effect === "ask");
+  }
+
   explain(request: PolicyRequest): PolicyExplanation {
     const resource = this.normalizeResource(request);
     const decision = this.#decide(request.action, resource);

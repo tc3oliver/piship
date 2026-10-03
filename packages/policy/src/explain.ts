@@ -20,10 +20,26 @@ function enforcementLine(explanation: PolicyExplanation): string {
   return enforcement;
 }
 
-export function formatDecision(explanation: PolicyExplanation): string {
+/**
+ * Rendering options. `autoApproved`: the user's auto mode is on and no
+ * explicit `ask` keeps the prompt (`PolicyEngine.keepsPrompt`), so an `ask`
+ * decision is approved without one. It changes nothing else.
+ */
+export interface DecisionFormatOptions {
+  readonly autoApproved?: boolean;
+}
+
+const AUTO_APPROVED = "ask (auto-approved by user)";
+
+export function formatDecision(
+  explanation: PolicyExplanation,
+  options: DecisionFormatOptions = {},
+): string {
   const { decision } = explanation;
+  const auto = !!options.autoApproved && decision.effect === "ask";
   const blocks = [
-    HEADINGS[decision.effect],
+    auto ? "AUTO-APPROVED" : HEADINGS[decision.effect],
+    ...(auto ? [section("Effect", AUTO_APPROVED)] : []),
     section("Action", decision.action),
     section("Resource", decision.resource),
     section("Rule", decision.ruleId),
@@ -62,10 +78,14 @@ export function formatDecision(explanation: PolicyExplanation): string {
 /** A JSON-safe explanation object (stable field names, redacted text). */
 export function decisionToJSON(
   explanation: PolicyExplanation,
+  options: DecisionFormatOptions = {},
 ): Record<string, unknown> {
   const { decision } = explanation;
   return {
     effect: decision.effect,
+    ...(options.autoApproved && decision.effect === "ask"
+      ? { autoApproved: true }
+      : {}),
     action: decision.action,
     resource: redact(decision.resource),
     ruleId: decision.ruleId,
@@ -97,6 +117,9 @@ export function decisionToJSON(
   };
 }
 
-export function formatDecisionJSON(explanation: PolicyExplanation): string {
-  return JSON.stringify(decisionToJSON(explanation), null, 2);
+export function formatDecisionJSON(
+  explanation: PolicyExplanation,
+  options: DecisionFormatOptions = {},
+): string {
+  return JSON.stringify(decisionToJSON(explanation, options), null, 2);
 }
