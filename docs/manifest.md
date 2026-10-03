@@ -118,6 +118,7 @@ The branded `capabilities [--json]` command reports six axes per capability (`su
 | `policy.projectTrust` | see below | Project origin matchers and per-dimension effects |
 | `policy.enforced` | `[]` | Rules that nothing below can relax |
 | `policy.defaults` | `[]` | Distribution rules a personal user may relax; managed user rules only narrow |
+| `policy.userAuto` | `off` (absent) | v1alpha5, managed only: `off` or `allowed`. `allowed` lets each user switch on [auto mode](#user-auto-mode), which approves an `ask` from `policy.defaults` or `policy.default` without a prompt; `deny`, `policy.enforced`, and team, project, and the user's own rules are never relaxed. A personal manifest that declares it is rejected: there the user already relaxes `ask` with allow rules in `config/policy.json` |
 
 A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, `resource` (default `**`), `effect` (`allow`, `ask`, or `deny`), and an optional `reason` shown in denials. `action` is one action, a known prefix such as `mcp.*`, or `*`. The actions are `model.use`, `resource.load`, `extension.load`, `skill.load`, `instruction.load`, `provider.load`, `agent.invoke`, `mcp.server.start`, `mcp.tool.call`, `tool.execute`, `shell.execute`, `filesystem.read`, `filesystem.write`, `network.connect`, `memory.read`, `memory.write`, `web.request`, and `browser.execute`. This release evaluates the resources below at runtime; the other actions are accepted in rules and by `policy explain` but no runtime hook evaluates them yet.
 
@@ -145,7 +146,7 @@ Resource globs are anchored and case-sensitive. `*` matches any run of character
 | `mcp` | `.mcp.json` | company-approved / deny / deny | allow / ask |
 | `agents`, `hooks`, `providers` | `.pi/agents`, `.pi/settings.json`, `.piship/providers` | deny | allow (`hooks` deny) / ask (`hooks` deny) |
 
-`company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny.
+`company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny. The user's [auto mode](#user-auto-mode) never answers these project trust prompts: they decide whether to trust a workspace's content, not whether to run an action.
 
 ### Local rule files
 
@@ -153,6 +154,18 @@ Two JSON files add rules at launch. Each is a list of rules or `{"rules": [...]}
 
 - `<state>/config/policy.json` holds user rules. In personal mode, where the local owner owns the policy, a matching user rule takes the place of the matching distribution default, so a user may relax a default (for example `ask` to `allow`) but never an enforced or team/project rule. In managed mode user rules are narrowing only, like project restrictions: they can tighten any decision, and `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event.
 - `.piship/policy.json` in the project holds project restrictions. It is narrowing only: `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event. It is not read if it resolves outside the project root.
+
+A managed user cannot widen the policy with these files. The one user-controlled relaxation is auto mode, and only where the distribution allows it.
+
+### User auto mode
+
+With `policy.userAuto: allowed` (v1alpha5, managed), each user may switch auto mode on for themselves with the branded `auto on`, `auto off`, and `auto status`, or `/auto on`, `/auto off`, and `/auto` inside a session. While it is on:
+
+- An `ask` decided by a `policy.defaults` rule or by `policy.default` is approved without a prompt, in an interactive session and headless (where it would otherwise resolve to deny). Each one is recorded as a `policy.auto_approved` audit event with the same metadata as the action's own event, and the action's own event records `decision: approved` with `approval: auto`.
+- `deny` is never changed. An `ask` from `policy.enforced`, the team adapter, a project restriction, or the user's own `config/policy.json` still prompts: those rules were written to keep the prompt. Project trust prompts and the built-in denials (the state directory, git control files, Plan mode, the sandbox) are not policy decisions and are not affected.
+- `policy explain` shows such a decision as `AUTO-APPROVED`, effect `ask (auto-approved by user)` (`"autoApproved": true` with `--json`); `doctor` shows the switch in the Policy group; `config explain` adds a `policy.userAuto` row with the user's state.
+
+Switching it is recorded as `policy.auto_enabled` or `policy.auto_disabled` (`detail.source`: `command` or `session`) before it changes, so a required audit sink that does not take the event leaves the switch as it was. With `policy.userAuto` absent or `off`, `auto on` and `/auto on` fail with `POLICY_DENIED`, and nothing else changes. The switch is stored in `<state>/config/auto.json`, bound to the signed-in principal (its principal binding): when another identity signs in, auto mode is reset to off, as the model selection is cleared, and stays off even if the first identity signs in again. Turn it on after signing in. The branded `auto on` takes effect at the next start; `/auto` applies at once. It applies only while the running release allows it: after an update to a release with `policy.userAuto: off`, a stored switch has no effect, and `doctor` and `auto status` say so. `uninstall` keeps it with the rest of the state and `purge` deletes it. Personal mode has no auto mode.
 
 ### MCP
 
@@ -268,7 +281,7 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 
 ## Configuration layers
 
-The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribution Enforced, then a permitted User Preference, then Distribution Defaults. An enforced value always wins, and a preference for a key that is enforced or not user-overridable is ignored with a visible notice. Users set preferences with the branded `config set <key> <value>` and `config unset <key>`, stored in `config/preferences.json`. Security-sensitive keys are refused with `POLICY_DENIED`, and a model outside the allowlist with `MODEL_DENIED`. `config set models.allowed a,b` may only narrow the allowlist. `config explain [--json]` prints every effective value with its source, runtime references with whether they resolve, and non-secret identity and credential state. For v1alpha3 and later it adds distribution-enforced rows for the policy ID and rule counts, `mcp.mode`, `sandbox.required`, `sandbox.network`, and `audit.sinks`.
+The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribution Enforced, then a permitted User Preference, then Distribution Defaults. An enforced value always wins, and a preference for a key that is enforced or not user-overridable is ignored with a visible notice. Users set preferences with the branded `config set <key> <value>` and `config unset <key>`, stored in `config/preferences.json`. Security-sensitive keys are refused with `POLICY_DENIED`, and a model outside the allowlist with `MODEL_DENIED`. `config set models.allowed a,b` may only narrow the allowlist. `config explain [--json]` prints every effective value with its source, runtime references with whether they resolve, and non-secret identity and credential state. For v1alpha3 and later it adds distribution-enforced rows for the policy ID and rule counts, `policy.userAuto` (managed mode, with this user's [auto mode](#user-auto-mode) state), `mcp.mode`, `sandbox.required`, `sandbox.network`, and `audit.sinks`.
 
 ## Runtime references
 
@@ -312,6 +325,7 @@ v1alpha3 and later branded commands add:
 
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
+- `auto on | auto off | auto status` (managed): the user's [auto mode](#user-auto-mode), where `policy.userAuto` allows it; `/auto` inside a session.
 - `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
@@ -400,7 +414,7 @@ Deferred items in this table are tracked on the [roadmap](roadmap.md#later).
 
 | Specification code | What PiShip does instead |
 | --- | --- |
-| `APPROVAL_REQUIRED` | An `ask` decision prompts the person; without an approval channel (headless) it resolves to deny and is recorded as a denial |
+| `APPROVAL_REQUIRED` | An `ask` decision prompts the person; without an approval channel (headless) it resolves to deny and is recorded as a denial, unless the user's [auto mode](#user-auto-mode) approves it |
 | `RESOURCE_DENIED` | A denied tool call is refused to the model and a denied resource is not loaded, both recorded as denials; a refused command or setting fails with `POLICY_DENIED` |
 | `PROVIDER_UNRESOLVED` | Reported on the `resolved` axis of `capabilities`; the capability is not effective |
 | `PROVIDER_UNHEALTHY` | Reported on the `healthy` axis; a provider the policy refuses is reported on the `enabled` axis |
