@@ -46,6 +46,7 @@ const POLICY = [
   "  enforced:",
   '    - { id: secrets, action: filesystem.read, resource: "~/.ssh/**", effect: deny }',
   '    - { id: keep-asking, action: filesystem.write, resource: "workspace/kept/**", effect: ask }',
+  '    - { id: push, action: shell.execute, resource: "git push**", effect: ask }',
   "  defaults:",
   '    - { id: read, action: filesystem.read, resource: "workspace/**", effect: allow }',
   '    - { id: write, action: filesystem.write, resource: "workspace/**", effect: ask }',
@@ -309,6 +310,43 @@ describe("user auto mode in a governed session", () => {
       ).rejects.toThrow(/not allowed/);
       expect(prompts).toBeGreaterThan(0);
       expect(existsSync(join(workspace, path))).toBe(false);
+    }
+  });
+
+  it("keeps an explicit shell ask when the command chains past its pattern", async () => {
+    const { session } = await open({
+      userAuto: "allowed",
+      on: true,
+      userRules: [
+        {
+          id: "mine",
+          action: "shell.execute",
+          resource: "npm publish**",
+          effect: "ask",
+        },
+      ],
+    });
+    for (const [command, ruleId] of [
+      ["git push origin main; true", "push"],
+      ["git push origin main && echo ok", "push"],
+      ["npm publish; true", "mine"],
+    ] as const) {
+      // Headless: no approval channel, so the kept ask is denied.
+      expect(
+        await session.decide("shell.execute", command, undefined),
+      ).toMatchObject({ outcome: "deny", approval: "unavailable", ruleId });
+      // Interactive: the prompt is shown.
+      let prompts = 0;
+      const resolved = await session.decide(
+        "shell.execute",
+        command,
+        async () => {
+          prompts += 1;
+          return "denied";
+        },
+      );
+      expect(prompts).toBe(1);
+      expect(resolved).toMatchObject({ outcome: "deny", ruleId });
     }
   });
 

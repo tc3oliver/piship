@@ -466,6 +466,45 @@ export class PolicyEngine {
     );
   }
 
+  /**
+   * The first `ask` rule of a narrowing layer that covers `resource` only
+   * because the command chains past its pattern (`git push**` against
+   * `git push origin main; true`). First-match skips such a rule, as it skips
+   * an allow, so the chained command could fall through to a weaker rule or
+   * to a distribution default that auto mode approves. An explicit ask from
+   * `policy.enforced`, the team, the project, or the managed user's own rules
+   * still applies to it, as a deny does: the extra match can only add an ask
+   * to the strictest-wins combination, never hide a stricter effect.
+   */
+  #chainedAsk(
+    layer: PolicyLayer,
+    action: string,
+    resource: string,
+    source?: string,
+  ): LayerRule | undefined {
+    if (action !== "shell.execute") return undefined;
+    return this.#layers[layer].find(
+      (entry) =>
+        (source === undefined || entry.source === source) &&
+        entry.rule.effect === "ask" &&
+        matchAction(entry.rule.action, action) &&
+        chainsBeyondPattern(entry.rule.resource, resource) &&
+        matchGlob(entry.rule.resource, resource),
+    );
+  }
+
+  /** The explicit asks that keep applying to a chained command. */
+  #chainedAsks(action: string, resource: string): (LayerRule | undefined)[] {
+    return [
+      this.#chainedAsk("distribution-enforced", action, resource),
+      this.#chainedAsk("team-project", action, resource, "team"),
+      this.#chainedAsk("team-project", action, resource, "project"),
+      this.#userNarrowing
+        ? this.#chainedAsk("user-preference", action, resource)
+        : undefined,
+    ];
+  }
+
   evaluate(request: PolicyRequest): PolicyDecision {
     const resource = this.normalizeResource(request);
     return this.#decide(request.action, resource);
@@ -506,16 +545,23 @@ export class PolicyEngine {
       (this.#userNarrowing ? undefined : userRule) ??
       this.#firstMatch("distribution-default", action, resource);
     const baseEffect = base?.rule.effect ?? this.#policy.default;
+    const chainedAsks = this.#chainedAsks(action, resource);
     const effect = strictest(
       enforced?.rule.effect,
       team?.rule.effect,
       project?.rule.effect,
       narrowingUser?.rule.effect,
+      ...chainedAsks.map((entry) => entry?.rule.effect),
       baseEffect,
     );
-    const deciding = [enforced, team, project, base, narrowingUser].find(
-      (entry) => entry?.rule.effect === effect,
-    );
+    const deciding = [
+      enforced,
+      team,
+      project,
+      base,
+      narrowingUser,
+      ...chainedAsks,
+    ].find((entry) => entry?.rule.effect === effect);
     const enforcement = enforcementPlane(action, this.context.containment);
     if (!deciding)
       return {
@@ -555,6 +601,7 @@ export class PolicyEngine {
       this.#userNarrowing
         ? this.#firstMatch("user-preference", action, resource)
         : undefined,
+      ...this.#chainedAsks(action, resource),
     ].some((entry) => entry?.rule.effect === "ask");
   }
 

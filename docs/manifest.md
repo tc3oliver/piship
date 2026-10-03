@@ -130,7 +130,7 @@ A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, 
 | `mcp.server.start` | Server ID |
 | `mcp.tool.call` | `<server>:<tool>` |
 | `tool.execute` | Tool name, such as `read`, `bash`, or `mcp__docs__search` |
-| `shell.execute` | The command text of the `bash` tool or a user `!` command. `allow` and `ask` rules are prefix hints: they do not match a command with a shell metacharacter (`;` `&` `\|` `$` `` ` `` `<` `>` `(` `)`, a line break, `^`, `%`) that the pattern does not spell out, except the bare `**`; `deny` rules always match |
+| `shell.execute` | The command text of the `bash` tool or a user `!` command. `allow` and `ask` rules are prefix hints: they do not match a command with a shell metacharacter (`;` `&` `\|` `$` `` ` `` `<` `>` `(` `)`, a line break, `^`, `%`) that the pattern does not spell out, except the bare `**`; `deny` rules always match. An `ask` from `policy.enforced`, a team or project rule, or a managed user's own rule still applies to such a chained command (`git push**` keeps its prompt for `git push origin main; true`); it only ever adds an `ask` to the strictest-wins result |
 | `filesystem.read`, `filesystem.write` | Absolute path, symlink-resolved, with `/` separators |
 
 Resource globs are anchored and case-sensitive. `*` matches any run of characters except `/`, `:`, and line breaks; `**` matches anything. A trailing `/**` also matches the directory itself (`~/.ssh/**` covers `~/.ssh`), and `/**/` also matches a single `/`. Filesystem rules may start with the path tokens `workspace` (the project root), `~/` (the home directory), and `tmp/` (the session temp directory, or the system one without a sandbox); they are expanded and symlink-resolved like the requested path.
