@@ -24,11 +24,13 @@ import {
   formatMigrationReport,
   generateSigningKey,
   initDistribution,
+  initTrustRoot,
   inspection,
   installDistribution,
   isEncryptedPrivateKey,
   keyFingerprint,
   lockManifest,
+  nextTrustRoot,
   payloadApp,
   payloadStateSchemas,
   pemSigner,
@@ -51,6 +53,7 @@ import {
   writePrivateKey,
   type AbandonedStaging,
   type DistributionLock,
+  type KeyedSigner,
   type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
@@ -89,6 +92,7 @@ const summaries = {
   "migrate-check": "Check whether a release can take over the current state",
   keygen: "Create a channel signing key",
   "sign-channel": "Sign channel metadata for release archives",
+  "trust-root": "Create bootstrap update trust or publish the next root",
   reproducibility: "Compare two builds of the same release",
 } as const;
 const commands = Object.keys(summaries) as (keyof typeof summaries)[];
@@ -186,18 +190,34 @@ const lifecycleCommands: Record<
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
+      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--key <private-key-file> --key-id <id>]... [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
     positional: [2, 64],
     values: [
       "--channel",
-      "--key",
-      "--key-id",
       "--passphrase-env",
       "--previous-key",
       "--sequence",
       "--expires-days",
     ],
     flags: ["--passphrase-stdin"],
+    repeated: ["--key", "--key-id"],
+  },
+  "trust-root": {
+    usage:
+      "trust-root init --key <id>=<public-key>... --root-keys <id,...> --channel-keys <id,...> [--root-threshold <n>] [--channel-threshold <n>] (--expires <timestamp> | --expires-days <n>)\n       piship trust-root next <update-source-dir> --manifest <piship.yaml> --sign <id>=<private-key-file>... [--add-key <id>=<public-key>]... [--remove-key <id>]... [--root-keys <id,...>] [--channel-keys <id,...>] [--root-threshold <n>] [--channel-threshold <n>] (--expires <timestamp> | --expires-days <n>) [--passphrase-env <NAME> | --passphrase-stdin]",
+    positional: [1, 2],
+    values: [
+      "--manifest",
+      "--root-keys",
+      "--channel-keys",
+      "--root-threshold",
+      "--channel-threshold",
+      "--expires",
+      "--expires-days",
+      "--passphrase-env",
+    ],
+    flags: ["--passphrase-stdin"],
+    repeated: ["--key", "--sign", "--add-key", "--remove-key"],
   },
   reproducibility: {
     usage: "reproducibility <release-a> <release-b> [--out <report.json>]",
@@ -253,6 +273,69 @@ function passphraseInput(
     ...(env === undefined ? {} : { env }),
     stdin: flags.has("--passphrase-stdin"),
   };
+}
+/** `<id>=<value>` pairs of a repeated option. */
+function pairs(values: readonly string[], option: string, value: string) {
+  return values.map((item) => {
+    const split = item.indexOf("=");
+    if (split < 1 || split === item.length - 1)
+      throw new Error(`${option} must be <id>=<${value}>`);
+    return { id: item.slice(0, split), value: item.slice(split + 1) };
+  });
+}
+function positiveInteger(value: string | undefined, name: string) {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1)
+    throw new Error(`${name} must be a positive integer`);
+  return parsed;
+}
+function idList(value: string | undefined) {
+  return value === undefined
+    ? undefined
+    : value.split(",").map((item) => item.trim());
+}
+/**
+ * PEM signers for `<key id, private key file>` pairs. An encrypted key's
+ * passphrase comes from --passphrase-env (one for every encrypted key),
+ * --passphrase-stdin (one encrypted key only), or a prompt per key.
+ */
+async function pemSigners(
+  keys: readonly { id: string; file: string }[],
+  input: PassphraseInput,
+  output: CliOutput,
+): Promise<KeyedSigner[]> {
+  const { readFileSync } = await import("node:fs");
+  const pems = keys.map((key) => ({
+    ...key,
+    pem: readFileSync(key.file, "utf8"),
+  }));
+  const encrypted = pems.filter((key) => isEncryptedPrivateKey(key.pem));
+  if (!encrypted.length && (input.env !== undefined || input.stdin))
+    output.stderr(
+      "Warning: no signing key is encrypted; the passphrase option is ignored.",
+    );
+  if (input.stdin && encrypted.length > 1)
+    throw new Error(
+      "--passphrase-stdin reads one passphrase; with several encrypted keys, use --passphrase-env or the prompts",
+    );
+  const signers: KeyedSigner[] = [];
+  for (const key of pems)
+    signers.push(
+      pemSigner({
+        keyId: key.id,
+        privateKeyPem: key.pem,
+        ...(isEncryptedPrivateKey(key.pem)
+          ? {
+              passphrase: await readSigningPassphrase(
+                `Passphrase for ${key.file}`,
+                input,
+              ),
+            }
+          : {}),
+      }),
+    );
+  return signers;
 }
 /** A lock from a manifest, lock file, payload, release, archive, or installed id. */
 async function lockFor(target: string): Promise<DistributionLock> {
@@ -863,52 +946,36 @@ async function runLifecycle(
         `Warning: ${first} is inside a git work tree and not git-ignored; do not commit it.`,
       );
     output.stdout(
-      `Wrote the private key to ${first}. Keep it out of the repository and out of CI logs.\nAdd the public key to piship.yaml:\n\nupdates:\n  trust:\n    keys:\n      - id: ${id}\n        publicKey: ${pair.publicKey}\n\nFingerprint: ${keyFingerprint(pair.publicKey)}`,
+      `Wrote the private key to ${first}. Keep it out of the repository and out of CI logs.\nPublic key: ${pair.publicKey}\nFingerprint: ${keyFingerprint(pair.publicKey)}\nPin it in piship.yaml through piship trust-root init --key ${id}=${pair.publicKey} ... (or publish it in the next root with piship trust-root next --add-key).`,
     );
   } else if (command === "sign-channel") {
     const channel = options["--channel"];
-    const key = options["--key"];
-    const keyId = options["--key-id"];
-    if (!channel || !key || !keyId)
+    const keys = repeated["--key"] ?? [];
+    const keyIds = repeated["--key-id"] ?? [];
+    if (!channel || !keys.length || !keyIds.length)
       throw new Error("sign-channel needs --channel, --key, and --key-id");
-    const { readFileSync } = await import("node:fs");
-    const number = (value: string | undefined, name: string) => {
-      if (value === undefined) return undefined;
-      const parsed = Number(value);
-      if (!Number.isSafeInteger(parsed) || parsed < 1)
-        throw new Error(`${name} must be a positive integer`);
-      return parsed;
-    };
-    const sequence = number(options["--sequence"], "--sequence");
-    const expiresDays = number(options["--expires-days"], "--expires-days");
+    if (keys.length !== keyIds.length)
+      throw new Error("Give one --key-id for each --key, in the same order");
+    const sequence = positiveInteger(options["--sequence"], "--sequence");
+    const expiresDays = positiveInteger(
+      options["--expires-days"],
+      "--expires-days",
+    );
     const previous = options["--previous-key"];
     const split = previous?.indexOf("=") ?? -1;
     if (previous !== undefined && split < 1)
       throw new Error("--previous-key must be <id>=<public-key>");
-    const privateKeyPem = readFileSync(key, "utf8");
-    const input = passphraseInput(options, flags);
-    const encrypted = isEncryptedPrivateKey(privateKeyPem);
-    if (!encrypted && (input.env !== undefined || input.stdin))
-      output.stderr(
-        `Warning: ${key} is not encrypted; the passphrase option is ignored.`,
-      );
-    const signer = pemSigner({
-      keyId,
-      privateKeyPem,
-      ...(encrypted
-        ? {
-            passphrase: await readSigningPassphrase(
-              `Passphrase for ${key}`,
-              input,
-            ),
-          }
-        : {}),
-    });
+    const [signer, ...additionalSigners] = await pemSigners(
+      keys.map((file, index) => ({ id: keyIds[index] as string, file })),
+      passphraseInput(options, flags),
+      output,
+    );
     const signed = await signChannel({
       directory: first,
       channel,
       archives: positional.slice(1),
-      signer,
+      signer: signer as KeyedSigner,
+      additionalSigners,
       ...(previous
         ? {
             previousKeys: [
@@ -923,8 +990,92 @@ async function runLifecycle(
       ...(expiresDays ? { expiresDays } : {}),
     });
     output.stdout(
-      `Signed ${signed.path} (sequence ${signed.metadata.sequence}, expires ${signed.metadata.expires}) with ${keyId}:\n${signed.metadata.releases.map((item) => `  ${item.version} ${item.target} ${item.archive}`).join("\n")}`,
+      `Signed ${signed.path} (sequence ${signed.metadata.sequence}, expires ${signed.metadata.expires}) with ${keyIds.join(", ")}:\n${signed.metadata.releases.map((item) => `  ${item.version} ${item.target} ${item.archive}`).join("\n")}`,
     );
+  } else if (command === "trust-root") {
+    const expiry = {
+      ...(options["--expires"] !== undefined
+        ? { expires: options["--expires"] }
+        : {}),
+      ...(options["--expires-days"] !== undefined
+        ? {
+            expiresDays: positiveInteger(
+              options["--expires-days"],
+              "--expires-days",
+            ) as number,
+          }
+        : {}),
+    };
+    const roles = {
+      ...(options["--root-keys"] !== undefined
+        ? { rootKeyIds: idList(options["--root-keys"]) as string[] }
+        : {}),
+      ...(options["--channel-keys"] !== undefined
+        ? { channelKeyIds: idList(options["--channel-keys"]) as string[] }
+        : {}),
+      ...(options["--root-threshold"] !== undefined
+        ? {
+            rootThreshold: positiveInteger(
+              options["--root-threshold"],
+              "--root-threshold",
+            ) as number,
+          }
+        : {}),
+      ...(options["--channel-threshold"] !== undefined
+        ? {
+            channelThreshold: positiveInteger(
+              options["--channel-threshold"],
+              "--channel-threshold",
+            ) as number,
+          }
+        : {}),
+    };
+    const publicKeys = (values: readonly string[], option: string) =>
+      pairs(values, option, "public-key").map((item) => ({
+        id: item.id,
+        publicKey: item.value,
+      }));
+    if (first === "init" && positional.length === 1) {
+      if (!roles.rootKeyIds || !roles.channelKeyIds)
+        throw new Error("trust-root init needs --root-keys and --channel-keys");
+      const described = initTrustRoot({
+        ...expiry,
+        ...roles,
+        rootKeyIds: roles.rootKeyIds,
+        channelKeyIds: roles.channelKeyIds,
+        keys: publicKeys(repeated["--key"] ?? [], "--key"),
+      });
+      for (const warning of described.warnings)
+        output.stderr(`Warning: ${warning}`);
+      output.stdout(
+        `Add this bootstrap root to piship.yaml (schema: piship/v1alpha5):\n\n${described.yaml}\nKey fingerprints:\n${described.fingerprints.map((key) => `  ${key.id} ${key.fingerprint}`).join("\n")}`,
+      );
+    } else if (first === "next" && positional.length === 2) {
+      const manifest = options["--manifest"];
+      if (!manifest) throw new Error("trust-root next needs --manifest");
+      const signers = await pemSigners(
+        pairs(repeated["--sign"] ?? [], "--sign", "private-key-file").map(
+          (item) => ({ id: item.id, file: item.value }),
+        ),
+        passphraseInput(options, flags),
+        output,
+      );
+      const result = await nextTrustRoot({
+        repository: second,
+        manifest,
+        ...expiry,
+        ...roles,
+        addKeys: publicKeys(repeated["--add-key"] ?? [], "--add-key"),
+        removeKeys: repeated["--remove-key"] ?? [],
+        signers,
+      });
+      output.stdout(
+        `Wrote ${result.path} and its signature: root ${result.previous.version} -> ${result.root.version}, expires ${result.root.expires}, signed by ${result.signedBy.join(", ")}\n  root role     ${result.root.roles.root.threshold} of ${result.root.roles.root.keyIds.join(", ")}\n  channel role  ${result.root.roles.channel.threshold} of ${result.root.roles.channel.keyIds.join(", ")}`,
+      );
+    } else {
+      output.stderr(`Usage: piship ${lifecycleCommands["trust-root"]?.usage}`);
+      return 2;
+    }
   } else if (command === "reproducibility") {
     const report = await compareReleases(first, second);
     const text = `${JSON.stringify(report, null, 2)}\n`;

@@ -683,6 +683,108 @@ describe("signing key passphrases", () => {
     expect(plain.status).toBe(1);
     expect(existsSync(join(temp, "plain.pem"))).toBe(false);
   });
+
+  it("pairs each sign-channel --key with a --key-id", async () => {
+    const result = await signChannel(join(temp, "a.pem"), "--key", "b.pem");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Give one --key-id for each --key");
+  });
+
+  it("creates a bootstrap root and publishes the next root with an encrypted root key", async () => {
+    process.env.PISHIP_TEST_SIGNING_PASSPHRASE = SECRET;
+    const rootKey = join(temp, "root.pem");
+    const keygen = await run([
+      "keygen",
+      rootKey,
+      "--id",
+      "root-a",
+      "--encrypt",
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    ]);
+    expect(keygen.status).toBe(0);
+    const publicKey = /Public key: (\S+)/.exec(keygen.stdout)?.[1] as string;
+    const channel = await run([
+      "keygen",
+      join(temp, "channel.pem"),
+      "--id",
+      "channel-a",
+    ]);
+    const channelKey = /Public key: (\S+)/.exec(channel.stdout)?.[1] as string;
+    const next = await run([
+      "keygen",
+      join(temp, "next.pem"),
+      "--id",
+      "channel-b",
+    ]);
+    const nextKey = /Public key: (\S+)/.exec(next.stdout)?.[1] as string;
+    const init = await run([
+      "trust-root",
+      "init",
+      "--key",
+      `root-a=${publicKey}`,
+      "--key",
+      `channel-a=${channelKey}`,
+      "--root-keys",
+      "root-a",
+      "--channel-keys",
+      "channel-a",
+      "--expires-days",
+      "365",
+    ]);
+    expect(init.status).toBe(0);
+    expect(init.stdout).toContain("    bootstrap:\n      version: 1\n");
+    mkdirSync(join(temp, "project", "resources"), { recursive: true });
+    writeFileSync(join(temp, "project", "resources", "AGENTS.md"), "# Acme\n");
+    const yaml = (/^(updates:\n[\s\S]*?)\n\n/m.exec(init.stdout)?.[1] ??
+      "") as string;
+    writeFileSync(
+      join(temp, "project", "piship.yaml"),
+      `schema: piship/v1alpha5\napp:\n  id: acmepi\n  name: AcmePi\n  command: acmepi\n  version: 1.0.0\nruntime:\n  pi: "1.0.0"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    user: [./resources/AGENTS.md]\n${yaml}\n`,
+    );
+    const args = [
+      "trust-root",
+      "next",
+      join(temp, "updates"),
+      "--manifest",
+      join(temp, "project", "piship.yaml"),
+      "--add-key",
+      `channel-b=${nextKey}`,
+      "--remove-key",
+      "channel-a",
+      "--channel-keys",
+      "channel-b",
+      "--expires-days",
+      "90",
+      "--sign",
+      `root-a=${rootKey}`,
+    ];
+    // Without the passphrase nothing is written.
+    const refused = await run(args);
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("CREDENTIAL_REQUIRED");
+    expect(existsSync(join(temp, "updates"))).toBe(false);
+    const published = await run([
+      ...args,
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    ]);
+    expect(published.stderr).toBe("");
+    expect(published.status).toBe(0);
+    expect(published.stdout).toContain("root 1 -> 2");
+    const root = JSON.parse(
+      readFileSync(join(temp, "updates", "root", "2.json"), "utf8"),
+    );
+    expect(root).toMatchObject({
+      schema: "piship-update-root/v1",
+      distribution: "acmepi",
+      version: 2,
+      roles: { channel: { keyIds: ["channel-b"], threshold: 1 } },
+    });
+    expect(existsSync(join(temp, "updates", "root", "2.json.sig"))).toBe(true);
+    for (const result of [keygen, init, refused, published])
+      expect(`${result.stdout}${result.stderr}`).not.toContain(SECRET);
+  });
 });
 
 describe("inspect", () => {
