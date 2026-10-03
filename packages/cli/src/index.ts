@@ -26,15 +26,18 @@ import {
   initDistribution,
   inspection,
   installDistribution,
+  isEncryptedPrivateKey,
   keyFingerprint,
   lockManifest,
   payloadApp,
   payloadStateSchemas,
+  pemSigner,
   PISHIP_VERSION,
   pathHint,
   progressReporter,
   purgeDistributionState,
   readInstallReceipt,
+  readSigningPassphrase,
   repairDistribution,
   requireCurrentLock,
   resolveResources,
@@ -47,6 +50,7 @@ import {
   writePrivateKey,
   type AbandonedStaging,
   type DistributionLock,
+  type PassphraseInput,
   type PurgeResult,
 } from "@piship/core";
 import { formatError, redact } from "@piship/contracts";
@@ -173,24 +177,26 @@ const lifecycleCommands: Record<
     flags: [],
   },
   keygen: {
-    usage: "keygen <private-key-file> --id <key-id> [--force-in-worktree]",
+    usage:
+      "keygen <private-key-file> --id <key-id> [--encrypt [--passphrase-env <NAME> | --passphrase-stdin]] [--force-in-worktree]",
     positional: [1, 1],
-    values: ["--id"],
-    flags: ["--force-in-worktree"],
+    values: ["--id", "--passphrase-env"],
+    flags: ["--force-in-worktree", "--encrypt", "--passphrase-stdin"],
   },
   "sign-channel": {
     usage:
-      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
+      "sign-channel <channel-dir> <archive>... --channel <name> --key <private-key-file> --key-id <id> [--passphrase-env <NAME> | --passphrase-stdin] [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]",
     positional: [2, 64],
     values: [
       "--channel",
       "--key",
       "--key-id",
+      "--passphrase-env",
       "--previous-key",
       "--sequence",
       "--expires-days",
     ],
-    flags: [],
+    flags: ["--passphrase-stdin"],
   },
   reproducibility: {
     usage: "reproducibility <release-a> <release-b> [--out <report.json>]",
@@ -235,6 +241,17 @@ function parseArguments(
   )
     return undefined;
   return { positional, options, flags, repeated };
+}
+/** The passphrase channel a signing command names; never the passphrase. */
+function passphraseInput(
+  options: Parsed["options"],
+  flags: Parsed["flags"],
+): PassphraseInput {
+  const env = options["--passphrase-env"];
+  return {
+    ...(env === undefined ? {} : { env }),
+    stdin: flags.has("--passphrase-stdin"),
+  };
 }
 /** A lock from a manifest, lock file, payload, release, archive, or installed id. */
 async function lockFor(target: string): Promise<DistributionLock> {
@@ -810,7 +827,20 @@ async function runLifecycle(
   } else if (command === "keygen") {
     const id = options["--id"];
     if (!id) throw new Error("keygen needs --id <key-id>");
-    const pair = generateSigningKey(id);
+    const input = passphraseInput(options, flags);
+    if (!flags.has("--encrypt") && (input.env !== undefined || input.stdin))
+      throw new Error("--passphrase-env and --passphrase-stdin need --encrypt");
+    const pair = generateSigningKey(
+      id,
+      flags.has("--encrypt")
+        ? {
+            passphrase: await readSigningPassphrase(
+              `Passphrase for the new key ${first}`,
+              { ...input, confirm: true },
+            ),
+          }
+        : {},
+    );
     const location = writePrivateKey(first, pair.privateKeyPem, {
       forceInWorktree: flags.has("--force-in-worktree"),
     });
@@ -841,12 +871,30 @@ async function runLifecycle(
     const split = previous?.indexOf("=") ?? -1;
     if (previous !== undefined && split < 1)
       throw new Error("--previous-key must be <id>=<public-key>");
+    const privateKeyPem = readFileSync(key, "utf8");
+    const input = passphraseInput(options, flags);
+    const encrypted = isEncryptedPrivateKey(privateKeyPem);
+    if (!encrypted && (input.env !== undefined || input.stdin))
+      output.stderr(
+        `Warning: ${key} is not encrypted; the passphrase option is ignored.`,
+      );
+    const signer = pemSigner({
+      keyId,
+      privateKeyPem,
+      ...(encrypted
+        ? {
+            passphrase: await readSigningPassphrase(
+              `Passphrase for ${key}`,
+              input,
+            ),
+          }
+        : {}),
+    });
     const signed = await signChannel({
       directory: first,
       channel,
       archives: positional.slice(1),
-      privateKeyPem: readFileSync(key, "utf8"),
-      keyId,
+      signer,
       ...(previous
         ? {
             previousKeys: [
