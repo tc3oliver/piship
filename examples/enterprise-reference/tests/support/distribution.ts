@@ -21,6 +21,7 @@ import {
   signInAtKeycloak,
 } from "./keycloak.js";
 import { PROJECT_PREFIX } from "../../../../tests/enterprise-reference/stack.js";
+import { bootstrapTrust } from "../../../../tests/helpers/update-trust.js";
 import { type ReferenceUser, referenceDirectory, type Stack } from "./stack.js";
 import { type ChannelHost, serveChannel } from "./updates.js";
 
@@ -273,10 +274,14 @@ function patchManifest(source: string, patch: ManifestPatch): string {
     text = next;
   }
   if (patch.releaseKey) {
-    const next = text.replace(
-      "    keys: []",
-      `    keys:\n      - id: ${patch.releaseKey.id}\n        publicKey: ${patch.releaseKey.publicKey}`,
-    );
+    // A bootstrap root: an offline root key, and the release key that
+    // signs channels in a role of its own.
+    const next = text.includes("\n  trust:\n")
+      ? text
+      : text.replace(
+          "  rollback: true\n",
+          `  rollback: true\n${bootstrapTrust(patch.releaseKey)}`,
+        );
     if (next === text) throw new Error("the release key was not pinned");
     text = next;
   }

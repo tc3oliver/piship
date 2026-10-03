@@ -4,7 +4,7 @@ Starting files for connecting a managed PiShip distribution to a [LiteLLM](https
 
 | File | Purpose |
 | --- | --- |
-| [`piship.yaml`](piship.yaml) | Managed access sections for `piship/v1alpha4`; passes `piship validate` |
+| [`piship.yaml`](piship.yaml) | Managed access sections for `piship/v1alpha5`; passes `piship validate` |
 | [`litellm-config.yaml`](litellm-config.yaml) | LiteLLM proxy config whose `model_name` values match `models.allowed` |
 
 What you still provide:

@@ -6,7 +6,7 @@ The production lifecycle for `piship/v1alpha4` distributions (added in v0.4) con
 
 The flow for a distribution owner:
 
-1. Migrate the manifest to `piship/v1alpha4`, add a release key, and lock ([manifest](../manifest.md#lifecycle-fields-v1alpha4)).
+1. Migrate the manifest to `piship/v1alpha5`, add the update trust bootstrap (root and channel keys), and lock ([manifest](../manifest.md#update-trust-bootstrap-v1alpha5)).
 2. Build a release on each target with `piship release`.
 3. Verify it with `piship verify-release` and, in CI, check reproducibility and build provenance.
 4. Add the archives to a channel with `piship sign-channel` and serve the channel directory.
@@ -26,12 +26,13 @@ node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.
 
 ## Building a release
 
-`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1alpha4` manifest, a current `piship.lock`, and package-registry access for the dependency scan. Static gates run first, before anything is assembled; each failure names its gate:
+`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1alpha5` manifest, a current `piship.lock`, and package-registry access for the dependency scan. Static gates run first, before anything is assembled; each failure names its gate:
 
 | Gate | Stops the build when |
 | --- | --- |
 | `lock` | `piship.lock` is missing, stale, or does not match the manifest and resources (`LOCK_INVALID`) |
-| `schema` | The manifest is not `piship/v1alpha4` |
+| `schema` | The manifest is not `piship/v1alpha5` |
+| `trust` | `updates.source` is set without `updates.trust.bootstrap`, or a managed distribution's root and channel roles share a key (as a migrated v1alpha4 key set does) |
 | `target` | This machine's `<platform>-<arch>` is not in `release.targets`, has no installed lifecycle evidence in this PiShip version (only `linux-x64`, `darwin-arm64`, and `win32-x64` do), or differs from the requested target |
 | `pi` | The pinned Pi version is not in this PiShip build's compatibility matrix |
 | `source` | A locked package has no recorded source, comes from an origin outside `release.sources`, or has no `sha512` integrity in the npm lock |
@@ -40,7 +41,7 @@ node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.
 | `certification` | A certified resource or capability provider has no certification evidence |
 | `sandbox` | `sandbox.required: true` and the target is not Linux or macOS (there is no Windows sandbox adapter) |
 
-`piship build` also runs the `source` and `install-script` gates on `piship/v1alpha4` locks, reported as `Build gate source` or `Build gate install-script`; `dev` and `test` do not.
+`piship build` also runs the `source` and `install-script` gates on `piship/v1alpha4` and `piship/v1alpha5` locks, reported as `Build gate source` or `Build gate install-script`; `dev` and `test` do not.
 
 PiShip then assembles the canonical payload with the same code as `piship build`, and runs the required tests on it with a throwaway state directory:
 

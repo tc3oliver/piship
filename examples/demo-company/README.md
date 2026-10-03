@@ -1,6 +1,6 @@
 # Demo company distribution example
 
-AcmeCode is a fictional managed distribution on `piship/v1alpha4`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. On top of that access layer it declares governance: a company policy, trust-classed resources, a governed MCP server, a Plan/Build workflow, a required OS sandbox, and audit. It also declares signed release channels and a release policy. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
+AcmeCode is a fictional managed distribution on `piship/v1alpha5`. It signs users in with OIDC, obtains a runtime credential from an `http-broker`, and sends inference to an OpenAI-compatible gateway with a three-model allowlist, an enforced theme, and private-only networking. On top of that access layer it declares governance: a company policy, trust-classed resources, a governed MCP server, a Plan/Build workflow, a required OS sandbox, and audit. It also declares signed release channels and a release policy. It contains no private data or credentials. The endpoints are `ACMECODE_*` runtime variables, so the lock stays machine-independent.
 
 The managed surface, governance, and the release lifecycle are **candidates**: all are verified with the deterministic local fixtures below, not with a live identity provider or gateway. The [enterprise reference stack](../enterprise-reference/README.md) runs a distribution that follows this one section by section against a real Keycloak, a reference broker, and LiteLLM. See [status](../../docs/status.md) for the current evidence and [compatibility](../../docs/compatibility.md) for the Pi contract.
 
@@ -13,7 +13,7 @@ The managed surface, governance, and the release lifecycle are **candidates**: a
 - **Plan and Build.** Sessions start in Plan mode: the model can read and search the handbook but cannot write, edit, or run commands. `/build` switches to Build mode, where tools follow the policy; `/plan` switches back.
 - **Sandbox.** `sandbox.required: true` with network `deny`, every default credential directory (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.npmrc`, `~/.pi`) hidden (the manifest restates them, since a declared list replaces the defaults), and writes limited to the workspace and a private temp directory. `bash`, `!` commands, and the MCP stdio server run inside it. The launch fails with `SANDBOX_UNAVAILABLE` if it cannot be enforced.
 - **Audit.** An optional local file sink records metadata-only events in the distribution state under `logs/audit.jsonl`.
-- **Release channels.** Users start on `stable` and may switch to `candidate`; `dev` is not allowed. Update metadata is read from `${ACMECODE_UPDATE_SOURCE}`, the previous release is retained for rollback, and releases are built for Linux x64, macOS arm64, and Windows x64 from `https://registry.npmjs.org` packages, failing on `high` or `critical` advisories. The example pins no release key (`updates.trust.keys: []`), so `update` fails until an owner adds one.
+- **Release channels.** Users start on `stable` and may switch to `candidate`; `dev` is not allowed. Update metadata is read from `${ACMECODE_UPDATE_SOURCE}`, the previous release is retained for rollback, and releases are built for Linux x64, macOS arm64, and Windows x64 from `https://registry.npmjs.org` packages, failing on `high` or `critical` advisories. The example pins no update trust (no `updates.trust.bootstrap`), so `update` fails closed and `piship release` refuses it until an owner adds root and channel keys.
 
 ## Deterministic local path
 
@@ -78,22 +78,31 @@ After a plain `uninstall`, sign out with the release's own command, `node dist/a
 
 This walkthrough plays both the owner and the user on one machine, with a local directory as the channel. `ACMECODE_UPDATE_SOURCE` is read only by `update`, never at launch, so the steps above work without it. Run these commands from the repository root, and work in a copy of the example so the demo stays unchanged.
 
-1. As the owner, create a release key outside the repository. `keygen` refuses to overwrite a file or to write inside a git work tree unless the path is git-ignored, and prints the public key and fingerprint:
+1. As the owner, create an offline root key and a channel release key outside the repository. A managed release needs the two roles on distinct keys. `keygen` refuses to overwrite a file or to write inside a git work tree unless the path is git-ignored, and prints the public key and fingerprint:
 
    ```bash
    cp -r examples/demo-company /tmp/acmecode
    mkdir -p ~/acme-keys
+   node packages/cli/dist/bin.js keygen ~/acme-keys/root.pem --id acme-root-2026
    node packages/cli/dist/bin.js keygen ~/acme-keys/release.pem --id acme-release-2026
    ```
 
-2. Replace `keys: []` under `updates.trust` in the copied `piship.yaml` with the printed entry. Only the public key goes in the manifest; the private key stays out of the repository, CI logs, and any shared location:
+2. Add `trust.bootstrap` under `updates` in the copied `piship.yaml` with the printed entries. Only public keys go in the manifest; the private keys stay out of the repository, CI logs, and any shared location, and the root key stays offline:
 
    ```yaml
    updates:
      trust:
-       keys:
-         - id: acme-release-2026
-           publicKey: MCowBQYDK2VwAyEA...
+       bootstrap:
+         version: 1
+         expires: 2027-10-01T00:00:00Z
+         keys:
+           - id: acme-root-2026
+             publicKey: MCowBQYDK2VwAyEA...
+           - id: acme-release-2026
+             publicKey: MCowBQYDK2VwAyEA...
+         roles:
+           root: { keyIds: [acme-root-2026], threshold: 1 }
+           channel: { keyIds: [acme-release-2026], threshold: 1 }
    ```
 
 3. Lock, build a release for this machine, and verify it. On Windows set `sandbox.required: false` first; a release that requires the sandbox is refused for `win32-x64`. The dependency scan needs registry access:

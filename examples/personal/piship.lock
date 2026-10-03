@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha4",
+  "schema": "piship-lock/v1alpha5",
   "manifest": {
-    "schema": "piship/v1alpha4",
-    "sha256": "8113844849fb0ffb60f7c7f7abd67839e2ec85025cfbb27e2bad709baca17ad6"
+    "schema": "piship/v1alpha5",
+    "sha256": "sha256-0253958bdad4335f93f583142a12480c34b83c2be07a963bb40b95fa8c9c2685"
   },
   "app": {
     "id": "mypi",
@@ -1327,9 +1327,7 @@
     ],
     "source": "${MYPI_UPDATE_SOURCE}",
     "rollback": true,
-    "trust": {
-      "keys": []
-    }
+    "trust": {}
   },
   "release": {
     "targets": [
