@@ -78,18 +78,20 @@ export function saveMetrics(metrics: LocalMetrics | undefined): void {
  * has already happened, so recording never undoes it. Optional sinks stay
  * best effort: a failure is a warning. A required sink must take every
  * event: when it cannot be opened or does not take them all, this throws
- * AUDIT_UNAVAILABLE and the command fails.
+ * AUDIT_UNAVAILABLE and the command fails. A caller that records before
+ * the operation, and does not run it when this throws, passes a `prefix`
+ * that says so.
  */
 export async function recordAudit(
   ctx: BrandedContext,
   network: NetworkPolicy,
   events: readonly AuditEmitInput[],
+  prefix = "The operation completed, but its audit was not recorded",
 ): Promise<void> {
   const lock = governedLock(ctx);
   if (!lock || !events.length) return;
   const config = lock.governance.manifest.audit;
   const required = config.enabled && config.sinks.some((sink) => sink.required);
-  const prefix = "The operation completed, but its audit was not recorded";
   let status: AuditStatus;
   try {
     const log = await AuditLog.open({

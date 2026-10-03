@@ -1,6 +1,6 @@
 // `<command> auto on|off|status`: the user's auto mode switch, which the
 // distribution must allow (`policy.userAuto: allowed`).
-import { PiShipError, principalId } from "@piship/contracts";
+import { formatError, PiShipError, principalId } from "@piship/contracts";
 import {
   describeUserAuto,
   setUserAuto,
@@ -66,18 +66,36 @@ export async function runAuto(
   }
   const enabled = action === "on";
   const principal = userAutoPrincipal(ctx.stateDir);
-  // Recorded before the switch changes: when a required audit sink does
-  // not take the event, the switch stays as it was.
-  await recordAudit(ctx, lifecycleNetwork(ctx), [
-    {
-      event: enabled ? "policy.auto_enabled" : "policy.auto_disabled",
-      user: principal ? principalId(principal) : null,
-      session: null,
-      policy: `${policy.id}@${policy.version}`,
-      detail: { source: "command" },
-    },
-  ]);
-  setUserAuto(ctx.stateDir, enabled);
+  const record = (prefix?: string) =>
+    recordAudit(
+      ctx,
+      lifecycleNetwork(ctx),
+      [
+        {
+          event: enabled ? "policy.auto_enabled" : "policy.auto_disabled",
+          user: principal ? principalId(principal) : null,
+          session: null,
+          policy: `${policy.id}@${policy.version}`,
+          detail: { source: "command" },
+        },
+      ],
+      prefix,
+    );
+  if (enabled) {
+    // Recorded before the switch changes: when a required audit sink does
+    // not take the event, auto mode stays off.
+    await record(
+      "Auto mode was not switched on, because its audit was not recorded",
+    );
+    setUserAuto(ctx.stateDir, true);
+  } else {
+    // Turning off only restores prompts, so an audit sink that is down
+    // never blocks it: the switch changes first, the event is best effort.
+    setUserAuto(ctx.stateDir, false);
+    await record().catch((error: unknown) =>
+      ctx.err(`Warning: ${formatError(error)}`),
+    );
+  }
   ctx.out(
     enabled
       ? `Auto mode is on: asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply. It takes effect at the next ${command} start; turn it off with ${command} auto off.`

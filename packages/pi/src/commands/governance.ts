@@ -13,7 +13,7 @@ import {
   formatCapabilities,
   formatDecision,
 } from "@piship/policy";
-import { inspectGovernance } from "../governance-session.js";
+import { GovernanceSession, inspectGovernance } from "../governance-session.js";
 import type { LaunchContext } from "../launch/context.js";
 import { governanceOptions } from "../launch/governance.js";
 
@@ -63,10 +63,12 @@ export async function runPolicy(
     resource,
   });
   // While the user's auto mode is on, an ask from the distribution defaults
-  // runs without a prompt.
+  // runs without a prompt, for an action the session resolves through its
+  // decisions; any other ask keeps its own handling.
   const format = {
     autoApproved:
       inspection.userAuto.active &&
+      GovernanceSession.AUTO_RESOLVED_ACTIONS.has(requested as PolicyAction) &&
       !inspection.engine.keepsPrompt({
         action: requested as PolicyAction,
         resource,

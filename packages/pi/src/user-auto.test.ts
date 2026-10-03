@@ -18,7 +18,11 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { AuditEvent, ManagedFetch } from "@piship/contracts";
+import {
+  type AuditEvent,
+  type ManagedFetch,
+  PiShipError,
+} from "@piship/contracts";
 import { resolveLock, setUserAuto, userAutoPath } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { governanceHooks } from "./builtins.js";
@@ -420,17 +424,109 @@ describe("user auto mode in a governed session", () => {
     expect(existsSync(userAutoPath(stateDir))).toBe(false);
     await session.close();
     // The write is decided before it runs and again on the file it opens.
-    expect([
-      ...new Set(
-        events()
-          .filter((event) => event.event.startsWith("policy.auto_"))
-          .map((event) => `${event.event} ${event.detail?.source ?? ""}`),
-      ),
-    ]).toEqual([
-      "policy.auto_enabled session",
+    // The later session started with the switch on, and records that; the
+    // two sessions deliver their events in the order they close.
+    expect(
+      [
+        ...new Set(
+          events()
+            .filter((event) => event.event.startsWith("policy.auto_"))
+            .map((event) => `${event.event} ${event.detail?.source ?? ""}`),
+        ),
+      ].sort(),
+    ).toEqual([
       "policy.auto_approved ",
       "policy.auto_disabled session",
+      "policy.auto_enabled session",
+      "policy.auto_enabled state",
     ]);
+  });
+
+  it("records a session that starts with auto on, also when auto.json was written by hand", async () => {
+    const built = distribution({ userAuto: "allowed" });
+    // No `auto on` and no audit event: the file alone switches it on.
+    mkdirSync(join(built.stateDir, "config"), { recursive: true });
+    writeFileSync(
+      userAutoPath(built.stateDir),
+      JSON.stringify({
+        schema: "piship-user-auto/v1",
+        enabled: true,
+        binding: null,
+        changed_at: "2026-10-03T00:00:00.000Z",
+      }),
+    );
+    const session = await GovernanceSession.open(built.options);
+    sessions.push(session);
+    expect(session.userAuto.active).toBe(true);
+    await session.close();
+    expect(
+      built.events().filter((event) => event.event === "policy.auto_enabled"),
+    ).toEqual([
+      expect.objectContaining({
+        user: "alice",
+        policy: "unit@1",
+        detail: { source: "state" },
+      }),
+    ]);
+    // Off: nothing is recorded at the start.
+    const off = await open({ userAuto: "allowed" });
+    await off.session.close();
+    expect(
+      off.events().some((event) => event.event === "policy.auto_enabled"),
+    ).toBe(false);
+  });
+
+  it("turns off even when a required audit sink is down, and switches on only once the event is delivered", async () => {
+    const { session, stateDir } = await open({ userAuto: "allowed", on: true });
+    const { commands } = hooks(session);
+    const auto = commands.get("auto");
+    if (!auto) throw new Error("/auto is not registered");
+    const status = session.audit.status.bind(session.audit);
+    const lost = () => ({
+      ...status(),
+      state: "failed" as const,
+      sinks: [
+        {
+          id: "company",
+          type: "http" as const,
+          required: true,
+          state: "failed" as const,
+          delivered: 0,
+          dropped: 0,
+          pending: 1,
+          lastError: "connection refused",
+        },
+      ],
+    });
+    const audit = session.audit as unknown as {
+      status: typeof status;
+      assertAvailable: () => void;
+    };
+    audit.status = lost;
+    audit.assertAvailable = () => {
+      throw new PiShipError(
+        "AUDIT_UNAVAILABLE",
+        "Audit is unavailable: required sink company is failing and the audit buffer is full",
+      );
+    };
+    // Off applies at once, and says the event was not recorded.
+    const off = context(async () => false);
+    await auto.handler("off", off.ctx);
+    expect(session.userAuto.active).toBe(false);
+    expect(existsSync(userAutoPath(stateDir))).toBe(false);
+    expect(off.notices.at(-1)).toMatch(
+      /^Auto mode is off, but its audit was not recorded: AUDIT_UNAVAILABLE/,
+    );
+    // On is refused while the event cannot be delivered.
+    audit.assertAvailable = () => {};
+    const on = context(async () => false);
+    await auto.handler("on", on.ctx);
+    expect(on.notices.at(-1)).toMatch(
+      /Auto mode was not switched on, because its audit was not recorded/,
+    );
+    expect(session.userAuto.active).toBe(false);
+    expect(existsSync(userAutoPath(stateDir))).toBe(false);
+    audit.status = status;
   });
 
   it("resets when another principal binds the state", async () => {
@@ -485,21 +581,40 @@ describe("policy explain and doctor with auto mode", () => {
   it("policy explain reports an ask as auto-approved by the user, and nothing else", async () => {
     const built = distribution({ userAuto: "allowed", on: true });
     const { ctx, out } = launchContext(built);
-    await runPolicy(ctx, ["explain", "web.request", "example.org"]);
+    await runPolicy(ctx, ["explain", "shell.execute", "ls"]);
     expect(out.at(-1)).toMatch(
       /^AUTO-APPROVED\n\nEffect:\n {2}ask \(auto-approved by user\)/,
     );
-    await runPolicy(ctx, ["explain", "web.request", "example.org", "--json"]);
+    await runPolicy(ctx, ["explain", "shell.execute", "ls", "--json"]);
     expect(JSON.parse(out.at(-1) as string)).toMatchObject({
       effect: "ask",
       autoApproved: true,
     });
-    // Deny is unchanged.
+    // Deny is unchanged, and an explicit ask keeps its prompt.
     await runPolicy(ctx, ["explain", "shell.execute", "rm -rf /"]);
     expect(out.at(-1)).toMatch(/^DENIED/);
+    await runPolicy(ctx, [
+      "explain",
+      "shell.execute",
+      "git push origin main; true",
+      "--json",
+    ]);
+    expect(JSON.parse(out.at(-1) as string)).not.toHaveProperty("autoApproved");
+    // An ask the session never resolves through auto mode: a mid-session
+    // model switch, and actions without a runtime hook.
+    for (const [action, resource] of [
+      ["model.use", "acme/other"],
+      ["network.connect", "example.org:443"],
+      ["web.request", "example.org"],
+    ] as const) {
+      await runPolicy(ctx, ["explain", action, resource, "--json"]);
+      const shown = JSON.parse(out.at(-1) as string);
+      expect(shown.effect, action).toBe("ask");
+      expect(shown, action).not.toHaveProperty("autoApproved");
+    }
     // Off: the plain ask.
     setUserAuto(built.stateDir, false);
-    await runPolicy(ctx, ["explain", "web.request", "example.org", "--json"]);
+    await runPolicy(ctx, ["explain", "shell.execute", "ls", "--json"]);
     expect(JSON.parse(out.at(-1) as string)).not.toHaveProperty("autoApproved");
   });
 

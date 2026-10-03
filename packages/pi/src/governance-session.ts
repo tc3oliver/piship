@@ -12,6 +12,7 @@ import {
 import {
   type ApprovalChannel,
   type AuditEventType,
+  formatError,
   type PolicyAction,
   PiShipError,
   type ResolvedDecision,
@@ -216,6 +217,14 @@ export class GovernanceSession {
           ...(session.userAuto.active ? { userAuto: true } : {}),
         },
       });
+      // The stored switch is audited when it is switched; a session that
+      // starts with it on records that too, so a switch turned on without
+      // an event (auto.json edited by hand) still leaves one. Metadata only.
+      if (session.userAuto.active)
+        session.emit("policy.auto_enabled", {
+          policy: engine.id,
+          detail: { source: "state" },
+        });
       // A team, project, or managed user file that tries to widen the policy
       // is recorded; a rule it names is what tried.
       for (const diagnostic of engine.diagnostics)
@@ -254,37 +263,84 @@ export class GovernanceSession {
     return this.engine.id;
   }
 
+  /**
+   * The actions whose `ask` this session resolves through `decide`, where
+   * the user's auto mode applies. Others are never auto-approved: a
+   * mid-session `model.use` switch accepts only a model approved at start,
+   * and `network.connect`, `web.request`, `browser.execute`, `memory.*`, and
+   * `agent.invoke` have no runtime hook (audit-only, or the sandbox).
+   * `policy explain` reports AUTO-APPROVED only for these.
+   */
+  static readonly AUTO_RESOLVED_ACTIONS: ReadonlySet<PolicyAction> =
+    new Set<PolicyAction>([
+      "tool.execute",
+      "shell.execute",
+      "filesystem.read",
+      "filesystem.write",
+      "resource.load",
+      "extension.load",
+      "skill.load",
+      "instruction.load",
+      "provider.load",
+      "mcp.server.start",
+      "mcp.tool.call",
+    ]);
+
   /** The user's auto mode as this session applies it. */
   get userAuto(): UserAutoStatus {
     return this.#userAuto;
   }
 
   /**
-   * Switch the user's auto mode from inside the session (`/auto`). Refused
-   * with POLICY_DENIED unless the distribution allows it. The switch is
-   * audited before it applies, and stored for later sessions.
+   * Switch the user's auto mode from inside the session (`/auto`), and store
+   * it for later sessions. Switching on is refused with POLICY_DENIED unless
+   * the distribution allows it, and is audited first: the event is flushed,
+   * and when a required sink has not taken it (AUDIT_UNAVAILABLE) the switch
+   * stays off. Switching off only restores prompts, so it always applies
+   * first; its event is best effort, and a failure to record it is
+   * returned as `warning`.
    */
-  switchUserAuto(enabled: boolean): UserAutoStatus {
-    if (!this.#userAuto.allowed) {
-      if (enabled)
+  async switchUserAuto(
+    enabled: boolean,
+  ): Promise<UserAutoStatus & { readonly warning?: string }> {
+    let warning: string | undefined;
+    if (enabled) {
+      if (!this.#userAuto.allowed)
         throw userAutoDenied(
           this.options.lock.app.command,
           this.options.lock.deployment.mode,
         );
-    } else {
       this.audit.assertAvailable();
-      this.emit(enabled ? "policy.auto_enabled" : "policy.auto_disabled", {
+      this.emit("policy.auto_enabled", {
         policy: this.policyId,
         detail: { source: "session" },
       });
+      await this.audit.flush();
+      const loss = requiredAuditLoss(
+        this.audit.status(),
+        "Auto mode was not switched on, because its audit was not recorded",
+      );
+      if (loss) throw loss;
+      setUserAuto(this.options.stateDir, true);
+    } else {
+      setUserAuto(this.options.stateDir, false);
+      if (this.#userAuto.allowed)
+        try {
+          this.audit.assertAvailable();
+          this.emit("policy.auto_disabled", {
+            policy: this.policyId,
+            detail: { source: "session" },
+          });
+        } catch (error) {
+          warning = `Auto mode is off, but its audit was not recorded: ${formatError(error)}`;
+        }
     }
-    setUserAuto(this.options.stateDir, enabled);
     this.#userAuto = userAutoStatus(
       this.options.stateDir,
       this.manifest.policy,
       this.options.lock.deployment.mode,
     );
-    return this.#userAuto;
+    return { ...this.#userAuto, ...(warning ? { warning } : {}) };
   }
 
   /** Throws AUDIT_UNAVAILABLE while a required audit sink has lost events. */
