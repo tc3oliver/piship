@@ -410,6 +410,133 @@ export function verifySignature(
   return fail(`Signature does not verify with trusted key ${value.keyId}`);
 }
 
+/** More signature entries than any root may list keys; larger is refused. */
+const MAX_SIGNATURE_ENTRIES = 64;
+
+/**
+ * Verify a `piship-signature/v1` envelope against a role: `threshold`
+ * distinct `trusted` keys must each contribute a valid signature over
+ * `bytes`. Without `signatures` the top-level signature is the one entry;
+ * with it, the top-level signature must equal one of its entries, and a key
+ * id may appear only once. Entries of unknown keys, other algorithms, or
+ * malformed or invalid signatures do not count, and one public key counts
+ * once however many ids name it. Returns the ids of the keys that counted,
+ * in envelope order; throws PiShipError("INTEGRITY_FAILED") otherwise.
+ */
+export function verifyThreshold(
+  bytes: Uint8Array,
+  envelope: unknown,
+  trusted: readonly TrustedKey[],
+  threshold: number,
+): string[] {
+  if (trusted.length === 0)
+    fail("Signature cannot be verified: no trusted release keys configured");
+  if (
+    !Number.isSafeInteger(threshold) ||
+    threshold < 1 ||
+    threshold > trusted.length
+  )
+    fail(
+      `Signature threshold ${threshold} is not between 1 and the ${trusted.length} trusted key(s)`,
+    );
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope))
+    fail("Signature envelope is not an object");
+  const value = envelope as Record<string, unknown>;
+  if (value.schema !== SIGNATURE_SCHEMA)
+    fail(`Signature envelope schema must be ${SIGNATURE_SCHEMA}`);
+  if (typeof value.keyId !== "string") fail("Signature envelope has no key id");
+  if (value.algorithm !== "ed25519")
+    fail("Signature algorithm must be ed25519");
+  if (typeof value.signature !== "string")
+    fail("Signature envelope has no signature");
+  let entries: Record<string, unknown>[];
+  if (value.signatures === undefined) entries = [value];
+  else {
+    if (!Array.isArray(value.signatures))
+      fail("Signature envelope signatures is not a list");
+    if (value.signatures.length > MAX_SIGNATURE_ENTRIES)
+      fail(
+        `Signature envelope lists more than ${MAX_SIGNATURE_ENTRIES} signatures`,
+      );
+    // A malformed entry does not count, but cannot hide a duplicate id.
+    entries = value.signatures.filter(
+      (entry): entry is Record<string, unknown> =>
+        !!entry && typeof entry === "object" && !Array.isArray(entry),
+    );
+    const ids = entries
+      .map((entry) => entry.keyId)
+      .filter((id) => typeof id === "string");
+    const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
+    if (duplicate !== undefined)
+      fail(`Signature key ${duplicate} appears more than once`);
+    if (
+      !entries.some(
+        (entry) =>
+          entry.keyId === value.keyId &&
+          entry.algorithm === value.algorithm &&
+          entry.signature === value.signature,
+      )
+    )
+      fail(
+        "Signature envelope's top-level signature is not one of its signatures",
+      );
+  }
+  const counted: string[] = [];
+  const keys = new Set<string>();
+  const invalid: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry.keyId !== "string" || entry.algorithm !== "ed25519")
+      continue;
+    const candidates = trusted.filter((key) => key.id === entry.keyId);
+    if (candidates.length === 0) continue;
+    let signature: Buffer;
+    try {
+      signature = strictBase64(entry.signature, "Signature");
+    } catch {
+      invalid.push(entry.keyId);
+      continue;
+    }
+    const match =
+      signature.length === 64
+        ? candidates.find((candidate) =>
+            verify(
+              null,
+              bytes,
+              createPublicKey({
+                key: publicKeyDer(candidate.publicKey),
+                format: "der",
+                type: "spki",
+              }),
+              signature,
+            ),
+          )
+        : undefined;
+    if (!match) {
+      invalid.push(entry.keyId);
+      continue;
+    }
+    if (keys.has(match.publicKey)) continue;
+    keys.add(match.publicKey);
+    counted.push(entry.keyId);
+  }
+  if (counted.length >= threshold) return counted;
+  const signers = entries
+    .map((entry) => entry.keyId)
+    .filter((id) => typeof id === "string");
+  const ids = [...new Set(trusted.map((key) => key.id))].join(", ");
+  // The single-signature messages verifySignature has always given.
+  if (threshold === 1 && entries.length === 1) {
+    if (invalid.length)
+      fail(`Signature does not verify with trusted key ${invalid[0]}`);
+    fail(
+      `Signature key ${String(signers[0])} is not trusted; trusted keys: ${ids}`,
+    );
+  }
+  return fail(
+    `Signatures meet ${counted.length} of the ${threshold} required from trusted keys ${ids} (signed by ${signers.join(", ") || "no key"}${invalid.length ? `; does not verify with trusted key ${invalid.join(", ")}` : ""})`,
+  );
+}
+
 /** "sha256:<hex>" of the public key's DER bytes. */
 export function keyFingerprint(publicKey: string): string {
   return `sha256:${createHash("sha256").update(publicKeyDer(publicKey)).digest("hex")}`;
