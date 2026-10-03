@@ -27,7 +27,7 @@ The identity token goes only to the broker (and to the IdP revocation endpoint o
 
 ## Manifest snippet
 
-The access sections of a managed `piship/v1alpha4` manifest; the complete file is [`examples/enterprise-litellm/piship.yaml`](../examples/enterprise-litellm/piship.yaml).
+The access sections of a managed `piship/v1alpha5` manifest; the complete file is [`examples/enterprise-litellm/piship.yaml`](../examples/enterprise-litellm/piship.yaml).
 
 ```yaml
 variables: [ACMECODE_OIDC_ISSUER, ACMECODE_OIDC_CLIENT_ID, ACMECODE_CREDENTIAL_BROKER_URL, ACMECODE_CREDENTIAL_REVOKE_URL, ACMECODE_LLM_GATEWAY_URL]

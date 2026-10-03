@@ -69,7 +69,21 @@ async function fetchSource(
   name: string,
   fetcher: typeof fetch,
   timeout: number,
-): Promise<Response> {
+): Promise<Response>;
+async function fetchSource(
+  url: URL,
+  name: string,
+  fetcher: typeof fetch,
+  timeout: number,
+  notFound: "absent",
+): Promise<Response | undefined>;
+async function fetchSource(
+  url: URL,
+  name: string,
+  fetcher: typeof fetch,
+  timeout: number,
+  notFound?: "absent",
+): Promise<Response | undefined> {
   checkSourceUrl(url);
   const signal = AbortSignal.timeout(timeout);
   let target = url;
@@ -118,6 +132,10 @@ async function fetchSource(
       target = next;
       continue;
     }
+    if (notFound && response.status === 404) {
+      await response.body?.cancel().catch(() => {});
+      return undefined;
+    }
     if (!response.ok || !response.body) {
       await response.body?.cancel().catch(() => {});
       const retryAfterMs =
@@ -155,23 +173,68 @@ export async function readSourceFile(
     const response = await fetchSource(url, name, fetcher, METADATA_TIMEOUT_MS);
     const date = Date.parse(response.headers.get("date") ?? "");
     if (answer && !Number.isNaN(date)) answer.date = date;
-    const declared = Number(response.headers.get("content-length"));
-    if (declared > MAX_METADATA_BYTES) throw tooLarge(name, MAX_METADATA_BYTES);
-    const chunks: Buffer[] = [];
-    let received = 0;
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      received += chunk.length;
-      if (received > MAX_METADATA_BYTES)
-        throw tooLarge(name, MAX_METADATA_BYTES);
-      chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
+    return readBody(response, name, MAX_METADATA_BYTES);
   }
   const path = join(resolve(source), name);
   if (!existsSync(path))
     throw new PiShipError("UPDATE_FAILED", `Update source has no ${name}`);
   if (statSync(path).size > MAX_METADATA_BYTES)
     throw tooLarge(name, MAX_METADATA_BYTES);
+  return readFileSync(path);
+}
+
+async function readBody(
+  response: Response,
+  name: string,
+  limit: number,
+): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > limit) {
+    await response.body?.cancel().catch(() => {});
+    throw tooLarge(name, limit);
+  }
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    received += chunk.length;
+    if (received > limit) throw tooLarge(name, limit);
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Like `readSourceFile` with a size limit of its own, but a file the source
+ * authoritatively reports as absent (HTTP 404, or no such file in a
+ * directory source) is `undefined`. Every other failure (network, TLS,
+ * proxy, another HTTP status, an unreadable file) still throws.
+ */
+export async function readOptionalSourceFile(
+  source: string,
+  name: string,
+  limit: number,
+  fetcher: typeof fetch = fetch,
+): Promise<Buffer | undefined> {
+  if (isUrlSource(source)) {
+    const url = new URL(name, source.endsWith("/") ? source : `${source}/`);
+    const response = await fetchSource(
+      url,
+      name,
+      fetcher,
+      METADATA_TIMEOUT_MS,
+      "absent",
+    );
+    return response && readBody(response, name, limit);
+  }
+  const path = join(resolve(source), name);
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (size > limit) throw tooLarge(name, limit);
   return readFileSync(path);
 }
 

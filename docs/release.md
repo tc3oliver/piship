@@ -1,6 +1,6 @@
 # Releases, updates, and rollback
 
-The production lifecycle for `piship/v1alpha4` distributions consists of a verifiable release archive per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. It wraps the [portable payload](portable-artifact.md) unchanged. Its current status and evidence are on the [status page](status.md); nothing is published to npm or through a signed channel.
+The production lifecycle for `piship/v1alpha4` and later distributions consists of a verifiable release archive per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. It wraps the [portable payload](portable-artifact.md) unchanged. Its current status and evidence are on the [status page](status.md); nothing is published to npm or through a signed channel.
 
 The guide has four parts:
 

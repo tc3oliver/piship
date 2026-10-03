@@ -110,7 +110,7 @@ A minimal managed distribution. `piship validate` accepts it as is; the demo's o
 <summary><b>Show piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: acmecode
@@ -182,7 +182,7 @@ updates:
 
 No secrets go in it; the schema rejects anything that looks like one. Policy, resources, MCP servers, audit, and release gates are optional. Every field is in the [manifest reference](docs/manifest.md).
 
-To start your own, run `node packages/cli/dist/bin.js init ./my-agent --managed` (leave out `--managed` for a personal one), keep it in its own repository, and see [running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository).
+To start your own company distribution, run `node packages/cli/dist/bin.js init ./company-agent --managed`, keep it in its own repository, and see [running the CLI from your own repository](docs/enterprise-integration.md#running-the-cli-from-your-own-repository). The [setup guide](docs/agent-setup.md) walks through every value it asks for.
 
 ## Not a company? Still useful
 
@@ -194,7 +194,7 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
-See the [personal example](examples/personal/README.md).
+To start your own, run `node packages/cli/dist/bin.js init ./my-agent --personal`. See the [personal example](examples/personal/README.md) and the [setup guide](docs/agent-setup.md).
 
 ## How it fits together
 
@@ -210,7 +210,8 @@ The sandbox follows the same split: PiShip decides whether a command may run, th
 
 PiShip is pre-release and not on npm. What is proven, and what is not:
 
-- **v0.7.1** is the [production-validation baseline](docs/status.md#v071-production-validation-baseline) on Pi 0.87.1, with six attested archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1). **`main`** runs Pi 1.0.0 ([changelog](CHANGELOG.md)).
+- **v0.7.1** is the [production-validation baseline](docs/status.md#v071-production-validation-baseline) on Pi 0.87.1, with six attested archives on its [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1).
+- **v0.8.0** is the [release candidate](docs/status.md#v080-release-candidate) for the next baseline, on Pi 1.0.0: `piship/v1alpha5`, an installation-level update trust root with root refresh, and multi-signature channels ([changelog](CHANGELOG.md)). It is not yet tagged, and v0.7.1 stays the baseline until v0.8.0 is qualified and published.
 - Personal distributions are supported. Managed access, governance, and the release lifecycle are candidates.
 - Managed flows pass on Linux, macOS, and Windows against local fixtures, and on Ubuntu against Keycloak, LiteLLM, and a container sandbox. One manual run sent a real model request through that stack.
 - Not proven yet: a production company identity provider or gateway; live E2B, CubeSandbox, or Kubernetes Agent Sandbox; a native sandbox on Windows (use a remote one there).

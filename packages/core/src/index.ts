@@ -26,6 +26,7 @@ export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./update/index.js";
 export {
+  channelTrustFromLock,
   checkPiVersion,
   lockManifest,
   requireCurrentLock,
@@ -37,6 +38,7 @@ export {
   LOCK_SCHEMA_V1ALPHA2,
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_VERSION,
   type LockDigests,
   type LockedPackage,
@@ -58,6 +60,10 @@ export {
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
 export * from "./signing.js";
+export {
+  type PassphraseInput,
+  readSigningPassphrase,
+} from "./signing-passphrase.js";
 export * from "./progress.js";
 export * from "./summary.js";
 export {
@@ -65,8 +71,11 @@ export {
   binHome,
   distributionStateDirectory,
   installHome,
+  isTestCreatedState,
   runtimeStateDirectory,
   stateHome,
+  testStateMarker,
+  withTestState,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
 export {

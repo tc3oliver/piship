@@ -1,7 +1,7 @@
 # Access sections for a managed distribution behind a company broker and a
 # LiteLLM gateway. Endpoints are runtime references resolved from the launch
 # environment; no secret belongs in this file.
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: acmecode
@@ -79,8 +79,7 @@ network:
   tls:
     additionalCA: []
 
-# Required by piship/v1alpha4; add a pinned release key before using update.
+# Required since piship/v1alpha4. Updates stay disabled until
+# updates.trust.bootstrap and updates.source are added.
 updates:
   channel: stable
-  trust:
-    keys: []

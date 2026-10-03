@@ -32,9 +32,9 @@ describe("documented CLI commands", () => {
     expect(offenders).toEqual([]);
   });
 
-  // `piship test` runs the acceptance launch against the real state home, so
-  // a documented install after it fails unless it adopts that state.
-  it("adopt the state that piship test created when installing after it", () => {
+  // The first install adopts the state `piship test` created on its own; a
+  // documented `--use-existing-state` there would teach adopting any state.
+  it("install after piship test without --use-existing-state", () => {
     const files = execFileSync("git", ["ls-files", "-z", "*.md"], {
       cwd: root,
       encoding: "utf8",
@@ -45,14 +45,16 @@ describe("documented CLI commands", () => {
       const lines = readFileSync(join(root, file), "utf8").split("\n");
       const tested = lines.findIndex((line) => /\bbin\.js test\b/.test(line));
       if (tested < 0) return [];
-      return lines.flatMap((line, index) =>
-        index > tested &&
-        /piship\.mjs install\b|install\.sh\b/.test(line) &&
-        /^\s*(?:node|sh)\s/.test(line) &&
-        !line.includes("--use-existing-state")
-          ? [`${file}:${index + 1}: ${line.trim()}`]
-          : [],
+      const index = lines.findIndex(
+        (line, index) =>
+          index > tested &&
+          /piship\.mjs install\b/.test(line) &&
+          /^\s*node\s/.test(line),
       );
+      const install = lines[index];
+      return install?.includes("--use-existing-state")
+        ? [`${file}:${index + 1}: ${install.trim()}`]
+        : [];
     });
     expect(offenders).toEqual([]);
   });

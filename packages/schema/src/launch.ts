@@ -11,7 +11,7 @@ import {
 import type { GovernanceManifest } from "./governance.js";
 import { governanceReferences } from "./governance-parse.js";
 import type { Manifest, ValidationDiagnostic } from "./index.js";
-import { lifecycleReferences } from "./lifecycle.js";
+import { lifecycleReferences, updateTrustWarnings } from "./lifecycle.js";
 import { hasRuntimeReference, referencedVariables } from "./variables.js";
 
 interface LaunchSections {
@@ -343,14 +343,23 @@ export function runtimeVariableUse(manifest: Manifest): {
 
 /**
  * Warnings for settings that parse but fail at launch in some environments
- * or have no effect. They never change how the manifest is parsed.
+ * or have no effect, plus update trust warnings (`updateTrustWarnings`).
+ * They never change how the manifest is parsed.
  */
 export function launchWarnings(manifest: Manifest): ValidationDiagnostic[] {
-  return findings({
-    mode: manifest.deployment.mode,
-    access: manifest.access,
-    governance: manifest.governance,
-  })
-    .filter((finding) => !finding.certain)
-    .map(({ path, message }) => ({ path, message }));
+  return [
+    ...findings({
+      mode: manifest.deployment.mode,
+      access: manifest.access,
+      governance: manifest.governance,
+    })
+      .filter((finding) => !finding.certain)
+      .map(({ path, message }) => ({ path, message })),
+    ...(manifest.lifecycle
+      ? updateTrustWarnings(
+          manifest.deployment.mode,
+          manifest.lifecycle.updates,
+        )
+      : []),
+  ];
 }

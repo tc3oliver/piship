@@ -18,13 +18,21 @@ import { sha256File } from "../archive.js";
 import {
   assertDisjointRoots,
   installHome,
+  isTestCreatedState,
   runtimeStateDirectory,
+  testStateMarker,
   verifyPayload,
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import {
+  initialTrustState,
+  removeTrustState,
+  writeTrustState,
+} from "./trust-state.js";
 import {
   RECEIPT_SCHEMA,
   VERSION_NAME,
@@ -324,7 +332,8 @@ export interface InstallChecks {
   readonly expectedSha256?: string;
   /**
    * Update-key fingerprints (`sha256:<hex>`) the release lock must pin. Each
-   * given key must be among `updates.trust.keys`; the lock may pin others.
+   * given key must be among the lock's channel trust keys
+   * (`channelTrustFromLock`); the lock may pin others.
    */
   readonly expectedKeys?: readonly string[];
 }
@@ -403,9 +412,7 @@ export async function installDistribution(
       );
     } else lock = verifyPayload(source);
     const pinned = new Set(
-      (lock.updates?.trust.keys ?? []).map((key) =>
-        keyFingerprint(key.publicKey),
-      ),
+      channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
     );
     const unpinned = expectedKeys.filter((key) => !pinned.has(key));
     if (unpinned.length)
@@ -509,9 +516,12 @@ export async function installDistribution(
             throw new Error(
               `Install collision for ${id}/${command}: ${path} exists but no PiShip installation of ${id} is recorded; move it aside if it is not in use, then install again`,
             );
+        // State that `piship test` or `dev` created for this distribution
+        // before its first install is adopted; any other state is not.
         if (
           !useExistingState &&
-          existsSync(runtimeStateDirectory({ value: id }))
+          existsSync(runtimeStateDirectory({ value: id })) &&
+          !isTestCreatedState({ value: id })
         )
           throw new Error(
             `State already exists for ${id}; pass --use-existing-state to explicitly reuse it`,
@@ -538,6 +548,12 @@ export async function installDistribution(
           writeFileSync(launcher, launcherSource(id));
           syncTree(apps);
           syncDirectory(dirname(apps));
+          // A fresh install is the one point where a release lock sets the
+          // installation's update trust; a leftover state of an earlier
+          // install is replaced, never merged.
+          const trust = initialTrustState(lock, id, new Date());
+          if (trust) writeTrustState(trust);
+          else removeTrustState(id);
           const receipt: InstallReceipt = {
             schema: RECEIPT_SCHEMA,
             app: lock.app,
@@ -556,6 +572,7 @@ export async function installDistribution(
             // Users start on the distribution's default channel, whatever
             // channel the installed archive was built for.
             ...(lock.updates ? { channel: lock.updates.channel } : {}),
+            ...(trust ? { trustState: true } : {}),
           };
           if (!hold.stillHeld())
             throw new Error(`Initial install lock for ${id} was lost; retry`);
@@ -563,12 +580,16 @@ export async function installDistribution(
           writeShim(commandPath, launcher);
           syncDirectory(dirname(commandPath));
           rmSync(installMarker(apps), { force: true });
+          // The state belongs to this install now: installing again after an
+          // uninstall must adopt it explicitly.
+          rmSync(testStateMarker({ value: id }), { force: true });
           return receipt;
         } catch (error) {
           if (!existsSync(receiptPath(id))) {
             if (ownsCommandShim(commandPath, launcher))
               rmSync(commandPath, { force: true });
             rmSync(apps, { recursive: true, force: true });
+            removeTrustState(id);
           }
           throw error;
         }

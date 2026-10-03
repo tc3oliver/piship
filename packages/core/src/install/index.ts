@@ -13,6 +13,14 @@ export {
   type RetiredKey,
 } from "./receipt.js";
 export { lifecycleStatus, type LifecycleStatus } from "./status.js";
+export {
+  LEGACY_ROOT_EXPIRES,
+  TRUST_STATE_SCHEMA,
+  readTrustState,
+  trustStatePath,
+  type RemovedTrustKey,
+  type UpdateTrustState,
+} from "./trust-state.js";
 export { sweepStateTemporaries } from "./temporaries.js";
 export {
   uninstallAndPurgeDistribution,

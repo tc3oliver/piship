@@ -1,0 +1,104 @@
+name: Production evidence
+description: Report the result of one production-validation step, with no company data
+title: "[Production evidence]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Report only the fields below
+
+        This form collects de-identified evidence from a production validation ([protocol](https://github.com/tc3oliver/piship/blob/main/docs/production-validation.md)). It is public, and editing an issue does not remove what it said: GitHub keeps the edit history.
+
+        **Never include, in a field, a screenshot, or an attachment:**
+
+        - raw credentials: API keys, passwords, client secrets, private signing keys
+        - tokens: identity, access, refresh, or runtime credentials, authorization codes, session cookies
+        - claims read from an identity token or the user-info endpoint
+        - internal URLs or hosts, including a path that contains one
+        - usernames or email addresses
+        - model names or IDs, including a gateway's aliases
+        - raw logs: terminal output, `doctor` output, `--smoke` JSON, audit logs, session files, crash records
+        - company-identifying fields: the company, the distribution or product name where it identifies the company, project or repository names, certificate subjects, ticket references
+
+        Report the PiShip error code, never its message: a message can name a host, a proxy, or a path. Share only what the distribution owner has approved. Report vulnerabilities privately using SECURITY.md.
+  - type: input
+    id: piship_version
+    attributes:
+      label: PiShip version
+      description: "The version the release was built with, for example 0.8.0."
+    validations:
+      required: true
+  - type: input
+    id: pi_version
+    attributes:
+      label: Pi version
+      description: "The Pi version the release records, for example 1.0.0."
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Architecture
+      options:
+        - x64
+        - arm64
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: Step
+      description: "One step per report."
+      options:
+        - install
+        - launch
+        - OIDC login
+        - credential acquire
+        - model discovery
+        - authenticated model request
+        - session resume
+        - doctor
+        - sandbox command
+        - update
+        - rollback
+        - logout
+        - uninstall
+        - purge
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - PASS
+        - FAIL
+    validations:
+      required: true
+  - type: input
+    id: error_code
+    attributes:
+      label: PiShip error code
+      description: "The code of a failure, such as GATEWAY_UNREACHABLE. Leave empty when the step passed or the failure had no code."
+  - type: textarea
+    id: note
+    attributes:
+      label: Sanitized note
+      description: "Only when the code does not say enough. One or two sentences in generic words, such as: the proxy refused the tunnel. No hosts, names, identifiers, or output."
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: "This report contains no raw credentials, tokens, claims, internal URLs or hosts, usernames or email addresses, model names or IDs, raw logs, or company-identifying fields."
+          required: true

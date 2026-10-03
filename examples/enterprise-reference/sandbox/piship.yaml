@@ -1,4 +1,4 @@
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 # The AcmeCode reference distribution (../piship.yaml) with its commands run in
 # the organization's container sandbox service (README.md) instead of the
@@ -222,8 +222,6 @@ updates:
   channels: [stable, candidate]
   source: ${ACMECODE_UPDATE_SOURCE}
   rollback: true
-  trust:
-    keys: []
 
 # As in the reference manifest: the stack runs in Linux containers, and the
 # native sandbox has an adapter on Linux and macOS only. This build's sandbox

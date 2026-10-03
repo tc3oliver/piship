@@ -2,19 +2,23 @@
 
 How a distribution owner builds, reviews, signs, and approves a release. This page is part of the [release guide](../release.md); the artifact format and its verification are in the [artifact contract](artifact-contract.md), and what users' installations do with a release is in the [update lifecycle](update-lifecycle.md).
 
-The production lifecycle for `piship/v1alpha4` distributions (added in v0.4) consists of a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. Its current status and evidence are on the [status page](../status.md); nothing is published to npm or through a signed channel. It wraps the v0.1 [portable payload](../portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
+The production lifecycle for `piship/v1alpha4` and later distributions (added in v0.4) consists of a verifiable release artifact per target, signed update channels, verified update with atomic activation, rollback to a retained known-good release, and an explicit migration check for local data. Its current status and evidence are on the [status page](../status.md); nothing is published to npm or through a signed channel. It wraps the v0.1 [portable payload](../portable-artifact.md) unchanged; nothing here assembles a second runtime, resource, launcher, or state layout.
 
 The flow for a distribution owner:
 
-1. Migrate the manifest to `piship/v1alpha4`, add a release key, and lock ([manifest](../manifest.md#lifecycle-fields-v1alpha4)).
+1. Migrate the manifest to `piship/v1alpha5`, add the update trust bootstrap (root and channel keys), and lock ([manifest](../manifest.md#update-trust-bootstrap-v1alpha5)).
 2. Build a release on each target with `piship release`.
 3. Verify it with `piship verify-release` and, in CI, check reproducibility and build provenance.
 4. Add the archives to a channel with `piship sign-channel` and serve the channel directory.
 5. Users install the release, then run `<command> update` and `<command> rollback`.
+6. Change trust later only by publishing the next root with `piship trust-root next`, never by editing a release's bootstrap.
 
 ```bash
 node packages/cli/dist/bin.js migrate ./acmecode/piship.yaml --write
-node packages/cli/dist/bin.js keygen ~/keys/acme-release.pem --id acme-release-2026
+node packages/cli/dist/bin.js keygen /media/offline/acme-root.pem --id acme-root-2026 --encrypt
+node packages/cli/dist/bin.js keygen ~/keys/acme-release.pem --id acme-release-2026 --encrypt
+node packages/cli/dist/bin.js trust-root init --key acme-root-2026=<public-key> --key acme-release-2026=<public-key> \
+  --root-keys acme-root-2026 --channel-keys acme-release-2026 --expires-days 365
 node packages/cli/dist/bin.js lock ./acmecode/piship.yaml
 node packages/cli/dist/bin.js release ./acmecode/piship.yaml [--out <dir>] [--channel <name>] [--reclaim-staging]
 node packages/cli/dist/bin.js verify-release dist/releases/acmecode-1.1.0-linux-x64.tar.gz [--sha256 <hex>] [--json]
@@ -22,16 +26,20 @@ node packages/cli/dist/bin.js reproducibility <release-a> <release-b> [--out rep
 node packages/cli/dist/bin.js diff <before> <after> [--json]
 node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.0-linux-x64.tar.gz \
   --channel stable --key ~/keys/acme-release.pem --key-id acme-release-2026 [--previous-key <id>=<public-key>] [--sequence <n>] [--expires-days <n>]
+node packages/cli/dist/bin.js trust-root next ./channel --manifest ./acmecode/piship.yaml \
+  [--add-key <id>=<public-key>]... [--remove-key <id>]... [--channel-keys <ids>] [--root-keys <ids>] \
+  --expires-days 365 --sign acme-root-2026=/media/offline/acme-root.pem
 ```
 
 ## Building a release
 
-`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1alpha4` manifest, a current `piship.lock`, and package-registry access for the dependency scan. Static gates run first, before anything is assembled; each failure names its gate:
+`piship release <manifest>` runs on the target it builds for; cross-target builds are refused. It needs a `piship/v1alpha5` manifest, a current `piship.lock`, and package-registry access for the dependency scan. Static gates run first, before anything is assembled; each failure names its gate:
 
 | Gate | Stops the build when |
 | --- | --- |
 | `lock` | `piship.lock` is missing, stale, or does not match the manifest and resources (`LOCK_INVALID`) |
-| `schema` | The manifest is not `piship/v1alpha4` |
+| `schema` | The manifest is not `piship/v1alpha5` |
+| `trust` | `updates.source` is set without `updates.trust.bootstrap`, or a managed distribution's root and channel roles share a key (as a migrated v1alpha4 key set does) |
 | `target` | This machine's `<platform>-<arch>` is not in `release.targets`, has no installed lifecycle evidence in this PiShip version (only `linux-x64`, `darwin-arm64`, and `win32-x64` do), or differs from the requested target |
 | `pi` | The pinned Pi version is not in this PiShip build's compatibility matrix |
 | `source` | A locked package has no recorded source, comes from an origin outside `release.sources`, or has no `sha512` integrity in the npm lock |
@@ -40,7 +48,7 @@ node packages/cli/dist/bin.js sign-channel ./channel dist/releases/acmecode-1.1.
 | `certification` | A certified resource or capability provider has no certification evidence |
 | `sandbox` | `sandbox.required: true` and the target is not Linux or macOS (there is no Windows sandbox adapter) |
 
-`piship build` also runs the `source` and `install-script` gates on `piship/v1alpha4` locks, reported as `Build gate source` or `Build gate install-script`; `dev` and `test` do not.
+`piship build` also runs the `source` and `install-script` gates on `piship/v1alpha4` and `piship/v1alpha5` locks, reported as `Build gate source` or `Build gate install-script`; `dev` and `test` do not.
 
 PiShip then assembles the canonical payload with the same code as `piship build`, and runs the required tests on it with a throwaway state directory:
 
@@ -64,9 +72,12 @@ Releases are built only for `linux-x64` (Ubuntu), `darwin-arm64`, and `win32-x64
 
 Channel names, the channel directory layout, and how clients accept signed metadata are described in the [update lifecycle](update-lifecycle.md#channels-and-signed-metadata). The owner's commands:
 
-- `piship keygen <file> --id <key-id> [--force-in-worktree]` writes a new Ed25519 private key (PKCS#8 PEM, mode 0600, refusing to overwrite, and refusing a path inside a git work tree that is not git-ignored unless `--force-in-worktree` is given) and prints the `updates.trust.keys` entry and the key's `sha256:` fingerprint. Keep the private key out of the repository, CI logs, and the manifest; only the public key is pinned.
-- `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id>` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. It extends existing metadata only when its signature verifies with the signing key, a key pinned by a release being added, or the key given with `--previous-key <id>=<public-key>` (the `updates.trust.keys` entry of the key that signed it), and it replaces the metadata and signature each through a temporary file and a rename ([trust root](trust-root.md#channel-hosting)). The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution. `sign-channel` does not check that the key is pinned by the distribution; an update with an unpinned key fails.
-- Rotation: pin the new key next to the old one, ship a release with both, then sign with the new key and remove the old key in a later release. Key IDs are unique within `updates.trust.keys`.
+- `piship keygen <file> --id <key-id> [--encrypt [--passphrase-env <NAME> | --passphrase-stdin]] [--force-in-worktree]` writes a new Ed25519 private key (PKCS#8 PEM, mode 0600, encrypted with `--encrypt`, refusing to overwrite, and refusing a path inside a git work tree that is not git-ignored unless `--force-in-worktree` is given) and prints the public key and its `sha256:` fingerprint. Keep the private key out of the repository, CI logs, and the manifest; only the public key is pinned.
+- `piship trust-root init --key <id>=<public-key>... --root-keys <ids> --channel-keys <ids> [--root-threshold <n>] [--channel-threshold <n>] (--expires <timestamp> | --expires-days <n>)` validates a bootstrap root and prints the `updates.trust.bootstrap` block for `piship.yaml` with each key's fingerprint. It warns when the roles share a key, which a managed release refuses.
+- `piship trust-root next <update-source-dir> --manifest <piship.yaml> --sign <id>=<private-key-file>... [--add-key <id>=<public-key>]... [--remove-key <id>]... [--root-keys <ids>] [--channel-keys <ids>] [--root-threshold <n>] [--channel-threshold <n>] (--expires <timestamp> | --expires-days <n>)` verifies the chain from the manifest's bootstrap through `root/` in the directory, builds exactly the next version (a removed key leaves every role; a role keeps its keys and threshold unless given), signs it with every `--sign` key, requires the current and the new root-role thresholds, and only then writes `root/<N+1>.json.sig` and `root/<N+1>.json`. A wrong passphrase, failing signer, or unmet threshold writes nothing. Every required signature is collected in one run; partially signed roots are not supported.
+- `piship sign-channel <channel-dir> <archive>... --channel <name> --key <file> --key-id <id> [--key <file> --key-id <id>]...` verifies each archive with `verify-release`, copies it into the channel directory, adds or replaces its version and target entry while keeping the others, and writes and signs the metadata. With several keys, the first one's signature is the top-level signature (what v0.7 clients check) and all of them are in `signatures[]`. Before writing, it checks the signatures against the trust the releases declare: the channel role of the newest root in `<channel-dir>/root/` reached from their bootstrap, or for v1alpha4 releases the top-level signature against `updates.trust.keys`; it refuses signatures clients would refuse. It extends existing metadata only when its signature verifies with a signing key, a key of that declared trust, a key a release being added pins, or `--previous-key <id>=<public-key>`, and it replaces the metadata and signature each through a temporary file and a rename ([trust root](trust-root.md#channel-hosting)). The sequence defaults to the previous one plus one and must increase; `expires` defaults to 30 days. A channel belongs to one distribution.
+- Encrypted keys take their passphrase at a hidden prompt per key, from `--passphrase-env <NAME>` (one passphrase for all encrypted keys of the run), or from `--passphrase-stdin` (one encrypted key).
+- Rotation and revocation publish the next root ([key runbook](key-runbook.md)); a release lock never changes what installed clients trust.
 
 Key custody, a backup key, the first trust root a client installs, rotation timing, compromised and lost keys, channel hosting and atomic publish, and why a GitHub Release is not a signed channel are covered in [release trust root](trust-root.md).
 
@@ -77,12 +88,12 @@ This is the checklist for a distribution owner shipping a release of their own d
 Before anything is signed into a channel employees read:
 
 1. **Inputs.** `piship validate` passes and every `Warning:` is understood ([what validate checks](../enterprise-integration.md#running-the-cli-from-your-own-repository)); `piship.lock` is current and was reviewed in the change that committed it.
-2. **Review the change.** Run `piship diff` between the previous release and this one. Every `high` risk change (a trust key added or removed, a policy that loosens, a new endpoint, host, or provider) has a second reviewer, and the tests the report asks for were run.
+2. **Review the change.** Run `piship diff` between the previous release and this one. Every `high` risk change (a bootstrap key or role changed, a policy that loosens, a new endpoint, host, or provider) has a second reviewer, and the tests the report asks for were run.
 3. **Build on each target** with `piship release`, on a clean machine or CI runner per target in `release.targets`. Run `piship verify-release` on another machine, and, if you build twice, `piship reproducibility` on the two builds ([artifact contract](artifact-contract.md)).
 4. **Vulnerabilities.** Review `vulnerabilities.json`, and every `release.vulnerabilities.allow` exception: its reason still holds and its expiry is in the future.
 5. **Against your services.** Install the release on a test machine and run it against staging: `login`, `doctor`, `--smoke`, `logout`, with your broker and audit collector checked as in [testing your own broker and audit collector](../enterprise-integration.md#testing-your-own-broker-and-audit-collector). A managed release that requires sign-in is not smoke-tested by `piship release` itself.
-6. **Trust keys.** The lock pins exactly the keys you intend, normally a primary and a backup, and their fingerprints match your key record. A key change follows the [release key runbook](key-runbook.md).
-7. **Record** the commit, version, archive SHA-256 values, the keys the lock pins, and the approver.
+6. **Trust keys.** The bootstrap pins exactly the root and channel keys you intend (distinct for a managed distribution) and their fingerprints match your key record; the newest published root has not expired and expires well after this release. A key change follows the [release key runbook](key-runbook.md).
+7. **Record** the commit, version, archive SHA-256 values, the bootstrap root version, and the approver.
 8. **Approval** by the named release owner for this commit and these archives.
 9. **Stage it.** Sign the release into `candidate` first and let a pilot group update; then sign the same archives into `stable` (`sign-channel --channel stable`; the archive is not rebuilt), with a higher sequence. Publish the channel files in the order the [trust root page](trust-root.md#channel-hosting) gives, and re-sign each channel before its metadata expires (30 days by default).
 10. **Know the way back** before you need it: [company-wide rollback](key-runbook.md#company-wide-rollback).

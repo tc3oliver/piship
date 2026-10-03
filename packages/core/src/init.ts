@@ -49,7 +49,20 @@ ${projectTrust}`;
   return `${policy}# No MCP servers until they are declared and reviewed.
 mcp:
   mode: ${managed ? "allowlist" : "off"}
-# Set required: true to fail the launch when the OS sandbox is unavailable.
+${
+  managed
+    ? `  # Governed MCP: only listed servers start, and only their allowed tools
+  # are callable. Each also needs policy allow rules for mcp.server.start
+  # (the server ID) and mcp.tool.call (<server>:<tool>).
+  #   servers:
+  #     docs:
+  #       transport: streamable-http
+  #       url: https://mcp.example.internal/docs
+  #       tools:
+  #         allow: [search]
+`
+    : ""
+}# Set required: true to fail the launch when the OS sandbox is unavailable.
 sandbox:
   required: false
 audit:
@@ -60,20 +73,34 @@ ${
     - id: local
       type: file
       required: false
+  # A company collector: list its variable under variables, and set
+  # required: true to fail the launch when it is unreachable.
+  #   - id: collector
+  #     type: http
+  #     url: \${AUDIT_COLLECTOR_URL}
+  #     required: false
 `
     : `  enabled: false
 `
-}# Updates stay disabled until updates.source and updates.trust.keys are set.
+}# Updates stay disabled until updates.source and updates.trust.bootstrap are set.
 updates:
   channel: stable
   channels: [stable]
   rollback: true
 `;
 }
+/**
+ * Create a distribution repository from the personal template (the default)
+ * or the managed one. `personal` and `managed` are mutually exclusive.
+ */
 export function initDistribution(
   directory: string,
-  options: { managed?: boolean } = {},
+  options: { personal?: boolean; managed?: boolean } = {},
 ): string {
+  if (options.personal && options.managed)
+    throw new Error(
+      "Choose one of --personal or --managed: a distribution is either personal or managed.",
+    );
   const root = resolve(directory);
   if (existsSync(root) && readdirSync(root).length)
     throw new Error(`Directory is not empty: ${root}`);
@@ -99,10 +126,21 @@ runtime:
       join(root, "piship.yaml"),
       `${header}deployment:
   mode: managed
+# Company-specific endpoints are runtime variables: the lock never holds
+# them, and each must be set in the environment that starts the command
+# (piship validate lists them). Replace one with a fixed https URL to drop
+# the variable, and remove it from this list.
+#   ${prefix}_OIDC_ISSUER              OIDC issuer URL
+#   ${prefix}_OIDC_CLIENT_ID           public OIDC client ID (PKCE, no secret)
+#   ${prefix}_CREDENTIAL_BROKER_URL    credential broker endpoint
+#   ${prefix}_CREDENTIAL_REVOKE_URL    credential broker revoke endpoint
+#   ${prefix}_LLM_GATEWAY_URL          OpenAI-compatible LLM gateway base URL
+# The contract each service must follow: docs/enterprise-integration.md.
 variables:
   - ${prefix}_OIDC_ISSUER
   - ${prefix}_OIDC_CLIENT_ID
   - ${prefix}_CREDENTIAL_BROKER_URL
+  - ${prefix}_CREDENTIAL_REVOKE_URL
   - ${prefix}_LLM_GATEWAY_URL
 identity:
   mode: oidc
@@ -116,6 +154,7 @@ credential:
   provider: http-broker
   broker:
     endpoint: \${${prefix}_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: \${${prefix}_CREDENTIAL_REVOKE_URL}
   storage:
     provider: system
   refresh:
@@ -123,6 +162,10 @@ credential:
 inference:
   provider: openai-compatible
   baseUrl: \${${prefix}_LLM_GATEWAY_URL}
+  # openai-completions or openai-responses, whichever the gateway speaks.
+  api: openai-completions
+# The models people may use: replace example/coder with the gateway's model
+# IDs. Every allowed ID needs a catalog entry.
 models:
   default: example/coder
   allowed:
@@ -134,6 +177,12 @@ models:
       maxOutputTokens: 8192
       tools: true
 network:
+  # HTTP(S)_PROXY and NO_PROXY from the launch environment.
+  proxy:
+    inheritEnvironment: true
+  # A company CA bundle, an absolute path on each machine:
+  #   tls:
+  #     additionalCA: [/etc/ssl/certs/company-ca.pem]
   publicFallback: deny
 resources:
   instructions:

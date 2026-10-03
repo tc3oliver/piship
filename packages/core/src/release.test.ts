@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -26,7 +27,7 @@ import {
   currentTarget,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA3,
-  LOCK_SCHEMA_V1ALPHA4,
+  LOCK_SCHEMA_V1ALPHA5,
   lockManifest,
   PI_COMPATIBILITY,
   payloadInventory,
@@ -52,7 +53,7 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
-import { generateSigningKey, signBytes } from "./signing.js";
+import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -105,7 +106,34 @@ interface ProjectOptions {
   /** Replaces the default `resources:` section. */
   readonly resources?: string;
   readonly lock?: boolean;
+  /** A managed distribution with plain https access endpoints. */
+  readonly managed?: boolean;
+  /** Replaces the v1alpha5 `updates.trust` body (indented four spaces). */
+  readonly trust?: string;
 }
+
+const COMPANY_RESOURCES = `resources:
+  instructions:
+    company: [./resources/AGENTS.md]
+`;
+const MANAGED_ACCESS = `identity:
+  mode: oidc
+  oidc:
+    issuer: https://login.acme.example
+    clientId: acmepi
+    redirectUri: http://127.0.0.1:8765/callback
+credential:
+  provider: http-broker
+  broker: { endpoint: https://broker.acme.example/token }
+inference:
+  provider: openai-compatible
+  baseUrl: https://gateway.acme.example/v1
+models:
+  default: acme/coder
+  allowed: [acme/coder]
+  catalog:
+    acme/coder: { name: Acme Coder, contextWindow: 128000, maxOutputTokens: 8192 }
+`;
 
 const DEFAULT_RELEASE = `release:
   vulnerabilities:
@@ -116,10 +144,26 @@ const DEFAULT_RELEASE = `release:
         expires: 2026-12-31
 `;
 
+/** `updates.trust` YAML whose root and channel roles are `keys` at threshold 1. */
+function bootstrapTrust(
+  keys: readonly { id: string; publicKey: string }[],
+): string {
+  const ids = keys.map((key) => key.id).join(", ");
+  return `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+${keys.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicKey}\n`).join("")}      roles:
+        root: { keyIds: [${ids}], threshold: 1 }
+        channel: { keyIds: [${ids}], threshold: 1 }
+`;
+}
+
 function manifestSource(options: ProjectOptions = {}): string {
   const id = options.id ?? "acmepi";
-  const schema = options.schema ?? "piship/v1alpha4";
-  const v4 = schema === "piship/v1alpha4";
+  const schema = options.schema ?? "piship/v1alpha5";
+  const v5 = schema === "piship/v1alpha5";
+  const v4 = schema === "piship/v1alpha4" || v5;
   return `schema: ${schema}
 app:
   id: ${id}
@@ -129,8 +173,8 @@ app:
 runtime:
   pi: "1.0.0"
 deployment:
-  mode: personal
-${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
+  mode: ${options.managed ? "managed" : "personal"}
+${options.managed ? MANAGED_ACCESS : ""}${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
   options.resources ??
   `resources:
   instructions:
@@ -144,10 +188,25 @@ ${v4 ? "variables:\n  - ACMEPI_UPDATE_SOURCE\n" : ""}${
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: true
   trust:
-    keys:
+${
+  options.trust !== undefined
+    ? options.trust
+    : v5
+      ? `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [${KEY.id}], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`
+      : `    keys:
       - id: ${KEY.id}
         publicKey: ${KEY.publicKey}
-${options.release ?? DEFAULT_RELEASE}`
+`
+}${options.release ?? DEFAULT_RELEASE}`
     : ""
 }${options.extra ?? ""}`;
 }
@@ -336,14 +395,15 @@ async function withNpmLock<T>(
 
 // --------------------------------------------------------------------- lock
 
-describe("lock piship-lock/v1alpha4", () => {
+describe("lock piship-lock/v1alpha5", () => {
   it("is deterministic and records sources, digests, updates, release, and state schemas", () => {
     const { path } = project({ lock: false });
     const first = readFileSync(lockManifest(path), "utf8");
     const second = readFileSync(lockManifest(path), "utf8");
     expect(second).toBe(first);
     const lock = requireCurrentLock(path);
-    expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA4);
+    expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA5);
+    expect(lock.manifest.sha256).toMatch(/^sha256-[0-9a-f]{64}$/);
     expect(lock.runtime.stateSchemas).toEqual(STATE_SCHEMAS);
     for (const item of lock.runtime.packages) {
       expect(item.resolved).toMatch(/^https:\/\//);
@@ -374,7 +434,17 @@ describe("lock piship-lock/v1alpha4", () => {
       channels: ["stable", "candidate"],
       source: `\${ACMEPI_UPDATE_SOURCE}`,
       rollback: true,
-      trust: { keys: TRUSTED },
+      trust: {
+        bootstrap: {
+          version: 1,
+          expires: "2099-01-01T00:00:00Z",
+          keys: TRUSTED,
+          roles: {
+            root: { keyIds: [KEY.id], threshold: 1 },
+            channel: { keyIds: [KEY.id], threshold: 1 },
+          },
+        },
+      },
     });
     expect(lock.release).toEqual({
       targets: ["linux-x64", "darwin-arm64", "win32-x64"],
@@ -506,9 +576,9 @@ it.runIf(process.env.CI === "true")(
 );
 
 describe.runIf(HOST_EVIDENCED)("release gates", () => {
-  it("accepts a current v1alpha4 lock with only reviewed install scripts", () => {
+  it("accepts a current v1alpha5 lock with only reviewed install scripts", () => {
     const { path } = project();
-    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA4);
+    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA5);
   });
 
   it("lock: refuses a stale lock after a resource edit", () => {
@@ -542,6 +612,65 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     const error = caught(() => checkReleaseInputs(path));
     expect(error.code).toBe("CONFIG_INVALID");
     expect(error.message).toMatch(/Release gate schema: .*piship\/v1alpha3/);
+  });
+
+  it("schema: refuses a v1alpha4 manifest; v0.8 releases need v1alpha5", () => {
+    const { path } = project({ schema: "piship/v1alpha4" });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(
+      /Release gate schema: production releases need a piship\/v1alpha5 manifest \(found piship\/v1alpha4\)/,
+    );
+  });
+
+  it("trust: refuses an update source without bootstrap trust", () => {
+    const { path } = project({ trust: "    {}\n" });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("CONFIG_INVALID");
+    expect(error.message).toMatch(
+      /Release gate trust: updates.source is set without updates.trust.bootstrap/,
+    );
+  });
+
+  it("trust: refuses a managed distribution whose root and channel roles share a key", () => {
+    // What piship migrate makes of a v1alpha4 key set: the legacy key in
+    // both roles. The owner must split the roles before a managed release.
+    const { path } = project({ managed: true, resources: COMPANY_RESOURCES });
+    const error = caught(() => checkReleaseInputs(path));
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toMatch(
+      new RegExp(
+        `Release gate trust: the update root and channel roles share ${KEY.id}`,
+      ),
+    );
+  });
+
+  it("trust: accepts a managed distribution with distinct root and channel keys", () => {
+    const root = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "der" })
+      .toString("base64");
+    const { path } = project({
+      managed: true,
+      resources: COMPANY_RESOURCES,
+      trust: `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: acme-root
+          publicKey: ${root}
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [acme-root], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`,
+    });
+    expect(checkReleaseInputs(path).schema).toBe(LOCK_SCHEMA_V1ALPHA5);
+  });
+
+  it("trust: accepts a personal distribution whose roles share a key", () => {
+    const { path } = project();
+    expect(checkReleaseInputs(path).deployment.mode).toBe("personal");
   });
 
   it("target: refuses a target outside release.targets", () => {
@@ -1713,8 +1842,8 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
           lifecycle: PI_COMPATIBILITY["1.0.0"]?.lifecycle,
         },
       },
-      manifestSchema: "piship/v1alpha4",
-      lockSchema: LOCK_SCHEMA_V1ALPHA4,
+      manifestSchema: "piship/v1alpha5",
+      lockSchema: LOCK_SCHEMA_V1ALPHA5,
       target,
       channel: "stable",
       created: "2026-01-01T00:00:00Z",
@@ -2187,20 +2316,92 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         );
   });
 
+  it("rejects a faulty signer before publishing and changes no files", async () => {
+    const { dir, channelDir, built } = await channel();
+    // Every file under the channel directory and the fresh one, with bytes.
+    const snapshot = () =>
+      [channelDir, join(dir, "fresh")].map((root) =>
+        existsSync(root)
+          ? readdirSync(root)
+              .sort()
+              .map((name) => [name, readFileSync(join(root, name))])
+          : null,
+      );
+    const before = snapshot();
+    expect(before[1]).toBeNull();
+    const next = project({ version: "1.1.0" });
+    const added = await build(next.path, { outputRoot: join(dir, "next") });
+    const faulty = (sign: () => Promise<Uint8Array>) => ({
+      keyId: KEY.id,
+      algorithm: "ed25519" as const,
+      publicKey: KEY.publicKey,
+      sign,
+    });
+    for (const signer of [
+      faulty(async () => new Uint8Array(64)),
+      faulty(async () => {
+        throw new Error("hardware token unplugged");
+      }),
+    ])
+      for (const directory of [channelDir, join(dir, "fresh")]) {
+        const error = await rejection(
+          signChannel({
+            directory,
+            channel: "stable",
+            archives: [built.archive, added.archive],
+            signer,
+          }),
+        );
+        expect(error.code).toBe("INTEGRITY_FAILED");
+        expect(error.message).not.toContain("unplugged");
+        expect(snapshot()).toEqual(before);
+      }
+  });
+
+  it("publishes with an encrypted key through a PEM signer", async () => {
+    const encrypted = generateSigningKey(KEY.id, { passphrase: "hunter2" });
+    const { dir, path } = project({ trust: bootstrapTrust([encrypted]) });
+    const built = await build(path);
+    const channelDir = join(dir, "channel");
+    const signed = await signChannel({
+      directory: channelDir,
+      channel: "stable",
+      archives: [built.archive],
+      signer: pemSigner({
+        keyId: KEY.id,
+        privateKeyPem: encrypted.privateKeyPem,
+        passphrase: "hunter2",
+      }),
+      now: () => new Date("2026-06-01T00:00:00Z"),
+    });
+    const read = await readChannel(channelDir, "stable", {
+      distribution: "acmepi",
+      trusted: [{ id: KEY.id, publicKey: encrypted.publicKey }],
+      now: () => new Date("2026-06-02T00:00:00Z"),
+    });
+    expect(read.metadata).toEqual(signed.metadata);
+    expect(
+      JSON.parse(readFileSync(join(channelDir, "stable.json.sig"), "utf8")),
+    ).not.toHaveProperty("signatures");
+  });
+
   it("extends existing metadata only when its signature verifies", async () => {
-    const { channelDir, built } = await channel();
+    const { channelDir, built: first } = await channel();
     const path = join(channelDir, "stable.json");
+    // A release whose channel role also trusts the next key.
+    const next = generateSigningKey("test-release-next");
+    const overlap = project({ trust: bootstrapTrust([KEY, next]) });
+    const both = await build(overlap.path);
     const resign = (key = KEY) =>
       signChannel({
         directory: channelDir,
         channel: "stable",
-        archives: [built.archive],
+        archives: [key === KEY ? first.archive : both.archive],
         privateKeyPem: key.privateKeyPem,
         keyId: key.id,
       });
     // Rotation: a new signing key may extend metadata signed by a key the
     // added release pins.
-    const next = generateSigningKey("test-release-next");
     expect((await resign(next)).metadata.sequence).toBe(2);
     // Metadata signed by a key neither the signer nor the release vouches
     // for is refused.
@@ -2227,7 +2428,7 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
     const back = await signChannel({
       directory: channelDir,
       channel: "stable",
-      archives: [built.archive],
+      archives: [first.archive],
       privateKeyPem: KEY.privateKeyPem,
       keyId: KEY.id,
       previousKeys: [{ id: next.id, publicKey: next.publicKey }],

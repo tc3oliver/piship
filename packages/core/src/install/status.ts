@@ -1,6 +1,7 @@
 // Installed lifecycle status for doctor.
 import { existsSync, readdirSync } from "node:fs";
 import type { DistributionLock } from "../index.js";
+import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import {
   appDirectory,
@@ -8,6 +9,7 @@ import {
   type InstallReceipt,
 } from "./receipt.js";
 import { runtimeLeases } from "./runtime-lease.js";
+import { readTrustState, type UpdateTrustState } from "./trust-state.js";
 
 export interface LifecycleStatus {
   readonly installed: boolean;
@@ -17,14 +19,27 @@ export interface LifecycleStatus {
   readonly channel?: string;
   readonly channels?: readonly string[];
   readonly source?: string;
-  /** Pinned keys the installation has not retired. */
+  /** Channel keys the installation trusts. */
   readonly trustedKeys?: number;
-  /** Every key the active lock pins; `retiredBy` names the retiring release. */
+  /**
+   * The channel keys of the installation's update root (or, before it has
+   * one, the active lock's), then keys taken out of the channel role;
+   * `retiredBy` names the retiring root version or v0.7 release.
+   */
   readonly keys?: readonly {
     readonly id: string;
     readonly fingerprint: string;
     readonly retiredBy?: string;
   }[];
+  /** The installation's current update root. */
+  readonly updateRoot?: {
+    readonly version: number;
+    readonly expires: string;
+    readonly origin: UpdateTrustState["origin"];
+    readonly channelThreshold: number;
+  };
+  /** Why the update trust state cannot be used; update fails closed. */
+  readonly trustProblem?: string;
   readonly rollback?: boolean;
   readonly fromRelease?: boolean;
   readonly lastCheck?: InstallReceipt["lastCheck"];
@@ -56,17 +71,47 @@ export function lifecycleStatus(
   const active = receipt.releases.find(
     (item) => item.version === receipt.active,
   );
-  const keys = (lock.updates?.trust.keys ?? []).map((key) => {
-    const fingerprint = keyFingerprint(key.publicKey);
-    const retired = receipt.retiredKeys?.find(
-      (item) => item.fingerprint === fingerprint,
-    );
-    return {
-      id: key.id,
-      fingerprint,
-      ...(retired ? { retiredBy: retired.release } : {}),
-    };
-  });
+  let trust: UpdateTrustState | undefined;
+  let trustProblem: string | undefined;
+  try {
+    trust = readTrustState(id);
+    if (!trust && receipt.trustState) trustProblem = "missing";
+  } catch (error) {
+    trustProblem = error instanceof Error ? error.message : String(error);
+  }
+  const keys: {
+    id: string;
+    fingerprint: string;
+    retiredBy?: string;
+  }[] = trust
+    ? [
+        ...trust.root.roles.channel.keyIds.flatMap((keyId) =>
+          trust.root.keys
+            .filter((key) => key.id === keyId)
+            .map((key) => ({
+              id: key.id,
+              fingerprint: keyFingerprint(key.publicKey),
+            })),
+        ),
+        ...trust.removedKeys
+          .filter((key) => key.role === "channel")
+          .map((key) => ({
+            id: key.id,
+            fingerprint: key.fingerprint,
+            retiredBy: `root ${key.version}`,
+          })),
+      ]
+    : channelTrustFromLock(lock).map((key) => {
+        const fingerprint = keyFingerprint(key.publicKey);
+        const retired = receipt.retiredKeys?.find(
+          (item) => item.fingerprint === fingerprint,
+        );
+        return {
+          id: key.id,
+          fingerprint,
+          ...(retired ? { retiredBy: retired.release } : {}),
+        };
+      });
   // The process asking (doctor runs in a launcher that holds a lease) is
   // not another session.
   const leases = runtimeLeases(id).filter((lease) => !lease.self);
@@ -90,6 +135,17 @@ export function lifecycleStatus(
           ...(lock.updates.source ? { source: lock.updates.source } : {}),
           trustedKeys: keys.filter((key) => !key.retiredBy).length,
           keys,
+          ...(trust
+            ? {
+                updateRoot: {
+                  version: trust.root.version,
+                  expires: trust.root.expires,
+                  origin: trust.origin,
+                  channelThreshold: trust.root.roles.channel.threshold,
+                },
+              }
+            : {}),
+          ...(trustProblem ? { trustProblem } : {}),
           rollback: lock.updates.rollback,
         }
       : {}),

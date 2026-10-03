@@ -6,9 +6,22 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 v0.7.1 is the production-validation baseline: tag `v0.7.1` at commit `bd4bc09`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) with six attested archives, Pi 0.87.1, and the schemas `piship/v1alpha4` and `piship-lock/v1alpha4`. A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v071-production-validation-baseline) of the status page; changes on `main` since then are under `Unreleased` in the [changelog](../CHANGELOG.md). They include the upgrade to Pi 1.0.0, which completes the Pi upgrade review ([#176](https://github.com/tc3oliver/piship/issues/176)): the new `AssistantMessage.thinkingLevel` field is classified, and the governance review of Pi's built-in MCP, codemode, tool search, and llama extensions found that a PiShip session loads none of them ([compatibility](compatibility.md#upgrade-to-pi-100)).
 
+## v0.8.0 — pre-production trust & validation hardening (release candidate)
+
+v0.8.0 is the final planned architecture-hardening milestone before PiShip is tested against a real company identity provider, credential broker, LLM gateway, proxy and enterprise CA, endpoint controls, and update path. It is a release candidate and not released: until a Release qualification passes on its exact commit and it is published as a pre-release, v0.7.1 stays the production-validation baseline. It freezes the contracts that are expensive to change once real installations exist:
+
+- **Update trust.** Manifest `piship/v1alpha5` and `piship-lock/v1alpha5`, with a bootstrap trust root that separates a root role from a channel role, each with a threshold. Older manifests stay inspectable and migratable.
+- **Installation trust state.** The current update root is installation state, monotonic and written atomically, advanced by a root refresh before any channel is verified. A release lock or a rollback cannot lower it.
+- **Signatures, rotation, and revocation.** Multi-signature channel metadata that keeps the v0.7 top-level signature, planned root-key rotation, and emergency channel-key revocation.
+- **Signer hardening.** Encrypted Ed25519 PEM signing keys, behind an internal signer boundary that leaves room for a later KMS or HSM adapter.
+- **Setup.** Explicit `piship init --personal` and `--managed`, with the personal and the managed path equally covered by the agent-assisted setup.
+- **Production validation.** The [protocol](production-validation.md) and its de-identified evidence form.
+
+This is the work behind signed channel hardening ([#181](https://github.com/tc3oliver/piship/issues/181)). The project still operates no update channel of its own. Not part of v0.8.0: a `data` lifecycle section, `resources.packages`, a public external-signer protocol, vendor KMS or HSM integrations, full TUF compatibility, a registry, a Windows sandbox, remote workspace synchronization, new enforcement hooks, code signing, and npm publication. No further manifest, lock, or update-trust redesign is planned before production evidence exists; that evidence decides what changes next.
+
 ## Production validation
 
-The first production consumer validates the managed path of a real company distribution on v0.7.1. That evidence is collected downstream, with the owner's approval, and summarized on the status page without identifiers ([distribution qualification](status.md#distribution-qualification)).
+The first production consumer validates the managed path of a real company distribution on v0.7.1; v0.8.0 is meant to replace it as the baseline once it is qualified and published. The steps to run, and the only facts a report may carry, are in the [production validation protocol](production-validation.md). That evidence is collected downstream, with the owner's approval, and summarized on the status page without identifiers ([distribution qualification](status.md#distribution-qualification)).
 
 So far the project has manual real-provider evidence for the reference stack only ([Live provider runs](status.md#after-v071-on-main)). Validation against a real company identity provider and company gateway in production does not exist yet; it is what this stage is for. Fixes that production validation needs go to `main` and reach the consumer in a later qualified release, never by tracking `main`.
 
@@ -16,7 +29,7 @@ So far the project has manual real-provider evidence for the reference stack onl
 
 These must be resolved before PiShip is rolled out broadly, beyond production validation:
 
-- **Signed channel hardening ([#181](https://github.com/tc3oliver/piship/issues/181)).** Time-bounded key validity, revocation before activation, multiple signatures per channel, and signer hardening. A broad rollout that relies on a signed update channel needs these; see the [trust root gaps](release/trust-root.md#gaps-and-follow-ups).
+- **Signed channel hardening ([#181](https://github.com/tc3oliver/piship/issues/181)).** Time-bounded key validity, revocation before activation, multiple signatures per channel, and signer hardening. A broad rollout that relies on a signed update channel needs these; see the [trust root gaps](release/trust-root.md#gaps-and-follow-ups). v0.8.0 (the release candidate, above) is the work that closes it, so it stays on this list until v0.8.0 is released.
 - **The `brace-expansion` exception ([#129](https://github.com/tc3oliver/piship/issues/129)).** The reviewed vulnerability exception for the version Pi pins (5.0.9 in both 0.87.1 and 1.0.0) expires on 2026-12-31, after which the release vulnerability gate fails again. It goes when upstream Pi ships a fixed version.
 - **Upstream Pi gaps ([#64](https://github.com/tc3oliver/piship/issues/64), [#139](https://github.com/tc3oliver/piship/issues/139)).** A user's `!` command output still goes through Pi's own temp file, and Pi still adds its `/bug` hint to a PiShip identity or credential failure in the TUI. Pi 1.0 also keeps its "π" terminal title, its `pi --session-dir` exit hint, and the built-in `/share` command, which uploads the session file as a GitHub gist through the user's `gh` CLI ([security](security.md#limits)). Each needs a public Pi API or a Pi change; PiShip does not patch Pi.
 
@@ -24,8 +37,8 @@ These must be resolved before PiShip is rolled out broadly, beyond production va
 
 Candidates, not scheduled:
 
-- A `piship/v1alpha5` schema: a `data` section for retention and purge policy, `app.configDir` and branding, a `policy.userRules` field, `resources.packages`, and a `tests` section.
-- A unified lock format: a `sha256-` prefixed, canonical manifest digest, and capabilities that record the contract actually selected.
+- A schema revision after `piship/v1alpha5`, driven by production evidence: a `data` section for retention and purge policy, `app.configDir` and branding, a `policy.userRules` field, `resources.packages` (Pi packages come from npm, git, and local sources, so a local-only schema would be incomplete), and a `tests` section.
+- Lock capabilities that record the contract actually selected, if the provider evidence the governance lock already carries proves not to be enough. The `sha256-` prefixed, canonical manifest digest is part of `piship-lock/v1alpha5` in v0.8.0.
 - A `registry/` directory and additional certification metadata.
 - The remaining git control-file hardening listed in [security](security.md#limits).
 - macOS and Windows code signing, and a Windows sandbox adapter.

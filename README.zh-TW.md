@@ -110,7 +110,7 @@ agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以
 <summary><b>展開 piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha4
+schema: piship/v1alpha5
 
 app:
   id: acmecode
@@ -182,7 +182,7 @@ updates:
 
 裡面不放任何機密，看起來像機密的欄位會被 schema 直接擋掉。政策、資源、MCP server、稽核和發版關卡都是選填。所有欄位都在 [manifest 說明](docs/manifest.md)。
 
-要做自己的發行版，執行 `node packages/cli/dist/bin.js init ./my-agent --managed`（個人用就不加 `--managed`），放在自己的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。
+要做自己公司的發行版，執行 `node packages/cli/dist/bin.js init ./company-agent --managed`，放在自己的 repository，接下來看 [從自己的 repository 執行 CLI](docs/enterprise-integration.md#running-the-cli-from-your-own-repository)。每個要填的值，[設定指南](docs/agent-setup.md) 都有說明。
 
 ## 不是公司也能用
 
@@ -194,7 +194,7 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
-見 [personal 範例](examples/personal/README.md)。
+要做自己的，執行 `node packages/cli/dist/bin.js init ./my-agent --personal`。見 [personal 範例](examples/personal/README.md) 和 [設定指南](docs/agent-setup.md)。
 
 ## 各自負責什麼
 
@@ -210,7 +210,8 @@ agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。
 
 PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還沒：
 
-- **v0.7.1** 是[正式環境驗證的基準版本](docs/status.md#v071-production-validation-baseline)，用 Pi 0.87.1，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) 上有六份附 attestation 的 archive。**`main`** 已經改用 Pi 1.0.0（[changelog](CHANGELOG.md)）。
+- **v0.7.1** 是[正式環境驗證的基準版本](docs/status.md#v071-production-validation-baseline)，用 Pi 0.87.1，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) 上有六份附 attestation 的 archive。
+- **v0.8.0** 是下一個基準版本的[候選版](docs/status.md#v080-release-candidate)，用 Pi 1.0.0：`piship/v1alpha5`、安裝層級的 update trust root 與 root refresh，以及多重簽章的 channel（[changelog](CHANGELOG.md)）。尚未打 tag；在 v0.8.0 通過 qualification 並發佈之前，基準版本仍是 v0.7.1。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
 - 還沒驗證過：真實公司正式環境的 IdP 或 gateway；實際部署的 E2B、CubeSandbox 或 Kubernetes Agent Sandbox；Windows 的本機沙箱（Windows 請改用遠端沙箱）。

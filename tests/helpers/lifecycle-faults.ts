@@ -113,7 +113,7 @@ network:
 `;
 
 function manifestSource(version: string, access: boolean): string {
-  return `schema: piship/v1alpha4
+  return `schema: piship/v1alpha5
 app:
   id: ${ID}
   name: AcmePi
@@ -134,9 +134,15 @@ updates:
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: true
   trust:
-    keys:
-      - id: ${KEY.id}
-        publicKey: ${KEY.publicKey}
+    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [${KEY.id}], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
 `;
 }
 

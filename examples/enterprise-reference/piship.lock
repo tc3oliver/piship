@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha4",
+  "schema": "piship-lock/v1alpha5",
   "manifest": {
-    "schema": "piship/v1alpha4",
-    "sha256": "69b5ad8b6c53506e02d383a4429b8fad168d141db4bae0407b6ff1cc01ef3881"
+    "schema": "piship/v1alpha5",
+    "sha256": "sha256-5f31b805807b1cea0b56a3a0c681c77254a05bc8270088980ad05d499ea8cd4a"
   },
   "app": {
     "id": "acmecode-reference",
@@ -17,8 +17,8 @@
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.0.0",
-    "pishipVersion": "0.7.1",
-    "npmLockSha256": "390cbf58ef553e81ee5c1324f095c97f9153a27b1405ea8cf1c12673d75f9e3f",
+    "pishipVersion": "0.8.0",
+    "npmLockSha256": "d7de84073d65782e79b9b0b2b212ec84ef692d78d412b8d4f48e2348de01392c",
     "packages": [
       {
         "path": "node_modules/@earendil-works/pi-coding-agent",
@@ -1409,9 +1409,7 @@
     ],
     "source": "${ACMECODE_UPDATE_SOURCE}",
     "rollback": true,
-    "trust": {
-      "keys": []
-    }
+    "trust": {}
   },
   "release": {
     "targets": [

@@ -79,11 +79,24 @@ interface UpdatesLock {
   readonly source?: string;
   readonly rollback?: boolean;
   readonly trust?: {
-    readonly keys?: readonly {
-      readonly id: string;
-      readonly publicKey: string;
-    }[];
+    readonly keys?: readonly TrustKeyLock[];
+    /** v1alpha5 bootstrap update root. */
+    readonly bootstrap?: {
+      readonly version?: number;
+      readonly expires?: string;
+      readonly keys?: readonly TrustKeyLock[];
+      readonly roles?: Readonly<
+        Record<
+          string,
+          { readonly keyIds?: readonly string[]; readonly threshold?: number }
+        >
+      >;
+    };
   };
+}
+interface TrustKeyLock {
+  readonly id: string;
+  readonly publicKey: string;
 }
 interface ReleaseLock {
   readonly targets?: readonly string[];

@@ -5,7 +5,7 @@ import { parseDocument } from "yaml";
 import { describe, expect, it } from "vitest";
 import {
   ManifestError,
-  PISHIP_SCHEMA_V1ALPHA4,
+  PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_VERSION,
   parseManifest,
   parseManifestHeader,
@@ -164,7 +164,7 @@ describe("secret-looking values", () => {
   it("accepts both shipped examples", () => {
     expect(readManifest(example("personal")).app.id).toBe("mypi");
     expect(readManifest(example("demo-company")).schema).toBe(
-      PISHIP_SCHEMA_V1ALPHA4,
+      PISHIP_SCHEMA_V1ALPHA5,
     );
   });
 });

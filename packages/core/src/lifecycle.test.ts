@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
+import type { UpdateRoot } from "@piship/schema";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
@@ -30,10 +32,13 @@ import {
   EVIDENCED_TARGETS,
   formatInspection,
   inspection,
+  isTestCreatedState,
   lockManifest,
   payloadInventory,
   type requireCurrentLock,
+  testStateMarker,
   verifyPayload,
+  withTestState,
 } from "./index.js";
 import {
   holdRuntimeLease,
@@ -48,12 +53,21 @@ import {
   uninstallDistribution,
 } from "./install/index.js";
 import { readStateMarker } from "./migration.js";
+import { readTrustState, trustStatePath } from "./install/trust-state.js";
 import {
   buildRelease,
   type CommandResult,
+  hostedRootText,
   signChannel,
 } from "./release/index.js";
-import { generateSigningKey, keyFingerprint } from "./signing.js";
+import {
+  buildSignatureEnvelope,
+  generateSigningKey,
+  keyFingerprint,
+  pemSigner,
+  signBytes,
+  signVerified,
+} from "./signing.js";
 import {
   repairDistribution,
   rollbackDistribution,
@@ -113,6 +127,7 @@ function manifestSource(
   rollback: boolean,
   storage?: "file" | "system",
   keys: readonly Key[] = [KEY],
+  rootKeys: readonly Key[] = keys,
 ): string {
   // With a storage provider, a personal access section whose runtime
   // credential (a local secret) lives in that store.
@@ -136,7 +151,13 @@ models:
       tools: true
 `
     : "";
-  return `schema: piship/v1alpha4
+  const ids = keys.map((key) => key.id).join(", ");
+  const rootIds = rootKeys.map((key) => key.id).join(", ");
+  const listed = [
+    ...keys,
+    ...rootKeys.filter((key) => !keys.some((other) => other.id === key.id)),
+  ];
+  return `schema: piship/v1alpha5
 app:
   id: ${ID}
   name: AcmePi
@@ -157,8 +178,14 @@ updates:
   source: \${ACMEPI_UPDATE_SOURCE}
   rollback: ${rollback}
   trust:
-    keys:
-${keys.map((key) => `      - id: ${key.id}\n        publicKey: ${key.publicKey}\n`).join("")}`;
+    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+${listed.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicKey}\n`).join("")}      roles:
+        root: { keyIds: [${rootIds}], threshold: 1 }
+        channel: { keyIds: [${ids}], threshold: 1 }
+`;
 }
 
 function project(
@@ -166,11 +193,15 @@ function project(
   rollback = true,
   storage?: "file" | "system",
   keys?: readonly Key[],
+  rootKeys?: readonly Key[],
 ): string {
   const dir = temp("piship-project-");
   write(join(dir, "resources", "AGENTS.md"), `# AcmePi ${version}\n`);
   const path = join(dir, "piship.yaml");
-  writeFileSync(path, manifestSource(version, rollback, storage, keys));
+  writeFileSync(
+    path,
+    manifestSource(version, rollback, storage, keys, rootKeys),
+  );
   lockManifest(path);
   return path;
 }
@@ -264,8 +295,9 @@ async function release(
   rollback = true,
   storage?: "file" | "system",
   keys?: readonly Key[],
+  rootKeys?: readonly Key[],
 ) {
-  const path = project(version, rollback, storage, keys);
+  const path = project(version, rollback, storage, keys, rootKeys);
   return buildRelease(path, {
     outputRoot: join(dirname(path), "dist"),
     assemble: fakeAssemble,
@@ -479,7 +511,7 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     // Staging is gone; the state directory is not created by install.
     expect(
       readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
-    ).toEqual(["apps", "receipts"]);
+    ).toEqual(["apps", "receipts", "trust"]);
     expect(lifecycleStatus(ID, verifyPayload(payload))).toEqual({
       installed: true,
       tracked: true,
@@ -489,6 +521,12 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       source: `\${ACMEPI_UPDATE_SOURCE}`,
       trustedKeys: 1,
       keys: [{ id: KEY.id, fingerprint: keyFingerprint(KEY.publicKey) }],
+      updateRoot: {
+        version: 1,
+        expires: "2099-01-01T00:00:00Z",
+        origin: "bootstrap",
+        channelThreshold: 1,
+      },
       rollback: true,
       fromRelease: true,
       leftovers: [],
@@ -635,6 +673,43 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     });
   });
 
+  it("adopts state that a pre-install test launch created, once", async () => {
+    const a = await release("1.0.0");
+    // `piship test` launches the payload, which creates the state.
+    withTestState({ value: ID }, () =>
+      mkdirSync(stateDir(), { recursive: true }),
+    );
+    expect(isTestCreatedState({ value: ID })).toBe(true);
+    await expect(installDistribution(a.archive)).resolves.toMatchObject({
+      active: "1.0.0",
+    });
+    // The install owns the state now; it is not test-created any more.
+    expect(existsSync(testStateMarker({ value: ID }))).toBe(false);
+    uninstallDistribution(ID);
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+  });
+
+  it("still refuses state that existed before a test launch", async () => {
+    const a = await release("1.0.0");
+    mkdirSync(stateDir(), { recursive: true });
+    withTestState({ value: ID }, () => undefined);
+    expect(existsSync(testStateMarker({ value: ID }))).toBe(false);
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+    // A marker naming another distribution is not this one's.
+    writeFileSync(
+      testStateMarker({ value: ID }),
+      JSON.stringify({ schema: "piship-test-state/v1", id: "other" }),
+    );
+    await expect(installDistribution(a.archive)).rejects.toThrow(
+      /State already exists for acmepi/,
+    );
+    expect(apps()).toEqual([]);
+  });
+
   it("recovers a marked first install interrupted before its receipt", async () => {
     const a = await release("1.0.0");
     mkdirSync(appsDir(), { recursive: true });
@@ -726,7 +801,7 @@ await installDistribution(artifact);
       // Nothing of the killed install is left behind, and uninstall works.
       expect(
         readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
-      ).toEqual(["apps", "receipts"]);
+      ).toEqual(["apps", "receipts", "trust"]);
       uninstallDistribution(ID);
       expect(existsSync(appsDir())).toBe(false);
       expect(existsSync(receipt.commandPath)).toBe(false);
@@ -1306,136 +1381,393 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(readInstallReceipt(ID).channelSequences).toEqual({ stable: 2 });
   });
 
-  // The trusted keys are the active release's locked updates.trust.keys, so
-  // a rotation's overlap window is the releases that pin both keys.
-  it("rotates the release key through an overlap release and then refuses the retired key", async () => {
+  // Update trust is installation state: a verified root refresh changes it;
+  // activating a release, rolling back, or a release lock never does.
+  const ROOT = generateSigningKey("test-root");
+  function rootBody(
+    version: number,
+    channel: readonly Key[],
+    rootKeys: readonly Key[] = [ROOT],
+    expires = "2099-01-01T00:00:00Z",
+  ): UpdateRoot {
+    const keys = [
+      ...rootKeys,
+      ...channel.filter(
+        (key) => !rootKeys.some((other) => other.id === key.id),
+      ),
+    ];
+    return {
+      version,
+      expires,
+      keys: keys.map((key) => ({ id: key.id, publicKey: key.publicKey })),
+      roles: {
+        root: { keyIds: rootKeys.map((key) => key.id), threshold: 1 },
+        channel: { keyIds: channel.map((key) => key.id), threshold: 1 },
+      },
+    };
+  }
+  /** Publish `root/<version>.json` and its signature as trust-root next does. */
+  async function publishRoot(
+    dir: string,
+    body: UpdateRoot,
+    signers: readonly (typeof KEY)[],
+  ): Promise<void> {
+    const text = Buffer.from(hostedRootText(ID, body));
+    const entries = [];
+    for (const key of signers)
+      entries.push(
+        await signVerified(
+          pemSigner({ keyId: key.id, privateKeyPem: key.privateKeyPem }),
+          text,
+        ),
+      );
+    write(join(dir, "root", `${body.version}.json`), text.toString());
+    write(
+      join(dir, "root", `${body.version}.json.sig`),
+      JSON.stringify(buildSignatureEnvelope(entries)),
+    );
+  }
+  /** Re-sign the published channel at the next sequence, as a holder of `key` could. */
+  function forgeChannel(dir: string, key: typeof KEY): void {
+    const path = join(dir, "stable.json");
+    const metadata = JSON.parse(readFileSync(path, "utf8"));
+    metadata.sequence += 1;
+    const text = `${JSON.stringify(metadata, null, 2)}\n`;
+    writeFileSync(path, text);
+    writeFileSync(
+      `${path}.sig`,
+      JSON.stringify(signBytes(Buffer.from(text), key.privateKeyPem, key.id)),
+    );
+  }
+  /** An https update source served from `dir`, recording each request path. */
+  function served(dir: string, requested: string[]): UpdateOptions {
+    const fetcher = (async (input: URL | string) => {
+      const url = new URL(String(input));
+      requested.push(url.pathname);
+      const file = join(dir, ...url.pathname.split("/").slice(2));
+      return existsSync(file)
+        ? new Response(readFileSync(file))
+        : new Response("", { status: 404 });
+    }) as typeof fetch;
+    return {
+      runCheck: fakeRun,
+      fetcher,
+      env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+    };
+  }
+
+  it("rotates the channel key only through a signed root; a release lock never widens trust", async () => {
     const next = generateSigningKey("test-release-next");
-    const a = await release("1.0.0", true, undefined, [KEY]);
-    const b = await release("1.1.0", true, undefined, [KEY, next]);
-    const c = await release("1.2.0", true, undefined, [next]);
+    const a = await release("1.0.0", true, undefined, [KEY], [ROOT]);
+    // B's lock also trusts the next key, as any channel signer's release could.
+    const b = await release("1.1.0", true, undefined, [KEY, next], [ROOT]);
+    const c = await release("1.2.0", true, undefined, [next], [ROOT]);
     const channelDir = temp("piship-channel-");
     const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
     await installDistribution(a.archive);
-    // A trusts only the current key: the next key is not yet trusted.
+    expect(readTrustState(ID)).toMatchObject({
+      origin: "bootstrap",
+      root: { version: 1, roles: { channel: { keyIds: [KEY.id] } } },
+    });
     await sign(channelDir, [b.archive], "stable", next);
     const early = await rejection(updateDistribution(ID, opts));
     expect(early.code).toBe("INTEGRITY_FAILED");
     expect(early.message).toMatch(
       /Signature key test-release-next is not trusted; trusted keys: test-release$/,
     );
-    expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    // The overlap release B, signed with the current key.
     await sign(channelDir, [b.archive]);
     expect(await updateDistribution(ID, opts)).toMatchObject({
       status: "updated",
       to: "1.1.0",
       keyId: KEY.id,
     });
-    // B pins both keys and accepts the next one. C pins only the next key,
-    // so the owner names the key that signed the existing metadata.
+    // Activating B, whose lock trusts the next key, did not trust it here.
+    expect(readTrustState(ID)?.root.roles.channel.keyIds).toEqual([KEY.id]);
     await sign(channelDir, [c.archive], "stable", next, KEY);
-    expect(await updateDistribution(ID, opts)).toMatchObject({
+    const stillOld = await rejection(updateDistribution(ID, opts));
+    expect(stillOld.message).toMatch(/test-release-next is not trusted/);
+    // The owner's root 2 moves the channel role to the next key.
+    await publishRoot(channelDir, rootBody(2, [next]), [ROOT]);
+    const rotated = await updateDistribution(ID, opts);
+    expect(rotated).toMatchObject({
       status: "updated",
       to: "1.2.0",
       keyId: next.id,
     });
-    // C pins only the next key: the retired key is refused, even with a
-    // higher sequence.
-    await sign(channelDir, [c.archive]);
-    const retired = await rejection(updateDistribution(ID, opts));
-    expect(retired.code).toBe("INTEGRITY_FAILED");
-    expect(retired.message).toMatch(
-      /Signature key test-release is not trusted; trusted keys: test-release-next$/,
+    expect(rotated.notices).toContain(
+      "Update trust advanced to root version 2",
     );
-    expect(readInstallReceipt(ID)).toMatchObject({
-      active: "1.2.0",
-      channelSequences: { stable: 3 },
-    });
-  });
-
-  it("keeps a key retired by an update retired after a rollback", async () => {
-    const backup = generateSigningKey("test-release-backup");
-    const a = await release("1.0.0", true, undefined, [KEY, backup]);
-    const b = await release("1.1.0", true, undefined, [backup]);
-    const channelDir = temp("piship-channel-");
-    const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
-    await installDistribution(a.archive);
-    // A fresh install of A has no history: both of its keys are trusted.
-    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
-    await sign(channelDir, [b.archive], "stable", backup);
-    expect(await updateDistribution(ID, opts)).toMatchObject({
-      status: "updated",
-      to: "1.1.0",
-      keyId: backup.id,
-    });
-    // B dropped KEY: the installation records it as retired.
-    expect(readInstallReceipt(ID).retiredKeys).toEqual([
-      {
-        id: KEY.id,
-        fingerprint: keyFingerprint(KEY.publicKey),
-        release: "1.1.0",
-      },
-    ]);
-    await rollbackDistribution(ID, { runCheck: fakeRun });
-    expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    // doctor's status shows the pinned key as retired, not trusted.
-    expect(
-      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.0.0"))),
-    ).toMatchObject({
-      trustedKeys: 1,
-      keys: [
+    expect(readTrustState(ID)).toMatchObject({
+      origin: "remote",
+      root: { version: 2 },
+      removedKeys: [
         {
           id: KEY.id,
           fingerprint: keyFingerprint(KEY.publicKey),
-          retiredBy: "1.1.0",
+          role: "channel",
+          version: 2,
         },
-        { id: backup.id, fingerprint: keyFingerprint(backup.publicKey) },
       ],
     });
-    // A still pins KEY, but metadata signed by it is refused, even newer.
-    await sign(channelDir, [b.archive]);
-    const retired = await rejection(updateDistribution(ID, opts));
-    expect(retired.code).toBe("INTEGRITY_FAILED");
-    expect(retired.message).toMatch(
-      /Signature key test-release was retired by the 1\.1\.0 release of this installation/,
+    // The receipt retires the removed channel key too, so a PiShip v0.7 CLI
+    // (which trusts its lock keys minus the retired keys) never trusts it
+    // again after a rollback to a release it installed.
+    const retired = readInstallReceipt(ID).retiredKeys ?? [];
+    expect(retired).toEqual([
+      {
+        id: KEY.id,
+        fingerprint: keyFingerprint(KEY.publicKey),
+        release: "root 2",
+      },
+    ]);
+    expect(
+      [KEY, next]
+        .filter(
+          (key) =>
+            !retired.some(
+              (item) => item.fingerprint === keyFingerprint(key.publicKey),
+            ),
+        )
+        .map((key) => key.id),
+    ).toEqual([next.id]);
+    // The removed key no longer counts, even at a higher sequence.
+    forgeChannel(channelDir, KEY);
+    expect((await rejection(updateDistribution(ID, opts))).message).toMatch(
+      /Signature key test-release is not trusted; trusted keys: test-release-next$/,
     );
-    expect(readInstallReceipt(ID)).toMatchObject({
-      active: "1.0.0",
-      channelSequences: { stable: 1 },
+    // Rolling back to B, whose lock trusts the old key, does not restore it.
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    expect(readTrustState(ID)?.root.version).toBe(2);
+    forgeChannel(channelDir, KEY);
+    expect((await rejection(updateDistribution(ID, opts))).message).toMatch(
+      /Signature key test-release is not trusted/,
+    );
+    expect(
+      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.1.0"))),
+    ).toMatchObject({
+      trustedKeys: 1,
+      updateRoot: { version: 2, origin: "remote", channelThreshold: 1 },
+      keys: [
+        { id: next.id, fingerprint: keyFingerprint(next.publicKey) },
+        {
+          id: KEY.id,
+          fingerprint: keyFingerprint(KEY.publicKey),
+          retiredBy: "root 2",
+        },
+      ],
     });
-    // The key A shares with B is still trusted.
+  });
+
+  it("an emergency root removes a compromised channel key before anything is downloaded", async () => {
+    const backup = generateSigningKey("test-release-backup");
+    const a = await release("1.0.0", true, undefined, [KEY], [ROOT]);
+    const b = await release("1.1.0", true, undefined, [KEY], [ROOT]);
+    const channelDir = temp("piship-channel-");
+    await installDistribution(a.archive);
+    // Whoever holds KEY publishes B under it ...
+    await sign(channelDir, [b.archive]);
+    // ... after the owner's emergency root 2 took KEY out.
+    await publishRoot(channelDir, rootBody(2, [backup]), [ROOT]);
+    const requested: string[] = [];
+    const error = await rejection(
+      updateDistribution(ID, served(channelDir, requested)),
+    );
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(
+      /Signature key test-release is not trusted; trusted keys: test-release-backup$/,
+    );
+    // Root first, then the channel; the archive is never fetched.
+    expect(requested).toEqual([
+      "/acmepi/root/2.json",
+      "/acmepi/root/2.json.sig",
+      "/acmepi/root/3.json",
+      "/acmepi/stable.json",
+      "/acmepi/stable.json.sig",
+    ]);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    // The failed update still persisted the newer root.
+    expect(readTrustState(ID)?.root.version).toBe(2);
     await sign(channelDir, [b.archive], "stable", backup, KEY);
-    expect(await updateDistribution(ID, opts)).toMatchObject({
+    expect(await updateDistribution(ID, served(channelDir, []))).toMatchObject({
       status: "updated",
       to: "1.1.0",
       keyId: backup.id,
     });
-    // A fresh install of A starts without history and trusts KEY again.
-    uninstallDistribution(ID);
-    await installDistribution(a.archive, true);
-    expect(readInstallReceipt(ID).retiredKeys).toBeUndefined();
-    await sign(channelDir, [b.archive]);
-    expect(await updateDistribution(ID, opts)).toMatchObject({
-      status: "updated",
-      to: "1.1.0",
-      keyId: KEY.id,
-    });
-    // A damaged retired-key record is refused, not read as "none retired".
-    const receiptFile = join(
-      process.env.PISHIP_INSTALL_HOME as string,
-      "receipts",
-      `${ID}.json`,
+  });
+
+  it("an expired final root cannot authorize the channel; an expired intermediate root still advances", async () => {
+    const { a, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    // The fixture's bootstrap has KEY in both roles.
+    await publishRoot(
+      channelDir,
+      rootBody(2, [KEY], [KEY], "2026-01-01T00:00:00Z"),
+      [KEY],
     );
+    const now = () => new Date("2026-06-01T00:00:00Z");
+    const expired = await rejection(updateDistribution(ID, { ...opts, now }));
+    expect(expired.code).toBe("INTEGRITY_FAILED");
+    expect(expired.message).toMatch(
+      /Update root version 2 expired at 2026-01-01T00:00:00Z/,
+    );
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    await publishRoot(channelDir, rootBody(3, [KEY], [KEY]), [KEY]);
+    expect(await updateDistribution(ID, { ...opts, now })).toMatchObject({
+      status: "updated",
+    });
+    expect(readTrustState(ID)?.root.version).toBe(3);
+  });
+
+  it("a failed root fetch stops the update before the channel", async () => {
+    const { a, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    for (const failure of ["HTTP 500", "fetch failed"]) {
+      const requested: string[] = [];
+      const options = served(channelDir, requested);
+      const fetcher = options.fetcher as typeof fetch;
+      const error = await rejection(
+        updateDistribution(ID, {
+          ...options,
+          fetcher: (async (input: URL | string, init?: RequestInit) => {
+            if (String(input).includes("/root/")) {
+              requested.push(new URL(String(input)).pathname);
+              if (failure === "fetch failed") throw new TypeError(failure);
+              return new Response("", { status: 500 });
+            }
+            return fetcher(input, init);
+          }) as typeof fetch,
+        }),
+      );
+      expect(error.message).toContain(failure);
+      expect(requested).toEqual(["/acmepi/root/2.json"]);
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    }
+  });
+
+  it("a damaged or missing trust state fails closed until a verified reinstall", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive, true);
+    const path = trustStatePath(ID);
+    writeFileSync(path, "{");
+    const damaged = await rejection(updateDistribution(ID, opts));
+    expect(damaged.code).toBe("INTEGRITY_FAILED");
+    expect(damaged.message).toMatch(/is damaged/);
+    expect(readFileSync(path, "utf8")).toBe("{");
+    // Deleting it does not reset trust to the active release lock.
+    rmSync(path);
+    const missing = await rejection(updateDistribution(ID, opts));
+    expect(missing.code).toBe("INTEGRITY_FAILED");
+    expect(missing.message).toMatch(/is missing/);
+    expect(existsSync(path)).toBe(false);
+    expect(
+      lifecycleStatus(ID, verifyPayload(join(appsDir(), "1.0.0"))).trustProblem,
+    ).toBe("missing");
+    // The recovery: uninstall (state kept), then a verified reinstall.
+    uninstallDistribution(ID);
+    expect(existsSync(path)).toBe(false);
+    await installDistribution(a.archive, true, { expectedSha256: a.sha256 });
+    expect(readTrustState(ID)).toMatchObject({
+      origin: "bootstrap",
+      root: { version: 1 },
+    });
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+  });
+
+  it("takes an installation from before v0.8 onto trust state once", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    // As PiShip v0.7 left it: no trust state, no marker in the receipt.
+    rmSync(trustStatePath(ID));
+    const { trustState: _marker, ...earlier } = readInstallReceipt(ID);
     writeFileSync(
-      receiptFile,
-      JSON.stringify({
-        ...readInstallReceipt(ID),
-        retiredKeys: [{ id: KEY.id, fingerprint: "sha256:x", release: "1" }],
+      join(process.env.PISHIP_INSTALL_HOME as string, "receipts", `${ID}.json`),
+      JSON.stringify(earlier),
+    );
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+    expect(readInstallReceipt(ID).trustState).toBe(true);
+    expect(readTrustState(ID)).toMatchObject({
+      origin: "bootstrap",
+      root: { version: 1 },
+    });
+  });
+
+  /** Replace the lock's update trust bootstrap behind a rewritten inventory. */
+  function corruptBootstrap(payload: string): void {
+    const path = join(payload, "piship.lock");
+    const lock = JSON.parse(readFileSync(path, "utf8"));
+    lock.updates.trust.bootstrap.roles.channel.keyIds = ["nobody"];
+    writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
+    write(
+      join(payload, "metadata", "inventory.json"),
+      `${JSON.stringify(payloadInventory(payload), null, 2)}\n`,
+    );
+  }
+
+  it("refuses to install a lock whose update trust bootstrap is malformed", async () => {
+    const payload = fakeAssemble(project("1.0.0"), temp("piship-payload-"));
+    corruptBootstrap(payload);
+    const error = await rejection(installDistribution(payload));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(error.message).toMatch(
+      /invalid update trust: .*updates\.trust\.bootstrap\.roles\.channel/,
+    );
+    expect(existsSync(trustStatePath(ID))).toBe(false);
+    expect(existsSync(appsDir())).toBe(false);
+  });
+
+  it("refuses to migrate an installation from before v0.8 onto a malformed bootstrap", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    rmSync(trustStatePath(ID));
+    const { trustState: _marker, ...earlier } = readInstallReceipt(ID);
+    writeFileSync(
+      join(process.env.PISHIP_INSTALL_HOME as string, "receipts", `${ID}.json`),
+      JSON.stringify(earlier),
+    );
+    corruptBootstrap(join(appsDir(), "1.0.0"));
+    const error = await rejection(updateDistribution(ID, opts));
+    expect(error.code).toBe("LOCK_INVALID");
+    expect(existsSync(trustStatePath(ID))).toBe(false);
+    expect(readInstallReceipt(ID).trustState).toBeUndefined();
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+  });
+
+  it("an update interrupted between root versions keeps each accepted root whole", async () => {
+    const { a, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    await publishRoot(channelDir, rootBody(2, [KEY], [KEY]), [KEY]);
+    await publishRoot(channelDir, rootBody(3, [KEY], [KEY]), [KEY]);
+    let accepted = 0;
+    const killed = await rejection(
+      updateDistribution(ID, {
+        ...opts,
+        faults: (phase) => {
+          if (phase === "root-accepted" && ++accepted === 1)
+            throw new Error("killed after root 2");
+        },
       }),
     );
-    expect(() => readInstallReceipt(ID)).toThrow(
-      /records invalid retired release keys/,
-    );
+    expect(killed.message).toBe("killed after root 2");
+    expect(readTrustState(ID)?.root.version).toBe(2);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    // A write that fails before its rename keeps the accepted root.
+    const trustDir = dirname(trustStatePath(ID));
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      chmodSync(trustDir, 0o500);
+      try {
+        const denied = await rejection(updateDistribution(ID, opts));
+        expect(denied.message).toMatch(/EACCES|permission/i);
+      } finally {
+        chmodSync(trustDir, 0o700);
+      }
+      expect(readTrustState(ID)?.root.version).toBe(2);
+    }
+    expect(await updateDistribution(ID, opts)).toMatchObject({
+      status: "updated",
+    });
+    expect(readTrustState(ID)?.root.version).toBe(3);
   });
 
   it("refuses a release whose launch check fails", async () => {
@@ -1614,6 +1946,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     });
     expect(result.status).toBe("updated");
     expect(requested).toEqual([
+      "/acmepi/root/2.json",
       "/acmepi/stable.json",
       "/acmepi/stable.json.sig",
       `/acmepi/acmepi-1.1.0-${currentTarget()}.tar.gz`,
@@ -3141,7 +3474,7 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     expect(error.code).toBe("UPDATE_FAILED");
     expect(error.retryable).toBe(true);
     expect(error.message).toMatch(
-      /did not answer for stable\.json within 30 s/,
+      /did not answer for root\/2\.json within 30 s/,
     );
     expect(existsSync(join(appsDir(), ".lifecycle.lock"))).toBe(false);
   });
