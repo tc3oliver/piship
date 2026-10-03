@@ -1,6 +1,7 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { redact } from "@piship/contracts";
+import { type UserAutoStatus, userAutoStatus } from "@piship/core";
 import {
   type CapabilityState,
   type PolicyEngine,
@@ -39,6 +40,8 @@ export interface GovernanceInspection {
   readonly capabilities: readonly CapabilityState[];
   /** Declared resources as trust and integrity see them, before approvals. */
   readonly resources: readonly ResourceEvidence[];
+  /** The user's auto mode as a session would apply it. */
+  readonly userAuto: UserAutoStatus;
 }
 
 /**
@@ -182,5 +185,10 @@ export async function inspectGovernance(
       staticProviderDenials(options, engine),
     ),
     resources,
+    userAuto: userAutoStatus(
+      options.stateDir,
+      manifest.policy,
+      options.lock.deployment.mode,
+    ),
   };
 }

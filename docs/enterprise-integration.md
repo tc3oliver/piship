@@ -428,6 +428,7 @@ audit:
             "tool.request", "tool.allowed", "tool.denied",
             "mcp.server.start", "mcp.call", "mcp.denied",
             "policy.loaded", "policy.violation",
+            "policy.auto_enabled", "policy.auto_disabled", "policy.auto_approved",
             "runtime.update", "runtime.rollback"
           ]
         },
@@ -462,7 +463,7 @@ audit:
 }
 ```
 
-`user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). v0.6 wrote the bare subject under the same `piship-audit/v1`; from v0.7 this form is fixed, and changing it again needs a new schema ([decision 29](decisions.md)). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback). `policy` is `<policy id>@<version>`. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
+`user` is the principal as one string, the issuer, `#`, then the subject (`%` and `#` inside the issuer are percent-encoded), or `null` without identity or outside a session's identity (update and rollback). v0.6 wrote the bare subject under the same `piship-audit/v1`; from v0.7 this form is fixed, and changing it again needs a new schema ([decision 29](decisions.md)). `session` is `null` outside a governed session (sign-in, sign-out, update, rollback, and `<command> auto on|off`). `policy` is `<policy id>@<version>`. The `policy.auto_*` events come only from distributions that allow [user auto mode](manifest.md#user-auto-mode): `policy.auto_enabled` and `policy.auto_disabled` record the user switching it (`detail.source` is `command` or `session`), and `policy.auto_approved` records each `ask` it approved without a prompt, with the resource, policy, rule, enforcement, and `detail` of the action's own event (`detail.approval: auto`, which the action's own event also carries). They were added to `piship-audit/v1` after v0.8.0; a collector that validates against an older copy of this schema must take the new names. The `content` classes map to `audit.capture` as `prompt` to `promptContent`, `response` to `responseContent`, `command` to `commandText`, and `source` to `sourceContent`. Longer strings are cut to the limit and end in `…[truncated]`.
 
 ## Client identification (`PiShip-Client`)
 

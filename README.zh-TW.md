@@ -40,7 +40,7 @@
 - **自己的品牌、自己的指令。** 叫 `acmecode`、`teampi` 或任何名字都行，公司的 instructions、skills、extensions、prompts 和 themes 直接內建。
 - **公司帳號登入。** 開發者用 SSO 登入，PiShip 拿這個身分去公司的 credential broker 換一張短效的 gateway 憑證，存進系統金鑰庫，到期自動續，登出就撤銷。
 - **你的 gateway、你的模型。** 請求只會送到公司的 OpenAI 相容 gateway（LiteLLM 就可以），而且只能用你允許的模型。
-- **真的會執行的政策。** 工具呼叫、讀寫檔案、shell 指令、MCP 工具，都在執行前檢查。想知道為什麼被擋，問 `acmecode policy explain`。
+- **真的會執行的政策。** 工具呼叫、讀寫檔案、shell 指令、MCP 工具，都在執行前檢查。想知道為什麼被擋，問 `acmecode policy explain`。你允許的話，每位使用者可以自己打開會留下稽核紀錄的 auto 模式，讓設成 `ask` 的動作不再逐一詢問；`deny` 和強制規則照樣有效。
 - **沒有沙箱就不執行。** 要求沙箱但沙箱不在，指令就不會在主機上跑，不會偷偷退回沒有保護的模式。
 - **信得過的發版。** 每個平台都是可重現的建置，附 SBOM、授權聲明、弱點掃描關卡、簽章更新通道，一個指令就能 rollback。
 

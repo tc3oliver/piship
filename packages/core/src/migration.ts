@@ -226,6 +226,18 @@ export const STATE_DATA_CLASSES: readonly DataClass[] = Object.freeze([
     migration: "kept in place; included in the pre-upgrade snapshot",
   },
   {
+    name: "user auto mode",
+    path: "config/auto.json",
+    kind: "file",
+    scope: "user, bound to the principal binding it was switched on under",
+    sensitivity: "metadata",
+    retention:
+      "kept by uninstall and logout; off once another principal binds the state",
+    clear: "auto off, purge",
+    migration:
+      "kept in place, never snapshotted; it applies only while the running release allows policy.userAuto",
+  },
+  {
     name: "Pi agent configuration",
     path: "agent",
     kind: "directory",

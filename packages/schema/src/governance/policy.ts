@@ -12,6 +12,7 @@ import {
   type ProjectTrustPolicy,
   PROVIDER_TRUST_CLASSES,
   type TrustSetting,
+  USER_AUTO_SETTINGS,
 } from "../governance.js";
 import {
   conflict,
@@ -221,10 +222,29 @@ function parseProjectTrust(
   return { company, external, unknown: { dimensions: unknown.dimensions } };
 }
 
+/**
+ * `policy.userAuto` (piship/v1alpha5). In personal mode the user already
+ * owns the policy (user rules replace a matching default), so the field is
+ * rejected there rather than silently meaning nothing.
+ */
+function parseUserAuto(
+  value: unknown,
+  mode: DeploymentMode,
+): PolicyConfig["userAuto"] {
+  if (value === undefined) return undefined;
+  if (mode !== "managed")
+    fail(
+      "policy.userAuto",
+      "userAuto applies to managed distributions only; in personal mode the user relaxes ask with allow rules in config/policy.json",
+    );
+  return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
+}
+
 export function parsePolicy(
   value: unknown,
   mode: DeploymentMode,
   app: { readonly id: string },
+  options: { readonly userAuto?: boolean } = {},
 ): PolicyConfig {
   const policy = optionalRecord(value, "policy", [
     "id",
@@ -236,7 +256,9 @@ export function parsePolicy(
     "projectTrust",
     "enforced",
     "defaults",
+    ...(options.userAuto ? ["userAuto"] : []),
   ]);
+  const userAuto = parseUserAuto(policy.userAuto, mode);
   const id =
     policy.id === undefined ? app.id : plainString(policy.id, "policy.id", 128);
   if (!RULE_ID.test(id))
@@ -295,6 +317,7 @@ export function parsePolicy(
     ...(policy.adapter === undefined
       ? {}
       : { adapter: modulePath(policy.adapter, "policy.adapter") }),
+    ...(userAuto === undefined ? {} : { userAuto }),
     resourceTrust: {
       upstream: trustOf(
         resourceTrust,

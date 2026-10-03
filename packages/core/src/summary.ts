@@ -98,7 +98,7 @@ export function formatInspection(info: Inspection): string {
     lines.push(
       row(
         "policy",
-        `${policy.id}@${policy.version} (default ${policy.default})`,
+        `${policy.id}@${policy.version} (default ${policy.default}${policy.userAuto ? `, user auto ${policy.userAuto}` : ""})`,
       ),
       row(
         "sandbox",

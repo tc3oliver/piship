@@ -40,7 +40,7 @@ You can fork Pi, build all of that in, and merge upstream every week for as long
 - **Your brand, your command.** `acmecode`, `teampi`, whatever you call it, with your instructions, skills, extensions, prompts, and themes built in.
 - **Company sign-in.** Developers log in with SSO. PiShip trades that identity at your credential broker for a short-lived gateway credential, keeps it in the OS keychain, renews it, and revokes it on logout.
 - **Your gateway, your models.** Requests go to your OpenAI-compatible gateway (LiteLLM works) and only to the models you allow.
-- **Policy that actually runs.** Tool calls, file access, shell commands, and MCP tools are checked before they happen. `acmecode policy explain` tells you why.
+- **Policy that actually runs.** Tool calls, file access, shell commands, and MCP tools are checked before they happen. `acmecode policy explain` tells you why. If you allow it, each user can switch on an audited auto mode so what you left to `ask` stops prompting them; `deny` and enforced rules still hold.
 - **A sandbox, or nothing runs.** If you require one and it is not there, the command does not run on the host. No silent fallback.
 - **Releases you can trust.** Reproducible builds per platform with an SBOM, license notices, a vulnerability gate, signed update channels, and one-command rollback.
 

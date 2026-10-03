@@ -1,6 +1,7 @@
 import { redact } from "@piship/contracts";
 import { type GovernanceManifest, resolveTemplate } from "@piship/schema";
 import { readPreferences, resolveEffectiveConfig } from "../config.js";
+import { describeUserAuto, userAutoStatus } from "../user-auto.js";
 import { DistributionAccess } from "./distribution-access.js";
 import { effectivePrivateOnly } from "./network.js";
 import { accessStatePaths } from "./state.js";
@@ -25,6 +26,7 @@ export interface ExplainOptions extends AccessOptions {
 function governanceRows(
   governance: GovernanceManifest,
   mode: AccessOptions["mode"],
+  stateDir: string,
 ): ExplainRow[] {
   const { policy, mcp, sandbox, audit } = governance;
   const row = (key: string, value: unknown, note?: string): ExplainRow => ({
@@ -45,6 +47,15 @@ function governanceRows(
       `${policy.id}@${policy.version}`,
       `default ${policy.default}; ${policy.enforced.length} enforced and ${policy.defaults.length} default rule(s); ${userRules}`,
     ),
+    ...(mode === "managed"
+      ? [
+          row(
+            "policy.userAuto",
+            policy.userAuto ?? "off",
+            `auto mode for this user: ${describeUserAuto(userAutoStatus(stateDir, policy, mode))}`,
+          ),
+        ]
+      : []),
     row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
     row(
       "sandbox.required",
@@ -257,7 +268,9 @@ export async function explainConfiguration(
       reference(`network.tls.additionalCA[${index}]`, path);
   }
   if (options.governance)
-    rows.push(...governanceRows(options.governance, options.mode));
+    rows.push(
+      ...governanceRows(options.governance, options.mode, options.stateDir),
+    );
   const paths = accessStatePaths(options.stateDir);
   let preferences: ReturnType<typeof readPreferences> = {
     schema: "piship-preferences/v1",

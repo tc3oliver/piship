@@ -365,9 +365,13 @@ export function parseManifest(value: unknown): Manifest {
     try {
       if (v3) {
         const variables = parseVariables(root.variables);
-        governance = parseGovernance(root, mode, variables, {
-          id: name(app.id, "app.id"),
-        });
+        governance = parseGovernance(
+          root,
+          mode,
+          variables,
+          { id: name(app.id, "app.id") },
+          v5,
+        );
         if (v4) lifecycle = parseLifecycle(root, variables, v5);
       }
       access = parseAccess(root, mode, [

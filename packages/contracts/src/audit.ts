@@ -25,6 +25,9 @@ export const AUDIT_EVENT_TYPES = [
   "mcp.denied",
   "policy.loaded",
   "policy.violation",
+  "policy.auto_enabled",
+  "policy.auto_disabled",
+  "policy.auto_approved",
   "runtime.update",
   "runtime.rollback",
 ] as const;

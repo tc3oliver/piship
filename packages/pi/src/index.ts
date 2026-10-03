@@ -15,6 +15,7 @@ import {
   runRollback,
   runSandbox,
   reclaimLaunchTemporaries,
+  runAuto,
   runUpdate,
   runtimeStateDirectory,
   sweepStateTemporaries,
@@ -135,6 +136,11 @@ export async function launchPiDistribution(
           metadata.governance.manifest.sandbox.credential === "stored"
             ? "\n  sandbox login | sandbox logout"
             : ""
+        }${
+          metadata.governance.manifest.policy.userAuto === "allowed" &&
+          metadata.deployment.mode === "managed"
+            ? "\n  auto on | auto off | auto status"
+            : ""
         }`
       : "";
     // Pi-native access signs in inside the Pi session; branded login and
@@ -169,6 +175,7 @@ export async function launchPiDistribution(
     // may hold the secret.
     if (command === "sandbox") return runSandbox(ctx, rest);
     if (command === "policy") return runPolicy(ctx, rest);
+    if (command === "auto") return runAuto(ctx, rest);
     if (command === "capabilities") return runCapabilities(ctx, rest);
   }
   if (

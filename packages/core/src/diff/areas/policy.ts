@@ -43,6 +43,23 @@ export function policy(
       "Tightens policy default.",
     ),
   );
+  // Absent is off, so declaring the default changes nothing.
+  out.scalar(
+    "policy",
+    "policy userAuto",
+    bp?.userAuto ?? "off",
+    ap?.userAuto ?? "off",
+    (_, y) =>
+      y === "allowed"
+        ? [
+            "high",
+            "Lets each user switch on auto mode, which approves asks from the distribution defaults without a prompt; deny and enforced rules still apply.",
+          ]
+        : [
+            "medium",
+            "Users can no longer switch on auto mode; a switch that is on stops applying.",
+          ],
+  );
   out.scalar("policy", "policy adapter", bp?.adapter, ap?.adapter, (_, y) =>
     y === ""
       ? [

@@ -78,6 +78,7 @@ export {
   withTestState,
 } from "./state-paths.js";
 export * from "./supply-chain.js";
+export * from "./user-auto.js";
 export {
   abandonedTemporaryCount,
   reclaimInstallTemporaries,

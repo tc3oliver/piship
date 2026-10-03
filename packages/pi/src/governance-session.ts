@@ -18,6 +18,12 @@ import {
   redact,
   resolveDecision,
 } from "@piship/contracts";
+import {
+  setUserAuto,
+  type UserAutoStatus,
+  userAutoDenied,
+  userAutoStatus,
+} from "@piship/core";
 import type {
   McpGovernor,
   McpServerConfig,
@@ -108,6 +114,7 @@ export class GovernanceSession {
   /** Full shell output of this session; removed at close(). */
   outputStore = new SessionOutputStore();
   #closed = false;
+  #userAuto: UserAutoStatus;
 
   private constructor(
     readonly options: GovernanceOptions,
@@ -120,6 +127,12 @@ export class GovernanceSession {
     readonly sessionId: string,
   ) {
     this.manifest = options.lock.governance.manifest;
+    // Read once: the switch the session starts with is the one it audits.
+    this.#userAuto = userAutoStatus(
+      options.stateDir,
+      this.manifest.policy,
+      options.lock.deployment.mode,
+    );
   }
 
   static async open(options: GovernanceOptions): Promise<GovernanceSession> {
@@ -198,7 +211,10 @@ export class GovernanceSession {
       });
       session.emit("policy.loaded", {
         policy: engine.id,
-        detail: { diagnostics: engine.diagnostics.length },
+        detail: {
+          diagnostics: engine.diagnostics.length,
+          ...(session.userAuto.active ? { userAuto: true } : {}),
+        },
       });
       // A team, project, or managed user file that tries to widen the policy
       // is recorded; a rule it names is what tried.
@@ -238,6 +254,39 @@ export class GovernanceSession {
     return this.engine.id;
   }
 
+  /** The user's auto mode as this session applies it. */
+  get userAuto(): UserAutoStatus {
+    return this.#userAuto;
+  }
+
+  /**
+   * Switch the user's auto mode from inside the session (`/auto`). Refused
+   * with POLICY_DENIED unless the distribution allows it. The switch is
+   * audited before it applies, and stored for later sessions.
+   */
+  switchUserAuto(enabled: boolean): UserAutoStatus {
+    if (!this.#userAuto.allowed) {
+      if (enabled)
+        throw userAutoDenied(
+          this.options.lock.app.command,
+          this.options.lock.deployment.mode,
+        );
+    } else {
+      this.audit.assertAvailable();
+      this.emit(enabled ? "policy.auto_enabled" : "policy.auto_disabled", {
+        policy: this.policyId,
+        detail: { source: "session" },
+      });
+    }
+    setUserAuto(this.options.stateDir, enabled);
+    this.#userAuto = userAutoStatus(
+      this.options.stateDir,
+      this.manifest.policy,
+      this.options.lock.deployment.mode,
+    );
+    return this.#userAuto;
+  }
+
   /** Throws AUDIT_UNAVAILABLE while a required audit sink has lost events. */
   assertAuditAvailable(): void {
     this.audit.assertAvailable();
@@ -256,8 +305,10 @@ export class GovernanceSession {
   }
 
   /**
-   * Evaluate, resolve `ask` through the channel (headless: deny), record
-   * denials, and fail closed when a required audit sink is down. Several
+   * Evaluate, resolve `ask` through the channel (headless: deny), or approve
+   * it without a prompt while the user's auto mode is on (recorded as
+   * `policy.auto_approved`), record denials, and fail closed when a required
+   * audit sink is down. Auto mode never touches `deny`. Several
    * resources (a lexical and a symlink-resolved path) are decided together:
    * the strictest decision wins and at most one approval is asked.
    */
@@ -275,10 +326,18 @@ export class GovernanceSession {
       .reduce((current, next) =>
         STRICTNESS[next.effect] > STRICTNESS[current.effect] ? next : current,
       );
-    const resolved = await resolveDecision(decision, channel, {
-      title: `${this.options.lock.app.name} policy approval`,
-      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
-    });
+    const auto =
+      this.#userAuto.active &&
+      decision.effect === "ask" &&
+      !resources.some((item) =>
+        this.engine.keepsPrompt({ action, resource: item }),
+      );
+    const resolved: ResolvedDecision = auto
+      ? { ...decision, outcome: "allow", approval: "auto" }
+      : await resolveDecision(decision, channel, {
+          title: `${this.options.lock.app.name} policy approval`,
+          message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
+        });
     const fields = {
       resource: events?.resource ?? redact(decision.resource),
       policy: decision.policyId,
@@ -291,13 +350,26 @@ export class GovernanceSession {
       },
       ...(events?.content ? { content: events.content } : {}),
     };
+    // Metadata only: the same fields as the action's own event, no content.
+    if (auto)
+      this.emit("policy.auto_approved", {
+        resource: fields.resource,
+        policy: fields.policy,
+        rule: fields.rule,
+        enforcement: fields.enforcement,
+        detail: fields.detail,
+        decision: "approved",
+      });
     if (resolved.outcome === "deny") {
       this.metrics.recordPolicyDenial(action);
       if (events) this.emit(events.denied, { ...fields, decision: "denied" });
     } else if (events?.allowed)
       this.emit(events.allowed, {
         ...fields,
-        decision: resolved.approval === "approved" ? "approved" : "allowed",
+        decision:
+          resolved.approval === "approved" || resolved.approval === "auto"
+            ? "approved"
+            : "allowed",
       });
     return resolved;
   }

@@ -381,6 +381,12 @@ describe("governed distribution (local fixtures)", () => {
     const capabilities = await dist.run(["capabilities"], project);
     expect(capabilities.status, capabilities.stderr).toBe(0);
     expect(capabilities.stdout).toMatch(/workflow\s+builtin\/workflow/);
+    // The demo does not declare policy.userAuto, so auto mode is refused.
+    const auto = await dist.run(["auto", "on"], project);
+    expect(auto.status).not.toBe(0);
+    expect(auto.stderr).toContain("POLICY_DENIED");
+    expect(auto.stderr).toContain("does not allow auto mode");
+    expect(existsSync(join(dist.state, "config", "auto.json"))).toBe(false);
     const doctor = await dist.run(["doctor"], project);
     expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
     expect(doctor.stdout).toContain("acme-engineering@1");

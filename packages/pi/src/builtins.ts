@@ -6,7 +6,8 @@ import type {
   ExtensionContext,
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { PiShipError, redact } from "@piship/contracts";
+import { formatError, PiShipError, redact } from "@piship/contracts";
+import { describeUserAuto } from "@piship/core";
 import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
@@ -18,6 +19,44 @@ export const DEFAULT_PLAN_PROMPT =
   "You are in Plan mode. Investigate and propose a plan. Only the read and ask_user tools are available: do not change files, run commands, or call other tools; the user switches to Build mode with /build when the plan is ready.";
 export const DEFAULT_BUILD_PROMPT =
   "You are in Build mode. Carry out the agreed plan with the available tools.";
+
+function showAuto(gov: GovernanceSession, ctx: ExtensionContext): void {
+  if (ctx.hasUI)
+    ctx.ui.setStatus("piship-auto", gov.userAuto.active ? "Auto" : undefined);
+}
+
+/**
+ * `/auto [on|off|status]`: the user's auto mode, when the distribution
+ * allows it. A refusal (`policy.userAuto` off) is shown, never thrown into
+ * Pi's command loop.
+ */
+async function autoCommand(
+  gov: GovernanceSession,
+  args: string,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const action = args.trim() || "status";
+  let message: string;
+  let level: "info" | "warning" | "error" = "info";
+  if (action === "status")
+    message = `Auto mode: ${describeUserAuto(gov.userAuto)}`;
+  else if (action === "on" || action === "off")
+    try {
+      const status = gov.switchUserAuto(action === "on");
+      message = status.active
+        ? "Auto mode is on: asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply."
+        : "Auto mode is off.";
+    } catch (error) {
+      message = formatError(error);
+      level = "error";
+    }
+  else {
+    message = "Usage: /auto on | /auto off | /auto status";
+    level = "warning";
+  }
+  showAuto(gov, ctx);
+  if (ctx.hasUI) ctx.ui.notify(message, level);
+}
 
 function attach(gov: GovernanceSession, ctx: ExtensionContext): void {
   gov.toolApproval = uiChannel(ctx);
@@ -57,7 +96,17 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
   return {
     name: "piship-policy",
     factory: (pi) => {
-      pi.on("session_start", (_event, ctx) => attach(gov, ctx));
+      pi.on("session_start", (_event, ctx) => {
+        attach(gov, ctx);
+        showAuto(gov, ctx);
+      });
+      // Managed only: a personal user owns the policy (config/policy.json).
+      if (gov.options.lock.deployment.mode === "managed")
+        pi.registerCommand("auto", {
+          description:
+            "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply",
+          handler: (args, ctx) => autoCommand(gov, args, ctx),
+        });
       pi.on("tool_call", async (event, ctx) => {
         const tool = event.toolName;
         try {
