@@ -26,6 +26,7 @@ import {
   MemorySecretStore,
   metadataSecretRefs,
   SANDBOX_CREDENTIAL_METADATA_SCHEMA,
+  SecretServiceSecretStore,
 } from "@piship/credentials";
 import {
   type AccessManifest,
@@ -1041,5 +1042,44 @@ describe("a custom adapter's own sandbox credential: adapter failures", () => {
         ADAPTER_SECRET,
       );
     }
+  });
+});
+
+describe("sandbox credential: a discarded marker whose store is not installed", () => {
+  const missing = new SecretServiceSecretStore(() => ({
+    status: null,
+    stdout: "",
+    stderr: "spawnSync secret-tool ENOENT",
+    missing: true,
+  }));
+  const marker = () => {
+    mkdirSync(join(stateDir(), "credentials-metadata"), { recursive: true });
+    writeFileSync(
+      metadataFile(),
+      JSON.stringify({
+        schema: "piship-credential-discarded/v1",
+        orphans: [`piship:${ID}:sandbox#1`],
+        secret_store: "system",
+      }),
+    );
+  };
+  const options = {
+    storage: { provider: "file" as const },
+    secretStoreFor: (provider: string) =>
+      provider === "system" ? missing : null,
+  };
+  const notice = `Secret references an earlier sign-in or sign-out left behind (piship:${ID}:sandbox#1) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`;
+
+  it("sandbox login says which references it dropped", async () => {
+    marker();
+    const saved = await slot(ALICE_KEY, options).save(enter(SECRET));
+    expect(saved.notices).toEqual([notice]);
+    expect(readMetadata().schema).toBe(SANDBOX_CREDENTIAL_METADATA_SCHEMA);
+  });
+
+  it("clearing reports them with its problems", async () => {
+    marker();
+    expect(await slot(ALICE_KEY, options).clear()).toEqual([notice]);
+    expect(existsSync(metadataFile())).toBe(false);
   });
 });

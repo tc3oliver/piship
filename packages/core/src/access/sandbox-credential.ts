@@ -29,6 +29,7 @@ import {
   type CredentialPhase,
   type CredentialRevokeReason,
   createSecretStore,
+  droppedReferencesNotice,
   LocalSecretCredentialProvider,
   normalizeCredential,
   type RejectedCredential,
@@ -284,9 +285,12 @@ export class SandboxCredential {
    * never holds the lock. The service is not contacted: the next launch
    * proves the secret.
    */
-  async save(
-    readSecret: (prompt: string) => Promise<string>,
-  ): Promise<{ readonly kind: SandboxCredentialKind; readonly store: string }> {
+  async save(readSecret: (prompt: string) => Promise<string>): Promise<{
+    readonly kind: SandboxCredentialKind;
+    readonly store: string;
+    /** References of a discarded marker dropped without deleting anything. */
+    readonly notices?: readonly string[];
+  }> {
     const origins = this.#resolvedOrigins();
     const prompt = PROMPTS[this.#options.provider ?? "custom"];
     const entered = await new LocalSecretCredentialProvider({
@@ -306,6 +310,7 @@ export class SandboxCredential {
     );
     const principal = this.#options.principal;
     const guard = this.#options.signedIn ?? ((task) => task());
+    const notices: string[] = [];
     // The sandbox lock, then the identity lock, and the user is checked under
     // both: a `logout` or another user's `login` that came first is seen
     // here, and one that comes after clears what is stored now.
@@ -313,7 +318,13 @@ export class SandboxCredential {
       guard(async () => {
         const problems = await manager.logout(
           { distributionId: this.#options.distributionId },
-          { reason: "replace" },
+          {
+            reason: "replace",
+            onDiscard: ({ dropped }) => {
+              if (dropped.length)
+                notices.push(droppedReferencesNotice(dropped));
+            },
+          },
         );
         if (manager.hasStoredCredential())
           throw new PiShipError(
@@ -339,6 +350,7 @@ export class SandboxCredential {
     return {
       kind: prompt.kind,
       store: `${this.store.kind} (${this.store.description})`,
+      ...(notices.length ? { notices } : {}),
     };
   }
 
@@ -352,12 +364,16 @@ export class SandboxCredential {
   async clear(reason: CredentialRevokeReason = "logout"): Promise<string[]> {
     const manager = this.#manager();
     if (!manager.hasStoredCredential()) return [];
-    return (
+    let dropped: readonly string[] = [];
+    const problems = (
       await manager.logout(
         { distributionId: this.#options.distributionId },
-        { reason },
+        { reason, onDiscard: (result) => (dropped = result.dropped) },
       )
     ).map((problem) => redact(problem));
+    // Reported with the problems: nothing was deleted for these references.
+    if (dropped.length) problems.push(droppedReferencesNotice(dropped));
+    return problems;
   }
 
   /**

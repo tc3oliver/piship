@@ -7,6 +7,9 @@ import {
   metadataFileSecretRefs,
   metadataFileSecretStore,
   metadataSecretRefs,
+  secretStoreUnreachable,
+  type UndeletedSecret,
+  unconfirmedDiscardedRefs,
 } from "@piship/credentials";
 import { accessStatePaths } from "../access/index.js";
 import {
@@ -21,6 +24,12 @@ export interface PurgeResult {
   readonly state: string;
   /** Secret-store references that were deleted from the platform store. */
   readonly deletedSecrets: readonly string[];
+  /**
+   * Present when a discarded marker named references never confirmed
+   * written whose secret store is not installed here: they were dropped
+   * without deleting anything, as login and logout drop them.
+   */
+  readonly droppedSecrets?: readonly string[];
   /**
    * Present when a purge `withoutLogout` found the distribution signed in:
    * what it deleted locally without revoking, so it stays live at the
@@ -126,11 +135,12 @@ export async function purgeDistributionState(
     "logout with the release's own command (node <release-dir>/payload/bin/<command> logout)",
     options,
   );
-  const deletedSecrets = await deleteReferencedSecrets(id, state, options);
+  const secrets = await deleteReferencedSecrets(id, state, options);
   rmSync(state, { recursive: true, force: true });
   return {
     state,
-    deletedSecrets,
+    deletedSecrets: secrets.deleted,
+    ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
     ...(live.length ? { notRevoked: live } : {}),
   };
 }
@@ -139,19 +149,24 @@ export async function purgeDistributionState(
  * Delete, confirming each deletion, the platform secret-store entries that
  * the metadata in `state` references; the file store's go with the state
  * directory. Throws SECRET_STORE_UNAVAILABLE, deleting no state, when one
- * cannot be deleted. Returns the deleted references.
+ * cannot be deleted. Returns the deleted references, and the `dropped` ones:
+ * references of a discarded marker never confirmed written whose store is
+ * not installed, as login and logout drop them (`unconfirmedDiscardedRefs`).
+ * Kept, such a reference would make purge fail on every attempt.
  */
 export async function deleteReferencedSecrets(
   id: string,
   state: string,
   options: { readonly secretStore?: SecretStore },
-): Promise<string[]> {
+): Promise<{ deleted: string[]; dropped: string[] }> {
   const paths = accessStatePaths(state);
   // The restricted file fallback keeps its secrets under the state directory,
   // which is removed below; otherwise they live in the platform store.
   const fileFallback =
     existsSync(paths.secrets) && readdirSync(paths.secrets).length > 0;
   const refs = new Set<string>();
+  const unconfirmed = new Set<string>();
+  const confirmed = new Set<string>();
   for (const [path, refClass] of [
     [paths.identity, "identity"],
     [paths.credential, "inference"],
@@ -168,20 +183,30 @@ export async function deleteReferencedSecrets(
     const platform =
       recorded === "system" || (recorded === undefined && !fileFallback);
     if (!platform) continue;
+    const pending = unconfirmedDiscardedRefs(parsed);
     // A damaged file still names secrets in its text; they are deleted too.
     for (const ref of [
       ...metadataSecretRefs(parsed, id),
       ...metadataFileSecretRefs(path, id, refClass),
-    ])
+    ]) {
       refs.add(ref);
+      (pending.has(ref) ? unconfirmed : confirmed).add(ref);
+    }
   }
-  const deletedSecrets: string[] = [];
+  const deleted: string[] = [];
+  const dropped: string[] = [];
   if (refs.size) {
     const store =
       options.secretStore ??
       createSecretStore({ provider: "system", fileDirectory: paths.secrets });
     const sorted = [...refs].sort();
-    const failed = await deleteSecretsVerified(store, sorted);
+    const failures = await deleteSecretsVerified(store, sorted);
+    const droppable = (item: UndeletedSecret) =>
+      unconfirmed.has(item.ref) &&
+      !confirmed.has(item.ref) &&
+      secretStoreUnreachable(item.error);
+    dropped.push(...failures.filter(droppable).map((item) => item.ref));
+    const failed = failures.filter((item) => !droppable(item));
     if (failed.length)
       throw new PiShipError(
         "SECRET_STORE_UNAVAILABLE",
@@ -192,7 +217,7 @@ export async function deleteReferencedSecrets(
           sanitizedDetail: { refs: failed.map((item) => item.ref) },
         },
       );
-    deletedSecrets.push(...sorted);
+    deleted.push(...sorted.filter((ref) => !dropped.includes(ref)));
   }
-  return deletedSecrets;
+  return { deleted, dropped };
 }

@@ -30,6 +30,7 @@ import {
   createSecretStore,
   deleteSecretsVerified,
   deletionFailure,
+  droppedReferencesNotice,
   HttpBrokerCredentialProvider,
   LocalSecretCredentialProvider,
   metadataFileSecretRefs,
@@ -1403,9 +1404,7 @@ export class DistributionAccess {
             onDiscard: ({ failed, dropped }) => {
               undeleted = failed;
               if (dropped.length)
-                notices.push(
-                  `Secret references an earlier sign-in or sign-out left behind (${dropped.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, so nothing was stored through it`,
-                );
+                notices.push(droppedReferencesNotice(dropped));
             },
           })
         ).map((problem) => redact(problem));
@@ -1498,11 +1497,15 @@ export class DistributionAccess {
       return null;
     });
     const signOut = async (): Promise<void> => {
+      let dropped: readonly string[] = [];
       problems.push(
-        ...(await manager.logout(this.#credentialContext())).map((problem) =>
-          redact(problem),
-        ),
+        ...(
+          await manager.logout(this.#credentialContext(), {
+            onDiscard: (result) => (dropped = result.dropped),
+          })
+        ).map((problem) => redact(problem)),
       );
+      if (dropped.length) problems.push(droppedReferencesNotice(dropped));
       this.#forgetSecret();
       this.#workload = null;
       const clearSandbox = async (): Promise<void> => {

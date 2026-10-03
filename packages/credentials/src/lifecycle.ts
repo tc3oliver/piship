@@ -56,6 +56,34 @@ export type CredentialSlot = "inference" | "sandbox";
  * before it does anything else with the credential.
  */
 export const CREDENTIAL_DISCARDED_SCHEMA = "piship-credential-discarded/v1";
+
+/**
+ * The references of a discarded marker that were never confirmed written,
+ * and so may be dropped when deleting them fails because the store cannot be
+ * reached at all (its command is not installed). A marker lists them in
+ * `unconfirmed`: the reference a first sign-in names before it writes the
+ * secret, until the write succeeds. Every other reference is confirmed and
+ * stays tracked until it is deleted. A marker from v0.8.0, written before the
+ * field existed, cannot tell a pre-write reference from one a logout failed
+ * to delete, so all of its references count as unconfirmed. Metadata that is
+ * not a discarded marker has none.
+ */
+export function unconfirmedDiscardedRefs(raw: unknown): ReadonlySet<string> {
+  const value =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  if (value.schema !== CREDENTIAL_DISCARDED_SCHEMA) return new Set();
+  const listed =
+    "unconfirmed" in value ? value.unconfirmed : (value.orphans ?? []);
+  if (!Array.isArray(listed)) return new Set();
+  return new Set(
+    listed.filter((item): item is string => typeof item === "string"),
+  );
+}
+
+/** The notice for references a logout dropped (`onDiscard`'s `dropped`). */
+export function droppedReferencesNotice(dropped: readonly string[]): string {
+  return `Secret references an earlier sign-in or sign-out left behind (${dropped.join(", ")}) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`;
+}
 export const REVOCATION_RETRY_SCHEMA = "piship-revocation-retry/v1";
 /** Default file name of pending revocations, beside the credential metadata. */
 export const REVOCATION_RETRY_FILE = "revocation-retry.json";
@@ -1300,18 +1328,24 @@ export class CredentialManager {
     // stopped between writing it and committing metadata: a discarded
     // marker names it first, so the next command deletes it, never uses it.
     let before: string | null | undefined;
+    let unconfirmed: string[] = [];
+    let refs: string[] = [];
     if (!previous) {
       before = existsSync(this.options.metadataPath)
         ? readFileSync(this.options.metadataPath, "utf8")
         : null;
-      this.#writeDiscarded([
+      refs = [
         ...metadataFileSecretRefs(
           this.options.metadataPath,
           this.options.distributionId,
           this.slot,
         ),
         ref,
-      ]);
+      ];
+      // The new reference holds no secret yet; an earlier marker's
+      // unconfirmed references stay unconfirmed.
+      unconfirmed = [...unconfirmedDiscardedRefs(this.#readRaw()), ref];
+      this.#writeDiscarded(refs, undefined, unconfirmed);
     }
     try {
       await store.put(ref, credential.secret);
@@ -1327,6 +1361,14 @@ export class CredentialManager {
       }
       throw error;
     }
+    // The secret is stored: the marker now tracks it as confirmed, so a
+    // store that is missing later never drops it.
+    if (before !== undefined)
+      this.#writeDiscarded(
+        refs,
+        undefined,
+        unconfirmed.filter((item) => item !== ref),
+      );
     await this.options.onPhase?.("secret-written");
     const orphans = new Set(previous?.orphans ?? []);
     if (previous) orphans.add(previous.credential_ref);
@@ -1412,16 +1454,26 @@ export class CredentialManager {
     }
   }
 
+  /**
+   * Write a discarded marker. `unconfirmed` names the references never
+   * confirmed written (see `unconfirmedDiscardedRefs`); it is always written,
+   * so a marker without it is one from v0.8.0.
+   */
   #writeDiscarded(
     refs: readonly string[],
     store: SecretStoreProvider = this.#storeProvider,
+    unconfirmed: readonly string[] = [],
   ): void {
+    const orphans = [...new Set(refs)].sort();
     writeAtomic(
       this.options.metadataPath,
       `${JSON.stringify(
         {
           schema: CREDENTIAL_DISCARDED_SCHEMA,
-          orphans: [...new Set(refs)].sort(),
+          orphans,
+          unconfirmed: [...new Set(unconfirmed)]
+            .filter((item) => orphans.includes(item))
+            .sort(),
           secret_store: store,
           discarded_at: new Date(this.#now()).toISOString(),
         },
@@ -1440,18 +1492,22 @@ export class CredentialManager {
    * still to delete, so the secret stays tracked and is never used, and the
    * failures are returned.
    *
-   * A discarded marker whose store cannot be reached at all (its command is
-   * not installed) is dropped instead, and its references are added to
-   * `dropped`: nothing can have been stored through a store that cannot be
-   * started, and kept, the marker would stop every later login, also after
-   * the storage provider changed. Credential metadata, and a marker whose
-   * store answers but fails, stay tracked.
+   * A reference of a discarded marker that was never confirmed written
+   * (`unconfirmedDiscardedRefs`) and whose store cannot be reached at all
+   * (its command is not installed) is dropped instead, and added to
+   * `dropped`: kept, it would stop every later login, also after the storage
+   * provider changed, for a secret that may never have existed. A confirmed
+   * reference, any reference of credential metadata, and one whose store
+   * answers but fails stay tracked: the store may be missing only now (a
+   * reduced PATH, an uninstalled package) while the secret exists.
    */
   async #discardMetadata(
     raw: unknown = this.#readRaw(),
     dropped?: string[],
   ): Promise<UndeletedSecret[]> {
-    const marker = this.#discardedPending();
+    const unconfirmed = this.#discardedPending()
+      ? unconfirmedDiscardedRefs(this.#readRaw())
+      : new Set<string>();
     const refs = [
       ...new Set([
         ...metadataSecretRefs(raw, this.options.distributionId),
@@ -1481,22 +1537,20 @@ export class CredentialManager {
           ref,
           problem: `the ${recorded} secret store that holds it is not available`,
         }));
-    const unreachable =
-      marker &&
-      failed.length > 0 &&
-      failed.every((item) =>
-        secretStoreUnreachable((item as UndeletedSecret).error),
-      );
-    if (!failed.length || unreachable) {
+    const droppable = (item: UndeletedSecret) =>
+      unconfirmed.has(item.ref) && secretStoreUnreachable(item.error);
+    dropped?.push(...failed.filter(droppable).map((item) => item.ref));
+    const kept = failed.filter((item) => !droppable(item));
+    if (!kept.length) {
       rmSync(this.options.metadataPath, { force: true });
-      if (unreachable) dropped?.push(...failed.map((item) => item.ref));
       return [];
     }
     this.#writeDiscarded(
-      failed.map((item) => item.ref),
+      kept.map((item) => item.ref),
       recorded,
+      [...unconfirmed],
     );
-    return failed;
+    return kept;
   }
 
   /**
@@ -1635,7 +1689,7 @@ export class CredentialManager {
       await this.#clearMetadata(undefined, dropped);
       notices.push(
         dropped.length
-          ? `Secret references left in the ${foreign ?? this.#storeProvider} secret store were dropped without deleting anything: that store is not installed here, so nothing was stored through it`
+          ? `Secret references left in the ${foreign ?? this.#storeProvider} secret store were dropped without deleting anything: that store is not installed here, and no secret was confirmed written under them`
           : discarded
             ? "The secrets of a discarded credential were deleted"
             : foreign

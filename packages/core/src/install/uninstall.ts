@@ -315,12 +315,13 @@ export async function uninstallAndPurgeDistribution(
       `${readInstallReceipt(id).app.command} logout`,
       options,
     );
-    const deletedSecrets = await deleteReferencedSecrets(id, state, options);
+    const secrets = await deleteReferencedSecrets(id, state, options);
     hold.remove();
     rmSync(state, { recursive: true, force: true });
     return {
       state,
-      deletedSecrets,
+      deletedSecrets: secrets.deleted,
+      ...(secrets.dropped.length ? { droppedSecrets: secrets.dropped } : {}),
       ...(live.length ? { notRevoked: live } : {}),
     };
   } finally {

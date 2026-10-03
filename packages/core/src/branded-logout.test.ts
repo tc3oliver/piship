@@ -28,6 +28,7 @@ import {
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
+  SecretServiceSecretStore,
   type SecretStoreSelection,
   withFileLock,
 } from "@piship/credentials";
@@ -300,6 +301,46 @@ describe("branded logout", () => {
     const text = stateText(ctx);
     for (const secret of secrets) expect(text).not.toContain(secret);
   });
+
+  it.each([
+    ["with", true],
+    ["without", false],
+  ])(
+    "says which references it dropped when the system store is not installed, %s the runtime variables",
+    async (_name, variables) => {
+      const { ctx, out, err, path } = context("system");
+      platform.store = new SecretServiceSecretStore(() => ({
+        status: null,
+        stdout: "",
+        stderr: "spawnSync secret-tool ENOENT",
+        missing: true,
+      }));
+      // The discarded marker v0.8.0 left: it cannot say whether a secret
+      // was ever written under the reference.
+      mkdirSync(path("credentials-metadata"), { recursive: true });
+      writeFileSync(
+        path("credentials-metadata", "inference.json"),
+        JSON.stringify({
+          schema: "piship-credential-discarded/v1",
+          orphans: [`piship:${ID}:inference#1`],
+          secret_store: "system",
+        }),
+      );
+      if (!variables)
+        for (const name of Object.keys(services.env()))
+          delete process.env[name];
+      await runLogout(ctx);
+      expect(err).toContainEqual(
+        `Warning: Secret references an earlier sign-in or sign-out left behind (piship:${ID}:inference#1) were dropped without deleting anything: the secret store that recorded them is not installed here, and no secret was confirmed written under them`,
+      );
+      expect(out).toEqual([
+        "Signed out of AcmeCode. Local runtime and identity credentials were cleared; sessions were preserved.",
+      ]);
+      expect(existsSync(path("credentials-metadata", "inference.json"))).toBe(
+        false,
+      );
+    },
+  );
 
   it("deletes the secrets damaged metadata still names when signing out without the runtime variables", async () => {
     const { ctx, path } = context();
