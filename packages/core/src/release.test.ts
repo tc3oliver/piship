@@ -623,12 +623,12 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
-  it("trust: refuses an update source without bootstrap trust", () => {
+  it("trust: builds an update-disabled release from a source without bootstrap trust", () => {
+    // Nothing can verify an update for it, so update fails closed; the
+    // release itself is no less trustworthy than one with no source.
     const { path } = project({ trust: "    {}\n" });
-    const error = caught(() => checkReleaseInputs(path));
-    expect(error.code).toBe("CONFIG_INVALID");
-    expect(error.message).toMatch(
-      /Release gate trust: updates.source is set without updates.trust.bootstrap/,
+    expect(checkReleaseInputs(path).updates?.trust).not.toHaveProperty(
+      "bootstrap",
     );
   });
 

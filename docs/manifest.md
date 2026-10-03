@@ -258,7 +258,7 @@ Only public keys go in the manifest; secret-looking field names are rejected. Wh
 
 Rules beyond the field checks:
 
-- With `updates.source` set and no bootstrap, no update can be verified. `piship validate` warns, `update` fails closed, and `piship release` refuses the distribution (gate `trust`).
+- With `updates.source` set and no bootstrap, no update can be verified. `piship validate` warns and `update` fails closed; `piship release` still builds the release, which is update-disabled, as it would be with no source.
 - With neither `updates.source` nor a bootstrap, the distribution is update-disabled.
 - A managed distribution whose root and channel roles name the same key gets a `piship validate` warning, and `piship release` refuses it (gate `trust`) until the roles use distinct keys. A managed production distribution keeps its root key offline, separate from the channel release key. A personal distribution may share one key between both roles.
 

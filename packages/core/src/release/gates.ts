@@ -4,13 +4,13 @@
 import { PiShipError } from "@piship/contracts";
 import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
 import {
+  currentTarget,
+  type DistributionLock,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA5,
   PI_COMPATIBILITY,
   REVIEWED_INSTALL_SCRIPTS,
-  currentTarget,
   requireCurrentLock,
-  type DistributionLock,
 } from "../index.js";
 import { gate } from "./shared.js";
 
@@ -178,26 +178,18 @@ export function checkPackageSources(
 }
 
 /**
- * The `trust` gate over the locked update bootstrap: an update source needs
- * bootstrap trust (update would fail closed), and a managed distribution
+ * The `trust` gate over the locked update bootstrap: a managed distribution
  * needs distinct root and channel keys. A migrated v1alpha4 key set shares
  * its keys between both roles, so a managed release waits for the owner's
- * explicit root / channel split.
+ * explicit root / channel split. An update source without bootstrap trust is
+ * not refused here: such a release is update-disabled, `update` fails closed
+ * on it, and `piship validate` warns.
  */
 function checkUpdateTrust(lock: DistributionLock): void {
   const updates = lock.updates;
   if (!updates || "keys" in updates.trust) return;
   const bootstrap = updates.trust.bootstrap;
-  if (!bootstrap) {
-    if (updates.source !== undefined)
-      throw gate(
-        "CONFIG_INVALID",
-        "trust",
-        "updates.source is set without updates.trust.bootstrap, so no update could be verified",
-        "Add updates.trust.bootstrap with root and channel keys, or remove updates.source, then lock again",
-      );
-    return;
-  }
+  if (!bootstrap) return;
   const shared = sharedRoleKeyIds(bootstrap);
   if (lock.deployment.mode === "managed" && shared.length)
     throw gate(
