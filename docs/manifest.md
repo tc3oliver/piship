@@ -246,7 +246,7 @@ Only public keys go in the manifest; secret-looking field names are rejected. Wh
 
 ### Update trust bootstrap (v1alpha5)
 
-`updates.trust.bootstrap` is static release configuration: the update root a fresh installation trusts first. It is not the current trust of an installation that already exists.
+`updates.trust.bootstrap` is static release configuration: the update root a fresh installation trusts first. It is not the current trust of an installation that already exists: an installed client keeps its own current root and advances it only through signed `root/<N+1>.json` files in the update source, so changing the bootstrap of a later release changes nothing for installed clients ([trust root](release/trust-root.md#installation-trust-state)). Generate the block from public keys with `piship trust-root init` rather than by hand, and publish later roots with `piship trust-root next` ([owner workflow](release/owner-workflow.md#signing-a-channel)).
 
 | Field | Values |
 | --- | --- |
@@ -279,7 +279,7 @@ The manifest and lock keep the unresolved template, so a lock is not machine-spe
 ## Commands
 
 ```bash
-node packages/cli/dist/bin.js init ./my-agent             # personal v1alpha5 (identity none, pi-native)
+node packages/cli/dist/bin.js init ./my-agent --personal  # personal v1alpha5 (identity none, pi-native)
 node packages/cli/dist/bin.js init ./my-agent --managed   # managed v1alpha5 template
 node packages/cli/dist/bin.js validate ./my-agent/piship.yaml
 node packages/cli/dist/bin.js migrate ./my-agent/piship.yaml [--write]
@@ -300,7 +300,7 @@ node ./dist/my-agent/piship.mjs uninstall my-agent --purge --yes   # both in one
 
 `uninstall` keeps state. `purge <id> --yes` deletes it after the uninstall, and `uninstall <id> --purge --yes` does both in one command, for a user whose only PiShip is the installed release; both delete the secret-store entries the state references, and a secret that cannot be deleted fails the command before anything is removed ([install layout](architecture.md#canonical-payload)). Neither revokes anything, so both refuse while the distribution is signed in: run `<command> logout` first ([logout and revocation](security.md#logout-and-revocation)).
 
-v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`; see [release](release.md).
+v1alpha4 adds `release`, `verify-release`, `reproducibility`, `diff`, `keygen`, `sign-channel`, `update`, `rollback`, and `migrate-check`, and v1alpha5 adds `trust-root init` and `trust-root next` for the update root; see [release](release.md).
 
 `piship --help` lists every command with a one-line summary, and `piship <command> --help` (or `-h`) prints that command's usage; `--help` is never read as a file name or an argument.
 
@@ -315,7 +315,7 @@ v1alpha3 and later branded commands add:
 - `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
-Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 release with pinned keys.
+Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 or later release with update trust: the installation's update root, started from the release's `updates.trust.bootstrap` (or v1alpha4 `updates.trust.keys`) at install ([installation trust state](release/trust-root.md#installation-trust-state)).
 
 ### Doctor report
 
