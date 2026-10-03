@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "./index.js";
 
 const ID = "mypi";
@@ -548,6 +548,140 @@ describe("file system errors", () => {
     );
     expect(result.stderr).toContain("Action: keygen never overwrites a key");
     expect(readFileSync(key, "utf8")).toBe(before);
+  });
+});
+
+describe("signing key passphrases", () => {
+  const SECRET = "hunter2-cli-passphrase-sentinel";
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-passphrase-"));
+    // No terminal: a passphrase must come from a named channel.
+    vi.spyOn(process, "stdin", "get").mockReturnValue({
+      isTTY: false,
+    } as unknown as typeof process.stdin);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.PISHIP_TEST_SIGNING_PASSPHRASE;
+    rmSync(temp, { recursive: true, force: true });
+  });
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+  const signChannel = (key: string, ...extra: string[]) =>
+    run([
+      "sign-channel",
+      join(temp, "channel"),
+      join(temp, "missing.tar.gz"),
+      "--channel",
+      "stable",
+      "--key",
+      key,
+      "--key-id",
+      "k1",
+      ...extra,
+    ]);
+
+  it("never accepts the passphrase as a command-line value", async () => {
+    const key = join(temp, "signing.pem");
+    for (const args of [
+      ["--passphrase", SECRET],
+      [`--passphrase=${SECRET}`],
+      [
+        "--passphrase-env",
+        "PISHIP_TEST_SIGNING_PASSPHRASE",
+        "--passphrase",
+        SECRET,
+      ],
+    ]) {
+      const result = await signChannel(key, ...args);
+      expect(result.status).toBe(2);
+      expect(`${result.stdout}${result.stderr}`).not.toContain(SECRET);
+    }
+    const keygen = await run([
+      "keygen",
+      key,
+      "--id",
+      "k1",
+      "--encrypt",
+      "--passphrase",
+      SECRET,
+    ]);
+    expect(keygen.status).toBe(2);
+    expect(existsSync(key)).toBe(false);
+    // A value given where the variable name belongs is refused unechoed.
+    const named = await signChannel(key, "--passphrase-env", `${SECRET}!`);
+    expect(named.status).toBe(1);
+    expect(`${named.stdout}${named.stderr}`).not.toContain(SECRET);
+  });
+
+  it("writes an encrypted key and fails closed without its passphrase", async () => {
+    const key = join(temp, "signing.pem");
+    process.env.PISHIP_TEST_SIGNING_PASSPHRASE = SECRET;
+    const keygen = await run([
+      "keygen",
+      key,
+      "--id",
+      "k1",
+      "--encrypt",
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    ]);
+    expect(keygen.status).toBe(0);
+    expect(readFileSync(key, "utf8")).toMatch(
+      /^-----BEGIN ENCRYPTED PRIVATE KEY-----\n/,
+    );
+    const pem = readFileSync(key, "utf8");
+    const body = pem
+      .split("\n")
+      .filter((line) => line && !line.startsWith("-"));
+    // No terminal and no channel: refused before any archive is read.
+    const none = await signChannel(key);
+    expect(none.status).toBe(1);
+    expect(none.stderr).toContain("CREDENTIAL_REQUIRED");
+    expect(none.stderr).toContain("no terminal is attached");
+    process.env.PISHIP_TEST_SIGNING_PASSPHRASE = `${SECRET}-wrong`;
+    const wrong = await signChannel(
+      key,
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    );
+    expect(wrong.status).toBe(1);
+    expect(wrong.stderr).toContain(
+      "INTEGRITY_FAILED: Signing key could not be decrypted",
+    );
+    process.env.PISHIP_TEST_SIGNING_PASSPHRASE = SECRET;
+    // The right passphrase gets past the key to the missing archive.
+    const right = await signChannel(
+      key,
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    );
+    expect(right.status).toBe(1);
+    expect(right.stderr).not.toContain("Signing key");
+    for (const result of [keygen, none, wrong, right]) {
+      const text = `${result.stdout}${result.stderr}`;
+      expect(text).not.toContain(SECRET);
+      for (const line of body) expect(text).not.toContain(line);
+    }
+    expect(existsSync(join(temp, "channel"))).toBe(false);
+    // --passphrase-* without --encrypt is a mistake, not a plaintext key.
+    const plain = await run([
+      "keygen",
+      join(temp, "plain.pem"),
+      "--id",
+      "k1",
+      "--passphrase-env",
+      "PISHIP_TEST_SIGNING_PASSPHRASE",
+    ]);
+    expect(plain.status).toBe(1);
+    expect(existsSync(join(temp, "plain.pem"))).toBe(false);
   });
 });
 

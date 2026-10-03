@@ -29,7 +29,9 @@ Each distribution has its own trust root. The owner generates Ed25519 release ke
 | Rotation with a time-bounded window, or keys with `notBefore`/`notAfter` | | Not implemented |
 | A revocation list, or a key a client refuses before it activates a release that drops it | | Not implemented |
 | More than one signature on the channel metadata (old and new key at once) | | Not implemented |
-| Signing with a key held in a hardware token, KMS, or agent, or with an encrypted PEM | | Not implemented: `sign-channel` reads an unencrypted PEM file |
+| Signing with an encrypted Ed25519 PKCS#8 PEM. `keygen --encrypt` writes one; `sign-channel` asks for its passphrase at a hidden prompt, or reads it from the environment variable named by `--passphrase-env <NAME>` or from `--passphrase-stdin`. The passphrase is never a command-line value and never appears in output or errors | `pemSigner`, `readSigningPassphrase` | Implemented |
+| Every signature is verified against the signer's public key before anything is written | `signVerified` | Implemented |
+| Signing with a key held in a hardware token, KMS, or agent | Internal `Signer` interface | Not implemented: no external signer protocol |
 | A first install that verifies the installed archive against a pinned key | | Not implemented (see [Bootstrap](#distribution-bootstrap)) |
 | An official channel or a pinned production key operated by the PiShip project | | None exists. Every example pins `keys: []` |
 
@@ -183,7 +185,8 @@ Operating an official channel would be a new decision; key generation, custody, 
 | Signed metadata verification | `channel-trust.test.ts` "accepts metadata signed by any pinned key"; build-backed: `release.test.ts` "signed channels" |
 | Rotation: overlap accepted, retired key refused after it | `channel-trust.test.ts` "rotation"; build-backed through real updates: `lifecycle.test.ts` "rotates the release key through an overlap release and then refuses the retired key" |
 | Revoked and unknown key refusal | `channel-trust.test.ts` "refuses a revoked key however the signature names it", "refuses unknown keys and an empty trust root"; `signing.test.ts` |
-| `sign-channel` refuses to extend unverified metadata and changes nothing when signing fails | `release.test.ts` "extends existing metadata only when its signature verifies", "changes nothing when signing fails, and leaves no temporary files" |
+| `sign-channel` refuses to extend unverified metadata and changes nothing when signing fails | `release.test.ts` "extends existing metadata only when its signature verifies", "changes nothing when signing fails, and leaves no temporary files", "rejects a faulty signer before publishing and changes no files" |
+| Encrypted keys, passphrase handling, and signer self-verification | `signer.test.ts`; `cli/src/index.test.ts` "signing key passphrases" |
 | Tamper rejection | Metadata byte change, half-published pairs, another channel's metadata, and archive digest or size mismatch: `channel-trust.test.ts`. Tampered archive in a channel: `lifecycle.test.ts`. Release contents: `release.test.ts` |
 | Retired key refused after a rollback; fresh install has no history | `channel-trust.test.ts` "refuses a retired key that the active lock still pins"; build-backed: `lifecycle.test.ts` "keeps a key retired by an update retired after a rollback" |
 | Rollback compatibility (replay, downgrade) | `channel-trust.test.ts` "rollback protection" (sequence floor, also across a key change); `lifecycle.test.ts` "refuses replayed older channel metadata", "refuses a downgrade offered by the channel" |
@@ -197,5 +200,5 @@ None of these weakens the current guarantees, and none blocks production validat
 1. **Time-bounded key validity.** Optional `notBefore`/`notAfter` per pinned key would let a retired key expire on clients that never update. This is a lock schema change.
 2. **Revocation before activation.** Retired keys are recorded per installation, only once it activates the release that drops a key. A client that never activated that release still trusts the key, as in [Compromised-key recovery](#compromised-key-recovery). Refusing a key earlier needs a revocation list the client can authenticate.
 3. **Multiple signatures per channel.** Accept a `.sig` that holds several envelopes, so one channel serves clients on both sides of a rotation.
-4. **Signer hardening.** Support encrypted PEM keys, or an external signer (hardware token or KMS), in `sign-channel`.
+4. **External signers.** Encrypted PEM keys are supported. A hardware token or KMS signer would implement the internal `Signer` interface; no public protocol for it exists yet.
 5. **Official channel.** Not planned; see [Examples](#examples).
