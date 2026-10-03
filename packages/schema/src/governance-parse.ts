@@ -54,11 +54,13 @@ export function parseGovernance(
   mode: DeploymentMode,
   variables: readonly string[],
   app: { readonly id: string },
+  /** piship/v1alpha5 and later: accepts `policy.userAuto`. */
+  v5 = false,
 ): GovernanceManifest {
   return {
     resources: parseGovernanceResources(root.resources),
     capabilities: parseCapabilities(root.capabilities),
-    policy: parsePolicy(root.policy, mode, app),
+    policy: parsePolicy(root.policy, mode, app, { userAuto: v5 }),
     mcp: parseMcp(root.mcp, mode, variables),
     sandbox: parseSandbox(root.sandbox, variables),
     audit: parseAudit(root.audit, mode, variables),

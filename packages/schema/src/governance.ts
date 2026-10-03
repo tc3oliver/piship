@@ -199,6 +199,9 @@ export interface ProjectTrustPolicy {
   readonly unknown: { readonly dimensions: ProjectDimensions };
 }
 
+export const USER_AUTO_SETTINGS = ["off", "allowed"] as const;
+export type UserAutoSetting = (typeof USER_AUTO_SETTINGS)[number];
+
 export interface PolicyConfig {
   readonly id: string;
   readonly version: number;
@@ -208,6 +211,12 @@ export interface PolicyConfig {
   readonly defaults: readonly PolicyRule[];
   /** Optional downstream team rules module (`./x.mjs`); narrowing only. */
   readonly adapter?: string;
+  /**
+   * Whether a managed user may switch on auto mode, which resolves `ask` to
+   * allow for that user (never `deny` or an enforced rule). Present only when
+   * the manifest declares it (piship/v1alpha5, managed mode); absent is `off`.
+   */
+  readonly userAuto?: UserAutoSetting;
   readonly resourceTrust: Readonly<
     Record<Exclude<ResourceTrustClass, "project">, TrustSetting> & {
       readonly project: ProjectResourceTrust;
