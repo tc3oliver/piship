@@ -86,6 +86,8 @@ async function open(
     readonly userRules?: readonly unknown[];
     readonly fetch?: ManagedFetch;
     readonly metrics?: LocalMetrics;
+    /** `policy.userAuto` of a v1alpha5 manifest, set on the v1alpha3 lock. */
+    readonly userAuto?: "allowed";
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-audit-events-"));
@@ -121,12 +123,27 @@ async function open(
     ].join("\n"),
   );
   const resolved = resolveLock(manifest);
-  const lock = options.mode
-    ? {
-        ...resolved,
-        deployment: { ...resolved.deployment, mode: options.mode },
-      }
-    : resolved;
+  const governance = resolved.governance;
+  const lock = {
+    ...resolved,
+    ...(options.mode
+      ? { deployment: { ...resolved.deployment, mode: options.mode } }
+      : {}),
+    ...(options.userAuto && governance
+      ? {
+          governance: {
+            ...governance,
+            manifest: {
+              ...governance.manifest,
+              policy: {
+                ...governance.manifest.policy,
+                userAuto: options.userAuto,
+              },
+            },
+          },
+        }
+      : {}),
+  };
   const session = await GovernanceSession.open({
     lock: lock as Parameters<typeof GovernanceSession.open>[0]["lock"],
     distributionDir: distribution,
@@ -170,7 +187,13 @@ const factoryOf = (extension: InlineExtension): ExtensionFactory =>
   typeof extension === "function" ? extension : extension.factory;
 
 /** What an inline extension registers, through the public API shape. */
-function handlers(gov: GovernanceSession) {
+function handlers(
+  gov: GovernanceSession,
+  commands = new Map<
+    string,
+    { handler: (args: string, ctx: unknown) => Promise<void> }
+  >(),
+) {
   const registered = new Map<
     string,
     (event: unknown, ctx: unknown) => unknown
@@ -178,6 +201,10 @@ function handlers(gov: GovernanceSession) {
   factoryOf(governanceHooks(gov))({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       registered.set(event, handler),
+    registerCommand: (
+      name: string,
+      options: { handler: (args: string, ctx: unknown) => Promise<void> },
+    ) => commands.set(name, options),
   } as never);
   return registered;
 }
@@ -273,25 +300,55 @@ describe("governed session audit events (real flows)", () => {
     expect(JSON.stringify(result)).toContain("query-canary");
     await session.close();
 
-    // A managed session: a user rule that tries to widen the policy, and a
-    // provider the policy refuses.
+    // A managed session: a user rule that tries to widen the policy, a
+    // provider the policy refuses, and the user's auto mode switched on and
+    // off around an `ask` it approves.
     const managed = await open(
       [
         "policy:",
         "  id: unit",
         "  version: 1",
         "  default: deny",
+        "  defaults:",
+        rule("read-tool", "tool.execute", "read", "ask"),
         ...PROVIDER,
         ...FILE_AUDIT,
       ],
       {
         mode: "managed",
+        userAuto: "allowed",
         userRules: [
           { id: "me.shell", action: "shell.execute", effect: "allow" },
         ],
       },
     );
+    const commands = new Map<
+      string,
+      { handler: (args: string, ctx: unknown) => Promise<void> }
+    >();
+    const managedHooks = handlers(managed.session, commands);
+    const auto = commands.get("auto");
+    if (!auto) throw new Error("/auto is not registered");
+    await auto.handler("on", context());
+    expect(
+      await (
+        managedHooks.get("tool_call") as (
+          event: unknown,
+          ctx: unknown,
+        ) => Promise<unknown>
+      )({ toolName: "read", input: {} }, context()),
+    ).toBeUndefined();
+    await auto.handler("off", context());
     await managed.session.close();
+    expect(
+      managed.events().find((event) => event.event === "policy.auto_approved"),
+    ).toMatchObject({
+      user: "alice",
+      resource: "read",
+      decision: "approved",
+      rule: "read-tool",
+      detail: { action: "tool.execute", approval: "auto" },
+    });
 
     const events = [...full.events(), ...managed.events()];
     const emitted = new Set(events.map((event) => event.event));
@@ -300,7 +357,7 @@ describe("governed session audit events (real flows)", () => {
         (name) => !emitted.has(name) && !OUTSIDE_A_SESSION.includes(name),
       ),
     ).toEqual([]);
-    // Together with the branded commands, the flows cover all 24 names.
+    // Together with the branded commands, the flows cover all 27 names.
     expect(new Set([...emitted, ...OUTSIDE_A_SESSION])).toEqual(
       new Set(AUDIT_EVENT_TYPES),
     );

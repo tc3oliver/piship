@@ -143,6 +143,7 @@ function inspection(
     engine: { id: "acme-engineering@1", diagnostics: [] },
     capabilities: [],
     resources: [],
+    userAuto: { allowed: false, state: "not-allowed", active: false },
   } as unknown as GovernanceInspection;
 }
 

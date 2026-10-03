@@ -62,10 +62,20 @@ export async function runPolicy(
     action: requested as PolicyAction,
     resource,
   });
+  // While the user's auto mode is on, an ask from the distribution defaults
+  // runs without a prompt.
+  const format = {
+    autoApproved:
+      inspection.userAuto.active &&
+      !inspection.engine.keepsPrompt({
+        action: requested as PolicyAction,
+        resource,
+      }),
+  };
   ctx.out(
     json
-      ? redact(JSON.stringify(decisionToJSON(explanation), null, 2))
-      : redact(formatDecision(explanation)),
+      ? redact(JSON.stringify(decisionToJSON(explanation, format), null, 2))
+      : redact(formatDecision(explanation, format)),
   );
 }
 
