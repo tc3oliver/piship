@@ -39,7 +39,19 @@ jobs:
       # npm 10, which Node 22 bundles, runs a git dependency's prepare script
       # while resolving, so `piship lock` refuses to lock Pi packages without
       # npm 11, and the tests that lock them fail under CI without it.
-      - run: npm install -g npm@11.21.0 && npm --version
+      # On Windows `npm install -g` writes to a separate global prefix and the
+      # npm.cmd beside node.exe still wins for spawned processes, so npm 11 is
+      # installed over the bundled npm there. The check spawns npm as the
+      # tests do.
+      - name: Use npm 11
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npm install -g npm@11.21.0 --prefix "$(node -p "require('path').dirname(process.execPath)")"
+          else
+            npm install -g npm@11.21.0
+          fi
+          node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       - run: npm ci
       - run: npm run build
@@ -163,7 +175,19 @@ jobs:
       # npm 10, which Node 22 bundles, runs a git dependency's prepare script
       # while resolving, so `piship lock` refuses to lock Pi packages without
       # npm 11, and the tests that lock them fail under CI without it.
-      - run: npm install -g npm@11.21.0 && npm --version
+      # On Windows `npm install -g` writes to a separate global prefix and the
+      # npm.cmd beside node.exe still wins for spawned processes, so npm 11 is
+      # installed over the bundled npm there. The check spawns npm as the
+      # tests do.
+      - name: Use npm 11
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npm install -g npm@11.21.0 --prefix "$(node -p "require('path').dirname(process.execPath)")"
+          else
+            npm install -g npm@11.21.0
+          fi
+          node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
       - run: node -p "process.platform + '/' + process.arch + ' Node ' + process.version"
       - run: docker version --format 'Docker {{.Server.Version}}' && docker compose version
 
