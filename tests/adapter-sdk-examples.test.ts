@@ -179,7 +179,7 @@ describe("the SDK example adapters", () => {
         command: "acme",
         version: "1.0.0",
       },
-      runtime: { pi: "1.0.0" },
+      runtime: { pi: "1.0.2" },
       deployment: { mode: "personal" },
       identity: { mode: "adapter", adapter: "./adapters/identity.mjs" },
       credential: { provider: "adapter", adapter: "./adapters/credential.mjs" },
@@ -257,7 +257,7 @@ describe("the SDK example adapters", () => {
       [
         "schema: piship/v1alpha3",
         "app: { id: acmecode, name: AcmeCode, command: acme, version: 0.1.0 }",
-        'runtime: { pi: "1.0.0" }',
+        'runtime: { pi: "1.0.2" }',
         "deployment: { mode: personal }",
         "sandbox:",
         "  required: true",
@@ -275,7 +275,7 @@ describe("the SDK example adapters", () => {
       distributionDir: distribution,
       stateDir: join(root, "state"),
       cwd: workspace,
-      piVersion: "1.0.0",
+      piVersion: "1.0.2",
       interactive: false,
       fetch: createManagedFetch({
         ...DEFAULT_NETWORK_POLICY,

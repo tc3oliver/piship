@@ -30,7 +30,7 @@ function fixture() {
   const path = join(dir, "piship.yaml");
   writeFileSync(
     path,
-    'schema: piship/v1alpha1\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "1.0.0"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    - ./resources/AGENTS.md\n',
+    'schema: piship/v1alpha1\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    - ./resources/AGENTS.md\n',
   );
   return { dir, path };
 }
@@ -56,7 +56,7 @@ describe("distribution core", () => {
     lockManifest(path);
     expect(readFileSync(lockPath, "utf8")).toBe(first);
     const lock = requireCurrentLock(path);
-    expect(lock.runtime.version).toBe("1.0.0");
+    expect(lock.runtime.version).toBe("1.0.2");
     expect(lock.resources[0]?.path).toBe("resources/AGENTS.md");
     expect(first).not.toMatch(/apiKey|password|secret/i);
     writeFileSync(join(dir, "resources", "AGENTS.md"), "changed\n");
@@ -124,7 +124,7 @@ describe("sandbox adapter locking", () => {
     const path = join(dir, "piship.yaml");
     writeFileSync(
       path,
-      'schema: piship/v1alpha3\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "1.0.0"\ndeployment:\n  mode: personal\nsandbox:\n  required: true\n  provider: custom\n  adapter: ./sandbox/acme.mjs\n',
+      'schema: piship/v1alpha3\napp:\n  id: mypi\n  name: My Pi\n  command: mypi\n  version: 0.1.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nsandbox:\n  required: true\n  provider: custom\n  adapter: ./sandbox/acme.mjs\n',
     );
     const locked = resolveLock(path).resources.find(
       (item) => item.kind === "adapters",

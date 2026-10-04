@@ -37,7 +37,7 @@ node dist/mypi/piship.mjs uninstall mypi
 
 ### Interactive launch
 
-The interactive `mypi` is Pi's own interactive mode. PiShip sets Pi's defaults on every launch: Pi does not ask pi.dev for a newer Pi version (so there is no "Update Available ... Run `pi update`" notice, and a newer Pi comes only with a new MyPi release; MyPi pins Pi 1.0.0), sends no install report or telemetry, keeps its crash log (`crashes.json`) in MyPi's state, starts without the Pi logo, key hints, or resource listing, and leaves the terminal's own scrollback in place instead of taking over the screen. A few things stay Pi's, and PiShip does not change them:
+The interactive `mypi` is Pi's own interactive mode. PiShip sets Pi's defaults on every launch: Pi does not ask pi.dev for a newer Pi version (so there is no "Update Available ... Run `pi update`" notice, and a newer Pi comes only with a new MyPi release; MyPi pins Pi 1.0.2), sends no install report or telemetry, keeps its crash log (`crashes.json`) in MyPi's state, starts without the Pi logo, key hints, or resource listing, and leaves the terminal's own scrollback in place instead of taking over the screen. A few things stay Pi's, and PiShip does not change them:
 
 - If `fd` or `rg` is neither on `PATH` nor in `~/.piship/mypi/agent/bin/` (or `$PISHIP_STATE_HOME/mypi/agent/bin/`), Pi downloads it from github.com into that directory. That is MyPi's state, not your `~/.pi`, so `purge` removes it and `uninstall` keeps it; each distribution downloads its own copies.
 - Pi may refresh model catalogs over the network.

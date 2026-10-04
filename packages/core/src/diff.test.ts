@@ -28,7 +28,7 @@ app:
   version: 1.0.0
   theme: mypi
 runtime:
-  pi: "1.0.0"
+  pi: "1.0.2"
 deployment:
   mode: personal
 resources:
@@ -87,7 +87,7 @@ describe("diffLocks", () => {
     expect(report.changes).toEqual([]);
     expect(report.requiredTests).toEqual([]);
     expect(formatDiff(report)).toBe(
-      `acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 1.0.0, PiShip ${PISHIP_VERSION}\nNo release-impact changes.\n`,
+      `acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 1.0.2, PiShip ${PISHIP_VERSION}\nNo release-impact changes.\n`,
     );
   });
 
@@ -100,7 +100,7 @@ describe("diffLocks", () => {
       expect.objectContaining({
         area: "pi",
         kind: "changed",
-        before: "1.0.0",
+        before: "1.0.2",
         after: "0.88.0",
         risk: "high",
       }),
@@ -407,7 +407,7 @@ describe("diffLocks", () => {
     expect(formatDiff(report)).toBe(
       [
         "acmecode 1.0.0 -> 1.1.0 (risk: medium)",
-        `Pi 1.0.0, PiShip ${PISHIP_VERSION} -> 0.2.0`,
+        `Pi 1.0.2, PiShip ${PISHIP_VERSION} -> 0.2.0`,
         "Changes:",
         "  [low] distribution: changed version (1.0.0 -> 1.1.0): Release version change.",
         `  [medium] piship: changed PiShip version (${PISHIP_VERSION} -> 0.2.0): PiShip runtime changed; launch and governance code differ.`,

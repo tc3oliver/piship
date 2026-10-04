@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--release-orange" alt="Status: pre-release">
-  <img src="https://img.shields.io/badge/Pi-1.0.0-blue" alt="Pi 1.0.0">
+  <img src="https://img.shields.io/badge/Pi-1.0.2-blue" alt="Pi 1.0.2">
   <img src="https://img.shields.io/badge/Node-%3E%3D22.19.0-339933?logo=node.js&logoColor=white" alt="Node >=22.19.0">
   <img src="https://img.shields.io/github/license/tc3oliver/piship" alt="License">
 </p>
@@ -119,7 +119,7 @@ app:
   version: 1.0.0
 
 runtime:
-  pi: "1.0.0"
+  pi: "1.0.2"
 
 deployment:
   mode: managed
