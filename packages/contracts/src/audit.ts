@@ -89,8 +89,8 @@ export type AuditExecutionSource = (typeof AUDIT_EXECUTION_SOURCES)[number];
 /**
  * Why a tool call failed before policy was asked (`detail.error` of a tool
  * execution event): the tool name is not registered, its arguments did not
- * validate, or another extension's `tool_call` hook refused it before
- * PiShip's ran.
+ * validate, or it was refused while another extension's `tool_call` hook
+ * runs before PiShip's (which then cannot tell the two apart).
  */
 export const TOOL_CALL_FAILURES = [
   "not-found",

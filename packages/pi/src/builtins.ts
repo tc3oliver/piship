@@ -147,15 +147,28 @@ function unresolvedExposure(
   };
 }
 
-/** The text of a tool result Pi reports at tool_execution_end. */
-function resultText(result: unknown): string {
-  const content = (result as { content?: unknown } | undefined)?.content;
-  if (!Array.isArray(content)) return "";
-  const first = content.find(
-    (part): part is { type: "text"; text: string } =>
-      part?.type === "text" && typeof part.text === "string",
+/** Pi's path for an inline extension (`<inline:name>`). */
+const POLICY_EXTENSION_PATH = "<inline:piship-policy>";
+
+/**
+ * Whether another tool_call handler runs before PiShip's, or undefined when
+ * the order is unknown. Pi stops at the first handler that blocks, so a
+ * call refused there never reaches PiShip's hook, just like a call whose
+ * arguments failed validation; with no handler before PiShip's, only
+ * validation can have refused it.
+ */
+function toolCallHandlerBefore(gov: GovernanceSession): boolean | undefined {
+  const extensions = gov.piExtensions?.();
+  if (!extensions) return undefined;
+  const own = extensions.findIndex(
+    (extension) => extension.path === POLICY_EXTENSION_PATH,
   );
-  return first?.text ?? "";
+  if (own < 0) return undefined;
+  return extensions
+    .slice(0, own)
+    .some(
+      (extension) => (extension.handlers.get("tool_call")?.length ?? 0) > 0,
+    );
 }
 
 /**
@@ -268,14 +281,13 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
               (info.exposure === "direct" &&
                 pi.getActiveTools().includes(tool)))
           : pi.getActiveTools().includes(tool);
-        // Pi validates the arguments before any tool_call hook; a callable
-        // tool that failed otherwise was refused by an earlier extension's
-        // hook. Only the error's fixed prefix is read, never recorded.
+        // Pi validates the arguments before any tool_call hook runs. The
+        // error text is the refusing extension's to choose, so it is never
+        // read: a failure is invalid-arguments only when no other handler
+        // runs before PiShip's.
         const error: ToolCallFailure = !callable
           ? "not-found"
-          : resultText(event.result).startsWith(
-                `Validation failed for tool "${tool}":`,
-              )
+          : toolCallHandlerBefore(gov) === false
             ? "invalid-arguments"
             : "refused-before-policy";
         gov.emit("tool.denied", {

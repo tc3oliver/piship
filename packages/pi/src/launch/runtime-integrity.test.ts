@@ -56,8 +56,14 @@ function harness(
   const state = {
     live: [...live],
     ignore: [] as string[],
-    // What ctx.getSystemPrompt() renders: the run's forced prompt, as Pi does.
-    options: undefined as { forceSystemPrompt?: string } | undefined,
+    // What ctx.getSystemPrompt() renders from: the run's prompt options.
+    options: undefined as
+      | {
+          forceSystemPrompt?: string;
+          contextFiles?: { content: string }[];
+          sections?: Record<string, string>;
+        }
+      | undefined,
   };
   const setActiveTools = vi.fn((names: string[]) => {
     state.live = names.filter((name) => !state.ignore.includes(name));
@@ -70,7 +76,16 @@ function harness(
     setActiveTools,
   });
   const ctx = {
-    getSystemPrompt: () => state.options?.forceSystemPrompt ?? "",
+    // As Pi renders it: the forced text, or the structured sections.
+    getSystemPrompt: () => {
+      const run = state.options;
+      if (!run) return "";
+      if (run.forceSystemPrompt !== undefined) return run.forceSystemPrompt;
+      return [
+        ...(run.contextFiles ?? []).map((file) => file.content),
+        ...Object.values(run.sections ?? {}),
+      ].join("\n\n");
+    },
   };
   const fire = (name: string, event: unknown = {}) => {
     const handler = handlers.get(name);
@@ -105,7 +120,9 @@ function options(overrides: Record<string, unknown> = {}) {
   };
 }
 
-type Forceable = ReturnType<typeof options> & { forceSystemPrompt?: string };
+type Forceable = ReturnType<typeof options> & {
+  forceSystemPrompt?: string | undefined;
+};
 
 const system = (sections: Record<string, string | null>, extra = {}) => ({
   role: "system",
@@ -350,6 +367,30 @@ describe("runtime integrity: context_with_system", () => {
       Object.defineProperty(opts, "forceSystemPrompt", { get: () => "x" }),
     ).toThrow(TypeError);
     expect(blocks).toEqual([]);
+  });
+
+  it("blocks a later turn whose copied options force a prompt the kept object no longer shows", () => {
+    const { fire, blocks, reverted, state } = harness();
+    const opts: Forceable = options();
+    fire("before_agent_start", { systemPromptOptions: opts });
+    const messages = [system({ project_context: COMPANY })];
+    fire("context_with_system", { messages });
+    expect(blocks).toEqual([]);
+    // turn_end set it, Pi copied it into turn 2's options, turn_start
+    // cleared it on the kept object.
+    state.options = { ...opts, forceSystemPrompt: "HOSTILE" };
+    opts.forceSystemPrompt = undefined;
+    fire("context_with_system", { messages });
+    expect(blocks).toEqual(["prompt:live"]);
+    expect(reverted()).not.toContain("prompt:forced");
+  });
+
+  it("blocks when the structured prompt of a later turn lost enforced text", () => {
+    const { fire, blocks, state } = harness();
+    fire("before_agent_start", { systemPromptOptions: options() });
+    state.options = options({ contextFiles: [] });
+    fire("context_with_system", { messages: [system({})] });
+    expect(blocks).toEqual(["prompt:live"]);
   });
 
   it("blocks when the forced prompt Pi will send still lacks the enforced text", () => {

@@ -259,6 +259,11 @@ export function runtimeIntegrityExtension(
   // and an extension can keep that object from before_agent_start and set it
   // later: it is re-read, as Pi will, at every request.
   let runOptions: BuildSystemPromptOptions | undefined;
+  // The enforced text the run's prompt carries once before_agent_start
+  // restored it. Pi copies the run's options into a new object for every
+  // later turn, which PiShip never sees, so what the prompt Pi renders lost
+  // after the first turn cannot be repaired, only refused.
+  let runRequired: readonly string[] | undefined;
   return {
     name: INTEGRITY_EXTENSION,
     factory: (pi: ExtensionAPI) => {
@@ -363,6 +368,7 @@ export function runtimeIntegrityExtension(
               : required.some((text) => !final.includes(text));
           if (lost)
             gov.blockRuntime("prompt", `${phase}: the prompt was not restored`);
+          runRequired = required;
           if (
             enforced.mandatoryTools.some(
               (name) => !options.selectedTools.includes(name),
@@ -393,25 +399,30 @@ export function runtimeIntegrityExtension(
             const phase = "context_with_system";
             if (runOptions) pinForced(runOptions);
             const forcedPrompt = runOptions?.forceSystemPrompt;
-            if (forcedPrompt !== undefined) {
+            if (forcedPrompt !== undefined && runOptions) {
               // Pi replaces every system message with the forced text after
-              // this handler; ctx.getSystemPrompt() renders what it will send.
-              const required = texts();
-              const missing = required.filter(
+              // this handler. The first turn's options are the object
+              // before_agent_start handed out, so it can still be repaired.
+              const missing = texts().filter(
                 (text) => !forcedPrompt.includes(text),
               );
-              if (missing.length && runOptions) {
+              if (missing.length) {
                 runOptions.forceSystemPrompt = `${forcedPrompt}\n\n${enforcedBlock(missing)}`;
                 reverted("prompt:forced", "appended", phase);
               }
-              const sent = ctx.getSystemPrompt();
-              if (required.some((text) => !sent.includes(text)))
-                gov.blockRuntime(
-                  "prompt:forced",
-                  `${phase}: the forced prompt was not restored`,
-                );
-              return undefined;
             }
+            // ctx.getSystemPrompt() renders the live run options, the forced
+            // text when the prompt is forced: what Pi sends if it is, and the
+            // prompt the request's system messages were built from if not.
+            if (runRequired) {
+              const sent = ctx.getSystemPrompt();
+              if (runRequired.some((text) => !sent.includes(text)))
+                gov.blockRuntime(
+                  forcedPrompt === undefined ? "prompt:live" : "prompt:forced",
+                  `${phase}: the prompt Pi renders for this turn lost enforced text`,
+                );
+            }
+            if (forcedPrompt !== undefined) return undefined;
             const messages = event.messages;
             // The first system message is not always at index 0: a session
             // that began with entries appended outside a prompt gets its
@@ -468,6 +479,7 @@ export function runtimeIntegrityExtension(
       // projection forces only a run's prompt.
       pi.on("agent_settled", () => {
         runOptions = undefined;
+        runRequired = undefined;
       });
 
       pi.on(

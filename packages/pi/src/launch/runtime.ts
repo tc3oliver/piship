@@ -318,7 +318,10 @@ async function startRuntime(
             extensionToolsOf(resourceLoader),
           )
         : null;
-    if (gov) gov.exposure = table;
+    if (gov) {
+      gov.exposure = table;
+      gov.piExtensions = () => resourceLoader.getExtensions().extensions;
+    }
     if (
       theme &&
       !["dark", "light"].includes(theme) &&

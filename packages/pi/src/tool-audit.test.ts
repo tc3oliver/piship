@@ -22,6 +22,8 @@ function setup(
     exposure?: Record<string, string>;
     tools?: { name: string; exposure: string }[];
     active?: string[];
+    /** Extensions loaded before PiShip's whose tool_call handlers run first; null: order unknown. */
+    before?: { tool_call: number }[] | null | undefined;
   } = {},
 ) {
   const emitted: Emitted[] = [];
@@ -38,6 +40,20 @@ function setup(
     userAuto: { active: false },
     metrics: { recordPolicyDenial: () => undefined },
     exposure: { get: (name: string) => exposure[name] },
+    piExtensions:
+      options.before === null
+        ? null
+        : () => [
+            ...(options.before ?? []).map((item, index) => ({
+              path: `/ext/${index}.js`,
+              handlers: new Map(
+                item.tool_call
+                  ? [["tool_call", Array(item.tool_call).fill(() => undefined)]]
+                  : [],
+              ),
+            })),
+            { path: "<inline:piship-policy>", handlers: new Map() },
+          ],
     emit: (event: string, fields: Record<string, unknown> = {}) =>
       emitted.push({ event, fields }),
     attachNotices: () => undefined,
@@ -143,13 +159,14 @@ describe("tool call audit", () => {
     expect(emitted.filter((item) => item.event === "tool.denied")).toEqual([]);
   });
 
-  it("classifies a call refused before policy as not-found, invalid-arguments, or refused-before-policy", () => {
+  const refusedBeforePolicy = (before?: { tool_call: number }[] | null) => {
     const { emitted, on } = setup({
       tools: [
         { name: "read", exposure: "direct" },
         { name: "codemode", exposure: "model-only" },
       ],
       active: ["read", "codemode"],
+      before,
     });
     const attempt = (
       id: string,
@@ -170,37 +187,42 @@ describe("tool call audit", () => {
       });
     };
     on("tool_execution_start")({ toolCallId: "p", toolName: "codemode" });
-    // Pi's validation error, which no tool_call hook sees.
-    attempt(
-      "p/1",
-      "read",
-      "p",
-      'Validation failed for tool "read":\n  - /path: secret-canary',
-    );
+    attempt("p/1", "read", "p"); // bad arguments, or an earlier hook
     attempt("p/2", "hidden_tool", "p"); // excluded: not registered
     attempt("p/3", "codemode", "p"); // model-only: never callable nested
     attempt("t1", "nope"); // top-level unknown name
-    // An earlier extension's tool_call hook blocked it, even one that
-    // words its reason like a validation error of another tool.
-    attempt("t2", "read", undefined, "blocked by a company hook");
-    attempt("t3", "read", undefined, 'Validation failed for tool "other":');
-    const denied = emitted.filter((item) => item.event === "tool.denied");
-    expect(
-      denied.map(({ fields }) => [
+    // The text never decides: a hook can word its reason like Pi's.
+    attempt("t2", "read", undefined, 'Validation failed for tool "read":');
+    expect(JSON.stringify(emitted)).not.toContain("secret-canary");
+    return emitted
+      .filter((item) => item.event === "tool.denied")
+      .map(({ fields }) => [
         fields.resource,
         fields.rule,
         (fields.detail as Record<string, unknown>).error,
         (fields.detail as Record<string, unknown>).source,
-      ]),
-    ).toEqual([
+      ]);
+  };
+
+  it("classifies a call refused before policy as not-found or invalid-arguments when no hook runs before PiShip's", () => {
+    expect(refusedBeforePolicy([{ tool_call: 0 }])).toEqual([
       ["read", PRE_POLICY_RULE, "invalid-arguments", "codemode"],
       ["hidden_tool", PRE_POLICY_RULE, "not-found", "codemode"],
       ["codemode", PRE_POLICY_RULE, "not-found", "codemode"],
       ["nope", PRE_POLICY_RULE, "not-found", "top-level"],
-      ["read", PRE_POLICY_RULE, "refused-before-policy", "top-level"],
-      ["read", PRE_POLICY_RULE, "refused-before-policy", "top-level"],
+      ["read", PRE_POLICY_RULE, "invalid-arguments", "top-level"],
     ]);
-    expect(JSON.stringify(emitted)).not.toContain("secret-canary");
+  });
+
+  it("classifies a callable tool as refused-before-policy when another hook runs first, or the order is unknown", () => {
+    for (const before of [[{ tool_call: 1 }], null])
+      expect(refusedBeforePolicy(before)).toEqual([
+        ["read", PRE_POLICY_RULE, "refused-before-policy", "codemode"],
+        ["hidden_tool", PRE_POLICY_RULE, "not-found", "codemode"],
+        ["codemode", PRE_POLICY_RULE, "not-found", "codemode"],
+        ["nope", PRE_POLICY_RULE, "not-found", "top-level"],
+        ["read", PRE_POLICY_RULE, "refused-before-policy", "top-level"],
+      ]);
   });
 
   it("managed: refuses a tool registered after the exposure was resolved", async () => {

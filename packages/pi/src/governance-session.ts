@@ -2,6 +2,7 @@
 // origin, sandbox, policy, resource and provider trust, capability state, and
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { Extension } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import {
   AuditLog,
@@ -532,6 +533,11 @@ export class GovernanceSession {
    * creates a session (again for `/new`, `/resume`, and fork).
    */
   exposure: ToolExposureTable | null = null;
+  /**
+   * The extensions Pi runs, in handler order; set with `exposure`. Read
+   * live, as Pi reads each extension's handlers at every event.
+   */
+  piExtensions: (() => readonly Extension[]) | null = null;
   /** Current piship-workflow mode; null when the workflow is not active. */
   workflowMode: "plan" | "build" | null = null;
 
