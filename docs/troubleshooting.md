@@ -7,6 +7,7 @@ This page lists what PiShip needs on a machine and what each PiShip error code m
 | Need | When | Details |
 | --- | --- | --- |
 | Node.js 22.19.0 or newer, and npm | Always, to build from source | The `engines` field in `package.json`. An installed release carries its own payload but still runs on the user's Node.js |
+| npm 11 or later | `piship lock` of a manifest that declares Pi packages | Node 22 bundles npm 10, which `piship lock` refuses for packages ([manifest](manifest.md#pi-packages-v1alpha6)); run `npm install -g npm@11`. `piship build` works with any npm |
 | Linux: bubblewrap (`bwrap`) with unprivileged user namespaces | `sandbox.required: true` with the default `native` provider, as in the managed demo | On Ubuntu 24.04, and other systems where `kernel.apparmor_restrict_unprivileged_userns` is `1`, AppArmor blocks unprivileged user namespaces. Allow them with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (as CI does), or with an AppArmor profile for `bwrap`. Otherwise the launch fails with `SANDBOX_UNAVAILABLE` |
 | macOS: Seatbelt | The same | Built in (`/usr/bin/sandbox-exec`); nothing to install |
 | Windows | The same | There is no native sandbox on Windows: a required `native` sandbox fails with `SANDBOX_UNAVAILABLE`. Use a remote backend ([sandbox](sandbox.md)) or `sandbox.required: false` |

@@ -63,6 +63,10 @@ jobs:
         with:
           node-version: 22.19.x
           cache: npm
+      # npm 10, which Node 22 bundles, runs a git dependency's prepare script
+      # while resolving, so `piship lock` refuses to lock Pi packages without
+      # npm 11, and the tests that lock them fail under CI without it.
+      - run: npm install -g npm@11.21.0 && npm --version
       # AcmeCode requires the OS sandbox: bubblewrap and unprivileged user
       # namespaces, which Ubuntu restricts through AppArmor by default.
       - timeout-minutes: 5

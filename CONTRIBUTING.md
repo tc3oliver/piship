@@ -4,7 +4,7 @@ PiShip is in early development. Documentation, tests for existing behavior, and 
 
 ## Set up
 
-Use Node.js 22.19.0 or newer and npm. On Linux the sandbox tests need bubblewrap with unprivileged user namespaces; see the [prerequisites](docs/troubleshooting.md#prerequisites). From the repository root:
+Use Node.js 22.19.0 or newer and npm 11 or later (`npm install -g npm@11`): the tests that lock Pi packages skip with an older npm, and CI runs them on npm 11. On Linux the sandbox tests need bubblewrap with unprivileged user namespaces; see the [prerequisites](docs/troubleshooting.md#prerequisites). From the repository root:
 
 ```bash
 npm ci

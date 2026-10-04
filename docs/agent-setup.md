@@ -23,7 +23,7 @@ git clone https://github.com/tc3oliver/piship.git ~/src/piship
 cd ~/src/piship && npm ci && npm run build
 ```
 
-It needs Node.js 22.19.0 or newer (`node --version`). Below, `piship` means `node ~/src/piship/packages/cli/dist/bin.js`.
+It needs Node.js 22.19.0 or newer (`node --version`), and npm 11 or later (`npm install -g npm@11`) to lock a distribution that declares Pi packages. Below, `piship` means `node ~/src/piship/packages/cli/dist/bin.js`.
 
 ## 2. Ask the person
 

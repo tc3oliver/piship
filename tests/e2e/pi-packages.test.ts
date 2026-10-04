@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PINNED_PI_VERSION } from "@piship/pi";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -57,7 +58,8 @@ function run(
  * `piship lock` refuses to resolve packages with npm older than 11: npm 10
  * (bundled with Node 22) runs a git dependency's `prepare` despite
  * `--ignore-scripts`. This test locks through the CLI, so it needs a real
- * npm 11 and is skipped, with that reason, where npm is older.
+ * npm 11 and is skipped, with that reason, where npm is older. CI installs
+ * npm 11, so there a missing npm 11 fails the test instead of skipping it.
  */
 const NPM_MAJOR = Number(
   /^(\d+)\./.exec(
@@ -70,10 +72,9 @@ const NPM_MAJOR = Number(
 
 describe("Pi packages", () => {
   it("a local and a git package are locked, vendored, installed, and loaded per file", (context) => {
-    context.skip(
-      NPM_MAJOR < 11,
-      `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`,
-    );
+    const reason = `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`;
+    if (process.env.CI) expect(NPM_MAJOR, reason).toBeGreaterThanOrEqual(11);
+    context.skip(NPM_MAJOR < 11, reason);
     const temp = mkdtempSync(join(tmpdir(), "piship-e2e-packages-"));
     temporary.push(temp);
     const env: NodeJS.ProcessEnv = {
@@ -130,7 +131,7 @@ describe("Pi packages", () => {
         "---\nname: triage\ndescription: Triage an issue.\n---\nTriage.\n",
       "piship.yaml": `schema: piship/v1alpha6
 app: { id: reviewer, name: Reviewer, command: reviewer, version: 1.0.0 }
-runtime: { pi: "1.0.0" }
+runtime: { pi: "${PINNED_PI_VERSION}" }
 deployment: { mode: personal }
 identity: { mode: none }
 credential: { provider: pi-native }

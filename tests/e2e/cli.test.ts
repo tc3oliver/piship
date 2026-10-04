@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PISHIP_VERSION } from "@piship/core";
 import { LATEST_SCHEMA } from "@piship/schema";
@@ -549,24 +549,21 @@ describe("CLI", () => {
     expect(existsSync(join(payload, "metadata", "distribution.json"))).toBe(
       false,
     );
-    // Codemode loads its QuickJS sandbox and worker from the payload.
-    const piModules = join(
-      payload,
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-      "node_modules",
-    );
+    // Codemode loads its QuickJS sandbox and worker from the payload. Resolve
+    // each dependency the way Node does, from the requiring package's
+    // directory upward, so the check holds whether npm nested or hoisted it.
+    const resolveFrom = (from: string, name: string): string => {
+      for (let dir = from; dir.startsWith(payload); dir = dirname(dir)) {
+        const candidate = join(dir, "node_modules", name);
+        if (existsSync(candidate)) return candidate;
+      }
+      throw new Error(`${name} is not resolvable from ${from}`);
+    };
+    const codingAgent = resolveFrom(payload, "@earendil-works/pi-coding-agent");
+    const codemode = resolveFrom(codingAgent, "@earendil-works/pi-codemode");
     for (const path of [
-      join(piModules, "quickjs-wasi", "quickjs.wasm"),
-      join(
-        piModules,
-        "@earendil-works",
-        "pi-codemode",
-        "dist",
-        "runtime",
-        "worker.js",
-      ),
+      join(resolveFrom(codemode, "quickjs-wasi"), "quickjs.wasm"),
+      join(codemode, "dist", "runtime", "worker.js"),
     ])
       expect(existsSync(path), path).toBe(true);
     const resource = join(payload, "resources", "resources", "AGENTS.md");

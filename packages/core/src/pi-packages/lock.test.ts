@@ -17,7 +17,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readManifest } from "@piship/schema";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  type TestContext,
+} from "vitest";
 import { lockManifest, requireCurrentLock } from "../lock.js";
 import type { DistributionLock } from "../lock-schema.js";
 import { type CommandRunner, runCommand } from "./command.js";
@@ -132,7 +139,8 @@ const readLock = (manifest: string): DistributionLock =>
  * runner, need a real npm 11 and are skipped without one; the others call
  * `lockPiPackages` with a runner that answers `npm --version` with 11 when
  * the real npm is older. Their fixtures hold no git dependency, the one
- * thing npm 10 mishandles, so every other npm call stays real.
+ * thing npm 10 mishandles, so every other npm call stays real. CI installs
+ * npm 11, so there a missing npm 11 fails the test instead of skipping it.
  */
 const NPM_MAJOR = Number(
   /^(\d+)\./.exec(
@@ -144,6 +152,10 @@ const NPM_MAJOR = Number(
 );
 const NPM_RESOLVES = NPM_MAJOR >= 11;
 const NPM_SKIP = `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`;
+const requireNpm11 = (context: TestContext): void => {
+  if (process.env.CI) expect(NPM_MAJOR, NPM_SKIP).toBeGreaterThanOrEqual(11);
+  context.skip(!NPM_RESOLVES, NPM_SKIP);
+};
 const run: CommandRunner = (command, args, options) =>
   !NPM_RESOLVES && command === "npm" && args[0] === "--version"
     ? { status: 0, stdout: Buffer.from("11.0.0\n"), stderr: "" }
@@ -153,7 +165,7 @@ const lockPackages = (manifest: string) =>
 
 describe("Pi packages in the lock", () => {
   it("lock records each package, stores its npm root beside the lock, and stays current offline", (context) => {
-    context.skip(!NPM_RESOLVES, NPM_SKIP);
+    requireNpm11(context);
     const manifest = distribution();
     lockManifest(manifest);
     const lock = readLock(manifest);
@@ -194,7 +206,7 @@ describe("Pi packages in the lock", () => {
   }, 120_000);
 
   it("a changed local package or a changed stored lockfile makes the lock stale", (context) => {
-    context.skip(!NPM_RESOLVES, NPM_SKIP);
+    requireNpm11(context);
     const manifest = distribution();
     lockManifest(manifest);
     const base = dirname(manifest);
@@ -216,7 +228,7 @@ describe("Pi packages in the lock", () => {
   }, 120_000);
 
   it("an undeclared package's npm root is removed when the lock is written", (context) => {
-    context.skip(!NPM_RESOLVES, NPM_SKIP);
+    requireNpm11(context);
     const manifest = distribution();
     lockManifest(manifest);
     const source = readFileSync(manifest, "utf8");
@@ -312,7 +324,7 @@ describe("Pi packages in the lock", () => {
   });
 
   it("the build vendors every package under pi-packages/<id> from the lock", (context) => {
-    context.skip(!NPM_RESOLVES, NPM_SKIP);
+    requireNpm11(context);
     const manifest = distribution();
     lockManifest(manifest);
     const lock = requireCurrentLock(manifest);
