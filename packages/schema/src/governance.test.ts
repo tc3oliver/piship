@@ -50,7 +50,7 @@ function managed(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA3,
     app,
-    runtime: { pi: "1.0.0" },
+    runtime: { pi: "1.0.2" },
     deployment: { mode: "managed" },
     ...structuredClone(managedAccess),
     ...extra,
@@ -60,7 +60,7 @@ function personal(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA3,
     app: { ...app, id: "mypi", command: "mypi" },
-    runtime: { pi: "1.0.0" },
+    runtime: { pi: "1.0.2" },
     deployment: { mode: "personal" },
     ...extra,
   };
@@ -78,7 +78,7 @@ function certified(extra: Json = {}): Json {
     source: "https://example.org/source-citation",
     integrity: INTEGRITY,
     license: "MIT",
-    pi: ["1.0.0"],
+    pi: ["1.0.2"],
     ...extra,
   };
 }
@@ -385,7 +385,7 @@ describe("v1alpha3 full managed example", () => {
           source: "npm:@acme/agents-plus@0.4.0",
           integrity: INTEGRITY,
           license: "Apache-2.0",
-          pi: ["1.0.0", "0.88.0"],
+          pi: ["1.0.2", "0.88.0"],
           platforms: ["linux"],
         },
       },
@@ -513,7 +513,7 @@ describe("v1alpha3 full managed example", () => {
           source: "https://example.org/source-citation",
           integrity: INTEGRITY,
           license: "MIT",
-          pi: ["1.0.0"],
+          pi: ["1.0.2"],
           platforms: ["linux", "darwin", "win32"],
         },
       },
@@ -572,7 +572,7 @@ describe("v1alpha3 full managed example", () => {
         source: "npm:@acme/agents-plus@0.4.0",
         integrity: INTEGRITY,
         license: "Apache-2.0",
-        pi: ["1.0.0", "0.88.0"],
+        pi: ["1.0.2", "0.88.0"],
         platforms: ["linux"],
       },
     });
@@ -1057,7 +1057,7 @@ describe("v1alpha3 capabilities", () => {
       source: "npm:perm@1.0.0",
       integrity: INTEGRITY,
       license: "MIT",
-      pi: ["1.0.0"],
+      pi: ["1.0.2"],
     };
     expect(
       governance(capability("permissions", company(base))).capabilities[0]
@@ -2109,7 +2109,7 @@ describe("v1alpha3 audit", () => {
 
 describe("migration to piship/v1alpha3", () => {
   const v1 =
-    'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.0"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n  extensions: [./ext]\n';
+    'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n  extensions: [./ext]\n';
   it("migrates v1alpha1 to v1alpha3 in steps", () => {
     const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.from).toBe("piship/v1alpha1");
@@ -2144,7 +2144,7 @@ describe("migration to piship/v1alpha3", () => {
     const source = [
       "schema: piship/v1alpha2",
       "app: { id: acmecode, name: AcmeCode, command: acmecode, version: 1.0.0 }",
-      'runtime: { pi: "1.0.0" }',
+      'runtime: { pi: "1.0.2" }',
       "deployment: { mode: managed }",
       "variables: [ACME_ISSUER, ACME_CLIENT_ID, ACME_GATEWAY_URL]",
       "identity:",
@@ -2221,7 +2221,7 @@ describe("migration to piship/v1alpha3", () => {
   });
   it("leaves a v1alpha3 manifest unchanged", () => {
     const source =
-      'schema: piship/v1alpha3\napp: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }\nruntime: { pi: "1.0.0" }\ndeployment: { mode: personal }\n';
+      'schema: piship/v1alpha3\napp: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }\nruntime: { pi: "1.0.2" }\ndeployment: { mode: personal }\n';
     expect(migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA3)).toEqual({
       from: PISHIP_SCHEMA_V1ALPHA3,
       to: PISHIP_SCHEMA_V1ALPHA3,

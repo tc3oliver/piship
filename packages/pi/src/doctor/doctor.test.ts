@@ -198,7 +198,7 @@ function doctorData(
 ): DoctorData {
   return {
     ctx: context(mode),
-    piVersion: "1.0.0",
+    piVersion: "1.0.2",
     metrics,
     ...parts,
   };

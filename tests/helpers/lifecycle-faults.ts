@@ -128,7 +128,7 @@ app:
   command: ${ID}
   version: ${version}
 runtime:
-  pi: "1.0.0"
+  pi: "1.0.2"
 deployment:
   mode: personal
 variables:
@@ -198,7 +198,7 @@ function fakeAssemble(manifestPath: string, outputRoot: string): string {
   const version = lock.app.version;
   write(
     join(out, "bin", lock.app.command),
-    `#!/usr/bin/env node\nconsole.log(process.argv[2] === "version" ? "AcmePi ${version}\\nPi 1.0.0" : "payload ${version}");\n`,
+    `#!/usr/bin/env node\nconsole.log(process.argv[2] === "version" ? "AcmePi ${version}\\nPi 1.0.2" : "payload ${version}");\n`,
   );
   write(
     join(out, "node_modules", "alpha", "package.json"),

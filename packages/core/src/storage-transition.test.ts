@@ -172,8 +172,8 @@ function stateRefs(): string[] {
 async function switchStore(from: SecretStoreProvider, to: SecretStoreProvider) {
   const report = checkStateMigration(
     stateDir(),
-    { version: "1.1.0", pi: "1.0.0", schemas: STATE_SCHEMAS, storage: to },
-    { version: "1.0.0", pi: "1.0.0", storage: from },
+    { version: "1.1.0", pi: "1.0.2", schemas: STATE_SCHEMAS, storage: to },
+    { version: "1.0.0", pi: "1.0.2", storage: from },
   );
   const notices = await clearCredentials(stateDir(), ID, report, {
     secretStore: storeOf(from),
@@ -316,11 +316,11 @@ describe.each([
       stateDir(),
       {
         version: "1.1.0",
-        pi: "1.0.0",
+        pi: "1.0.2",
         schemas: STATE_SCHEMAS,
         storage: from,
       },
-      { version: "1.0.0", pi: "1.0.0", storage: from },
+      { version: "1.0.0", pi: "1.0.2", storage: from },
     );
     expect(
       report.items.find((item) => item.name === "identity session"),
@@ -328,8 +328,8 @@ describe.each([
     // Absent classes are not cleared by a transition either.
     const changing = checkStateMigration(
       stateDir(),
-      { version: "1.1.0", pi: "1.0.0", schemas: STATE_SCHEMAS, storage: to },
-      { version: "1.0.0", pi: "1.0.0", storage: from },
+      { version: "1.1.0", pi: "1.0.2", schemas: STATE_SCHEMAS, storage: to },
+      { version: "1.0.0", pi: "1.0.2", storage: from },
     );
     expect(
       changing.items.find(
@@ -597,8 +597,8 @@ describe("clearing what the target cannot read", () => {
   const switching = (from: SecretStoreProvider, to: SecretStoreProvider) =>
     checkStateMigration(
       stateDir(),
-      { version: "1.1.0", pi: "1.0.0", schemas: STATE_SCHEMAS, storage: to },
-      { version: "1.0.0", pi: "1.0.0", storage: from },
+      { version: "1.1.0", pi: "1.0.2", schemas: STATE_SCHEMAS, storage: to },
+      { version: "1.0.0", pi: "1.0.2", storage: from },
     );
 
   /**
@@ -803,8 +803,8 @@ describe("rollback to a release before the Linux Secret Service part layout", ()
   ) =>
     checkStateMigration(
       stateDir(),
-      { version: "0.6.0", pi: "1.0.0", schemas, storage: "system" },
-      { version: "0.7.0", pi: "1.0.0", storage: "system", platform },
+      { version: "0.6.0", pi: "1.0.2", schemas, storage: "system" },
+      { version: "0.7.0", pi: "1.0.2", storage: "system", platform },
     );
 
   it("deletes every part and the metadata before the switch, and the target signs in again", async () => {

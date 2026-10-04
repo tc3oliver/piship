@@ -46,14 +46,23 @@ jobs:
           # cache with a closure that includes an unpinned Pi.
           cache: ''
       - run: npm ci
-      # --no-save leaves package.json and package-lock.json untouched; the
-      # latest Pi exists only in this runner's node_modules.
+      # --no-save leaves package-lock.json untouched; the latest Pi exists
+      # only in this runner's node_modules. The root overrides pin Pi's
+      # sibling packages to the reviewed versions, so they are dropped for
+      # the install (or the new Pi would run against old siblings) and
+      # restored after it; the sibling drift test skips under
+      # PISHIP_PI_CANARY=1. The install must not write package.json either,
+      # so it is compared with the copy taken before the install.
       - name: Install the latest Pi
         run: |
           latest="$(npm view @earendil-works/pi-coding-agent version)"
           echo "Pinned Pi: $(node -p 'require("./packages/pi/package.json").dependencies["@earendil-works/pi-coding-agent"]')"
           echo "Latest Pi: $latest"
+          npm pkg delete overrides
+          cp package.json "$RUNNER_TEMP/package.json"
           npm install --no-save --workspace @piship/pi "@earendil-works/pi-coding-agent@$latest"
+          cmp package.json "$RUNNER_TEMP/package.json"
+          git checkout -- package.json
           installed="$(cd packages/pi && node --input-type=module -e 'import { VERSION } from "@earendil-works/pi-coding-agent"; console.log(VERSION)')"
           test "$installed" = "$latest"
           git diff --exit-code -- package.json package-lock.json packages/pi/package.json

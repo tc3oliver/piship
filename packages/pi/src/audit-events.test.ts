@@ -116,7 +116,7 @@ async function open(
     [
       "schema: piship/v1alpha3",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
-      'runtime: { pi: "1.0.0" }',
+      'runtime: { pi: "1.0.2" }',
       "deployment: { mode: personal }",
       ...lines,
       "",
@@ -149,7 +149,7 @@ async function open(
     distributionDir: distribution,
     stateDir: join(root, "state"),
     cwd: workspace,
-    piVersion: "1.0.0",
+    piVersion: "1.0.2",
     interactive: false,
     fetch:
       options.fetch ??

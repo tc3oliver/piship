@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. Each section is
 
 Changes on `main` after v0.8.1. Not released.
 
+### Changed
+
+- Pi is pinned to 1.0.2 (`@earendil-works/pi-coding-agent`, exact), up from 1.0.0. `compatibility/pi.json` and the copy in `@piship/core` list 1.0.2 with the statuses of 1.0.0, and keep 1.0.0 and 0.87.1 so that releases built on them are still recognized; the launcher runs only 1.0.2. The public API change is additive, the session format stays version 3, and no `builtin:*` extension loads ([upgrade notes](docs/compatibility.md#upgrade-to-pi-102)).
+- Pi 1.0.1 and later ship no `npm-shrinkwrap.json` and declare their sibling packages with `^`. The root `package.json` `overrides` pin `chord`, `pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-mcp`, `pi-telemetry`, and `pi-tui` to exactly 1.0.2, from one list (`PI_SIBLING_PINS` in `@piship/pi`) that the compatibility suite checks against the overrides, the npm lock, and the installed packages. The `Pi latest canary` drops the overrides before it installs the newest Pi and skips that check under `PISHIP_PI_CANARY=1`.
+- The reviewed install scripts are re-keyed to their hoisted paths (`node_modules/@google/genai`, `node_modules/esbuild`, `node_modules/protobufjs`, same versions and scripts). npm's `os`/`cpu` filtering now applies to Pi's optional packages, so the personal example's payload drops from 147.6 MB to 145.3 MB on `darwin-arm64` and from 149.2 MB to 146.9 MB on `linux-x64`.
+- Every example lock is regenerated for the new npm lock.
+
+### Security
+
+- Pi 1.0.2 pins `brace-expansion` 5.0.12, which fixes GHSA-qhr7-859c-m2p7 and GHSA-6j4f-fj2g-mc7p. The reviewed exception for them is removed from the five example manifests, and `piship release` on the demo passes the vulnerability gate with no `allow` entries and no findings. The agent setup guide no longer says to copy the entries (#129).
+
 ## v0.8.1
 
 Preview milestone, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.1) from tag `v0.8.1` (commit `d069104`, the squash of #203); not published to npm. Release qualification passed on that exact commit ([run 37127974973](https://github.com/tc3oliver/piship/actions/runs/37127974973)). v0.8.1 collects the changes made on `main` after v0.8.0: an administrator-allowed user auto mode, an administrator-allowed plain-HTTP update channel, handling of a secret store that cannot be reached, and the fixes from the review of those changes. The manifest and lock schemas stay `piship/v1alpha5` and `piship-lock/v1alpha5`, and Pi stays at 1.0.0. v0.8.1 is the production-validation baseline, replacing [v0.8.0](docs/status.md#v080-previous-production-validation-baseline) ([baseline](docs/status.md#v081-production-validation-baseline)).

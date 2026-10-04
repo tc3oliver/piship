@@ -176,9 +176,8 @@ If a signed update source is configured, also check update and rollback before h
 Only when the person asked for it (S11, P5, or M12). A personal distribution may run its own self-managed signed channel; a managed one uses the company's update source. Follow the [release guide](release.md) and the [owner workflow](release/owner-workflow.md), which describe the update trust fields of the current manifest schema:
 
 1. The key holders run `piship keygen --encrypt` (a root key and a channel key; a personal distribution may use one key for both) and keep the private keys out of the repository. `piship trust-root init` prints the `updates.trust.bootstrap` block for the manifest from their public keys; the channel URL goes in `updates.source` (a runtime variable or an `https` URL).
-2. Copy the `release.vulnerabilities.allow` entries from the [demo company manifest](../examples/demo-company/piship.yaml). Pi pins a `brace-expansion` version with a reviewed advisory exception until 2026-12-31 ([#129](https://github.com/tc3oliver/piship/issues/129)); without the entries `piship release` stops at the vulnerability gate.
-3. `piship release`, `piship verify-release`, and `piship sign-channel` produce the signed artifacts the person uploads to the update source. Later key changes are published with `piship trust-root next` ([key runbook](release/key-runbook.md)), never by editing the bootstrap of a new release.
-4. Before handoff, install one release, publish a newer one, and check:
+2. `piship release`, `piship verify-release`, and `piship sign-channel` produce the signed artifacts the person uploads to the update source. Later key changes are published with `piship trust-root next` ([key runbook](release/key-runbook.md)), never by editing the bootstrap of a new release.
+3. Before handoff, install one release, publish a newer one, and check:
 
    ```bash
    ~/.local/bin/<command> update --check

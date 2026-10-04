@@ -29,7 +29,6 @@ So far the project has manual real-provider evidence for the reference stack onl
 
 These must be resolved before PiShip is rolled out broadly, beyond production validation:
 
-- **The `brace-expansion` exception ([#129](https://github.com/tc3oliver/piship/issues/129)).** The reviewed vulnerability exception for the version Pi pins (5.0.9 in both 0.87.1 and 1.0.0) expires on 2026-12-31, after which the release vulnerability gate fails again. It goes when upstream Pi ships a fixed version.
 - **Upstream Pi gaps ([#64](https://github.com/tc3oliver/piship/issues/64), [#139](https://github.com/tc3oliver/piship/issues/139)).** A user's `!` command output still goes through Pi's own temp file, and Pi still adds its `/bug` hint to a PiShip identity or credential failure in the TUI. Pi 1.0 also keeps its "π" terminal title, its `pi --session-dir` exit hint, and the built-in `/share` command, which uploads the session file as a GitHub gist through the user's `gh` CLI ([security](security.md#limits)). Each needs a public Pi API or a Pi change; PiShip does not patch Pi.
 
 ## Later

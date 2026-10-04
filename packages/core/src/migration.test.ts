@@ -62,14 +62,14 @@ function treeHash(root: string): Record<string, string> {
   return output;
 }
 
-/** A realistic state directory written by 1.1.0 on Pi 1.0.0. */
+/** A realistic state directory written by 1.1.0 on Pi 1.0.2. */
 function populated(): string {
   const dir = state();
   write(dir, "state.json", {
     schema: "piship-state/v1",
     distribution: "acmepi",
     version: "1.1.0",
-    pi: "1.0.0",
+    pi: "1.0.2",
     piship: "0.1.0",
   });
   write(dir, "identity/session.json", {
@@ -98,12 +98,12 @@ function populated(): string {
   return dir;
 }
 
-const target = (pi = "1.0.0", schemas = STATE_SCHEMAS) => ({
+const target = (pi = "1.0.2", schemas = STATE_SCHEMAS) => ({
   version: "1.0.0",
   pi,
   schemas,
 });
-const current = { version: "1.1.0", pi: "1.0.0" };
+const current = { version: "1.1.0", pi: "1.0.2" };
 
 function item(report: MigrationReport, name: string) {
   const found = report.items.find((entry) => entry.name === name);
@@ -199,7 +199,7 @@ describe("checkStateMigration", () => {
     });
     write(dir, "config/preferences.json", { schema: "piship-preferences/v9" });
     const before = treeHash(dir);
-    for (const pi of ["1.0.0", "0.86.0"])
+    for (const pi of ["1.0.2", "0.86.0"])
       for (const schemas of [STATE_SCHEMAS, LEGACY_STATE_SCHEMAS])
         checkStateMigration(dir, target(pi, schemas), current);
     expect(treeHash(dir)).toEqual(before);
@@ -226,8 +226,8 @@ describe("checkStateMigration", () => {
       pi: null,
     });
     expect(report.verdict).toBe("safe");
-    expect(report.from).toEqual({ version: "1.1.0", pi: "1.0.0" });
-    expect(report.to).toEqual({ version: "1.0.0", pi: "1.0.0" });
+    expect(report.from).toEqual({ version: "1.1.0", pi: "1.0.2" });
+    expect(report.to).toEqual({ version: "1.0.0", pi: "1.0.2" });
     expect(report.items.map((entry) => entry.name)).toEqual(
       STATE_DATA_CLASSES.map((entry) => entry.name),
     );
@@ -239,7 +239,7 @@ describe("checkStateMigration", () => {
       "piship-audit/v1",
     );
     expect(formatMigrationReport(report)).toMatch(
-      /^Migration check 1.1.0 -> 1.0.0 \(Pi 1.0.0 -> 1.0.0\): safe/,
+      /^Migration check 1.1.0 -> 1.0.0 \(Pi 1.0.2 -> 1.0.2\): safe/,
     );
   });
 
@@ -266,7 +266,7 @@ describe("checkStateMigration", () => {
     expect(item(report, "sessions")).toMatchObject({
       verdict: "requires-review",
       action: "review",
-      current: "Pi 1.0.0",
+      current: "Pi 1.0.2",
     });
     // Without session files there is nothing to review.
     rmSync(join(dir, "sessions", "one.jsonl"));
@@ -282,18 +282,18 @@ describe("checkStateMigration", () => {
 
   it("uses the marker over the caller's idea of the current release", () => {
     const dir = populated();
-    const report = checkStateMigration(dir, target("1.0.0"), {
+    const report = checkStateMigration(dir, target("1.0.2"), {
       version: "0.9.0",
       pi: "0.80.0",
     });
-    expect(report.from).toEqual({ version: "1.1.0", pi: "1.0.0" });
+    expect(report.from).toEqual({ version: "1.1.0", pi: "1.0.2" });
     rmSync(join(dir, "state.json"));
     const fallback = checkStateMigration(dir, target("0.86.0"), {
       version: "1.1.0",
-      pi: "1.0.0",
+      pi: "1.0.2",
     });
     expect(fallback.verdict).toBe("requires-review");
-    expect(fallback.from).toEqual({ version: "1.1.0", pi: "1.0.0" });
+    expect(fallback.from).toEqual({ version: "1.1.0", pi: "1.0.2" });
   });
 
   it("refuses preferences in a schema the target does not read", () => {
@@ -426,11 +426,11 @@ describe("checkStateMigration", () => {
       ...v06
     } = STATE_SCHEMAS;
     const dir = populated();
-    const from = { version: "0.6.0", pi: "1.0.0" };
+    const from = { version: "0.6.0", pi: "1.0.2" };
     const forward = checkStateMigration(dir, target(), from);
     expect(forward.verdict).toBe("safe");
     expect(forward.items.every((entry) => entry.action === "keep")).toBe(true);
-    const back = checkStateMigration(dir, target("1.0.0", v06), current);
+    const back = checkStateMigration(dir, target("1.0.2", v06), current);
     expect(back.verdict).toBe("safe");
     expect(back.items.every((entry) => entry.action === "keep")).toBe(true);
   });
@@ -447,7 +447,7 @@ describe("checkStateMigration", () => {
     for (const schemas of [older, LEGACY_STATE_SCHEMAS]) {
       const report = checkStateMigration(
         dir,
-        target("1.0.0", schemas),
+        target("1.0.2", schemas),
         current,
       );
       expect(report.verdict).toBe("safe");
@@ -482,7 +482,7 @@ describe("checkStateMigration", () => {
     write(dir, "state.json", {
       schema: "piship-state/v9",
       version: "2.0.0",
-      pi: "1.0.0",
+      pi: "1.0.2",
     });
     expect(
       item(checkStateMigration(dir, target(), current), "state marker"),
@@ -494,7 +494,7 @@ describe("checkStateMigration", () => {
       item(
         checkStateMigration(
           dir,
-          target("1.0.0", LEGACY_STATE_SCHEMAS),
+          target("1.0.2", LEGACY_STATE_SCHEMAS),
           current,
         ),
         "state marker",

@@ -39,8 +39,8 @@ export function removeNpmBins(directory: string): void {
 /**
  * Remove optional packages whose npm lock `os`/`cpu` exclude this target.
  * npm skips them for ordinary dependencies but installs every platform build
- * inside a shrinkwrapped dependency (Pi ships one), which put all 26 esbuild
- * binaries into each payload. Returns the removed lock paths.
+ * inside a shrinkwrapped dependency (Pi shipped one up to 1.0.0), which put
+ * all 26 esbuild binaries into each payload. Returns the removed lock paths.
  */
 export function removeForeignPlatformPackages(
   root: string,
