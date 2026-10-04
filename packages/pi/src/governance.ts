@@ -29,6 +29,12 @@ export interface PiNativeGovernance {
   readonly allowedModelKeys: readonly string[];
   /** ...unless a policy restricts models, in which case empty allows none. */
   readonly restricted?: boolean;
+  /**
+   * `provider/id` keys that may receive a request; `allowedModelKeys` when
+   * absent. Narrowing limits selection only, so the routes of a selectable
+   * virtual model stay here.
+   */
+  readonly dispatchModelKeys?: readonly string[];
 }
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
@@ -52,6 +58,9 @@ export interface VirtualModelRule {
    */
   readonly routerPath?: string;
 }
+
+/** How long a routed request's rebased copy may claim its route. */
+const REBASED_ROUTE_MS = 10_000;
 
 export type ModelAction = "model.select" | "model.dispatch";
 
@@ -216,7 +225,9 @@ export function governModelRuntime(
     (managed
       ? model.provider === managed.providerId &&
         (managed.dispatchModelIds ?? managed.allowedModelIds).includes(model.id)
-      : listed(model.provider, model.id)) &&
+      : governance.kind === "pi-native" && governance.dispatchModelKeys
+        ? governance.dispatchModelKeys.includes(key(model))
+        : listed(model.provider, model.id)) &&
     (policy
       ? (policy.dispatches ?? policy.selects).call(
           policy,
@@ -226,8 +237,41 @@ export function governModelRuntime(
       : true);
   const isVirtual = (model: { api?: string }) =>
     model.api === PI_VIRTUAL_MODEL_API;
-  /** Copies of physical models a declared virtual model routed a request to. */
-  const routed = new WeakSet<object>();
+  /**
+   * Frozen copies of physical models a declared virtual model routed a
+   * request to, with the rule that routed them.
+   */
+  const routed = new WeakMap<object, VirtualModelRule>();
+  /**
+   * Routed requests whose Pi-native credential carries a base URL: Pi sends
+   * them on a copy (`{ ...model, baseUrl }`) that has lost the mark, so the
+   * next request for that model and base URL claims it, once, right after.
+   */
+  let rebased: {
+    provider: string;
+    id: string;
+    baseUrl: string;
+    rule: VirtualModelRule;
+    at: number;
+  }[] = [];
+  const routeOf = (
+    model: ModelRef & { baseUrl?: string },
+  ): VirtualModelRule | undefined => {
+    const rule = routed.get(model);
+    if (rule) return rule;
+    const now = Date.now();
+    rebased = rebased.filter((item) => now - item.at < REBASED_ROUTE_MS);
+    const index = rebased.findIndex(
+      (item) =>
+        item.provider === model.provider &&
+        item.id === model.id &&
+        item.baseUrl === model.baseUrl,
+    );
+    if (index < 0) return undefined;
+    return rebased.splice(index, 1)[0]?.rule;
+  };
+  const declaredRoute = (rule: VirtualModelRule, model: ModelRef) =>
+    rule.routes.some((item) => key(item) === key(model));
   let registering = false;
   const providerHasAllowed = (provider: string): boolean =>
     managed
@@ -247,13 +291,15 @@ export function governModelRuntime(
     policy?.denied?.(action, model.provider, model.id, detail);
     throw denied(model.provider, model.id, detail?.reason);
   };
-  const guard = (model: ModelRef & { api?: string }) => {
+  const guard = (model: ModelRef & { api?: string; baseUrl?: string }) => {
+    const rule = isVirtual(model) ? undefined : routeOf(model);
     if (isVirtual(model)) {
       // Pi routes it next; resolveModel checks the model it routes to.
       if (!rules.has(key(model)) || !selectable(model))
         refuse("model.select", model);
-    } else if (routed.has(model)) {
-      if (!dispatchable(model)) refuse("model.dispatch", model);
+    } else if (rule) {
+      if (!declaredRoute(rule, model) || !dispatchable(model))
+        refuse("model.dispatch", model);
     } else {
       // Selected and dispatched are the same model.
       if (!selectable(model)) refuse("model.select", model);
@@ -367,6 +413,7 @@ export function governModelRuntime(
     )
       return undefined;
     if (!providerHasAllowed(provider)) return undefined;
+    const rule = typeof model === "string" ? undefined : routed.get(model);
     if (managed) {
       let apiKey: string;
       try {
@@ -381,7 +428,16 @@ export function governModelRuntime(
         source: "PiShip managed credential",
       } as AuthResult;
     }
-    return original.getAuth(model, overrides);
+    const result = await original.getAuth(model, overrides);
+    if (rule && typeof model !== "string" && result?.auth.baseUrl)
+      rebased.push({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: result.auth.baseUrl,
+        rule,
+        at: Date.now(),
+      });
+    return result;
   };
   target.stream = ((model: Model, ...rest: unknown[]) => {
     guard(model);
@@ -463,16 +519,17 @@ export function governModelRuntime(
     const route = await original.resolveModel(model, messages, options);
     const physical = route.model;
     const detail = { selected, router: rule.router };
-    if (!rule.routes.some((item) => key(item) === key(physical)))
+    if (!declaredRoute(rule, physical))
       refuse("model.dispatch", physical, {
         ...detail,
         reason: "not a declared route",
       });
     if (!dispatchable(physical)) refuse("model.dispatch", physical, detail);
-    // A copy, so that only this routed request is checked by dispatch
-    // alone; the catalog object itself still needs model.select.
-    const tagged = { ...physical };
-    routed.add(tagged);
+    // A frozen copy, so that only this routed request is checked by
+    // dispatch alone and cannot be changed into another model; the catalog
+    // object itself still needs model.select.
+    const tagged = Object.freeze({ ...physical });
+    routed.set(tagged, rule);
     policy?.dispatched?.({
       selected,
       dispatched: key(physical),

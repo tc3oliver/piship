@@ -25,6 +25,8 @@ export async function sweepDistributionData(
   options: {
     /** packages/pi passes its live session owner check. */
     readonly sessionHeld?: (sessionFile: string) => boolean;
+    /** packages/pi passes its session claim; see `DataSweepOptions`. */
+    readonly claimSession?: (sessionFile: string) => (() => void) | undefined;
     readonly now?: number;
   } = {},
 ): Promise<DataSweepResult | undefined> {
@@ -48,6 +50,7 @@ export async function sweepDistributionData(
           `The ${event.resource} retention sweep did not run`,
         ),
       ...(options.sessionHeld ? { sessionHeld: options.sessionHeld } : {}),
+      ...(options.claimSession ? { claimSession: options.claimSession } : {}),
       ...(options.now === undefined ? {} : { now: options.now }),
     });
     for (const entry of result.classes) {

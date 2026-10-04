@@ -28,10 +28,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
   governModelRuntime,
+  type GovernedRuntime,
   type ModelPolicy,
   PI_VIRTUAL_MODEL_API,
   type VirtualModelRule,
 } from "./governance.js";
+import type { ManagedFetch } from "@piship/contracts";
+import { type ActivatedAccess, resolveLock } from "@piship/core";
+import type { CatalogModel } from "@piship/schema";
+import { GovernanceSession } from "./governance-session.js";
+import type { LaunchContext, PreparedAccess } from "./launch/context.js";
+import { modelPolicy } from "./launch/governance.js";
+import { createModelRuntime } from "./launch/model-runtime.js";
 import { governVirtualModels } from "./launch/virtual-models.js";
 
 const API_KEY = "sk-compat-models-key";
@@ -93,16 +101,12 @@ const completions = (): string[] =>
     .filter((item: { path: string }) => item.path.endsWith("/chat/completions"))
     .map((item: { body: string }) => JSON.parse(item.body).model);
 
-async function launch(
-  options: {
-    policy?: ModelPolicy;
-    extensions?: InlineExtension[];
-    sessionManager?: SessionManager;
-    /** Select the virtual model (default) or let Pi restore one. */
-    select?: boolean;
-    routerPath?: string;
-  } = {},
-) {
+/** The managed runtime of these tests, governed with every model allowed. */
+async function testRuntime(
+  rule: VirtualModelRule,
+  denied: string[],
+  policy: ModelPolicy | undefined,
+): Promise<{ runtime: ModelRuntime; governed: GovernedRuntime }> {
   const runtime = await ModelRuntime.create({
     credentials: {
       read: async () => undefined as never,
@@ -132,14 +136,6 @@ async function launch(
       },
     ],
   });
-  const rule: VirtualModelRule = {
-    provider: "acmecode",
-    id: "acme/auto",
-    routes: [{ provider: "acmecode", id: "acme/coder" }],
-    router: "./extensions/router.ts",
-    routerPath: options.routerPath ?? routerPath,
-  };
-  const denied: string[] = [];
   const governed = governModelRuntime(
     runtime,
     {
@@ -158,10 +154,42 @@ async function launch(
       selects: () => true,
       denied: (action, provider, id) =>
         denied.push(`${action} ${provider}/${id}`),
-      ...options.policy,
+      ...policy,
     },
     [rule],
   );
+  return { runtime, governed };
+}
+
+async function launch(
+  options: {
+    policy?: ModelPolicy;
+    extensions?: InlineExtension[];
+    sessionManager?: SessionManager;
+    /** Select the virtual model (default) or let Pi restore one. */
+    select?: boolean;
+    routerPath?: string;
+    routes?: string[];
+    /** The runtime as launch creates it, instead of this test's own. */
+    create?: (
+      rule: VirtualModelRule,
+    ) => Promise<{ runtime: ModelRuntime; governed: GovernedRuntime }>;
+  } = {},
+) {
+  const rule: VirtualModelRule = {
+    provider: "acmecode",
+    id: "acme/auto",
+    routes: (options.routes ?? ["acme/coder"]).map((id) => ({
+      provider: "acmecode",
+      id,
+    })),
+    router: "./extensions/router.ts",
+    routerPath: options.routerPath ?? routerPath,
+  };
+  const denied: string[] = [];
+  const { runtime, governed } = options.create
+    ? await options.create(rule)
+    : await testRuntime(rule, denied, options.policy);
   const settingsManager = SettingsManager.inMemory({
     retry: { enabled: false },
     compaction: { keepRecentTokens: 1 },
@@ -476,5 +504,207 @@ describe("Pi model governance seams", () => {
     expect(lastAssistant(session)).toMatchObject({ stopReason: "error" });
     expect(completions()).toEqual(["acme/coder"]);
     session.dispose();
+  });
+});
+
+// Launch's own runtime (createModelRuntime) and policy (modelPolicy), so the
+// allowlist narrowing and the policy's deny-wins dispatch are checked
+// against Pi's routing, not only the governance wrapper.
+const catalogEntry = (id: string, routes?: string[]): CatalogModel => ({
+  id,
+  name: id,
+  contextWindow: 64000,
+  maxOutputTokens: 4096,
+  input: ["text"],
+  reasoning: false,
+  tools: true,
+  streaming: true,
+  policyTags: [],
+  type: "chat",
+  ...(routes ? { virtual: { router: "./extensions/router.ts", routes } } : {}),
+});
+
+/** createModelRuntime for an activation whose effective allowlist is `allowed`. */
+function launchRuntime(
+  allowed: string[],
+  policy?: ModelPolicy,
+): (
+  rule: VirtualModelRule,
+) => Promise<{ runtime: ModelRuntime; governed: GovernedRuntime }> {
+  return async (rule) => {
+    const routes = rule.routes.map((route) => route.id);
+    const catalog = [
+      catalogEntry("acme/coder"),
+      catalogEntry("acme/general"),
+      catalogEntry("acme/auto", routes),
+    ];
+    const ctx = {
+      agentDir: temp,
+      metadata: {
+        app: { name: "AcmeCode", command: "acme" },
+        access: { models: { catalog } },
+      },
+    } as unknown as LaunchContext;
+    const activated = {
+      runtime: {
+        kind: "managed-endpoint",
+        providerId: "acmecode",
+        baseUrl: services.gatewayUrl,
+        api: "openai-completions",
+        requiresCredential: true,
+        models: catalog.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          provider: "acmecode",
+          capabilities: {
+            input: ["text"],
+            contextWindow: 64000,
+            maxOutputTokens: 4096,
+          },
+          policyTags: [],
+          availability: { available: true },
+        })),
+      },
+      config: { allowedModels: allowed, modelsRestricted: true },
+      incompatibleModels: {},
+    } as unknown as ActivatedAccess;
+    const prepared = {
+      activated,
+      access: { requestSecret: async () => ({ reveal: () => API_KEY }) },
+    } as unknown as PreparedAccess;
+    const { modelRuntime, governed } = await createModelRuntime(
+      ctx,
+      prepared,
+      policy,
+      [rule],
+    );
+    if (!governed) throw new Error("not governed");
+    return { runtime: modelRuntime, governed };
+  };
+}
+
+const policySessions: GovernanceSession[] = [];
+afterEach(async () => {
+  for (const session of policySessions.splice(0))
+    await session.close().catch(() => undefined);
+});
+
+/** The distribution policy as launch resolves it, for a selected `acmecode/acme/auto`. */
+async function launchPolicy(
+  defaults: string[],
+  enforced: string[],
+  routes: string[],
+): Promise<ModelPolicy> {
+  const distribution = join(temp, "distribution");
+  mkdirSync(distribution, { recursive: true });
+  const manifest = join(distribution, "piship.yaml");
+  writeFileSync(
+    manifest,
+    [
+      "schema: piship/v1alpha3",
+      "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+      'runtime: { pi: "1.0.2" }',
+      "deployment: { mode: personal }",
+      "policy:",
+      "  id: unit",
+      "  version: 1",
+      "  default: deny",
+      "  enforced:",
+      ...enforced,
+      "  defaults:",
+      ...defaults,
+      "",
+    ].join("\n"),
+  );
+  const session = await GovernanceSession.open({
+    lock: resolveLock(manifest) as Parameters<
+      typeof GovernanceSession.open
+    >[0]["lock"],
+    distributionDir: distribution,
+    stateDir: join(temp, "state"),
+    cwd: temp,
+    piVersion: "1.0.2",
+    interactive: false,
+    fetch: (() => {
+      throw new Error("no network in compatibility tests");
+    }) as unknown as ManagedFetch,
+    resolveTemplate: (_key, template) => template,
+    homeDir: join(temp, "home"),
+    user: "alice",
+  });
+  policySessions.push(session);
+  return modelPolicy(session, "acmecode/acme/auto", [
+    {
+      provider: "acmecode",
+      id: "acme/auto",
+      routes: routes.map((id) => ({ provider: "acmecode", id })),
+      router: "./extensions/router.ts",
+    },
+  ]);
+}
+
+describe("launch model governance against Pi routing", () => {
+  it("routes a virtual model that is the only selectable model (enforced or narrowed), and keeps its routes unselectable", async () => {
+    const { session, governed } = await launch({
+      create: launchRuntime(["acme/auto"]),
+    });
+    expect(session.model).toMatchObject({ id: "acme/auto" });
+    await session.prompt("hello");
+    expect(session.getLastAssistantText()).toBe("Hello from acme/coder.");
+    expect(completions()).toEqual(["acme/coder"]);
+    expect(governed.isSelectable("acmecode", "acme/coder")).toBe(false);
+    // A request for the route itself, not routed, is still refused.
+    const coder = {
+      ...chat("acme/coder"),
+      provider: "acmecode",
+      api: "openai-completions",
+      baseUrl: services.gatewayUrl,
+    };
+    await expect(
+      (async () =>
+        session.agent.streamFunction(
+          coder as never,
+          { messages: [] } as never,
+        ))(),
+    ).rejects.toThrow("not allowed");
+    expect(completions()).toEqual(["acme/coder"]);
+    session.dispose();
+  });
+
+  it("a wildcard allow does not route around a model.select deny (deny wins)", async () => {
+    const rule = (
+      id: string,
+      action: string,
+      resource: string,
+      effect: string,
+    ) =>
+      `    - { id: ${id}, action: "${action}", resource: "${resource}", effect: ${effect} }`;
+    for (const wildcard of ["*", "model.*"]) {
+      services.state.requests.length = 0;
+      const policy = await launchPolicy(
+        [rule("everything", wildcard, "acmecode/**", "allow")],
+        [rule("no-general", "model.select", "acmecode/acme/general", "deny")],
+        ["acme/coder", "acme/general"],
+      );
+      control.__pishipRouter = { target: "acme/general" };
+      const { session } = await launch({
+        routes: ["acme/coder", "acme/general"],
+        create: launchRuntime(
+          ["acme/coder", "acme/general", "acme/auto"],
+          policy,
+        ),
+      });
+      await session.prompt("hello");
+      expect(lastAssistant(session), wildcard).toMatchObject({
+        stopReason: "error",
+      });
+      expect(completions(), wildcard).toEqual([]);
+      control.__pishipRouter = { target: "acme/coder" };
+      await session.prompt("again");
+      expect(session.getLastAssistantText(), wildcard).toBe(
+        "Hello from acme/coder.",
+      );
+      session.dispose();
+    }
   });
 });

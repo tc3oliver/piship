@@ -8,7 +8,7 @@ const lock = (
 ) =>
   ({
     deployment: { mode },
-    declared: { extensions: ["./extensions/router.ts"] },
+    declared: { extensions: ["./extensions/router.ts", "./certified/router"] },
     governance: {
       certified: [
         {
@@ -43,6 +43,20 @@ describe("release gate: virtual model routes", () => {
           lock("managed", { id: "acme/auto", router, routes: ["acme/coder"] }),
         ),
       ).toEqual([]);
+  });
+
+  it("fails a certified router whose path is not a declared extension of the build", () => {
+    const certified = lock("managed", {
+      id: "acme/auto",
+      router: "company-router",
+      routes: ["acme/coder"],
+    }) as unknown as { declared: { extensions: string[] } };
+    certified.declared.extensions = ["./extensions/router.ts"];
+    expect(
+      virtualRouteProblems(certified as unknown as DistributionLock),
+    ).toEqual([
+      "virtual model acme/auto names router company-router, which is not a declared extension",
+    ]);
   });
 
   it("fails a route outside the allowlist or the physical chat catalog, and an undeclared router", () => {

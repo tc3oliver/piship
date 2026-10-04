@@ -869,6 +869,91 @@ describe("model.select and model.dispatch", () => {
     expect(() => stream(runtime, { ...route.model })).toThrow("not allowed");
   });
 
+  it("freezes the routed copy, so it cannot become another model", async () => {
+    const { runtime, resolve } = await routed({
+      selectDeny: ["acme/coder"],
+      dispatchDeny: [],
+    });
+    const route = await resolve();
+    expect(Object.isFrozen(route.model)).toBe(true);
+    expect(() => {
+      (route.model as { id: string }).id = "acme/general";
+    }).toThrow();
+    expect(() => stream(runtime, route.model)).not.toThrow();
+  });
+
+  it("Pi-native: routes when the allowlist narrows to the virtual model, and once through a rebased copy", async () => {
+    const runtime = await ModelRuntime.create({
+      credentials: memoryCredentials() as never,
+      modelsPath: null,
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    });
+    runtime.registerProvider("acmecode", {
+      name: "AcmeCode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      apiKey: "sk-native",
+      models: [model("acme/coder"), model("acme/general")],
+    });
+    // A provider whose credential carries its own base URL; Pi then sends
+    // the request on a copy of the model with that URL.
+    const rebasedUrl = `${services.gatewayUrl}/`;
+    runtime.getAuth = (async () => ({
+      auth: { apiKey: "sk-native", baseUrl: rebasedUrl },
+      source: "test",
+    })) as never;
+    const events: string[] = [];
+    const governed = governModelRuntime(
+      runtime,
+      {
+        kind: "pi-native",
+        // An enforced virtual model: the only selectable model.
+        allowedModelKeys: ["acmecode/acme/auto"],
+        restricted: true,
+        dispatchModelKeys: ["acmecode/acme/auto", "acmecode/acme/coder"],
+      },
+      {
+        selects: () => true,
+        denied: (action, provider, id) =>
+          events.push(`${action} ${provider}/${id}`),
+      },
+      [
+        {
+          provider: "acmecode",
+          id: "acme/auto",
+          routes: [{ provider: "acmecode", id: "acme/coder" }],
+          router: "./extensions/router.ts",
+        },
+      ],
+    );
+    governed.withRegistrationWindow(() =>
+      runtime.registerVirtualModel({
+        provider: "acmecode",
+        id: "acme/auto",
+        name: "Auto",
+        route: () => ({
+          model: { ...model("acme/coder"), provider: "acmecode" } as never,
+          thinkingLevel: "off",
+        }),
+      }),
+    );
+    const auto = runtime.getModel("acmecode", "acme/auto");
+    if (!auto) throw new Error("virtual model not selectable");
+    expect(governed.isSelectable("acmecode", "acme/coder")).toBe(false);
+    const route = await runtime.resolveModel(auto, [], {
+      reason: "direct",
+      thinkingLevel: "off",
+    });
+    const auth = await runtime.getAuth(route.model);
+    expect(auth?.auth.baseUrl).toBe(rebasedUrl);
+    const rebased = { ...route.model, baseUrl: rebasedUrl };
+    await stream(runtime, rebased).result();
+    // The mark is claimed once: another copy is an unrouted request.
+    expect(() => stream(runtime, { ...rebased })).toThrow("not allowed");
+    expect(events).toEqual(["model.select acmecode/acme/coder"]);
+  });
+
   it("checks a routed model by model.select when no model.dispatch rule decides it", async () => {
     const { resolve, events } = await routed({ selectDeny: ["acme/coder"] });
     await expect(resolve()).rejects.toMatchObject({ code: "MODEL_DENIED" });

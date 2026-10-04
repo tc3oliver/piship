@@ -3,7 +3,11 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { DistributionLock } from "@piship/core";
 import { describe, expect, it } from "vitest";
 import { governModelRuntime, type VirtualModelRule } from "../governance.js";
-import { registerVirtualModels, virtualModelRules } from "./virtual-models.js";
+import {
+  governVirtualModels,
+  registerVirtualModels,
+  virtualModelRules,
+} from "./virtual-models.js";
 
 const model = (id: string) => ({
   id,
@@ -155,6 +159,48 @@ describe("virtual model registration at load", () => {
     registerVirtualModels(loaded().loader, governed, modelRuntime, [RULE]);
     // runtime.ts refuses a launch model getModel does not return with
     // MODEL_UNAVAILABLE.
+    expect(modelRuntime.getModel("acmecode", "acme/auto")).toBeUndefined();
+  });
+
+  it("removes the registrations of a reload that fails, so the model fails closed", async () => {
+    const { modelRuntime, governed } = await runtime();
+    const queue: { pendingVirtualModelRegistrations: unknown[] } = {
+      pendingVirtualModelRegistrations: [],
+    };
+    let next: () => unknown[] = () => [];
+    const loader = {
+      getExtensions: () => ({ runtime: queue }),
+      reload: async () => {
+        queue.pendingVirtualModelRegistrations = next();
+      },
+    };
+    next = () =>
+      loaded({ id: "acme/auto", extensionPath: ROUTER }).runtime
+        .pendingVirtualModelRegistrations;
+    await loader.reload();
+    governVirtualModels(loader as never, governed, modelRuntime, [RULE]);
+    expect(modelRuntime.getModel("acmecode", "acme/auto")).toBeDefined();
+    // The reloaded extensions register the model again, then one that is
+    // not declared: the reload fails, and nothing stays registered.
+    next = () =>
+      loaded(
+        { id: "acme/auto", extensionPath: ROUTER },
+        { id: "acme/other", extensionPath: ROUTER },
+      ).runtime.pendingVirtualModelRegistrations;
+    await expect(loader.reload()).rejects.toMatchObject({
+      code: "MODEL_DENIED",
+    });
+    expect(modelRuntime.getModel("acmecode", "acme/auto")).toBeUndefined();
+    // A reload that itself throws leaves nothing registered either.
+    next = () =>
+      loaded({ id: "acme/auto", extensionPath: ROUTER }).runtime
+        .pendingVirtualModelRegistrations;
+    await loader.reload();
+    expect(modelRuntime.getModel("acmecode", "acme/auto")).toBeDefined();
+    next = () => {
+      throw new Error("extension failed to load");
+    };
+    await expect(loader.reload()).rejects.toThrow("extension failed to load");
     expect(modelRuntime.getModel("acmecode", "acme/auto")).toBeUndefined();
   });
 

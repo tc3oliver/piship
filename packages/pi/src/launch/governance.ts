@@ -239,8 +239,11 @@ export function governedCustomTools(
  * that model is virtual, for each of its declared routes; other models that
  * need approval are not offered for switching or routing mid-session.
  *
- * Without a model.dispatch rule for a physical model, model.select decides
- * it (§18.3), so a v0.8 `model.use` deny cannot be routed around.
+ * Deny wins: a dispatch also needs model.select unless a rule that names
+ * model.dispatch itself decides it (the router-only case). Without such a
+ * rule (none matched, or the deciding rule is a `*` or `model.*` wildcard)
+ * model.select decides alone (§18.3), so neither a v0.8 `model.use` deny nor
+ * a model.select deny can be routed around.
  */
 export async function modelPolicy(
   gov: GovernanceSession,
@@ -249,12 +252,27 @@ export async function modelPolicy(
 ): Promise<ModelPolicy> {
   const approved = new Set<string>();
   const approvedDispatch = new Set<string>();
-  /** The rule that decides a dispatch: model.dispatch, else model.select. */
-  const dispatchAction = (key: string): PolicyAction =>
-    gov.engine.evaluate({ action: "model.dispatch", resource: key }).ruleId ===
-    BUILTIN_DEFAULT_RULE
-      ? "model.select"
-      : "model.dispatch";
+  /** model.select asks approved at start only so that a route may dispatch. */
+  const approvedRoute = new Set<string>();
+  /**
+   * The model.dispatch decision, and whether a rule naming model.dispatch
+   * decides it: a rule that also matches model.select names a wildcard.
+   */
+  const dispatchDecision = (key: string) => {
+    const decision = gov.engine.evaluate({
+      action: "model.dispatch",
+      resource: key,
+    });
+    const named =
+      decision.ruleId !== BUILTIN_DEFAULT_RULE &&
+      !gov.engine
+        .explain({ action: "model.select", resource: key })
+        .matches.some(
+          (match) =>
+            match.layer === decision.layer && match.ruleId === decision.ruleId,
+        );
+    return { decision, named };
+  };
   const startup = async (action: PolicyAction, key: string) =>
     (
       await gov.decide(action, key, gov.startupChannel(), {
@@ -278,16 +296,22 @@ export async function modelPolicy(
     const rule = virtual.find((item) => key(item) === selected);
     const targets = rule ? rule.routes.map(key) : [selected];
     for (const target of targets) {
-      const action = dispatchAction(target);
-      if (action === "model.select" && approved.has(target)) {
-        approvedDispatch.add(target);
-        continue;
+      const { decision: dispatch, named } = dispatchDecision(target);
+      if (dispatch.ruleId !== BUILTIN_DEFAULT_RULE) {
+        if (dispatch.effect === "deny") continue;
+        if (dispatch.effect === "ask") {
+          if (!(await startup("model.dispatch", target))) continue;
+          approvedDispatch.add(target);
+        }
+        if (named) continue;
       }
       if (
-        gov.engine.evaluate({ action, resource: target }).effect === "ask" &&
-        (await startup(action, target))
+        !approved.has(target) &&
+        gov.engine.evaluate({ action: "model.select", resource: target })
+          .effect === "ask" &&
+        (await startup("model.select", target))
       )
-        approvedDispatch.add(target);
+        approvedRoute.add(target);
     }
     // A virtual model needs one route it may dispatch to.
     if (!targets.some((target) => dispatches(target)))
@@ -299,22 +323,28 @@ export async function modelPolicy(
         { component: "policy" },
       );
   }
-  function selects(key: string): boolean {
+  function selectEffect(key: string, routes: boolean): boolean {
     const effect = gov.engine.evaluate({
       action: "model.select",
       resource: key,
     }).effect;
-    return effect === "allow" || (effect === "ask" && approved.has(key));
-  }
-  function dispatches(key: string): boolean {
-    const action = dispatchAction(key);
-    const effect = gov.engine.evaluate({ action, resource: key }).effect;
     return (
       effect === "allow" ||
       (effect === "ask" &&
-        (approvedDispatch.has(key) ||
-          (action === "model.select" && approved.has(key))))
+        (approved.has(key) || (routes && approvedRoute.has(key))))
     );
+  }
+  function selects(key: string): boolean {
+    return selectEffect(key, false);
+  }
+  function dispatches(key: string): boolean {
+    const { decision, named } = dispatchDecision(key);
+    if (decision.ruleId === BUILTIN_DEFAULT_RULE)
+      return selectEffect(key, true);
+    const allowed =
+      decision.effect === "allow" ||
+      (decision.effect === "ask" && approvedDispatch.has(key));
+    return allowed && (named || selectEffect(key, true));
   }
   return {
     selects: (provider, id) => selects(`${provider}/${id}`),

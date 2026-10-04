@@ -306,6 +306,78 @@ describe("effective model catalog (§10)", () => {
     });
   });
 
+  describe("a virtual model", () => {
+    const AUTO = "acme/auto";
+    const coder = access.models.catalog.find((entry) => entry.id === CODER);
+    const withAuto = (config: Partial<AccessManifest["config"]> = {}) =>
+      options({
+        models: {
+          allowed: [...access.models.allowed, AUTO],
+          catalog: [
+            ...access.models.catalog,
+            {
+              ...(coder as AccessManifest["models"]["catalog"][number]),
+              id: AUTO,
+              name: "Auto",
+              virtual: {
+                router: "./extensions/router.ts",
+                routes: [CODER, GENERAL],
+              },
+            },
+          ],
+        },
+        config,
+      });
+    const registered = (
+      activated: Awaited<ReturnType<DistributionAccess["activate"]>>,
+    ) => activated.runtime.models.map((model) => model.id);
+
+    it("stays selectable when the entitlement lists only its physical routes", async () => {
+      services.knobs.entitledModels = [CODER];
+      const distribution = DistributionAccess.open(withAuto());
+      await login(distribution);
+      const activated = await distribution.activate();
+      expect(activated.config.allowedModels).toEqual([CODER, AUTO]);
+      expect(registered(activated)).toEqual([CODER, AUTO]);
+    });
+
+    it("keeps its routes registered when it is the enforced model", async () => {
+      const distribution = DistributionAccess.open(
+        withAuto({
+          enforced: { theme: "dark", model: AUTO },
+          userOverridable: ["thinkingLevel"],
+        }),
+      );
+      await login(distribution);
+      const activated = await distribution.activate();
+      expect(activated.selectedModel).toBe(AUTO);
+      expect(activated.config.allowedModels).toEqual([AUTO]);
+      expect(registered(activated)).toEqual(
+        expect.arrayContaining([CODER, GENERAL, AUTO]),
+      );
+    });
+
+    it("keeps its routes registered when the user narrows to it alone", async () => {
+      const narrowed = withAuto();
+      const distribution = DistributionAccess.open(narrowed);
+      await login(distribution);
+      setPreference(
+        accessStatePaths(join(temp, "state")).preferences,
+        narrowed.access,
+        undefined,
+        "models.allowed",
+        AUTO,
+      );
+      const activated = await distribution.activate({ requestedModel: AUTO });
+      expect(activated.config.allowedModels).toEqual([AUTO]);
+      expect(registered(activated)).toEqual(
+        expect.arrayContaining([CODER, GENERAL, AUTO]),
+      );
+      // Not selectable: the routes only receive what the router sends.
+      expect(registered(activated)).not.toContain(REVIEW);
+    });
+  });
+
   it("reports an allowed but unentitled model as MODEL_UNAVAILABLE and a model outside the allowlist as MODEL_DENIED", async () => {
     services.knobs.entitledModels = [CODER, GENERAL];
     const distribution = DistributionAccess.open(options());

@@ -93,14 +93,17 @@ export function virtualRouteProblems(lock: DistributionLock): string[] {
             `${name} routes to ${route}, which is not a physical chat model of the catalog`,
           );
       }
+    // As launch resolves it: a `./` path or a certified extension's path,
+    // either one a declared extension of the build. A `package:` router
+    // names no built extension yet.
     const router = virtual.router;
-    const declared = router.startsWith("./")
-      ? lock.declared.extensions.includes(router)
-      : (lock.governance?.certified ?? []).some(
+    const path = router.startsWith("./")
+      ? router
+      : lock.governance?.certified.find(
           (entry) =>
             entry.kind === "extensions" && entry.evidence.id === router,
-        );
-    if (!declared)
+        )?.path;
+    if (!path || !lock.declared.extensions.includes(path))
       problems.push(
         `${name} names router ${router}, which is not a declared extension`,
       );

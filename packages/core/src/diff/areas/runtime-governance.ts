@@ -150,11 +150,13 @@ export function enforcement(out: Collector, b: AnyLock, a: AnyLock): void {
       bx[resource],
       ax[resource],
       (be, ae) =>
-        be === "" || ae === ""
-          ? ["low", "Session export status recorded."]
-          : (STATUS_RANK[ae] ?? 0) < (STATUS_RANK[be] ?? 0)
-            ? ["high", "Enforcement downgrade for session export."]
-            : ["medium", "Session export is now enforced."],
+        ae === ""
+          ? ["high", "The lock no longer records session export status."]
+          : be === ""
+            ? ["low", "Session export status recorded."]
+            : (STATUS_RANK[ae] ?? 0) < (STATUS_RANK[be] ?? 0)
+              ? ["high", "Enforcement downgrade for session export."]
+              : ["medium", "Session export is now enforced."],
     );
 }
 

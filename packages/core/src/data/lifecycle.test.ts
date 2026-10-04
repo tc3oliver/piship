@@ -16,8 +16,6 @@ import { STATE_DATA_CLASSES } from "../migration.js";
 import {
   type DataSweptEvent,
   dataLifecycleIssues,
-  effectiveRetention,
-  effectiveRetentions,
   auditRotation,
   declaredRetention,
   sessionHasOwnerRecord,
@@ -56,29 +54,7 @@ function recorder() {
   };
 }
 
-describe("retention bounds", () => {
-  it("treats audit as a minimum and the other classes as maximums", () => {
-    // A user may lengthen audit, never shorten it.
-    expect(effectiveRetention("audit", 180 * DAY, 30 * DAY)).toBe(180 * DAY);
-    expect(effectiveRetention("audit", 180 * DAY, 365 * DAY)).toBe(365 * DAY);
-    // A user may shorten the others, never lengthen them.
-    expect(effectiveRetention("sessions", 30 * DAY, 7 * DAY)).toBe(7 * DAY);
-    expect(effectiveRetention("sessions", 30 * DAY, 90 * DAY)).toBe(30 * DAY);
-    expect(effectiveRetention("cache", 7 * DAY, undefined)).toBe(7 * DAY);
-    expect(effectiveRetention("temp", undefined, DAY)).toBe(DAY);
-    expect(effectiveRetention("cache", undefined, undefined)).toBeUndefined();
-  });
-
-  it("leaves a class without any retention out", () => {
-    expect(
-      effectiveRetentions(
-        { sessions: 30 * DAY, audit: 180 * DAY },
-        { audit: 10 * DAY, cache: DAY },
-      ),
-    ).toEqual({ sessions: 30 * DAY, audit: 180 * DAY, cache: DAY });
-    expect(effectiveRetentions({})).toEqual({});
-  });
-
+describe("retention", () => {
   it("purges onLogout classes at logout only, and never audit", () => {
     const retention = { sessions: 30 * DAY, audit: 180 * DAY };
     expect(sweepRetention("launch", retention, ["cache", "sessions"])).toEqual(
@@ -165,6 +141,37 @@ describe("sweepData", () => {
         },
       },
     ]);
+  });
+
+  it("sweeps audit only under the rotation lock, and releases it", async () => {
+    const rotated = file("logs/audit.jsonl.3", 200);
+    const lock = file("logs/audit.jsonl.rotate.lock", 0, "4242-abcd\n");
+    const { events, record } = recorder();
+    const held = await sweepData({
+      stateDir: state,
+      trigger: "launch",
+      retention: { audit: 180 * DAY },
+      record,
+      now: NOW,
+    });
+    // A rotation holds the lock: audit is left as it is.
+    expect(held.classes).toEqual([]);
+    expect(events).toEqual([]);
+    expect(existsSync(rotated)).toBe(true);
+    rmSync(lock);
+    let locked = false;
+    await sweepData({
+      stateDir: state,
+      trigger: "launch",
+      retention: { audit: 180 * DAY },
+      record: () => {
+        locked = existsSync(lock);
+      },
+      now: NOW,
+    });
+    expect(locked).toBe(true);
+    expect(existsSync(rotated)).toBe(false);
+    expect(existsSync(lock)).toBe(false);
   });
 
   it("writes the data.swept event before it deletes anything", async () => {
@@ -267,6 +274,31 @@ describe("sweepData", () => {
     });
     expect(existsSync(session)).toBe(true);
     expect(result.classes[0]).toMatchObject({ removed: 0, kept: 1 });
+  });
+
+  it("deletes a session only under its own claim, and keeps one another owner took", async () => {
+    const taken = file("sessions/user/taken.jsonl", 90);
+    const free = file("sessions/user/free.jsonl", 90);
+    const order: string[] = [];
+    const result = await sweepData({
+      stateDir: state,
+      trigger: "launch",
+      retention: { sessions: 30 * DAY },
+      record: () => undefined,
+      // The sweep's own record would count as an owner; the claim alone decides.
+      sessionHeld: (path) => order.includes(`claim ${path}`),
+      claimSession: (path) => {
+        // A launch resumed it after selection: its record is seen.
+        if (path === taken) return undefined;
+        order.push(`claim ${path}`);
+        return () => order.push(`release ${path}`);
+      },
+      now: NOW,
+    });
+    expect(existsSync(taken)).toBe(true);
+    expect(existsSync(free)).toBe(false);
+    expect(order).toEqual([`claim ${free}`, `release ${free}`]);
+    expect(result.classes[0]).toMatchObject({ removed: 1, kept: 1 });
   });
 
   it("never sweeps credential metadata or other unswept classes", async () => {

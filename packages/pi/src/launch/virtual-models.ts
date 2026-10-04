@@ -23,7 +23,7 @@ const real = (path: string): string => {
 };
 
 /** Built path of a declared router: a `./` path or a certified extension id. */
-function routerPath(
+export function routerPath(
   lock: DistributionLock,
   distributionDir: string,
   router: string,
@@ -90,26 +90,35 @@ export function governVirtualModels(
   );
   const reload = resourceLoader.reload.bind(resourceLoader);
   resourceLoader.reload = async () => {
-    await reload();
     const previous = registered;
-    registered = registerVirtualModels(
-      resourceLoader,
-      governed,
-      modelRuntime,
-      rules,
-    );
-    // Pi keeps a registration the reloaded extensions no longer make, with
-    // the replaced router; it is removed, so the model fails closed.
-    for (const name of previous)
-      if (!registered.has(name)) {
-        const rule = rules.find(
-          (item) => `${item.provider}/${item.id}` === name,
-        );
-        if (rule)
-          governed.withRegistrationWindow(() =>
-            modelRuntime.unregisterVirtualModel(rule.provider, rule.id),
+    const next = new Set<string>();
+    let failed = true;
+    try {
+      await reload();
+      registerVirtualModels(
+        resourceLoader,
+        governed,
+        modelRuntime,
+        rules,
+        next,
+      );
+      failed = false;
+    } finally {
+      // Pi keeps a registration the reloaded extensions no longer make, with
+      // the replaced router; it is removed, so the model fails closed. A
+      // failed reload removes them all, the ones it registered included.
+      registered = failed ? new Set() : next;
+      for (const name of new Set([...previous, ...next]))
+        if (!registered.has(name)) {
+          const rule = rules.find(
+            (item) => `${item.provider}/${item.id}` === name,
           );
-      }
+          if (rule)
+            governed.withRegistrationWindow(() =>
+              modelRuntime.unregisterVirtualModel(rule.provider, rule.id),
+            );
+        }
+    }
   };
 }
 
@@ -125,15 +134,16 @@ function fromRouter(extensionPath: string, router: string): boolean {
  * declared virtual model, registered by its declared router; anything else
  * fails the launch (or the reload). The queue is emptied, so Pi registers
  * nothing further when it binds the extensions. Returns the registered
- * `provider/id` names.
+ * `provider/id` names, added to `registered` as they register, so a caller
+ * knows them even when a later one fails.
  */
 export function registerVirtualModels(
   resourceLoader: Pick<DefaultResourceLoader, "getExtensions">,
   governed: GovernedRuntime,
   modelRuntime: Pick<ModelRuntime, "registerVirtualModel">,
   rules: readonly VirtualModelRule[],
+  registered: Set<string> = new Set(),
 ): Set<string> {
-  const registered = new Set<string>();
   const runtime = resourceLoader.getExtensions().runtime;
   const pending = runtime.pendingVirtualModelRegistrations;
   runtime.pendingVirtualModelRegistrations = [];

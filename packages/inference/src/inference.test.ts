@@ -95,6 +95,17 @@ describe("model catalog", () => {
       available: false,
       reason: "excluded by user preference",
     });
+    // Narrowing to the virtual model keeps its routes available for routing;
+    // a model it does not route to is still excluded.
+    const narrowed = buildModelDefinitions("acmecode", [...catalog, auto], {
+      allowed: ["acme/auto", "acme/coder", "acme/general"],
+      userAllowed: ["acme/auto"],
+    });
+    expect(
+      narrowed
+        .filter((model) => model.availability.available)
+        .map((model) => model.id),
+    ).toEqual(["acme/coder", "acme/auto"]);
   });
   it("carries structured output only when the catalog declares it", () => {
     const [declared, unknown] = buildModelDefinitions(

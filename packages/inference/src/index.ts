@@ -57,6 +57,17 @@ export function buildModelDefinitions(
       : constraints.live && !constraints.live.includes(id)
         ? "not currently listed by the inference gateway"
         : undefined;
+  // A user narrowing limits selection: the routes of a virtual model the
+  // user keeps stay available to it.
+  const userRoutes = new Set(
+    catalog.flatMap((entry) =>
+      entry.virtual &&
+      constraints.allowed.includes(entry.id) &&
+      constraints.userAllowed?.includes(entry.id)
+        ? entry.virtual.routes
+        : [],
+    ),
+  );
   return catalog
     .filter((entry) => constraints.allowed.includes(entry.id))
     .map((entry) => {
@@ -74,7 +85,8 @@ export function buildModelDefinitions(
       if (
         !reason &&
         constraints.userAllowed &&
-        !constraints.userAllowed.includes(entry.id)
+        !constraints.userAllowed.includes(entry.id) &&
+        !userRoutes.has(entry.id)
       )
         reason = "excluded by user preference";
       return {

@@ -11,6 +11,7 @@ import {
 } from "@piship/policy";
 import { DATA_CLASSES, LATEST_SCHEMA } from "@piship/schema";
 import { policyContainment } from "../governance/engine.js";
+import { routerPath } from "../launch/virtual-models.js";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
@@ -94,12 +95,20 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
     if (lock.runtimeTools)
       out.info("extension tools", "exposure resolved and enforced at launch");
   }
-  if (lock.virtualModels?.length)
-    for (const model of lock.virtualModels)
-      out.ok(
-        `virtual ${model.id}`,
-        `router ${model.router}, routes ${model.routes.join(", ")}`,
-      );
+  if (lock.virtualModels?.length) {
+    // The router resolves as launch resolves it; one that names no built
+    // extension cannot register the model, which then fails closed.
+    for (const model of lock.virtualModels) {
+      const detail = `router ${model.router}, routes ${model.routes.join(", ")}`;
+      if (routerPath(lock, data.ctx.distributionDir, model.router))
+        out.ok(`virtual ${model.id}`, detail);
+      else
+        out.bad(
+          `virtual ${model.id}`,
+          `${detail}; the router is not a declared extension of this build, so the model cannot be registered`,
+        );
+    }
+  }
   if (lock.packages?.length) {
     // The payload inventory verified every vendored file before Pi loaded.
     out.ok(

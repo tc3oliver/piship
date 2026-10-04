@@ -21,13 +21,20 @@
 // age by mtime, and writes one `data.swept` audit event per class before it
 // deletes anything of that class. A class whose event cannot be recorded is
 // left as it is.
-import { lstatSync, readdirSync, type Stats, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  type Stats,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { AUDIT_ROTATION, type AuditRotation } from "@piship/audit";
 import type { AuditEventType } from "@piship/contracts";
 import {
   DATA_CLASSES,
-  DATA_RETENTION_BOUNDS,
   type DataClass,
   type DataManifest,
 } from "@piship/schema";
@@ -70,42 +77,6 @@ export function declaredRetention(data: DataManifest): RetentionMs {
   return result;
 }
 
-/**
- * The retention applied to one class, from the distribution's and the
- * user's value: for `audit` the distribution's is a minimum (a user may
- * lengthen it, never shorten it), for every other class a maximum (a user may
- * shorten it). Without a distribution value the user's applies; without
- * either the class is not swept.
- */
-export function effectiveRetention(
-  dataClass: RetainedDataClass,
-  enforced: number | undefined,
-  user: number | undefined,
-): number | undefined {
-  if (enforced === undefined) return user;
-  if (user === undefined) return enforced;
-  return DATA_RETENTION_BOUNDS[dataClass] === "minimum"
-    ? Math.max(enforced, user)
-    : Math.min(enforced, user);
-}
-
-/** Effective retention for every class, from the enforced and the user's values. */
-export function effectiveRetentions(
-  enforced: RetentionMs,
-  user: RetentionMs = {},
-): RetentionMs {
-  const result: RetentionMs = {};
-  for (const dataClass of DATA_CLASSES) {
-    const value = effectiveRetention(
-      dataClass,
-      enforced[dataClass],
-      user[dataClass],
-    );
-    if (value !== undefined) result[dataClass] = value;
-  }
-  return result;
-}
-
 export interface DataLifecycleIssue {
   readonly level: "error";
   readonly path: string;
@@ -132,7 +103,7 @@ export function dataLifecycleIssues(data: DataManifest): DataLifecycleIssue[] {
 export type DataSweepTrigger = "launch" | "logout";
 
 /**
- * The retention a sweep applies: at launch the effective retention, at
+ * The retention a sweep applies: at launch the declared retention, at
  * logout also 0 for every class in `purge.onLogout` (audit never, whatever
  * the contract says).
  */
@@ -172,6 +143,15 @@ export interface DataSweepOptions {
    * session but keeps one whose owner died until a launch clears its record.
    */
   readonly sessionHeld?: (sessionFile: string) => boolean;
+  /**
+   * Takes a session file the way a launch does (an owner record written
+   * before it looks for another owner) and returns its release, or
+   * undefined when another owner holds it. With it, a session is deleted
+   * only under this claim, so a launch resuming it at the same time either
+   * sees the sweep's record or is seen; without it, the owner check and
+   * the deletion are not atomic.
+   */
+  readonly claimSession?: (sessionFile: string) => (() => void) | undefined;
   /** Wall clock in milliseconds; tests pass a fixed one. */
   readonly now?: number;
 }
@@ -290,84 +270,144 @@ export async function sweepData(
   for (const dataClass of ["sessions", "audit", "cache"] as const) {
     const retention = options.retention[dataClass];
     if (retention === undefined || !(retention >= 0)) continue;
-    const cutoff = now - retention;
-    // A logout purge (retention 0) takes everything that exists now.
-    const old = (path: string) => {
-      const stats = lstat(path);
-      return (
-        stats?.isFile() === true && (retention === 0 || stats.mtimeMs < cutoff)
-      );
-    };
-    const isHeld = (path: string) =>
-      dataClass === "sessions" && safeHeld(held, path);
-    const selected: string[] = [];
-    let heldCount = 0;
-    for (const path of candidates(options.stateDir, dataClass)) {
-      if (!old(path)) continue;
-      if (isHeld(path)) heldCount += 1;
-      else selected.push(path);
-    }
-    if (selected.length === 0) {
-      if (heldCount > 0)
-        classes.push({
-          class: dataClass,
-          removed: 0,
-          held: heldCount,
-          kept: 0,
-          failed: 0,
-        });
-      continue;
-    }
+    // Rotation renames the rotated audit files; holding its lock keeps the
+    // files selected the files deleted. A held lock leaves audit as it is.
+    const release =
+      dataClass === "audit" ? rotationLock(options.stateDir) : () => undefined;
+    if (!release) continue;
     try {
-      await options.record({
-        event: "data.swept",
-        resource: dataClass,
-        detail: {
-          class: dataClass,
-          trigger: options.trigger,
-          retentionSeconds: Math.floor(retention / 1000),
-          cutoff: new Date(cutoff).toISOString(),
-          files: selected.length,
-          ...(dataClass === "sessions" ? { held: heldCount } : {}),
-        },
-      });
-    } catch {
-      classes.push({
+      classes.push(
+        ...(await sweepClass(options, dataClass, retention, now, held)),
+      );
+    } finally {
+      release();
+    }
+  }
+  return { classes };
+}
+
+async function sweepClass(
+  options: DataSweepOptions,
+  dataClass: SweptDataClass,
+  retention: number,
+  now: number,
+  held: (sessionFile: string) => boolean,
+): Promise<DataSweepClassResult[]> {
+  const cutoff = now - retention;
+  // A logout purge (retention 0) takes everything that exists now.
+  const old = (path: string) => {
+    const stats = lstat(path);
+    return (
+      stats?.isFile() === true && (retention === 0 || stats.mtimeMs < cutoff)
+    );
+  };
+  const isHeld = (path: string) =>
+    dataClass === "sessions" && safeHeld(held, path);
+  const selected: string[] = [];
+  let heldCount = 0;
+  for (const path of candidates(options.stateDir, dataClass)) {
+    if (!old(path)) continue;
+    if (isHeld(path)) heldCount += 1;
+    else selected.push(path);
+  }
+  if (selected.length === 0)
+    return heldCount > 0
+      ? [{ class: dataClass, removed: 0, held: heldCount, kept: 0, failed: 0 }]
+      : [];
+  try {
+    await options.record({
+      event: "data.swept",
+      resource: dataClass,
+      detail: {
+        class: dataClass,
+        trigger: options.trigger,
+        retentionSeconds: Math.floor(retention / 1000),
+        cutoff: new Date(cutoff).toISOString(),
+        files: selected.length,
+        ...(dataClass === "sessions" ? { held: heldCount } : {}),
+      },
+    });
+  } catch {
+    return [
+      {
         class: dataClass,
         removed: 0,
         held: heldCount,
         kept: selected.length,
         failed: 0,
         unrecorded: true,
-      });
+      },
+    ];
+  }
+  let removed = 0;
+  let kept = 0;
+  let failed = 0;
+  for (const path of selected) {
+    // A session is deleted under the sweep's own claim when it can take
+    // one; one another owner took meanwhile is kept.
+    const claimed =
+      dataClass === "sessions" && options.claimSession
+        ? safeClaim(options.claimSession, path)
+        : () => undefined;
+    if (!claimed) {
+      kept += 1;
       continue;
     }
-    let removed = 0;
-    let kept = 0;
-    let failed = 0;
-    for (const path of selected) {
+    try {
       // Checked again: a session resumed, or a file written, since it was
-      // selected stays.
-      if (!old(path) || isHeld(path)) {
+      // selected stays. A claim has already looked for another owner (and
+      // its own record would count as one).
+      if (!old(path) || (!options.claimSession && isHeld(path))) {
         kept += 1;
         continue;
       }
-      try {
-        unlinkSync(path);
-        removed += 1;
-      } catch {
-        failed += 1;
-      }
+      unlinkSync(path);
+      removed += 1;
+    } catch {
+      failed += 1;
+    } finally {
+      claimed();
     }
-    classes.push({
-      class: dataClass,
-      removed,
-      held: heldCount,
-      kept,
-      failed,
-    });
   }
-  return { classes };
+  return [{ class: dataClass, removed, held: heldCount, kept, failed }];
+}
+
+/** A claim that throws is not taken: the session is kept. */
+function safeClaim(
+  claim: (path: string) => (() => void) | undefined,
+  path: string,
+): (() => void) | undefined {
+  try {
+    return claim(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Take the audit file sink's rotation lock (`logs/audit.jsonl.rotate.lock`)
+ * with a token rotation recognizes, so a crash leaves it to the next
+ * rotation. Returns its release, or undefined while another process holds
+ * it.
+ */
+function rotationLock(stateDir: string): (() => void) | undefined {
+  const logs = join(stateDir, "logs");
+  // No logs directory (or a link in its place): no rotated file to sweep.
+  if (!lstat(logs)?.isDirectory()) return () => undefined;
+  const lock = join(logs, "audit.jsonl.rotate.lock");
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}\n`;
+  try {
+    writeFileSync(lock, token, { flag: "wx", mode: 0o600 });
+  } catch {
+    return undefined;
+  }
+  return () => {
+    try {
+      if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
+    } catch {
+      // Gone already: a rotation took over a lock it judged abandoned.
+    }
+  };
 }
 
 /** A predicate that throws holds the session: wrongly kept is harmless. */

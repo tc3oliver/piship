@@ -28,7 +28,7 @@ afterEach(async () => {
 const rule = (id: string, action: string, resource: string, effect: string) =>
   `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: ${effect} }`;
 
-async function open(rules: string[]) {
+async function open(rules: string[], enforced: string[] = []) {
   const root = mkdtempSync(join(tmpdir(), "piship-model-policy-"));
   roots.push(root);
   const distribution = join(root, "distribution");
@@ -49,6 +49,7 @@ async function open(rules: string[]) {
       "  id: unit",
       "  version: 1",
       "  default: deny",
+      ...(enforced.length ? ["  enforced:", ...enforced] : []),
       "  defaults:",
       ...rules,
       "",
@@ -115,6 +116,32 @@ describe("model.select and model.dispatch policy", () => {
     expect(policy.dispatches?.("acme", "coder")).toBe(true);
     // No rule names acme/general: model.select, which the default denies.
     expect(policy.dispatches?.("acme", "general")).toBe(false);
+  });
+
+  it("keeps a model.select deny when a wildcard allow decides model.dispatch (deny wins)", async () => {
+    for (const wildcard of ["'*'", "model.*"]) {
+      const { session } = await open(
+        [rule("everything", wildcard, "acme/*", "allow")],
+        [rule("no-general", "model.select", "acme/general", "deny")],
+      );
+      const policy = await modelPolicy(session, "acme/auto", [AUTO]);
+      expect(policy.selects("acme", "general"), wildcard).toBe(false);
+      // The wildcard names model.select too, so it is no route around it.
+      expect(policy.dispatches?.("acme", "general"), wildcard).toBe(false);
+      expect(policy.dispatches?.("acme", "coder"), wildcard).toBe(true);
+      await session.close();
+    }
+    // A rule that names model.dispatch itself still routes (router-only).
+    const { session } = await open(
+      [
+        rule("route", "model.dispatch", "acme/general", "allow"),
+        rule("everything", "model.*", "acme/*", "allow"),
+      ],
+      [rule("no-general", "model.select", "acme/general", "deny")],
+    );
+    const policy = await modelPolicy(session, "acme/auto", [AUTO]);
+    expect(policy.selects("acme", "general")).toBe(false);
+    expect(policy.dispatches?.("acme", "general")).toBe(true);
   });
 
   it("resolves ask for each route at start, and refuses a virtual model with no route left", async () => {

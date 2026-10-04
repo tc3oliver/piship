@@ -575,6 +575,15 @@ describe("diffLocks", () => {
         risk: "high",
       });
       expect(find(report, "session export support")?.risk).toBe("high");
+      // A status the lock no longer records is a downgrade too.
+      const dropped = v6();
+      delete (dropped.sessionExportStatus as Record<string, string>).support;
+      expect(
+        find(diffLocks(v6(), dropped), "session export support"),
+      ).toMatchObject({ kind: "removed", risk: "high" });
+      expect(
+        find(diffLocks(dropped, v6()), "session export support")?.risk,
+      ).toBe("low");
       expect(report.requiredTests).toContain(DIFF_TESTS.compatibility);
       const upgraded = diffLocks(after, v6());
       expect(find(upgraded, "seam tool.execute")?.risk).toBe("medium");

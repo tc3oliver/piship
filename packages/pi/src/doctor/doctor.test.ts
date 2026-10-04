@@ -1791,8 +1791,18 @@ describe("Governance group", () => {
       }),
       {
         runtimeTools: { codemode: "on", toolSearch: "off", exposure: [] },
+        declared: { extensions: ["./extensions/router.ts"] },
         virtualModels: [
-          { id: "acme/auto", router: "acme-router", routes: ["acme/coder"] },
+          {
+            id: "acme/auto",
+            router: "./extensions/router.ts",
+            routes: ["acme/coder"],
+          },
+          {
+            id: "acme/platform",
+            router: "package:platform",
+            routes: ["acme/coder"],
+          },
         ],
         packages: [
           {
@@ -1837,9 +1847,12 @@ describe("Governance group", () => {
         `  ✓ ${"deferred tools".padEnd(20)} off`,
         `  ✓ ${"tool exposure".padEnd(20)} codemode: bash; hidden: docs_delete; direct: edit, read`,
         `  - ${"extension tools".padEnd(20)} exposure resolved and enforced at launch`,
-        `  ✓ ${"virtual acme/auto".padEnd(20)} router acme-router, routes acme/coder`,
+        `  ✓ ${"virtual acme/auto".padEnd(20)} router ./extensions/router.ts, routes acme/coder`,
+        // A router that names no built extension cannot register the model.
+        `  ✗ ${"virtual acme/platform".padEnd(20)} router package:platform, routes acme/coder; the router is not a declared extension of this build, so the model cannot be registered`,
       ]),
     );
+    expect(renderDoctor(data).failed).toBe(true);
     const failed = renderDoctor(
       doctorData("managed", {
         access: accessData(),

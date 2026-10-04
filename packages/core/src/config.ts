@@ -299,7 +299,16 @@ export function resolveEffectiveConfig(
     sources.push("enforced model");
   }
   if (entitledModels) {
-    allowed = allowed.filter((item) => entitledModels.includes(item));
+    // A credential is entitled to physical models; a virtual model is
+    // entitled through any of its routes.
+    const routes = (id: string) =>
+      access?.models.catalog.find((entry) => entry.id === id)?.virtual?.routes;
+    allowed = allowed.filter(
+      (item) =>
+        entitledModels.includes(item) ||
+        (routes(item)?.some((route) => entitledModels.includes(route)) ??
+          false),
+    );
     sources.push("credential entitlement");
   }
   if (preferences.modelsAllowed) {

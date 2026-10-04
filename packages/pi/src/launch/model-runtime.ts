@@ -105,18 +105,40 @@ export async function createModelRuntime(
       modelsPath: join(ctx.agentDir, "models.json"),
     });
     // The effective allowlist includes an enforced model and user narrowing,
-    // not only the manifest's list.
+    // not only the manifest's list. They limit selection only: the routes
+    // of a selectable virtual model may still receive a request.
     const effective = activated?.config;
+    const allowedModelKeys = effective
+      ? effective.allowedModels
+      : (ctx.metadata.access?.models.allowed ?? []);
     const governed =
       ctx.metadata.access || policy
         ? governModelRuntime(
             modelRuntime,
             {
               kind: "pi-native",
-              allowedModelKeys: effective
-                ? effective.allowedModels
-                : (ctx.metadata.access?.models.allowed ?? []),
+              allowedModelKeys,
               restricted: effective?.modelsRestricted ?? false,
+              ...(allowedModelKeys.length
+                ? {
+                    dispatchModelKeys: [
+                      ...new Set([
+                        ...allowedModelKeys,
+                        ...virtual
+                          .filter((rule) =>
+                            allowedModelKeys.includes(
+                              `${rule.provider}/${rule.id}`,
+                            ),
+                          )
+                          .flatMap((rule) =>
+                            rule.routes.map(
+                              (route) => `${route.provider}/${route.id}`,
+                            ),
+                          ),
+                      ]),
+                    ],
+                  }
+                : {}),
             },
             policy,
             virtual,
@@ -134,6 +156,22 @@ export async function createModelRuntime(
       (id) =>
         activated.config.allowedModels.includes(id) &&
         !activated.incompatibleModels[id],
+    );
+  // An enforced model and user narrowing limit selection only: the routes of
+  // a selectable virtual model may receive a request. The runtime models are
+  // already within the manifest allowlist and the credential entitlement.
+  const routes = new Set(
+    allowedModelIds.flatMap(
+      (id) => catalog.find((item) => item.id === id)?.virtual?.routes ?? [],
+    ),
+  );
+  const dispatchModelIds = activated.runtime.models
+    .map((model) => model.id)
+    .filter(
+      (id) =>
+        !catalog.find((item) => item.id === id)?.virtual &&
+        !activated.incompatibleModels[id] &&
+        (allowedModelIds.includes(id) || routes.has(id)),
     );
   const modelRuntime = await ModelRuntime.create({
     credentials: isolatedCredentialStore() as never,
@@ -159,9 +197,7 @@ export async function createModelRuntime(
       command: ctx.metadata.app.command,
       allowedModelIds,
       // A virtual model is selected, never dispatched.
-      dispatchModelIds: allowedModelIds.filter(
-        (id) => !catalog.find((item) => item.id === id)?.virtual,
-      ),
+      dispatchModelIds,
       apiKey: async ({ force }) => {
         if (!activated.runtime.requiresCredential)
           return NO_CREDENTIAL_PLACEHOLDER;

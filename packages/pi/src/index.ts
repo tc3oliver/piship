@@ -27,7 +27,7 @@ import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
-import { liveOwner } from "./launch/session-file.js";
+import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
   governModelRuntime,
@@ -202,9 +202,15 @@ export async function launchPiDistribution(
       `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
     );
   // The data retention sweep runs when a session launches, before it claims
-  // a session file; a session another launch holds is kept.
+  // a session file; a session another launch holds is kept, and one is
+  // deleted only under the sweep's own claim, so a launch resuming it at the
+  // same time keeps it.
   await sweepDistributionData(ctx, "launch", {
     sessionHeld: (file) => liveOwner(file) !== undefined,
+    claimSession: (file) => {
+      const ownership = new SessionOwnership();
+      return ownership.claim(file) ? () => ownership.release() : undefined;
+    },
   });
   if (smoke)
     return runSmoke(
