@@ -21,7 +21,7 @@ Do these once, before the first release that employees install.
    ```
 
    Each holder keeps the PEM on encrypted storage and the passphrase in a password manager, never together. Root keys come online only for a root change.
-2. **Pin the bootstrap.** Print the manifest block from the public keys and paste it under `updates:` in `piship.yaml` (schema `piship/v1alpha5`):
+2. **Pin the bootstrap.** Print the manifest block from the public keys and paste it under `updates:` in `piship.yaml` (schema `piship/v1alpha5` or later; `piship init` writes `piship/v1alpha6`):
 
    ```bash
    piship trust-root init \

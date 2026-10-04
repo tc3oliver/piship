@@ -615,6 +615,28 @@ describe("diffLocks", () => {
       });
     });
 
+    it("records the uninstall purge without claiming uninstall applies it", () => {
+      const after = v6();
+      after.data.declared.purge.onUninstall = "all";
+      const report = diffLocks(v6(), after);
+      expect(find(report, "purge on uninstall")).toMatchObject({
+        area: "data",
+        before: "none",
+        after: "all",
+        risk: "low",
+        reason:
+          "Uninstall purge recorded: all (not applied: uninstall keeps state).",
+      });
+      const back = diffLocks(after, v6());
+      expect(find(back, "purge on uninstall")).toMatchObject({
+        before: "all",
+        after: "none",
+        risk: "low",
+        reason:
+          "Uninstall purge recorded: none (uninstall keeps state, as before).",
+      });
+    });
+
     it("flags a new Pi package or a changed resolution as high", () => {
       const pkg = {
         id: "pi-platform",

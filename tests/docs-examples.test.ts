@@ -144,7 +144,7 @@ describe("documented examples", () => {
   });
 
   it("the README manifest is a complete manifest PiShip accepts on its own", () => {
-    const snippet = block("README.md", "yaml", "schema: piship/v1alpha5");
+    const snippet = block("README.md", "yaml", "schema: piship/v1alpha6");
     const directory = temporary();
     writeFileSync(join(directory, "piship.yaml"), snippet);
     const manifest = readManifest(join(directory, "piship.yaml"));
