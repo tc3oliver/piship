@@ -3,6 +3,7 @@ import {
   normalizePolicyAction,
   POLICY_ACTIONS,
   type PolicyEffect,
+  SESSION_EXPORT_RESOURCES,
 } from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
@@ -63,6 +64,25 @@ function resourceGlob(value: unknown, path: string): string {
   return plainString(value, path, 1024);
 }
 
+/**
+ * Whether a `session.export` resource glob matches a known export resource,
+ * as the policy engine's glob does: the names hold no separator, so `*` and
+ * `**` both match any run of characters, and a trailing `/**` also matches
+ * the name itself. A rule matching none of them would govern nothing.
+ */
+function coversSessionExport(resource: string): boolean {
+  const patterns = [resource];
+  if (resource.endsWith("/**")) patterns.push(resource.slice(0, -3));
+  return patterns.some((pattern) => {
+    const source = pattern
+      .split(/\*+/)
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".*");
+    const regexp = new RegExp(`^${source}$`, "s");
+    return SESSION_EXPORT_RESOURCES.some((name) => regexp.test(name));
+  });
+}
+
 function parseRule(entry: unknown, path: string): PolicyRule {
   const rule = record(entry, path, [
     "id",
@@ -77,10 +97,17 @@ function parseRule(entry: unknown, path: string): PolicyRule {
       `${path}.id`,
       "Rule IDs use lowercase letters, digits, and . _ - (at most 128)",
     );
+  const action = ruleAction(rule.action, `${path}.action`);
+  const resource = resourceGlob(rule.resource, `${path}.resource`);
+  if (action === "session.export" && !coversSessionExport(resource))
+    fail(
+      `${path}.resource`,
+      `A session.export rule names ${SESSION_EXPORT_RESOURCES.join(", ")}, or a glob covering one of them`,
+    );
   return {
     id,
-    action: ruleAction(rule.action, `${path}.action`),
-    resource: resourceGlob(rule.resource, `${path}.resource`),
+    action,
+    resource,
     effect: oneOf(rule.effect, `${path}.effect`, EFFECTS),
     ...(rule.reason === undefined
       ? {}

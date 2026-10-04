@@ -5,7 +5,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { manifestContainment, unenforcedRules } from "@piship/policy";
-import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
+import {
+  defaultMcpServerClass,
+  type ReleaseManifest,
+  sharedRoleKeyIds,
+} from "@piship/schema";
 import { withSessionExportRules } from "../data/session-export.js";
 import {
   currentTarget,
@@ -139,6 +143,14 @@ function policyConflicts(lock: DistributionLock): string[] {
       conflicts.push(
         `${item.kind} ${item.path} is declared ${item.class}, which policy.resourceTrust denies`,
       );
+  if (governance.mcp.mode !== "off")
+    for (const server of governance.mcp.servers) {
+      const cls = server.class ?? defaultMcpServerClass(lock.deployment.mode);
+      if (resourceTrust[cls] === "deny")
+        conflicts.push(
+          `MCP server ${server.id} is declared ${cls}, which policy.resourceTrust denies`,
+        );
+    }
   const providerTrust = policy.providerTrust as Record<string, string>;
   for (const capability of governance.capabilities)
     if (

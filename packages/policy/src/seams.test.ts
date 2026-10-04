@@ -84,6 +84,14 @@ describe("RUNTIME_SEAMS", () => {
     expect(ruleStatus("session.export", "pub*", NO_CONTAINMENT)).toBe(
       "unsupported",
     );
+    // Only the per-resource table raises support: an unknown resource, or
+    // none, has no seam.
+    expect(RUNTIME_SEAMS["session.export"]).toBe("none");
+    for (const resource of ["secret", undefined])
+      expect(enforcementStatus("session.export", offline, resource)).toBe(
+        "unsupported",
+      );
+    expect(ruleStatus("session.export", "secret", offline)).toBe("unsupported");
   });
 });
 

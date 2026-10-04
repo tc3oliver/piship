@@ -127,17 +127,48 @@ describe("unenforcedRules", () => {
 });
 
 describe("manifestContainment", () => {
-  it("contains every plane only with a required sandbox", () => {
+  const sandbox = (required: boolean, network: "deny" | "allow") =>
+    ({ sandbox: { required, network: { mode: network } } }) as never;
+
+  it("contains every plane only with a required sandbox that denies the network", () => {
     expect(manifestContainment({}, "personal")).toEqual({
       ...NO_CONTAINMENT,
       piOffline: false,
     });
+    expect(manifestContainment(sandbox(false, "deny"), "managed")).toEqual({
+      ...NO_CONTAINMENT,
+      piOffline: true,
+    });
+    expect(manifestContainment(sandbox(true, "deny"), "managed")).toEqual(
+      contained,
+    );
+  });
+
+  it("does not contain the network when a required sandbox allows it", () => {
+    expect(manifestContainment(sandbox(true, "allow"), "managed")).toEqual({
+      ...contained,
+      network: false,
+    });
+    // A managed network.connect deny is then unenforceable.
+    const findings = unenforcedRules(
+      "managed",
+      makePolicy({
+        enforced: [rule("no.net", "network.connect", "**", "deny")],
+      }),
+      manifestContainment(sandbox(true, "allow"), "managed"),
+    );
+    expect(findings.map((item) => [item.level, item.key])).toEqual([
+      ["error", "network.connect:**"],
+    ]);
     expect(
-      manifestContainment({ sandbox: { required: false } as never }, "managed"),
-    ).toEqual({ ...NO_CONTAINMENT, piOffline: true });
-    expect(
-      manifestContainment({ sandbox: { required: true } as never }, "managed"),
-    ).toEqual(contained);
+      unenforcedRules(
+        "managed",
+        makePolicy({
+          enforced: [rule("no.net", "network.connect", "**", "deny")],
+        }),
+        manifestContainment(sandbox(true, "deny"), "managed"),
+      ),
+    ).toEqual([]);
   });
 
   it("runs Pi offline only in managed mode", () => {

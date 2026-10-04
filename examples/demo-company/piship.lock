@@ -1630,13 +1630,13 @@
       "network.connect": "none",
       "provider.load": "hook",
       "resource.load": "hook",
-      "session.export": "hook",
+      "session.export": "none",
       "shell.execute": "hook",
       "skill.load": "hook",
       "tool.execute": "hook",
       "web.request": "none"
     },
-    "digest": "sha256-68b337f8bdf559ee0d372c030ba60dfbf1e04fc61b863862c87f19fcae512695"
+    "digest": "sha256-6038b13ad6a1dded66df018bdb31a0c7d8afb25373c066d10cacdc7a503d1fa3"
   },
   "data": {
     "contract": "piship-data/v1"

@@ -85,6 +85,8 @@ async function open(
     readonly resolveTemplate?: (key: string, template: string) => string;
     readonly mode?: "managed" | "personal";
     readonly metrics?: LocalMetrics;
+    /** The `class` of every declared MCP server (piship/v1alpha6). */
+    readonly mcpClass?: "company" | "user";
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -121,6 +123,19 @@ async function open(
     ].join("\n"),
   );
   const resolved = resolveLock(manifest);
+  // piship/v1alpha6 needs an updates section; the class is set on the lock.
+  if (options.mcpClass && resolved.governance) {
+    const mcp = resolved.governance.manifest.mcp;
+    Object.assign(resolved.governance.manifest, {
+      mcp: {
+        ...mcp,
+        servers: mcp.servers.map((server) => ({
+          ...server,
+          class: options.mcpClass,
+        })),
+      },
+    });
+  }
   // A managed manifest needs identity and access; the policy engine only
   // reads the deployment mode, so tests switch it on the resolved lock.
   const lock = options.mode
@@ -1243,6 +1258,85 @@ describe("Streamable HTTP MCP urls", () => {
     ).rejects.toMatchObject({
       code: "CONFIG_UNAVAILABLE",
       message: expect.stringContaining("UNIT_MCP_URL"),
+    });
+  });
+});
+
+describe("MCP server trust class", () => {
+  const fetch = (async () => {
+    throw new Error("connection refused");
+  }) as unknown as ManagedFetch;
+  const manifest = (denied: "company" | "user", required = false) => [
+    // Continues POLICY's defaults list, then the policy mapping.
+    "    - { id: start, action: mcp.server.start, resource: tickets, effect: allow }",
+    `  resourceTrust: { ${denied}: deny }`,
+    "audit:",
+    "  enabled: true",
+    "  sinks:",
+    "    - { id: local, type: file, required: false }",
+    "mcp:",
+    "  mode: allowlist",
+    "  servers:",
+    "    tickets:",
+    "      transport: streamable-http",
+    "      url: https://mcp.unit.example/rpc",
+    `      required: ${required}`,
+  ];
+
+  it.each([
+    ["managed", undefined, "company"],
+    ["personal", undefined, "user"],
+    ["managed", "user", "user"],
+    ["managed", "company", "company"],
+    ["personal", "company", "company"],
+    ["personal", "user", "user"],
+  ] as const)(
+    "%s mode, class %s: resource trust for %s decides the start",
+    async (mode, mcpClass, effective) => {
+      const other = effective === "company" ? "user" : "company";
+      const classOption = mcpClass ? { mcpClass } : {};
+      const denied = await open(manifest(effective), {
+        fetch,
+        mode,
+        ...classOption,
+      });
+      expect(denied.session.mcpReports).toEqual([
+        expect.objectContaining({
+          id: "tickets",
+          state: "denied",
+          reason: `Resource trust denies class ${effective}`,
+        }),
+      ]);
+      await denied.session.close();
+      expect(
+        readFileSync(join(denied.root, "state", "logs", "audit.jsonl"), "utf8"),
+      ).toMatch(
+        new RegExp(
+          `"event":"mcp\\.server\\.start"[^\\n]*"decision":"denied"[^\\n]*"class":"${effective}"`,
+        ),
+      );
+      // Denying the other class leaves the server to policy; it then starts
+      // (and fails to connect, as nothing listens).
+      const allowed = await open(manifest(other), {
+        fetch,
+        mode,
+        ...classOption,
+      });
+      expect(allowed.session.mcpReports).toEqual([
+        expect.objectContaining({ id: "tickets", state: "failed" }),
+      ]);
+    },
+  );
+
+  it("fails the launch when a required server's class is denied", async () => {
+    await expect(
+      open(manifest("company", true), {
+        fetch,
+        mode: "managed",
+      }),
+    ).rejects.toMatchObject({
+      code: "MCP_DENIED",
+      message: expect.stringContaining("Required MCP server tickets"),
     });
   });
 });

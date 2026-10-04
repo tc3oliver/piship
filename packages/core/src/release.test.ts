@@ -958,6 +958,23 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(
       checkReleaseInputs(project({ extra: rules }).path).deployment.mode,
     ).toBe("personal");
+    // A required sandbox contains the network only when it denies it.
+    const network = (mode: "deny" | "allow") => `sandbox:
+  required: true
+  network:
+    mode: ${mode}
+policy:
+  enforced:
+    - id: acme.net.deny
+      action: network.connect
+      effect: deny
+`;
+    const open = caught(() => checkReleaseInputs(managed(network("allow"))));
+    expect(open.code).toBe("POLICY_UNENFORCEABLE");
+    expect(open.message).toContain("acme.net.deny (deny network.connect:**)");
+    expect(checkReleaseInputs(managed(network("deny"))).deployment.mode).toBe(
+      "managed",
+    );
   });
 
   it("policy: duplicate rule ids are already rejected by the manifest schema", () => {
@@ -989,6 +1006,30 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /Release gate policy: instructions .*AGENTS.md is declared user, which policy.resourceTrust denies/,
     );
+  });
+
+  it("policy: refuses a declared MCP server whose trust class policy denies", () => {
+    const server = (cls: string) => `mcp:
+  servers:
+    docs: { transport: streamable-http, url: "https://mcp.example.com/mcp", class: ${cls} }
+policy:
+  resourceTrust:
+    company: deny
+`;
+    const error = caught(() =>
+      checkReleaseInputs(
+        project({ schema: "piship/v1alpha6", extra: server("company") }).path,
+      ),
+    );
+    expect(error.code).toBe("POLICY_DENIED");
+    expect(error.message).toContain(
+      "MCP server docs is declared company, which policy.resourceTrust denies",
+    );
+    expect(
+      checkReleaseInputs(
+        project({ schema: "piship/v1alpha6", extra: server("user") }).path,
+      ).deployment.mode,
+    ).toBe("personal");
   });
 
   it("policy: refuses an enabled capability whose provider class policy.providerTrust denies", () => {

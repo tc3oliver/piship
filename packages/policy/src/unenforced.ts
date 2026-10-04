@@ -36,8 +36,12 @@ export interface UnenforcedFinding {
 
 /**
  * Containment as the manifest declares it: a required sandbox contains the
- * filesystem, shell, and network planes, and a managed launch runs Pi offline
- * (`PI_OFFLINE=1`). Nothing optional is assumed.
+ * filesystem and shell planes, the network plane only when it also denies
+ * the network (`sandbox.network.mode: deny`), and a managed launch runs Pi
+ * offline (`PI_OFFLINE=1`). Nothing optional is assumed. The filesystem plane
+ * is still a claim about the backend: the runtime counts it only when the
+ * active backend enforces the whole path policy (`enforcesPathPolicy`), which
+ * the manifest cannot know.
  */
 export function manifestContainment(
   governance: Partial<Pick<GovernanceManifest, "sandbox">>,
@@ -46,7 +50,7 @@ export function manifestContainment(
   const required = governance.sandbox?.required === true;
   return {
     filesystem: required,
-    network: required,
+    network: required && governance.sandbox?.network?.mode === "deny",
     shell: required,
     piOffline: mode === "managed",
   };

@@ -36,8 +36,8 @@ export const RUNTIME_SEAMS: Readonly<Record<PolicyAction, RuntimeSeamKind>> = {
   "memory.write": "none",
   "web.request": "none",
   "browser.execute": "none",
-  // Narrowed per resource below.
-  "session.export": "hook",
+  // Raised per resource below; a resource outside that table has no seam.
+  "session.export": "none",
 };
 
 /**
