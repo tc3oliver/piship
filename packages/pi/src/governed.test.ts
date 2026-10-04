@@ -32,7 +32,7 @@ import { normalizePathResource } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  askUserExtension,
+  askUserTool,
   DEFAULT_PLAN_PROMPT,
   governanceHooks,
   workflowExtension,
@@ -50,6 +50,7 @@ import {
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
+import { modelPolicy } from "./launch/governance.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 const roots: string[] = [];
@@ -1116,8 +1117,7 @@ describe("governed shell output persistence", () => {
 describe("piship-ask-user", () => {
   it("returns approved, denied, chosen, cancelled, and unavailable answers", async () => {
     const { session } = await open();
-    const [ask] = load(askUserExtension(session)).tools;
-    if (!ask) throw new Error("ask_user was not registered");
+    const ask = askUserTool(session);
     const answer = async (params: unknown, ctx: ExtensionToolContext) =>
       (await run(ask, params, ctx)).details as { outcome: string };
     expect(await answer({ question: "Ship it?" }, context(true))).toEqual({
@@ -1141,6 +1141,25 @@ describe("piship-ask-user", () => {
   });
 });
 
+describe("runtime block", () => {
+  it("refuses every later model request once enforcement failed", async () => {
+    const { session } = await open();
+    const policy = await modelPolicy(session, undefined);
+    expect(() => policy.available?.()).not.toThrow();
+    session.blockRuntime(
+      "tools",
+      "turn_end: the tool could not be re-activated",
+    );
+    session.blockRuntime("prompt", "a second failure keeps the first error");
+    expect(() => policy.available?.()).toThrow(
+      expect.objectContaining({
+        code: "POLICY_DENIED",
+        message: expect.stringContaining("could not be restored"),
+      }),
+    );
+  });
+});
+
 describe("piship-workflow", () => {
   it("starts in the configured mode, switches by command, and adds mode prompts", async () => {
     const { session } = await open();
@@ -1150,18 +1169,19 @@ describe("piship-workflow", () => {
     expect(session.workflowMode).toBe("plan");
     const handler = workflow.handlers.get("before_agent_start");
     if (!handler) throw new Error("before_agent_start was not registered");
-    const start = (event: unknown, ctx: unknown) =>
-      handler(event, ctx) as { systemPrompt: string };
-    expect(
-      (start({ systemPrompt: "base" }, context()) as { systemPrompt: string })
-        .systemPrompt,
-    ).toBe(`base\n\n${DEFAULT_PLAN_PROMPT}`);
+    // A prompt section, never a forced prompt.
+    const start = () => {
+      const event = {
+        systemPrompt: "base",
+        systemPromptOptions: { sections: {} as Record<string, string> },
+      };
+      expect(handler(event, context())).toBeUndefined();
+      return event.systemPromptOptions.sections;
+    };
+    expect(start()).toEqual({ piship_workflow: DEFAULT_PLAN_PROMPT });
     await workflow.commands.get("build")?.handler("", context(true));
     expect(session.workflowMode).toBe("build");
-    expect(
-      (start({ systemPrompt: "base" }, context()) as { systemPrompt: string })
-        .systemPrompt,
-    ).toBe("base\n\nCompany build rules.");
+    expect(start()).toEqual({ piship_workflow: "Company build rules." });
     await workflow.commands.get("plan")?.handler("", context(true));
     expect(session.workflowMode).toBe("plan");
   });

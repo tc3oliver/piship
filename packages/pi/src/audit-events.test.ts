@@ -16,6 +16,7 @@ import {
   type ExtensionToolContext,
   type InlineExtension,
   SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { LocalMetrics } from "@piship/audit";
@@ -31,6 +32,8 @@ import { governanceHooks } from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 import { modelPolicy } from "./launch/governance.js";
+import { piSettings } from "./launch/pi-defaults.js";
+import { governCacheWarming } from "./launch/runtime-integrity.js";
 
 /**
  * Emitted by the branded commands outside a session, and proven from their
@@ -49,15 +52,14 @@ const OUTSIDE_A_SESSION = [
 ];
 /**
  * v0.9 event types the contract already carries but no runtime flow emits
- * yet: model dispatch (09-B4) and runtime mutation repair (09-B5). Each task
- * removes its names from this list when its flow emits them.
+ * yet: model dispatch (09-B4). Each task removes its names from this list
+ * when its flow emits them.
  * `session.export` stays until an export flow exists: Pi's /share and
  * /export have no seam, and PiShip has no command that exports a session.
  */
 const NOT_YET_EMITTED: readonly AuditEventType[] = [
   "model.dispatch",
   "session.export",
-  "runtime.mutation.reverted",
 ];
 
 const roots: string[] = [];
@@ -273,6 +275,10 @@ describe("governed session audit events (real flows)", () => {
     ]);
     const { session, workspace } = full;
     const hooks = handlers(session);
+    // An enforced cache warming mode refuses the user's change.
+    const settings = SettingsManager.inMemory(piSettings("off"));
+    governCacheWarming(settings, { mode: "off", enforced: true }, session);
+    settings.setCacheWarmingMode("idle");
     const toolCall = hooks.get("tool_call") as (
       event: unknown,
       ctx: unknown,

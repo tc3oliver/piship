@@ -1,4 +1,8 @@
-import { type InlineExtension, VERSION } from "@earendil-works/pi-coding-agent";
+import {
+  type InlineExtension,
+  type ToolDefinition,
+  VERSION,
+} from "@earendil-works/pi-coding-agent";
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
@@ -16,7 +20,7 @@ import {
 import type { ModelEvidence } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import {
-  askUserExtension,
+  askUserTool,
   governanceHooks,
   workflowExtension,
 } from "../builtins.js";
@@ -25,6 +29,8 @@ import {
   type GovernanceOptions,
   GovernanceSession,
 } from "../governance-session.js";
+import type { ToolExposureTable } from "../governance/exposure.js";
+import { governedTools } from "../governed-tools.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
 
 export function governanceOptions(
@@ -177,24 +183,53 @@ export async function openGovernance(
   return gov;
 }
 
-/** PiShip's inline extensions for a governed session. */
+/** The settings of the built-in workflow when this session runs it. */
+export function activeWorkflow(
+  gov: GovernanceSession,
+): Readonly<Record<string, string>> | undefined {
+  const workflow = gov.manifest.capabilities.find(
+    (item) => item.name === "workflow",
+  );
+  return workflow &&
+    gov.loader.builtin.has("piship-workflow") &&
+    gov.effective("workflow") &&
+    (workflow.provider?.id ?? "builtin/workflow") === "builtin/workflow"
+    ? workflow.settings
+    : undefined;
+}
+
+/**
+ * PiShip's inline extensions for a governed session. `ask_user` is an SDK
+ * custom tool (`governedCustomTools`), not an extension tool, so a file
+ * extension of the same name cannot shadow it.
+ */
 export function governanceExtensions(
   gov: GovernanceSession,
 ): InlineExtension[] {
   const extensions = [governanceHooks(gov)];
-  if (gov.loader.builtin.has("piship-ask-user"))
-    extensions.push(askUserExtension(gov));
-  const workflow = gov.manifest.capabilities.find(
-    (item) => item.name === "workflow",
-  );
-  if (
-    workflow &&
-    gov.loader.builtin.has("piship-workflow") &&
-    gov.effective("workflow") &&
-    (workflow.provider?.id ?? "builtin/workflow") === "builtin/workflow"
-  )
-    extensions.push(workflowExtension(gov, workflow.settings));
+  const workflow = activeWorkflow(gov);
+  if (workflow) extensions.push(workflowExtension(gov, workflow));
   return extensions;
+}
+
+/** Governed built-in tools plus `ask_user` when the builtin is loaded. */
+export function governedCustomTools(
+  gov: GovernanceSession,
+  cwd: string,
+  table: ToolExposureTable | null = gov.exposure,
+): ToolDefinition[] {
+  return [
+    ...governedTools(gov, cwd, table),
+    ...(gov.loader.builtin.has("piship-ask-user") &&
+    table?.get("ask_user") !== "hidden"
+      ? [
+          {
+            ...askUserTool(gov),
+            exposure: table?.get("ask_user") ?? "direct",
+          } as ToolDefinition,
+        ]
+      : []),
+  ];
 }
 
 /**
@@ -233,6 +268,9 @@ export async function modelPolicy(
     },
     denied: (provider, id) =>
       gov.emit("model.denied", { resource: `${provider}/${id}` }),
-    available: () => gov.assertAuditAvailable(),
+    available: () => {
+      gov.assertAuditAvailable();
+      gov.assertRuntimeIntact();
+    },
   };
 }

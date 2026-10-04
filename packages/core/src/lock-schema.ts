@@ -6,6 +6,7 @@ import type {
 } from "@piship/contracts";
 import type {
   AccessManifest,
+  CacheWarmingConfig,
   DATA_CONTRACT_VERSION,
   DataManifest,
   DeclarableResourceClass,
@@ -222,6 +223,11 @@ export interface DistributionLock {
    * and tool search modes and the exposure rules a launch applies.
    */
   readonly runtimeTools?: RuntimeToolsConfig;
+  /**
+   * v1alpha6: `runtime.cacheWarming` as parsed. Absent: `off`, and enforced
+   * only for a managed distribution.
+   */
+  readonly cacheWarming?: CacheWarmingConfig;
   /** v1alpha6: virtual models and their physical routes. */
   readonly virtualModels?: readonly LockedVirtualModel[];
   /** v1alpha6: the runtime seam evidence. */

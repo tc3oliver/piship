@@ -1,7 +1,10 @@
 // Pi's own runtime defaults that a branded distribution sets. Pi reads these
 // from its settings and from environment variables, not from the SDK options
 // PiShip passes, so they are applied here for every launch.
-import { VERSION } from "@earendil-works/pi-coding-agent";
+import {
+  type CacheWarmingMode,
+  VERSION,
+} from "@earendil-works/pi-coding-agent";
 
 /**
  * Settings for the in-memory `SettingsManager` of every session. The store is
@@ -17,6 +20,15 @@ export const PI_SETTINGS = {
   // The terminal's own scrollback, as before Pi 1.0 made fullscreen the default.
   tuiMode: "regular",
 } as const;
+
+/**
+ * `PI_SETTINGS` with the session's cache warming mode. Pi's own default is
+ * `streaming`; PiShip always writes the mode, so an omitted manifest mode
+ * means `off`.
+ */
+export function piSettings(cacheWarming: CacheWarmingMode) {
+  return { ...PI_SETTINGS, cacheWarming };
+}
 
 /**
  * Pi's environment switches, set after a managed launch has removed every

@@ -15,6 +15,7 @@ import {
 
 interface Fake {
   readonly mode?: "managed" | "personal";
+  readonly builtin?: readonly string[];
   /** `<action> <resource>` decided deny. */
   readonly deny?: readonly string[];
   /** `<action> <resource>` decided only by the built-in default. */
@@ -31,6 +32,7 @@ interface Fake {
 function gov(fake: Fake = {}): GovernanceSession {
   return {
     options: { lock: { deployment: { mode: fake.mode ?? "personal" } } },
+    loader: { builtin: new Set(fake.builtin ?? []) },
     manifest: { mcp: { mode: "allowlist", servers: fake.servers ?? [] } },
     engine: {
       evaluate: ({
@@ -89,13 +91,13 @@ describe("session tool exposure table", () => {
       expect(table.excluded()).toContain(name);
     for (const name of ["read", "write", "edit", "bash"])
       expect(table.get(name)).toBe("direct");
-    // ask_user is PiShip's only while piship-ask-user registers it.
+    // ask_user is PiShip's only while the piship-ask-user builtin is loaded.
     expect(table.get("ask_user")).toBeUndefined();
     expect(
       buildExposureTable(
-        gov(),
+        gov({ builtin: ["piship-ask-user"] }),
         config(),
-        new Map([["ask_user", extension()]]),
+        new Map(),
       ).get("ask_user"),
     ).toBe("direct");
     // Codemode and tool search are off: excluded, never activated.

@@ -166,6 +166,9 @@ export function resolveLock(
                 runtimeTools: manifest.runtime.tools,
               }
             : {}),
+          ...(manifest.runtime.cacheWarming
+            ? { cacheWarming: manifest.runtime.cacheWarming }
+            : {}),
           enforcement: seamEvidence(runtime.version),
           data: {
             contract: DATA_CONTRACT_VERSION,

@@ -351,6 +351,39 @@ export class GovernanceSession {
     this.audit.assertAvailable();
   }
 
+  #runtimeBlock: PiShipError | undefined;
+
+  /**
+   * Enforced instructions or tools were changed and could not be restored,
+   * or PiShip's own enforcement failed: every later model request of this
+   * process is refused. The first failure is kept. Never throws, so a Pi
+   * handler that calls it cannot have the block swallowed with its error.
+   */
+  blockRuntime(resource: string, reason: string): void {
+    this.#runtimeBlock ??= new PiShipError(
+      "POLICY_DENIED",
+      "Enforced instructions or tools of this session were changed and could not be restored",
+      {
+        component: "policy",
+        userAction: `Start ${this.options.lock.app.command} again`,
+      },
+    );
+    try {
+      this.emit("runtime.mutation.reverted", {
+        resource,
+        decision: "denied",
+        detail: { repair: "failed", reason: redact(reason) },
+      });
+    } catch {
+      // The block stands whether or not its audit was recorded.
+    }
+  }
+
+  /** Throws POLICY_DENIED once `blockRuntime` was called. */
+  assertRuntimeIntact(): void {
+    if (this.#runtimeBlock) throw this.#runtimeBlock;
+  }
+
   emit(
     event: AuditEventType,
     fields: Omit<Parameters<AuditLog["emit"]>[0], "event"> = {},
@@ -505,6 +538,11 @@ export class GovernanceSession {
   attachNotices(notify: (message: string) => void): void {
     this.#notify = notify;
     for (const message of this.#pendingNotices.splice(0)) this.#notice(message);
+  }
+
+  /** Show a session notice now, or once a UI is attached. */
+  notice(message: string): void {
+    this.#notice(message);
   }
 
   #notice(message: string): void {

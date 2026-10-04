@@ -38,7 +38,7 @@ export const UNGOVERNED_PI_BASE_TOOLS = [
 
 /**
  * PiShip's own tools, resolved against `runtime.tools.exposure`. `ask_user`
- * is one only while `piship-ask-user` registers it.
+ * is one only while the `piship-ask-user` builtin is loaded.
  */
 export const PISHIP_TOOLS = ["read", "write", "edit", "bash", "ask_user"];
 
@@ -246,8 +246,10 @@ export function buildExposureTable(
       resolveExposure(name, config.exposure, fallback),
       denied(gov, name),
     );
+  // `ask_user` is an SDK custom tool: an extension tool of that name never
+  // counts as PiShip's.
   for (const name of PISHIP_TOOLS)
-    if (name !== "ask_user" || extensionTools.has(name))
+    if (name !== "ask_user" || gov.loader.builtin.has("piship-ask-user"))
       set(name, runtimeExposure(name, "direct"));
   const mcpTools = gov.mcp?.tools() ?? [];
   for (const tool of mcpTools) {

@@ -31,13 +31,24 @@ import {
   extensionToolsOf,
 } from "../governance/exposure.js";
 import type { GovernanceSession } from "../governance-session.js";
-import { governedTools } from "../governed-tools.js";
 import { saveMetrics } from "../launch-metrics.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
-import { governanceExtensions, modelPolicy } from "./governance.js";
-import { PI_SETTINGS } from "./pi-defaults.js";
+import {
+  activeWorkflow,
+  governanceExtensions,
+  governedCustomTools,
+  modelPolicy,
+} from "./governance.js";
+import { piSettings } from "./pi-defaults.js";
 import { createModelRuntime, type Model } from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
+import {
+  cacheWarmingSetting,
+  enforcedRuntime,
+  governCacheWarming,
+  inlineExtensionOrder,
+  runtimeIntegrityExtension,
+} from "./runtime-integrity.js";
 import {
   openSession,
   resumeRefusal,
@@ -146,6 +157,10 @@ async function startRuntime(
   const exposureConfig = gov ? exposureConfigOf(gov) : null;
   const exposureExtensionFactories =
     gov && exposureConfig ? exposureFactories(gov, exposureConfig) : [];
+  const integrity = gov
+    ? runtimeIntegrityExtension(gov, enforcedRuntime(gov, activeWorkflow(gov)))
+    : null;
+  const cacheWarming = cacheWarmingSetting(gov);
   const theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
   const thinkingLevel = activated?.config.values.thinkingLevel;
   const context =
@@ -215,7 +230,10 @@ async function startRuntime(
           component: "session",
         },
       );
-    const settingsManager = SettingsManager.inMemory({ ...PI_SETTINGS });
+    const settingsManager = SettingsManager.inMemory(
+      piSettings(cacheWarming.mode),
+    );
+    governCacheWarming(settingsManager, cacheWarming, gov);
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,
       prepared,
@@ -239,14 +257,16 @@ async function startRuntime(
       additionalThemePaths: gov
         ? gov.loader.themes
         : resourcePaths(ctx, "themes"),
-      extensionFactories: [
-        ownerExtension,
-        ...(ctx.metadata.access ? [governanceExtension] : []),
-        ...builtinExtensions,
-        ...exposureExtensionFactories,
-        // Last, so the message Pi persists is the redacted one.
+      extensionFactories: inlineExtensionOrder(
+        [
+          ownerExtension,
+          ...(ctx.metadata.access ? [governanceExtension] : []),
+          ...builtinExtensions,
+          ...exposureExtensionFactories,
+        ],
+        integrity,
         providerErrorRedaction,
-      ],
+      ),
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -329,7 +349,7 @@ async function startRuntime(
       ...(gov
         ? {
             noTools: "builtin" as const,
-            customTools: governedTools(gov, cwd, table),
+            customTools: governedCustomTools(gov, cwd, table),
             excludeTools: table?.excluded() ?? [],
           }
         : {}),
