@@ -31,7 +31,7 @@ policy:
   default: ask
 ${projectTrust}  defaults:
     - id: distribution.models
-      action: model.use
+      action: model.select
       resource: "${id}/**"
       effect: allow
     - id: distribution.instructions

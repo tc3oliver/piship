@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiShipError, redact } from "@piship/contracts";
+import { withSessionExportRules } from "@piship/core";
 import {
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -178,7 +179,11 @@ export async function buildEngine(
   const manifest = options.lock.governance.manifest;
   const projectRules = readProjectRestrictions(candidates);
   return new PolicyEngine({
-    policy: manifest.policy,
+    // `data.export.<r>` is sugar for a distribution-enforced session.export rule.
+    policy: withSessionExportRules(
+      manifest.policy,
+      options.lock.data?.declared,
+    ),
     teamRules: await readTeamRules(
       options.distributionDir,
       manifest.policy.adapter,
@@ -199,7 +204,12 @@ export async function buildEngine(
       workspaceRoot: project.root,
       homeDir,
       tmpDir,
-      containment: policyContainment(report),
+      // A managed launch runs Pi offline (applyPiEnvironment), which closes
+      // Pi's own /bug upload.
+      containment: {
+        ...policyContainment(report),
+        piOffline: options.lock.deployment.mode === "managed",
+      },
     },
   });
 }

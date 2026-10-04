@@ -69,8 +69,9 @@ describe("piship/v1alpha4 schema", () => {
       "piship/v1alpha3",
       "piship/v1alpha4",
       "piship/v1alpha5",
+      "piship/v1alpha6",
     ]);
-    expect(LATEST_SCHEMA).toBe("piship/v1alpha5");
+    expect(LATEST_SCHEMA).toBe("piship/v1alpha6");
     expect(parseManifestHeader(personal())).toEqual({
       schema: PISHIP_SCHEMA_V1ALPHA4,
     });
@@ -594,6 +595,7 @@ describe("migration to piship/v1alpha4", () => {
       from: PISHIP_SCHEMA_V1ALPHA4,
       to: PISHIP_SCHEMA_V1ALPHA4,
       changes: [],
+      effective: [],
       source: plan.source,
     });
   });

@@ -1,4 +1,5 @@
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -7,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { removeForeignPlatformPackages } from "./payload.js";
 
@@ -67,6 +69,27 @@ describe("removeForeignPlatformPackages", () => {
     expect(existsSync(join(root, nested, "esbuild"))).toBe(true);
     for (const kept of ["not-windows", "any-platform", "required-linux"])
       expect(existsSync(join(root, "node_modules", kept))).toBe(true);
+  });
+
+  it("keeps Codemode's QuickJS sandbox and worker on every target", () => {
+    // Pi resolves quickjs-wasi/quickjs.wasm and the pi-codemode worker at
+    // run time; pruning either would fail every Codemode call.
+    copyFileSync(
+      fileURLToPath(new URL("../../../package-lock.json", import.meta.url)),
+      join(root, "package-lock.json"),
+    );
+    const pi = "node_modules/@earendil-works/pi-coding-agent/node_modules";
+    const runtime = [`${pi}/quickjs-wasi`, `${pi}/@earendil-works/pi-codemode`];
+    for (const [platform, arch] of [
+      ["linux", "x64"],
+      ["linux", "arm64"],
+      ["darwin", "arm64"],
+      ["darwin", "x64"],
+      ["win32", "x64"],
+    ] as const) {
+      const removed = removeForeignPlatformPackages(root, platform, arch);
+      for (const path of runtime) expect(removed).not.toContain(path);
+    }
   });
 
   it("applies negated os entries", () => {

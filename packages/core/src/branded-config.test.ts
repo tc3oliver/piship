@@ -85,7 +85,7 @@ describe("config explain header and schema", () => {
 
   it("shows the manifest's own schema, not v1alpha2 for every managed manifest", async () => {
     const text = await explain("demo-company");
-    expect(text).toMatch(/^schema\s+"piship\/v1alpha5"/m);
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha6"/m);
     expect(text).not.toContain("piship/v1alpha2");
   });
 

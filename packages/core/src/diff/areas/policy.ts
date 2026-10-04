@@ -1,3 +1,4 @@
+import { normalizePolicyAction } from "@piship/contracts";
 import type { GovernanceManifest } from "@piship/schema";
 import {
   type Collector,
@@ -127,7 +128,14 @@ export function policy(
       "high",
       "Changes what the rule covers; review coverage with policy explain.",
     ];
-    out.scalar("policy", `${item} action`, x.rule.action, y.rule.action, scope);
+    // `model.use` is read as `model.select`: the rename is not a change.
+    out.scalar(
+      "policy",
+      `${item} action`,
+      normalizePolicyAction(x.rule.action),
+      normalizePolicyAction(y.rule.action),
+      scope,
+    );
     out.scalar(
       "policy",
       `${item} resource`,
@@ -140,6 +148,17 @@ export function policy(
       "Rule explanation changed.",
     ]);
   }
+  out.set(
+    "policy",
+    "policy acknowledgeUnenforced",
+    bp?.acknowledgeUnenforced,
+    ap?.acknowledgeUnenforced,
+    [
+      "medium",
+      "Acknowledges a rule no runtime seam enforces; managed validation no longer fails on it.",
+    ],
+    ["low", "No longer acknowledges an unenforced rule."],
+  );
   for (const [field, order] of [
     ["resourceTrust", TRUST_RANK],
     ["providerTrust", TRUST_RANK],

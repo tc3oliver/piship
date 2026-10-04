@@ -74,6 +74,24 @@ v0.7.1 was the one PiShip baseline a production consumer pinned for production v
 - The governed `bash` follows Pi 1.0's result shape: it returns Pi's `structuredContent` (`output` up to 1 MiB, and the first and last 512 KiB when longer; `truncated`; `full_output_path` when truncated and saved; `exit_code`; `wall_time_seconds`), which codemode scripts receive, and a non-zero exit returns an `isError: true` result instead of throwing. The full output file still lives in PiShip's session-owned output store.
 - Every launch sets Pi's defaults ([security](security.md#secrets)): no pi.dev version check and no update notice, no Pi telemetry or install report, Pi's agent directory (its crash log and the `fd` and `rg` it downloads) in the distribution's state instead of `~/.pi/agent`, a quiet startup, and the terminal's own scrollback instead of Pi 1.0's fullscreen. A managed launch also runs Pi offline.
 
+## v0.9.0 release candidate
+
+v0.9.0 is a release candidate and not released: the version is set to 0.9.0, and it has no tag, no pre-release, and no Release qualification. Until it is qualified on its exact commit and published, v0.8.1 stays the production-validation baseline above. It adopts Pi 1.0.2 and brings Pi 1.x-native governance and the last alpha schemas, `piship/v1alpha6` and `piship-lock/v1alpha6`; the [changelog](../CHANGELOG.md#v090) lists every change. Covered by the fast gate (unit and Pi compatibility tests) and a local Portable E2E run:
+
+- Schemas: manifest `piship/v1alpha6`, lock `piship-lock/v1alpha6`; update root, channel, and signature schemas unchanged. v1alpha5 manifests and older locks keep loading. `piship migrate` takes v1alpha5 to v1alpha6 without broadening, and `--check` exits non-zero on an effective change ([migration](manifest.md#migrating-from-v1alpha5-to-v1alpha6)). Every example uses `piship/v1alpha6`.
+- Pinned Pi: `@earendil-works/pi-coding-agent` 1.0.2, with its sibling packages pinned exactly; [#129](https://github.com/tc3oliver/piship/issues/129) is closed by the upgrade ([upgrade to Pi 1.0.2](compatibility.md#upgrade-to-pi-102)).
+- Model governance: `model.select` for the selected model and `model.dispatch` for the physical model a request reaches, on every request path, with virtual model routes and classifier and image models.
+- Enforcement status: every action is reported `enforced`, `audit-only`, or `unsupported` from the runtime seam table; a managed `deny` or `ask` on an unsupported action fails with `POLICY_UNENFORCEABLE` unless acknowledged ([enforcement status](manifest.md#enforcement-status)).
+- Tool exposure, `excludeTools`, Codemode, and tool search, with the bypass regression rows in the compatibility suite.
+- The `data` lifecycle (retention sweep at launch and logout, logout purge, `data.swept`) and `session.export` status, always reported in the lock and `doctor`; `support` counts as enforced only where Pi runs offline (managed mode).
+- Pi packages: locked to immutable identities, vendored into the payload by `piship build` with `--ignore-scripts`, gated by `release.sources`, the install-script review, and `npm audit`, and checked file by file at launch; Pi's installer never runs ([manifest](manifest.md#pi-packages-v1alpha6)). A Portable E2E test locks, builds, installs, and launches a distribution with a local and a git package.
+- Runtime mutation governance (the enforced prompt sections and tools re-asserted on every request, `runtime.mutation.reverted`, a failed repair blocks the session) and cache warming (`off` unless declared, `cache_warming_decision` answered `stop`, `/settings` refused unless `userOverride`).
+- `doctor` (a Governance group) and `piship diff` report the v1alpha6 governance state; install-path tests launch v0.8.1-shaped state with a v1alpha5 manifest without rewriting a state file.
+- Examples: every example is on `piship/v1alpha6` and relocked; `examples/enterprise-reference` and its sandbox variant declare the `packages/pi-platform` local Pi package.
+- PiShip version: `0.9.0` (every `@piship/*` package and `PISHIP_VERSION` in [`compatibility.ts`](../packages/core/src/compatibility.ts)).
+- Upstream: the Pi gaps v0.9 works around are raised upstream: a model ID on `before_provider_request`, a tool-set change event, tool-search discover and activate events, a way to disable or intercept `/share` and `/export`, a capability discovery API, and package installation without lifecycle scripts.
+- Qualification: not run. Release qualification is dispatched manually on the exact candidate commit; this line records the run when it passes.
+
 ## Status terms
 
 | Status | Meaning |
@@ -169,6 +187,7 @@ Limits of v0.8.1 as shipped, with earlier releases named where a bullet says so,
 - The v0.7.x follow-ups tracked under #125 (#157 to #162) are fixed in v0.7.1, and #125 is closed.
 - The project operates no signed update channel. Installation trust state, sequential root refresh, root / channel role separation, threshold multi-signatures, and emergency channel-key revocation are implemented in v0.8.0 and covered by its [Release qualification](#v080), and again by that of [v0.8.1](#v081); the remaining gaps are partial root signing across machines and external signers ([trust root gaps](release/trust-root.md#gaps-and-follow-ups)).
 - In v0.8.0 and v0.8.1, some Pi 1.0.0 behavior has no public Pi switch, and PiShip does not patch Pi: the terminal title is still "π" (Pi's `APP_TITLE`); the exit hint still says `pi --session-dir ... --session ...`; Pi still adds its `/bug` hint (#139); and the built-in `/share` command uploads the session file as a GitHub gist through the user's own `gh` CLI, a child process outside PiShip's in-process network policy, so a session can leave the machine that way in managed mode too ([security](security.md#limits)).
+- Session export has no Pi seam for `/share`'s gist fallback or `/export`, so `session.export` `public` and `local` are `unsupported` on `main`, and `support` is `unsupported` in personal mode, where Pi's `/bug` upload is open; the lock and `doctor` always report them ([security](security.md#limits)).
 - In v0.8.0 and v0.8.1, a managed distribution runs Pi offline (`PI_OFFLINE=1`), so Pi downloads no `fd` or `rg`; they must be on `PATH` for `@` completion and Pi's find and grep tools. Elsewhere each distribution downloads its own `fd` and `rg` into its state, `<state>/agent/bin` ([security](security.md#secrets)).
 
 ## Pi compatibility
@@ -300,5 +319,7 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.6 (implemented, frozen and qualified at `ab3e7f2`) | Project consolidation | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.7 (v0.7.0 at `4994eee`, the squash of #165; v0.7.1 at `bd4bc09`, the squash of #174) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.8 (v0.8.0 at `8550282`, the squash of #193; v0.8.1 at `d069104`, the squash of #203) | Pre-production trust and validation hardening | `piship/v1alpha5` | `piship-lock/v1alpha5` |
+| v0.9 (v0.9.0, a release candidate, not tagged) | Pi 1.x-native governance | `piship/v1alpha6` | `piship-lock/v1alpha6` |
+| v0.9 (in progress on `main`) | Pi 1.x-native governance and final pre-GA contract convergence | `piship/v1alpha6` | `piship-lock/v1alpha6` |
 
-All five manifest schemas are still accepted and all are experimental; only `piship/v1alpha5` can build a release, and `piship migrate` takes a v1alpha4 manifest to it ([migration](manifest.md#migration)). Every example uses `piship/v1alpha5`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).
+All six manifest schemas are still accepted and all are experimental; only `piship/v1alpha5` and `piship/v1alpha6` can build a release, and `piship migrate` takes an older manifest step by step to v1alpha6 ([migration](manifest.md#migration)). Every example uses `piship/v1alpha6`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).

@@ -18,6 +18,7 @@ import {
   runAuto,
   runUpdate,
   runtimeStateDirectory,
+  sweepDistributionData,
   sweepStateTemporaries,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
@@ -26,6 +27,7 @@ import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
   governModelRuntime,
@@ -193,19 +195,29 @@ export async function launchPiDistribution(
     if (command === "auto") return runAuto(ctx, rest);
     if (command === "capabilities") return runCapabilities(ctx, rest);
   }
-  if (
-    args.length === 1 &&
-    (command === "--smoke" || command === "--smoke-model")
-  )
+  const smoke =
+    args.length === 1 && (command === "--smoke" || command === "--smoke-model");
+  if (args.length > 0 && !smoke)
+    throw new Error(
+      `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
+    );
+  // The data retention sweep runs when a session launches, before it claims
+  // a session file; a session another launch holds is kept, and one is
+  // deleted only under the sweep's own claim, so a launch resuming it at the
+  // same time keeps it.
+  await sweepDistributionData(ctx, "launch", {
+    sessionHeld: (file) => liveOwner(file) !== undefined,
+    claimSession: (file) => {
+      const ownership = new SessionOwnership();
+      return ownership.claim(file) ? () => ownership.release() : undefined;
+    },
+  });
+  if (smoke)
     return runSmoke(
       ctx,
       requestedModel,
       command === "--smoke-model",
       newSession,
-    );
-  if (args.length > 0)
-    throw new Error(
-      `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
     );
   return runInteractive(ctx, requestedModel, newSession);
 }

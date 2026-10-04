@@ -1,5 +1,10 @@
 // Policy: rules, resource and provider trust, and project trust dimensions.
-import { POLICY_ACTIONS, type PolicyEffect } from "@piship/contracts";
+import {
+  normalizePolicyAction,
+  POLICY_ACTIONS,
+  type PolicyEffect,
+  SESSION_EXPORT_RESOURCES,
+} from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
   type PolicyConfig,
@@ -41,7 +46,8 @@ const ACTION_PREFIXES = new Set(
 );
 
 function ruleAction(value: unknown, path: string): PolicyRule["action"] {
-  const action = plainString(value, path, 128);
+  // `model.use` (piship/v1alpha5 and earlier) is read as `model.select`.
+  const action = normalizePolicyAction(plainString(value, path, 128));
   if (action === "*") return action;
   if ((POLICY_ACTIONS as readonly string[]).includes(action))
     return action as PolicyRule["action"];
@@ -58,6 +64,25 @@ function resourceGlob(value: unknown, path: string): string {
   return plainString(value, path, 1024);
 }
 
+/**
+ * Whether a `session.export` resource glob matches a known export resource,
+ * as the policy engine's glob does: the names hold no separator, so `*` and
+ * `**` both match any run of characters, and a trailing `/**` also matches
+ * the name itself. A rule matching none of them would govern nothing.
+ */
+function coversSessionExport(resource: string): boolean {
+  const patterns = [resource];
+  if (resource.endsWith("/**")) patterns.push(resource.slice(0, -3));
+  return patterns.some((pattern) => {
+    const source = pattern
+      .split(/\*+/)
+      .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+      .join(".*");
+    const regexp = new RegExp(`^${source}$`, "s");
+    return SESSION_EXPORT_RESOURCES.some((name) => regexp.test(name));
+  });
+}
+
 function parseRule(entry: unknown, path: string): PolicyRule {
   const rule = record(entry, path, [
     "id",
@@ -72,10 +97,17 @@ function parseRule(entry: unknown, path: string): PolicyRule {
       `${path}.id`,
       "Rule IDs use lowercase letters, digits, and . _ - (at most 128)",
     );
+  const action = ruleAction(rule.action, `${path}.action`);
+  const resource = resourceGlob(rule.resource, `${path}.resource`);
+  if (action === "session.export" && !coversSessionExport(resource))
+    fail(
+      `${path}.resource`,
+      `A session.export rule names ${SESSION_EXPORT_RESOURCES.join(", ")}, or a glob covering one of them`,
+    );
   return {
     id,
-    action: ruleAction(rule.action, `${path}.action`),
-    resource: resourceGlob(rule.resource, `${path}.resource`),
+    action,
+    resource,
     effect: oneOf(rule.effect, `${path}.effect`, EFFECTS),
     ...(rule.reason === undefined
       ? {}
@@ -240,11 +272,31 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
+/**
+ * `policy.acknowledgeUnenforced` (piship/v1alpha6): `<action>:<resource>`
+ * entries naming one exact action. Whether the action is actually
+ * unenforceable is decided by validation, not here.
+ */
+function acknowledged(entry: unknown, path: string): string {
+  const text = plainString(entry, path, 1024);
+  const colon = text.indexOf(":");
+  const action = normalizePolicyAction(colon < 0 ? text : text.slice(0, colon));
+  if (colon <= 0 || colon === text.length - 1)
+    fail(path, "Expected <action>:<resource>, such as session.export:public");
+  if (!(POLICY_ACTIONS as readonly string[]).includes(action))
+    fail(path, `Expected one policy action (${POLICY_ACTIONS.join(", ")})`);
+  return `${action}${text.slice(colon)}`;
+}
+
 export function parsePolicy(
   value: unknown,
   mode: DeploymentMode,
   app: { readonly id: string },
-  options: { readonly userAuto?: boolean } = {},
+  options: {
+    readonly userAuto?: boolean;
+    /** piship/v1alpha6 and later: accepts `policy.acknowledgeUnenforced`. */
+    readonly acknowledgeUnenforced?: boolean;
+  } = {},
 ): PolicyConfig {
   const policy = optionalRecord(value, "policy", [
     "id",
@@ -257,6 +309,7 @@ export function parsePolicy(
     "enforced",
     "defaults",
     ...(options.userAuto ? ["userAuto"] : []),
+    ...(options.acknowledgeUnenforced ? ["acknowledgeUnenforced"] : []),
   ]);
   const userAuto = parseUserAuto(policy.userAuto, mode);
   const id =
@@ -318,6 +371,15 @@ export function parsePolicy(
       ? {}
       : { adapter: modulePath(policy.adapter, "policy.adapter") }),
     ...(userAuto === undefined ? {} : { userAuto }),
+    ...(options.acknowledgeUnenforced
+      ? {
+          acknowledgeUnenforced: list(
+            policy.acknowledgeUnenforced,
+            "policy.acknowledgeUnenforced",
+            acknowledged,
+          ),
+        }
+      : {}),
     resourceTrust: {
       upstream: trustOf(
         resourceTrust,

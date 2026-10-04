@@ -340,6 +340,48 @@ describe("AuditLog file sink retention", () => {
         expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
+  it("keeps rotated files younger than the audit minimum past the file count", async () => {
+    const base = join(temp, "logs", "audit.jsonl");
+    const rotation = {
+      maxBytes: 600,
+      files: 2,
+      minimumRetentionMs: 24 * 60 * 60_000,
+    };
+    const write = async (from: number, to: number) => {
+      const log = await AuditLog.open({
+        config: config([...sink], 1000),
+        distribution: "acmecode",
+        stateDir: temp,
+        rotation,
+      });
+      for (let index = from; index < to; index += 1) {
+        log.emit({ event: "resource.load", resource: `r${index}` });
+        await log.flush();
+      }
+      await log.close();
+    };
+    await write(0, 12);
+    // Every event is younger than the minimum, so none was rotated away:
+    // the chain grew past `files` instead.
+    const files = auditLogFiles(temp, rotation);
+    expect(files.length).toBeGreaterThan(3);
+    const kept = [...files]
+      .reverse()
+      .flatMap((path) =>
+        lines(path).map((line) => Number(line.resource.slice(1))),
+      );
+    expect(kept).toEqual(Array.from({ length: 12 }, (_, i) => i));
+    // Once the oldest files are older than the minimum, rotation deletes
+    // them down to the configured count again.
+    const old = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    for (const path of files.slice(1)) utimesSync(path, old, old);
+    await write(12, 15);
+    expect(existsSync(`${base}.${rotation.files + 1}`)).toBe(false);
+    expect(auditLogFiles(temp, rotation).length).toBeLessThanOrEqual(
+      rotation.files + 1,
+    );
+  });
+
   it("does not rotate twice when another writer already rotated", async () => {
     // Nine rotated files hold more than the twelve events written, so no event
     // leaves through retention however the two writers interleave. A writer

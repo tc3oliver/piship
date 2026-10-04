@@ -16,8 +16,14 @@ export const RESOURCE_KINDS = [
 ] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
-/** Pi resource trust classes. `project` is discovered, never declared. */
-export const RESOURCE_TRUST_CLASSES = [
+/**
+ * The one trust vocabulary for every governed object: extensions, skills,
+ * prompts, themes, instructions, Pi packages, MCP servers, and capability
+ * providers. Each object is evaluated as source trust (this class) plus
+ * integrity (the lock digest), policy (its load, start, or call action), and,
+ * for tools, exposure.
+ */
+export const TRUST_CLASSES = [
   "upstream",
   "builtin",
   "certified",
@@ -25,17 +31,38 @@ export const RESOURCE_TRUST_CLASSES = [
   "user",
   "project",
 ] as const;
-export type ResourceTrustClass = (typeof RESOURCE_TRUST_CLASSES)[number];
+export type TrustClass = (typeof TRUST_CLASSES)[number];
 
-/** Capability-provider trust classes; deliberately separate from resource trust. */
+/** Kinds of governed object that carry a trust class. */
+export const TRUST_SUBJECTS = [
+  "instructions",
+  "skills",
+  "extensions",
+  "prompts",
+  "themes",
+  "packages",
+  "mcp-servers",
+  "providers",
+] as const;
+export type TrustSubject = (typeof TRUST_SUBJECTS)[number];
+
+/** Pi resource trust classes. `project` is discovered, never declared. */
+export const RESOURCE_TRUST_CLASSES = TRUST_CLASSES;
+export type ResourceTrustClass = TrustClass;
+
+/**
+ * Capability-provider trust classes: the shared vocabulary without
+ * `project` (a provider is never discovered in a project), evaluated
+ * against `policy.providerTrust` rather than `policy.resourceTrust`.
+ */
 export const PROVIDER_TRUST_CLASSES = [
   "upstream",
   "builtin",
   "certified",
   "company",
   "user",
-] as const;
-export type ProviderTrustClass = (typeof PROVIDER_TRUST_CLASSES)[number];
+] as const satisfies readonly TrustClass[];
+export type ProviderTrustClass = Exclude<TrustClass, "project">;
 
 /** Classes a manifest may declare by path. */
 export const DECLARABLE_RESOURCE_CLASSES = [
@@ -80,7 +107,141 @@ export interface DeclaredResource {
 export interface GovernanceResources {
   readonly declared: readonly DeclaredResource[];
   readonly builtin: readonly BuiltinExtension[];
+  /** piship/v1alpha6: Pi packages that PiShip resolves and vendors. */
+  readonly packages?: readonly DeclaredPackage[];
 }
+
+// ---------------------------------------------------------- Pi packages
+
+/** Where a Pi package comes from. PiShip resolves it; Pi never installs it. */
+export const PACKAGE_SOURCE_KINDS = ["npm", "git", "local"] as const;
+export type PackageSourceKind = (typeof PACKAGE_SOURCE_KINDS)[number];
+
+/** Pi resource kinds a package filter selects, in Pi's package manifest. */
+export const PACKAGE_RESOURCE_KINDS = [
+  "extensions",
+  "skills",
+  "prompts",
+  "themes",
+] as const;
+export type PackageResourceKind = (typeof PACKAGE_RESOURCE_KINDS)[number];
+
+/**
+ * Pi's object-form filter grammar per resource kind, unchanged: glob
+ * patterns with `!`, `+`, and `-` prefixes. An absent kind selects all of
+ * that kind; an empty list selects none.
+ */
+export type PackageFilters = Readonly<
+  Partial<Record<PackageResourceKind, readonly string[]>>
+>;
+
+interface DeclaredPackageBase {
+  readonly id: string;
+  readonly class: DeclarableResourceClass;
+  /** Present exactly when `class` is `certified`. */
+  readonly certified?: CertifiedEvidence;
+  readonly filters: PackageFilters;
+}
+export interface NpmPackage extends DeclaredPackageBase {
+  readonly source: "npm";
+  /** The npm package name, such as `@company/pi-platform`. */
+  readonly package: string;
+  /** As declared: an exact version, or (personal only) a range the lock resolves. */
+  readonly version: string;
+  /** Registry URL; absent uses the build environment's npm configuration. */
+  readonly registry?: string;
+}
+export interface GitPackage extends DeclaredPackageBase {
+  readonly source: "git";
+  /** https repository URL without credentials. */
+  readonly repository: string;
+  /** As declared: a full commit SHA, or (personal only) a ref the lock resolves. */
+  readonly ref: string;
+}
+export interface LocalPackage extends DeclaredPackageBase {
+  readonly source: "local";
+  /** `./` relative path inside the distribution directory. */
+  readonly path: string;
+}
+export type DeclaredPackage = NpmPackage | GitPackage | LocalPackage;
+
+/**
+ * `packageTrust`: constraints on package *sources* (not trust classes).
+ * An absent `git.hosts` or `local.paths` places no constraint beyond the
+ * other rules.
+ */
+export interface PackageTrustConfig {
+  readonly npm: { readonly requireIntegrity: boolean };
+  readonly git: {
+    readonly hosts?: readonly string[];
+    readonly requireCommitSha: boolean;
+  };
+  readonly local: { readonly paths?: readonly string[] };
+}
+
+// ------------------------------------------------------------ tool exposure
+
+/**
+ * Pi's `ToolDefinition.exposure`, used for PiShip-registered tools and
+ * PiShip-governed MCP tools. Exposure decides what the model can see or
+ * discover; policy still decides what can run. `hidden` is excluded from
+ * the session.
+ */
+export const TOOL_EXPOSURES = [
+  "direct",
+  "model-only",
+  "codemode",
+  "deferred",
+  "hidden",
+] as const;
+export type ToolExposure = (typeof TOOL_EXPOSURES)[number];
+
+/**
+ * One `<glob>: <exposure>` entry, in declaration order. Precedence (the most
+ * specific glob wins; a tie is invalid) is resolved where tools are
+ * registered, not by the parser.
+ */
+export interface ToolExposureRule {
+  readonly pattern: string;
+  readonly exposure: ToolExposure;
+}
+
+/** `runtime.tools.codemode`: Pi's Codemode factory `mode`. */
+export const CODEMODE_MODES = ["off", "on", "only"] as const;
+export type CodemodeMode = (typeof CODEMODE_MODES)[number];
+
+/** `runtime.tools.toolSearch`. */
+export const TOOL_SEARCH_MODES = ["off", "on"] as const;
+export type ToolSearchMode = (typeof TOOL_SEARCH_MODES)[number];
+
+/** `runtime.tools` (piship/v1alpha6). */
+export interface RuntimeToolsConfig {
+  readonly codemode: CodemodeMode;
+  readonly toolSearch: ToolSearchMode;
+  readonly exposure: readonly ToolExposureRule[];
+}
+
+/** `runtime.cacheWarming.mode`: Pi's `cacheWarming` setting. */
+export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const;
+export type CacheWarmingMode = (typeof CACHE_WARMING_MODES)[number];
+
+/** `runtime.cacheWarming` (piship/v1alpha6); an omitted mode is `off`. */
+export interface CacheWarmingConfig {
+  readonly mode: CacheWarmingMode;
+  /** Whether a user preference may override the distribution's mode. */
+  readonly userOverride: boolean;
+}
+
+// -------------------------------------------------- runtime mutability
+
+/**
+ * Who may change a resource at runtime: `enforced` nobody (PiShip restores
+ * it every turn), `mutable` any extension or command. There is no
+ * "distribution extensions only" class: Pi does not record which extension
+ * made a change, so it could not be enforced.
+ */
+export const MUTABILITY_CLASSES = ["enforced", "mutable"] as const;
+export type MutabilityClass = (typeof MUTABILITY_CLASSES)[number];
 
 // ------------------------------------------------------------ capabilities
 
@@ -217,6 +378,11 @@ export interface PolicyConfig {
    * the manifest declares it (piship/v1alpha5, managed mode); absent is `off`.
    */
   readonly userAuto?: UserAutoSetting;
+  /**
+   * piship/v1alpha6: `<action>:<resource>` pairs whose `deny` or `ask` rule
+   * names an action PiShip cannot enforce, acknowledged by the owner.
+   */
+  readonly acknowledgeUnenforced?: readonly string[];
   readonly resourceTrust: Readonly<
     Record<Exclude<ResourceTrustClass, "project">, TrustSetting> & {
       readonly project: ProjectResourceTrust;
@@ -249,10 +415,42 @@ export interface McpServerConfig {
   readonly startupTimeoutMs: number;
   readonly retry: { readonly attempts: number };
   readonly required: boolean;
+  /**
+   * The piship/v1alpha5 tool filter: deny wins; an empty allow admits every
+   * tool not denied. Empty for piship/v1alpha6, where `exposure` and
+   * `toolExposure` decide which tools are visible.
+   */
   readonly tools: {
     readonly allow: readonly string[];
     readonly deny: readonly string[];
   };
+  /** piship/v1alpha6: trust class, governed by `policy.resourceTrust`. */
+  readonly class?: McpServerClass;
+  /** piship/v1alpha6: the server's default tool exposure (default `direct`). */
+  readonly exposure?: ToolExposure;
+  /** piship/v1alpha6: per-tool exposure globs (`tools:` in the manifest). */
+  readonly toolExposure?: readonly ToolExposureRule[];
+}
+
+/**
+ * Trust classes an MCP server may declare. `certified` needs review evidence
+ * that has no MCP form yet, and the rest of the vocabulary is never declared.
+ */
+export const MCP_SERVER_CLASSES = ["company", "user"] as const;
+export type McpServerClass = (typeof MCP_SERVER_CLASSES)[number];
+
+/** The exposure of an MCP server without `exposure` (v0.8 behavior). */
+export const DEFAULT_MCP_EXPOSURE: ToolExposure = "direct";
+
+/**
+ * The trust class of an MCP server that declares none: `company` in a
+ * managed distribution and `user` in a personal one. piship/v1alpha5
+ * servers migrate to it.
+ */
+export function defaultMcpServerClass(
+  mode: "personal" | "managed",
+): McpServerClass {
+  return mode === "managed" ? "company" : "user";
 }
 
 export interface McpConfig {
@@ -338,4 +536,6 @@ export interface GovernanceManifest {
   readonly mcp: McpConfig;
   readonly sandbox: SandboxConfig;
   readonly audit: AuditConfig;
+  /** piship/v1alpha6: package source constraints, mode defaults applied. */
+  readonly packageTrust?: PackageTrustConfig;
 }

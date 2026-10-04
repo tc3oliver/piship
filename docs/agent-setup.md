@@ -23,7 +23,7 @@ git clone https://github.com/tc3oliver/piship.git ~/src/piship
 cd ~/src/piship && npm ci && npm run build
 ```
 
-It needs Node.js 22.19.0 or newer (`node --version`). Below, `piship` means `node ~/src/piship/packages/cli/dist/bin.js`.
+It needs Node.js 22.19.0 or newer (`node --version`), and npm 11 or later (`npm install -g npm@11`) to lock a distribution that declares Pi packages. Below, `piship` means `node ~/src/piship/packages/cli/dist/bin.js`.
 
 ## 2. Ask the person
 
@@ -118,7 +118,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M1 OIDC | `identity.oidc.issuer`, `clientId`, `redirectUri`, `scopes`, `audience` | `scopes` must include `openid`; no `clientSecret` |
 | M2 Broker | `credential.broker.endpoint`, `revokeEndpoint` | It must follow the [broker contract](enterprise-integration.md#credential-broker-http-broker) |
 | M3 Gateway | `inference.baseUrl`, `inference.api` | |
-| M4 Models | `models.default`, `models.allowed`, `models.catalog.<id>` | Replace `example/coder`. Every allowed ID needs a catalog entry. The template's `distribution.models` rule (`model.use` on `<app.id>/**`) covers them; to narrow it, write `<app.id>/<model>` |
+| M4 Models | `models.default`, `models.allowed`, `models.catalog.<id>` | Replace `example/coder`. Every allowed ID needs a catalog entry. The template's `distribution.models` rule (`model.select` on `<app.id>/**`) covers them; to narrow it, write `<app.id>/<model>` |
 | M5 Runtime variables | `variables` plus `${NAME}`, or plain `https` URLs | Every `${NAME}` used must be listed in `variables`, and every listed name used. Names that look like secrets are rejected |
 | M6 Proxy, CA | `network.proxy.inheritEnvironment`, `network.tls.additionalCA` | An absolute path on each machine |
 | M7 Project trust | `policy.projectTrust.company.match` with `remote` and `path` | `remote` alone is only a claim; pair it with `path` |

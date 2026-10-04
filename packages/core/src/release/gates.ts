@@ -1,18 +1,33 @@
 // Static release gates: lock, schema, update trust, target, Pi compatibility
 // surfaces, package sources and install scripts, policy, certification, and
 // sandbox.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
+import { manifestContainment, unenforcedRules } from "@piship/policy";
+import {
+  defaultMcpServerClass,
+  type ReleaseManifest,
+  sharedRoleKeyIds,
+} from "@piship/schema";
+import { withSessionExportRules } from "../data/session-export.js";
 import {
   currentTarget,
   type DistributionLock,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA5,
+  LOCK_SCHEMA_V1ALPHA6,
   PI_COMPATIBILITY,
-  REVIEWED_INSTALL_SCRIPTS,
   requireCurrentLock,
 } from "../index.js";
+import { checkLockedPiPackage } from "../pi-packages/gates.js";
+import {
+  packageLockFiles,
+  reviewedInstallScripts,
+} from "../pi-packages/lock.js";
+import { effectivePackageTrust } from "../pi-packages/trust.js";
 import { gate } from "./shared.js";
+import { checkLockedPackageSources } from "./sources.js";
 
 /** The release name `<id>-<version>-<target>`. */
 export function releaseName(lock: DistributionLock, target: string): string {
@@ -55,6 +70,47 @@ export function piCompatibility(
   return COMPATIBILITY_ORDER[Math.min(...ranks)] as string;
 }
 
+/**
+ * The virtual model gate: in a managed lock, every route of a virtual model
+ * is an allowed physical chat model of the catalog, which is all the
+ * gateway credential can be scoped to; in every lock, its router is a
+ * declared extension (a `./` path or a certified id). Whether the credential
+ * a user receives is entitled to a route is known only at runtime, where the
+ * model runtime refuses a route outside it and the gateway enforces it again.
+ */
+export function virtualRouteProblems(lock: DistributionLock): string[] {
+  const models = lock.access?.models;
+  const problems: string[] = [];
+  for (const virtual of lock.virtualModels ?? []) {
+    const name = `virtual model ${virtual.id}`;
+    if (lock.deployment.mode === "managed")
+      for (const route of virtual.routes) {
+        const entry = models?.catalog.find((item) => item.id === route);
+        if (!models?.allowed.includes(route))
+          problems.push(`${name} routes to ${route}, which is not allowed`);
+        else if (!entry || entry.virtual || (entry.type ?? "chat") !== "chat")
+          problems.push(
+            `${name} routes to ${route}, which is not a physical chat model of the catalog`,
+          );
+      }
+    // As launch resolves it: a `./` path or a certified extension's path,
+    // either one a declared extension of the build. A `package:` router
+    // names no built extension yet.
+    const router = virtual.router;
+    const path = router.startsWith("./")
+      ? router
+      : lock.governance?.certified.find(
+          (entry) =>
+            entry.kind === "extensions" && entry.evidence.id === router,
+        )?.path;
+    if (!path || !lock.declared.extensions.includes(path))
+      problems.push(
+        `${name} names router ${router}, which is not a declared extension`,
+      );
+  }
+  return problems;
+}
+
 /** Enforced rules that contradict each other or a declared trust class. */
 function policyConflicts(lock: DistributionLock): string[] {
   const governance = lock.governance?.manifest;
@@ -90,6 +146,14 @@ function policyConflicts(lock: DistributionLock): string[] {
       conflicts.push(
         `${item.kind} ${item.path} is declared ${item.class}, which policy.resourceTrust denies`,
       );
+  if (governance.mcp.mode !== "off")
+    for (const server of governance.mcp.servers) {
+      const cls = server.class ?? defaultMcpServerClass(lock.deployment.mode);
+      if (resourceTrust[cls] === "deny")
+        conflicts.push(
+          `MCP server ${server.id} is declared ${cls}, which policy.resourceTrust denies`,
+        );
+    }
   const providerTrust = policy.providerTrust as Record<string, string>;
   for (const capability of governance.capabilities)
     if (
@@ -114,66 +178,41 @@ export function checkPackageSources(
   lock: DistributionLock,
   stage: "Release" | "Build" = "Release",
 ): void {
+  if (!lock.release) return;
+  checkLockedPackageSources(lock.runtime.packages, lock.release.sources, stage);
+}
+
+/**
+ * The package gates over every locked Pi package (spec §17): its stored npm
+ * lockfile matches the lock, its closure holds only immutable sources with
+ * integrity, comes from `release.sources`, and runs no unreviewed lifecycle
+ * script. The tree digest and file count are checked when the build vendors
+ * it.
+ */
+function checkLockedPiPackages(
+  lock: DistributionLock,
+  manifestPath: string,
+): void {
   const release = lock.release;
   if (!release) return;
-  for (const item of lock.runtime.packages) {
-    // The lock keeps every registry entry, so one the npm lock records
-    // without integrity is refused here instead of going unchecked.
-    if (!item.integrity)
+  const base = dirname(resolve(manifestPath));
+  for (const entry of lock.packages ?? []) {
+    const { lockfile } = packageLockFiles(base, entry.id);
+    if (!existsSync(lockfile))
       throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} is missing integrity in the npm lock`,
-        "Record the registry dist.integrity for this package in package-lock.json and lock again",
-        stage,
+        "LOCK_INVALID",
+        "package",
+        `${entry.id} has no stored npm lockfile`,
+        "Run piship lock",
       );
-    if (!item.resolved)
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no recorded source`,
-        undefined,
-        stage,
-      );
-    let origin: string;
-    try {
-      origin = new URL(item.resolved).origin;
-    } catch {
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has an unparsable source`,
-        undefined,
-        stage,
-      );
-    }
-    if (!release.sources.includes(origin))
-      throw gate(
-        "POLICY_DENIED",
-        "source",
-        `${item.path}@${item.version} comes from ${origin}, which is not in release.sources (${release.sources.join(", ")})`,
-        undefined,
-        stage,
-      );
-    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(item.integrity))
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no sha512 integrity`,
-        undefined,
-        stage,
-      );
-    if (
-      item.installScript &&
-      !REVIEWED_INSTALL_SCRIPTS.includes(`${item.path}@${item.version}`)
-    )
-      throw gate(
-        "POLICY_DENIED",
-        "install-script",
-        `${item.path}@${item.version} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
-        undefined,
-        stage,
-      );
+    checkLockedPiPackage(entry, readFileSync(lockfile, "utf8"), {
+      trust: effectivePackageTrust(
+        lock.governance?.manifest.packageTrust,
+        lock.deployment.mode,
+      ),
+      sources: release.sources,
+      reviewed: reviewedInstallScripts(release),
+    });
   }
 }
 
@@ -201,7 +240,8 @@ function checkUpdateTrust(lock: DistributionLock): void {
 }
 
 /**
- * Static release gates, checked before anything is assembled. Each failure
+ * Static release gates, checked before anything is assembled. The policy gate
+ * also refuses a managed POLICY_UNENFORCEABLE rule. Each failure
  * names its gate: lock, schema, trust, target, pi, source, install-script,
  * policy, certification, or sandbox.
  */
@@ -221,11 +261,16 @@ export function checkReleaseInputs(
       "Review the manifest and resource changes, then run piship lock",
     );
   }
-  if (lock.schema !== LOCK_SCHEMA_V1ALPHA5 || !lock.release || !lock.updates)
+  if (
+    (lock.schema !== LOCK_SCHEMA_V1ALPHA5 &&
+      lock.schema !== LOCK_SCHEMA_V1ALPHA6) ||
+    !lock.release ||
+    !lock.updates
+  )
     throw gate(
       "CONFIG_INVALID",
       "schema",
-      `production releases need a piship/v1alpha5 manifest (found ${lock.manifest.schema})`,
+      `production releases need a piship/v1alpha5 or piship/v1alpha6 manifest (found ${lock.manifest.schema})`,
       "Run piship migrate --write, review updates.trust.bootstrap, and lock again",
     );
   checkUpdateTrust(lock);
@@ -255,9 +300,32 @@ export function checkReleaseInputs(
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
   checkPackageSources(lock);
+  checkLockedPiPackages(lock, manifestPath);
   const conflicts = policyConflicts(lock);
   if (conflicts.length)
     throw gate("POLICY_DENIED", "policy", conflicts.join("; "));
+  const governance = lock.governance?.manifest;
+  const unenforced = governance
+    ? unenforcedRules(
+        lock.deployment.mode,
+        withSessionExportRules(governance.policy, lock.data?.declared),
+        manifestContainment(governance, lock.deployment.mode),
+      ).filter((item) => item.level === "error")
+    : [];
+  if (unenforced.length)
+    throw gate(
+      "POLICY_UNENFORCEABLE",
+      "policy",
+      unenforced.map((item) => item.message).join("; "),
+    );
+  const routes = virtualRouteProblems(lock);
+  if (routes.length)
+    throw gate(
+      "POLICY_DENIED",
+      "models",
+      routes.join("; "),
+      "Declare each route as an allowed catalog model and the router as a declared extension, then lock again",
+    );
   for (const provider of lock.governance?.providers ?? [])
     if (provider.class === "certified" && !provider.certified)
       throw gate(

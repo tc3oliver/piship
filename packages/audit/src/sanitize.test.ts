@@ -1,9 +1,12 @@
 import {
   AUDIT_EVENT_TYPES,
   type AuditCapture,
+  ENFORCEMENT_PLANES,
+  ENFORCEMENT_STATUSES,
   NO_CONTENT_CAPTURE,
   PiShipError,
   SecretValue,
+  TOOL_CALL_FAILURES,
 } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import { AUDIT_LIMITS, sanitizeEvent } from "./index.js";
@@ -15,6 +18,57 @@ const ALL_CAPTURE: AuditCapture = {
   sourceContent: true,
 };
 const fixed = () => new Date("2026-09-28T10:00:00.000Z");
+
+describe("tool execution detail (v0.9)", () => {
+  it("keeps the source, parent, exposure, and pre-policy failure of a tool call", () => {
+    const detail = {
+      action: "tool.execute",
+      source: "codemode",
+      parent: "call_script_1",
+      exposure: "deferred",
+      error: "not-found",
+    };
+    for (const [event, rule] of [
+      ["tool.request", undefined],
+      ["tool.denied", "piship.pre-policy"],
+      ["tool.denied", "piship.exposure.unresolved"],
+    ] as const) {
+      const sanitized = sanitizeEvent(
+        {
+          event,
+          distribution: "acme",
+          resource: "read",
+          ...(rule ? { rule, decision: "denied" as const } : {}),
+          detail,
+        },
+        NO_CONTENT_CAPTURE,
+        fixed,
+      );
+      expect(sanitized.detail).toEqual(detail);
+      if (rule) expect(sanitized.rule).toBe(rule);
+    }
+  });
+
+  it("keeps every pre-policy failure class, including a refusal by an earlier extension", () => {
+    expect(TOOL_CALL_FAILURES).toContain("refused-before-policy");
+    for (const error of TOOL_CALL_FAILURES) {
+      const detail = { action: "tool.execute", source: "top-level", error };
+      const sanitized = sanitizeEvent(
+        {
+          event: "tool.denied",
+          distribution: "acme",
+          resource: "company_tool",
+          rule: "piship.pre-policy",
+          decision: "denied",
+          detail,
+        },
+        NO_CONTENT_CAPTURE,
+        fixed,
+      );
+      expect(sanitized.detail).toEqual(detail);
+    }
+  });
+});
 const TOKENS = [
   "Bearer abc.def.ghi1234567",
   "sk-live0123456789abcdef",
@@ -251,6 +305,67 @@ describe("sanitizeEvent", () => {
     expect(event.detail).toEqual({ source: "project" });
     expect(JSON.stringify(event)).not.toContain(secret.reveal());
     expectNoTokens(event);
+  });
+
+  it("keeps every enforcement plane, gateway included, and never unsupported", () => {
+    for (const enforcement of ENFORCEMENT_PLANES)
+      expect(
+        sanitizeEvent(
+          { event: "model.dispatch", distribution: "acmecode", enforcement },
+          NO_CONTENT_CAPTURE,
+        ).enforcement,
+      ).toBe(enforcement);
+    // A status is not a plane: `unsupported` is never recorded.
+    expect(ENFORCEMENT_STATUSES).toContain("unsupported");
+    expect(
+      sanitizeEvent(
+        {
+          event: "session.export",
+          distribution: "acmecode",
+          enforcement: "unsupported" as never,
+        },
+        NO_CONTENT_CAPTURE,
+      ),
+    ).not.toHaveProperty("enforcement");
+  });
+
+  it("accepts the v0.9 event types and keeps their governance detail", () => {
+    for (const type of [
+      "model.dispatch",
+      "session.export",
+      "runtime.mutation.reverted",
+      "data.swept",
+    ]) {
+      expect(AUDIT_EVENT_TYPES).toContain(type);
+      const event = sanitizeEvent(
+        {
+          event: type,
+          distribution: "acmecode",
+          detail: {
+            source: "nested",
+            error: "invalid-arguments",
+            parent: "call-7",
+            exposure: "codemode",
+            selected: "company/auto",
+            dispatched: "openai/gpt-y",
+            router: "company-router",
+            package: "company-platform@1.4.2",
+          },
+        },
+        NO_CONTENT_CAPTURE,
+      );
+      expect(event.event).toBe(type);
+      expect(event.detail).toEqual({
+        source: "nested",
+        error: "invalid-arguments",
+        parent: "call-7",
+        exposure: "codemode",
+        selected: "company/auto",
+        dispatched: "openai/gpt-y",
+        router: "company-router",
+        package: "company-platform@1.4.2",
+      });
+    }
   });
 
   it("drops invalid decision and enforcement values", () => {

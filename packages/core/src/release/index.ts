@@ -12,12 +12,14 @@ export {
   type ChannelRelease,
   type SignChannelOptions,
 } from "./channel.js";
+export { checkLockedPackageSources } from "./sources.js";
 export {
   checkPackageSources,
   checkReleaseInputs,
   piCompatibility,
   piCompatibilitySurfaces,
   releaseName,
+  virtualRouteProblems,
 } from "./gates.js";
 export {
   CHANNEL_SCHEMA,

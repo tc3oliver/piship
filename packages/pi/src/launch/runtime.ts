@@ -23,14 +23,37 @@ import {
   isCredentialRejection,
   isModelDenial,
 } from "../governance.js";
+import {
+  activateExposure,
+  buildExposureTable,
+  exposureConfigOf,
+  exposureFactories,
+  extensionToolsOf,
+} from "../governance/exposure.js";
 import type { GovernanceSession } from "../governance-session.js";
-import { governedTools } from "../governed-tools.js";
 import { saveMetrics } from "../launch-metrics.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
-import { governanceExtensions, modelPolicy } from "./governance.js";
-import { PI_SETTINGS } from "./pi-defaults.js";
-import { createModelRuntime, type Model } from "./model-runtime.js";
+import {
+  activeWorkflow,
+  governanceExtensions,
+  governedCustomTools,
+  modelPolicy,
+} from "./governance.js";
+import { piSettings } from "./pi-defaults.js";
+import {
+  createModelRuntime,
+  launchVirtualModels,
+  type Model,
+} from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
+import { governVirtualModels } from "./virtual-models.js";
+import {
+  cacheWarmingSetting,
+  enforcedRuntime,
+  governCacheWarming,
+  inlineExtensionOrder,
+  runtimeIntegrityExtension,
+} from "./runtime-integrity.js";
 import {
   openSession,
   resumeRefusal,
@@ -134,8 +157,16 @@ async function startRuntime(
     activated?.selectedModel && activated.runtime.kind === "managed-endpoint"
       ? `${activated.runtime.providerId}/${activated.selectedModel}`
       : activated?.selectedModel;
-  const policy = gov ? await modelPolicy(gov, selectedKey) : undefined;
+  const virtual = launchVirtualModels(ctx, prepared);
+  const policy = gov ? await modelPolicy(gov, selectedKey, virtual) : undefined;
   const builtinExtensions = gov ? governanceExtensions(gov) : [];
+  const exposureConfig = gov ? exposureConfigOf(gov) : null;
+  const exposureExtensionFactories =
+    gov && exposureConfig ? exposureFactories(gov, exposureConfig) : [];
+  const integrity = gov
+    ? runtimeIntegrityExtension(gov, enforcedRuntime(gov, activeWorkflow(gov)))
+    : null;
+  const cacheWarming = cacheWarmingSetting(gov);
   const theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
   const thinkingLevel = activated?.config.values.thinkingLevel;
   const context =
@@ -205,11 +236,15 @@ async function startRuntime(
           component: "session",
         },
       );
-    const settingsManager = SettingsManager.inMemory({ ...PI_SETTINGS });
+    const settingsManager = SettingsManager.inMemory(
+      piSettings(cacheWarming.mode),
+    );
+    governCacheWarming(settingsManager, cacheWarming, gov);
     const { modelRuntime, governed } = await createModelRuntime(
       ctx,
       prepared,
       policy,
+      virtual,
     );
     governedRef = governed;
     // Discovery uses the built distribution, never the user's cwd or personal ~/.pi.
@@ -229,13 +264,16 @@ async function startRuntime(
       additionalThemePaths: gov
         ? gov.loader.themes
         : resourcePaths(ctx, "themes"),
-      extensionFactories: [
-        ownerExtension,
-        ...(ctx.metadata.access ? [governanceExtension] : []),
-        ...builtinExtensions,
-        // Last, so the message Pi persists is the redacted one.
+      extensionFactories: inlineExtensionOrder(
+        [
+          ownerExtension,
+          ...(ctx.metadata.access ? [governanceExtension] : []),
+          ...builtinExtensions,
+          ...exposureExtensionFactories,
+        ],
+        integrity,
         providerErrorRedaction,
-      ],
+      ),
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,
@@ -258,6 +296,32 @@ async function startRuntime(
       throw new Error(
         `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
       );
+    // Virtual models are registered here, before the launch model and a
+    // resumed session's model are looked up, and again after each /reload;
+    // Pi would register them later and drop a refusal unheard.
+    if (governed) {
+      governVirtualModels(resourceLoader, governed, modelRuntime, virtual);
+      for (const rule of virtual)
+        if (!modelRuntime.getModel(rule.provider, rule.id))
+          ctx.err(
+            `Notice: virtual model ${rule.provider}/${rule.id} is declared, but its router ${rule.router} did not register it.`,
+          );
+    }
+    // Hidden and denied tools, and Pi's ungoverned base tools, are excluded
+    // from the session; an extension tool wider than the manifest allows
+    // fails the launch.
+    const table =
+      gov && exposureConfig
+        ? buildExposureTable(
+            gov,
+            exposureConfig,
+            extensionToolsOf(resourceLoader),
+          )
+        : null;
+    if (gov) {
+      gov.exposure = table;
+      gov.piExtensions = () => resourceLoader.getExtensions().extensions;
+    }
     if (
       theme &&
       !["dark", "light"].includes(theme) &&
@@ -304,14 +368,19 @@ async function startRuntime(
       // Governed sessions replace Pi's built-in tools with governed ones of
       // the same names; SDK custom tools also win over extension tools.
       ...(gov
-        ? { noTools: "builtin" as const, customTools: governedTools(gov, cwd) }
+        ? {
+            noTools: "builtin" as const,
+            customTools: governedCustomTools(gov, cwd, table),
+            excludeTools: table?.excluded() ?? [],
+          }
         : {}),
     });
+    if (table) activateExposure(result.session, table);
     const current = result.session.model;
     if (
       governed &&
       current &&
-      !governed.isAllowed(current.provider, current.id)
+      !governed.isSelectable(current.provider, current.id)
     ) {
       if (!model)
         throw new PiShipError(

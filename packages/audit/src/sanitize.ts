@@ -1,6 +1,8 @@
 import {
   AUDIT_EVENT_SCHEMA,
   AUDIT_EVENT_TYPES,
+  ENFORCEMENT_PLANES,
+  type EnforcementPlane,
   type AuditCapture,
   type AuditEvent,
   type AuditEventType,
@@ -31,7 +33,7 @@ export const AUDIT_LIMITS = Object.freeze({
 const TRUNCATED = "…[truncated]";
 const DETAIL_KEY = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const DECISIONS = new Set(["allowed", "denied", "asked", "approved"]);
-const ENFORCEMENT = new Set(["control-plane", "sandbox", "audit-only"]);
+const ENFORCEMENT = new Set<string>(ENFORCEMENT_PLANES);
 const EVENT_TYPES = new Set<string>(AUDIT_EVENT_TYPES);
 
 /** Raw input accepted by `sanitizeEvent`. Anything unexpected is dropped. */
@@ -195,7 +197,7 @@ export function sanitizeEvent(
     typeof input.enforcement === "string" &&
     ENFORCEMENT.has(input.enforcement)
   )
-    event.enforcement = input.enforcement;
+    event.enforcement = input.enforcement as EnforcementPlane;
   const detail = sanitizeDetail(input.detail);
   if (detail) event.detail = detail;
   const content = sanitizeContent(input.content, capture);

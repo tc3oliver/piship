@@ -49,6 +49,7 @@ import {
   realpathNearest,
   withApprovedNetwork,
 } from "@piship/sandbox";
+import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
 
@@ -74,7 +75,13 @@ export function planRefusal(
   gov: GovernanceSession,
   tool: string,
 ): string | undefined {
-  if (gov.workflowMode !== "plan" || PLAN_ALLOWED_TOOLS.has(tool))
+  // `ask_user` is PiShip's only while its builtin is loaded; without it, a
+  // tool of that name is an extension's, with effects PiShip cannot know.
+  if (
+    gov.workflowMode !== "plan" ||
+    (PLAN_ALLOWED_TOOLS.has(tool) &&
+      (tool !== "ask_user" || gov.loader.builtin.has("piship-ask-user")))
+  )
     return undefined;
   gov.metrics.recordPolicyDenial("tool.execute");
   gov.emit("tool.denied", {
@@ -88,13 +95,21 @@ export function planRefusal(
   return `Plan mode does not allow ${tool}. The user can switch to Build mode with /build.`;
 }
 
-/** An approval channel backed by Pi's dialog UI, or none when headless. */
+/**
+ * An approval channel backed by Pi's dialog UI, or none when headless. The
+ * dialog closes when the turn is aborted, so a queued approval (see
+ * GovernanceSession.decide) never waits on a prompt nobody can answer.
+ */
 export function uiChannel(ctx: ExtensionContext): ApprovalChannel | undefined {
   if (!ctx.hasUI) return undefined;
-  return async (_decision, detail) =>
-    (await ctx.ui.confirm(detail.title, detail.message))
-      ? "approved"
-      : "denied";
+  return async (_decision, detail) => {
+    const signal = ctx.signal;
+    if (signal?.aborted) return "denied";
+    const approved = signal
+      ? await ctx.ui.confirm(detail.title, detail.message, { signal })
+      : await ctx.ui.confirm(detail.title, detail.message);
+    return approved ? "approved" : "denied";
+  };
 }
 
 class BlockedError extends Error {}
@@ -779,6 +794,11 @@ function mcpTool(
 ): ToolDefinition {
   return {
     name: tool.name,
+    // Groups the server's tools in Codemode's searchTools/describeNamespace.
+    namespace: {
+      name: `mcp__${tool.server}`,
+      description: `Tools from the ${tool.server} MCP server`,
+    },
     label: `${tool.server}: ${tool.tool}`,
     description:
       tool.description || `${tool.tool} from the ${tool.server} MCP server`,
@@ -803,10 +823,15 @@ function mcpTool(
   };
 }
 
-/** The governed tool set for a v1alpha3 session. */
+/**
+ * The governed tool set for a v1alpha3 session, each with the exposure the
+ * session's table resolved. A hidden tool is left out here as well as
+ * excluded from the session.
+ */
 export function governedTools(
   gov: GovernanceSession,
   cwd: string,
+  table: ToolExposureTable | null = gov.exposure,
 ): ToolDefinition[] {
   const absolute = (path: string) =>
     isAbsolute(path) ? path : resolve(cwd, path);
@@ -872,7 +897,12 @@ export function governedTools(
     governedBashTool(gov, cwd) as ToolDefinition,
     ...(gov.mcp?.tools() ?? []).map((item) => mcpTool(gov, item)),
   ];
-  return tools.map((tool) => withChannel(gov, tool));
+  return tools.flatMap((tool) => {
+    const exposure = table?.get(tool.name) ?? "direct";
+    return exposure === "hidden"
+      ? []
+      : [withChannel(gov, { ...tool, exposure } as ToolDefinition)];
+  });
 }
 
 export function isBlockedError(error: unknown): boolean {

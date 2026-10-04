@@ -1,0 +1,42 @@
+schema: piship/v1alpha3
+# A personal distribution with access sections.
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+runtime:
+  pi: "1.0.0"
+deployment:
+  mode: personal
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+resources:
+  instructions:
+    user: [ ./instructions/AGENTS.md ]
+  extensions:
+    user: [ ./extensions/helper ]
+policy:
+  default: allow
+  projectTrust:
+    company: &a1
+      passiveContext: deny
+      instructions: deny
+      skills: deny
+      agents: deny
+      hooks: deny
+      extensions: deny
+      mcp: deny
+      providers: deny
+    external: *a1
+    unknown: *a1
+sandbox:
+  required: false
+audit:
+  enabled: false
+mcp:
+  mode: off

@@ -1176,6 +1176,26 @@ describe("v1alpha3 policy", () => {
       ).toBe(action);
     },
   );
+  it("rejects a session.export rule that covers no export resource", () => {
+    for (const resource of ["secret", "pub", "local/x", "support:*"])
+      rejects(
+        policy({ enforced: [rule({ action: "session.export", resource })] }),
+        "policy.enforced[0].resource",
+        "A session.export rule names public, local, support",
+      );
+    for (const resource of ["public", "pub*", "**", "*", "support/**"])
+      expect(
+        governance(
+          policy({ defaults: [rule({ action: "session.export", resource })] }),
+        ).policy.defaults[0]?.resource,
+      ).toBe(resource);
+    // Wildcard actions are not export rules.
+    expect(
+      governance(
+        policy({ defaults: [rule({ action: "session.*", resource: "x" })] }),
+      ).policy.defaults[0]?.resource,
+    ).toBe("x");
+  });
   it("defaults the resource glob to **", () => {
     expect(
       governance(policy({ enforced: [rule({})] })).policy.enforced[0],
@@ -2226,6 +2246,7 @@ describe("migration to piship/v1alpha3", () => {
       from: PISHIP_SCHEMA_V1ALPHA3,
       to: PISHIP_SCHEMA_V1ALPHA3,
       changes: [],
+      effective: [],
       source,
     });
   });

@@ -40,6 +40,7 @@ import {
   writeIdentityDiscardedMarker,
 } from "../access/index.js";
 import { removeAccessTemporaries } from "../install/temporaries.js";
+import { sweepDistributionData } from "./data.js";
 import {
   type BrandedContext,
   auditAccess,
@@ -493,6 +494,14 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   // Revocation problems are shown before auditing, which can fail the command.
   for (const problem of problems) ctx.err(`Warning: ${problem}`);
   await auditEvents();
+  // Retention, and the classes the distribution purges at logout. Sessions a
+  // running launch holds are kept.
+  await sweepDistributionData(ctx, "logout");
+  const sessions = ctx.metadata.data?.declared?.purge.onLogout.includes(
+    "sessions",
+  )
+    ? "sessions not in use were removed"
+    : "sessions were preserved";
   // Whatever metadata is left names a secret that could not be deleted. A
   // distribution without a stored runtime credential never clears one.
   const classes = [
@@ -507,7 +516,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
     .map(([, name]) => name);
   if (!kept.length) {
     ctx.out(
-      `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; sessions were preserved.`,
+      `Signed out of ${ctx.metadata.app.name}. Local runtime and identity credentials were cleared; ${sessions}.`,
     );
     return;
   }
@@ -517,7 +526,7 @@ export async function runLogout(ctx: BrandedContext): Promise<void> {
   const many = kept.length > 1;
   throw new PiShipError(
     "SECRET_STORE_UNAVAILABLE",
-    `Signed out of ${ctx.metadata.app.name} only in part: ${cleared.length ? `${cleared.join(" and ")} ${cleared.length > 1 ? "were" : "was"} cleared, but ` : ""}${kept.join(" and ")} could not be deleted from the secret store. ${many ? "They are" : "It is"} never used and ${many ? "stay" : "stays"} tracked, so the next login or logout deletes ${many ? "them" : "it"}; sessions were preserved`,
+    `Signed out of ${ctx.metadata.app.name} only in part: ${cleared.length ? `${cleared.join(" and ")} ${cleared.length > 1 ? "were" : "was"} cleared, but ` : ""}${kept.join(" and ")} could not be deleted from the secret store. ${many ? "They are" : "It is"} never used and ${many ? "stay" : "stays"} tracked, so the next login or logout deletes ${many ? "them" : "it"}; ${sessions}`,
     {
       component: "credential",
       userAction: `Unlock or repair the secret store, then run ${ctx.metadata.app.command} logout again`,

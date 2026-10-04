@@ -2,6 +2,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  normalizePolicyAction,
   PiShipError,
   type PolicyAction,
   POLICY_ACTIONS,
@@ -41,11 +42,13 @@ export async function runPolicy(
       "CONFIG_INVALID",
       `Usage: ${ctx.metadata.app.command} policy explain <action> <resource> [--json]`,
     );
-  const [, requested, target] = words as [string, string, string];
+  const [, named, target] = words as [string, string, string];
+  // A former action name (`model.use`) explains its current action.
+  const requested = normalizePolicyAction(named);
   if (!(POLICY_ACTIONS as readonly string[]).includes(requested))
     throw new PiShipError(
       "CONFIG_INVALID",
-      `Unknown policy action ${requested}. Actions: ${POLICY_ACTIONS.join(", ")}`,
+      `Unknown policy action ${named}. Actions: ${POLICY_ACTIONS.join(", ")}`,
     );
   const lock = requireGovernedLock(ctx, "policy explain");
   const inspection = await inspectGovernance(

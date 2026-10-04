@@ -3,13 +3,20 @@ import { PiShipError, redact } from "@piship/contracts";
 import { classifyGatewayStatus, isUpstreamProviderError } from "@piship/core";
 
 type Model = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+type ModelRef = { readonly provider: string; readonly id: string };
 type AuthResult = Awaited<ReturnType<ModelRuntime["getAuth"]>>;
 type AuthCheck = Awaited<ReturnType<ModelRuntime["checkAuth"]>>;
 
 export interface ManagedEndpointGovernance {
   readonly kind: "managed-endpoint";
   readonly providerId: string;
+  /** Models that may be selected, virtual ones included. */
   readonly allowedModelIds: readonly string[];
+  /**
+   * Physical models that may receive a request; `allowedModelIds` when
+   * absent. A virtual model is selected, never dispatched.
+   */
+  readonly dispatchModelIds?: readonly string[];
   /** Request-time key; `force` re-acquires after a gateway rejection. */
   readonly apiKey: (options: { force: boolean }) => Promise<string>;
   /** The distribution's command, named where Pi asks the user to sign in. */
@@ -22,15 +29,67 @@ export interface PiNativeGovernance {
   readonly allowedModelKeys: readonly string[];
   /** ...unless a policy restricts models, in which case empty allows none. */
   readonly restricted?: boolean;
+  /**
+   * `provider/id` keys that may receive a request; `allowedModelKeys` when
+   * absent. Narrowing limits selection only, so the routes of a selectable
+   * virtual model stay here.
+   */
+  readonly dispatchModelKeys?: readonly string[];
 }
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
 
-/** A further model.use check from the distribution policy (v1alpha3). */
+/**
+ * The API id Pi gives a virtual catalog entry. Pi exports it only as a type
+ * from its root, so it is matched by value; a compatibility test pins it.
+ */
+export const PI_VIRTUAL_MODEL_API = "pi-virtual";
+
+/** A declared virtual model and the closed set of physical models it may route to. */
+export interface VirtualModelRule {
+  readonly provider: string;
+  readonly id: string;
+  readonly routes: readonly ModelRef[];
+  /** The router as the manifest declares it, recorded in audit. */
+  readonly router: string;
+  /**
+   * The built path of the router extension, which alone may register the
+   * model; undefined when the declaration resolves to no built extension.
+   */
+  readonly routerPath?: string;
+}
+
+/** How long a routed request's rebased copy may claim its route. */
+const REBASED_ROUTE_MS = 10_000;
+
+export type ModelAction = "model.select" | "model.dispatch";
+
+/** One routed request: the selected virtual model and its physical target. */
+export interface ModelDispatch {
+  readonly selected: string;
+  readonly dispatched: string;
+  readonly router: string;
+  readonly type: string;
+}
+
+/** Further model checks from the distribution policy. */
 export interface ModelPolicy {
-  allows(provider: string, id: string): boolean;
-  /** Called when a request for a disallowed model is refused. */
-  denied?(provider: string, id: string): void;
+  /** model.select: the model a session selects, possibly virtual. */
+  selects(provider: string, id: string): boolean;
+  /**
+   * model.dispatch: the physical model that receives a request. Absent, a
+   * physical model is checked against `selects`.
+   */
+  dispatches?(provider: string, id: string): boolean;
+  /** Called when a request or a registration is refused. */
+  denied?(
+    action: ModelAction,
+    provider: string,
+    id: string,
+    detail?: Readonly<Record<string, string>>,
+  ): void;
+  /** Called when a virtual model is routed to an allowed physical model. */
+  dispatched?(dispatch: ModelDispatch): void;
   /**
    * Called before every request; throws to refuse it. A prompt can carry
    * workspace content, so a request must not leave while a required control
@@ -40,7 +99,14 @@ export interface ModelPolicy {
 }
 
 export interface GovernedRuntime {
-  isAllowed(provider: string, id: string): boolean;
+  /** Whether a model may be selected (the allowlist and model.select). */
+  isSelectable(provider: string, id: string): boolean;
+  /**
+   * Run `fn` with virtual model registration open. Outside it, registering
+   * or unregistering a virtual model is refused: only PiShip registers the
+   * declared ones, from the declared router, when extensions load.
+   */
+  withRegistrationWindow<T>(fn: () => T): T;
   /** Mark the current credential as rejected so the next request re-acquires. */
   markCredentialRejected(): void;
   /**
@@ -53,14 +119,31 @@ export interface GovernedRuntime {
   withAccessAction(message: unknown): unknown;
 }
 
-function denied(provider: string, id: string): PiShipError {
+function denied(provider: string, id: string, reason?: string): PiShipError {
   return new PiShipError(
     "MODEL_DENIED",
-    `Model ${provider}/${id} is not allowed by this distribution`,
+    `Model ${provider}/${id} is not allowed by this distribution${reason ? ` (${reason})` : ""}`,
     {
       component: "inference",
     },
   );
+}
+
+/** A refused classify or generateImages call, in the shape Pi returns instead of rejecting. */
+function errorResult(model: ModelRef & { api?: string }, error: unknown) {
+  return {
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    stopReason: "error" as const,
+    errorMessage:
+      error instanceof PiShipError
+        ? `${error.code}: ${error.message}`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    timestamp: Date.now(),
+  };
 }
 
 /**
@@ -70,11 +153,20 @@ function denied(provider: string, id: string): PiShipError {
  * others (no auth), and a request for a disallowed model throws MODEL_DENIED.
  * In managed mode no other provider — built-in, environment, auth.json, or
  * extension-registered — can obtain credentials.
+ *
+ * A selected model is checked by model.select, the physical model that
+ * receives a request by model.dispatch. A virtual model is routed through
+ * `resolveModel`, the one routing step of every Pi path (agent loop, direct
+ * stream, summaries): its target must be one of its declared routes and
+ * dispatchable, and only that routed request may reach a model the session
+ * could not select itself. Classifier, image, and deferred requests and the
+ * type-aware listings are narrowed the same way.
  */
 export function governModelRuntime(
   runtime: ModelRuntime,
   governance: ModelGovernance,
   policy?: ModelPolicy,
+  virtual: readonly VirtualModelRule[] = [],
 ): GovernedRuntime {
   const original = {
     getModel: runtime.getModel.bind(runtime),
@@ -91,6 +183,19 @@ export function governModelRuntime(
     streamSimple: runtime.streamSimple.bind(runtime),
     complete: runtime.complete.bind(runtime),
     completeSimple: runtime.completeSimple.bind(runtime),
+    streamDeferred: runtime.streamDeferred.bind(runtime),
+    fetchDeferred: runtime.fetchDeferred.bind(runtime),
+    cancelDeferred: runtime.cancelDeferred.bind(runtime),
+    classify: runtime.classify.bind(runtime),
+    generateImages: runtime.generateImages.bind(runtime),
+    getModelsOfType: runtime.getModelsOfType.bind(runtime),
+    getModelOfType: runtime.getModelOfType.bind(runtime),
+    getAllModels: runtime.getAllModels.bind(runtime),
+    getAvailableOfType: runtime.getAvailableOfType.bind(runtime),
+    getAllAvailable: runtime.getAllAvailable.bind(runtime),
+    resolveModel: runtime.resolveModel.bind(runtime),
+    registerVirtualModel: runtime.registerVirtualModel.bind(runtime),
+    unregisterVirtualModel: runtime.unregisterVirtualModel.bind(runtime),
   };
   let force = false;
   /** The PiShip error the last managed key request failed with. */
@@ -101,13 +206,78 @@ export function governModelRuntime(
     governance.kind === "pi-native" &&
     !governance.restricted &&
     !governance.allowedModelKeys.length;
-  const isAllowed = (provider: string, id: string): boolean =>
-    (managed
+  const key = (model: ModelRef) => `${model.provider}/${model.id}`;
+  const rules = new Map(virtual.map((rule) => [key(rule), rule]));
+  /** The distribution's allowlist: managed ids, or pi-native keys. */
+  const listed = (provider: string, id: string): boolean =>
+    managed
       ? provider === managed.providerId && managed.allowedModelIds.includes(id)
       : governance.kind === "pi-native" &&
         (unrestricted ||
-          governance.allowedModelKeys.includes(`${provider}/${id}`))) &&
-    (policy?.allows(provider, id) ?? true);
+          governance.allowedModelKeys.includes(`${provider}/${id}`));
+  const isSelectable = (provider: string, id: string): boolean =>
+    listed(provider, id) && (policy?.selects(provider, id) ?? true);
+  const selectable = (model: ModelRef) =>
+    isSelectable(model.provider, model.id);
+  /** A physical model that may receive a request. */
+  const dispatchable = (model: ModelRef): boolean =>
+    !rules.has(key(model)) &&
+    (managed
+      ? model.provider === managed.providerId &&
+        (managed.dispatchModelIds ?? managed.allowedModelIds).includes(model.id)
+      : governance.kind === "pi-native" && governance.dispatchModelKeys
+        ? governance.dispatchModelKeys.includes(key(model))
+        : listed(model.provider, model.id)) &&
+    (policy
+      ? (policy.dispatches ?? policy.selects).call(
+          policy,
+          model.provider,
+          model.id,
+        )
+      : true);
+  const isVirtual = (model: { api?: string }) =>
+    model.api === PI_VIRTUAL_MODEL_API;
+  /**
+   * Frozen copies of physical models a declared virtual model routed a
+   * request to, with the rule that routed them.
+   */
+  const routed = new WeakMap<object, VirtualModelRule>();
+  /**
+   * Routed requests whose Pi-native credential carries a base URL: Pi sends
+   * them on a copy (`{ ...model, baseUrl }`) that has lost the mark, so the
+   * next request for that model and base URL claims it, once, right after.
+   * Only Pi's own auth lookup before it sends opens one: the lookup Pi's
+   * runtime makes inside a request PiShip already let through (`guarded`)
+   * does not, so no unclaimed one is left behind.
+   */
+  let rebased: {
+    provider: string;
+    id: string;
+    baseUrl: string;
+    rule: VirtualModelRule;
+    at: number;
+  }[] = [];
+  const routeOf = (
+    model: ModelRef & { baseUrl?: string },
+  ): VirtualModelRule | undefined => {
+    const rule = routed.get(model);
+    if (rule) return rule;
+    const now = Date.now();
+    rebased = rebased.filter((item) => now - item.at < REBASED_ROUTE_MS);
+    const index = rebased.findIndex(
+      (item) =>
+        item.provider === model.provider &&
+        item.id === model.id &&
+        item.baseUrl === model.baseUrl,
+    );
+    if (index < 0) return undefined;
+    return rebased.splice(index, 1)[0]?.rule;
+  };
+  /** Model objects of requests the guard let through. */
+  const guarded = new WeakSet<object>();
+  const declaredRoute = (rule: VirtualModelRule, model: ModelRef) =>
+    rule.routes.some((item) => key(item) === key(model));
+  let registering = false;
   const providerHasAllowed = (provider: string): boolean =>
     managed
       ? provider === managed.providerId
@@ -117,34 +287,44 @@ export function governModelRuntime(
             key.startsWith(`${provider}/`),
           ));
   const managedModels = (): Model[] =>
-    managed
-      ? original
-          .getModels(managed.providerId)
-          .filter((model) => isAllowed(model.provider, model.id))
-      : [];
-  const guard = (model: { provider: string; id: string }) => {
-    if (!isAllowed(model.provider, model.id)) {
-      policy?.denied?.(model.provider, model.id);
-      throw denied(model.provider, model.id);
+    managed ? original.getModels(managed.providerId).filter(selectable) : [];
+  const refuse = (
+    action: ModelAction,
+    model: ModelRef,
+    detail?: Readonly<Record<string, string>>,
+  ): never => {
+    policy?.denied?.(action, model.provider, model.id, detail);
+    throw denied(model.provider, model.id, detail?.reason);
+  };
+  const guard = (model: ModelRef & { api?: string; baseUrl?: string }) => {
+    const rule = isVirtual(model) ? undefined : routeOf(model);
+    if (isVirtual(model)) {
+      // Pi routes it next; resolveModel checks the model it routes to.
+      if (!rules.has(key(model)) || !selectable(model))
+        refuse("model.select", model);
+    } else if (rule) {
+      if (!declaredRoute(rule, model) || !dispatchable(model))
+        refuse("model.dispatch", model);
+    } else {
+      // Selected and dispatched are the same model.
+      if (!selectable(model)) refuse("model.select", model);
+      if (!dispatchable(model)) refuse("model.dispatch", model);
     }
     policy?.available?.();
+    guarded.add(model);
   };
 
   const target = runtime as unknown as Record<string, unknown>;
   target.getModel = (providerId: string, modelId: string): Model | undefined =>
-    isAllowed(providerId, modelId)
+    isSelectable(providerId, modelId)
       ? original.getModel(providerId, modelId)
       : undefined;
   target.getModels = (providerId?: string): readonly Model[] =>
-    original
-      .getModels(providerId)
-      .filter((model) => isAllowed(model.provider, model.id));
+    original.getModels(providerId).filter(selectable);
   target.getAvailableSnapshot = (): readonly Model[] =>
     managed
       ? managedModels()
-      : original
-          .getAvailableSnapshot()
-          .filter((model) => isAllowed(model.provider, model.id));
+      : original.getAvailableSnapshot().filter(selectable);
   target.getAvailable = async (
     providerId?: string,
     options?: Parameters<ModelRuntime["getAvailable"]>[1],
@@ -153,8 +333,39 @@ export function governModelRuntime(
       ? managedModels().filter(
           (model) => !providerId || model.provider === providerId,
         )
-      : (await original.getAvailable(providerId, options)).filter((model) =>
-          isAllowed(model.provider, model.id),
+      : (await original.getAvailable(providerId, options)).filter(selectable);
+  target.getModelsOfType = (type: never, providerId?: string) =>
+    original.getModelsOfType(type, providerId).filter(selectable);
+  target.getModelOfType = (type: never, providerId: string, modelId: string) =>
+    isSelectable(providerId, modelId)
+      ? original.getModelOfType(type, providerId, modelId)
+      : undefined;
+  target.getAllModels = (providerId?: string) =>
+    original.getAllModels(providerId).filter(selectable);
+  const inManaged = (model: ModelRef, providerId?: string) =>
+    selectable(model) && (!providerId || model.provider === providerId);
+  target.getAvailableOfType = async (
+    type: never,
+    providerId?: string,
+    options?: Parameters<ModelRuntime["getAvailableOfType"]>[2],
+  ) =>
+    managed
+      ? original
+          .getModelsOfType(type, managed.providerId)
+          .filter((model) => inManaged(model, providerId))
+      : (await original.getAvailableOfType(type, providerId, options)).filter(
+          selectable,
+        );
+  target.getAllAvailable = async (
+    providerId?: string,
+    options?: Parameters<ModelRuntime["getAllAvailable"]>[1],
+  ) =>
+    managed
+      ? original
+          .getAllModels(managed.providerId)
+          .filter((model) => inManaged(model, providerId))
+      : (await original.getAllAvailable(providerId, options)).filter(
+          selectable,
         );
   target.checkAuth = async (
     providerId: string,
@@ -166,6 +377,10 @@ export function governModelRuntime(
     return original.checkAuth(providerId, options);
   };
   if (managed) {
+    // PiShip supplies the managed provider's credential at request time, so
+    // Pi's snapshot never records one; a routed request checks it here.
+    target.hasConfiguredAuth = (providerId: string) =>
+      providerId === managed.providerId;
     // Pi's `/login` offers the login methods of `getProviders()`. A managed
     // distribution signs in with its own command, so only its provider is
     // listed, with a method that has no `login`: Pi shows it as configured
@@ -195,9 +410,19 @@ export function governModelRuntime(
     overrides?: unknown,
   ): Promise<AuthResult> => {
     const provider = typeof model === "string" ? model : model.provider;
-    if (typeof model !== "string" && !isAllowed(model.provider, model.id))
+    // A routed model needs only dispatch; a virtual one is never sent.
+    if (
+      typeof model !== "string" &&
+      (isVirtual(model)
+        ? !rules.has(key(model)) || !selectable(model)
+        : !dispatchable(model))
+    )
       return undefined;
     if (!providerHasAllowed(provider)) return undefined;
+    const rule =
+      typeof model === "string" || guarded.has(model)
+        ? undefined
+        : routed.get(model);
     if (managed) {
       let apiKey: string;
       try {
@@ -212,7 +437,16 @@ export function governModelRuntime(
         source: "PiShip managed credential",
       } as AuthResult;
     }
-    return original.getAuth(model, overrides);
+    const result = await original.getAuth(model, overrides);
+    if (rule && typeof model !== "string" && result?.auth.baseUrl)
+      rebased.push({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: result.auth.baseUrl,
+        rule,
+        at: Date.now(),
+      });
+    return result;
   };
   target.stream = ((model: Model, ...rest: unknown[]) => {
     guard(model);
@@ -246,6 +480,94 @@ export function governModelRuntime(
       ...rest,
     );
   }) as unknown;
+  target.streamDeferred = (model: Model, ...rest: unknown[]) => {
+    guard(model);
+    return (original.streamDeferred as (...args: unknown[]) => unknown)(
+      model,
+      ...rest,
+    );
+  };
+  for (const name of ["fetchDeferred", "cancelDeferred"] as const) {
+    const call = original[name] as (...args: unknown[]) => Promise<unknown>;
+    target[name] = async (model: Model, ...rest: unknown[]) => {
+      guard(model);
+      return call(model, ...rest);
+    };
+  }
+  // Pi's contract for these is "never rejects": a refusal is an error result.
+  target.classify = async (model: Model, ...rest: unknown[]) => {
+    try {
+      guard(model);
+    } catch (error) {
+      return { ...errorResult(model, error), answers: {} };
+    }
+    return (original.classify as (...args: unknown[]) => unknown)(
+      model,
+      ...rest,
+    );
+  };
+  target.generateImages = async (model: Model, ...rest: unknown[]) => {
+    try {
+      guard(model);
+    } catch (error) {
+      return { ...errorResult(model, error), output: [] };
+    }
+    return (original.generateImages as (...args: unknown[]) => unknown)(
+      model,
+      ...rest,
+    );
+  };
+  target.resolveModel = async (
+    model: Model,
+    messages: Parameters<ModelRuntime["resolveModel"]>[1],
+    options: Parameters<ModelRuntime["resolveModel"]>[2],
+  ) => {
+    const selected = key(model);
+    const rule = rules.get(selected);
+    if (!rule || !selectable(model)) return refuse("model.select", model);
+    const route = await original.resolveModel(model, messages, options);
+    const physical = route.model;
+    const detail = { selected, router: rule.router };
+    if (!declaredRoute(rule, physical))
+      refuse("model.dispatch", physical, {
+        ...detail,
+        reason: "not a declared route",
+      });
+    if (!dispatchable(physical)) refuse("model.dispatch", physical, detail);
+    // A frozen copy, so that only this routed request is checked by
+    // dispatch alone and cannot be changed into another model; the catalog
+    // object itself still needs model.select.
+    const tagged = Object.freeze({ ...physical });
+    routed.set(tagged, rule);
+    policy?.dispatched?.({
+      selected,
+      dispatched: key(physical),
+      router: rule.router,
+      type: "chat",
+    });
+    return { ...route, model: tagged };
+  };
+  const registration = (provider: string, id: string, apply: () => void) => {
+    if (!registering) {
+      policy?.denied?.("model.select", provider, id, { router: "<unknown>" });
+      throw new PiShipError(
+        "POLICY_DENIED",
+        `Virtual model ${provider}/${id} is refused: only the declared router registers a virtual model, when extensions load`,
+        { component: "inference" },
+      );
+    }
+    apply();
+  };
+  target.registerVirtualModel = (
+    definition: Parameters<ModelRuntime["registerVirtualModel"]>[0],
+  ) =>
+    registration(definition.provider, definition.id, () =>
+      original.registerVirtualModel(definition),
+    );
+  target.unregisterVirtualModel = (provider: string, id: string) =>
+    registration(provider, id, () =>
+      original.unregisterVirtualModel(provider, id),
+    );
   if (managed) {
     target.login = async () => {
       throw new PiShipError(
@@ -267,7 +589,15 @@ export function governModelRuntime(
     };
   }
   return {
-    isAllowed,
+    isSelectable,
+    withRegistrationWindow: (fn) => {
+      registering = true;
+      try {
+        return fn();
+      } finally {
+        registering = false;
+      }
+    },
     markCredentialRejected: () => {
       force = true;
     },

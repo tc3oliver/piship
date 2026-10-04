@@ -28,7 +28,7 @@ import {
   KIND_ACTION,
   type ResourceEvidence,
 } from "./options.js";
-import { payloadTree } from "./resources.js";
+import { fileMatches, packageRoot, payloadTree } from "./resources.js";
 import { sandboxBackend } from "./sandbox.js";
 
 export interface GovernanceInspection {
@@ -150,6 +150,45 @@ export async function inspectGovernance(
       integrity,
       compatible,
     });
+  }
+  // Vendored Pi package files, each decided like a declared resource.
+  for (const entry of options.lock.packages ?? []) {
+    const origin = `${entry.id}@${entry.version ?? entry.commit ?? "local"}`;
+    const root = packageRoot(options.distributionDir, manifest, entry.id);
+    for (const file of entry.resources) {
+      const path = `packages/${entry.id}/${file.path}`;
+      const base = { kind: file.kind, class: entry.class, path, origin };
+      const trust = resourceTrustDecision(
+        manifest.policy,
+        entry.class,
+        file.kind,
+      );
+      if (!trust.allowed) {
+        resources.push({ ...base, loaded: false, reason: trust.reason });
+        continue;
+      }
+      if (!fileMatches(join(root, ...file.path.split("/")), file.sha256)) {
+        resources.push({
+          ...base,
+          loaded: false,
+          reason: "the vendored file does not match the lock",
+        });
+        continue;
+      }
+      const decision = engine.evaluate({
+        action: KIND_ACTION[file.kind] ?? "resource.load",
+        resource: `${entry.class}:${path}`,
+      });
+      resources.push({
+        ...base,
+        loaded: decision.effect !== "deny",
+        reason:
+          decision.effect === "allow"
+            ? trust.reason
+            : `policy ${decision.ruleId} (${decision.effect})`,
+        integrity: "verified",
+      });
+    }
   }
   for (const name of manifest.resources.builtin) {
     const decision = engine.evaluate({

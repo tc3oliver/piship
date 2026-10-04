@@ -2,6 +2,7 @@
 // origin, sandbox, policy, resource and provider trust, capability state, and
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { Extension } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import {
   AuditLog,
@@ -20,6 +21,7 @@ import {
   resolveDecision,
 } from "@piship/contracts";
 import {
+  auditRotation,
   setUserAuto,
   type UserAutoStatus,
   userAutoDenied,
@@ -51,6 +53,7 @@ import {
   gitProtection,
   sandboxConfig,
 } from "./governance/engine.js";
+import type { ToolExposureTable } from "./governance/exposure.js";
 import { startMcp } from "./governance/mcp.js";
 import type {
   DecisionEvents,
@@ -150,6 +153,7 @@ export class GovernanceSession {
         config: manifest.audit,
         distribution: options.lock.app.id,
         stateDir: options.stateDir,
+        rotation: auditRotation(options.lock),
         fetch: options.fetch,
         resolveUrl: (template) =>
           options.resolveTemplate("audit.sinks.url", template),
@@ -266,7 +270,7 @@ export class GovernanceSession {
   /**
    * The actions whose `ask` this session resolves through `decide`, where
    * the user's auto mode applies. Others are never auto-approved: a
-   * mid-session `model.use` switch accepts only a model approved at start,
+   * mid-session `model.select` switch accepts only a model approved at start,
    * and `network.connect`, `web.request`, `browser.execute`, `memory.*`, and
    * `agent.invoke` have no runtime hook (audit-only, or the sandbox).
    * `policy explain` reports AUTO-APPROVED only for these.
@@ -348,6 +352,39 @@ export class GovernanceSession {
     this.audit.assertAvailable();
   }
 
+  #runtimeBlock: PiShipError | undefined;
+
+  /**
+   * Enforced instructions or tools were changed and could not be restored,
+   * or PiShip's own enforcement failed: every later model request of this
+   * process is refused. The first failure is kept. Never throws, so a Pi
+   * handler that calls it cannot have the block swallowed with its error.
+   */
+  blockRuntime(resource: string, reason: string): void {
+    this.#runtimeBlock ??= new PiShipError(
+      "POLICY_DENIED",
+      "Enforced instructions or tools of this session were changed and could not be restored",
+      {
+        component: "policy",
+        userAction: `Start ${this.options.lock.app.command} again`,
+      },
+    );
+    try {
+      this.emit("runtime.mutation.reverted", {
+        resource,
+        decision: "denied",
+        detail: { repair: "failed", reason: redact(reason) },
+      });
+    } catch {
+      // The block stands whether or not its audit was recorded.
+    }
+  }
+
+  /** Throws POLICY_DENIED once `blockRuntime` was called. */
+  assertRuntimeIntact(): void {
+    if (this.#runtimeBlock) throw this.#runtimeBlock;
+  }
+
   emit(
     event: AuditEventType,
     fields: Omit<Parameters<AuditLog["emit"]>[0], "event"> = {},
@@ -382,7 +419,16 @@ export class GovernanceSession {
       .reduce((current, next) =>
         STRICTNESS[next.effect] > STRICTNESS[current.effect] ? next : current,
       );
-    const auto =
+    const prompt = {
+      title: `${this.options.lock.app.name} policy approval`,
+      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
+    };
+    // Pi does not queue extension dialogs: a second confirm replaces the
+    // first, whose promise never settles. Approvals of concurrent tool
+    // calls (parallel top-level calls, Codemode's nested calls) wait their
+    // turn; the queue is held only while a prompt is open. A call that waited
+    // while the user switched auto mode on is approved without its prompt.
+    let auto =
       this.#userAuto.active &&
       decision.effect === "ask" &&
       !resources.some((item) =>
@@ -390,10 +436,22 @@ export class GovernanceSession {
       );
     const resolved: ResolvedDecision = auto
       ? { ...decision, outcome: "allow", approval: "auto" }
-      : await resolveDecision(decision, channel, {
-          title: `${this.options.lock.app.name} policy approval`,
-          message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
-        });
+      : decision.effect === "ask" && channel
+        ? await this.#serialized(async () => {
+            auto =
+              this.#userAuto.active &&
+              !resources.some((item) =>
+                this.engine.keepsPrompt({ action, resource: item }),
+              );
+            return auto
+              ? {
+                  ...decision,
+                  outcome: "allow" as const,
+                  approval: "auto" as const,
+                }
+              : resolveDecision(decision, channel, prompt);
+          })
+        : await resolveDecision(decision, channel, prompt);
     const fields = {
       resource: events?.resource ?? redact(decision.resource),
       policy: decision.policyId,
@@ -430,6 +488,23 @@ export class GovernanceSession {
     return resolved;
   }
 
+  #approvalTail: Promise<unknown> = Promise.resolve();
+
+  /** Run `prompt` after every approval prompt queued before it settled. */
+  #serialized<T>(prompt: () => Promise<T>): Promise<T> {
+    const next = this.#approvalTail.then(prompt, prompt);
+    this.#approvalTail = next.catch(() => undefined);
+    return next;
+  }
+
+  /**
+   * Run a dialog of PiShip's own (`ask_user`) in the approval queue, so it
+   * never replaces an open approval prompt or another question.
+   */
+  serializeDialog<T>(dialog: () => Promise<T>): Promise<T> {
+    return this.#serialized(dialog);
+  }
+
   /** Approval before the TUI starts: the terminal, or none when headless. */
   startupChannel(): ApprovalChannel | undefined {
     return (
@@ -453,6 +528,16 @@ export class GovernanceSession {
   currentChannel(): ApprovalChannel | undefined {
     return this.#channelScope.getStore() ?? this.toolApproval;
   }
+  /**
+   * The exposure table of the current Pi session; set when the runtime
+   * creates a session (again for `/new`, `/resume`, and fork).
+   */
+  exposure: ToolExposureTable | null = null;
+  /**
+   * The extensions Pi runs, in handler order; set with `exposure`. Read
+   * live, as Pi reads each extension's handlers at every event.
+   */
+  piExtensions: (() => readonly Extension[]) | null = null;
   /** Current piship-workflow mode; null when the workflow is not active. */
   workflowMode: "plan" | "build" | null = null;
 
@@ -467,6 +552,11 @@ export class GovernanceSession {
   attachNotices(notify: (message: string) => void): void {
     this.#notify = notify;
     for (const message of this.#pendingNotices.splice(0)) this.#notice(message);
+  }
+
+  /** Show a session notice now, or once a UI is attached. */
+  notice(message: string): void {
+    this.#notice(message);
   }
 
   #notice(message: string): void {

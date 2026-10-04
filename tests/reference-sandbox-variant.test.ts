@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 // commands run in the organization's container sandbox service. It sits in
 // its own directory because a lock is `piship.lock` next to its manifest and
 // a manifest cannot reach outside its directory, so it repeats the reference
-// manifest and its two resources. This keeps the repetition honest on every
+// manifest, its two resources, and its Pi package. This keeps the repetition honest on every
 // pull request, without Docker: what the variant changes is exactly the
 // sandbox, and its adapter is one file that imports only the SDK.
 
@@ -96,17 +96,20 @@ describe("the sandbox variant of the reference distribution", () => {
     expect(app(base).id).not.toBe(app(demo).id);
   });
 
-  it("carries the same resources as the reference distribution", () => {
-    const names = (root: string) =>
-      files(join(root, "resources")).map((path) =>
-        relative(join(root, "resources"), path),
-      );
-    expect(names(sandbox).sort()).toEqual(names(reference).sort());
-    for (const name of names(reference))
-      expect(readFileSync(join(sandbox, "resources", name), "utf8")).toBe(
-        readFileSync(join(reference, "resources", name), "utf8"),
-      );
-  });
+  it.each(["resources", "packages"])(
+    "carries the same %s as the reference distribution",
+    (directory) => {
+      const names = (root: string) =>
+        files(join(root, directory)).map((path) =>
+          relative(join(root, directory), path),
+        );
+      expect(names(sandbox).sort()).toEqual(names(reference).sort());
+      for (const name of names(reference))
+        expect(readFileSync(join(sandbox, directory, name), "utf8")).toBe(
+          readFileSync(join(reference, directory, name), "utf8"),
+        );
+    },
+  );
 
   it("has an adapter that is one file importing only the SDK and Node built-ins", () => {
     const source = readFileSync(

@@ -5,6 +5,7 @@ import { credentialGroup } from "../doctor/credential.js";
 import { collectDoctorData, type DoctorData } from "../doctor/data.js";
 import { distributionGroup } from "../doctor/distribution.js";
 import { gatewayGroup } from "../doctor/gateway.js";
+import { governanceGroup } from "../doctor/governance.js";
 import { identityGroup } from "../doctor/identity.js";
 import { inferenceGroup } from "../doctor/inference.js";
 import { mcpGroup } from "../doctor/mcp.js";
@@ -32,6 +33,7 @@ export function renderDoctor(data: DoctorData): DoctorReport {
   gatewayGroup(data, report.section("Gateway"));
   resourcesGroup(data, report.section("Resources"));
   policyGroup(data, report.section("Policy"));
+  governanceGroup(data, report.section("Governance"));
   projectGroup(data, report.section("Project"));
   capabilitiesGroup(data, report.section("Capabilities"));
   sandboxGroup(data, report.section("Sandbox"));

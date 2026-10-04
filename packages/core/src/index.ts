@@ -12,6 +12,9 @@ export {
   REVIEWED_INSTALL_SCRIPTS,
 } from "./compatibility.js";
 export * from "./config.js";
+export * from "./data/contract.js";
+export * from "./data/lifecycle.js";
+export * from "./data/session-export.js";
 export * from "./diff/index.js";
 // The gateway answer reading Pi's request path shares with the model list
 // check; the Pi seam cannot import @piship/inference itself.
@@ -21,7 +24,7 @@ export {
   isUpstreamProviderError,
 } from "@piship/inference";
 export { canonicalJson } from "./digest.js";
-export { checkGovernance } from "./governance-lock.js";
+export { checkEnforceability, checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./update/index.js";
@@ -39,10 +42,20 @@ export {
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
+  LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
   type LockDigests,
+  type LockedDataContract,
+  type LockedEnforcement,
   type LockedPackage,
+  type LockedPackageResource,
+  type LockedPiPackage,
+  type LockedPiSiblings,
   type LockedResource,
+  LOCKED_TOOL_ORIGINS,
+  type LockedToolExposure,
+  type LockedToolOrigin,
+  type LockedVirtualModel,
   type LockSchemaVersion,
   type ResolvedDistribution,
 } from "./lock-schema.js";
@@ -89,3 +102,4 @@ export {
   type OutputStagingOptions,
 } from "./temporary-directories.js";
 export * from "./trust.js";
+export { checkToolExposure, lockedTools } from "./tool-exposure.js";

@@ -1,6 +1,7 @@
 // The policy engine: layered rule precedence, enforcement planes, and rule
 // list parsing for user, project, and adapter rule files.
 import {
+  normalizePolicyAction,
   POLICY_ACTIONS,
   PiShipError,
   redact,
@@ -20,12 +21,18 @@ import {
   normalizeTokenContext,
   type PathTokenContext,
 } from "./glob.js";
+import { seamPlane } from "./seams.js";
 
 /** Which planes an active OS sandbox adapter enforces. */
 export interface PolicyContainment {
   readonly filesystem: boolean;
   readonly network: boolean;
   readonly shell: boolean;
+  /**
+   * Pi runs offline (`PI_OFFLINE=1`, which every managed launch sets), so
+   * Pi's own uploads such as `/bug` are closed. Absent means online.
+   */
+  readonly piOffline?: boolean;
 }
 
 export interface PolicyContext extends PathTokenContext {
@@ -39,46 +46,17 @@ export const NO_CONTAINMENT: PolicyContainment = {
 };
 
 /**
- * Actions PiShip decides at a runtime hook before they happen. Actions
- * without such a hook (`agent.invoke`, `memory.read`, `memory.write`) are
- * evaluated for explanation and audit only, so they are not listed here.
- */
-const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
-  "model.use",
-  "resource.load",
-  "extension.load",
-  "skill.load",
-  "instruction.load",
-  "provider.load",
-  "mcp.server.start",
-  "mcp.tool.call",
-  "tool.execute",
-]);
-
-/**
- * The plane that enforces `action` under the active containment. Filesystem
- * actions fall back to the control plane (built-in file tools are gated
- * in-process); shell command gating falls back to the control plane (the
- * tool call is intercepted before it runs); network connections without a
- * sandbox, web/browser actions, and actions no runtime hook evaluates are
- * audit-only.
+ * The plane that enforces `action` under the active containment, from the
+ * runtime seam table (`RUNTIME_SEAMS`). An action with no seam and no
+ * containment carries `audit-only` here; `decisionStatus` reports it as
+ * `unsupported`.
  */
 export function enforcementPlane(
   action: PolicyAction,
   containment: PolicyContainment,
+  resource?: string,
 ): EnforcementPlane {
-  if (CONTROL_PLANE_ACTIONS.has(action)) return "control-plane";
-  switch (action) {
-    case "filesystem.read":
-    case "filesystem.write":
-      return containment.filesystem ? "sandbox" : "control-plane";
-    case "shell.execute":
-      return containment.shell ? "sandbox" : "control-plane";
-    case "network.connect":
-      return containment.network ? "sandbox" : "audit-only";
-    default:
-      return "audit-only";
-  }
+  return seamPlane(action, containment, resource) ?? "audit-only";
 }
 
 const STRICTNESS: Readonly<Record<PolicyEffect, number>> = {
@@ -113,6 +91,18 @@ export function chainsBeyondPattern(pattern: string, command: string): boolean {
   for (const [char] of command.matchAll(SHELL_METACHARACTERS))
     if (!pattern.includes(char)) return true;
   return false;
+}
+
+/**
+ * A rule with a former action name (`model.use`) under its current name.
+ * Rules from a lock written before the rename still match the action the
+ * runtime evaluates.
+ */
+function normalizeRuleAction(rule: PolicyRule): PolicyRule {
+  const action = normalizePolicyAction(rule.action);
+  return action === rule.action
+    ? rule
+    : { ...rule, action: action as PolicyRule["action"] };
 }
 
 export function isPathAction(action: string): boolean {
@@ -212,7 +202,14 @@ function parseRule(value: unknown, source: string, path: string): PolicyRule {
       `${path}.id`,
       "rule ids use lowercase letters, digits, and . _ - (at most 128)",
     );
-  const { action, effect } = record;
+  const { effect } = record;
+  // A former action name (`model.use`) is read as its current name, so a
+  // rule file written for an older release keeps applying; it is never
+  // rewritten on disk.
+  const action =
+    typeof record.action === "string"
+      ? normalizePolicyAction(record.action)
+      : record.action;
   if (typeof action !== "string" || !isActionPattern(action))
     throw invalid(
       source,
@@ -372,7 +369,7 @@ export class PolicyEngine {
       source: string,
     ): LayerRule[] =>
       rules.map((rule) => ({
-        rule,
+        rule: normalizeRuleAction(rule),
         layer,
         source,
         pathPattern: expandPathTokens(rule.resource, this.context),
@@ -562,7 +559,11 @@ export class PolicyEngine {
       narrowingUser,
       ...chainedAsks,
     ].find((entry) => entry?.rule.effect === effect);
-    const enforcement = enforcementPlane(action, this.context.containment);
+    const enforcement = enforcementPlane(
+      action,
+      this.context.containment,
+      resource,
+    );
     if (!deciding)
       return {
         ...common,

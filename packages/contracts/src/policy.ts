@@ -5,13 +5,50 @@ export type PolicyEffect = "allow" | "ask" | "deny";
 
 /**
  * Where a decision is enforced. `control-plane` is prevented by PiShip before
- * the action runs; `sandbox` needs an OS/process boundary; `audit-only` is
+ * the action runs; `sandbox` needs an OS/process boundary; `gateway` is
+ * prevented by the managed LLM gateway or credential broker; `audit-only` is
  * observed but cannot be reliably prevented and is never reported as deny.
  */
-export type EnforcementPlane = "control-plane" | "sandbox" | "audit-only";
+export const ENFORCEMENT_PLANES = [
+  "control-plane",
+  "sandbox",
+  "gateway",
+  "audit-only",
+] as const;
+export type EnforcementPlane = (typeof ENFORCEMENT_PLANES)[number];
+
+/**
+ * The status reported for an action. `control-plane`, `sandbox`, and
+ * `gateway` are `enforced`; `audit-only` is observed and recorded but not
+ * prevented; `unsupported` has no runtime hook at all: it is neither
+ * prevented nor recorded, and is never emitted in an audit event.
+ */
+export const ENFORCEMENT_STATUSES = [
+  "enforced",
+  "audit-only",
+  "unsupported",
+] as const;
+export type EnforcementStatus = (typeof ENFORCEMENT_STATUSES)[number];
+
+/**
+ * What the Pi runtime offers PiShip for an action: `hook` can prevent it,
+ * `observe` only reports it, `none` has no public seam.
+ */
+export const RUNTIME_SEAM_KINDS = ["hook", "observe", "none"] as const;
+export type RuntimeSeamKind = (typeof RUNTIME_SEAM_KINDS)[number];
+
+/**
+ * Resources of the `session.export` action: `public` is `/share` and any
+ * upload that leaves the machine, `local` is `/export` to a local file, and
+ * `support` is a support bundle or bug attachment.
+ */
+export const SESSION_EXPORT_RESOURCES = ["public", "local", "support"] as const;
+export type SessionExportResource = (typeof SESSION_EXPORT_RESOURCES)[number];
 
 export const POLICY_ACTIONS = [
-  "model.use",
+  "model.select",
+  "model.dispatch",
+  "session.export",
   "resource.load",
   "extension.load",
   "skill.load",
@@ -31,6 +68,27 @@ export const POLICY_ACTIONS = [
   "browser.execute",
 ] as const;
 export type PolicyAction = (typeof POLICY_ACTIONS)[number];
+
+/**
+ * Former action names that are still accepted in rules and normalized to
+ * the current name when the rule is parsed. `model.use` (piship/v1alpha5 and
+ * earlier) is `model.select`.
+ */
+export const POLICY_ACTION_ALIASES = {
+  "model.use": "model.select",
+} as const satisfies Readonly<Record<string, PolicyAction>>;
+export type PolicyActionAlias = keyof typeof POLICY_ACTION_ALIASES;
+
+/**
+ * The current name of a rule action: an alias becomes its action, and
+ * anything else (an action, a `<prefix>.*`, `*`, or an unknown name) is
+ * returned unchanged.
+ */
+export function normalizePolicyAction(action: string): string {
+  return Object.hasOwn(POLICY_ACTION_ALIASES, action)
+    ? POLICY_ACTION_ALIASES[action as PolicyActionAlias]
+    : action;
+}
 
 /** The configuration layer a rule came from, highest precedence first. */
 export const POLICY_LAYERS = [

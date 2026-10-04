@@ -70,8 +70,172 @@ export function redactProviderError(message: unknown): unknown {
   return Object.keys(changes).length ? { ...value, ...changes } : undefined;
 }
 
+type ToolResultMessage = Extract<
+  MessageEndEvent["message"],
+  { role: "toolResult" }
+>;
+
 /**
- * Redacts provider error text before Pi persists the message. Pi runs the
+ * Every field of Pi's tool result message, by what it holds. The calls a
+ * tool made to other tools (`nestedCalls`, attached by Pi; a Codemode
+ * result's `details.calls`) hold their arguments and error text, which
+ * PiShip redacts; the result content itself is tool output. A Pi upgrade
+ * that adds or removes a field fails to compile here until it is classified.
+ */
+export const TOOL_RESULT_MESSAGE_FIELDS: Record<
+  keyof ToolResultMessage,
+  "redacted" | "tool-output" | "metadata"
+> = {
+  role: "metadata",
+  toolCallId: "metadata",
+  toolName: "metadata",
+  content: "tool-output",
+  details: "redacted",
+  usage: "metadata",
+  nestedCalls: "redacted",
+  isError: "metadata",
+  timestamp: "metadata",
+};
+
+type NestedCall = {
+  id?: unknown;
+  arguments?: unknown;
+  argumentsBytes?: number;
+  error?: unknown;
+};
+type CodemodeCall = { id?: unknown; args?: unknown; error?: unknown };
+
+const changed = (before: unknown, after: unknown) =>
+  JSON.stringify(before) !== JSON.stringify(after);
+
+/** Codemode's argument preview: JSON cut to 200 characters, ending `...`. */
+const ARGS_PREVIEW_CHARS = 200;
+/** Codemode's error preview length. */
+const ERROR_PREVIEW_CHARS = 500;
+
+function preview(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+/**
+ * A Codemode preview redacted. A cut can leave only the start of a secret,
+ * which `redact` no longer recognizes, so a cut preview also loses its last
+ * unbroken token.
+ */
+function redactPreview(text: string, max: number): string {
+  const redacted = redact(text);
+  if (text.length !== max || !text.endsWith("...")) return redacted;
+  return redacted.replace(/[^\s"'`,:;=()[\]{}<>]*\.\.\.$/, "...");
+}
+
+/**
+ * The tool result with the nested calls' arguments and error text redacted,
+ * or undefined when there is nothing to redact: Pi's `nestedCalls` record,
+ * and the `details.calls` a Codemode result keeps (a 200-character argument
+ * preview and the error). Both are persisted with the message and shown in
+ * the HTML export.
+ */
+export function redactToolResult(message: unknown): unknown {
+  const value = message as
+    | {
+        role?: string;
+        toolName?: string;
+        nestedCalls?: { calls?: NestedCall[] };
+        details?: { calls?: CodemodeCall[] };
+      }
+    | null
+    | undefined;
+  if (value?.role !== "toolResult") return undefined;
+  const changes: Record<string, unknown> = {};
+  const nested = value.nestedCalls;
+  if (Array.isArray(nested?.calls)) {
+    const calls = nested.calls.map((call) => ({
+      ...call,
+      ...(call.arguments === undefined
+        ? {}
+        : { arguments: redactValue(call.arguments) }),
+      ...(typeof call.error === "string" ? { error: redact(call.error) } : {}),
+    }));
+    if (changed(nested.calls, calls))
+      changes.nestedCalls = { ...nested, calls };
+  }
+  const details = value.details;
+  if (value.toolName === "codemode" && Array.isArray(details?.calls)) {
+    // The preview is rebuilt from the full arguments Pi recorded for the
+    // same call, redacted before the cut.
+    const full = new Map<unknown, unknown>();
+    for (const call of Array.isArray(nested?.calls) ? nested.calls : [])
+      if (call.arguments !== undefined) full.set(call.id, call.arguments);
+    const args = (call: CodemodeCall): string => {
+      const source = full.get(call.id);
+      if (source !== undefined)
+        return preview(
+          JSON.stringify(redactValue(source)) ?? "",
+          ARGS_PREVIEW_CHARS,
+        );
+      return redactPreview(call.args as string, ARGS_PREVIEW_CHARS);
+    };
+    const calls = details.calls.map((call) => ({
+      ...call,
+      ...(typeof call.args === "string" ? { args: args(call) } : {}),
+      ...(typeof call.error === "string"
+        ? { error: redactPreview(call.error, ERROR_PREVIEW_CHARS) }
+        : {}),
+    }));
+    if (changed(details.calls, calls)) changes.details = { ...details, calls };
+  }
+  return Object.keys(changes).length ? { ...value, ...changes } : undefined;
+}
+
+/**
+ * `redactToolResult` that fails closed: the nested calls' arguments are
+ * dropped (Pi's own `argumentsBytes` form), their error text replaced by a
+ * fixed marker, and the Codemode argument previews blanked.
+ */
+export function redactToolResultOrDrop(message: unknown): unknown {
+  try {
+    return redactToolResult(message);
+  } catch {
+    const value = message as {
+      role?: string;
+      nestedCalls?: { calls?: NestedCall[] };
+      details?: { calls?: CodemodeCall[] };
+    };
+    if (value?.role !== "toolResult") return undefined;
+    const scrub = <T extends { error?: unknown }>(call: T) =>
+      call.error === undefined
+        ? call
+        : { ...call, error: REDACTION_FAILED_TEXT };
+    const nested = value.nestedCalls;
+    const details = value.details;
+    return {
+      ...value,
+      ...(Array.isArray(nested?.calls)
+        ? {
+            nestedCalls: {
+              ...nested,
+              complete: false,
+              calls: nested.calls.map(({ arguments: _dropped, ...call }) =>
+                scrub({ ...call, argumentsBytes: call.argumentsBytes ?? 0 }),
+              ),
+            },
+          }
+        : {}),
+      ...(Array.isArray(details?.calls)
+        ? {
+            details: {
+              ...details,
+              calls: details.calls.map((call) => scrub({ ...call, args: "" })),
+            },
+          }
+        : {}),
+    };
+  }
+}
+
+/**
+ * Redacts provider error text, and the nested tool calls a tool result
+ * records, before Pi persists the message. Pi runs the
  * handlers of extensions loaded from paths before inline ones, in order, and
  * persists the message the last replacement produced, so this extension goes
  * last: whatever an earlier handler returned is redacted too. At
@@ -83,7 +247,9 @@ export const providerErrorRedaction: InlineExtension = {
   factory: (pi) => {
     pi.on("session_start", () => installCrashRedaction());
     pi.on("message_end", (event) => {
-      const message = redactProviderErrorOrDrop(event.message);
+      const message =
+        redactProviderErrorOrDrop(event.message) ??
+        redactToolResultOrDrop(event.message);
       return message ? { message: message as typeof event.message } : undefined;
     });
   },

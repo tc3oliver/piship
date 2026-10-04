@@ -16,12 +16,14 @@ import {
   type ExtensionToolContext,
   type InlineExtension,
   SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { LocalMetrics } from "@piship/audit";
 import {
   AUDIT_EVENT_TYPES,
   type AuditEvent,
+  type AuditEventType,
   type ManagedFetch,
 } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
@@ -30,6 +32,8 @@ import { governanceHooks } from "./builtins.js";
 import { GovernanceSession } from "./governance-session.js";
 import { governedTools } from "./governed-tools.js";
 import { modelPolicy } from "./launch/governance.js";
+import { piSettings } from "./launch/pi-defaults.js";
+import { governCacheWarming } from "./launch/runtime-integrity.js";
 
 /**
  * Emitted by the branded commands outside a session, and proven from their
@@ -44,7 +48,16 @@ const OUTSIDE_A_SESSION = [
   "credential.revoke",
   "runtime.update",
   "runtime.rollback",
+  "data.swept",
 ];
+/**
+ * v0.9 event types the contract already carries but no runtime flow emits
+ * yet. Each task removes its names from this list when its flow emits
+ * them.
+ * `session.export` stays until an export flow exists: Pi's /share and
+ * /export have no seam, and PiShip has no command that exports a session.
+ */
+const NOT_YET_EMITTED: readonly AuditEventType[] = ["session.export"];
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -249,7 +262,7 @@ describe("governed session audit events (real flows)", () => {
       rule("provider-extension", "extension.load", "company:./providers/flow"),
       rule("docs", "mcp.server.start", "docs"),
       rule("docs-search", "mcp.tool.call", "docs:search"),
-      rule("model", "model.use", "unit/allowed"),
+      rule("model", "model.select", "unit/allowed"),
       "resources:",
       "  extensions:",
       "    builtin: [piship-ask-user, piship-workflow]",
@@ -259,16 +272,33 @@ describe("governed session audit events (real flows)", () => {
     ]);
     const { session, workspace } = full;
     const hooks = handlers(session);
+    // An enforced cache warming mode refuses the user's change.
+    const settings = SettingsManager.inMemory(piSettings("off"));
+    governCacheWarming(settings, { mode: "off", enforced: true }, session);
+    settings.setCacheWarmingMode("idle");
     const toolCall = hooks.get("tool_call") as (
       event: unknown,
       ctx: unknown,
     ) => Promise<unknown>;
-    expect(
-      await toolCall({ toolName: "read", input: {} }, context()),
-    ).toBeUndefined();
+    // Pi starts a tool execution, then asks the tool_call hooks.
+    const start = hooks.get("tool_execution_start") as (
+      event: unknown,
+    ) => unknown;
+    start({ toolCallId: "call_read", toolName: "read", args: {} });
     expect(
       await toolCall(
-        { toolName: "bash", input: { command: "echo command-canary" } },
+        { toolCallId: "call_read", toolName: "read", input: {} },
+        context(),
+      ),
+    ).toBeUndefined();
+    start({ toolCallId: "call_bash", toolName: "bash", args: {} });
+    expect(
+      await toolCall(
+        {
+          toolCallId: "call_bash",
+          toolName: "bash",
+          input: { command: "echo command-canary" },
+        },
         context(),
       ),
     ).toMatchObject({ block: true });
@@ -287,8 +317,16 @@ describe("governed session audit events (real flows)", () => {
       context(),
     );
     const policy = await modelPolicy(session, "unit/allowed");
-    if (!policy.denied) throw new Error("the model policy reports no denial");
-    policy.denied("unit", "other");
+    if (!policy.denied || !policy.dispatched)
+      throw new Error("the model policy reports no denial or dispatch");
+    policy.denied("model.select", "unit", "other");
+    // What the model runtime reports for a request a virtual model routed.
+    policy.dispatched({
+      selected: "unit/auto",
+      dispatched: "unit/allowed",
+      router: "./extensions/router.ts",
+      type: "chat",
+    });
     await expect(modelPolicy(session, "unit/denied")).rejects.toMatchObject({
       code: "MODEL_DENIED",
     });
@@ -354,13 +392,17 @@ describe("governed session audit events (real flows)", () => {
     const emitted = new Set(events.map((event) => event.event));
     expect(
       AUDIT_EVENT_TYPES.filter(
-        (name) => !emitted.has(name) && !OUTSIDE_A_SESSION.includes(name),
+        (name) =>
+          !emitted.has(name) &&
+          !OUTSIDE_A_SESSION.includes(name) &&
+          !NOT_YET_EMITTED.includes(name),
       ),
     ).toEqual([]);
-    // Together with the branded commands, the flows cover all 27 names.
-    expect(new Set([...emitted, ...OUTSIDE_A_SESSION])).toEqual(
-      new Set(AUDIT_EVENT_TYPES),
-    );
+    expect(NOT_YET_EMITTED.filter((name) => emitted.has(name))).toEqual([]);
+    // Together with the branded commands, the flows cover all 27 v0.8 names.
+    expect(
+      new Set([...emitted, ...OUTSIDE_A_SESSION, ...NOT_YET_EMITTED]),
+    ).toEqual(new Set(AUDIT_EVENT_TYPES));
     expect(events.every((event) => typeof event.id === "string")).toBe(true);
     expect(events.find((event) => event.event === "mcp.call")).toMatchObject({
       user: "alice",

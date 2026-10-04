@@ -2,6 +2,7 @@
 // through redact() so rule reasons can never leak secret values.
 import { redact, type PolicyEffect } from "@piship/contracts";
 import type { PolicyExplanation } from "./engine.js";
+import { decisionStatus } from "./seams.js";
 
 const HEADINGS: Readonly<Record<PolicyEffect, string>> = {
   allow: "ALLOWED",
@@ -14,10 +15,15 @@ function section(title: string, ...lines: readonly string[]): string {
 }
 
 function enforcementLine(explanation: PolicyExplanation): string {
-  const { enforcement, effect } = explanation.decision;
-  if (enforcement === "audit-only" && effect !== "allow")
-    return "audit-only (not enforced: no runtime hook evaluates this action, so it is not prevented or recorded)";
-  return enforcement;
+  const { decision } = explanation;
+  switch (decisionStatus(decision)) {
+    case "enforced":
+      return `enforced (${decision.enforcement})`;
+    case "audit-only":
+      return "audit-only (observed and recorded, not prevented)";
+    default:
+      return "unsupported (no runtime seam: neither prevented nor recorded)";
+  }
 }
 
 /**
@@ -92,6 +98,7 @@ export function decisionToJSON(
     layer: decision.layer,
     policyId: decision.policyId,
     enforcement: decision.enforcement,
+    enforcementStatus: decisionStatus(decision),
     ...(decision.reason ? { reason: redact(decision.reason) } : {}),
     matches: explanation.matches.map((match) => ({
       layer: match.layer,

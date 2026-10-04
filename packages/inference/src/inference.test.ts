@@ -60,6 +60,53 @@ describe("model catalog", () => {
       }).map((model) => model.id),
     ).toEqual(["acme/coder"]);
   });
+  it("makes a virtual model available while one of its allowed routes is", () => {
+    const auto = {
+      ...(catalog[0] as (typeof catalog)[number]),
+      id: "acme/auto",
+      virtual: { routes: ["acme/coder", "acme/review"] },
+    };
+    const availability = (constraints: {
+      allowed?: string[];
+      entitled?: string[];
+      live?: string[];
+      userAllowed?: string[];
+    }) =>
+      buildModelDefinitions("acmecode", [...catalog, auto], {
+        allowed: ["acme/auto", "acme/coder", "acme/review"],
+        ...constraints,
+      }).find((model) => model.id === "acme/auto")?.availability;
+    // The gateway never lists or entitles the virtual id itself.
+    expect(
+      availability({ entitled: ["acme/review"], live: ["acme/review"] }),
+    ).toEqual({ available: true });
+    expect(availability({ entitled: ["acme/general"] })).toEqual({
+      available: false,
+      reason: "none of its routes is available",
+    });
+    // A route outside the allowlist does not count.
+    expect(
+      availability({
+        allowed: ["acme/auto", "acme/coder"],
+        live: ["acme/review"],
+      }),
+    ).toMatchObject({ available: false });
+    expect(availability({ userAllowed: ["acme/coder"] })).toEqual({
+      available: false,
+      reason: "excluded by user preference",
+    });
+    // Narrowing to the virtual model keeps its routes available for routing;
+    // a model it does not route to is still excluded.
+    const narrowed = buildModelDefinitions("acmecode", [...catalog, auto], {
+      allowed: ["acme/auto", "acme/coder", "acme/general"],
+      userAllowed: ["acme/auto"],
+    });
+    expect(
+      narrowed
+        .filter((model) => model.availability.available)
+        .map((model) => model.id),
+    ).toEqual(["acme/coder", "acme/auto"]);
+  });
   it("carries structured output only when the catalog declares it", () => {
     const [declared, unknown] = buildModelDefinitions(
       "acmecode",

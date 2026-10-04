@@ -99,6 +99,12 @@ export function listPayloadPackages(payloadDir: string): PayloadPackage[] {
     }
   };
   visitModules(join(payloadDir, "node_modules"));
+  // Vendored Pi packages: each has its own npm root under pi-packages/<id>.
+  const vendored = join(payloadDir, "pi-packages");
+  if (existsSync(vendored) && lstatSync(vendored).isDirectory())
+    for (const entry of readdirSync(vendored, { withFileTypes: true }))
+      if (entry.isDirectory())
+        visitModules(join(vendored, entry.name, "node_modules"));
   return found.sort((a, b) => compare(a.path, b.path));
 }
 

@@ -32,7 +32,7 @@ import { normalizePathResource } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  askUserExtension,
+  askUserTool,
   DEFAULT_PLAN_PROMPT,
   governanceHooks,
   workflowExtension,
@@ -50,6 +50,7 @@ import {
   pathClass,
   SHELL_OUTPUT_LIMIT_BYTES,
 } from "./governed-tools.js";
+import { modelPolicy } from "./launch/governance.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 const roots: string[] = [];
@@ -84,6 +85,8 @@ async function open(
     readonly resolveTemplate?: (key: string, template: string) => string;
     readonly mode?: "managed" | "personal";
     readonly metrics?: LocalMetrics;
+    /** The `class` of every declared MCP server (piship/v1alpha6). */
+    readonly mcpClass?: "company" | "user";
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "piship-governed-"));
@@ -120,6 +123,19 @@ async function open(
     ].join("\n"),
   );
   const resolved = resolveLock(manifest);
+  // piship/v1alpha6 needs an updates section; the class is set on the lock.
+  if (options.mcpClass && resolved.governance) {
+    const mcp = resolved.governance.manifest.mcp;
+    Object.assign(resolved.governance.manifest, {
+      mcp: {
+        ...mcp,
+        servers: mcp.servers.map((server) => ({
+          ...server,
+          class: options.mcpClass,
+        })),
+      },
+    });
+  }
   // A managed manifest needs identity and access; the policy engine only
   // reads the deployment mode, so tests switch it on the resolved lock.
   const lock = options.mode
@@ -706,10 +722,22 @@ describe("governed built-in tools", () => {
         block: true,
         reason: `Plan mode does not allow ${name}. The user can switch to Build mode with /build.`,
       });
-    for (const name of ["read", "ask_user"])
-      expect(await call?.({ toolName: name, input: {} }, context())).toBe(
-        undefined,
-      );
+    expect(await call?.({ toolName: "read", input: {} }, context())).toBe(
+      undefined,
+    );
+    // ask_user is PiShip's only while its builtin is loaded; otherwise a
+    // tool of that name is an extension's.
+    expect(
+      await call?.({ toolName: "ask_user", input: {} }, context()),
+    ).toEqual({
+      block: true,
+      reason:
+        "Plan mode does not allow ask_user. The user can switch to Build mode with /build.",
+    });
+    session.loader.builtin.add("piship-ask-user");
+    expect(await call?.({ toolName: "ask_user", input: {} }, context())).toBe(
+      undefined,
+    );
     session.workflowMode = "build";
     expect(
       await call?.({ toolName: "mcp__docs__search", input: {} }, context()),
@@ -1116,8 +1144,7 @@ describe("governed shell output persistence", () => {
 describe("piship-ask-user", () => {
   it("returns approved, denied, chosen, cancelled, and unavailable answers", async () => {
     const { session } = await open();
-    const [ask] = load(askUserExtension(session)).tools;
-    if (!ask) throw new Error("ask_user was not registered");
+    const ask = askUserTool(session);
     const answer = async (params: unknown, ctx: ExtensionToolContext) =>
       (await run(ask, params, ctx)).details as { outcome: string };
     expect(await answer({ question: "Ship it?" }, context(true))).toEqual({
@@ -1139,6 +1166,86 @@ describe("piship-ask-user", () => {
       outcome: "unavailable",
     });
   });
+
+  it("waits for an open approval prompt, and closes with its call", async () => {
+    const { session, workspace } = await open();
+    const ask = askUserTool(session);
+    let open_ = 0;
+    let maxOpen = 0;
+    const signals: (AbortSignal | undefined)[] = [];
+    const confirm = async (
+      _title: string,
+      _message: string,
+      options?: { signal?: AbortSignal },
+    ) => {
+      signals.push(options?.signal);
+      open_ += 1;
+      maxOpen = Math.max(maxOpen, open_);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      open_ -= 1;
+      return true;
+    };
+    const ctx = context(true, confirm);
+    const controller = new AbortController();
+    // Codemode's Promise.all of a question and a write that asks.
+    const [answer] = await Promise.all([
+      ask.execute(
+        "q",
+        { question: "Ship it?" } as never,
+        controller.signal,
+        undefined,
+        ctx,
+      ),
+      run(
+        tool(governedTools(session, workspace), "write"),
+        { path: "w.txt", content: "x" },
+        ctx,
+      ),
+      ask.execute(
+        "q2",
+        { question: "Again?" } as never,
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ]);
+    expect(answer.details).toEqual({ outcome: "approved" });
+    expect(maxOpen).toBe(1);
+    // Both questions and the write's approvals.
+    const shown = signals.length;
+    expect(shown).toBeGreaterThanOrEqual(3);
+    expect(signals).toContain(controller.signal);
+    // A question whose call was aborted while it waited is never shown.
+    controller.abort();
+    const aborted = await ask.execute(
+      "q3",
+      { question: "Late?" } as never,
+      controller.signal,
+      undefined,
+      ctx,
+    );
+    expect(aborted.details).toEqual({ outcome: "cancelled" });
+    expect(signals).toHaveLength(shown);
+  });
+});
+
+describe("runtime block", () => {
+  it("refuses every later model request once enforcement failed", async () => {
+    const { session } = await open();
+    const policy = await modelPolicy(session, undefined);
+    expect(() => policy.available?.()).not.toThrow();
+    session.blockRuntime(
+      "tools",
+      "turn_end: the tool could not be re-activated",
+    );
+    session.blockRuntime("prompt", "a second failure keeps the first error");
+    expect(() => policy.available?.()).toThrow(
+      expect.objectContaining({
+        code: "POLICY_DENIED",
+        message: expect.stringContaining("could not be restored"),
+      }),
+    );
+  });
 });
 
 describe("piship-workflow", () => {
@@ -1150,18 +1257,19 @@ describe("piship-workflow", () => {
     expect(session.workflowMode).toBe("plan");
     const handler = workflow.handlers.get("before_agent_start");
     if (!handler) throw new Error("before_agent_start was not registered");
-    const start = (event: unknown, ctx: unknown) =>
-      handler(event, ctx) as { systemPrompt: string };
-    expect(
-      (start({ systemPrompt: "base" }, context()) as { systemPrompt: string })
-        .systemPrompt,
-    ).toBe(`base\n\n${DEFAULT_PLAN_PROMPT}`);
+    // A prompt section, never a forced prompt.
+    const start = () => {
+      const event = {
+        systemPrompt: "base",
+        systemPromptOptions: { sections: {} as Record<string, string> },
+      };
+      expect(handler(event, context())).toBeUndefined();
+      return event.systemPromptOptions.sections;
+    };
+    expect(start()).toEqual({ piship_workflow: DEFAULT_PLAN_PROMPT });
     await workflow.commands.get("build")?.handler("", context(true));
     expect(session.workflowMode).toBe("build");
-    expect(
-      (start({ systemPrompt: "base" }, context()) as { systemPrompt: string })
-        .systemPrompt,
-    ).toBe("base\n\nCompany build rules.");
+    expect(start()).toEqual({ piship_workflow: "Company build rules." });
     await workflow.commands.get("plan")?.handler("", context(true));
     expect(session.workflowMode).toBe("plan");
   });
@@ -1223,6 +1331,85 @@ describe("Streamable HTTP MCP urls", () => {
     ).rejects.toMatchObject({
       code: "CONFIG_UNAVAILABLE",
       message: expect.stringContaining("UNIT_MCP_URL"),
+    });
+  });
+});
+
+describe("MCP server trust class", () => {
+  const fetch = (async () => {
+    throw new Error("connection refused");
+  }) as unknown as ManagedFetch;
+  const manifest = (denied: "company" | "user", required = false) => [
+    // Continues POLICY's defaults list, then the policy mapping.
+    "    - { id: start, action: mcp.server.start, resource: tickets, effect: allow }",
+    `  resourceTrust: { ${denied}: deny }`,
+    "audit:",
+    "  enabled: true",
+    "  sinks:",
+    "    - { id: local, type: file, required: false }",
+    "mcp:",
+    "  mode: allowlist",
+    "  servers:",
+    "    tickets:",
+    "      transport: streamable-http",
+    "      url: https://mcp.unit.example/rpc",
+    `      required: ${required}`,
+  ];
+
+  it.each([
+    ["managed", undefined, "company"],
+    ["personal", undefined, "user"],
+    ["managed", "user", "user"],
+    ["managed", "company", "company"],
+    ["personal", "company", "company"],
+    ["personal", "user", "user"],
+  ] as const)(
+    "%s mode, class %s: resource trust for %s decides the start",
+    async (mode, mcpClass, effective) => {
+      const other = effective === "company" ? "user" : "company";
+      const classOption = mcpClass ? { mcpClass } : {};
+      const denied = await open(manifest(effective), {
+        fetch,
+        mode,
+        ...classOption,
+      });
+      expect(denied.session.mcpReports).toEqual([
+        expect.objectContaining({
+          id: "tickets",
+          state: "denied",
+          reason: `Resource trust denies class ${effective}`,
+        }),
+      ]);
+      await denied.session.close();
+      expect(
+        readFileSync(join(denied.root, "state", "logs", "audit.jsonl"), "utf8"),
+      ).toMatch(
+        new RegExp(
+          `"event":"mcp\\.server\\.start"[^\\n]*"decision":"denied"[^\\n]*"class":"${effective}"`,
+        ),
+      );
+      // Denying the other class leaves the server to policy; it then starts
+      // (and fails to connect, as nothing listens).
+      const allowed = await open(manifest(other), {
+        fetch,
+        mode,
+        ...classOption,
+      });
+      expect(allowed.session.mcpReports).toEqual([
+        expect.objectContaining({ id: "tickets", state: "failed" }),
+      ]);
+    },
+  );
+
+  it("fails the launch when a required server's class is denied", async () => {
+    await expect(
+      open(manifest("company", true), {
+        fetch,
+        mode: "managed",
+      }),
+    ).rejects.toMatchObject({
+      code: "MCP_DENIED",
+      message: expect.stringContaining("Required MCP server tickets"),
     });
   });
 });

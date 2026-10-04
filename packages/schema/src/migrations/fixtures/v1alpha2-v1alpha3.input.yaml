@@ -1,0 +1,20 @@
+schema: piship/v1alpha2
+# A personal distribution with access sections.
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+runtime:
+  pi: "1.0.0"
+deployment:
+  mode: personal
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+resources:
+  instructions: [./instructions/AGENTS.md]
+  extensions: [./extensions/helper]

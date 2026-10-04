@@ -56,8 +56,8 @@ describe("matchAction", () => {
     expect(matchAction("mcp.*", "mcp.tool.call")).toBe(true);
     expect(matchAction("mcp.tool.*", "mcp.tool.call")).toBe(true);
     expect(matchAction("mcp.*", "mcpx.call")).toBe(false);
-    expect(matchAction("*", "model.use")).toBe(true);
-    expect(matchAction("model.use", "model.used")).toBe(false);
+    expect(matchAction("*", "model.select")).toBe(true);
+    expect(matchAction("model.select", "model.selected")).toBe(false);
   });
 });
 

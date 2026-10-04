@@ -2,6 +2,8 @@
 // distribution explicitly opts in; credential and token bodies are never part
 // of an event.
 
+import type { EnforcementPlane } from "./policy.js";
+
 export const AUDIT_EVENT_TYPES = [
   "session.start",
   "session.end",
@@ -30,6 +32,10 @@ export const AUDIT_EVENT_TYPES = [
   "policy.auto_approved",
   "runtime.update",
   "runtime.rollback",
+  "model.dispatch",
+  "session.export",
+  "runtime.mutation.reverted",
+  "data.swept",
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
@@ -60,12 +66,61 @@ export interface AuditEvent {
   /** `<policy id>@<version>` when a policy decision is involved. */
   readonly policy?: string;
   readonly rule?: string;
-  readonly enforcement?: "control-plane" | "sandbox" | "audit-only";
+  /** Never `unsupported`: an action without a runtime hook is not recorded. */
+  readonly enforcement?: EnforcementPlane;
   /** Short, redacted, content-free metadata. */
   readonly detail?: Readonly<Record<string, string | number | boolean | null>>;
   /** Present only with explicit capture opt-in; always redacted. */
   readonly content?: Readonly<Record<string, string>>;
 }
+
+/**
+ * Where a tool call came from (`detail.source` of a tool execution event):
+ * issued by the model, nested inside a Codemode script, or nested through
+ * another extension tool's `ctx.executeTool`.
+ */
+export const AUDIT_EXECUTION_SOURCES = [
+  "top-level",
+  "codemode",
+  "nested",
+] as const;
+export type AuditExecutionSource = (typeof AUDIT_EXECUTION_SOURCES)[number];
+
+/**
+ * Why a tool call failed before policy was asked (`detail.error` of a tool
+ * execution event): the tool name is not registered, its arguments did not
+ * validate, or it was refused while another extension's `tool_call` hook
+ * runs before PiShip's (which then cannot tell the two apart).
+ */
+export const TOOL_CALL_FAILURES = [
+  "not-found",
+  "invalid-arguments",
+  "refused-before-policy",
+] as const;
+export type ToolCallFailure = (typeof TOOL_CALL_FAILURES)[number];
+
+/**
+ * `detail` keys added in v0.9. `piship-audit-batch/v1` keeps a closed set of
+ * top-level fields, so new metadata travels in `detail`:
+ * `source` an AuditExecutionSource, `error` a ToolCallFailure, `parent` the
+ * parent tool call ID of a
+ * nested call, `exposure` the tool exposure, `selected` the selected
+ * (possibly virtual) model, `dispatched` the physical model that received
+ * the request, `router` the extension that routed it, and `package` the
+ * originating Pi package as `id@version`.
+ */
+export const AUDIT_GOVERNANCE_DETAIL_KEYS = [
+  "source",
+  "error",
+  "parent",
+  "exposure",
+  "selected",
+  "dispatched",
+  "router",
+  "package",
+] as const;
+export type AuditGovernanceDetailKey =
+  (typeof AUDIT_GOVERNANCE_DETAIL_KEYS)[number];
 
 /** Content classes a distribution may opt in to capturing. Off by default. */
 export interface AuditCapture {

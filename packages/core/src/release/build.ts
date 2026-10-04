@@ -61,6 +61,10 @@ import {
   npmAuditScanner,
   npmSignatureAuditor,
 } from "./scans.js";
+import {
+  auditPiPackage,
+  PI_PACKAGE_VENDOR_DIRECTORY,
+} from "../pi-packages/gates.js";
 import { gate, hash, writeJson } from "./shared.js";
 
 /**
@@ -274,7 +278,44 @@ export async function buildRelease(
       release.vulnerabilities,
       (options.now ?? (() => new Date()))(),
     );
-    writeJson(join(root, "vulnerabilities.json"), report);
+    // Each vendored Pi package lockfile goes through the same policy, against
+    // release.vulnerabilities.registry or the package's own registry.
+    const packageAudits = [];
+    for (const entry of lock.packages ?? []) {
+      const vendored = join(payload, PI_PACKAGE_VENDOR_DIRECTORY, entry.id);
+      const declaration = lock.governance?.manifest.resources.packages?.find(
+        (item) => item.id === entry.id,
+      );
+      const registry =
+        release.vulnerabilities.registry ??
+        (declaration?.source === "npm" ? declaration.registry : undefined);
+      const audit = await auditPiPackage(
+        entry.id,
+        {
+          manifest: readFileSync(join(vendored, "package.json"), "utf8"),
+          lockfile: readFileSync(join(vendored, "package-lock.json"), "utf8"),
+        },
+        release.vulnerabilities,
+        {
+          mode: lock.deployment.mode,
+          ...(registry ? { registry } : {}),
+          now: (options.now ?? (() => new Date()))(),
+          ...(options.scanner ? { scanner: options.scanner } : {}),
+        },
+      );
+      packageAudits.push({
+        id: audit.id,
+        scannedAt: audit.scannedAt,
+        ...(audit.report
+          ? { verdict: audit.report.verdict, findings: audit.report.findings }
+          : {}),
+        ...(audit.warning ? { warning: audit.warning } : {}),
+      });
+    }
+    writeJson(
+      join(root, "vulnerabilities.json"),
+      packageAudits.length ? { ...report, packages: packageAudits } : report,
+    );
     if (report.verdict !== "passed")
       throw gate(
         "POLICY_DENIED",

@@ -44,6 +44,26 @@ resources:
     - ./resources/themes/mypi.json
 `;
 
+// The demo company's manifest as it was before its migration to
+// piship/v1alpha6, so these comparisons run on a piship-lock/v1alpha5 lock and
+// the v1alpha6 fields are added to it below.
+const V1ALPHA5_DEMO = readFileSync(
+  join(repo, "examples", "demo-company", "piship.yaml"),
+  "utf8",
+)
+  .replace("schema: piship/v1alpha6", "schema: piship/v1alpha5")
+  .replace("action: model.select", "action: model.use")
+  .replace(
+    `        search: direct
+        get_document: direct
+        delete_document: direct
+        "*": hidden
+      class: company
+      exposure: direct
+`,
+    "        allow: [search, get_document, delete_document]\n",
+  );
+
 /**
  * Lock a temporary copy of an example with the built CLI, optionally with a
  * replacement manifest.
@@ -71,7 +91,7 @@ let personal: DistributionLock;
 const clone = (lock: DistributionLock): Mutable => structuredClone(lock);
 
 beforeAll(() => {
-  base = lockExample("demo-company");
+  base = lockExample("demo-company", V1ALPHA5_DEMO);
   personal = lockExample("personal", V1ALPHA1_PERSONAL);
 });
 afterAll(() => {
@@ -440,5 +460,228 @@ describe("diffLocks", () => {
       ]),
     );
     expect(() => formatDiff(diffLocks(base, personal))).not.toThrow();
+  });
+
+  it("does not report the model.use -> model.select rename", () => {
+    const before = clone(base);
+    const after = clone(base);
+    const rule = {
+      id: "acme.models",
+      action: "model.use",
+      resource: "acme/**",
+      effect: "allow",
+    };
+    before.governance.manifest.policy.defaults.push(rule);
+    after.governance.manifest.policy.defaults.push({
+      ...rule,
+      action: "model.select",
+    });
+    expect(diffLocks(before, after).changes).toEqual([]);
+  });
+
+  describe("v1alpha6 lock fields", () => {
+    const v6 = (): Mutable => {
+      const lock = clone(base);
+      lock.runtimeTools = { codemode: "off", toolSearch: "off", exposure: [] };
+      lock.tools = [
+        { tool: "bash", origin: "piship", exposure: "direct" },
+        { tool: "docs:delete_*", origin: "mcp", exposure: "hidden" },
+      ];
+      lock.enforcement = {
+        pi: "1.0.0",
+        seams: { "tool.execute": "hook", "web.request": "none" },
+        digest: `sha256-${"a".repeat(64)}`,
+      };
+      lock.data = {
+        contract: "piship-data/v1",
+        declared: {
+          retention: {
+            sessions: { retentionSeconds: 2_592_000 },
+            audit: { retentionSeconds: 15_552_000 },
+          },
+          purge: { onLogout: ["cache", "temp"], onUninstall: "none" },
+          export: { public: "deny" },
+        },
+      };
+      lock.sessionExportStatus = {
+        public: "unsupported",
+        local: "unsupported",
+        support: "enforced",
+      };
+      lock.virtualModels = [
+        { id: "acme/auto", router: "acme-router", routes: ["acme/coder"] },
+      ];
+      return lock;
+    };
+    const find = (report: ReturnType<typeof diffLocks>, item: string) =>
+      report.changes.find((change) => change.item === item);
+
+    it("reports nothing for identical v1alpha6 locks", () => {
+      expect(diffLocks(v6(), v6()).changes).toEqual([]);
+    });
+
+    it("treats the fields of an older lock as absent", () => {
+      const report = diffLocks(base, v6());
+      expect(find(report, "seam evidence")).toMatchObject({
+        area: "enforcement",
+        kind: "added",
+        risk: "low",
+      });
+      expect(find(report, "virtual model acme/auto")).toMatchObject({
+        risk: "high",
+        after: "acme/coder",
+      });
+      expect(() => formatDiff(report)).not.toThrow();
+    });
+
+    it("flags widened exposure and Codemode as high", () => {
+      const after = v6();
+      after.runtimeTools.codemode = "on";
+      after.runtimeTools.toolSearch = "on";
+      after.runtimeTools.exposure = [{ pattern: "bash", exposure: "deferred" }];
+      after.tools[1].exposure = "direct";
+      after.tools[0].exposure = "deferred";
+      const report = diffLocks(v6(), after);
+      expect(report.risk).toBe("high");
+      expect(find(report, "Codemode")).toMatchObject({
+        area: "tools",
+        before: "off",
+        after: "on",
+        risk: "high",
+      });
+      expect(find(report, "tool search")?.risk).toBe("medium");
+      expect(find(report, "exposure rule bash")?.risk).toBe("medium");
+      expect(find(report, "tool mcp docs:delete_*")).toMatchObject({
+        before: "hidden",
+        after: "direct",
+        risk: "high",
+        reason: "Exposure widened: the model can see or reach more.",
+      });
+      expect(find(report, "tool piship bash")?.risk).toBe("medium");
+      expect(report.requiredTests).toContain(DIFF_TESTS.governance);
+    });
+
+    it("flags any enforcement downgrade as high", () => {
+      const after = v6();
+      after.enforcement.pi = "1.0.2";
+      after.enforcement.seams["tool.execute"] = "none";
+      after.sessionExportStatus.support = "unsupported";
+      const report = diffLocks(v6(), after);
+      expect(find(report, "seam table Pi")?.risk).toBe("medium");
+      expect(find(report, "seam tool.execute")).toMatchObject({
+        area: "enforcement",
+        before: "hook",
+        after: "none",
+        risk: "high",
+      });
+      expect(find(report, "session export support")?.risk).toBe("high");
+      // A status the lock no longer records is a downgrade too.
+      const dropped = v6();
+      delete (dropped.sessionExportStatus as Record<string, string>).support;
+      expect(
+        find(diffLocks(v6(), dropped), "session export support"),
+      ).toMatchObject({ kind: "removed", risk: "high" });
+      expect(
+        find(diffLocks(dropped, v6()), "session export support")?.risk,
+      ).toBe("low");
+      expect(report.requiredTests).toContain(DIFF_TESTS.compatibility);
+      const upgraded = diffLocks(after, v6());
+      expect(find(upgraded, "seam tool.execute")?.risk).toBe("medium");
+      // Only the digest moved: the per-resource evidence changed.
+      const digest = v6();
+      digest.enforcement.digest = `sha256-${"b".repeat(64)}`;
+      expect(diffLocks(v6(), digest).changes).toMatchObject([
+        { item: "seam digest", risk: "medium" },
+      ]);
+    });
+
+    it("flags allowed export and shorter audit retention as high", () => {
+      const after = v6();
+      after.data.declared.export.public = "allow";
+      after.data.declared.retention.audit.retentionSeconds = 86_400;
+      after.data.declared.retention.sessions.retentionSeconds = 86_400;
+      after.data.declared.purge.onLogout = ["temp"];
+      const report = diffLocks(v6(), after);
+      expect(find(report, "export public")).toMatchObject({
+        area: "data",
+        risk: "high",
+        reason: "Session export allowed.",
+      });
+      expect(find(report, "retention audit")?.risk).toBe("high");
+      expect(find(report, "retention sessions")?.risk).toBe("medium");
+      expect(find(report, "purge on logout cache")).toMatchObject({
+        kind: "removed",
+        risk: "medium",
+      });
+    });
+
+    it("flags a new Pi package or a changed resolution as high", () => {
+      const pkg = {
+        id: "pi-platform",
+        source: "npm",
+        class: "company",
+        url: "https://registry.npmjs.org/",
+        version: "1.0.0",
+        integrity: `sha512-${"A".repeat(86)}==`,
+        tree: `sha256-${"c".repeat(64)}`,
+        files: 4,
+        resources: [],
+      };
+      const before = v6();
+      const after = v6();
+      after.packages = [pkg];
+      expect(
+        find(diffLocks(before, after), "Pi package pi-platform"),
+      ).toMatchObject({
+        area: "packages",
+        kind: "added",
+        after: "npm 1.0.0",
+        risk: "high",
+      });
+      before.packages = [pkg];
+      after.packages = [
+        {
+          ...pkg,
+          version: "1.0.1",
+          tree: `sha256-${"d".repeat(64)}`,
+          class: "user",
+        },
+      ];
+      const changed = diffLocks(before, after);
+      for (const item of ["version", "tree", "class"])
+        expect(find(changed, `Pi package pi-platform ${item}`)?.risk).toBe(
+          "high",
+        );
+      expect(changed.requiredTests).toContain(DIFF_TESTS.compatibility);
+    });
+
+    it("reports cache warming, absent as off", () => {
+      const after = v6();
+      after.cacheWarming = { mode: "streaming", userOverride: true };
+      const report = diffLocks(v6(), after);
+      expect(find(report, "cache warming")).toMatchObject({
+        area: "models",
+        before: "off",
+        after: "streaming",
+        risk: "medium",
+      });
+      expect(find(report, "cache warming userOverride")?.risk).toBe("medium");
+      const off = v6();
+      off.cacheWarming = { mode: "off", userOverride: false };
+      expect(diffLocks(v6(), off).changes).toEqual([]);
+    });
+
+    it("flags a new physical route as high", () => {
+      const after = v6();
+      after.virtualModels[0].routes.push("anthropic/claude-opus-x");
+      after.virtualModels[0].router = "acme-router-2";
+      const report = diffLocks(v6(), after);
+      expect(
+        find(report, "virtual model acme/auto route anthropic/claude-opus-x"),
+      ).toMatchObject({ area: "models", kind: "added", risk: "high" });
+      expect(find(report, "virtual model acme/auto router")?.risk).toBe(
+        "medium",
+      );
+    });
   });
 });

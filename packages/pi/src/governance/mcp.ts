@@ -5,7 +5,10 @@ import {
   McpGovernor,
   type McpServerConfig,
 } from "@piship/mcp";
+import { trustDecision } from "@piship/policy";
+import { defaultMcpServerClass } from "@piship/schema";
 import type { GovernanceSession } from "../governance-session.js";
+import { mcpToolExposure } from "./exposure.js";
 
 /** Start the declared and admitted project MCP servers under policy. */
 export async function startMcp(
@@ -23,6 +26,16 @@ export async function startMcp(
   // project file never gets launch environment values interpolated.
   const declared = new Set(
     mcp.mode === "off" ? [] : mcp.servers.map((server) => server.id),
+  );
+  // A declared server's trust class is decided by policy.resourceTrust
+  // before its start is authorized; a project server was already decided by
+  // project trust when it was admitted.
+  const classes = new Map(
+    (mcp.mode === "off" ? [] : mcp.servers).map((server) => [
+      server.id,
+      server.class ??
+        defaultMcpServerClass(session.options.lock.deployment.mode),
+    ]),
   );
   const governor = new McpGovernor({
     servers,
@@ -53,12 +66,31 @@ export async function startMcp(
           },
         }
       : {}),
-    // A tool the policy always denies is never offered to the model;
-    // every call is still authorized when it happens.
-    expose: ({ resource }) =>
-      session.engine.evaluate({ action: "mcp.tool.call", resource }).effect !==
-      "deny",
+    // A hidden tool (by its server's exposure rules, or because the policy
+    // always denies it) is never offered to the model; every call is still
+    // authorized when it happens.
+    expose: ({ server, tool }) =>
+      mcpToolExposure(session, server, tool) !== "hidden",
     authorize: async (request) => {
+      const cls =
+        request.action === "mcp.server.start"
+          ? classes.get(request.resource)
+          : undefined;
+      if (cls) {
+        const trust = trustDecision(
+          session.manifest.policy,
+          "mcp-servers",
+          cls,
+        );
+        if (!trust.allowed) {
+          session.emit("mcp.server.start", {
+            resource: request.resource,
+            decision: "denied",
+            detail: { class: cls, reason: trust.reason },
+          });
+          return { allowed: false, reason: trust.reason };
+        }
+      }
       const channelNow =
         request.action === "mcp.server.start"
           ? channel

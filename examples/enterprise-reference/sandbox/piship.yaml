@@ -1,4 +1,4 @@
-schema: piship/v1alpha5
+schema: piship/v1alpha6
 
 # The AcmeCode reference distribution (../piship.yaml) with its commands run in
 # the organization's container sandbox service (README.md) instead of the
@@ -104,6 +104,19 @@ resources:
     company: [./resources/skills]
   extensions:
     builtin: [piship-ask-user, piship-workflow]
+  # A Pi package kept beside the manifest: one extension, one skill, one
+  # prompt, and one runtime dependency. PiShip locks and vendors it; Pi never
+  # installs it.
+  packages:
+    - id: pi-platform
+      source: local
+      path: ./packages/pi-platform
+      class: company
+
+# A managed distribution loads no local package unless its path is listed.
+packageTrust:
+  local:
+    paths: [./packages]
 
 capabilities:
   permissions:
@@ -136,7 +149,7 @@ policy:
       reason: Credentials stay outside the agent
   defaults:
     - id: acme.models
-      action: model.use
+      action: model.select
       resource: "acmecode-reference/**"
       effect: allow
     - id: acme.skills
@@ -150,6 +163,10 @@ policy:
     - id: acme.extensions
       action: extension.load
       resource: "**"
+      effect: allow
+    - id: acme.package-resources
+      action: resource.load
+      resource: "company:packages/pi-platform/**"
       effect: allow
     - id: acme.workspace.read
       action: filesystem.read

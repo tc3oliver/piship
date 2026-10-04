@@ -1,0 +1,30 @@
+schema: piship/v1alpha5
+# A distribution with legacy update keys.
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+runtime:
+  pi: "1.0.0"
+deployment:
+  mode: personal
+updates:
+  channel: stable
+  channels: [ stable ]
+  source: https://updates.example.com/mypi
+  trust:
+    bootstrap:
+      version: 1
+      expires: 2027-10-01T00:00:00Z
+      keys:
+        # the release key
+        - id: release-2026
+          publicKey: MCowBQYDK2VwAyEAN+2VxZJJXtDgjfJJQTzdusAQQ2rg+mNLwX13wvMcdBo=
+      roles:
+        root:
+          keyIds: [ release-2026 ]
+          threshold: 1
+        channel:
+          keyIds: [ release-2026 ]
+          threshold: 1

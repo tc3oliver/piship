@@ -196,7 +196,7 @@ describe("init", () => {
       }
       lockManifest(path);
       const lock = requireCurrentLock(path);
-      expect(lock.schema).toBe("piship-lock/v1alpha5");
+      expect(lock.schema).toBe("piship-lock/v1alpha6");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
       expect(lock.updates?.trust).toEqual({});
     },

@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha5",
+  "schema": "piship-lock/v1alpha6",
   "manifest": {
-    "schema": "piship/v1alpha5",
-    "sha256": "sha256-bf6eb1d6f0dfb08733a31b55f0651a4d0670dc5f2bfa4116fe0200631797d19d"
+    "schema": "piship/v1alpha6",
+    "sha256": "sha256-b260b7c7ef4a2ec5c612c7171c2a83c74af32d52224ceac3c598cf6fbbdd432a"
   },
   "app": {
     "id": "acmecode",
@@ -17,8 +17,8 @@
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.0.2",
-    "pishipVersion": "0.8.1",
-    "npmLockSha256": "abbe6b03d53e7ba7cff807c118ab589d1c2084394f1a41d710e2cc56b3e6f2a8",
+    "pishipVersion": "0.9.0",
+    "npmLockSha256": "7d3d378ccf64e7632be34f282183a32fafb4ee502cc11b47185ad8a5f7e11582",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",
@@ -1053,7 +1053,8 @@
           "policyTags": [
             "general",
             "code"
-          ]
+          ],
+          "type": "chat"
         },
         {
           "id": "acme/general",
@@ -1068,7 +1069,8 @@
           "streaming": true,
           "policyTags": [
             "general"
-          ]
+          ],
+          "type": "chat"
         },
         {
           "id": "acme/review",
@@ -1083,7 +1085,8 @@
           "streaming": true,
           "policyTags": [
             "review"
-          ]
+          ],
+          "type": "chat"
         }
       ]
     },
@@ -1158,7 +1161,8 @@
         "builtin": [
           "piship-ask-user",
           "piship-workflow"
-        ]
+        ],
+        "packages": []
       },
       "capabilities": [
         {
@@ -1235,7 +1239,7 @@
         "defaults": [
           {
             "id": "acme.models",
-            "action": "model.use",
+            "action": "model.select",
             "resource": "acmecode/**",
             "effect": "allow"
           },
@@ -1294,6 +1298,7 @@
             "effect": "allow"
           }
         ],
+        "acknowledgeUnenforced": [],
         "resourceTrust": {
           "upstream": "allow",
           "builtin": "allow",
@@ -1376,13 +1381,29 @@
             },
             "required": false,
             "tools": {
-              "allow": [
-                "search",
-                "get_document",
-                "delete_document"
-              ],
+              "allow": [],
               "deny": []
-            }
+            },
+            "class": "company",
+            "exposure": "direct",
+            "toolExposure": [
+              {
+                "pattern": "search",
+                "exposure": "direct"
+              },
+              {
+                "pattern": "get_document",
+                "exposure": "direct"
+              },
+              {
+                "pattern": "delete_document",
+                "exposure": "direct"
+              },
+              {
+                "pattern": "*",
+                "exposure": "hidden"
+              }
+            ]
           }
         ],
         "project": "deny",
@@ -1450,6 +1471,17 @@
           "commandText": false,
           "sourceContent": false
         }
+      },
+      "packageTrust": {
+        "npm": {
+          "requireIntegrity": true
+        },
+        "git": {
+          "requireCommitSha": true
+        },
+        "local": {
+          "paths": []
+        }
       }
     },
     "certified": [
@@ -1493,12 +1525,12 @@
   },
   "digests": {
     "resources": "sha256-4324767ab5f9114492df68197c3391cd2f048d701396e692f8546a8aefb59f33",
-    "policy": "sha256-d7b6a9ec4404a324971547ffaef557e8d3614c63cce7ade35f5c0d867b2cb7e1",
+    "policy": "sha256-98ec3a273d9db8054f207f7f5cf43c4397062c72e96793981cf55fdaa5b7f12e",
     "capabilities": "sha256-bfe9d791f4a44ae588d31a7a9da5395ace8deff9a25476fac16bc8042468b3b9",
-    "mcp": "sha256-a0831046aa070dc1b2d306d8d593ad03cf2cbe8e58bde8d0de627f1117ec9c5f",
+    "mcp": "sha256-0a3052edf09f38f5736d9a44c9b8cb4a564fedde6eba06cfb551c9545272a2e6",
     "sandbox": "sha256-a2e206c220b291bada5380fbf7ce351fd1728ff4505d59c7b159e176c834c26d",
     "audit": "sha256-e0d22ba30e63b55679bc96702db49a7681db0f8cafc8a71818172adb5ba140a0",
-    "access": "sha256-168bdc2fc25e02aad6f72655c9851671d113386b8c9dced41322194942e7e847"
+    "access": "sha256-e159279d6e1f4a95e05d02d7422a52ab1ec9a36bd1d860f9e611434212a7af63"
   },
   "updates": {
     "channel": "stable",
@@ -1523,5 +1555,95 @@
       "failOn": "high",
       "allow": []
     }
+  },
+  "tools": [
+    {
+      "tool": "read",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "write",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "edit",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "bash",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "ask_user",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "docs:search",
+      "origin": "mcp",
+      "exposure": "direct"
+    },
+    {
+      "tool": "docs:get_document",
+      "origin": "mcp",
+      "exposure": "direct"
+    },
+    {
+      "tool": "docs:delete_document",
+      "origin": "mcp",
+      "exposure": "direct"
+    },
+    {
+      "tool": "docs:*",
+      "origin": "mcp",
+      "exposure": "hidden"
+    }
+  ],
+  "runtimeTools": {
+    "codemode": "off",
+    "toolSearch": "off",
+    "exposure": []
+  },
+  "cacheWarming": {
+    "mode": "off",
+    "userOverride": false
+  },
+  "enforcement": {
+    "pi": "1.0.2",
+    "seams": {
+      "agent.invoke": "none",
+      "browser.execute": "none",
+      "extension.load": "hook",
+      "filesystem.read": "hook",
+      "filesystem.write": "hook",
+      "instruction.load": "hook",
+      "mcp.server.start": "hook",
+      "mcp.tool.call": "hook",
+      "memory.read": "none",
+      "memory.write": "none",
+      "model.dispatch": "hook",
+      "model.select": "hook",
+      "network.connect": "none",
+      "provider.load": "hook",
+      "resource.load": "hook",
+      "session.export": "none",
+      "shell.execute": "hook",
+      "skill.load": "hook",
+      "tool.execute": "hook",
+      "web.request": "none"
+    },
+    "digest": "sha256-6038b13ad6a1dded66df018bdb31a0c7d8afb25373c066d10cacdc7a503d1fa3"
+  },
+  "data": {
+    "contract": "piship-data/v1"
+  },
+  "sessionExportStatus": {
+    "public": "unsupported",
+    "local": "unsupported",
+    "support": "enforced"
   }
 }

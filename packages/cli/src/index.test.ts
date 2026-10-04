@@ -381,6 +381,53 @@ describe("validate", () => {
     );
   });
 
+  it("rejects a managed deny on an unsupported action unless acknowledged, and warns in personal mode", async () => {
+    const policy = {
+      enforced: [
+        { id: "acme.web.deny", action: "web.request", effect: "deny" },
+      ],
+    };
+    const rejected = await validate({ policy });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout).not.toContain("Manifest is valid.");
+    expect(rejected.stderr).toContain("POLICY_UNENFORCEABLE");
+    expect(rejected.stderr).toContain(
+      "policy.enforced rule acme.web.deny (deny web.request:**)",
+    );
+    const acknowledged = await validate({
+      schema: "piship/v1alpha6",
+      policy: { ...policy, acknowledgeUnenforced: ["web.request:**"] },
+    });
+    expect(acknowledged.status).toBe(0);
+    expect(acknowledged.stdout).toContain("Manifest is valid.");
+    expect(acknowledged.stderr).toContain(
+      "Note: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam in this Pi version, so the rule is neither prevented nor recorded (acknowledged in policy.acknowledgeUnenforced)",
+    );
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        schema: "piship/v1alpha3",
+        app: base.app,
+        runtime: base.runtime,
+        deployment: { mode: "personal" },
+        policy,
+      }),
+    );
+    const stderr: string[] = [];
+    const personal = {
+      status: await runCli(["validate", manifest], {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      }),
+      stderr: stderr.join("\n"),
+    };
+    expect(personal.status).toBe(0);
+    expect(personal.stderr).toContain(
+      "Warning: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam",
+    );
+  });
+
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;
@@ -915,6 +962,78 @@ describe("init", () => {
   });
 });
 
+describe("migrate --check", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-migrate-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  const manifest = (schema: string, runtime = 'runtime: { pi: "1.0.0" }') => {
+    const path = join(temp, "piship.yaml");
+    writeFileSync(
+      path,
+      [
+        `schema: ${schema}`,
+        "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
+        runtime,
+        "deployment: { mode: personal }",
+        "updates: { channel: stable, channels: [stable] }",
+        "",
+      ].join("\n"),
+    );
+    return path;
+  };
+
+  it("exits 1, writing nothing, when migrating changes an effective decision", async () => {
+    const path = manifest("piship/v1alpha5");
+    const before = readFileSync(path, "utf8");
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Migration check piship/v1alpha5 -> piship/v1alpha6",
+    );
+    expect(result.stderr).toContain("would change 1 effective decision(s)");
+    expect(result.stderr).toContain("runtime.cacheWarming");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("exits 0 when the manifest is already current", async () => {
+    const path = manifest(
+      "piship/v1alpha6",
+      'runtime: { pi: "1.0.0", cacheWarming: { mode: streaming } }',
+    );
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Already piship/v1alpha6; nothing to migrate.");
+  });
+
+  it("exits 0 for a manifest written by --write", async () => {
+    const path = manifest("piship/v1alpha5");
+    expect((await run(["migrate", path, "--write"])).status).toBe(0);
+    expect(readFileSync(path, "utf8")).toContain("schema: piship/v1alpha6");
+    expect((await run(["migrate", path, "--check"])).status).toBe(0);
+  });
+
+  it("refuses --check together with --write", async () => {
+    const path = manifest("piship/v1alpha5");
+    const result = await run(["migrate", path, "--write", "--check"]);
+    expect(result.status).toBe(2);
+    expect(readFileSync(path, "utf8")).toContain("piship/v1alpha5");
+  });
+});
+
 describe("docs/agent-setup.md", () => {
   it("names only piship commands and options the CLI has", async () => {
     const text = readFileSync(
@@ -971,7 +1090,7 @@ describe("config explain from a manifest", () => {
     });
     expect(status).toBe(0);
     const text = out.join("\n");
-    expect(text).toMatch(/^schema\s+"piship\/v1alpha5"/m);
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha6"/m);
     for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
       expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
     expect(text).toMatch(
