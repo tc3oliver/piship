@@ -256,7 +256,7 @@ export function checkReleaseInputs(
     ? unenforcedRules(
         lock.deployment.mode,
         withSessionExportRules(governance.policy, lock.data?.declared),
-        manifestContainment(governance),
+        manifestContainment(governance, lock.deployment.mode),
       ).filter((item) => item.level === "error")
     : [];
   if (unenforced.length)

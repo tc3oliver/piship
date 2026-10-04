@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, type AuditStatus } from "@piship/audit";
@@ -1703,5 +1709,221 @@ describe("doctor secret scan", () => {
     expect(output).toContain("http://proxy.acme.example:3128");
     expect(output).toContain("host audit.acme.example");
     expect(output).toContain("https://idp.acme.example/realms/acme");
+  });
+});
+
+describe("Governance group", () => {
+  const v6 = (
+    data: DoctorData,
+    metadata: Record<string, unknown> = {},
+  ): DoctorData => ({
+    ...data,
+    ctx: {
+      ...data.ctx,
+      metadata: {
+        ...data.ctx.metadata,
+        schema: "piship-lock/v1alpha6",
+        manifest: { schema: "piship/v1alpha6" },
+        enforcement: { pi: "1.0.2", seams: {}, digest: "sha256-x" },
+        ...metadata,
+      } as unknown as LaunchContext["metadata"],
+    },
+  });
+
+  it("lists every action no seam enforces, and never calls it enforced", () => {
+    const output = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        // A sandbox without the network plane: network.connect has no seam.
+        governance: governanceData(),
+      }),
+    ).render();
+    const lines = group(output, "Governance");
+    expect(lines).toContain(`  ✓ ${"enforced actions".padEnd(20)} 13 of 19`);
+    for (const action of [
+      "agent.invoke",
+      "network.connect",
+      "memory.read",
+      "memory.write",
+      "web.request",
+      "browser.execute",
+    ])
+      expect(lines).toContain(`  - ${action.padEnd(20)} unsupported`);
+    for (const line of lines.filter((item) => item.includes("unsupported")))
+      expect(line).not.toMatch(/\benforced\b/);
+  });
+
+  it("suggests migrate for an older manifest schema", () => {
+    const output = renderDoctor(doctorData("personal", {})).render();
+    expect(group(output, "Governance")).toEqual([
+      `  - ${"manifest schema".padEnd(20)} piship/v1alpha4; the maintainer runs piship migrate <manifest> --check, then --write, to adopt piship/v1alpha6`,
+    ]);
+  });
+
+  it("warns when the seam table was proven against another Pi", () => {
+    const data = v6(doctorData("personal", {}), {
+      enforcement: { pi: "0.87.1", seams: {}, digest: "sha256-x" },
+    });
+    expect(group(renderDoctor(data).render(), "Governance")).toEqual([
+      `  ! ${"seam table".padEnd(20)} proven against Pi 0.87.1, running Pi 1.0.2; relock the distribution`,
+      // A v1alpha6 lock without runtime.cacheWarming is off.
+      `  ✓ ${"cache warming".padEnd(20)} off`,
+    ]);
+  });
+
+  it("reports the tool exposure a launch resolves", () => {
+    const data = v6(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({
+          exposure: {
+            codemode: "on",
+            codemodeOn: true,
+            toolSearchOn: false,
+            tools: {
+              bash: "codemode",
+              docs_delete: "hidden",
+              edit: "direct",
+              read: "direct",
+            },
+          },
+        }),
+      }),
+      {
+        runtimeTools: { codemode: "on", toolSearch: "off", exposure: [] },
+        virtualModels: [
+          { id: "acme/auto", router: "acme-router", routes: ["acme/coder"] },
+        ],
+        packages: [
+          {
+            id: "pi-platform",
+            source: "npm",
+            class: "company",
+            version: "1.0.0",
+            files: 4,
+          },
+        ],
+        cacheWarming: { mode: "streaming", userOverride: true },
+      },
+    );
+    const lines = group(renderDoctor(data).render(), "Governance");
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        `  ✓ ${"Pi packages".padEnd(20)} 1 vendored, integrity verified at launch`,
+        `  - ${"package pi-platform".padEnd(20)} npm 1.0.0 (company), 4 files`,
+        `  ✓ ${"cache warming".padEnd(20)} streaming (user may override)`,
+        `  ✓ ${"runtime mutation".padEnd(20)} enforced per turn; a change that cannot be restored blocks the session`,
+      ]),
+    );
+    const blocked = renderDoctor(
+      v6(
+        doctorData("managed", {
+          access: accessData(),
+          governance: governanceData({
+            runtimeError:
+              "Enforced instructions or tools of this session were changed and could not be restored",
+          }),
+        }),
+      ),
+    );
+    expect(blocked.failed).toBe(true);
+    expect(group(blocked.render(), "Governance")).toContain(
+      `  ✗ ${"runtime".padEnd(20)} Enforced instructions or tools of this session were changed and could not be restored`,
+    );
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        `  ✓ ${"seam table".padEnd(20)} Pi 1.0.2`,
+        `  ✓ ${"Codemode".padEnd(20)} enforced (on)`,
+        `  ✓ ${"deferred tools".padEnd(20)} off`,
+        `  ✓ ${"tool exposure".padEnd(20)} codemode: bash; hidden: docs_delete; direct: edit, read`,
+        `  - ${"extension tools".padEnd(20)} exposure resolved and enforced at launch`,
+        `  ✓ ${"virtual acme/auto".padEnd(20)} router acme-router, routes acme/coder`,
+      ]),
+    );
+    const failed = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({
+          exposureError:
+            "Codemode is on, but the policy decides bash only by its built-in default",
+        }),
+      }),
+    );
+    expect(failed.failed).toBe(true);
+    expect(group(failed.render(), "Governance")).toContain(
+      `  ✗ ${"tool exposure".padEnd(20)} Codemode is on, but the policy decides bash only by its built-in default`,
+    );
+  });
+
+  it("reports the data lifecycle, and a retained release that stops sweeping", () => {
+    const home = join(temp, "install");
+    const bin = join(temp, "bin");
+    process.env.PISHIP_BIN_HOME = bin;
+    const app = join(home, "apps", "doctor-test");
+    const payload = (version: string, lock: Record<string, unknown>) => {
+      const dir = join(app, version);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "piship.lock"), JSON.stringify(lock));
+      return dir;
+    };
+    const older = payload("0.9.0", { schema: "piship-lock/v1alpha5" });
+    const active = payload("1.0.0", {
+      schema: "piship-lock/v1alpha6",
+      data: { contract: "piship-data/v1" },
+    });
+    mkdirSync(join(home, "receipts"), { recursive: true });
+    writeFileSync(
+      join(home, "receipts", "doctor-test.json"),
+      JSON.stringify({
+        schema: "piship-install/v1",
+        app: {
+          id: "doctor-test",
+          name: "AcmeCode",
+          version: "1.0.0",
+          command: "acmecode",
+        },
+        payload: active,
+        commandPath: join(
+          bin,
+          process.platform === "win32" ? "acmecode.cmd" : "acmecode",
+        ),
+        launcher: join(app, "launch.mjs"),
+        active: "1.0.0",
+        previous: "0.9.0",
+        releases: [
+          { version: "0.9.0", payload: older, installedAt: "" },
+          { version: "1.0.0", payload: active, installedAt: "" },
+        ],
+      }),
+    );
+    const base = doctorData("personal", {});
+    const data = v6(
+      { ...base, ctx: { ...base.ctx, distributionDir: active } },
+      {
+        data: {
+          contract: "piship-data/v1",
+          declared: {
+            retention: {
+              sessions: { retentionSeconds: 30 * 86_400 },
+              audit: { retentionSeconds: 180 * 86_400 },
+              temp: { retentionSeconds: 3_600 },
+            },
+            purge: { onLogout: ["cache", "temp"], onUninstall: "none" },
+            export: {},
+          },
+        },
+      },
+    );
+    expect(group(renderDoctor(data).render(), "Governance")).toEqual([
+      `  ✓ ${"seam table".padEnd(20)} Pi 1.0.2`,
+      `  ✓ ${"cache warming".padEnd(20)} off`,
+      `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h max`,
+      `  ✓ ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none`,
+      `  ! ${"data retention".padEnd(20)} installed release 0.9.0 predates the data contract: rolled back to, it stops the retention sweep`,
+    ]);
+    const undeclared = v6(base, { data: { contract: "piship-data/v1" } });
+    expect(group(renderDoctor(undeclared).render(), "Governance")).toContain(
+      `  - ${"data retention".padEnd(20)} not declared; nothing is swept`,
+    );
   });
 });

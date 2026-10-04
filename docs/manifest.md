@@ -1,12 +1,13 @@
 # Experimental manifest and lock
 
-Five alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change independently of project milestones: v0.5, v0.6, and v0.7 all use `piship/v1alpha4` and `piship-lock/v1alpha4`; v0.8 introduces `piship/v1alpha5` and `piship-lock/v1alpha5` ([version map](status.md#version-map)). While a schema is preview, a backward-compatible addition (a new enum value, a new optional lock key) keeps its version; removing or reinterpreting a field, or making one required, needs a new version ([decision 27](decisions.md)). v0.7 added `sandbox.credential: stored` and two `runtime.stateSchemas` lock keys this way.
+Six alpha schemas are accepted. All remain experimental, and unknown fields are rejected. Schema versions change independently of project milestones: v0.5, v0.6, and v0.7 all use `piship/v1alpha4` and `piship-lock/v1alpha4`; v0.8 introduces `piship/v1alpha5` and `piship-lock/v1alpha5`, and v0.9 (in progress on `main`) `piship/v1alpha6` and `piship-lock/v1alpha6`, the last alpha schemas before v1 ([version map](status.md#version-map)). While a schema is preview, a backward-compatible addition (a new enum value, a new optional lock key) keeps its version; removing or reinterpreting a field, or making one required, needs a new version ([decision 27](decisions.md)). v0.7 added `sandbox.credential: stored` and two `runtime.stateSchemas` lock keys this way.
 
 - `piship/v1alpha1` is the v0.1 personal contract. It accepts only `deployment.mode: personal`, uses Pi-native providers and auth in isolated state, and rejects credential fields and `${...}` substitutions. The personal example used it in v0.1; it now uses `piship/v1alpha5`.
 - `piship/v1alpha2` adds access configuration for `managed` and `personal` distributions.
 - `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit.
 - `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning.
 - `piship/v1alpha5` changes only the update-trust contract: `updates.trust.bootstrap`, a versioned update root with separate root and channel signing roles, replaces v1alpha4's `updates.trust.keys` ([update trust](#update-trust-bootstrap-v1alpha5)). Every other v1alpha4 field keeps its meaning. A v0.8 release requires v1alpha5. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha5 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha5 manifests.
+- `piship/v1alpha6` adds Pi 1.x-native governance: tool exposure, Codemode and tool search, cache warming, MCP server classes, model types and virtual models, the `data` lifecycle, Pi packages, and `policy.acknowledgeUnenforced` ([v1alpha6 fields](#v1alpha6-fields)). Every v1alpha5 field keeps its meaning except MCP `tools`, which becomes an exposure map; `piship migrate` converts a v1alpha5 manifest without broadening it ([migration](#migrating-from-v1alpha5-to-v1alpha6)). `piship release` accepts v1alpha5 and v1alpha6.
 
 ## Common fields
 
@@ -181,7 +182,7 @@ A server declares `transport`:
 - `stdio`: exactly one of `module` (a `./` `.mjs` or `.js` file in the distribution, run with the distribution's Node.js) or `command` (a bare executable name found on `PATH`), plus `args` and `env` (`allow`: variable names inherited from the launch environment; `set`: fixed non-secret values). Credential-looking names are rejected.
 - `streamable-http`: `url`, which may be a `${NAME}` runtime reference resolved from the launch environment at startup. An unset variable fails a required server with `CONFIG_UNAVAILABLE` and marks an optional one failed (`MCP_UNHEALTHY`). Project `.mcp.json` URLs are never interpolated. The legacy HTTP+SSE transport is rejected.
 
-Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only, and only when the server URL has the same origin as `inference.baseUrl`, otherwise the server fails to start), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both). Exposed tools are named `mcp__<server>__<tool>`. A required `streamable-http` server that can never start is rejected by `validate`, `lock`, and `build`: a plain `url` whose host a private-only network policy refuses (always private-only in managed mode; declare the host in `network.allowHosts`), or `credential: runtime` with a plain `url` on another origin than a plain `inference.baseUrl`, or with no runtime credential at all. When a runtime variable is involved, or the server is optional, `validate` prints a warning instead ([company setup](enterprise-integration.md#company-setup)).
+Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only, and only when the server URL has the same origin as `inference.baseUrl`, otherwise the server fails to start), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and, up to v1alpha5, `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both; v1alpha6 replaces them with `class`, `exposure`, and an exposure map in `tools`, see [v1alpha6 fields](#v1alpha6-fields)). Exposed tools are named `mcp__<server>__<tool>`. A required `streamable-http` server that can never start is rejected by `validate`, `lock`, and `build`: a plain `url` whose host a private-only network policy refuses (always private-only in managed mode; declare the host in `network.allowHosts`), or `credential: runtime` with a plain `url` on another origin than a plain `inference.baseUrl`, or with no runtime credential at all. When a runtime variable is involved, or the server is optional, `validate` prints a warning instead ([company setup](enterprise-integration.md#company-setup)).
 
 ### Sandbox
 
@@ -316,6 +317,52 @@ Rules beyond the field checks:
 
 v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migrate` keeps those keys as a compatibility trust set: every key goes into both the root and the channel role with threshold 1 ([migration](#migration)). That is exactly as strong as before; it does not invent an offline root key, and for a managed distribution it is the shared-key case that `piship release` refuses until the owner splits the roles.
 
+## v1alpha6 fields
+
+`piship/v1alpha6` keeps every v1alpha5 field and adds the fields below. Unknown fields are still rejected, so no earlier schema accepts them.
+
+| Field | Default | Values |
+| --- | --- | --- |
+| `runtime.tools.codemode` | `off` | `off`, `on`, or `only`: Pi's Codemode, loaded by PiShip without the script `models` global. Nested calls go through the same policy hook as top-level calls |
+| `runtime.tools.toolSearch` | `off` | `off` or `on`: Pi's tool search for `deferred` tools |
+| `runtime.tools.exposure` | none (every tool `direct`) | A map of tool globs (`A-Z a-z 0-9 _ . - *`, at most 128 characters) to `direct`, `model-only`, `codemode`, `deferred`, or `hidden`. The most specific glob wins; two globs of equal specificity that can match the same tool fail `validate` and `lock` |
+| `runtime.cacheWarming.mode` | `off` | `off`, `streaming`, or `idle`: Pi's prompt cache warming. Pi's own default is `streaming` |
+| `runtime.cacheWarming.userOverride` | `false` | Whether a user preference may override the distribution's mode |
+| `mcp.servers.<id>.class` | `company` (managed), `user` (personal) | The server's trust class, decided by `policy.resourceTrust` like a resource of that class |
+| `mcp.servers.<id>.exposure` | `direct` | The exposure of the server's tools |
+| `mcp.servers.<id>.tools` | none | An exposure map of tool globs, as `runtime.tools.exposure`, such as `get_*: deferred` or `delete_*: hidden`. It replaces v1alpha5's `tools.allow` / `tools.deny`, which v1alpha6 rejects |
+| `models.catalog.<id>.type` | `chat` | `chat`, `classifier`, or `image`. A non-chat model names its `api`; an `image` model lists its `output` (`text`, `image`) |
+| `models.catalog.<id>.virtual` | none | `router` (the declared extension that registers the virtual model: its `./` path, a certified extension ID, or `package:<id>`) and `routes`, the closed set of physical catalog entries it may route to |
+| `data.<class>.retention` | none (not swept) | For `sessions`, `audit`, `cache`, and `temp`: a duration such as `30d` or `12h`. Audit retention is a minimum a user may lengthen; the others are maximums a user may shorten |
+| `data.purge.onLogout` | `[]` | Data classes `logout` deletes; may not name `audit` |
+| `data.purge.onUninstall` | `none` | `none` or `all` |
+| `data.export.<resource>` | none | `allow`, `ask`, or `deny` for `public`, `local`, or `support`: sugar for a distribution-enforced `session.export` rule |
+| `policy.acknowledgeUnenforced` | `[]` | `"<action>:<resource>"` keys of `deny` or `ask` rules on an action no runtime seam enforces; a managed distribution needs the entry, or `validate` fails with `POLICY_UNENFORCEABLE` |
+| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, and resource filters per kind |
+| `packageTrust` | managed: npm integrity, full commit SHAs, no local paths; personal: npm integrity | `npm.requireIntegrity`, `git.hosts`, `git.requireCommitSha`, `local.paths` |
+| `release.vulnerabilities.registry` | the configured registry | An https registry URL that `npm audit` asks for advisories |
+| `release.installScripts` | `[]` | Reviewed install scripts in Pi package closures, as `pi-packages/<id>/node_modules/<name>@<version>`; PiShip never runs the script either way |
+
+Policy gains the actions `model.select` (the v1alpha5 `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` ([Policy](#policy)).
+
+Exposure, Codemode, tool search, cache warming, Pi packages ([below](#pi-packages-v1alpha6)), the `data` section, `data.export`, and `policy.acknowledgeUnenforced` are enforced on `main`. Model dispatch and virtual routes are parsed and locked, and their enforcement is in progress for v0.9.0 ([status](status.md)).
+
+### Enforcement status
+
+Every action has a reported status, derived from the runtime seam table in `@piship/policy`: `enforced` (the control plane, an enforced sandbox, or the gateway prevents it), `audit-only` (observed and recorded, not prevented), or `unsupported` (no runtime seam: neither prevented nor recorded). Pi has no capability discovery API, so the table is static data proven by the compatibility tests, and `piship-lock/v1alpha6` records it with the Pi version and a digest. Against Pi 1.0.x, `web.request`, `browser.execute`, `agent.invoke`, and `memory.*` are `unsupported`, and so is `network.connect` without a required deny sandbox. A managed `deny` or `ask` rule naming an unsupported action exactly fails `validate` and the release `policy` gate with `POLICY_UNENFORCEABLE` unless `policy.acknowledgeUnenforced` lists it; a personal one warns. `policy.default`, `*`, and `<prefix>.*` rules never count ([security](security.md#governance)).
+
+### Session export
+
+`session.export` has three resources:
+
+| Resource | Covers | Status against Pi 1.0.x |
+| --- | --- | --- |
+| `public` | `/share` and any upload leaving the machine | `unsupported`: the Radius path is closed (no `radius` credential is issued, and a gateway distribution with the ID `radius` is refused with `RADIUS_PROVIDER_RESERVED`), but `/share` falls back to a GitHub gist through the host `gh` CLI, outside PiShip |
+| `local` | `/export` to a local file | `unsupported` by construction: session files are readable under `<state>/sessions` |
+| `support` | A support bundle or bug report | `enforced` where Pi runs offline (`PI_OFFLINE=1`, which every managed launch sets), so Pi's `/bug` upload is closed; `unsupported` in personal mode |
+
+The lock's `sessionExportStatus` and `doctor` always report all three, whatever the manifest declares, so leaving the rule out does not hide a gap. A managed `public: deny` needs `"session.export:public"` in `policy.acknowledgeUnenforced`.
+
 ## Configuration layers
 
 The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribution Enforced, then a permitted User Preference, then Distribution Defaults. An enforced value always wins, and a preference for a key that is enforced or not user-overridable is ignored with a visible notice. Users set preferences with the branded `config set <key> <value>` and `config unset <key>`, stored in `config/preferences.json`. Security-sensitive keys are refused with `POLICY_DENIED`, and a model outside the allowlist with `MODEL_DENIED`. `config set models.allowed a,b` may only narrow the allowlist. `config explain [--json]` prints every effective value with its source, runtime references with whether they resolve, and non-secret identity and credential state. For v1alpha3 and later it adds distribution-enforced rows for the policy ID and rule counts, `policy.userAuto` (managed mode, with this user's [auto mode](#user-auto-mode) state), `mcp.mode`, `sandbox.required`, `sandbox.network`, and `audit.sinks`.
@@ -384,6 +431,8 @@ Branded commands of installed distributions add `update [--channel <name>] [--fr
 
 Every line is sanitized before it is printed: URL credentials, queries, and fragments are removed, and known secret values and token shapes are redacted, whatever an error message holds.
 
+`doctor` has a Governance group for a governed distribution: the manifest schema (for `piship/v1alpha5`, a suggestion to run `piship migrate <manifest> --check`, then `--write`); the seam table's Pi version, with a warning when it differs from the running Pi; the enforced actions as N of M, with a line per `unsupported` action; Codemode, deferred tools, tool exposure, and the extension tools resolved at launch; virtual models; Pi packages (how many are vendored, integrity verified at launch, and a line per package); the cache warming mode (a v1alpha6 lock without one shows `off`); runtime mutation (enforced per turn; a blocked runtime fails `doctor`); data retention and purge; and a warning when an installed older release predates the data contract, so a rollback to it would stop the retention sweep. The Policy group always shows the session export status of `public`, `local`, and `support`, and each `POLICY_UNENFORCEABLE` rule, acknowledged or not.
+
 For a governed distribution, `doctor` opens one governed session as a launch does, with the same network policy, the same child network environment, and the signed-in principal, so MCP servers start and the audit sinks receive real events. That session is recorded in audit like a short launch (`session.start`, `policy.loaded`, the resource, provider, and MCP decisions, any credential acquisition activation needed, and `session.end`). Delivering those events is what shows that the sinks work. A required sink that does not take every event makes `doctor` fail with `AUDIT_UNAVAILABLE` in the Audit group; the rest of the report is still printed.
 
 ## Lock
@@ -409,12 +458,23 @@ A v1alpha5 manifest produces `piship-lock/v1alpha5`, which keeps every v1alpha4 
 | --- | --- |
 | `manifest.sha256` | The canonical manifest digest: `sha256-<64 lowercase hex>` of the canonical JSON (sorted keys) of the parsed manifest, so YAML comments, key order, flow or block style, and line endings never change it, and any semantic change does. Older locks keep the bare hex SHA-256 of the parsed manifest's JSON |
 | `updates.trust.bootstrap` | The exact validated bootstrap root (`version`, `expires`, `keys`, `roles`), or no `bootstrap` when updates are disabled. It is only the bootstrap trust of a fresh installation |
-| `runtimeTools` | piship-lock/v1alpha6: `runtime.tools` with defaults applied (`codemode`, `toolSearch`, `exposure` rules), which a launch applies. A v1alpha5 lock has none and launches with Codemode and tool search off and every tool direct |
-| `tools` | piship-lock/v1alpha6: the exposure of PiShip's own tools resolved against `runtime.tools.exposure`, and each declared MCP server's rules as `<server>:<glob>` (its default as `<server>:*`). Extension tools register at run time and are checked at launch, never locked. Two exposure globs of equal specificity that can match the same tool fail the lock, and in managed mode so does Codemode while a PiShip tool it can reach has no policy rule for `tool.execute` |
+
+A v1alpha6 manifest produces `piship-lock/v1alpha6`, which keeps every v1alpha5 field and adds:
+
+| Field | Content |
+| --- | --- |
+| `runtimeTools` | `runtime.tools` with defaults applied (`codemode`, `toolSearch`, `exposure` rules), which a launch applies. A v1alpha5 lock has none and launches with Codemode and tool search off and every tool direct |
+| `tools` | the exposure of PiShip's own tools resolved against `runtime.tools.exposure`, and each declared MCP server's rules as `<server>:<glob>` (its default as `<server>:*`). Extension tools register at run time and are checked at launch, never locked. Two exposure globs of equal specificity that can match the same tool fail the lock, and in managed mode so does Codemode while a PiShip tool it can reach has no policy rule for `tool.execute` |
+| `virtualModels` | Each virtual model with its router and the closed set of its physical routes |
+| `enforcement` | The runtime seam evidence: the Pi version the seam table was proven against, the per-action table, and a `sha256-` digest that also covers the per-resource seams |
+| `data` | The data lifecycle contract version (`piship-data/v1`) and the manifest's `data` section, which the sweeps and the audit rotation read at run time |
+| `sessionExportStatus` | The status of `public`, `local`, and `support`, always recorded |
+| `cacheWarming` | `runtime.cacheWarming` as parsed (`mode`, `userOverride`); absent when the manifest has none, which a launch takes as `off`, enforced for a managed distribution only |
+| `packages` | Each Pi package's resolved identity, tree digest, file count, stored lockfile digest, and resource inventory ([below](#pi-packages-v1alpha6)) |
 
 A v1alpha6 manifest with Pi packages records each one in `packages` (source, class, canonical source URL without userinfo, npm version and integrity or git commit, `tree` digest and file count of the package's own files, the sha256 of its stored npm lockfile, the expanded resource inventory with each file's sha256, and the optional dependencies each release target installs) and adds `digests.packages`. The stale-lock check is offline: it re-reads the stored lockfiles and recomputes local package digests, and never reaches a registry or repository ([Pi packages](#pi-packages-v1alpha6)).
 
-Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
+Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)). Between v1alpha6 locks it also compares `runtimeTools`, each tool's exposure, the seam evidence, the data contract and declared `data`, `sessionExportStatus`, virtual models, Pi packages, and `cacheWarming`. A new package, a change of a package's source, URL, version, commit, integrity, or tree, a widened package class, widened exposure (such as `hidden`, `deferred`, or `codemode` to `direct`), an enforcement downgrade, and an export that becomes allowed are high risk; a cache warming change and an added `policy.acknowledgeUnenforced` entry are medium. The `model.use` to `model.select` rename is not reported as a change.
 
 The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. For a `piship/v1alpha4` or `piship/v1alpha5` lock, `piship build` also runs the release `source` and `install-script` gates ([owner workflow](release/owner-workflow.md)); `dev` and `test` do not. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 
@@ -422,14 +482,35 @@ The lock never contains tokens, credentials, private keys, or resolved endpoint 
 
 `piship migrate <manifest>` prints a dry-run plan and the migrated YAML; `--write` applies it in place. It migrates step by step to `piship/v1alpha6`; an existing v1alpha6 manifest is left unchanged. Migration is deterministic and idempotent, and never broadens what the distribution allows. `--check` writes nothing and exits non-zero when migrating would change an effective decision, and names each one.
 
-From v1alpha5 to v1alpha6, `model.use` rules become `model.select` rules (`model.use` is still accepted as an alias, in manifests and in `config/policy.json`, which is never rewritten); each MCP server gets `exposure: direct` and the trust class `company` (managed) or `user` (personal), now governed by `policy.resourceTrust`, and its `tools.allow` / `tools.deny` become an exposure map that keeps the same tools visible. Two changes are effective decisions that `--check` reports: an omitted `runtime.cacheWarming` is `off` in v1alpha6, while v0.8 sessions warmed the prompt cache (set `runtime.cacheWarming.mode: streaming` to keep warming), and a server whose new class `policy.resourceTrust` denies would no longer start.
-
 - v1alpha1 to v1alpha2: an equivalent personal profile with `identity.mode: none`, `credential.provider: pi-native`, and `inference.provider: pi-native`. v1alpha1 never had a runnable managed mode, so a v1alpha1 manifest with `deployment.mode: managed` is rejected and must be rewritten with access sections (see `piship init --managed`).
 - v1alpha2 to v1alpha3: each flat resource list becomes the `company` class (managed) or `user` class (personal). The new sections are written with values that keep v1alpha2 behavior: `policy.default: allow`; every project origin denies every dimension, including `passiveContext` (project themes), since v1alpha2 loaded no project resources; `sandbox.required: false`; `audit.enabled: false`; and `mcp.mode: off`. Resource, provider, and project trust and capability defaults then apply (the builtin `permissions` capability is enabled), so review the plan before writing it.
 - v1alpha3 to v1alpha4: adds `updates: {channel: stable, channels: [stable], rollback: true}` with no `source` and no trust keys, so updates stay disabled until a source and at least one key are added. `release` is not written; its defaults apply (the three evidenced targets, `https://registry.npmjs.org`, and `failOn: high`). Nothing else changes.
 - v1alpha4 to v1alpha5: `updates.trust.keys` becomes `updates.trust.bootstrap` with `version: 1`, a fixed `expires: 2027-10-01T00:00:00Z`, the same keys (comments kept), and every key in both the root and the channel role with threshold 1: the legacy keys as a compatibility trust set, never a stronger split. For a managed distribution the plan warns that managed rollout requires an explicit root / channel split, and `piship validate` and the release `trust` gate keep reporting it until the owner splits the roles. With no keys, `updates.trust` is removed and no key is invented, so the distribution stays update-disabled; an `updates.source` is kept, and update keeps failing closed until a bootstrap is added.
+- v1alpha5 to v1alpha6: see [below](#migrating-from-v1alpha5-to-v1alpha6).
 
-After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2, v1alpha3, and v1alpha4 remain accepted but cannot build a release. `piship init` writes `piship/v1alpha5` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.bootstrap` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.
+After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted for personal distributions, and v1alpha2, v1alpha3, and v1alpha4 remain accepted but cannot build a release; v1alpha5 and v1alpha6 can. `piship init` writes `piship/v1alpha5` in both modes, with project items from external and unknown workspaces unloaded, no MCP servers, `sandbox.required: false`, and updates disabled until `updates.source` and `updates.trust.bootstrap` are set; the managed template also sets `policy.default: ask` with allow rules for its models, company instructions, and workspace reads, and a local audit sink.
+
+### Migrating from v1alpha5 to v1alpha6
+
+v1alpha5 manifests keep loading unchanged on v0.9, and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
+
+1. Run `piship migrate piship.yaml --check`. It prints every change and exits non-zero when one changes an effective decision.
+2. Review the plan, then run `piship migrate piship.yaml --write`.
+3. Run `piship validate`, `piship lock`, and `piship diff` against the previous lock, then rebuild.
+
+The step writes:
+
+- `policy.enforced[]` and `policy.defaults[]` rules with `action: model.use` become `model.select`: the same rule. `model.use` stays accepted as an alias, in manifests and in `config/policy.json`, normalized at parse time.
+- Each MCP server gets `class: company` (managed) or `class: user` (personal), now decided by `policy.resourceTrust` for that class, and `exposure: direct`, the v0.8 behavior (Pi's own `mcp.json` default does not apply).
+- `tools.allow` / `tools.deny` become an exposure map that keeps the same tools visible: an allowed tool is `direct`, a denied tool `hidden`, and with an allowlist `"*": hidden`. An empty filter is removed. v1alpha5 filters list exact names; a filter entry with `*` is refused rather than migrated, because a glob could outrank a deny.
+- No `data` section is written, so no retention sweep runs, as in v0.8.
+
+Two effective changes are reported by `--check`:
+
+- An omitted `runtime.cacheWarming` is `off` in v1alpha6, while v0.8 sessions warmed the prompt cache through Pi's default (`streaming`). Set `runtime.cacheWarming.mode: streaming` to keep warming.
+- A server whose new class `policy.resourceTrust` does not allow would no longer start. Allow the class or remove the server before migrating.
+
+The migration never broadens: every value it writes keeps the v0.8 decision. Independently of the schema, `validate` on v0.9 reports a managed `deny` or `ask` rule on an action without a runtime seam (such as `web.request`) as `POLICY_UNENFORCEABLE`. Only v1alpha6 accepts `policy.acknowledgeUnenforced`, so such a rule is either acknowledged after migrating or removed ([enforcement status](#enforcement-status)).
 
 Earlier checkout-local preview manifests need `app.version` added; `app.banner`, `app.theme`, and `resources.themes` are optional. Regenerate `piship.lock` with the current CLI, then rebuild. Checkout-local output cannot be installed as a portable payload.
 

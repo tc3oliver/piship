@@ -26,7 +26,7 @@ export function policyGroup(data: DoctorData, out: DoctorSection): void {
   );
   // Rules on an action no runtime seam enforces never read as enforced;
   // `data.export.<r>` counts as the enforced rule it is sugar for.
-  const containment = manifestContainment(governance.manifest);
+  const containment = manifestContainment(governance.manifest, data.ctx.mode);
   const declaredData = data.ctx.metadata.data?.declared;
   for (const item of unenforcedRules(
     data.ctx.mode,

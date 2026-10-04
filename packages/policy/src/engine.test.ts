@@ -574,7 +574,12 @@ describe("headless ask", () => {
 });
 
 describe("enforcement planes", () => {
-  const contained = { filesystem: true, network: true, shell: true };
+  const contained = {
+    filesystem: true,
+    network: true,
+    shell: true,
+    piOffline: true,
+  };
   it("maps control-plane actions", () => {
     for (const action of [
       "model.select",

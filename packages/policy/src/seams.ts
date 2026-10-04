@@ -43,13 +43,30 @@ export const RUNTIME_SEAMS: Readonly<Record<PolicyAction, RuntimeSeamKind>> = {
 /**
  * Per-resource seams for actions whose resources differ. `/share` falls back
  * to the host `gh` CLI (a gist) outside PiShip, and `/export` writes session
- * files the user can read anyway, so only `support` is enforced.
+ * files the user can read anyway, so only `support` is enforced, and only
+ * where Pi runs offline (`OFFLINE_SEAMS`).
  */
 export const RESOURCE_SEAMS: Readonly<{
   "session.export": Readonly<Record<SessionExportResource, RuntimeSeamKind>>;
 }> = {
   "session.export": { public: "none", local: "none", support: "hook" },
 };
+
+/**
+ * Resources whose seam holds only while Pi runs offline. PiShip's own support
+ * commands are gated in-process, but Pi's `/bug` upload is closed only by
+ * `PI_OFFLINE=1`, which a managed launch sets and a personal one does not.
+ */
+export const OFFLINE_SEAMS: Readonly<{
+  "session.export": readonly SessionExportResource[];
+}> = { "session.export": ["support"] };
+
+function needsOffline(action: PolicyAction, resource: string): boolean {
+  return (
+    action === "session.export" &&
+    (OFFLINE_SEAMS[action] as readonly string[]).includes(resource)
+  );
+}
 
 function resourceSeams(
   action: PolicyAction,
@@ -73,7 +90,10 @@ const STATUS_RANK: Readonly<Record<EnforcementStatus, number>> = {
   enforced: 2,
 };
 
-/** The seam for `action`, narrowed by `resource` when the table has one. */
+/**
+ * The seam for `action`, narrowed by `resource` when the table has one. This
+ * is the static table; `seamPlane` also applies containment and `piOffline`.
+ */
 export function runtimeSeam(
   action: PolicyAction,
   resource?: string,
@@ -96,6 +116,12 @@ export function seamPlane(
 ): EnforcementPlane | undefined {
   const plane = SANDBOX_PLANES[action];
   if (plane && containment[plane]) return "sandbox";
+  if (
+    resource !== undefined &&
+    needsOffline(action, resource) &&
+    !containment.piOffline
+  )
+    return undefined;
   switch (runtimeSeam(action, resource)) {
     case "hook":
       return "control-plane";
@@ -154,10 +180,12 @@ export function decisionStatus(decision: {
   readonly resource: string;
   readonly enforcement: EnforcementPlane;
 }): EnforcementStatus {
+  // An offline-gated resource is audit-only only when Pi was online.
   if (
     decision.enforcement === "audit-only" &&
     isPolicyAction(decision.action) &&
-    runtimeSeam(decision.action, decision.resource) === "none"
+    (runtimeSeam(decision.action, decision.resource) === "none" ||
+      needsOffline(decision.action, decision.resource))
   )
     return "unsupported";
   return planeStatus(decision.enforcement);
@@ -191,8 +219,9 @@ export function seamEvidence(pi: string): SeamEvidence {
       sorted(table),
     ]),
   );
+  const offline = sorted(OFFLINE_SEAMS);
   const digest = `sha256-${createHash("sha256")
-    .update(JSON.stringify({ pi, seams, resources }))
+    .update(JSON.stringify({ pi, seams, resources, offline }))
     .digest("hex")}`;
   return { pi, seams, digest };
 }

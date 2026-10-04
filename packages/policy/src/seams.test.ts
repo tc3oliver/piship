@@ -16,7 +16,13 @@ import {
   seamEvidence,
 } from "./index.js";
 
-const contained = { filesystem: true, network: true, shell: true };
+const contained = {
+  filesystem: true,
+  network: true,
+  shell: true,
+  piOffline: true,
+};
+const offline = { ...NO_CONTAINMENT, piOffline: true };
 
 describe("RUNTIME_SEAMS", () => {
   it("covers every policy action", () => {
@@ -64,22 +70,44 @@ describe("RUNTIME_SEAMS", () => {
     expect(Object.keys(RESOURCE_SEAMS["session.export"]).sort()).toEqual(
       [...SESSION_EXPORT_RESOURCES].sort(),
     );
-    expect(enforcementStatus("session.export", NO_CONTAINMENT, "support")).toBe(
+    expect(enforcementStatus("session.export", offline, "support")).toBe(
       "enforced",
     );
     for (const resource of ["public", "local"])
       expect(enforcementStatus("session.export", contained, resource)).toBe(
         "unsupported",
       );
-    expect(ruleStatus("session.export", "support", NO_CONTAINMENT)).toBe(
-      "enforced",
-    );
+    expect(ruleStatus("session.export", "support", offline)).toBe("enforced");
     expect(ruleStatus("session.export", "**", NO_CONTAINMENT)).toBe(
       "unsupported",
     );
     expect(ruleStatus("session.export", "pub*", NO_CONTAINMENT)).toBe(
       "unsupported",
     );
+  });
+});
+
+describe("support export needs Pi offline", () => {
+  it("reports support unsupported while Pi's /bug upload is open", () => {
+    // Personal launches leave Pi online; only PI_OFFLINE closes /bug.
+    expect(enforcementStatus("session.export", NO_CONTAINMENT, "support")).toBe(
+      "unsupported",
+    );
+    expect(
+      enforcementStatus(
+        "session.export",
+        { ...contained, piOffline: false },
+        "support",
+      ),
+    ).toBe("unsupported");
+    expect(ruleStatus("session.export", "support", NO_CONTAINMENT)).toBe(
+      "unsupported",
+    );
+    expect(enforcementStatus("session.export", offline, "support")).toBe(
+      "enforced",
+    );
+    // Other actions do not depend on Pi being offline.
+    expect(enforcementStatus("tool.execute", NO_CONTAINMENT)).toBe("enforced");
   });
 });
 
@@ -106,6 +134,27 @@ describe("status derivation", () => {
         action: "tool.execute",
         resource: "bash",
         enforcement: "control-plane",
+      }),
+    ).toBe("enforced");
+    // A personal engine (Pi online) decides support exports audit-only.
+    const personal = enforcementPlane(
+      "session.export",
+      NO_CONTAINMENT,
+      "support",
+    );
+    expect(personal).toBe("audit-only");
+    expect(
+      decisionStatus({
+        action: "session.export",
+        resource: "support",
+        enforcement: personal,
+      }),
+    ).toBe("unsupported");
+    expect(
+      decisionStatus({
+        action: "session.export",
+        resource: "support",
+        enforcement: enforcementPlane("session.export", offline, "support"),
       }),
     ).toBe("enforced");
   });

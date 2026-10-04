@@ -7,7 +7,12 @@ import {
   unenforcedRules,
 } from "./index.js";
 
-const contained = { filesystem: true, network: true, shell: true };
+const contained = {
+  filesystem: true,
+  network: true,
+  shell: true,
+  piOffline: true,
+};
 
 describe("unenforcedRules", () => {
   const policy = makePolicy({
@@ -107,21 +112,36 @@ describe("unenforcedRules", () => {
         contained,
       ).map((item) => item.level),
     ).toEqual(["info", "error"]);
+    // Personal: Pi's /bug upload is open, so a support rule is unsupported too.
+    expect(
+      unenforcedRules("personal", exports, {
+        ...contained,
+        piOffline: false,
+      }).map((item) => [item.level, item.key]),
+    ).toEqual([
+      ["warning", "session.export:public"],
+      ["warning", "session.export:support"],
+      ["warning", "session.export:**"],
+    ]);
   });
 });
 
 describe("manifestContainment", () => {
   it("contains every plane only with a required sandbox", () => {
-    expect(manifestContainment({})).toEqual(NO_CONTAINMENT);
+    expect(manifestContainment({}, "personal")).toEqual({
+      ...NO_CONTAINMENT,
+      piOffline: false,
+    });
     expect(
-      manifestContainment({
-        sandbox: { required: false } as never,
-      }),
-    ).toEqual(NO_CONTAINMENT);
+      manifestContainment({ sandbox: { required: false } as never }, "managed"),
+    ).toEqual({ ...NO_CONTAINMENT, piOffline: true });
     expect(
-      manifestContainment({
-        sandbox: { required: true } as never,
-      }),
+      manifestContainment({ sandbox: { required: true } as never }, "managed"),
     ).toEqual(contained);
+  });
+
+  it("runs Pi offline only in managed mode", () => {
+    expect(manifestContainment({}, "managed").piOffline).toBe(true);
+    expect(manifestContainment({}, "personal").piOffline).toBe(false);
   });
 });

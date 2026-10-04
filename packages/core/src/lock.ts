@@ -177,7 +177,10 @@ export function resolveLock(
           // Always recorded, whatever the manifest declares: the gaps of
           // Pi's /share and /export stay visible.
           sessionExportStatus: sessionExportStatus(
-            manifestContainment(manifest.governance ?? {}),
+            manifestContainment(
+              manifest.governance ?? {},
+              manifest.deployment.mode,
+            ),
           ),
         }
       : {}),

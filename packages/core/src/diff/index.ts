@@ -9,6 +9,14 @@ import { governance } from "./areas/governance.js";
 import { packages } from "./areas/packages.js";
 import { release } from "./areas/release.js";
 import { resources } from "./areas/resources.js";
+import {
+  cacheWarming,
+  dataLifecycle,
+  enforcement,
+  piPackages,
+  runtimeTools,
+  virtualModels,
+} from "./areas/runtime-governance.js";
 import { updates } from "./areas/updates.js";
 import { Collector, compare, RISK_RANK, side } from "./collector.js";
 import {
@@ -56,9 +64,15 @@ function requiredTests(changes: readonly DiffChange[]): string[] {
         tests.add(DIFF_TESTS.governance);
         break;
       case "policy":
+      case "tools":
       case "mcp":
       case "audit":
+      case "data":
         tests.add(DIFF_TESTS.governance);
+        break;
+      case "enforcement":
+        tests.add(DIFF_TESTS.governance);
+        tests.add(DIFF_TESTS.compatibility);
         break;
       case "sandbox":
         tests.add(DIFF_TESTS.governance);
@@ -88,9 +102,15 @@ export function diffLocks(
   const out = new Collector();
   distribution(out, b, a);
   packages(out, b, a);
+  piPackages(out, b, a);
   resources(out, b, a);
   governance(out, b, a);
+  runtimeTools(out, b, a);
+  enforcement(out, b, a);
+  dataLifecycle(out, b, a);
   access(out, b, a);
+  virtualModels(out, b, a);
+  cacheWarming(out, b, a);
   updates(out, b, a);
   release(out, b, a);
   const changes = out.changes.sort(

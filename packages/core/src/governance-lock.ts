@@ -98,7 +98,7 @@ export function checkEnforceability(manifest: Manifest): UnenforcedFinding[] {
   const findings = unenforcedRules(
     manifest.deployment.mode,
     withSessionExportRules(governance.policy, manifest.data),
-    manifestContainment(governance),
+    manifestContainment(governance, manifest.deployment.mode),
   );
   const errors = findings.filter((item) => item.level === "error");
   if (errors.length)

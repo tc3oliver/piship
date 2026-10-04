@@ -1,4 +1,6 @@
 // The retention sweep of a built distribution at launch and logout.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { formatError, redact } from "@piship/contracts";
 import {
   type DataSweepResult,
@@ -8,7 +10,7 @@ import {
   sweepRetention,
 } from "../data/lifecycle.js";
 import { type BrandedContext, recordAudit } from "./context.js";
-import { lifecycleNetwork } from "./lifecycle.js";
+import { installedHere, lifecycleNetwork } from "./lifecycle.js";
 
 /**
  * Sweep what the declared retention no longer keeps (at logout, also purge
@@ -65,4 +67,30 @@ export async function sweepDistributionData(
     );
     return undefined;
   }
+}
+
+/**
+ * Installed releases other than the active one whose runtime predates the
+ * data contract (their lock records no `data`): rolling back to one stops
+ * the retention sweep the active release runs. Empty when the active lock
+ * declares no `data`, or when this payload is not the installed one. A
+ * release whose lock cannot be read is left out.
+ */
+export function releasesWithoutDataSweep(ctx: BrandedContext): string[] {
+  if (!ctx.metadata.data?.declared) return [];
+  const here = installedHere(ctx);
+  if (!here) return [];
+  return here.releases
+    .filter((release) => release.version !== here.active)
+    .filter((release) => {
+      try {
+        const lock = JSON.parse(
+          readFileSync(join(release.payload, "piship.lock"), "utf8"),
+        ) as { readonly data?: unknown };
+        return lock.data === undefined;
+      } catch {
+        return false;
+      }
+    })
+    .map((release) => release.version);
 }

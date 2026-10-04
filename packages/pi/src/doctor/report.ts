@@ -20,6 +20,7 @@ export const DOCTOR_GROUPS = [
   "Gateway",
   "Resources",
   "Policy",
+  "Governance",
   "Project",
   "Capabilities",
   "Sandbox",

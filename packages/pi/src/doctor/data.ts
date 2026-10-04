@@ -31,12 +31,18 @@ import {
   openAccess,
   undeclaredGovernanceHosts,
 } from "@piship/core";
-import type { GovernanceManifest } from "@piship/schema";
+import type { GovernanceManifest, ToolExposure } from "@piship/schema";
 import {
   type GovernanceInspection,
   type GovernanceSession,
   inspectGovernance,
 } from "../governance-session.js";
+import {
+  buildExposureTable,
+  exposureConfigOf,
+  PISHIP_TOOLS,
+  type ToolExposureTable,
+} from "../governance/exposure.js";
 import { AccessEvents, type LaunchContext } from "../launch/context.js";
 import { governanceOptions, openGovernance } from "../launch/governance.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -256,7 +262,49 @@ export interface GovernanceData {
   readonly sessionError?: string;
   /** Stopping MCP servers or disposing the sandbox failed at session end. */
   readonly shutdownError?: string;
+  /** The session's tool exposure, as a launch resolves it. */
+  readonly exposure?: ExposureData;
+  /** Why the exposure could not be resolved (a launch would fail too). */
+  readonly exposureError?: string;
+  /** The governed session's runtime block, when its enforcement failed. */
+  readonly runtimeError?: string;
   readonly audit: AuditData;
+}
+
+/**
+ * The tool exposure doctor reports: PiShip's own tools and MCP tools as a
+ * launch resolves them. Extension and package tools register themselves only
+ * when their code runs, so they are resolved, and enforced, at launch.
+ */
+export interface ExposureData {
+  readonly codemode: ToolExposureTable["codemode"];
+  readonly codemodeOn: boolean;
+  readonly toolSearchOn: boolean;
+  /** Tool name -> exposure, in name order. */
+  readonly tools: Readonly<Record<string, ToolExposure>>;
+}
+
+function exposureData(session: GovernanceSession): ExposureData {
+  const table = buildExposureTable(
+    session,
+    exposureConfigOf(session),
+    new Map(),
+  );
+  const names = [
+    ...PISHIP_TOOLS,
+    ...(session.mcp?.tools() ?? []).map((tool) => tool.name),
+  ].sort();
+  const tools: Record<string, ToolExposure> = {};
+  for (const name of names) {
+    const exposure = table.get(name);
+    if (exposure) tools[name] = exposure;
+  }
+  return {
+    codemode: table.codemode,
+    codemodeOn: table.codemodeOn,
+    toolSearchOn: table.toolSearchOn,
+    tools,
+  };
 }
 
 export interface AuditData {
@@ -537,12 +585,23 @@ async function collectSession(
   ctx: LaunchContext,
   prepared: Parameters<typeof openGovernance>[1],
 ): Promise<
-  Pick<GovernanceData, "mcp" | "sessionError" | "shutdownError"> & {
+  Pick<
+    GovernanceData,
+    | "mcp"
+    | "sessionError"
+    | "shutdownError"
+    | "exposure"
+    | "exposureError"
+    | "runtimeError"
+  > & {
     audit: Omit<AuditData, "targets">;
   }
 > {
   let session: GovernanceSession | null = null;
   let mcp: GovernanceData["mcp"];
+  let exposure: ExposureData | undefined;
+  let exposureError: string | undefined;
+  let runtimeError: string | undefined;
   let sessionError: string | undefined;
   let openError: string | undefined;
   let closeError: string | undefined;
@@ -552,6 +611,18 @@ async function collectSession(
     if (session) {
       mcp = session.mcpReports;
       await session.audit.flush();
+      // As at launch, with the MCP tools started: a managed Codemode that
+      // reaches a tool decided only by the default fails here as it would.
+      try {
+        exposure = exposureData(session);
+      } catch (error) {
+        exposureError = formatError(error);
+      }
+      try {
+        session.assertRuntimeIntact();
+      } catch (error) {
+        runtimeError = formatError(error);
+      }
     }
   } catch (error) {
     if (error instanceof PiShipError && error.code === "AUDIT_UNAVAILABLE")
@@ -572,6 +643,9 @@ async function collectSession(
     }
   return {
     ...(mcp ? { mcp } : {}),
+    ...(exposure ? { exposure } : {}),
+    ...(exposureError ? { exposureError } : {}),
+    ...(runtimeError ? { runtimeError } : {}),
     ...(sessionError ? { sessionError } : {}),
     ...(shutdownError ? { shutdownError } : {}),
     audit: {

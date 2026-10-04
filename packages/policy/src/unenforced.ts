@@ -36,13 +36,20 @@ export interface UnenforcedFinding {
 
 /**
  * Containment as the manifest declares it: a required sandbox contains the
- * filesystem, shell, and network planes. Nothing optional is assumed.
+ * filesystem, shell, and network planes, and a managed launch runs Pi offline
+ * (`PI_OFFLINE=1`). Nothing optional is assumed.
  */
 export function manifestContainment(
   governance: Partial<Pick<GovernanceManifest, "sandbox">>,
+  mode: DeploymentMode,
 ): PolicyContainment {
   const required = governance.sandbox?.required === true;
-  return { filesystem: required, network: required, shell: required };
+  return {
+    filesystem: required,
+    network: required,
+    shell: required,
+    piOffline: mode === "managed",
+  };
 }
 
 /**

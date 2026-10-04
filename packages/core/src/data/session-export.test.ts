@@ -77,11 +77,17 @@ describe("assertRadiusClosed", () => {
 
 describe("sessionExportStatus", () => {
   it("reports every resource from the seam table", () => {
-    expect(sessionExportStatus(NO_CONTAINMENT)).toEqual({
-      public: "unsupported",
-      local: "unsupported",
-      support: "enforced",
-    });
+    expect(sessionExportStatus({ ...NO_CONTAINMENT, piOffline: true })).toEqual(
+      {
+        public: "unsupported",
+        local: "unsupported",
+        support: "enforced",
+      },
+    );
+  });
+
+  it("reports support unsupported while Pi is online (personal)", () => {
+    expect(sessionExportStatus(NO_CONTAINMENT).support).toBe("unsupported");
   });
 });
 
@@ -118,10 +124,11 @@ describe("data.export sugar", () => {
       export: { public: "deny", support: "deny" },
     } as DataManifest;
     expect(withSessionExportRules(policy, undefined)).toBe(policy);
+    const offline = { ...NO_CONTAINMENT, piOffline: true };
     const managed = unenforcedRules(
       "managed",
       withSessionExportRules(policy, data),
-      NO_CONTAINMENT,
+      offline,
     );
     expect(managed.map((item) => [item.level, item.key])).toEqual([
       ["error", "session.export:public"],
@@ -132,7 +139,7 @@ describe("data.export sugar", () => {
         { ...policy, acknowledgeUnenforced: ["session.export:public"] },
         data,
       ),
-      NO_CONTAINMENT,
+      offline,
     );
     expect(acknowledged.map((item) => item.level)).toEqual(["info"]);
     expect(
@@ -140,7 +147,10 @@ describe("data.export sugar", () => {
         "personal",
         withSessionExportRules(policy, data),
         NO_CONTAINMENT,
-      ).map((item) => item.level),
-    ).toEqual(["warning"]);
+      ).map((item) => [item.level, item.key]),
+    ).toEqual([
+      ["warning", "session.export:public"],
+      ["warning", "session.export:support"],
+    ]);
   });
 });

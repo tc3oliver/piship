@@ -97,11 +97,12 @@ describe("lock piship-lock/v1alpha6", () => {
     expect(lock.data).toEqual({ contract: DATA_CONTRACT_VERSION });
     expect(lock.enforcement).toEqual(seamEvidence(lock.runtime.version));
     expect(lock.enforcement?.seams["web.request"]).toBe("none");
-    // Always recorded, whatever the manifest declares.
+    // Always recorded, whatever the manifest declares. A personal launch
+    // leaves Pi online, so Pi's /bug upload keeps support unsupported.
     expect(lock.sessionExportStatus).toEqual({
       public: "unsupported",
       local: "unsupported",
-      support: "enforced",
+      support: "unsupported",
     });
     expect(lock.governance?.manifest.mcp.servers[0]).toMatchObject({
       class: "user",

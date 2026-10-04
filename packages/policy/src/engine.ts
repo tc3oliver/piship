@@ -28,6 +28,11 @@ export interface PolicyContainment {
   readonly filesystem: boolean;
   readonly network: boolean;
   readonly shell: boolean;
+  /**
+   * Pi runs offline (`PI_OFFLINE=1`, which every managed launch sets), so
+   * Pi's own uploads such as `/bug` are closed. Absent means online.
+   */
+  readonly piOffline?: boolean;
 }
 
 export interface PolicyContext extends PathTokenContext {
