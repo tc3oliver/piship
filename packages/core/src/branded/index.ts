@@ -10,6 +10,7 @@ export {
 } from "./context.js";
 export { runAuto, userAutoDenied } from "./auto.js";
 export { runConfig } from "./config.js";
+export { sweepDistributionData } from "./data.js";
 export { lifecycleDoctor, undeclaredGovernanceHosts } from "./doctor.js";
 export { runRollback, runUpdate } from "./lifecycle.js";
 export { runLogin, runLogout } from "./login.js";

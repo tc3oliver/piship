@@ -6,6 +6,7 @@ import {
   unenforcedRules,
 } from "@piship/policy";
 import type { Manifest } from "@piship/schema";
+import { withSessionExportRules } from "./data/session-export.js";
 import type { LockedResource } from "./lock-schema.js";
 import { resolveResources } from "./resources.js";
 import {
@@ -94,7 +95,7 @@ export function checkEnforceability(manifest: Manifest): UnenforcedFinding[] {
   if (!governance) return [];
   const findings = unenforcedRules(
     manifest.deployment.mode,
-    governance.policy,
+    withSessionExportRules(governance.policy, manifest.data),
     manifestContainment(governance),
   );
   const errors = findings.filter((item) => item.level === "error");

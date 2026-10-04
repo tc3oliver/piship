@@ -70,10 +70,9 @@ describe("error codes", () => {
 
   // A code no runtime path produces is a dead contract: remove it rather than
   // keeping it exported.
-  // v0.9 codes the contract carries before their producer lands:
-  // RADIUS_PROVIDER_RESERVED (09-B7, session export). Each task removes its
-  // code from this list when it produces it.
-  const NOT_YET_PRODUCED: readonly string[] = ["RADIUS_PROVIDER_RESERVED"];
+  // v0.9 codes the contract carries before their producer lands. Each task
+  // removes its code from this list when it produces it.
+  const NOT_YET_PRODUCED: readonly string[] = [];
   it("lists only declared, still unproduced codes as not yet produced", () => {
     for (const code of NOT_YET_PRODUCED) {
       expect(PISHIP_ERROR_CODES).toContain(code);

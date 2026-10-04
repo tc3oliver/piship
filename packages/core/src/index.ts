@@ -12,6 +12,9 @@ export {
   REVIEWED_INSTALL_SCRIPTS,
 } from "./compatibility.js";
 export * from "./config.js";
+export * from "./data/contract.js";
+export * from "./data/lifecycle.js";
+export * from "./data/session-export.js";
 export * from "./diff/index.js";
 // The gateway answer reading Pi's request path shares with the model list
 // check; the Pi seam cannot import @piship/inference itself.

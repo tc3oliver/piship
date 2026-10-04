@@ -2,7 +2,15 @@
 // logout, credential changes, update, and rollback. Events come from the real
 // DistributionAccess flows against the deterministic fixture services and
 // from the real emitting functions, written through real sinks.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,12 +19,19 @@ import { fileURLToPath } from "node:url";
 import type { AuditConfig } from "@piship/audit";
 import type { AuditEvent } from "@piship/contracts";
 import { MemorySecretStore } from "@piship/credentials";
-import type { AccessManifest, Manifest } from "@piship/schema";
+import {
+  type AccessManifest,
+  DATA_CONTRACT_VERSION,
+  type DataManifest,
+  type Manifest,
+  parseData,
+} from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import { type AccessEvent, DistributionAccess } from "./access/index.js";
 import { auditAccess, type BrandedContext } from "./branded/context.js";
+import { sweepDistributionData } from "./branded/data.js";
 import { auditLifecycle } from "./branded/lifecycle.js";
 import { resolveLock } from "./index.js";
 
@@ -34,6 +49,7 @@ const BRANDED_EVENTS = [
   "credential.revoke",
   "runtime.update",
   "runtime.rollback",
+  "data.swept",
 ] as const;
 
 interface Collector {
@@ -118,6 +134,33 @@ function context(audit: Partial<AuditConfig["sinks"][number]>[]) {
   return { ctx, errors };
 }
 
+/** The context with a 30 day session retention and one 40 day old session. */
+function withStaleSession(ctx: BrandedContext): {
+  ctx: BrandedContext;
+  session: string;
+} {
+  const session = join(ctx.stateDir, "sessions", "user", "old.jsonl");
+  mkdirSync(join(ctx.stateDir, "sessions", "user"), { recursive: true });
+  writeFileSync(session, "{}\n");
+  const old = new Date(Date.now() - 40 * 24 * 60 * 60_000);
+  utimesSync(session, old, old);
+  return {
+    ctx: {
+      ...ctx,
+      metadata: {
+        ...ctx.metadata,
+        data: {
+          contract: DATA_CONTRACT_VERSION,
+          declared: parseData({
+            sessions: { retention: "30d" },
+          }) as DataManifest,
+        },
+      },
+    },
+    session,
+  };
+}
+
 function accessOptions(
   events: AccessEvent[],
 ): Parameters<typeof DistributionAccess.open>[0] {
@@ -184,6 +227,9 @@ describe("branded command audit (real flows)", () => {
       from: "1.1.0",
       to: "1.0.0",
     });
+    const stale = withStaleSession(ctx);
+    await sweepDistributionData(stale.ctx, "logout");
+    expect(existsSync(stale.session)).toBe(false);
     expect(errors).toEqual([]);
 
     const delivered = collector.batches.flatMap((batch) => batch.events);
@@ -205,6 +251,17 @@ describe("branded command audit (real flows)", () => {
     // Both sinks got the same events, with the same ids.
     expect(local.map((event) => event.id)).toEqual(
       delivered.map((event) => event.id),
+    );
+    expect(delivered.find((event) => event.event === "data.swept")).toEqual(
+      expect.objectContaining({
+        resource: "sessions",
+        user: null,
+        detail: expect.objectContaining({
+          class: "sessions",
+          trigger: "logout",
+          files: 1,
+        }),
+      }),
     );
     expect(delivered.find((event) => event.event === "identity.login")).toEqual(
       expect.objectContaining({ user: "demo-user-1", session: null }),
@@ -249,6 +306,20 @@ describe("branded command audit with a required sink", () => {
     await expect(
       auditLifecycle(ctx, "runtime.update", "allowed", { from: "1.0.0" }),
     ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+  });
+
+  it("keeps data past its retention when the required sink does not take data.swept", async () => {
+    await collector.close();
+    const { ctx, errors } = context(sinks(collector.url, true));
+    const stale = withStaleSession(ctx);
+    const result = await sweepDistributionData(stale.ctx, "launch");
+    expect(existsSync(stale.session)).toBe(true);
+    expect(result?.classes).toEqual([
+      expect.objectContaining({ class: "sessions", unrecorded: true }),
+    ]);
+    expect(errors).toEqual([
+      "Warning: sessions past their retention were kept: the data.swept audit event was not recorded",
+    ]);
   });
 
   it("fails the command when the required sink does not take the events", async () => {

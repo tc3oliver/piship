@@ -7,6 +7,7 @@ import type {
 import type {
   AccessManifest,
   DATA_CONTRACT_VERSION,
+  DataManifest,
   DeclarableResourceClass,
   Manifest,
   PackageResourceKind,
@@ -146,6 +147,12 @@ export interface LockedEnforcement {
 /** v1alpha6: the data lifecycle contract the lock was written for. */
 export interface LockedDataContract {
   readonly contract: typeof DATA_CONTRACT_VERSION;
+  /**
+   * The manifest's `data` section (retention, purge, export), which the
+   * launch and logout sweeps and the session export status read. Absent when
+   * the manifest has none: no retention sweep runs.
+   */
+  readonly declared?: DataManifest;
 }
 /** v1alpha6: the exact Pi sibling package versions (`name` -> version). */
 export type LockedPiSiblings = Readonly<Record<string, string>>;

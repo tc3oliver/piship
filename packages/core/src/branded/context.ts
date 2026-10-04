@@ -15,6 +15,7 @@ import {
   PiShipError,
 } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
+import { auditRotation } from "../data/lifecycle.js";
 import {
   type AccessEvent,
   DistributionAccess,
@@ -98,6 +99,7 @@ export async function recordAudit(
       config,
       distribution: lock.app.id,
       stateDir: ctx.stateDir,
+      rotation: auditRotation(lock),
       fetch: createManagedFetch(network, "audit"),
       resolveUrl: (template) =>
         resolveTemplate(

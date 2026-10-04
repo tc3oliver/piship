@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { seamEvidence } from "@piship/policy";
+import { manifestContainment, seamEvidence } from "@piship/policy";
 import {
   channelTrustKeys,
   DATA_CONTRACT_VERSION,
@@ -26,6 +26,8 @@ import {
   LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
 } from "./lock-schema.js";
+import { checkDataContract } from "./data/contract.js";
+import { sessionExportStatus } from "./data/session-export.js";
 import { resolveResources } from "./resources.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
 
@@ -70,6 +72,7 @@ export function checkPiVersion(manifest: Manifest): void {
 export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
+  checkDataContract(manifest);
   const resources = resolveResources(manifest, manifestPath);
   const governance = governanceLock(
     manifest,
@@ -138,7 +141,15 @@ export function resolveLock(manifestPath: string): DistributionLock {
       ? {
           ...(virtualModels.length ? { virtualModels } : {}),
           enforcement: seamEvidence(runtime.version),
-          data: { contract: DATA_CONTRACT_VERSION },
+          data: {
+            contract: DATA_CONTRACT_VERSION,
+            ...(manifest.data ? { declared: manifest.data } : {}),
+          },
+          // Always recorded, whatever the manifest declares: the gaps of
+          // Pi's /share and /export stay visible.
+          sessionExportStatus: sessionExportStatus(
+            manifestContainment(manifest.governance ?? {}),
+          ),
         }
       : {}),
   };

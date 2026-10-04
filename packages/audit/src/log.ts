@@ -89,8 +89,9 @@ export interface AuditLogOptions {
   /** Per-request timeout for HTTP sinks. Default 10 s. */
   readonly requestTimeoutMs?: number;
   /**
-   * File sink retention. Fixed defaults (AUDIT_ROTATION); not a manifest
-   * setting. Tests pass smaller limits.
+   * File sink retention. Fixed size defaults (AUDIT_ROTATION), plus the
+   * manifest's `data.audit.retention` as `minimumRetentionMs`. Tests pass
+   * smaller limits.
    */
   readonly rotation?: AuditRotation;
 }
@@ -99,8 +100,19 @@ export interface AuditLogOptions {
 export interface AuditRotation {
   /** Rotate before an append would grow `audit.jsonl` past this size. */
   readonly maxBytes: number;
-  /** Rotated files kept (`audit.jsonl.1` is the newest); older ones are deleted. */
+  /**
+   * Rotated files kept (`audit.jsonl.1` is the newest); older ones are
+   * deleted, unless `minimumRetentionMs` keeps them.
+   */
   readonly files: number;
+  /**
+   * The audit retention minimum (`data.audit.retention`): a rotated file
+   * modified more recently than this is never deleted by rotation, so the
+   * chain grows past `files` (`.6`, `.7`, ...) instead. Local audit is then
+   * bounded by how much is written within the minimum, not by
+   * `maxBytes * (files + 1)`; the retention sweep deletes what has aged out.
+   */
+  readonly minimumRetentionMs?: number;
   /**
    * How long (monotonic) a rotation lock must be seen unchanged before it is
    * taken over as abandoned. Default 30 s.
@@ -251,7 +263,12 @@ export function auditLogFiles(
 ): string[] {
   const base = join(stateDir, AUDIT_LOG_FILE);
   const paths = [base];
-  for (let index = 1; index <= rotation.files; index += 1)
+  // Past `files`, the files a retention minimum kept, while they continue.
+  for (
+    let index = 1;
+    index <= rotation.files || existsSync(`${base}.${index}`);
+    index += 1
+  )
     paths.push(`${base}.${index}`);
   return paths.filter((path) => existsSync(path));
 }
@@ -363,8 +380,22 @@ class FileSinkWriter implements AuditSink {
       // can only make another writer skip one rotation, never repeat one.
       await this.writeGeneration(String(Number(measured) + 1));
       const files = Math.max(1, Math.floor(this.rotation.files));
-      await rm(`${this.path}.${files}`, { force: true });
-      for (let index = files - 1; index >= 1; index -= 1)
+      // The oldest file is the highest index: `files`, or past it when a
+      // retention minimum kept older ones. Delete from the oldest end what
+      // is beyond the count and older than the minimum; keep the rest.
+      let top = files;
+      while (
+        await lstat(`${this.path}.${top + 1}`).then(
+          () => true,
+          () => false,
+        )
+      )
+        top += 1;
+      while (top >= files && (await this.expired(`${this.path}.${top}`))) {
+        await rm(`${this.path}.${top}`, { force: true });
+        top -= 1;
+      }
+      for (let index = top; index >= 1; index -= 1)
         await rename(
           `${this.path}.${index}`,
           `${this.path}.${index + 1}`,
@@ -379,6 +410,15 @@ class FileSinkWriter implements AuditSink {
       if ((await readFile(lock, "utf8").catch(() => "")) === token)
         await rm(lock, { force: true }).catch(() => undefined);
     }
+  }
+
+  /** Whether rotation may delete a rotated file: no minimum keeps it. */
+  private async expired(path: string): Promise<boolean> {
+    const minimum = this.rotation.minimumRetentionMs;
+    if (minimum === undefined) return true;
+    const stats = await lstat(path).catch(() => undefined);
+    if (!stats) return true;
+    return Date.now() - stats.mtimeMs >= minimum;
   }
 
   /**

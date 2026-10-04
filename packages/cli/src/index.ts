@@ -11,6 +11,7 @@ import {
   buildDistribution,
   buildRelease,
   checkEnforceability,
+  checkDataContract,
   checkGovernance,
   checkPiVersion,
   checkStateMigration,
@@ -551,6 +552,7 @@ export async function runCli(
       // The same resource and governance checks as lock, without writing it.
       checkGovernance(manifest, target, resolveResources(manifest, target));
       const unenforced = checkEnforceability(manifest);
+      checkDataContract(manifest);
       // updates.source is read only by update; launch never needs it.
       const variables = runtimeVariableUse(manifest);
       const unset = (names: readonly string[]) =>

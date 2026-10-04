@@ -45,18 +45,19 @@ const OUTSIDE_A_SESSION = [
   "credential.revoke",
   "runtime.update",
   "runtime.rollback",
+  "data.swept",
 ];
 /**
  * v0.9 event types the contract already carries but no runtime flow emits
- * yet: model dispatch (09-B4), runtime mutation repair (09-B5), and the data
- * sweep and session export (09-B7). Each task removes its names from this
- * list when its flow emits them.
+ * yet: model dispatch (09-B4) and runtime mutation repair (09-B5). Each task
+ * removes its names from this list when its flow emits them.
+ * `session.export` stays until an export flow exists: Pi's /share and
+ * /export have no seam, and PiShip has no command that exports a session.
  */
 const NOT_YET_EMITTED: readonly AuditEventType[] = [
   "model.dispatch",
   "session.export",
   "runtime.mutation.reverted",
-  "data.swept",
 ];
 
 const roots: string[] = [];

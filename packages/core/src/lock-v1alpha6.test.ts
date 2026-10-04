@@ -91,6 +91,12 @@ describe("lock piship-lock/v1alpha6", () => {
     expect(lock.data).toEqual({ contract: DATA_CONTRACT_VERSION });
     expect(lock.enforcement).toEqual(seamEvidence(lock.runtime.version));
     expect(lock.enforcement?.seams["web.request"]).toBe("none");
+    // Always recorded, whatever the manifest declares.
+    expect(lock.sessionExportStatus).toEqual({
+      public: "unsupported",
+      local: "unsupported",
+      support: "enforced",
+    });
     expect(lock.governance?.manifest.mcp.servers[0]).toMatchObject({
       class: "user",
       exposure: "direct",
@@ -137,5 +143,36 @@ describe("lock piship-lock/v1alpha6", () => {
       ...before.governance?.manifest.policy,
       acknowledgeUnenforced: [],
     });
+  });
+
+  it("records the declared data section for the sweeps", () => {
+    const lock = resolveLock(
+      project(
+        `${V6}data:\n  sessions: { retention: 30d }\n  audit: { retention: 180d }\n  purge: { onLogout: [cache] }\n  export: { public: deny }\n`,
+      ),
+    );
+    expect(lock.data).toEqual({
+      contract: DATA_CONTRACT_VERSION,
+      declared: {
+        retention: {
+          sessions: { retentionSeconds: 30 * 86_400 },
+          audit: { retentionSeconds: 180 * 86_400 },
+        },
+        purge: { onLogout: ["cache"], onUninstall: "none" },
+        export: { public: "deny" },
+      },
+    });
+  });
+
+  it("refuses audit in data.purge.onLogout", () => {
+    expect(() =>
+      resolveLock(project(`${V6}data:\n  purge: { onLogout: [audit] }\n`)),
+    ).toThrow(/audit retention is a minimum/);
+  });
+
+  it("refuses a gateway distribution with the id radius", () => {
+    expect(() =>
+      resolveLock(project(V6.replace("id: acmepi,", "id: radius,"))),
+    ).toThrow(expect.objectContaining({ code: "RADIUS_PROVIDER_RESERVED" }));
   });
 });

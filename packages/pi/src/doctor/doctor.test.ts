@@ -384,6 +384,66 @@ describe("renderDoctor", () => {
       expect(line(output)).not.toMatch(/\benforced\b/);
   });
 
+  it("always reports session export, and counts data.export as a rule", () => {
+    const exportLine = (output: string) =>
+      group(output, "Policy").find((item) => item.includes("session export"));
+    const plain = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData(),
+      }),
+    ).render();
+    // Nothing declared: the gaps are still shown.
+    expect(exportLine(plain)).toBe(
+      `  - ${"session export".padEnd(20)} public unsupported, local unsupported, support enforced`,
+    );
+    const declared = (acknowledgeUnenforced?: string[]) => {
+      const data = doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({
+          manifest: {
+            ...governanceData().manifest,
+            policy: {
+              ...governanceData().manifest.policy,
+              ...(acknowledgeUnenforced ? { acknowledgeUnenforced } : {}),
+            },
+          } as unknown as GovernanceData["manifest"],
+        }),
+      });
+      return renderDoctor({
+        ...data,
+        ctx: {
+          ...data.ctx,
+          metadata: {
+            ...data.ctx.metadata,
+            data: {
+              contract: "piship-data/v1",
+              declared: {
+                retention: {},
+                purge: { onLogout: [], onUninstall: "none" },
+                export: { public: "deny" },
+              },
+            },
+          },
+        },
+      });
+    };
+    const unacknowledged = declared();
+    expect(unacknowledged.failed).toBe(true);
+    expect(
+      group(unacknowledged.render(), "Policy").find((item) =>
+        item.includes("data.export.public"),
+      ),
+    ).toBe(
+      `  ✗ ${"session.export".padEnd(20)} unsupported: rule data.export.public (deny public)`,
+    );
+    const acknowledged = declared(["session.export:public"]);
+    expect(acknowledged.failed).toBe(false);
+    expect(exportLine(acknowledged.render())).toBe(
+      `  - ${"session export".padEnd(20)} public unsupported (acknowledged), local unsupported, support enforced`,
+    );
+  });
+
   it("never shows identity claims", () => {
     const output = renderDoctor(
       doctorData("managed", { access: accessData() }),

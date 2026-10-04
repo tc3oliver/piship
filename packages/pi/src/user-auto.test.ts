@@ -627,7 +627,7 @@ describe("policy explain and doctor with auto mode", () => {
         shown.push(`${status} ${label}: ${value}`);
       policyGroup(
         {
-          ctx: { mode: built.lock.deployment.mode },
+          ctx: { mode: built.lock.deployment.mode, metadata: built.lock },
           governance: { manifest: built.lock.governance.manifest, inspection },
         } as unknown as DoctorData,
         {

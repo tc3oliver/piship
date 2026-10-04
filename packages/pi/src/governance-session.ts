@@ -20,6 +20,7 @@ import {
   resolveDecision,
 } from "@piship/contracts";
 import {
+  auditRotation,
   setUserAuto,
   type UserAutoStatus,
   userAutoDenied,
@@ -150,6 +151,7 @@ export class GovernanceSession {
         config: manifest.audit,
         distribution: options.lock.app.id,
         stateDir: options.stateDir,
+        rotation: auditRotation(options.lock),
         fetch: options.fetch,
         resolveUrl: (template) =>
           options.resolveTemplate("audit.sinks.url", template),

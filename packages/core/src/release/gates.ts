@@ -4,6 +4,7 @@
 import { PiShipError } from "@piship/contracts";
 import { manifestContainment, unenforcedRules } from "@piship/policy";
 import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
+import { withSessionExportRules } from "../data/session-export.js";
 import {
   currentTarget,
   type DistributionLock,
@@ -270,7 +271,7 @@ export function checkReleaseInputs(
   const unenforced = governance
     ? unenforcedRules(
         lock.deployment.mode,
-        governance.policy,
+        withSessionExportRules(governance.policy, lock.data?.declared),
         manifestContainment(governance),
       ).filter((item) => item.level === "error")
     : [];
