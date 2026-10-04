@@ -98,14 +98,35 @@ export const TOOL_RESULT_MESSAGE_FIELDS: Record<
 };
 
 type NestedCall = {
+  id?: unknown;
   arguments?: unknown;
   argumentsBytes?: number;
   error?: unknown;
 };
-type CodemodeCall = { args?: unknown; error?: unknown };
+type CodemodeCall = { id?: unknown; args?: unknown; error?: unknown };
 
 const changed = (before: unknown, after: unknown) =>
   JSON.stringify(before) !== JSON.stringify(after);
+
+/** Codemode's argument preview: JSON cut to 200 characters, ending `...`. */
+const ARGS_PREVIEW_CHARS = 200;
+/** Codemode's error preview length. */
+const ERROR_PREVIEW_CHARS = 500;
+
+function preview(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+/**
+ * A Codemode preview redacted. A cut can leave only the start of a secret,
+ * which `redact` no longer recognizes, so a cut preview also loses its last
+ * unbroken token.
+ */
+function redactPreview(text: string, max: number): string {
+  const redacted = redact(text);
+  if (text.length !== max || !text.endsWith("...")) return redacted;
+  return redacted.replace(/[^\s"'`,:;=()[\]{}<>]*\.\.\.$/, "...");
+}
 
 /**
  * The tool result with the nested calls' arguments and error text redacted,
@@ -140,10 +161,26 @@ export function redactToolResult(message: unknown): unknown {
   }
   const details = value.details;
   if (value.toolName === "codemode" && Array.isArray(details?.calls)) {
+    // The preview is rebuilt from the full arguments Pi recorded for the
+    // same call, redacted before the cut.
+    const full = new Map<unknown, unknown>();
+    for (const call of Array.isArray(nested?.calls) ? nested.calls : [])
+      if (call.arguments !== undefined) full.set(call.id, call.arguments);
+    const args = (call: CodemodeCall): string => {
+      const source = full.get(call.id);
+      if (source !== undefined)
+        return preview(
+          JSON.stringify(redactValue(source)) ?? "",
+          ARGS_PREVIEW_CHARS,
+        );
+      return redactPreview(call.args as string, ARGS_PREVIEW_CHARS);
+    };
     const calls = details.calls.map((call) => ({
       ...call,
-      ...(typeof call.args === "string" ? { args: redact(call.args) } : {}),
-      ...(typeof call.error === "string" ? { error: redact(call.error) } : {}),
+      ...(typeof call.args === "string" ? { args: args(call) } : {}),
+      ...(typeof call.error === "string"
+        ? { error: redactPreview(call.error, ERROR_PREVIEW_CHARS) }
+        : {}),
     }));
     if (changed(details.calls, calls)) changes.details = { ...details, calls };
   }

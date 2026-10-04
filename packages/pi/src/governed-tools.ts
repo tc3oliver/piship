@@ -75,7 +75,13 @@ export function planRefusal(
   gov: GovernanceSession,
   tool: string,
 ): string | undefined {
-  if (gov.workflowMode !== "plan" || PLAN_ALLOWED_TOOLS.has(tool))
+  // `ask_user` is PiShip's only while its builtin is loaded; without it, a
+  // tool of that name is an extension's, with effects PiShip cannot know.
+  if (
+    gov.workflowMode !== "plan" ||
+    (PLAN_ALLOWED_TOOLS.has(tool) &&
+      (tool !== "ask_user" || gov.loader.builtin.has("piship-ask-user")))
+  )
     return undefined;
   gov.metrics.recordPolicyDenial("tool.execute");
   gov.emit("tool.denied", {

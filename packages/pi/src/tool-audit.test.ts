@@ -143,7 +143,7 @@ describe("tool call audit", () => {
     expect(emitted.filter((item) => item.event === "tool.denied")).toEqual([]);
   });
 
-  it("classifies a call Pi refused before policy as not-found or invalid-arguments", () => {
+  it("classifies a call refused before policy as not-found, invalid-arguments, or refused-before-policy", () => {
     const { emitted, on } = setup({
       tools: [
         { name: "read", exposure: "direct" },
@@ -151,7 +151,12 @@ describe("tool call audit", () => {
       ],
       active: ["read", "codemode"],
     });
-    const attempt = (id: string, toolName: string, parent?: string) => {
+    const attempt = (
+      id: string,
+      toolName: string,
+      parent?: string,
+      text = "secret-canary",
+    ) => {
       const event = {
         toolCallId: id,
         toolName,
@@ -161,14 +166,24 @@ describe("tool call audit", () => {
       on("tool_execution_end")({
         ...event,
         isError: true,
-        result: { content: [{ type: "text", text: "secret-canary" }] },
+        result: { content: [{ type: "text", text }] },
       });
     };
     on("tool_execution_start")({ toolCallId: "p", toolName: "codemode" });
-    attempt("p/1", "read", "p"); // bad arguments
+    // Pi's validation error, which no tool_call hook sees.
+    attempt(
+      "p/1",
+      "read",
+      "p",
+      'Validation failed for tool "read":\n  - /path: secret-canary',
+    );
     attempt("p/2", "hidden_tool", "p"); // excluded: not registered
     attempt("p/3", "codemode", "p"); // model-only: never callable nested
     attempt("t1", "nope"); // top-level unknown name
+    // An earlier extension's tool_call hook blocked it, even one that
+    // words its reason like a validation error of another tool.
+    attempt("t2", "read", undefined, "blocked by a company hook");
+    attempt("t3", "read", undefined, 'Validation failed for tool "other":');
     const denied = emitted.filter((item) => item.event === "tool.denied");
     expect(
       denied.map(({ fields }) => [
@@ -182,6 +197,8 @@ describe("tool call audit", () => {
       ["hidden_tool", PRE_POLICY_RULE, "not-found", "codemode"],
       ["codemode", PRE_POLICY_RULE, "not-found", "codemode"],
       ["nope", PRE_POLICY_RULE, "not-found", "top-level"],
+      ["read", PRE_POLICY_RULE, "refused-before-policy", "top-level"],
+      ["read", PRE_POLICY_RULE, "refused-before-policy", "top-level"],
     ]);
     expect(JSON.stringify(emitted)).not.toContain("secret-canary");
   });
@@ -209,5 +226,48 @@ describe("tool call audit", () => {
       }),
     ).toBeUndefined();
     expect(personal.decided.map((item) => item.tool)).toEqual(["late_tool"]);
+  });
+
+  it("managed: refuses a tool re-registered with a wider exposure than launch resolved", async () => {
+    const options = {
+      exposure: { company_batch: "deferred", company_same: "codemode" },
+      tools: [
+        { name: "company_batch", exposure: "direct" },
+        { name: "company_same", exposure: "codemode" },
+      ],
+    };
+    const managed = setup({ ...options, mode: "managed" });
+    expect(
+      await managed.on("tool_call")({
+        toolCallId: "w",
+        toolName: "company_batch",
+        input: {},
+      }),
+    ).toMatchObject({ block: true });
+    expect(managed.emitted.at(-1)).toMatchObject({
+      event: "tool.denied",
+      fields: { resource: "company_batch", rule: UNRESOLVED_EXPOSURE_RULE },
+    });
+    // The exposure it was resolved with goes on to policy.
+    expect(
+      await managed.on("tool_call")({
+        toolCallId: "s",
+        toolName: "company_same",
+        input: {},
+      }),
+    ).toBeUndefined();
+    expect(managed.decided.map((item) => item.tool)).toEqual(["company_same"]);
+    // Personal: the policy decides it.
+    const personal = setup(options);
+    expect(
+      await personal.on("tool_call")({
+        toolCallId: "w",
+        toolName: "company_batch",
+        input: {},
+      }),
+    ).toBeUndefined();
+    expect(personal.decided.map((item) => item.tool)).toEqual([
+      "company_batch",
+    ]);
   });
 });

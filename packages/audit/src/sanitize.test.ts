@@ -6,6 +6,7 @@ import {
   NO_CONTENT_CAPTURE,
   PiShipError,
   SecretValue,
+  TOOL_CALL_FAILURES,
 } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import { AUDIT_LIMITS, sanitizeEvent } from "./index.js";
@@ -45,6 +46,26 @@ describe("tool execution detail (v0.9)", () => {
       );
       expect(sanitized.detail).toEqual(detail);
       if (rule) expect(sanitized.rule).toBe(rule);
+    }
+  });
+
+  it("keeps every pre-policy failure class, including a refusal by an earlier extension", () => {
+    expect(TOOL_CALL_FAILURES).toContain("refused-before-policy");
+    for (const error of TOOL_CALL_FAILURES) {
+      const detail = { action: "tool.execute", source: "top-level", error };
+      const sanitized = sanitizeEvent(
+        {
+          event: "tool.denied",
+          distribution: "acme",
+          resource: "company_tool",
+          rule: "piship.pre-policy",
+          decision: "denied",
+          detail,
+        },
+        NO_CONTENT_CAPTURE,
+        fixed,
+      );
+      expect(sanitized.detail).toEqual(detail);
     }
   });
 });

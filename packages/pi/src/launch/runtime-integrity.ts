@@ -4,14 +4,21 @@
 // model request when a repair fails. v0.9 knows two classes: what is listed
 // here is enforced, everything else stays mutable by any extension.
 import type {
+  BuildSystemPromptOptions,
   ContextWithSystemEvent,
   ExtensionAPI,
+  ExtensionContext,
   InlineExtension,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { formatError } from "@piship/contracts";
-import type { CacheWarmingMode, MutabilityClass } from "@piship/schema";
+import type {
+  CacheWarmingMode,
+  MutabilityClass,
+  ToolExposure,
+} from "@piship/schema";
 import { workflowSection } from "../builtins.js";
+import { widenedTools } from "../governance/exposure.js";
 import type { GovernanceSession } from "../governance-session.js";
 
 export const RUNTIME_MUTATION_REVERTED = "runtime.mutation.reverted";
@@ -37,6 +44,13 @@ export interface EnforcedRuntime {
   readonly sections: () => Readonly<Record<string, string>>;
   /** PiShip tools that stay active. */
   readonly mandatoryTools: readonly string[];
+  /**
+   * Tools re-registered with an exposure wider than the one resolved at
+   * launch, which the session refuses to run with (managed only).
+   */
+  readonly widenedTools?: (
+    live: readonly { name: string; exposure: ToolExposure }[],
+  ) => readonly string[];
   readonly cacheWarming: CacheWarmingSetting;
 }
 
@@ -116,16 +130,42 @@ export function enforcedRuntime(
     // Read per check: the exposure table is built once extensions loaded.
     get mandatoryTools() {
       const table = gov.exposure;
+      // Only a tool the model calls directly is active; a Codemode or
+      // deferred ask_user is reached through Codemode or tool search.
+      const askUser = table?.get("ask_user") ?? "direct";
       return [
         ...(gov.loader.builtin.has("piship-ask-user") &&
-        table?.get("ask_user") !== "hidden"
+        (askUser === "direct" || askUser === "model-only")
           ? ["ask_user"]
           : []),
         ...(table?.mandatoryActive() ?? []),
       ];
     },
+    widenedTools: (live) =>
+      managed && gov.exposure ? widenedTools(gov.exposure, live) : [],
     cacheWarming: cacheWarmingSetting(gov),
   };
+}
+
+/**
+ * Turns `forceSystemPrompt` into a plain data property holding its current
+ * value, so an accessor an extension installed cannot answer PiShip's check
+ * with one value and Pi's request projection with another. It stays
+ * writable, as Pi's own handlers assign it; it is not configurable, so no
+ * accessor can be installed again.
+ */
+function pinForced(options: BuildSystemPromptOptions): void {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    options,
+    "forceSystemPrompt",
+  );
+  if (descriptor && "value" in descriptor && !descriptor.configurable) return;
+  Object.defineProperty(options, "forceSystemPrompt", {
+    value: options.forceSystemPrompt,
+    writable: true,
+    enumerable: true,
+    configurable: false,
+  });
 }
 
 /** Enforced text a request lost, framed as one prompt section. */
@@ -197,10 +237,13 @@ export function runtimeIntegrityExtension(
   // Pi catches a handler's throw and only reports it, which would skip the
   // enforcement silently: a failure blocks the session instead.
   const guarded =
-    <E, R>(phase: string, handler: (event: E) => R | undefined) =>
-    (event: E): R | undefined => {
+    <E, R>(
+      phase: string,
+      handler: (event: E, ctx: ExtensionContext) => R | undefined,
+    ) =>
+    (event: E, ctx: ExtensionContext): R | undefined => {
       try {
-        return handler(event);
+        return handler(event, ctx);
       } catch (error) {
         gov.blockRuntime(`runtime:${phase}`, formatError(error));
         return undefined;
@@ -212,7 +255,10 @@ export function runtimeIntegrityExtension(
   ];
   // A forced prompt replaces every system message of the request after the
   // context transforms, so the request-time repair does not apply to it.
-  let forced = false;
+  // Pi reads it from the run's prompt options when it projects each request,
+  // and an extension can keep that object from before_agent_start and set it
+  // later: it is re-read, as Pi will, at every request.
+  let runOptions: BuildSystemPromptOptions | undefined;
   return {
     name: INTEGRITY_EXTENSION,
     factory: (pi: ExtensionAPI) => {
@@ -234,11 +280,23 @@ export function runtimeIntegrityExtension(
             );
       };
 
+      /** Blocks the session when a tool was re-registered more widely. */
+      const checkExposure = (phase: string) => {
+        for (const name of enforced.widenedTools?.(pi.getAllTools()) ?? [])
+          gov.blockRuntime(
+            `tool:${name}`,
+            `${phase}: the tool was re-registered with a wider exposure`,
+          );
+      };
+
       pi.on(
         "before_agent_start",
         guarded("before_agent_start", (event) => {
           const phase = "before_agent_start";
           const options = event.systemPromptOptions;
+          // An accessor would answer this check and the request differently.
+          pinForced(options);
+          runOptions = options;
           for (const item of enforced.instructions) {
             const at = options.contextFiles.findIndex(
               (file) => file.path === item.path,
@@ -278,7 +336,6 @@ export function runtimeIntegrityExtension(
               reverted("prompt:forced", "appended", phase);
             }
           }
-          forced = options.forceSystemPrompt !== undefined;
           // An edited selectedTools wins over the live set; when nobody
           // edited it, the live set does.
           const missing = enforced.mandatoryTools.filter(
@@ -312,6 +369,7 @@ export function runtimeIntegrityExtension(
             )
           )
             gov.blockRuntime("tools", `${phase}: the tools were not restored`);
+          checkExposure(phase);
           return undefined;
         }),
       );
@@ -322,65 +380,95 @@ export function runtimeIntegrityExtension(
         "turn_end",
         guarded("turn_end", () => {
           restoreLive("turn_end");
+          checkExposure("turn_end");
           return undefined;
         }),
       );
 
       pi.on(
         "context_with_system",
-        guarded("context_with_system", (event: ContextWithSystemEvent) => {
-          const phase = "context_with_system";
-          if (forced) return undefined;
-          const messages = event.messages;
-          // The first system message is not always at index 0: a session
-          // that began with entries appended outside a prompt gets its
-          // prompt later in the transcript.
-          const at = messages.findIndex(
-            (message) => (message as SystemLike).role === "system",
-          );
-          const head = messages[at] as SystemLike | undefined;
-          if (!head) {
-            gov.blockRuntime(
-              "prompt:system",
-              `${phase}: the request has no system message`,
+        guarded(
+          "context_with_system",
+          (event: ContextWithSystemEvent, ctx: ExtensionContext) => {
+            const phase = "context_with_system";
+            if (runOptions) pinForced(runOptions);
+            const forcedPrompt = runOptions?.forceSystemPrompt;
+            if (forcedPrompt !== undefined) {
+              // Pi replaces every system message with the forced text after
+              // this handler; ctx.getSystemPrompt() renders what it will send.
+              const required = texts();
+              const missing = required.filter(
+                (text) => !forcedPrompt.includes(text),
+              );
+              if (missing.length && runOptions) {
+                runOptions.forceSystemPrompt = `${forcedPrompt}\n\n${enforcedBlock(missing)}`;
+                reverted("prompt:forced", "appended", phase);
+              }
+              const sent = ctx.getSystemPrompt();
+              if (required.some((text) => !sent.includes(text)))
+                gov.blockRuntime(
+                  "prompt:forced",
+                  `${phase}: the forced prompt was not restored`,
+                );
+              return undefined;
+            }
+            const messages = event.messages;
+            // The first system message is not always at index 0: a session
+            // that began with entries appended outside a prompt gets its
+            // prompt later in the transcript.
+            const at = messages.findIndex(
+              (message) => (message as SystemLike).role === "system",
             );
-            return undefined;
-          }
-          const required = texts();
-          const current = replaySystem(messages);
-          let result: { messages: typeof messages } | undefined;
-          const missing = required.filter(
-            (text) => !current.prompt.includes(text),
-          );
-          if (missing.length) {
-            const repaired = messages.slice();
-            repaired[at] = {
-              ...head,
-              sections: {
-                ...head.sections,
-                piship_enforced: enforcedBlock(missing),
-              },
-            } as unknown as (typeof messages)[number];
-            const prompt = replaySystem(repaired).prompt;
-            if (required.some((text) => !prompt.includes(text)))
+            const head = messages[at] as SystemLike | undefined;
+            if (!head) {
               gov.blockRuntime(
                 "prompt:system",
-                `${phase}: the prompt was not restored`,
+                `${phase}: the request has no system message`,
               );
-            else {
-              reverted("prompt:system", "appended", phase);
-              result = { messages: repaired };
+              return undefined;
             }
-          }
-          // A declaration without an executable tool fails the call, so the
-          // tool is restored for the next turn, not declared here.
-          const undeclared = enforced.mandatoryTools.filter(
-            (name) => !current.tools.has(name),
-          );
-          if (undeclared.length) restoreLive(phase, undeclared);
-          return result;
-        }),
+            const required = texts();
+            const current = replaySystem(messages);
+            let result: { messages: typeof messages } | undefined;
+            const missing = required.filter(
+              (text) => !current.prompt.includes(text),
+            );
+            if (missing.length) {
+              const repaired = messages.slice();
+              repaired[at] = {
+                ...head,
+                sections: {
+                  ...head.sections,
+                  piship_enforced: enforcedBlock(missing),
+                },
+              } as unknown as (typeof messages)[number];
+              const prompt = replaySystem(repaired).prompt;
+              if (required.some((text) => !prompt.includes(text)))
+                gov.blockRuntime(
+                  "prompt:system",
+                  `${phase}: the prompt was not restored`,
+                );
+              else {
+                reverted("prompt:system", "appended", phase);
+                result = { messages: repaired };
+              }
+            }
+            // A declaration without an executable tool fails the call, so the
+            // tool is restored for the next turn, not declared here.
+            const undeclared = enforced.mandatoryTools.filter(
+              (name) => !current.tools.has(name),
+            );
+            if (undeclared.length) restoreLive(phase, undeclared);
+            return result;
+          },
+        ),
       );
+
+      // Pi drops the run's prompt options when the run settles, and its
+      // projection forces only a run's prompt.
+      pi.on("agent_settled", () => {
+        runOptions = undefined;
+      });
 
       pi.on(
         "cache_warming_decision",

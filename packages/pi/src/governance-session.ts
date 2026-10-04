@@ -496,6 +496,14 @@ export class GovernanceSession {
     return next;
   }
 
+  /**
+   * Run a dialog of PiShip's own (`ask_user`) in the approval queue, so it
+   * never replaces an open approval prompt or another question.
+   */
+  serializeDialog<T>(dialog: () => Promise<T>): Promise<T> {
+    return this.#serialized(dialog);
+  }
+
   /** Approval before the TUI starts: the terminal, or none when headless. */
   startupChannel(): ApprovalChannel | undefined {
     return (

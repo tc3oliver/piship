@@ -722,10 +722,22 @@ describe("governed built-in tools", () => {
         block: true,
         reason: `Plan mode does not allow ${name}. The user can switch to Build mode with /build.`,
       });
-    for (const name of ["read", "ask_user"])
-      expect(await call?.({ toolName: name, input: {} }, context())).toBe(
-        undefined,
-      );
+    expect(await call?.({ toolName: "read", input: {} }, context())).toBe(
+      undefined,
+    );
+    // ask_user is PiShip's only while its builtin is loaded; otherwise a
+    // tool of that name is an extension's.
+    expect(
+      await call?.({ toolName: "ask_user", input: {} }, context()),
+    ).toEqual({
+      block: true,
+      reason:
+        "Plan mode does not allow ask_user. The user can switch to Build mode with /build.",
+    });
+    session.loader.builtin.add("piship-ask-user");
+    expect(await call?.({ toolName: "ask_user", input: {} }, context())).toBe(
+      undefined,
+    );
     session.workflowMode = "build";
     expect(
       await call?.({ toolName: "mcp__docs__search", input: {} }, context()),
@@ -1153,6 +1165,67 @@ describe("piship-ask-user", () => {
     expect(await answer({ question: "Ship it?" }, context())).toEqual({
       outcome: "unavailable",
     });
+  });
+
+  it("waits for an open approval prompt, and closes with its call", async () => {
+    const { session, workspace } = await open();
+    const ask = askUserTool(session);
+    let open_ = 0;
+    let maxOpen = 0;
+    const signals: (AbortSignal | undefined)[] = [];
+    const confirm = async (
+      _title: string,
+      _message: string,
+      options?: { signal?: AbortSignal },
+    ) => {
+      signals.push(options?.signal);
+      open_ += 1;
+      maxOpen = Math.max(maxOpen, open_);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      open_ -= 1;
+      return true;
+    };
+    const ctx = context(true, confirm);
+    const controller = new AbortController();
+    // Codemode's Promise.all of a question and a write that asks.
+    const [answer] = await Promise.all([
+      ask.execute(
+        "q",
+        { question: "Ship it?" } as never,
+        controller.signal,
+        undefined,
+        ctx,
+      ),
+      run(
+        tool(governedTools(session, workspace), "write"),
+        { path: "w.txt", content: "x" },
+        ctx,
+      ),
+      ask.execute(
+        "q2",
+        { question: "Again?" } as never,
+        undefined,
+        undefined,
+        ctx,
+      ),
+    ]);
+    expect(answer.details).toEqual({ outcome: "approved" });
+    expect(maxOpen).toBe(1);
+    // Both questions and the write's approvals.
+    const shown = signals.length;
+    expect(shown).toBeGreaterThanOrEqual(3);
+    expect(signals).toContain(controller.signal);
+    // A question whose call was aborted while it waited is never shown.
+    controller.abort();
+    const aborted = await ask.execute(
+      "q3",
+      { question: "Late?" } as never,
+      controller.signal,
+      undefined,
+      ctx,
+    );
+    expect(aborted.details).toEqual({ outcome: "cancelled" });
+    expect(signals).toHaveLength(shown);
   });
 });
 

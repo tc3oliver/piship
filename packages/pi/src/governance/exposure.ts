@@ -196,6 +196,32 @@ export function activateExposure(
     ]);
 }
 
+/** `live` exposes a tool more widely than the `resolved` exposure. */
+export function widerExposure(
+  live: ToolExposure,
+  resolved: ToolExposure,
+): boolean {
+  return EXPOSURE_VISIBILITY[live] > EXPOSURE_VISIBILITY[resolved];
+}
+
+/**
+ * Tools whose live exposure is wider than the table resolved at launch. The
+ * table is a snapshot: an extension that re-registers its tool later (in
+ * `session_start` or a command) replaces Pi's definition, and Pi reads the
+ * new exposure from then on.
+ */
+export function widenedTools(
+  table: ToolExposureTable,
+  live: readonly { readonly name: string; readonly exposure: ToolExposure }[],
+): string[] {
+  return live
+    .filter((tool) => {
+      const resolved = table.get(tool.name);
+      return resolved !== undefined && widerExposure(tool.exposure, resolved);
+    })
+    .map((tool) => tool.name);
+}
+
 export interface ToolExposureTable {
   readonly codemode: ExposureConfig["codemode"];
   /** The Codemode extension runs and its tool is activated. */

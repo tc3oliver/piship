@@ -84,6 +84,40 @@ describe("redactToolResult", () => {
     expect(JSON.stringify(message)).toContain(CREDENTIAL);
   });
 
+  it("leaves no part of a secret a Codemode preview cut through", () => {
+    // Codemode's 200-character preview: JSON cut, ending in `...`.
+    const command = `${"x".repeat(170)} ${CREDENTIAL}`;
+    const json = JSON.stringify({ command });
+    const cut = `${json.slice(0, 197)}...`;
+    const partial = cut.slice(cut.lastIndexOf(" ") + 1, -3);
+    expect(CREDENTIAL.startsWith(partial)).toBe(true);
+    const message = {
+      role: "toolResult",
+      toolCallId: "call_2",
+      toolName: "codemode",
+      content: [],
+      isError: false,
+      timestamp: 1,
+      nestedCalls: {
+        complete: true,
+        calls: [{ id: "call_2/1", name: "bash", arguments: { command } }],
+      },
+      details: {
+        calls: [
+          { id: "call_2/1", name: "bash", args: cut, status: "ok" },
+          // No full arguments recorded (over Pi's size limit).
+          { id: "call_2/2", name: "bash", args: cut, status: "ok" },
+        ],
+      },
+    };
+    const redacted = redactToolResult(message) as typeof message;
+    const [rebuilt, stripped] = redacted.details.calls;
+    expect(rebuilt?.args).toContain("[REDACTED");
+    expect(stripped?.args.endsWith(" ...")).toBe(true);
+    for (const call of redacted.details.calls)
+      expect(call.args).not.toContain(partial);
+  });
+
   it("leaves another tool's details, and a result with nothing to redact, alone", () => {
     const other = redactToolResult(nestedMessage("company_batch")) as {
       details: unknown;

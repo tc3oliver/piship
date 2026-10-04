@@ -15,7 +15,8 @@ import {
   type ToolCallFailure,
 } from "@piship/contracts";
 import { describeUserAuto } from "@piship/core";
-import { CODEMODE_TOOL } from "./governance/exposure.js";
+import type { ToolExposure } from "@piship/schema";
+import { CODEMODE_TOOL, widerExposure } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
@@ -104,12 +105,26 @@ function lateRegistration(
   ctx: ExtensionContext,
 ): { block: true; reason: string } | undefined {
   if (!gov.exposure || gov.exposure.get(tool) !== undefined) return undefined;
+  return unresolvedExposure(
+    gov,
+    tool,
+    ctx,
+    `${tool} was registered after the session started`,
+  );
+}
+
+function unresolvedExposure(
+  gov: GovernanceSession,
+  tool: string,
+  ctx: ExtensionContext,
+  what: string,
+): { block: true; reason: string } | undefined {
   if (gov.options.lock.deployment.mode !== "managed") {
     const noticed = lateNoticed.get(gov) ?? new Set<string>();
     lateNoticed.set(gov, noticed);
     if (!noticed.has(tool) && ctx.hasUI)
       ctx.ui.notify(
-        `${tool} was registered after the session started, so its exposure was not checked against the distribution; the policy still decides each call.`,
+        `${what}, so its exposure was not checked against the distribution; the policy still decides each call.`,
         "warning",
       );
     noticed.add(tool);
@@ -127,9 +142,44 @@ function lateRegistration(
   return {
     block: true,
     reason: redact(
-      `${tool} was registered after the session started, and this distribution only runs tools whose exposure it resolved at launch`,
+      `${what}, and this distribution only runs tools whose exposure it resolved at launch`,
     ),
   };
+}
+
+/** The text of a tool result Pi reports at tool_execution_end. */
+function resultText(result: unknown): string {
+  const content = (result as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return "";
+  const first = content.find(
+    (part): part is { type: "text"; text: string } =>
+      part?.type === "text" && typeof part.text === "string",
+  );
+  return first?.text ?? "";
+}
+
+/**
+ * A tool whose live exposure is wider than the exposure resolved at launch:
+ * an extension re-registered it (in `session_start` or later) after the
+ * table was built. Managed: refused. Personal: policy alone decides, with a
+ * notice once per tool.
+ */
+function widenedRegistration(
+  gov: GovernanceSession,
+  tool: string,
+  liveExposure: () => ToolExposure | undefined,
+  ctx: ExtensionContext,
+): { block: true; reason: string } | undefined {
+  const resolved = gov.exposure?.get(tool);
+  if (!resolved) return undefined;
+  const live = liveExposure();
+  if (!live || !widerExposure(live, resolved)) return undefined;
+  return unresolvedExposure(
+    gov,
+    tool,
+    ctx,
+    `${tool} was re-registered with exposure ${live} after the session started, wider than the ${resolved} the distribution resolved at launch`,
+  );
 }
 
 async function decideToolCall(
@@ -218,9 +268,16 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
               (info.exposure === "direct" &&
                 pi.getActiveTools().includes(tool)))
           : pi.getActiveTools().includes(tool);
-        const error: ToolCallFailure = callable
-          ? "invalid-arguments"
-          : "not-found";
+        // Pi validates the arguments before any tool_call hook; a callable
+        // tool that failed otherwise was refused by an earlier extension's
+        // hook. Only the error's fixed prefix is read, never recorded.
+        const error: ToolCallFailure = !callable
+          ? "not-found"
+          : resultText(event.result).startsWith(
+                `Validation failed for tool "${tool}":`,
+              )
+            ? "invalid-arguments"
+            : "refused-before-policy";
         gov.emit("tool.denied", {
           resource: tool,
           decision: "denied",
@@ -236,7 +293,15 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
         const call = calls.get(event.toolCallId);
         if (call) call.gated = true;
         try {
-          const late = lateRegistration(gov, tool, ctx);
+          const late =
+            lateRegistration(gov, tool, ctx) ??
+            widenedRegistration(
+              gov,
+              tool,
+              () =>
+                pi.getAllTools().find((item) => item.name === tool)?.exposure,
+              ctx,
+            );
           if (late) return late;
           return await decideToolCall(
             gov,
@@ -314,7 +379,7 @@ export function askUserTool(gov: GovernanceSession): ToolDefinition {
       additionalProperties: false,
     } as never,
     executionMode: "sequential",
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const input = params as AskInput;
       const reply = (outcome: string, text: string) => {
         gov.emit("tool.request", {
@@ -334,16 +399,28 @@ export function askUserTool(gov: GovernanceSession): ToolDefinition {
       const options = (input.options ?? []).filter(
         (item) => typeof item === "string" && item.trim(),
       );
+      // Pi does not queue dialogs: the question waits for open approval
+      // prompts (Codemode can run it next to a call that asks), and closes
+      // with the call.
+      const dialog = signal ? { signal } : {};
+      const cancelled = () =>
+        reply("cancelled", "The user cancelled the question without choosing.");
       if (options.length) {
-        const choice = await ctx.ui.select(input.question, [...options]);
+        const choice = await gov.serializeDialog(async () =>
+          signal?.aborted
+            ? undefined
+            : ctx.ui.select(input.question, [...options], dialog),
+        );
         return choice === undefined
-          ? reply(
-              "cancelled",
-              "The user cancelled the question without choosing.",
-            )
+          ? cancelled()
           : reply("answered", `The user chose: ${choice}`);
       }
-      const approved = await ctx.ui.confirm("Question", input.question);
+      const approved = await gov.serializeDialog(async () =>
+        signal?.aborted
+          ? undefined
+          : ctx.ui.confirm("Question", input.question, dialog),
+      );
+      if (approved === undefined) return cancelled();
       return approved
         ? reply("approved", "The user approved.")
         : reply("denied", "The user declined.");

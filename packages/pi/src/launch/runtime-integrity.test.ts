@@ -39,7 +39,11 @@ function enforced(overrides: Partial<EnforcedRuntime> = {}): EnforcedRuntime {
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 
-function harness(runtime = enforced(), live = ["read", "ask_user"]) {
+function harness(
+  runtime = enforced(),
+  live = ["read", "ask_user"],
+  all: { name: string; exposure: string }[] = [],
+) {
   const events: { event: string; fields: unknown }[] = [];
   const blocks: string[] = [];
   const notices: string[] = [];
@@ -49,7 +53,12 @@ function harness(runtime = enforced(), live = ["read", "ask_user"]) {
     notice: (message: string) => notices.push(message),
   };
   const handlers = new Map<string, Handler>();
-  const state = { live: [...live], ignore: [] as string[] };
+  const state = {
+    live: [...live],
+    ignore: [] as string[],
+    // What ctx.getSystemPrompt() renders: the run's forced prompt, as Pi does.
+    options: undefined as { forceSystemPrompt?: string } | undefined,
+  };
   const setActiveTools = vi.fn((names: string[]) => {
     state.live = names.filter((name) => !state.ignore.includes(name));
   });
@@ -57,12 +66,19 @@ function harness(runtime = enforced(), live = ["read", "ask_user"]) {
   (extension as { factory: (pi: unknown) => void }).factory({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     getActiveTools: () => [...state.live],
+    getAllTools: () => all,
     setActiveTools,
   });
+  const ctx = {
+    getSystemPrompt: () => state.options?.forceSystemPrompt ?? "",
+  };
   const fire = (name: string, event: unknown = {}) => {
     const handler = handlers.get(name);
     if (!handler) throw new Error(`${name} was not registered`);
-    return handler({ type: name, ...(event as object) });
+    const options = (event as { systemPromptOptions?: typeof state.options })
+      .systemPromptOptions;
+    if (options) state.options = options;
+    return handler({ type: name, ...(event as object) }, ctx);
   };
   const reverted = () =>
     events
@@ -88,6 +104,8 @@ function options(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+type Forceable = ReturnType<typeof options> & { forceSystemPrompt?: string };
 
 const system = (sections: Record<string, string | null>, extra = {}) => ({
   role: "system",
@@ -295,6 +313,79 @@ describe("runtime integrity: context_with_system", () => {
     expect(reverted()).toEqual(["prompt:forced"]);
     expect(blocks).toEqual([]);
   });
+
+  it("appends to a prompt forced after before_agent_start through a kept options object", () => {
+    const { fire, reverted, blocks } = harness();
+    const opts: Forceable = options();
+    fire("before_agent_start", { systemPromptOptions: opts });
+    expect(reverted()).toEqual([]);
+    // A `context` handler of an extension that kept the object.
+    opts.forceSystemPrompt = "late";
+    expect(
+      fire("context_with_system", {
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      }),
+    ).toBeUndefined();
+    expect(opts.forceSystemPrompt).toContain("late");
+    expect(opts.forceSystemPrompt).toContain(COMPANY);
+    expect(opts.forceSystemPrompt).toContain(WORKFLOW);
+    expect(reverted()).toEqual(["prompt:forced"]);
+    expect(blocks).toEqual([]);
+  });
+
+  it("pins an accessor on forceSystemPrompt to the value PiShip checked", () => {
+    const { fire, blocks } = harness();
+    const opts: Forceable = options();
+    let reads = 0;
+    Object.defineProperty(opts, "forceSystemPrompt", {
+      get: () => (++reads > 1 ? "late" : undefined),
+      set: () => undefined,
+      enumerable: true,
+      configurable: true,
+    });
+    fire("before_agent_start", { systemPromptOptions: opts });
+    expect(opts.forceSystemPrompt).toBeUndefined();
+    // No accessor can be installed again.
+    expect(() =>
+      Object.defineProperty(opts, "forceSystemPrompt", { get: () => "x" }),
+    ).toThrow(TypeError);
+    expect(blocks).toEqual([]);
+  });
+
+  it("blocks when the forced prompt Pi will send still lacks the enforced text", () => {
+    const { fire, blocks, state } = harness();
+    const opts: Forceable = options();
+    fire("before_agent_start", { systemPromptOptions: opts });
+    opts.forceSystemPrompt = "late";
+    // A later turn's options object, which PiShip cannot reach.
+    state.options = { forceSystemPrompt: "late" };
+    fire("context_with_system", {
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    });
+    expect(blocks).toEqual(["prompt:forced"]);
+  });
+});
+
+describe("runtime integrity: exposure", () => {
+  it("blocks the session when a tool was re-registered more widely than launch resolved", () => {
+    const all = [
+      { name: "company_batch", exposure: "direct" },
+      { name: "read", exposure: "direct" },
+    ];
+    const widened = (live: readonly { name: string; exposure: string }[]) =>
+      live
+        .filter((tool) => tool.name === "company_batch")
+        .map((tool) => tool.name);
+    const { fire, blocks } = harness(
+      enforced({ widenedTools: widened as never }),
+      ["read", "ask_user"],
+      all,
+    );
+    fire("before_agent_start", { systemPromptOptions: options() });
+    expect(blocks).toEqual(["tool:company_batch"]);
+    fire("turn_end");
+    expect(blocks).toEqual(["tool:company_batch", "tool:company_batch"]);
+  });
 });
 
 describe("runtime integrity: replaySystem", () => {
@@ -365,6 +456,46 @@ describe("enforced runtime", () => {
       mandatoryActive: () => ["codemode", "tool_search"],
     };
     expect(runtime.mandatoryTools).toEqual(["codemode", "tool_search"]);
+    // A Codemode or deferred ask_user is not kept active; model-only is.
+    for (const [exposure, mandatory] of [
+      ["codemode", false],
+      ["deferred", false],
+      ["model-only", true],
+      ["direct", true],
+    ] as const) {
+      gov.exposure = {
+        get: (name: string) => (name === "ask_user" ? exposure : "direct"),
+        mandatoryActive: () => [],
+      };
+      expect(runtime.mandatoryTools).toEqual(mandatory ? ["ask_user"] : []);
+    }
+  });
+
+  it("reports widened tools for a managed distribution only", () => {
+    const table = {
+      get: (name: string) =>
+        name === "company_batch" ? "deferred" : undefined,
+      mandatoryActive: () => [],
+    };
+    const live = [
+      { name: "company_batch", exposure: "direct" as const },
+      { name: "late_tool", exposure: "direct" as const },
+    ];
+    for (const [mode, expected] of [
+      ["managed", ["company_batch"]],
+      ["personal", []],
+    ] as const) {
+      const runtime = enforcedRuntime(
+        {
+          options: { lock: { deployment: { mode } } },
+          resources: [],
+          loader: { instructions: [], builtin: new Set<string>() },
+          exposure: table,
+        } as never,
+        undefined,
+      );
+      expect(runtime.widenedTools?.(live)).toEqual(expected);
+    }
   });
 });
 
