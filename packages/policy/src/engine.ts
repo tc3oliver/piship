@@ -21,6 +21,7 @@ import {
   normalizeTokenContext,
   type PathTokenContext,
 } from "./glob.js";
+import { seamPlane } from "./seams.js";
 
 /** Which planes an active OS sandbox adapter enforces. */
 export interface PolicyContainment {
@@ -40,46 +41,17 @@ export const NO_CONTAINMENT: PolicyContainment = {
 };
 
 /**
- * Actions PiShip decides at a runtime hook before they happen. Actions
- * without such a hook (`agent.invoke`, `memory.read`, `memory.write`) are
- * evaluated for explanation and audit only, so they are not listed here.
- */
-const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
-  "model.select",
-  "resource.load",
-  "extension.load",
-  "skill.load",
-  "instruction.load",
-  "provider.load",
-  "mcp.server.start",
-  "mcp.tool.call",
-  "tool.execute",
-]);
-
-/**
- * The plane that enforces `action` under the active containment. Filesystem
- * actions fall back to the control plane (built-in file tools are gated
- * in-process); shell command gating falls back to the control plane (the
- * tool call is intercepted before it runs); network connections without a
- * sandbox, web/browser actions, and actions no runtime hook evaluates are
- * audit-only.
+ * The plane that enforces `action` under the active containment, from the
+ * runtime seam table (`RUNTIME_SEAMS`). An action with no seam and no
+ * containment carries `audit-only` here; `decisionStatus` reports it as
+ * `unsupported`.
  */
 export function enforcementPlane(
   action: PolicyAction,
   containment: PolicyContainment,
+  resource?: string,
 ): EnforcementPlane {
-  if (CONTROL_PLANE_ACTIONS.has(action)) return "control-plane";
-  switch (action) {
-    case "filesystem.read":
-    case "filesystem.write":
-      return containment.filesystem ? "sandbox" : "control-plane";
-    case "shell.execute":
-      return containment.shell ? "sandbox" : "control-plane";
-    case "network.connect":
-      return containment.network ? "sandbox" : "audit-only";
-    default:
-      return "audit-only";
-  }
+  return seamPlane(action, containment, resource) ?? "audit-only";
 }
 
 const STRICTNESS: Readonly<Record<PolicyEffect, number>> = {
@@ -582,7 +554,11 @@ export class PolicyEngine {
       narrowingUser,
       ...chainedAsks,
     ].find((entry) => entry?.rule.effect === effect);
-    const enforcement = enforcementPlane(action, this.context.containment);
+    const enforcement = enforcementPlane(
+      action,
+      this.context.containment,
+      resource,
+    );
     if (!deciding)
       return {
         ...common,

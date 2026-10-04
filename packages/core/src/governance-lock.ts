@@ -1,4 +1,10 @@
 import { dirname, resolve } from "node:path";
+import { PiShipError } from "@piship/contracts";
+import {
+  manifestContainment,
+  type UnenforcedFinding,
+  unenforcedRules,
+} from "@piship/policy";
 import type { Manifest } from "@piship/schema";
 import type { LockedResource } from "./lock-schema.js";
 import { resolveResources } from "./resources.js";
@@ -76,4 +82,27 @@ export function checkGovernance(
   ),
 ): void {
   governanceLock(manifest, dirname(resolve(manifestPath)), resources);
+}
+
+/**
+ * Rules that deny or ask for an action no runtime seam enforces. A managed
+ * finding that is neither acknowledged nor audit-only throws
+ * POLICY_UNENFORCEABLE; the rest are returned for display.
+ */
+export function checkEnforceability(manifest: Manifest): UnenforcedFinding[] {
+  const governance = manifest.governance;
+  if (!governance) return [];
+  const findings = unenforcedRules(
+    manifest.deployment.mode,
+    governance.policy,
+    manifestContainment(governance),
+  );
+  const errors = findings.filter((item) => item.level === "error");
+  if (errors.length)
+    throw new PiShipError(
+      "POLICY_UNENFORCEABLE",
+      errors.map((item) => item.message).join("\n"),
+      { component: "policy" },
+    );
+  return findings;
 }

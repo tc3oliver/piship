@@ -578,6 +578,7 @@ describe("enforcement planes", () => {
   it("maps control-plane actions", () => {
     for (const action of [
       "model.select",
+      "model.dispatch",
       "resource.load",
       "extension.load",
       "skill.load",
@@ -607,6 +608,22 @@ describe("enforcement planes", () => {
       }).evaluate({ action, resource: "anything" });
       expect(decision.effect).toBe("deny");
       expect(decision.enforcement).toBe("audit-only");
+    }
+  });
+  it("takes session.export's plane from its resource", () => {
+    expect(enforcementPlane("session.export", contained, "support")).toBe(
+      "control-plane",
+    );
+    for (const resource of ["public", "local"]) {
+      expect(enforcementPlane("session.export", contained, resource)).toBe(
+        "audit-only",
+      );
+      expect(
+        engine({ context: { ...context, containment: contained } }).evaluate({
+          action: "session.export",
+          resource,
+        }).enforcement,
+      ).toBe("audit-only");
     }
   });
   it("uses the sandbox only when containment is active", () => {

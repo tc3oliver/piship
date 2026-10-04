@@ -381,6 +381,53 @@ describe("validate", () => {
     );
   });
 
+  it("rejects a managed deny on an unsupported action unless acknowledged, and warns in personal mode", async () => {
+    const policy = {
+      enforced: [
+        { id: "acme.web.deny", action: "web.request", effect: "deny" },
+      ],
+    };
+    const rejected = await validate({ policy });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout).not.toContain("Manifest is valid.");
+    expect(rejected.stderr).toContain("POLICY_UNENFORCEABLE");
+    expect(rejected.stderr).toContain(
+      "policy.enforced rule acme.web.deny (deny web.request:**)",
+    );
+    const acknowledged = await validate({
+      schema: "piship/v1alpha6",
+      policy: { ...policy, acknowledgeUnenforced: ["web.request:**"] },
+    });
+    expect(acknowledged.status).toBe(0);
+    expect(acknowledged.stdout).toContain("Manifest is valid.");
+    expect(acknowledged.stderr).toContain(
+      "Note: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam in this Pi version, so the rule is neither prevented nor recorded (acknowledged in policy.acknowledgeUnenforced)",
+    );
+    const manifest = join(temp, "piship.yaml");
+    writeFileSync(
+      manifest,
+      JSON.stringify({
+        schema: "piship/v1alpha3",
+        app: base.app,
+        runtime: base.runtime,
+        deployment: { mode: "personal" },
+        policy,
+      }),
+    );
+    const stderr: string[] = [];
+    const personal = {
+      status: await runCli(["validate", manifest], {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      }),
+      stderr: stderr.join("\n"),
+    };
+    expect(personal.status).toBe(0);
+    expect(personal.stderr).toContain(
+      "Warning: policy.enforced rule acme.web.deny (deny web.request:**): web.request has no runtime seam",
+    );
+  });
+
   it("separates the variables launch needs from the ones only update reads", async () => {
     delete process.env.ACME_GATEWAY_URL;
     delete process.env.ACME_UPDATE_URL;

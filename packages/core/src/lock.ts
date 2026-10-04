@@ -1,17 +1,18 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { seamEvidence } from "@piship/policy";
 import {
+  channelTrustKeys,
+  DATA_CONTRACT_VERSION,
   type Manifest,
   ManifestError,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
-  DATA_CONTRACT_VERSION,
   PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_V1ALPHA6,
   readManifest,
   type UpdateTrustKey,
-  channelTrustKeys,
 } from "@piship/schema";
 import { PI_VERSION } from "./compatibility.js";
 import { digest, hash } from "./digest.js";
@@ -79,6 +80,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
   const v5 = manifest.schema === PISHIP_SCHEMA_V1ALPHA5 || v6;
   const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const policy = governance?.manifest;
+  const runtime = runtimeDependencies(v4);
   const virtualModels = (manifest.access?.models.catalog ?? []).flatMap(
     (model) =>
       model.virtual
@@ -106,7 +108,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,
-    runtime: runtimeDependencies(v4),
+    runtime,
     resources,
     declared: manifest.resources,
     ...(manifest.access ? { access: manifest.access } : {}),
@@ -135,6 +137,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
     ...(v6
       ? {
           ...(virtualModels.length ? { virtualModels } : {}),
+          enforcement: seamEvidence(runtime.version),
           data: { contract: DATA_CONTRACT_VERSION },
         }
       : {}),

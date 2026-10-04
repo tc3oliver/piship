@@ -10,6 +10,7 @@ import {
   binHome,
   buildDistribution,
   buildRelease,
+  checkEnforceability,
   checkGovernance,
   checkPiVersion,
   checkStateMigration,
@@ -549,6 +550,7 @@ export async function runCli(
       checkPiVersion(manifest);
       // The same resource and governance checks as lock, without writing it.
       checkGovernance(manifest, target, resolveResources(manifest, target));
+      const unenforced = checkEnforceability(manifest);
       // updates.source is read only by update; launch never needs it.
       const variables = runtimeVariableUse(manifest);
       const unset = (names: readonly string[]) =>
@@ -585,6 +587,10 @@ export async function runCli(
       );
       for (const warning of launchWarnings(manifest))
         output.stderr(`Warning: ${warning.path}: ${warning.message}`);
+      for (const item of unenforced)
+        output.stderr(
+          `${item.level === "info" ? "Note" : "Warning"}: ${item.message}`,
+        );
       const theyAre = (names: readonly string[]) =>
         names.length > 1 ? "they are" : "it is";
       const them = (names: readonly string[]) =>

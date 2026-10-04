@@ -4,4 +4,6 @@ export * from "./explain.js";
 export * from "./glob.js";
 export * from "./model-requirements.js";
 export * from "./project.js";
+export * from "./seams.js";
 export * from "./trust.js";
+export * from "./unenforced.js";

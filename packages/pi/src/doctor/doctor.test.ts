@@ -334,6 +334,56 @@ describe("renderDoctor", () => {
     ]);
   });
 
+  it("never reports a rule on an unsupported action as enforced", () => {
+    const withPolicy = (acknowledgeUnenforced?: string[]) =>
+      governanceData({
+        manifest: {
+          ...governanceData().manifest,
+          policy: {
+            default: "deny",
+            enforced: [
+              {
+                id: "acme.web.deny",
+                action: "web.request",
+                resource: "**",
+                effect: "deny",
+              },
+            ],
+            defaults: [],
+            adapter: null,
+            ...(acknowledgeUnenforced ? { acknowledgeUnenforced } : {}),
+          },
+        } as unknown as GovernanceData["manifest"],
+      });
+    const line = (output: string) =>
+      group(output, "Policy").find((item) => item.includes("web.request"));
+    const acknowledged = renderDoctor(
+      doctorData("managed", {
+        access: accessData(),
+        governance: withPolicy(["web.request:**"]),
+      }),
+    );
+    expect(acknowledged.failed).toBe(false);
+    expect(line(acknowledged.render())).toBe(
+      `  - ${"web.request".padEnd(20)} unsupported (acknowledged): rule acme.web.deny (deny **)`,
+    );
+    const unacknowledged = renderDoctor(
+      doctorData("managed", { access: accessData(), governance: withPolicy() }),
+    );
+    expect(unacknowledged.failed).toBe(true);
+    expect(line(unacknowledged.render())).toBe(
+      `  ✗ ${"web.request".padEnd(20)} unsupported: rule acme.web.deny (deny **)`,
+    );
+    const personal = renderDoctor(
+      doctorData("personal", { governance: withPolicy() }),
+    ).render();
+    expect(line(personal)).toBe(
+      `  ! ${"web.request".padEnd(20)} unsupported: rule acme.web.deny (deny **)`,
+    );
+    for (const output of [acknowledged.render(), personal])
+      expect(line(output)).not.toMatch(/\benforced\b/);
+  });
+
   it("never shows identity claims", () => {
     const output = renderDoctor(
       doctorData("managed", { access: accessData() }),

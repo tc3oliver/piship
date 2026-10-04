@@ -162,7 +162,7 @@ ${keys.map((key) => `        - id: ${key.id}\n          publicKey: ${key.publicK
 function manifestSource(options: ProjectOptions = {}): string {
   const id = options.id ?? "acmepi";
   const schema = options.schema ?? "piship/v1alpha5";
-  const v5 = schema === "piship/v1alpha5";
+  const v5 = schema === "piship/v1alpha5" || schema === "piship/v1alpha6";
   const v4 = schema === "piship/v1alpha4" || v5;
   return `schema: ${schema}
 app:
@@ -886,6 +886,78 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(
       /Release gate policy: enforced rules for filesystem.read ~\/.ssh\/\*\* disagree \(deny and allow\)/,
     );
+  });
+
+  it("policy: refuses a managed deny on an unsupported action (POLICY_UNENFORCEABLE)", () => {
+    const root = generateKeyPairSync("ed25519")
+      .publicKey.export({ type: "spki", format: "der" })
+      .toString("base64");
+    const managed = (extra: string, schema?: string) =>
+      project({
+        managed: true,
+        ...(schema ? { schema } : {}),
+        resources: COMPANY_RESOURCES,
+        trust: `    bootstrap:
+      version: 1
+      expires: 2099-01-01T00:00:00Z
+      keys:
+        - id: acme-root
+          publicKey: ${root}
+        - id: ${KEY.id}
+          publicKey: ${KEY.publicKey}
+      roles:
+        root: { keyIds: [acme-root], threshold: 1 }
+        channel: { keyIds: [${KEY.id}], threshold: 1 }
+`,
+        extra,
+      }).path;
+    const rules = `policy:
+  enforced:
+    - id: acme.web.deny
+      action: web.request
+      effect: deny
+`;
+    const error = caught(() => checkReleaseInputs(managed(rules)));
+    expect(error.code).toBe("POLICY_UNENFORCEABLE");
+    expect(error.message).toMatch(
+      /^Release gate policy: policy.enforced rule acme.web.deny \(deny web.request:\*\*\)/,
+    );
+    // An acknowledged rule passes; the acknowledgement is in the lock.
+    const acknowledged = checkReleaseInputs(
+      managed(
+        `${rules}  acknowledgeUnenforced: ["web.request:**"]\n`,
+        "piship/v1alpha6",
+      ),
+    );
+    expect(
+      acknowledged.governance?.manifest.policy.acknowledgeUnenforced,
+    ).toEqual(["web.request:**"]);
+    // Acknowledging another resource does not cover the rule.
+    expect(
+      caught(() =>
+        checkReleaseInputs(
+          managed(
+            `${rules}  acknowledgeUnenforced: ["web.request:example.com"]\n`,
+            "piship/v1alpha6",
+          ),
+        ),
+      ).code,
+    ).toBe("POLICY_UNENFORCEABLE");
+    // Wildcard and prefix rules never trigger it.
+    expect(
+      checkReleaseInputs(
+        managed(`policy:
+  enforced:
+    - id: acme.web.all
+      action: web.*
+      effect: deny
+`),
+      ).deployment.mode,
+    ).toBe("managed");
+    // A personal distribution only warns at validate.
+    expect(
+      checkReleaseInputs(project({ extra: rules }).path).deployment.mode,
+    ).toBe("personal");
   });
 
   it("policy: duplicate rule ids are already rejected by the manifest schema", () => {

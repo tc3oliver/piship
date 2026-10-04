@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { seamEvidence } from "@piship/policy";
 import { DATA_CONTRACT_VERSION, migrateManifestSource } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -88,6 +89,8 @@ describe("lock piship-lock/v1alpha6", () => {
       { id: "acme/auto", router: "acme-router", routes: ["acme/coder"] },
     ]);
     expect(lock.data).toEqual({ contract: DATA_CONTRACT_VERSION });
+    expect(lock.enforcement).toEqual(seamEvidence(lock.runtime.version));
+    expect(lock.enforcement?.seams["web.request"]).toBe("none");
     expect(lock.governance?.manifest.mcp.servers[0]).toMatchObject({
       class: "user",
       exposure: "direct",
@@ -110,6 +113,7 @@ describe("lock piship-lock/v1alpha6", () => {
     const lock = resolveLock(project(V5));
     expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA5);
     expect(lock).not.toHaveProperty("data");
+    expect(lock).not.toHaveProperty("enforcement");
     expect(lock).not.toHaveProperty("virtualModels");
     // model.use is read as model.select at parse time.
     expect(lock.governance?.manifest.policy.defaults[0]?.action).toBe(

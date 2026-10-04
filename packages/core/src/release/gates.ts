@@ -2,6 +2,7 @@
 // surfaces, package sources and install scripts, policy, certification, and
 // sandbox.
 import { PiShipError } from "@piship/contracts";
+import { manifestContainment, unenforcedRules } from "@piship/policy";
 import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
 import {
   currentTarget,
@@ -202,7 +203,8 @@ function checkUpdateTrust(lock: DistributionLock): void {
 }
 
 /**
- * Static release gates, checked before anything is assembled. Each failure
+ * Static release gates, checked before anything is assembled. The policy gate
+ * also refuses a managed POLICY_UNENFORCEABLE rule. Each failure
  * names its gate: lock, schema, trust, target, pi, source, install-script,
  * policy, certification, or sandbox.
  */
@@ -264,6 +266,20 @@ export function checkReleaseInputs(
   const conflicts = policyConflicts(lock);
   if (conflicts.length)
     throw gate("POLICY_DENIED", "policy", conflicts.join("; "));
+  const governance = lock.governance?.manifest;
+  const unenforced = governance
+    ? unenforcedRules(
+        lock.deployment.mode,
+        governance.policy,
+        manifestContainment(governance),
+      ).filter((item) => item.level === "error")
+    : [];
+  if (unenforced.length)
+    throw gate(
+      "POLICY_UNENFORCEABLE",
+      "policy",
+      unenforced.map((item) => item.message).join("; "),
+    );
   for (const provider of lock.governance?.providers ?? [])
     if (provider.class === "certified" && !provider.certified)
       throw gate(

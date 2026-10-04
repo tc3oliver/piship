@@ -21,7 +21,7 @@ export {
   isUpstreamProviderError,
 } from "@piship/inference";
 export { canonicalJson } from "./digest.js";
-export { checkGovernance } from "./governance-lock.js";
+export { checkEnforceability, checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
 export * from "./install/index.js";
 export * from "./update/index.js";

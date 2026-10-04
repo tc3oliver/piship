@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { makePolicy, rule } from "./fixtures.test-helpers.js";
+import { POLICY_ACTIONS } from "@piship/contracts";
 import {
   NO_CONTAINMENT,
   PolicyEngine,
+  RUNTIME_SEAMS,
   decisionToJSON,
   formatDecision,
   formatDecisionJSON,
@@ -53,7 +55,7 @@ describe("formatDecision", () => {
         "Resource:\n  docs:delete_document",
         "Rule:\n  acme.docs.destructive",
         "Policy:\n  acme-engineering@3",
-        "Enforcement:\n  control-plane",
+        "Enforcement:\n  enforced (control-plane)",
         "Layer:\n  distribution-enforced",
         "Reason:\n  Destructive document tools need a change ticket",
         "Other matching rules:\n  acme.mcp.default (distribution-default, allow)\n  me.docs (user-preference, ask)",
@@ -68,6 +70,7 @@ describe("formatDecision", () => {
       ruleId: "acme.docs.destructive",
       policyId: "acme-engineering@3",
       enforcement: "control-plane",
+      enforcementStatus: "enforced",
       layer: "distribution-enforced",
     });
     expect(json.matches).toHaveLength(3);
@@ -77,7 +80,7 @@ describe("formatDecision", () => {
     });
     expect(json.diagnostics).toHaveLength(1);
   });
-  it("labels audit-only denies honestly and redacts secrets", () => {
+  it("labels unsupported denies honestly and redacts secrets", () => {
     const audit = new PolicyEngine({
       policy: makePolicy({
         enforced: [
@@ -97,8 +100,12 @@ describe("formatDecision", () => {
     });
     const text = formatDecision(audit);
     expect(text).toContain(
-      "Enforcement:\n  audit-only (not enforced: no runtime hook evaluates this action, so it is not prevented or recorded)",
+      "Enforcement:\n  unsupported (no runtime seam: neither prevented nor recorded)",
     );
+    expect(decisionToJSON(audit)).toMatchObject({
+      enforcement: "audit-only",
+      enforcementStatus: "unsupported",
+    });
     expect(text).not.toContain("abcdefghijkl");
     expect(text).not.toContain("zzz123456");
     expect(JSON.stringify(decisionToJSON(audit))).not.toContain("zzz123456");
@@ -120,6 +127,35 @@ describe("formatDecision", () => {
     );
     expect(text).toMatch(/^ALLOWED\n/);
     expect(text).toContain("Rule:\n  builtin:default");
+  });
+});
+
+describe("enforcement status in explain", () => {
+  it("never prints enforced for an action without a runtime seam", () => {
+    const contained = { filesystem: true, network: true, shell: true };
+    for (const containment of [NO_CONTAINMENT, contained])
+      for (const action of POLICY_ACTIONS) {
+        if (RUNTIME_SEAMS[action] !== "none") continue;
+        const engine = new PolicyEngine({
+          policy: makePolicy({
+            enforced: [rule("no.action", action, "**", "deny")],
+          }),
+          context: { ...context, containment },
+        });
+        const explanation = engine.explain({ action, resource: "anything" });
+        const sandboxed =
+          action === "network.connect" && containment.network === true;
+        const line = formatDecision(explanation)
+          .split("\n\n")
+          .find((block) => block.startsWith("Enforcement:"));
+        if (sandboxed) expect(line).toBe("Enforcement:\n  enforced (sandbox)");
+        else {
+          expect(line).not.toMatch(/\benforced\b/);
+          expect(decisionToJSON(explanation).enforcementStatus).toBe(
+            "unsupported",
+          );
+        }
+      }
   });
 });
 
