@@ -952,6 +952,84 @@ describe("lock-time script execution and shipped modules", () => {
     SLOW,
   );
 
+  it.each([
+    ["npm", () => npmPackage("@company/pi-platform", "1.4.2")],
+    [
+      "local",
+      (): DeclaredPackage => ({
+        id: "env-local",
+        source: "local",
+        path: "./packages/env-local",
+        class: "company",
+        filters: {},
+      }),
+    ],
+  ] as const)(
+    "give every npm call of a %s package ignore-scripts and the refusing git in its environment, for the installs npm nests",
+    (_, declaration) => {
+      const base = context();
+      write(join(base.distributionDir, "packages", "env-local"), {
+        "package.json": JSON.stringify({
+          name: "env-local",
+          dependencies: { "left-pad": "1.3.0" },
+        }),
+      });
+      const envs: { args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+      resolvePiPackage(declaration(), {
+        ...base,
+        run: (command, args, options) => {
+          if (command === "npm")
+            envs.push({ args, env: options.env ?? process.env });
+          return runCommand(command, args, options);
+        },
+      });
+      expect(envs.map(({ args }) => args[0])).toEqual(
+        declaration().source === "npm"
+          ? ["view", "view", "install", "ci"]
+          : ["install", "ci"],
+      );
+      for (const { args, env: callEnv } of envs) {
+        expect(callEnv.npm_config_ignore_scripts).toBe("true");
+        expect(`--git=${callEnv.npm_config_git}`).toBe(
+          args.find((arg) => arg.startsWith("--git=")),
+        );
+      }
+    },
+    SLOW,
+  );
+
+  it(
+    "refuse a case variant of node_modules in a git or local package",
+    () => {
+      const fixture = gitFixture("ships-case-modules", {
+        "package.json": JSON.stringify({ name: "ships", version: "1.0.0" }),
+        "lib/Node_Modules/evil/index.js": "module.exports = 1;\n",
+      });
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(gitPackage("ships-case-modules", fixture), ctx),
+      ).toThrow(/lib\/Node_Modules ships its own node_modules/);
+      write(join(ctx.distributionDir, "packages", "case-modules"), {
+        "package.json": JSON.stringify({ name: "case-modules" }),
+        "Node_Modules/evil/index.js": "module.exports = 1;\n",
+      });
+      expect(() =>
+        resolvePiPackage(
+          {
+            id: "case-modules",
+            source: "local",
+            path: "./packages/case-modules",
+            class: "company",
+            filters: {},
+          },
+          ctx,
+        ),
+      ).toThrow(/Node_Modules is a case variant of node_modules/);
+      expect(npmCalls(calls)).toEqual([]);
+    },
+    SLOW,
+  );
+
   it(
     "refuse a git package that ships node_modules, before npm runs",
     () => {

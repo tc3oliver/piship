@@ -100,8 +100,19 @@ const posix = (path: string) => path.split(sep).join("/");
 const sha256 = (content: string | Buffer) =>
   createHash("sha256").update(content).digest("hex");
 
-function environment(context: PackageContext): NodeJS.ProcessEnv {
-  return { ...(context.env ?? process.env), GIT_TERMINAL_PROMPT: "0" };
+/**
+ * The environment of a git call, or, with `git` (the refusing stub), of an
+ * npm call. An npm call carries `--ignore-scripts` and `--git` in the
+ * environment too: a hosted-git spec deeper in the closure can be fetched
+ * as an https tarball without git, and npm prepares it with a nested
+ * `npm install` that inherits this environment but none of the flags.
+ */
+function environment(context: PackageContext, git?: string): NodeJS.ProcessEnv {
+  return {
+    ...(context.env ?? process.env),
+    GIT_TERMINAL_PROMPT: "0",
+    ...(git ? { npm_config_ignore_scripts: "true", npm_config_git: git } : {}),
+  };
 }
 
 /**
@@ -198,7 +209,11 @@ function bindingGypPaths(directory: string): Set<string> {
   return found;
 }
 
-/** Copy a local package without node_modules, .git, or symlinks. */
+/**
+ * Copy a local package without node_modules, .git, or symlinks. A case
+ * variant of `node_modules` (such as `Node_Modules`) is refused rather than
+ * copied: on a case-insensitive filesystem Node resolves modules from it.
+ */
 export function copyLocalPackage(
   id: string,
   source: string,
@@ -207,6 +222,12 @@ export function copyLocalPackage(
   mkdirSync(target, { recursive: true });
   for (const name of readdirSync(source).sort()) {
     if (name === "node_modules" || name === ".git") continue;
+    if (name.toLowerCase() === "node_modules")
+      throw packageError(
+        "POLICY_DENIED",
+        id,
+        `${name} is a case variant of node_modules; dependencies are installed only from the package npm lockfile`,
+      );
     const from = join(source, name);
     const to = join(target, name);
     const stat = lstatSync(from);
@@ -238,7 +259,8 @@ function checkSourceTree(id: string, root: string): void {
           `${posix(relative(root, path))} is a symlink; packages are vendored without symlinks`,
         );
       if (!entry.isDirectory()) continue;
-      if (entry.name === "node_modules")
+      // Any case: a case-insensitive filesystem resolves modules from it.
+      if (entry.name.toLowerCase() === "node_modules")
         throw packageError(
           "POLICY_DENIED",
           id,
@@ -360,7 +382,7 @@ function npmView(
       "--json",
       ...npmArgs(declaration, git),
     ],
-    { cwd, env: environment(context) },
+    { cwd, env: environment(context, git) },
   ).toString();
   try {
     return JSON.parse(output);
@@ -546,7 +568,6 @@ function materialize(
 ): VendoredPiPackage {
   const run = context.run ?? runCommand;
   const { id } = declaration;
-  const env = environment(context);
   let url: string | undefined;
   /** npm: the exact version; git: the full commit SHA. */
   let resolved: string | undefined;
@@ -556,6 +577,8 @@ function materialize(
   let ownInstallScript = false;
   mkdirSync(directory, { recursive: true });
   const git = refusingGit(work);
+  /** The environment of this package's npm calls. */
+  const env = environment(context, git);
   if (declaration.source === "npm") {
     checkNpmDeclaration(declaration, context.mode);
     const npm = pin
