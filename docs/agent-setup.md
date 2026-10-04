@@ -2,11 +2,11 @@
 
 This page is written for a coding agent (Claude Code, Codex, Pi, or similar) that a person has asked to set up a PiShip distribution. A person can follow it too. The [README](../README.md#set-it-up-with-your-coding-agent) has the prompt that points an agent here.
 
-A distribution is either **personal** (one person, no company services) or **managed** (a company rolls it out behind its own sign-in, broker, and gateway). The two share the first questions and the completion checklist; everything else is a separate branch below. Work through the steps in order. Stop and ask the person whenever a step needs a value you do not have; never invent a URL, client ID, model ID, repository host, or company name.
+A distribution is either **personal** (one person, no company services) or **managed** (a company rolls it out behind its own sign-in, broker, and gateway). The two share the first questions and the completion checklist; everything else is a separate branch below. Work through steps 1 to 8 in order to set up a new distribution; to move an existing one to a newer PiShip, use [step 9](#9-upgrade-an-existing-distribution) instead. Stop and ask the person whenever a step needs a value you do not have; never invent a URL, client ID, model ID, repository host, or company name.
 
 ## Rules
 
-- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain URLs (`https`, or `http` on loopback). Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`, Pi's `/login`), never by you.
+- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, `piship.lock.d/`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain URLs (`https`, or `http` on loopback). Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`, Pi's `/login`), never by you.
 - **Leave the person's existing setup alone.** Do not read, change, or delete `~/.pi`, and do not uninstall or overwrite another installed distribution. A distribution keeps its own state under `~/.piship/<id>`.
 - **Ask before installing.** `install` writes a command into `~/.local/bin`. Say what it will add and get a yes first. The same goes for `uninstall`, `purge`, and editing a shell profile.
 - **Run the CLI by path.** PiShip is not on npm. Use `node <piship>/packages/cli/dist/bin.js`; npx or `npm exec` would fetch an unrelated package from the public registry.
@@ -42,6 +42,10 @@ Ask in one message and wait for the answers. Ask the shared questions and the qu
 - **S9. MCP** (optional). MCP servers the agent should use: name, URL or command, and which tools.
 - **S10. Sandbox** (optional for personal). Should commands the agent runs be contained, and must a launch fail when the sandbox is unavailable?
 - **S11. Updates and rollback.** Is installing a new build by hand enough, or should installed copies update from a signed channel, with rollback to the previous release?
+- **S12. Prompt cache warming** (optional). PiShip keeps Pi's prompt cache warming off unless the distribution says otherwise; v0.8 sessions warmed it. Keep it off, or `streaming` or `idle`? May users change it?
+- **S13. Codemode and tools** (optional). Should the agent run scripts that call its tools (Pi's Codemode: `off`, `on`, or `only`), and should tool search be on? Is any tool to be hidden from the model, or only discoverable on demand?
+- **S14. Pi packages** (optional). Pi packages to ship (npm, git, or a local directory): the source, an exact version or full commit, and the class (`user`, `company`, or `certified`). The machine that runs `piship lock` needs npm 11 and access to the registry or git host.
+- **S15. Data retention and session export** (optional). How long may sessions, audit logs, and cache stay on a machine, and which of them should `logout` delete? May users export sessions (`/share`, `/export`, `/bug`)?
 
 ### Personal branch
 
@@ -68,7 +72,7 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **M5. Runtime variables.** Endpoints as runtime variables set on each machine (the template's default) or fixed `https` URLs in the manifest? How will the variables reach each machine?
 - **M6. Proxy and enterprise CA.** A company proxy or CA bundle, if the network needs one, and the bundle's path on each machine.
 - **M7. Project trust.** Which repositories count as company projects: the git host and organization (for example `git.acme.example/platform/**`) and, ideally, where they are checked out. Everything else is unknown, and its `AGENTS.md`, skills, and MCP files are not loaded.
-- **M8. Policy.** Shell commands to always allow, always deny, or ask about. Anything unmatched asks the person.
+- **M8. Policy.** Shell commands to always allow, always deny, or ask about. Anything unmatched asks the person. Also ask whether any rule is meant for web requests, browsers, sub-agents, or memory: PiShip cannot enforce those, so a `deny` or `ask` rule on them needs the person's explicit acknowledgement.
   - **User auto.** May users turn on auto mode themselves (every `ask` becomes `allow` for that user, `deny` and enforced rules still apply, and auto-approved actions are audited)? Default: no.
 - **M9. Sandbox.** The OS sandbox on each machine, or a remote one (a CubeSandbox or other E2B-compatible service, Kubernetes Agent Sandbox, or the company's own adapter)? For a remote one: its API URL, template or pool, working directory, and how it authenticates. Should commands in it reach the network (with `deny`, `npm install`, `pip install`, and `git fetch` fail inside it)? Extra paths the agent may write, or must never read?
 - **M10. Governed MCP.** The approved servers from S9 and the tools each may expose.
@@ -98,6 +102,10 @@ The managed template validates as generated. Every company-specific endpoint in 
 | S8 Operating systems | `release.targets` | Only needed for `piship release` |
 | S10 Sandbox | `sandbox.required`, `sandbox.network.mode`, `sandbox.filesystem` | `required: true` stops the launch when the sandbox is missing, which on Windows is always. A declared path list replaces the defaults: restate them, as the demo manifest does |
 | S11 Updates | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
+| S12 Cache warming | `runtime.cacheWarming.mode` (`off`, `streaming`, `idle`) and `userOverride` | Omitted means `off` (v0.8 warmed through Pi's default). A managed distribution enforces the mode; a declared mode is enforced unless `userOverride: true` |
+| S13 Codemode, tools | `runtime.tools.codemode` (`off`, `on`, `only`), `toolSearch` (`off`, `on`), and `exposure` (a map of `<tool glob>` to `direct`, `model-only`, `codemode`, `deferred`, or `hidden`) | Off by default. A managed distribution with Codemode on needs a `tool.execute` policy rule for `read`, `write`, `edit`, and `bash`, or `validate` fails with `POLICY_DENIED`. A policy `deny` on a tool hides it from the model |
+| S14 Pi packages | `resources.packages[]` (`id`, `source: npm`, `git`, or `local`, `class`) and `packageTrust` | `piship lock` needs npm 11 and network access. A registry other than npmjs must be listed in `release.sources`, or `lock` fails the `source` gate. Managed needs a full commit SHA for git and `packageTrust.local.paths` for local. Commit `piship.lock.d/` ([manifest](manifest.md#pi-packages-v1alpha6)) |
+| S15 Retention, export | `data.sessions.retention`, `data.audit.retention`, `data.cache.retention` (for example `30d`), `data.purge.onLogout`, and `data.export.<resource>` (`public`, `local`, `support`) | Audit retention is a minimum, and `purge.onLogout` may not name `audit`. `data.purge.onUninstall` is recorded but `uninstall` does not apply it. PiShip cannot block `/share` or `/export`, so a managed `data.export.public: deny` needs `"session.export:public"` in `policy.acknowledgeUnenforced` ([manifest](manifest.md#session-export)) |
 
 ### Personal
 
@@ -108,7 +116,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | P1 Local endpoint, no key | As above with `credential.provider: none` and no `storage` | `http` is allowed only on loopback |
 | P1 Self-hosted model | As above; `inference.baseUrl` is the server's `https` URL, or a runtime variable | Every allowed model needs a catalog entry with `name`, `contextWindow`, `maxOutputTokens`; `tools: true` for tool-calling models |
 | P3 Sandbox | `sandbox.required: false` (best effort) or `true` | |
-| P4 Personal MCP | `mcp.mode: allowlist`, `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, `tools.allow` | Only servers the person named |
+| P4 Personal MCP | `mcp.mode: allowlist`, `mcp.servers.<id>` with `transport`, `url` or `module`/`command`, and `tools` as an exposure map: `<tool>: direct` for each tool the person named, then `"*": hidden` | Only servers the person named. `tools.allow` and `tools.deny` are v1alpha5 syntax and fail `validate` |
 | P5 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.lan`, `*.local`); a public host fails `validate`. It changes nothing for any other endpoint |
 
 ### Managed
@@ -122,10 +130,10 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M5 Runtime variables | `variables` plus `${NAME}`, or plain `https` URLs | Every `${NAME}` used must be listed in `variables`, and every listed name used. Names that look like secrets are rejected |
 | M6 Proxy, CA | `network.proxy.inheritEnvironment`, `network.tls.additionalCA` | An absolute path on each machine |
 | M7 Project trust | `policy.projectTrust.company.match` with `remote` and `path` | `remote` alone is only a claim; pair it with `path` |
-| M8 Policy | `policy.enforced` (cannot be relaxed) or `policy.defaults`, action `shell.execute` | `allow` rules do not match commands with `;`, `&&`, pipes, or `$`; `deny` rules always match. The template's `policy.default` is `ask` and allows only instructions: add `policy.defaults` allow rules for `skill.load`, `extension.load`, and `resource.load` on `company:**`, as the demo does, or each one asks at every launch and is denied in headless runs |
+| M8 Policy | `policy.enforced` (cannot be relaxed) or `policy.defaults`, action `shell.execute` | `allow` rules do not match commands with `;`, `&&`, pipes, or `$`; `deny` rules always match. The template's `policy.default` is `ask` and allows only instructions: add `policy.defaults` allow rules for `skill.load`, `extension.load`, and `resource.load` on `company:**`, as the demo does, or each one asks at every launch and is denied in headless runs. A managed `deny` or `ask` rule on an action PiShip cannot enforce (`web.request`, `browser.execute`, `agent.invoke`, `memory.*`, or `network.connect` without a required `deny` sandbox) fails `validate` with `POLICY_UNENFORCEABLE`: ask the person to drop it, or list it as `"<action>:<resource>"` in `policy.acknowledgeUnenforced` and tell them it is not enforced |
 | M8 User auto | `policy.userAuto: off \| allowed` | Leave it out (`off`) unless the answer was yes. `allowed` lets each user run `<command> auto on` or `/auto on`: an `ask` from `policy.defaults` or `policy.default` is then approved without a prompt and audited. Put any `ask` that must keep its prompt in `policy.enforced`. Managed only; a personal manifest rejects it ([user auto mode](manifest.md#user-auto-mode)) |
 | M9 Sandbox | `sandbox.required`, `sandbox.provider`, `endpoint`, `template`, `workdir`, `user`, `credential` | CubeSandbox: `provider: e2b-compatible`, `user: root`, a `workdir` under `/root`. Only shell commands run remotely; the sandbox must mount or sync the workspace ([sandbox](sandbox.md#workspace)) |
-| M10 Governed MCP | `mcp.servers.<id>` (the template's `mcp.mode` is already `allowlist`) | Also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does. A server host must be allowed by the private-only network policy |
+| M10 Governed MCP | `mcp.servers.<id>` (the template's `mcp.mode` is already `allowlist`) | Also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does. A server host must be allowed by the private-only network policy. Limit a server's tools with a `tools` exposure map (`<tool>: direct`, then `"*": hidden`), not `tools.allow` |
 | M11 Audit | an `audit.sinks` entry with `id`, `type: http`, `url`, `required` | The template keeps a local file sink and shows the collector entry as a comment |
 | M12 Update source | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
 | M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. OIDC, the broker, the gateway, MCP, and audit still need HTTPS ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
@@ -192,6 +200,20 @@ Only when the person asked for it (S11, P5, or M12). A personal distribution may
 Tell the person, briefly:
 
 - the mode, the command to run, and for a managed distribution the variables to set on each machine;
-- what to commit: `piship.yaml`, `piship.lock`, and `resources/` (not `dist/`, never a private key);
+- what to commit: `piship.yaml`, `piship.lock`, `resources/`, and, when the distribution declares Pi packages, `piship.lock.d/` and any local package directory (not `dist/`, never a private key);
 - the completion checklist with each result, the open items from step 2, and anything you could not check;
 - for a managed distribution, that their identity provider, broker, and gateway must follow the [enterprise integration contract](enterprise-integration.md).
+
+## 9. Upgrade an existing distribution
+
+When the person already has a distribution built with an earlier PiShip and wants the new one, update PiShip first, then the distribution. Nothing here changes an installed machine until it installs the rebuilt release.
+
+1. Update the PiShip checkout to the release they want and rebuild it: `cd ~/src/piship && git fetch --tags && git checkout <tag> && npm ci && npm run build`.
+2. In the distribution repository, keep the current lock for comparison: `cp piship.lock previous.lock` (the name must end in `.lock`).
+3. Set `runtime.pi` to the Pi version the new PiShip pins: `1.0.2` for v0.9. A v0.8 distribution pins `1.0.0`, and `validate`, `lock`, and `build` refuse it with `Pi 1.0.0 is not available in this PiShip build`. Also add the new Pi version to the `pi` list of each `certified` resource's evidence (`resources.<kind>.certified[].pi`) once the person has reviewed it against that Pi. A certified resource whose evidence does not list the running Pi is not loaded (`certified for Pi 1.0.0; running Pi 1.0.2`), and nothing fails at `validate` or `build`.
+4. Run `piship migrate piship.yaml --check`. It writes nothing, prints every change, and exits non-zero when one changes an effective decision; for a v0.8 manifest it always does, because the cache-warming change is always reported. Show the person each reported change and ask how to keep it. From v0.8 to v0.9 there are up to two ([migration guide](manifest.md#migrating-from-v1alpha5-to-v1alpha6)): prompt cache warming is `off` unless `runtime.cacheWarming.mode: streaming` is set, and an MCP server whose new class `policy.resourceTrust` does not allow no longer starts.
+5. Run `piship migrate piship.yaml --write` and apply the person's answers.
+6. Run `piship validate piship.yaml`. A managed `deny` or `ask` rule on an action PiShip cannot enforce fails it with `POLICY_UNENFORCEABLE` ([enforcement status](manifest.md#enforcement-status)); ask the person whether to list the rule in `policy.acknowledgeUnenforced` or remove it.
+7. Run `piship lock piship.yaml`, then `piship diff previous.lock piship.lock`, and read the diff with the person. A high-risk entry, such as the Pi runtime change, needs their confirmation. Delete `previous.lock` afterwards. If `release.vulnerabilities.allow` lists GHSA-qhr7-859c-m2p7 or GHSA-6j4f-fj2g-mc7p (an earlier version of this guide had agents copy them from the demo manifest), remove those entries: Pi 1.0.2 ships the fixed `brace-expansion`, and an unused exception would let the same advisory ID pass unnoticed until 2026-12-31.
+8. Rebuild and rerun the [completion checklist](#6-setup-completion-checklist). With a signed update source, publish the new release and check update and rollback as in [step 7](#7-signed-updates-and-rollback): an installation's state files are read as they are and never rewritten, so a rollback to the previous release still reads them.
+9. Commit `piship.yaml`, `piship.lock`, and `piship.lock.d/` if the distribution declares Pi packages.

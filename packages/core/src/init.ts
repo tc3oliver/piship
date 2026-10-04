@@ -59,7 +59,8 @@ ${
   #       transport: streamable-http
   #       url: https://mcp.example.internal/docs
   #       tools:
-  #         allow: [search]
+  #         search: direct
+  #         "*": hidden
 `
     : ""
 }# Set required: true to fail the launch when the OS sandbox is unavailable.

@@ -202,6 +202,27 @@ describe("init", () => {
     },
     180000,
   );
+
+  it("writes a managed MCP example that validates once uncommented", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-init-"));
+    roots.push(root);
+    const path = initDistribution(join(root, "mcp-agent"), { managed: true });
+    const lines = readFileSync(path, "utf8").split("\n");
+    const first = lines.indexOf("  #   servers:");
+    const last = lines.indexOf('  #         "*": hidden');
+    expect(first).toBeGreaterThan(-1);
+    expect(last).toBeGreaterThan(first);
+    // `#` and three spaces become the two-space indent under `mcp:`.
+    for (let index = first; index <= last; index += 1)
+      lines[index] = (lines[index] as string).replace(/^ {2}# {3}/, "  ");
+    writeFileSync(path, lines.join("\n"));
+    const server = readManifest(path).governance?.mcp.servers[0];
+    expect(server?.id).toBe("docs");
+    expect(server?.toolExposure).toEqual([
+      { pattern: "search", exposure: "direct" },
+      { pattern: "*", exposure: "hidden" },
+    ]);
+  });
 });
 
 describe("init mode", () => {

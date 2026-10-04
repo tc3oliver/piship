@@ -110,7 +110,7 @@ agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以
 <summary><b>展開 piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha5
+schema: piship/v1alpha6
 
 app:
   id: acmecode

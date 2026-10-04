@@ -39,6 +39,8 @@ A model outside the distribution allowlist, or a Pi model in managed mode, is re
 
 The distribution allowlist is the ceiling: every other list only removes models from it. With `models.allowed: [A, B]`, a credential entitled to `B, C`, and a gateway listing `B, C, D`, the only available model is `B`; `A` is `MODEL_UNAVAILABLE` (not entitled), and `C` and `D` are `MODEL_DENIED`. A gateway listing never authorizes a model, and an enforced model does not override a narrower entitlement: if the enforced model is not entitled, launch fails with `MODEL_UNAVAILABLE`.
 
+A piship/v1alpha6 virtual model (`models.catalog.<id>.virtual`) is the exception to the gateway listing: the gateway never lists it, so it is available when at least one of its declared `routes` is allowed, entitled, and listed, and is otherwise `MODEL_UNAVAILABLE` ("none of its routes is available"). The user's narrowing applies to the virtual model itself, and the routes of a virtual model the user keeps stay available to it. A request it routes is decided again as `model.dispatch` for the physical model, and a target outside `routes` is refused with `MODEL_DENIED` ([security](security.md#tools-shell-and-plan-mode)).
+
 ### Entitlement freshness
 
 The entitlement is the `models` list the broker or adapter returned with the credential, stored in the credential metadata. It is read again only when the credential is acquired or renewed:
@@ -91,6 +93,7 @@ Pi's message keeps only the SDK's text for a request that got no answer ("Connec
 | Selected model misses an enabled capability's `requirements`, or its metadata is unknown | `MODEL_INCOMPATIBLE`; no substitution |
 | Gateway outage | `GATEWAY_UNREACHABLE` at launch with `liveCatalog: true` and in `doctor`; otherwise Pi reports the failed request |
 | Model outside the allowlist | `MODEL_DENIED` |
+| A routed request to a model outside the declared `routes`, or one `model.dispatch` denies | `MODEL_DENIED` |
 | Model unentitled, unlisted, or narrowed out | `MODEL_UNAVAILABLE` |
 | Undeclared host under `privateOnly` | `NETWORK_DENIED` |
 | Non-loopback plain HTTP endpoint | `NETWORK_DENIED` |

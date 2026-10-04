@@ -14,7 +14,7 @@ These decisions constrain every change to PiShip. Each names where it is enforce
 | 8 | Managed mode disables ambient inheritance: undeclared global or project resources and personal credentials do not load. | Resource loader with discovery disabled; managed environment sanitizing; in-memory model credentials |
 | 9 | When distribution policy governs resources and instructions, PiShip owns discovery. | Governance session resource admission and project trust in `@piship/policy` |
 | 10 | Governance is not containment. Permission hooks never replace an OS or process sandbox. | Separate `@piship/sandbox`; [security](security.md#limits) |
-| 11 | Every decision names its enforcement plane: `control-plane`, `sandbox`, or `audit-only`, and an audit-only decision is never reported as prevented. | `PolicyDecision.enforcement`; `policy explain` |
+| 11 | Every decision names its enforcement plane: `control-plane`, `sandbox`, `gateway`, or `audit-only`. An audit-only decision is never reported as prevented, and an action with no runtime seam is reported `unsupported`, never `enforced`. | `PolicyDecision.enforcement`; `RUNTIME_SEAMS` in `@piship/policy`; `policy explain` |
 | 12 | Capability state has six independent axes: supported, resolved, enabled, compatible, healthy, effective. | `@piship/policy` capability state; `capabilities` |
 | 13 | Reproducibility covers the static envelope; entitlements and remote health are never lock facts. | Lock builder; `piship reproducibility`; release-candidate workflow |
 | 14 | Standard protocols first: OIDC and OAuth, and OpenAI-compatible inference, before organization-specific adapters. | `@piship/identity`, `@piship/inference` |
