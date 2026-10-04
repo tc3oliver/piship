@@ -180,6 +180,55 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
     );
   });
 
+  describe("MCP tool filters keep deny-wins", () => {
+    const manifest = (tools: string) =>
+      [
+        "schema: piship/v1alpha5",
+        "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
+        'runtime: { pi: "1.0.0" }',
+        "deployment: { mode: personal }",
+        "mcp:",
+        "  servers:",
+        `    docs: { transport: stdio, module: ./mcp/docs.mjs, tools: ${tools} }`,
+        "updates: { channel: stable, channels: [stable] }",
+        "",
+      ].join("\n");
+
+    it("migrates a plain allow/deny filter to exact names, with no effective change", () => {
+      const plan = migrateManifestSource(
+        manifest("{ allow: [search, get_issue], deny: [delete_issue] }"),
+      );
+      expect(
+        parse(plan.source).governance?.mcp.servers[0]?.toolExposure,
+      ).toEqual([
+        { pattern: "search", exposure: "direct" },
+        { pattern: "get_issue", exposure: "direct" },
+        { pattern: "delete_issue", exposure: "hidden" },
+        { pattern: "*", exposure: "hidden" },
+      ]);
+      expect(plan.effective).toEqual([
+        expect.stringContaining("runtime.cacheWarming"),
+      ]);
+    });
+
+    // A glob allow more specific than a deny glob, or two equally specific
+    // ones, would resolve differently under most-specific-wins (or tie).
+    // v1alpha5 never accepted globs in tool filters, so neither can reach
+    // the migration.
+    for (const [name, tools] of [
+      [
+        "allow more specific than deny",
+        '{ allow: ["get_issue*"], deny: ["get_*"] }',
+      ],
+      ["equal-specificity tie", '{ allow: ["get_*"], deny: ["*_all"] }'],
+    ] as const)
+      it(`refuses a v1alpha5 filter with globs (${name})`, () => {
+        expect(() => migrateManifestSource(manifest(tools))).toThrow(
+          /Tool names use letters, digits, and _ \. -/,
+        );
+      });
+  });
+
   it("never rewrites a manifest that is already piship/v1alpha6", () => {
     const migrated = migrateManifestSource(input).source;
     expect(migrateManifestSource(migrated).changes).toEqual([]);

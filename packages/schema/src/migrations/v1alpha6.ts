@@ -31,11 +31,22 @@ function renameModelUse(document: YamlDocument, changes: string[]): void {
  * The exposure map that keeps a v1alpha5 `tools.allow` / `tools.deny`
  * filter: denied tools are hidden, and with an allowlist every other tool is
  * hidden too.
+ *
+ * The result resolves exactly like v0.8's deny-wins filter because v1alpha5
+ * lists only exact tool names (no `*`): an exact name outranks every glob,
+ * no name is both allowed and denied, and `*` catches only names neither
+ * list names. A glob could make an allow outrank a deny and show a tool
+ * v0.8 hid, so one is refused rather than migrated.
  */
 function exposureMap(
   allow: readonly string[],
   deny: readonly string[],
 ): Record<string, string> {
+  const glob = [...allow, ...deny].find((name) => name.includes("*"));
+  if (glob !== undefined)
+    throw new Error(
+      `Cannot migrate the MCP tool filter entry ${glob}: v1alpha5 tool filters list exact names, and a glob could outrank a deny`,
+    );
   const map: Record<string, string> = {};
   for (const name of allow) map[name] = "direct";
   for (const name of deny) map[name] = "hidden";

@@ -1,4 +1,9 @@
-import type { ToolExposureRule } from "@piship/schema";
+import {
+  migrateManifestSource,
+  parseManifest,
+  type ToolExposureRule,
+} from "@piship/schema";
+import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import {
   EXPOSURE_VISIBILITY,
@@ -89,6 +94,48 @@ describe("tool exposure resolution", () => {
   it("collapses a policy deny to hidden, whatever the rule says", () => {
     expect(effectiveExposure({ exposure: "direct" }, true)).toBe("hidden");
     expect(effectiveExposure({ exposure: "deferred" }, false)).toBe("deferred");
+  });
+
+  it("resolves a migrated v1alpha5 tool filter exactly like v0.8's deny-wins filter", () => {
+    const source = (tools: string) =>
+      [
+        "schema: piship/v1alpha5",
+        "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
+        'runtime: { pi: "1.0.0" }',
+        "deployment: { mode: personal }",
+        "mcp:",
+        "  servers:",
+        `    docs: { transport: stdio, module: ./mcp/docs.mjs, tools: ${tools} }`,
+        "updates: { channel: stable, channels: [stable] }",
+        "",
+      ].join("\n");
+    const names = ["search", "get_issue", "delete_issue", "other", "get_*"];
+    for (const [allow, deny] of [
+      [["search", "get_issue"], ["delete_issue"]],
+      [[], ["delete_issue", "search"]],
+      [["search"], []],
+      [[], []],
+    ] as [string[], string[]][]) {
+      const tools = `{ allow: ${JSON.stringify(allow)}, deny: ${JSON.stringify(deny)} }`;
+      const migrated = parseManifest(
+        parseYaml(migrateManifestSource(source(tools)).source),
+      ).governance?.mcp.servers[0];
+      if (!migrated) throw new Error("no server");
+      for (const name of names) {
+        // v0.8: deny wins; an empty allow list admits every tool not denied.
+        const v08 =
+          !deny.includes(name) && (!allow.length || allow.includes(name));
+        const resolved = effectiveExposure(
+          resolveExposure(
+            name,
+            migrated.toolExposure ?? [],
+            migrated.exposure ?? "direct",
+          ),
+          false,
+        );
+        expect(resolved !== "hidden", `${tools} ${name}`).toBe(v08);
+      }
+    }
   });
 
   it("orders exposures from excluded to always declared", () => {
