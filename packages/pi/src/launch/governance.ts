@@ -240,10 +240,13 @@ export function governedCustomTools(
  * need approval are not offered for switching or routing mid-session.
  *
  * Deny wins: a dispatch also needs model.select unless a rule that names
- * model.dispatch itself decides it (the router-only case). Without such a
- * rule (none matched, or the deciding rule is a `*` or `model.*` wildcard)
- * model.select decides alone (§18.3), so neither a v0.8 `model.use` deny nor
- * a model.select deny can be routed around.
+ * model.dispatch itself decides it (the router-only case), from a layer at
+ * least as authoritative as every model.select deny or ask that matches.
+ * Without such a rule (none matched, the deciding rule is a `*` or `model.*`
+ * wildcard, or a stricter layer restricts selection: an enforced, team,
+ * project, or user rule over a default or user allow) model.select decides
+ * (§18.3), so neither a v0.8 `model.use` deny nor a model.select deny can be
+ * routed around.
  */
 export async function modelPolicy(
   gov: GovernanceSession,
@@ -255,23 +258,34 @@ export async function modelPolicy(
   /** model.select asks approved at start only so that a route may dispatch. */
   const approvedRoute = new Set<string>();
   /**
-   * The model.dispatch decision, and whether a rule naming model.dispatch
-   * decides it: a rule that also matches model.select names a wildcard.
+   * The model.dispatch decision, the model.select one, and whether a rule
+   * naming model.dispatch decides dispatch on its own: a rule that also
+   * matches model.select names a wildcard, and a model.select deny or ask
+   * from a more authoritative layer still applies.
    */
   const dispatchDecision = (key: string) => {
     const decision = gov.engine.evaluate({
       action: "model.dispatch",
       resource: key,
     });
+    const select = gov.engine.explain({
+      action: "model.select",
+      resource: key,
+    });
     const named =
       decision.ruleId !== BUILTIN_DEFAULT_RULE &&
-      !gov.engine
-        .explain({ action: "model.select", resource: key })
-        .matches.some(
-          (match) =>
-            match.layer === decision.layer && match.ruleId === decision.ruleId,
-        );
-    return { decision, named };
+      !select.matches.some(
+        (match) =>
+          match.layer === decision.layer && match.ruleId === decision.ruleId,
+      ) &&
+      select.matches.every(
+        (match) =>
+          !match.first ||
+          match.effect === "allow" ||
+          (decision.layer === "distribution-enforced" ? 3 : 1) >=
+            authority(match.layer),
+      );
+    return { decision, select: select.decision, named };
   };
   const startup = async (action: PolicyAction, key: string) =>
     (
@@ -296,12 +310,21 @@ export async function modelPolicy(
     const rule = virtual.find((item) => key(item) === selected);
     const targets = rule ? rule.routes.map(key) : [selected];
     for (const target of targets) {
-      const { decision: dispatch, named } = dispatchDecision(target);
+      const { decision: dispatch, select, named } = dispatchDecision(target);
       if (dispatch.ruleId !== BUILTIN_DEFAULT_RULE) {
         if (dispatch.effect === "deny") continue;
         if (dispatch.effect === "ask") {
           if (!(await startup("model.dispatch", target))) continue;
           approvedDispatch.add(target);
+          // One wildcard ask decides both: its approval is asked once.
+          if (
+            select.effect === "ask" &&
+            select.layer === dispatch.layer &&
+            select.ruleId === dispatch.ruleId
+          ) {
+            approvedRoute.add(target);
+            continue;
+          }
         }
         if (named) continue;
       }
@@ -368,6 +391,18 @@ export async function modelPolicy(
       gov.assertRuntimeIntact();
     },
   };
+}
+
+/**
+ * How authoritative a model.select deny or ask is against a model.dispatch
+ * allow: an enforced one yields to an enforced allow only, a narrowing one
+ * (team, project, a user's own restriction) too, since no allow comes from
+ * those layers; a default one also to a default or user allow.
+ */
+function authority(layer: string): number {
+  if (layer === "distribution-enforced") return 3;
+  if (layer === "team-project" || layer === "user-preference") return 2;
+  return 1;
 }
 
 const key = (model: { provider: string; id: string }) =>

@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AuditEvent, ManagedFetch } from "@piship/contracts";
+import type {
+  ApprovalChannel,
+  AuditEvent,
+  ManagedFetch,
+} from "@piship/contracts";
 import { resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { VirtualModelRule } from "../governance.js";
@@ -28,9 +32,24 @@ afterEach(async () => {
 const rule = (id: string, action: string, resource: string, effect: string) =>
   `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: ${effect} }`;
 
-async function open(rules: string[], enforced: string[] = []) {
+async function open(
+  rules: string[],
+  enforced: string[] = [],
+  extra: {
+    /** The user's own `config/policy.json` rules. */
+    readonly userRules?: readonly unknown[];
+    readonly startupApproval?: ApprovalChannel;
+  } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "piship-model-policy-"));
   roots.push(root);
+  if (extra.userRules) {
+    mkdirSync(join(root, "state", "config"), { recursive: true });
+    writeFileSync(
+      join(root, "state", "config", "policy.json"),
+      JSON.stringify(extra.userRules),
+    );
+  }
   const distribution = join(root, "distribution");
   mkdirSync(distribution, { recursive: true });
   const manifest = join(distribution, "piship.yaml");
@@ -70,6 +89,9 @@ async function open(rules: string[], enforced: string[] = []) {
     resolveTemplate: (_key, template) => template,
     homeDir: join(root, "home"),
     user: "alice",
+    ...(extra.startupApproval
+      ? { startupApproval: extra.startupApproval }
+      : {}),
   });
   sessions.push(session);
   const events = () =>
@@ -131,17 +153,102 @@ describe("model.select and model.dispatch policy", () => {
       expect(policy.dispatches?.("acme", "coder"), wildcard).toBe(true);
       await session.close();
     }
-    // A rule that names model.dispatch itself still routes (router-only).
+    // A rule that names model.dispatch itself still routes (router-only),
+    // from a layer as authoritative as the deny.
     const { session } = await open(
       [
         rule("route", "model.dispatch", "acme/general", "allow"),
         rule("everything", "model.*", "acme/*", "allow"),
       ],
-      [rule("no-general", "model.select", "acme/general", "deny")],
+      [
+        rule("no-general", "model.select", "acme/general", "deny"),
+        rule("route-enforced", "model.dispatch", "acme/general", "allow"),
+      ],
     );
     const policy = await modelPolicy(session, "acme/auto", [AUTO]);
     expect(policy.selects("acme", "general")).toBe(false);
     expect(policy.dispatches?.("acme", "general")).toBe(true);
+  });
+
+  it("keeps an enforced model.select deny over a user's model.dispatch allow", async () => {
+    const user = {
+      userRules: [
+        {
+          id: "mine",
+          action: "model.dispatch",
+          resource: "acme/general",
+          effect: "allow",
+        },
+      ],
+    };
+    const enforced = await open(
+      [rule("pick", "model.select", "acme/*", "allow")],
+      [rule("no-general", "model.select", "acme/general", "deny")],
+      user,
+    );
+    const policy = await modelPolicy(enforced.session, "acme/auto", [AUTO]);
+    expect(policy.dispatches?.("acme", "general")).toBe(false);
+    expect(policy.dispatches?.("acme", "coder")).toBe(true);
+    await enforced.session.close();
+    // Only an enforced model.dispatch allow routes past an enforced deny
+    // (the default, deny here, still has to allow the dispatch).
+    const routed = await open(
+      [
+        rule("pick", "model.select", "acme/*", "allow"),
+        rule("route-default", "model.dispatch", "acme/general", "allow"),
+      ],
+      [
+        rule("no-general", "model.select", "acme/general", "deny"),
+        rule("route", "model.dispatch", "acme/general", "allow"),
+      ],
+    );
+    expect(
+      (await modelPolicy(routed.session, "acme/auto", [AUTO])).dispatches?.(
+        "acme",
+        "general",
+      ),
+    ).toBe(true);
+    await routed.session.close();
+    // A personal owner's own allow still routes past a distribution default.
+    const defaults = await open(
+      [
+        rule("pick-auto", "model.select", "acme/auto", "allow"),
+        rule("no-general", "model.select", "acme/general", "deny"),
+      ],
+      [],
+      user,
+    );
+    expect(
+      (await modelPolicy(defaults.session, "acme/auto", [AUTO])).dispatches?.(
+        "acme",
+        "general",
+      ),
+    ).toBe(true);
+  });
+
+  it("asks a wildcard ask once per route at start", async () => {
+    const asked: string[] = [];
+    const { session } = await open(
+      [
+        rule("pick-auto", "model.select", "acme/auto", "allow"),
+        rule("route-ask", "model.*", "acme/*", "ask"),
+      ],
+      [],
+      {
+        startupApproval: async (decision) => {
+          asked.push(`${decision.action} ${decision.resource}`);
+          return "approved";
+        },
+      },
+    );
+    const policy = await modelPolicy(session, "acme/auto", [AUTO]);
+    expect(asked).toEqual([
+      "model.dispatch acme/coder",
+      "model.dispatch acme/general",
+    ]);
+    expect(policy.dispatches?.("acme", "coder")).toBe(true);
+    // Approved to route, not to be selected.
+    expect(policy.selects("acme", "coder")).toBe(false);
   });
 
   it("resolves ask for each route at start, and refuses a virtual model with no route left", async () => {

@@ -246,6 +246,9 @@ export function governModelRuntime(
    * Routed requests whose Pi-native credential carries a base URL: Pi sends
    * them on a copy (`{ ...model, baseUrl }`) that has lost the mark, so the
    * next request for that model and base URL claims it, once, right after.
+   * Only Pi's own auth lookup before it sends opens one: the lookup Pi's
+   * runtime makes inside a request PiShip already let through (`guarded`)
+   * does not, so no unclaimed one is left behind.
    */
   let rebased: {
     provider: string;
@@ -270,6 +273,8 @@ export function governModelRuntime(
     if (index < 0) return undefined;
     return rebased.splice(index, 1)[0]?.rule;
   };
+  /** Model objects of requests the guard let through. */
+  const guarded = new WeakSet<object>();
   const declaredRoute = (rule: VirtualModelRule, model: ModelRef) =>
     rule.routes.some((item) => key(item) === key(model));
   let registering = false;
@@ -306,6 +311,7 @@ export function governModelRuntime(
       if (!dispatchable(model)) refuse("model.dispatch", model);
     }
     policy?.available?.();
+    guarded.add(model);
   };
 
   const target = runtime as unknown as Record<string, unknown>;
@@ -413,7 +419,10 @@ export function governModelRuntime(
     )
       return undefined;
     if (!providerHasAllowed(provider)) return undefined;
-    const rule = typeof model === "string" ? undefined : routed.get(model);
+    const rule =
+      typeof model === "string" || guarded.has(model)
+        ? undefined
+        : routed.get(model);
     if (managed) {
       let apiKey: string;
       try {

@@ -945,13 +945,29 @@ describe("model.select and model.dispatch", () => {
       reason: "direct",
       thinkingLevel: "off",
     });
-    const auth = await runtime.getAuth(route.model);
+    // The main path: Pi streams the routed model and looks its credential
+    // up inside the request. That lookup leaves no claim behind, so a copy
+    // with the base URL right after is an unrouted request.
+    await stream(runtime, route.model).result();
+    expect(() =>
+      stream(runtime, { ...route.model, baseUrl: rebasedUrl }),
+    ).toThrow("not allowed");
+    // Pi's own lookup before it sends a rebased copy of the next routed
+    // request opens the claim.
+    const next = await runtime.resolveModel(auto, [], {
+      reason: "direct",
+      thinkingLevel: "off",
+    });
+    const auth = await runtime.getAuth(next.model);
     expect(auth?.auth.baseUrl).toBe(rebasedUrl);
-    const rebased = { ...route.model, baseUrl: rebasedUrl };
+    const rebased = { ...next.model, baseUrl: rebasedUrl };
     await stream(runtime, rebased).result();
     // The mark is claimed once: another copy is an unrouted request.
     expect(() => stream(runtime, { ...rebased })).toThrow("not allowed");
-    expect(events).toEqual(["model.select acmecode/acme/coder"]);
+    expect(events).toEqual([
+      "model.select acmecode/acme/coder",
+      "model.select acmecode/acme/coder",
+    ]);
   });
 
   it("checks a routed model by model.select when no model.dispatch rule decides it", async () => {
