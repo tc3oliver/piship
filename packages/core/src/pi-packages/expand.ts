@@ -11,7 +11,16 @@ import {
   readFileSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  type PlatformPath,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { packageError } from "./refs.js";
 import {
   PACKAGE_RESOURCE_KINDS,
@@ -72,6 +81,45 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${output}$`);
 }
 
+/**
+ * A manifest path entry that is absolute, a drive-letter or UNC path, or
+ * uses a backslash. It is refused before any filesystem call: `resolve`
+ * takes such an entry as given, so on Windows `C:/x` or `//host/share`
+ * would leave the package root.
+ */
+export function isUnsafeEntry(entry: string): boolean {
+  return (
+    entry.startsWith("/") ||
+    entry.includes("\\") ||
+    /^[A-Za-z]:/.test(entry) ||
+    isAbsolute(entry)
+  );
+}
+
+/**
+ * `path` is `root` or below it. Decided by `relative`, so a path on another
+ * drive or UNC share (for which `relative` returns an absolute path) is
+ * outside. `paths` defaults to this platform's path module.
+ */
+export function insideRoot(
+  root: string,
+  path: string,
+  paths: Pick<PlatformPath, "relative" | "isAbsolute" | "sep"> = {
+    relative,
+    isAbsolute,
+    sep,
+  },
+): boolean {
+  const rel = paths.relative(root, path);
+  return (
+    rel === "" ||
+    (!paths.isAbsolute(rel) &&
+      rel !== ".." &&
+      !rel.startsWith(`..${paths.sep}`) &&
+      !rel.startsWith("../"))
+  );
+}
+
 function matches(path: string, pattern: string): boolean {
   return globToRegExp(pattern.replace(/^\.\//, "")).test(path);
 }
@@ -84,6 +132,17 @@ class Expander {
 
   private rel(path: string): string {
     return posix(relative(this.root, path));
+  }
+
+  /** A manifest path entry, refused before any filesystem call when unsafe. */
+  checked(entry: string): string {
+    if (isUnsafeEntry(entry))
+      throw packageError(
+        "POLICY_DENIED",
+        this.id,
+        `pi manifest entry ${JSON.stringify(entry)} is absolute, a drive or UNC path, or uses a backslash; entries are relative paths inside the package`,
+      );
+    return entry;
   }
 
   private entries(dir: string) {
@@ -131,7 +190,7 @@ class Expander {
   private manifestExtensions(dir: string): string[] | null {
     const manifest = readPiManifest(join(dir, "package.json"));
     const listed = (manifest?.extensions ?? [])
-      .map((entry) => resolve(dir, entry))
+      .map((entry) => resolve(dir, this.checked(entry)))
       .filter((path) => existsSync(path));
     if (listed.length) return listed;
     for (const index of ["index.ts", "index.js"])
@@ -189,6 +248,7 @@ class Expander {
     const sources = entries.filter((entry) => !isOverride(entry));
     let tree: string[] | undefined;
     const resolved = sources.flatMap((entry) => {
+      this.checked(entry);
       if (!/[*?]/.test(entry)) return [resolve(this.root, entry)];
       tree ??= this.tree();
       return tree.filter((path) => matches(this.rel(path), entry)).sort();
@@ -329,14 +389,20 @@ export function expandPackageResources(
   }
   const resources: LockedPackageResource[] = [];
   for (const [path, kind] of enabled) {
-    const rel = posix(relative(root, path));
-    if (!rel || rel.startsWith("../") || rel === "..")
+    if (path === root || !insideRoot(root, path))
       throw packageError(
         "POLICY_DENIED",
         id,
         `${kind} entry resolves outside the package root`,
       );
-    for (let current = path; current !== root; current = dirname(current))
+    const rel = posix(relative(root, path));
+    // Inside the root, so the walk ends there; it also stops at a
+    // filesystem root rather than loop.
+    for (
+      let current = path;
+      current !== root && dirname(current) !== current;
+      current = dirname(current)
+    )
       if (lstatSync(current).isSymbolicLink())
         throw packageError(
           "POLICY_DENIED",

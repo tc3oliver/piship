@@ -10,8 +10,10 @@ import { REVIEWED_INSTALL_SCRIPTS } from "../compatibility.js";
 import { checkLockedPackageSources } from "../release/sources.js";
 import type { VulnerabilityReport } from "../release/metadata.js";
 import { evaluateVulnerabilities, npmAuditScanner } from "../release/scans.js";
+import { gate } from "../release/shared.js";
 import { checkLockfileClosure, packageError } from "./refs.js";
 import type {
+  DeclaredPackage,
   DeploymentMode,
   LockedPiPackage,
   PackageDependency,
@@ -55,6 +57,76 @@ export function checkPiPackageSources(
     stage,
     reviewed,
   );
+}
+
+/**
+ * The `install-script` gate alone, which applies with or without a
+ * `lifecycle.release` (spec §8.2 step 6): every closure entry with an npm
+ * lifecycle script or a binding.gyp, and a git or local package's own root
+ * with one (`ownInstallScript`, `package@<commit or tree>`), must be reviewed.
+ */
+export function checkPiPackageInstallScripts(
+  id: string,
+  dependencies: readonly PackageDependency[],
+  ownInstallScript: string | undefined,
+  stage: "Release" | "Build" = "Release",
+  reviewed: readonly string[] = REVIEWED_INSTALL_SCRIPTS,
+): void {
+  const scripts = [
+    ...(ownInstallScript
+      ? [`${PI_PACKAGE_VENDOR_DIRECTORY}/${id}/${ownInstallScript}`]
+      : []),
+    ...dependencies
+      .filter((item) => item.installScript)
+      .map((item) => `${piPackageDependencyPath(id, item)}@${item.version}`),
+  ];
+  for (const script of scripts)
+    if (!reviewed.includes(script))
+      throw gate(
+        "POLICY_DENIED",
+        "install-script",
+        `${script} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
+        undefined,
+        stage,
+      );
+}
+
+/**
+ * A certified package's review evidence must describe what was locked: its
+ * `integrity` is the locked tree digest (or, for npm, the registry
+ * integrity), and for npm its `version` is the locked version. Evidence
+ * versions are SemVer, so a git commit is bound through the tree digest of
+ * its content instead, as a local package is.
+ */
+export function checkCertifiedPackage(
+  declaration: Pick<DeclaredPackage, "id" | "class" | "certified">,
+  locked: LockedPiPackage,
+): void {
+  if (declaration.class !== "certified") return;
+  const evidence = declaration.certified;
+  if (!evidence)
+    throw packageError(
+      "POLICY_DENIED",
+      declaration.id,
+      "the package is certified without certification evidence",
+    );
+  if (locked.version !== undefined && evidence.version !== locked.version)
+    throw packageError(
+      "INTEGRITY_FAILED",
+      declaration.id,
+      `certified evidence is for version ${evidence.version}, but the lock resolved ${locked.version}`,
+      "Review the resolved package and update its certified evidence, or pin the reviewed version",
+    );
+  if (
+    evidence.integrity !== locked.tree &&
+    (!locked.integrity || evidence.integrity !== locked.integrity)
+  )
+    throw packageError(
+      "INTEGRITY_FAILED",
+      declaration.id,
+      "the locked package does not match its certified integrity",
+      "Review the resolved package and update its certified evidence",
+    );
 }
 
 /**

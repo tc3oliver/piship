@@ -50,6 +50,51 @@ function isVersionRange(version: string): boolean {
 }
 
 /**
+ * A git or local package's own `dependencies` and `optionalDependencies`, and
+ * an npm package's published ones, must be registry specs (an exact version
+ * or a semver range) before npm sees them. npm fetches a git spec by cloning
+ * it and running the repository's `prepare` under the repository's own npm
+ * configuration despite `--ignore-scripts`, so a git, file, link, alias,
+ * tarball, or dist-tag spec is refused here, before any npm call, rather
+ * than in the lockfile npm would write.
+ */
+export function checkRegistrySpecs(
+  id: string,
+  manifest: {
+    readonly dependencies?: unknown;
+    readonly optionalDependencies?: unknown;
+  },
+): void {
+  for (const field of ["dependencies", "optionalDependencies"] as const) {
+    const specs = manifest[field];
+    if (specs === undefined || specs === null) continue;
+    if (typeof specs !== "object" || Array.isArray(specs))
+      throw packageError(
+        "CONFIG_INVALID",
+        id,
+        `the package's ${field} is not an object`,
+      );
+    for (const [name, spec] of Object.entries(specs)) {
+      if (!PACKAGE_NAME.test(name))
+        throw packageError(
+          "POLICY_DENIED",
+          id,
+          `the package lists ${JSON.stringify(name)} in ${field}, which is not an npm package name`,
+        );
+      if (
+        typeof spec !== "string" ||
+        !(isExactVersion(spec) || isVersionRange(spec))
+      )
+        throw packageError(
+          "POLICY_DENIED",
+          id,
+          `the package lists ${name}@${JSON.stringify(spec)} in ${field}; only registry versions and semver ranges are resolved, never git, file, link, alias, tarball, or dist-tag specs`,
+        );
+    }
+  }
+}
+
+/**
  * Host-provided packages Pi supplies to extensions (Pi `docs/packages.md`).
  * A package or any dependency that lists one in `dependencies`, or a closure
  * that would vendor one, is refused.

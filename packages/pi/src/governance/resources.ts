@@ -124,10 +124,37 @@ export function fileMatches(path: string, expected: string): boolean {
 }
 
 async function packageResources(session: GovernanceSession): Promise<void> {
-  const { lock, distributionDir } = session.options;
+  const { lock, distributionDir, piVersion } = session.options;
   for (const entry of lock.packages ?? []) {
     const root = packageRoot(distributionDir, session.manifest, entry.id);
     const label = `${entry.id}@${entry.version ?? entry.commit ?? "local"}`;
+    // A certified package carries evidence the lock was checked against;
+    // like a certified resource, it loads only on the Pi versions and
+    // platforms it was reviewed for.
+    let incompatible: string | undefined;
+    if (entry.class === "certified") {
+      const evidence = session.manifest.resources.packages?.find(
+        (item) => item.id === entry.id,
+      )?.certified;
+      if (
+        !evidence ||
+        (evidence.integrity !== entry.tree &&
+          evidence.integrity !== entry.integrity)
+      ) {
+        session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `Certified package ${entry.id} does not match its reviewed evidence`,
+          { userAction: "Re-lock and rebuild the distribution" },
+        );
+      }
+      if (
+        !evidence.pi.includes(piVersion) ||
+        (evidence.platforms.length > 0 &&
+          !evidence.platforms.includes(process.platform))
+      )
+        incompatible = `certified for Pi ${evidence.pi.join(", ")}${evidence.platforms.length ? ` on ${evidence.platforms.join(", ")}` : ""}; running Pi ${piVersion} on ${process.platform}`;
+    }
     for (const file of entry.resources) {
       const path = `packages/${entry.id}/${file.path}`;
       const resource = `${entry.class}:${path}`;
@@ -160,6 +187,11 @@ async function packageResources(session: GovernanceSession): Promise<void> {
           `Package ${entry.id} file ${file.path} does not match the lock`,
           { userAction: "Reinstall the distribution from a trusted artifact" },
         );
+      }
+      if (incompatible) {
+        session.emit("resource.denied", { resource, detail });
+        record(false, incompatible);
+        continue;
       }
       const decision = await session.decide(
         KIND_ACTION[file.kind] ?? "resource.load",

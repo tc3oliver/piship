@@ -61,13 +61,18 @@ export function mustRun(
   options: CommandOptions,
 ): Buffer {
   const result = run(command, args, options);
+  // The subcommand, past git's leading `-c <name=value>` and `-C <dir>`.
+  const subcommand = args.find(
+    (arg, index) =>
+      !arg.startsWith("-") && !/^-[cC]$/.test(args[index - 1] ?? ""),
+  );
   if (result.status !== 0)
     throw packageError(
       /EINTEGRITY|integrity/i.test(result.stderr)
         ? "INTEGRITY_FAILED"
         : "UPDATE_FAILED",
       id,
-      `${command} ${args[0] ?? ""} failed: ${result.stderr.trim().split("\n").slice(0, 6).join(" ").slice(0, 600)}`,
+      `${command} ${subcommand ?? args[0] ?? ""} failed: ${result.stderr.trim().split("\n").slice(0, 6).join(" ").slice(0, 600)}`,
     );
   return result.stdout;
 }

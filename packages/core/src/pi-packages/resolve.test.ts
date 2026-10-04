@@ -12,6 +12,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +20,12 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { auditPiPackage, checkPiPackageSources } from "./gates.js";
+import { runCommand } from "./command.js";
+import {
+  auditPiPackage,
+  checkPiPackageInstallScripts,
+  checkPiPackageSources,
+} from "./gates.js";
 import {
   type PackageContext,
   resolvePiPackage,
@@ -169,6 +175,28 @@ const PACKAGES: Record<string, Record<string, PublishedVersion>> = {
       manifest: { name: "@earendil-works/pi-ai", version: "1.0.2" },
     },
   },
+  "git-dependency": {
+    "1.0.0": {
+      manifest: {
+        name: "git-dependency",
+        version: "1.0.0",
+        dependencies: {
+          evil: "github:attacker/repo#0123456789abcdef0123456789abcdef01234567",
+        },
+      },
+      files: { "extensions/x.ts": "export default () => {};\n" },
+    },
+  },
+  "ships-modules": {
+    "1.0.0": {
+      manifest: { name: "ships-modules", version: "1.0.0" },
+      files: {
+        "extensions/x.ts": 'import "evil";\nexport default () => {};\n',
+        "node_modules/evil/package.json": '{"name":"evil","version":"1.0.0"}',
+        "node_modules/evil/index.js": "module.exports = 1;\n",
+      },
+    },
+  },
   tampered: {
     "1.0.0": {
       manifest: { name: "tampered", version: "1.0.0" },
@@ -299,6 +327,81 @@ function createGitFixture(): void {
   env.GIT_CONFIG_KEY_0 = `url.${pathToFileURL(join(root, "pi-security.git")).href}.insteadOf`;
   env.GIT_CONFIG_VALUE_0 = SECURITY_REPOSITORY;
 }
+
+/**
+ * Another git fixture behind `https://git.example.test/fixtures/<name>`,
+ * committed after `prepare` (for content `write` cannot make), and its SHA.
+ */
+function gitFixture(
+  name: string,
+  files: Files,
+  prepare?: (work: string) => void,
+): { repository: string; commit: string } {
+  const work = join(root, `git-${name}`);
+  write(work, files);
+  prepare?.(work);
+  const git = (...args: string[]) =>
+    run(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.autocrlf=false",
+        ...args,
+      ],
+      work,
+    ).trim();
+  git("init", "--quiet", "--initial-branch=main");
+  git("add", "-A");
+  git("commit", "--quiet", "-m", "fixture");
+  const commit = git("rev-parse", "HEAD");
+  run("git", ["clone", "--quiet", "--bare", work, `${work}.git`], root);
+  const repository = `https://git.example.test/fixtures/${name}`;
+  const index = Number(env.GIT_CONFIG_COUNT ?? "0");
+  env.GIT_CONFIG_COUNT = String(index + 1);
+  env[`GIT_CONFIG_KEY_${index}`] =
+    `url.${pathToFileURL(`${work}.git`).href}.insteadOf`;
+  env[`GIT_CONFIG_VALUE_${index}`] = repository;
+  return { repository, commit };
+}
+
+const gitPackage = (
+  id: string,
+  fixture: { repository: string; commit: string },
+): DeclaredPackage => ({
+  id,
+  source: "git",
+  repository: fixture.repository,
+  ref: fixture.commit,
+  class: "company",
+  filters: {},
+});
+
+/** The context with a runner that records every command before running it. */
+function recorded(base: PackageContext): {
+  context: PackageContext;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  return {
+    calls,
+    context: {
+      ...base,
+      run: (command, args, options) => {
+        calls.push([command, ...args]);
+        return runCommand(command, args, options);
+      },
+    },
+  };
+}
+
+const npmCalls = (calls: string[][]) =>
+  calls.filter(([command]) => command === "npm");
 
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "piship-packages-")));
@@ -750,4 +853,276 @@ describe("local packages", () => {
       resolvePiPackage({ ...local, path: "./elsewhere" }, ctx),
     ).toThrow(/outside packageTrust.local.paths/);
   });
+});
+
+describe("lock-time script execution and shipped modules", () => {
+  const GIT_SPEC =
+    "github:attacker/repo#0123456789abcdef0123456789abcdef01234567";
+
+  it.each([
+    GIT_SPEC,
+    "git+ssh://git@github.com/attacker/repo.git",
+    "https://example.test/evil.tgz",
+    "file:../evil",
+    "link:../evil",
+    "npm:left-pad@1.3.0",
+    "attacker/repo",
+    "latest",
+  ])("refuse a local package's dependency %s before npm runs", (spec) => {
+    const { context: ctx, calls } = recorded(context());
+    write(join(ctx.distributionDir, "packages", "deps"), {
+      "package.json": JSON.stringify({
+        name: "deps",
+        version: "1.0.0",
+        optionalDependencies: { evil: spec },
+      }),
+    });
+    expect(() =>
+      resolvePiPackage(
+        {
+          id: "deps",
+          source: "local",
+          path: "./packages/deps",
+          class: "company",
+          filters: {},
+        },
+        ctx,
+      ),
+    ).toThrow(/only registry versions and semver ranges/);
+    expect(npmCalls(calls)).toEqual([]);
+  });
+
+  it(
+    "refuse a git package's git dependency before npm runs",
+    () => {
+      const fixture = gitFixture("git-dependency", {
+        "package.json": JSON.stringify({
+          name: "git-dependency",
+          version: "1.0.0",
+          dependencies: { evil: GIT_SPEC },
+        }),
+        ".npmrc": "git=/tmp/pwn.sh\n",
+        "extensions/x.ts": "export default () => {};\n",
+      });
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(gitPackage("git-dependency", fixture), ctx),
+      ).toThrow(/evil@"github:attacker\/repo#0123/);
+      expect(calls.some(([command]) => command === "git")).toBe(true);
+      expect(npmCalls(calls)).toEqual([]);
+    },
+    SLOW,
+  );
+
+  it(
+    "refuse an npm package whose published dependencies hold a git spec before npm installs anything",
+    () => {
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(npmPackage("git-dependency", "1.0.0"), ctx),
+      ).toThrow(/evil@"github:attacker/);
+      expect(npmCalls(calls).map((call) => call[1])).toEqual(["view", "view"]);
+    },
+    SLOW,
+  );
+
+  it(
+    "run every npm call with a git that refuses to run",
+    () => {
+      const stubs: { status: number | null }[] = [];
+      const base = context();
+      resolvePiPackage(npmPackage("@company/pi-platform", "1.4.2"), {
+        ...base,
+        run: (command, args, options) => {
+          if (command === "npm") {
+            const git = args.find((arg) => arg.startsWith("--git="));
+            expect(git).toBeDefined();
+            stubs.push(
+              spawnSync((git as string).slice("--git=".length), ["clone"], {
+                shell: process.platform === "win32",
+              }),
+            );
+          }
+          return runCommand(command, args, options);
+        },
+      });
+      expect(stubs.length).toBeGreaterThanOrEqual(4);
+      for (const stub of stubs) expect(stub.status).toBe(1);
+    },
+    SLOW,
+  );
+
+  it(
+    "refuse a git package that ships node_modules, before npm runs",
+    () => {
+      const fixture = gitFixture("ships-modules", {
+        "package.json": JSON.stringify({ name: "ships", version: "1.0.0" }),
+        "extensions/x.ts": 'import "evil";\nexport default () => {};\n',
+        "lib/node_modules/evil/index.js": "module.exports = 1;\n",
+      });
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(gitPackage("ships-modules", fixture), ctx),
+      ).toThrow(/lib\/node_modules ships its own node_modules/);
+      expect(npmCalls(calls)).toEqual([]);
+    },
+    SLOW,
+  );
+
+  it(
+    "refuse an npm package whose tarball ships node_modules the lockfile does not install",
+    () => {
+      expect(() =>
+        resolvePiPackage(npmPackage("ships-modules", "1.0.0"), context()),
+      ).toThrow(
+        /node_modules\/ships-modules\/node_modules\/evil is not a package the npm lockfile installs/,
+      );
+    },
+    SLOW,
+  );
+
+  it(
+    "never copy a local package's node_modules",
+    () => {
+      const ctx = context();
+      write(join(ctx.distributionDir, "packages", "with-modules"), {
+        "package.json": JSON.stringify({ name: "with-modules" }),
+        "skills/x/SKILL.md": "---\nname: x\n---\n",
+        "node_modules/evil/index.js": "module.exports = 1;\n",
+        "skills/x/node_modules/evil/index.js": "module.exports = 1;\n",
+      });
+      const declaration: DeclaredPackage = {
+        id: "with-modules",
+        source: "local",
+        path: "./packages/with-modules",
+        class: "company",
+        filters: {},
+      };
+      const resolved = resolvePiPackage(declaration, ctx);
+      expect(resolved.locked.files).toBe(2);
+      const vendored = vendorPiPackage(
+        declaration,
+        resolved,
+        ctx,
+        join(root, "vendor", "with-modules"),
+      );
+      expect(existsSync(join(vendored.packageRoot, "node_modules"))).toBe(
+        false,
+      );
+      expect(
+        existsSync(join(vendored.packageRoot, "skills", "x", "node_modules")),
+      ).toBe(false);
+    },
+    SLOW,
+  );
+
+  it(
+    "count a git or local package root's own install script or binding.gyp",
+    () => {
+      const ctx = context();
+      write(join(ctx.distributionDir, "packages", "native"), {
+        "package.json": JSON.stringify({ name: "native", version: "1.0.0" }),
+        "binding.gyp": "{}\n",
+        "skills/x/SKILL.md": "---\nname: x\n---\n",
+      });
+      const local = resolvePiPackage(
+        {
+          id: "native",
+          source: "local",
+          path: "./packages/native",
+          class: "company",
+          filters: {},
+        },
+        ctx,
+      );
+      expect(local.ownInstallScript).toBe(`package@${local.locked.tree}`);
+      expect(() =>
+        checkPiPackageInstallScripts(
+          "native",
+          local.dependencies,
+          local.ownInstallScript,
+        ),
+      ).toThrow(
+        /install-script: pi-packages\/native\/package@sha256-[0-9a-f]{64} runs npm lifecycle scripts/,
+      );
+      expect(() =>
+        checkPiPackageInstallScripts(
+          "native",
+          local.dependencies,
+          local.ownInstallScript,
+          "Release",
+          [`pi-packages/native/package@${local.locked.tree}`],
+        ),
+      ).not.toThrow();
+
+      const fixture = gitFixture("postinstall", {
+        "package.json": JSON.stringify({
+          name: "postinstall",
+          version: "1.0.0",
+          scripts: { postinstall: "node pwn.js" },
+        }),
+        "prompts/a.md": "A.\n",
+      });
+      const git = resolvePiPackage(gitPackage("postinstall", fixture), ctx);
+      expect(git.ownInstallScript).toBe(`package@${fixture.commit}`);
+    },
+    SLOW,
+  );
+
+  it(
+    "refuse a symlinked package.json in a git package before reading it or running npm",
+    () => {
+      writeFileSync(
+        join(root, "outside.json"),
+        JSON.stringify({ name: "outside" }),
+      );
+      const fixture = gitFixture(
+        "symlinked-manifest",
+        { "prompts/a.md": "A.\n" },
+        (work) =>
+          symlinkSync(join(root, "outside.json"), join(work, "package.json")),
+      );
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(gitPackage("symlinked-manifest", fixture), ctx),
+      ).toThrow(/package\.json is a symlink/);
+      expect(npmCalls(calls)).toEqual([]);
+    },
+    SLOW,
+  );
+
+  it(
+    "archive git content as committed, whatever the repository's .gitattributes say",
+    () => {
+      const content = "one\ntwo $Format:%H$ $Id$\n";
+      const fixture = gitFixture("attributes", {
+        ".gitattributes": "* text eol=crlf\n*.md export-subst ident\n",
+        "package.json": JSON.stringify({ name: "attributes" }),
+        "prompts/a.md": content,
+      });
+      // A user-level autocrlf in the build environment does not apply either.
+      const ctx = {
+        ...context(),
+        env: { ...env, GIT_CONFIG_PARAMETERS: "'core.autocrlf'='true'" },
+      };
+      const resolved = resolvePiPackage(gitPackage("attributes", fixture), ctx);
+      expect(resolved.locked.resources).toEqual([
+        {
+          kind: "prompts",
+          path: "prompts/a.md",
+          sha256: createHash("sha256").update(content).digest("hex"),
+        },
+      ]);
+      const vendored = vendorPiPackage(
+        gitPackage("attributes", fixture),
+        resolved,
+        ctx,
+        join(root, "vendor", "attributes"),
+      );
+      expect(
+        readFileSync(join(vendored.packageRoot, "prompts", "a.md"), "utf8"),
+      ).toBe(content);
+    },
+    SLOW,
+  );
 });

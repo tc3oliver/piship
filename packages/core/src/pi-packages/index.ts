@@ -5,7 +5,9 @@ export { type CommandRunner, runCommand } from "./command.js";
 export { expandPackageResources } from "./expand.js";
 export {
   auditPiPackage,
+  checkCertifiedPackage,
   checkLockedPiPackage,
+  checkPiPackageInstallScripts,
   checkPiPackageSources,
   PI_PACKAGE_VENDOR_DIRECTORY,
   type PackageAuditResult,
@@ -16,6 +18,7 @@ export {
   checkLocalDeclaration,
   checkLockfileClosure,
   checkNpmDeclaration,
+  checkRegistrySpecs,
   isHostProvided,
   optionalDependenciesFor,
 } from "./refs.js";

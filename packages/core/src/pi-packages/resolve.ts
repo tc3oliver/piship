@@ -27,6 +27,7 @@ import {
   checkLocalDeclaration,
   checkLockfileClosure,
   checkNpmDeclaration,
+  checkRegistrySpecs,
   isExactVersion,
   isHostProvided,
   type NpmLockfile,
@@ -64,6 +65,11 @@ export interface ResolvedPiPackage {
   readonly manifest: string;
   /** The closure as the lockfile records it, with binding.gyp counted as an install script. */
   readonly dependencies: readonly PackageDependency[];
+  /**
+   * A git or local package whose own root has an npm install script or a
+   * binding.gyp: its install-script review key, `package@<commit or tree>`.
+   */
+  readonly ownInstallScript?: string;
 }
 
 /** A vendored package directory: the npm root and the package root inside it. */
@@ -98,12 +104,33 @@ function environment(context: PackageContext): NodeJS.ProcessEnv {
   return { ...(context.env ?? process.env), GIT_TERMINAL_PROMPT: "0" };
 }
 
-function registryArgs(declaration: DeclaredPackage): string[] {
-  return declaration.source === "npm" && declaration.registry
-    ? [
-        `--registry=${canonicalSourceUrl(declaration.id, "registry", declaration.registry)}/`,
-      ]
-    : [];
+/**
+ * Write the `git` every npm call runs instead of the real one: it exits 1 for
+ * any arguments. npm reaches git only to fetch a git dependency, which a
+ * package closure never holds, and a git fetch runs the repository's
+ * `prepare` under the repository's own npm configuration despite
+ * `--ignore-scripts`. A `.cmd` on Windows, where npm cannot spawn it without
+ * a shell and so fails closed as well.
+ */
+function refusingGit(work: string): string {
+  const windows = process.platform === "win32";
+  const path = join(work, windows ? "refuse-git.cmd" : "refuse-git");
+  writeFileSync(path, windows ? "@exit /b 1\r\n" : "#!/bin/sh\nexit 1\n", {
+    mode: 0o755,
+  });
+  return path;
+}
+
+/** The flags of every npm call: the refusing git, and the declared registry. */
+function npmArgs(declaration: DeclaredPackage, git: string): string[] {
+  return [
+    `--git=${git}`,
+    ...(declaration.source === "npm" && declaration.registry
+      ? [
+          `--registry=${canonicalSourceUrl(declaration.id, "registry", declaration.registry)}/`,
+        ]
+      : []),
+  ];
 }
 
 function readJson<T>(id: string, file: string, what: string): T {
@@ -194,16 +221,102 @@ export function copyLocalPackage(
   }
 }
 
+/**
+ * A git or local package's own tree, checked right after extraction or copy
+ * and before anything in it is read: no symlink, and no `node_modules` at any
+ * depth. Shipped modules would load ahead of the locked closure while no
+ * lockfile entry, tree digest, or binding.gyp scan covers them.
+ */
+function checkSourceTree(id: string, root: string): void {
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink())
+        throw packageError(
+          "POLICY_DENIED",
+          id,
+          `${posix(relative(root, path))} is a symlink; packages are vendored without symlinks`,
+        );
+      if (!entry.isDirectory()) continue;
+      if (entry.name === "node_modules")
+        throw packageError(
+          "POLICY_DENIED",
+          id,
+          `${posix(relative(root, path))} ships its own node_modules; dependencies are installed only from the package npm lockfile`,
+        );
+      walk(path);
+    }
+  };
+  walk(root);
+}
+
+/**
+ * Every package directory under the npm root's `node_modules` is one the
+ * package npm lockfile installs, and a `node_modules` directory holds nothing
+ * else (npm's own top-level `.package-lock.json` aside). A published tarball
+ * can carry a `node_modules` of its own, which npm extracts without a
+ * lockfile entry, integrity, or install-script scan.
+ */
+function checkInstalledModules(
+  id: string,
+  directory: string,
+  lockfile: NpmLockfile,
+): void {
+  const packages = lockfile.packages ?? {};
+  const visit = (modules: string, top: boolean) => {
+    if (!existsSync(modules)) return;
+    for (const entry of readdirSync(modules, { withFileTypes: true })) {
+      if (top && entry.name === ".package-lock.json" && entry.isFile())
+        continue;
+      const path = join(modules, entry.name);
+      const roots =
+        entry.isDirectory() && entry.name.startsWith("@")
+          ? readdirSync(path, { withFileTypes: true }).map((scoped) => ({
+              path: join(path, scoped.name),
+              directory: scoped.isDirectory(),
+            }))
+          : [{ path, directory: entry.isDirectory() }];
+      for (const root of roots) {
+        const key = posix(relative(directory, root.path));
+        if (!root.directory || !packages[key])
+          throw packageError(
+            "POLICY_DENIED",
+            id,
+            `${key} is not a package the npm lockfile installs; a package cannot ship its own node_modules`,
+          );
+        visit(join(root.path, "node_modules"), false);
+      }
+    }
+  };
+  visit(join(directory, "node_modules"), true);
+}
+
+/** npm's install-time lifecycle scripts; a binding.gyp implies `install`. */
+function hasInstallScript(root: string, manifest: PackageJson): boolean {
+  const scripts = manifest.scripts;
+  return (
+    existsSync(join(root, "binding.gyp")) ||
+    (["preinstall", "install", "postinstall"] as const).some(
+      (name) =>
+        !!scripts &&
+        typeof scripts === "object" &&
+        typeof (scripts as Record<string, unknown>)[name] === "string",
+    )
+  );
+}
+
 interface PackageJson {
   readonly name?: unknown;
   readonly version?: unknown;
   readonly dependencies?: Record<string, string>;
   readonly optionalDependencies?: Record<string, string>;
+  readonly scripts?: unknown;
 }
 
 /**
  * The npm root PiShip installs a git or local package's dependencies into:
- * only `dependencies` and `optionalDependencies`, never dev or peer ones.
+ * only `dependencies` and `optionalDependencies`, never dev or peer ones,
+ * each a registry spec (checked before npm runs).
  */
 function wrapperFor(
   id: string,
@@ -217,6 +330,7 @@ function wrapperFor(
           id,
           `the package lists host-provided ${name} in ${field}; declare it in peerDependencies instead`,
         );
+  checkRegistrySpecs(id, manifest);
   return {
     name: `piship-package-${id}`,
     version: "0.0.0",
@@ -233,6 +347,7 @@ function npmView(
   field: string | undefined,
   context: PackageContext,
   cwd: string,
+  git: string,
 ): unknown {
   const output = mustRun(
     run,
@@ -243,7 +358,7 @@ function npmView(
       spec,
       ...(field ? [field] : []),
       "--json",
-      ...registryArgs(declaration),
+      ...npmArgs(declaration, git),
     ],
     { cwd, env: environment(context) },
   ).toString();
@@ -264,6 +379,7 @@ function resolveNpm(
   declaration: DeclaredPackage & { source: "npm" },
   context: PackageContext,
   cwd: string,
+  git: string,
 ): { version: string; integrity: string } {
   const { id } = declaration;
   const versions = npmView(
@@ -273,6 +389,7 @@ function resolveNpm(
     "version",
     context,
     cwd,
+    git,
   );
   const version = Array.isArray(versions) ? versions.at(-1) : versions;
   if (typeof version !== "string" || !isExactVersion(version))
@@ -288,6 +405,7 @@ function resolveNpm(
     undefined,
     context,
     cwd,
+    git,
   ) as
     | (PackageJson & { dist?: { integrity?: unknown; tarball?: unknown } })
     | null;
@@ -356,11 +474,31 @@ function archiveGitCommit(
     cwd: work,
     env,
   });
+  // The repository's own .gitattributes cannot rewrite what is archived: no
+  // end-of-line conversion, filter, ident, export-subst, or re-encoding. The
+  // repository-local attributes file outranks every in-tree one.
+  mkdirSync(join(bare, "info"), { recursive: true });
+  writeFileSync(
+    join(bare, "info", "attributes"),
+    "* -text -eol -filter -ident -export-subst -working-tree-encoding\n",
+  );
   mustRun(
     run,
     id,
     "git",
-    ["-C", bare, "fetch", "--quiet", "--no-tags", "--depth=1", "--", url, sha],
+    [
+      "-c",
+      "transfer.fsckObjects=true",
+      "-C",
+      bare,
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--depth=1",
+      "--",
+      url,
+      sha,
+    ],
     { cwd: work, env },
   );
   // The commit must exist as fetched; its content is then pinned by the
@@ -373,7 +511,17 @@ function archiveGitCommit(
     run,
     id,
     "git",
-    ["-C", bare, "archive", "--format=tar", sha],
+    [
+      "-c",
+      "core.autocrlf=false",
+      "-c",
+      "core.eol=lf",
+      "-C",
+      bare,
+      "archive",
+      "--format=tar",
+      sha,
+    ],
     { cwd: work, env },
   );
   mkdirSync(target, { recursive: true });
@@ -405,7 +553,9 @@ function materialize(
   let packageRoot: string;
   let wrapper: Record<string, unknown>;
   let integrity: string | undefined;
+  let ownInstallScript = false;
   mkdirSync(directory, { recursive: true });
+  const git = refusingGit(work);
   if (declaration.source === "npm") {
     checkNpmDeclaration(declaration, context.mode);
     const npm = pin
@@ -413,7 +563,7 @@ function materialize(
           version: pin.locked.version ?? "",
           integrity: pin.locked.integrity ?? "",
         }
-      : resolveNpm(run, declaration, context, work);
+      : resolveNpm(run, declaration, context, work, git);
     resolved = npm.version;
     integrity = npm.integrity;
     packageRoot = join(
@@ -443,6 +593,7 @@ function materialize(
       );
       copyLocalPackage(id, source, packageRoot);
     }
+    checkSourceTree(id, packageRoot);
     const own = existsSync(join(packageRoot, "package.json"))
       ? readJson<PackageJson>(
           id,
@@ -450,7 +601,9 @@ function materialize(
           "package.json",
         )
       : {};
+    // Checked before npm runs: every dependency must be a registry spec.
     wrapper = wrapperFor(id, own);
+    ownInstallScript = hasInstallScript(packageRoot, own);
   }
   const manifest = `${JSON.stringify(wrapper, null, 2)}\n`;
   writeFileSync(join(directory, "package.json"), manifest);
@@ -473,7 +626,7 @@ function materialize(
         "install",
         "--package-lock-only",
         ...NPM_FLAGS,
-        ...registryArgs(declaration),
+        ...npmArgs(declaration, git),
       ],
       { cwd: directory, env },
     );
@@ -496,10 +649,11 @@ function materialize(
       (item) => item.path === `node_modules/${declaration.package}`,
     )?.resolved as string;
   }
-  mustRun(run, id, "npm", ["ci", ...NPM_FLAGS, ...registryArgs(declaration)], {
+  mustRun(run, id, "npm", ["ci", ...NPM_FLAGS, ...npmArgs(declaration, git)], {
     cwd: directory,
     env,
   });
+  checkInstalledModules(id, directory, parsed);
   if (declaration.source === "npm") {
     const installed = readJson<PackageJson>(
       id,
@@ -541,7 +695,17 @@ function materialize(
         .map((target) => [target, optionalDependenciesFor(parsed, target)]),
     ),
   };
-  return { locked, lockfile, manifest, dependencies, directory, packageRoot };
+  return {
+    locked,
+    lockfile,
+    manifest,
+    dependencies,
+    ...(ownInstallScript
+      ? { ownInstallScript: `package@${locked.commit ?? locked.tree}` }
+      : {}),
+    directory,
+    packageRoot,
+  };
 }
 
 function workDirectory(context: PackageContext): string {
@@ -559,13 +723,15 @@ export function resolvePiPackage(
 ): ResolvedPiPackage {
   const work = workDirectory(context);
   try {
-    const { locked, lockfile, manifest, dependencies } = materialize(
-      declaration,
-      context,
-      join(work, "vendor"),
-      work,
-    );
-    return { locked, lockfile, manifest, dependencies };
+    const { locked, lockfile, manifest, dependencies, ownInstallScript } =
+      materialize(declaration, context, join(work, "vendor"), work);
+    return {
+      locked,
+      lockfile,
+      manifest,
+      dependencies,
+      ...(ownInstallScript ? { ownInstallScript } : {}),
+    };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

@@ -7,10 +7,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { expandPackageResources, globToRegExp } from "./expand.js";
+import {
+  expandPackageResources,
+  globToRegExp,
+  insideRoot,
+  isUnsafeEntry,
+} from "./expand.js";
 import type { PackageFilters } from "./types.js";
 
 const roots: string[] = [];
@@ -150,6 +155,52 @@ describe("Pi package expansion", () => {
     expect(() => paths(join(root, "package"))).toThrow(
       /outside the package root/,
     );
+  });
+
+  it.each([
+    ["an absolute path", "/etc/outside.ts"],
+    ["a UNC path", "//server/share/outside.ts"],
+    ["a drive-letter path", "C:/outside.ts"],
+    ["a drive-relative path", "c:outside.ts"],
+    ["a backslash path", "extensions\\alpha.ts"],
+    ["a backslash UNC path", "\\\\server\\share\\outside.ts"],
+  ])("refuses %s in the pi manifest before any filesystem call", (_, entry) => {
+    for (const kind of ["extensions", "skills"] as const) {
+      const root = packageRoot({
+        "package.json": JSON.stringify({
+          name: "escape",
+          pi: { [kind]: [entry] },
+        }),
+      });
+      expect(() => paths(root)).toThrow(/drive or UNC path/);
+    }
+    // A nested package.json's extension entries too.
+    const nested = packageRoot({
+      "package.json": JSON.stringify({ name: "escape" }),
+      "extensions/sub/package.json": JSON.stringify({
+        pi: { extensions: [entry] },
+      }),
+    });
+    expect(() => paths(nested)).toThrow(/drive or UNC path/);
+  });
+
+  it("decides containment with relative, so another drive or share is outside", () => {
+    expect(insideRoot("C:\\pkg", "C:\\pkg\\extensions\\a.ts", win32)).toBe(
+      true,
+    );
+    expect(insideRoot("C:\\pkg", "C:\\pkg", win32)).toBe(true);
+    expect(insideRoot("C:\\pkg", "C:\\pkg\\..x\\a.ts", win32)).toBe(true);
+    expect(insideRoot("C:\\pkg", "D:\\pkg\\a.ts", win32)).toBe(false);
+    expect(insideRoot("C:\\pkg", "\\\\server\\share\\a.ts", win32)).toBe(false);
+    expect(insideRoot("C:\\pkg", "C:\\other\\a.ts", win32)).toBe(false);
+    expect(insideRoot("C:\\pkg", "C:\\", win32)).toBe(false);
+    expect(insideRoot("/pkg", "/pkg/a.ts", posix)).toBe(true);
+    expect(insideRoot("/pkg", "/pkgx/a.ts", posix)).toBe(false);
+    expect(insideRoot("/pkg", "/", posix)).toBe(false);
+    for (const entry of ["C:/x", "c:x", "//h/s", "\\\\h\\s", "a\\b", "/x"])
+      expect(isUnsafeEntry(entry)).toBe(true);
+    for (const entry of ["./extensions", "extensions/*.ts", "skills"])
+      expect(isUnsafeEntry(entry)).toBe(false);
   });
 
   it("refuses a resource reached through a symlink", () => {

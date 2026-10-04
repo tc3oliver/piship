@@ -17,7 +17,9 @@ import type { DeclaredPackage, Manifest } from "@piship/schema";
 import { currentTarget, REVIEWED_INSTALL_SCRIPTS } from "../compatibility.js";
 import type { DistributionLock } from "../lock-schema.js";
 import {
+  checkCertifiedPackage,
   checkLockedPiPackage,
+  checkPiPackageInstallScripts,
   checkPiPackageSources,
   PI_PACKAGE_VENDOR_DIRECTORY,
 } from "./gates.js";
@@ -106,6 +108,16 @@ export function lockPiPackages(
   const release = manifest.lifecycle?.release;
   return declared.map((declaration) => {
     const resolved = resolvePiPackage(declaration, context);
+    checkCertifiedPackage(declaration, resolved.locked);
+    // The install-script review applies with or without lifecycle.release;
+    // the source gate needs its release.sources.
+    checkPiPackageInstallScripts(
+      declaration.id,
+      resolved.dependencies,
+      resolved.ownInstallScript,
+      "Release",
+      reviewedInstallScripts(release),
+    );
     if (release)
       checkPiPackageSources(
         declaration.id,
@@ -239,14 +251,23 @@ export function vendorPiPackages(
         stage: "Build",
         reviewed: reviewedInstallScripts(lock.release),
       });
-    output.push(
-      vendorPiPackage(
-        declaration,
-        { locked: entry, lockfile },
-        context,
-        join(payload, PI_PACKAGE_VENDOR_DIRECTORY, entry.id),
-      ),
+    const vendored = vendorPiPackage(
+      declaration,
+      { locked: entry, lockfile },
+      context,
+      join(payload, PI_PACKAGE_VENDOR_DIRECTORY, entry.id),
     );
+    // What vendoring found (a binding.gyp, the package root's own scripts)
+    // passes the install-script review with or without lifecycle.release.
+    if (options.supplyChainGates !== false)
+      checkPiPackageInstallScripts(
+        entry.id,
+        vendored.dependencies,
+        vendored.ownInstallScript,
+        "Build",
+        reviewedInstallScripts(lock.release),
+      );
+    output.push(vendored);
   }
   return output;
 }

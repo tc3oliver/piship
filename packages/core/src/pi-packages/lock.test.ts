@@ -20,6 +20,7 @@ import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { lockManifest, requireCurrentLock } from "../lock.js";
 import type { DistributionLock } from "../lock-schema.js";
+import { checkCertifiedPackage } from "./gates.js";
 import { PACKAGE_LOCK_DIRECTORY, vendorPiPackages } from "./lock.js";
 
 const REPOSITORY = "https://git.example.test/platform/pi-review";
@@ -198,6 +199,86 @@ describe("Pi packages in the lock", () => {
       existsSync(join(dirname(manifest), PACKAGE_LOCK_DIRECTORY, "pi-review")),
     ).toBe(false);
   }, 120_000);
+
+  it("the install-script review applies without lifecycle.release, to a package root's own binding.gyp too", () => {
+    const manifest = distribution();
+    write(dirname(manifest), { "packages/team/binding.gyp": "{}\n" });
+    expect(() => lockManifest(manifest)).toThrow(
+      /install-script: pi-packages\/team\/package@sha256-[0-9a-f]{64} runs npm lifecycle scripts/,
+    );
+  }, 120_000);
+
+  it("a certified package's evidence must match the locked tree", () => {
+    const manifest = distribution();
+    lockManifest(manifest);
+    const tree = readLock(manifest).packages?.[1]?.tree;
+    expect(tree).toMatch(/^sha256-[0-9a-f]{64}$/);
+    const company = readFileSync(manifest, "utf8");
+    const certified = (integrity: string) =>
+      company.replace(
+        "      class: company\n",
+        [
+          "      class: certified",
+          "      certified:",
+          "        version: 1.0.0",
+          `        source: ${REPOSITORY}`,
+          `        integrity: ${integrity}`,
+          "        license: MIT",
+          '        pi: ["1.0.2"]',
+          "        platforms: []",
+          "",
+        ].join("\n"),
+      );
+    writeFileSync(manifest, certified(`sha256-${"0".repeat(64)}`));
+    expect(() => lockManifest(manifest)).toThrow(
+      /pi-review: the locked package does not match its certified integrity/,
+    );
+    writeFileSync(manifest, certified(tree as string));
+    lockManifest(manifest);
+    expect(readLock(manifest).packages?.[1]?.class).toBe("certified");
+  }, 120_000);
+
+  it("a certified npm package's evidence must name the locked version", () => {
+    const evidence = {
+      id: "x",
+      version: "1.0.0",
+      source: "https://registry.example.test/x",
+      integrity: `sha256-${"a".repeat(64)}`,
+      license: "MIT",
+      pi: ["1.0.2"],
+      platforms: [],
+    };
+    const locked = {
+      id: "x",
+      source: "npm" as const,
+      class: "certified" as const,
+      version: "1.0.0",
+      integrity: "sha512-AAAA",
+      tree: evidence.integrity,
+      files: 1,
+      resources: [],
+    };
+    const declaration = {
+      id: "x",
+      class: "certified" as const,
+      certified: evidence,
+    };
+    expect(() => checkCertifiedPackage(declaration, locked)).not.toThrow();
+    expect(() =>
+      checkCertifiedPackage(declaration, { ...locked, version: "1.0.1" }),
+    ).toThrow(
+      /certified evidence is for version 1\.0\.0, but the lock resolved 1\.0\.1/,
+    );
+    expect(() =>
+      checkCertifiedPackage(declaration, {
+        ...locked,
+        tree: `sha256-${"b".repeat(64)}`,
+      }),
+    ).toThrow(/does not match its certified integrity/);
+    expect(() =>
+      checkCertifiedPackage({ id: "x", class: "certified" }, locked),
+    ).toThrow(/without certification evidence/);
+  });
 
   it("the build vendors every package under pi-packages/<id> from the lock", () => {
     const manifest = distribution();
