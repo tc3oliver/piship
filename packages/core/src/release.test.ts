@@ -888,7 +888,7 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     );
   });
 
-  it("policy: refuses a managed deny on an unsupported action (POLICY_UNENFORCEABLE)", () => {
+  it("policy: refuses a managed deny on an unsupported action (POLICY_UNENFORCEABLE)", async () => {
     const root = generateKeyPairSync("ed25519")
       .publicKey.export({ type: "spki", format: "der" })
       .toString("base64");
@@ -958,7 +958,9 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(
       checkReleaseInputs(project({ extra: rules }).path).deployment.mode,
     ).toBe("personal");
-    // A required sandbox contains the network only when it denies it.
+    // A required sandbox contains the network only when it denies it. Build
+    // on a (simulated) linux-x64 host, which has a sandbox adapter, so the
+    // policy gate decides on every host, win32 included.
     const network = (mode: "deny" | "allow") => `sandbox:
   required: true
   network:
@@ -969,12 +971,26 @@ policy:
       action: network.connect
       effect: deny
 `;
-    const open = caught(() => checkReleaseInputs(managed(network("allow"))));
-    expect(open.code).toBe("POLICY_UNENFORCEABLE");
-    expect(open.message).toContain("acme.net.deny (deny network.connect:**)");
-    expect(checkReleaseInputs(managed(network("deny"))).deployment.mode).toBe(
-      "managed",
-    );
+    vi.resetModules();
+    vi.doMock("./index.js", async (original) => ({
+      ...(await original<typeof import("./index.js")>()),
+      currentTarget: () => "linux-x64",
+    }));
+    try {
+      const release = await import("./release/index.js");
+      const open = caught(() =>
+        release.checkReleaseInputs(managed(network("allow")), "linux-x64"),
+      );
+      expect(open.code).toBe("POLICY_UNENFORCEABLE");
+      expect(open.message).toContain("acme.net.deny (deny network.connect:**)");
+      expect(
+        release.checkReleaseInputs(managed(network("deny")), "linux-x64")
+          .deployment.mode,
+      ).toBe("managed");
+    } finally {
+      vi.doUnmock("./index.js");
+      vi.resetModules();
+    }
   });
 
   it("policy: duplicate rule ids are already rejected by the manifest schema", () => {

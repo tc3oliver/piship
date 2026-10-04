@@ -594,7 +594,13 @@ function archiveGitCommit(
     { cwd: work, env },
   );
   mkdirSync(target, { recursive: true });
-  mustRun(run, id, "tar", ["-xf", "-", "-C", target], {
+  // `git archive` writes UTF-8 names without a charset header. Windows' tar
+  // (bsdtar) reads such names in the ANSI code page unless told otherwise,
+  // so `node_moduleſ` would land as `node_moduleÅ¿` and a non-ASCII name
+  // would not be the committed one.
+  const charset =
+    process.platform === "win32" ? ["--options", "hdrcharset=UTF-8"] : [];
+  mustRun(run, id, "tar", [...charset, "-xf", "-", "-C", target], {
     cwd: work,
     env,
     input: archive,
