@@ -115,11 +115,27 @@ export interface VulnerabilityReport {
   readonly verdict: "passed" | "failed";
   readonly counts: Readonly<Record<string, number>>;
   readonly findings: readonly VulnerabilityFinding[];
+  /**
+   * v1alpha6: the scan of each Pi package lockfile, with its scan time (npm
+   * exposes no advisory-database timestamp), or why a personal release could
+   * not scan it.
+   */
+  readonly packages?: readonly {
+    readonly id: string;
+    readonly scannedAt: string;
+    readonly verdict?: "passed" | "failed";
+    readonly findings?: readonly VulnerabilityFinding[];
+    readonly warning?: string;
+  }[];
 }
 
-/** Returns npm-audit-v2-shaped JSON for the given npm lock directory. */
+/**
+ * Returns npm-audit-v2-shaped JSON for the given npm lock directory, asking
+ * `registry` for advisories when one is given.
+ */
 export type VulnerabilityScanner = (
   lockDirectory: string,
+  registry?: string,
 ) => Promise<unknown> | unknown;
 
 export interface CommandResult {

@@ -161,6 +161,8 @@ export type LockedPiSiblings = Readonly<Record<string, string>>;
 /** v1alpha4 static digests (`sha256-<hex>` of canonical JSON). */
 export interface LockDigests {
   readonly resources: string;
+  /** v1alpha6: the locked Pi packages, when the manifest declares any. */
+  readonly packages?: string;
   readonly policy: string;
   readonly capabilities: string;
   readonly mcp: string;

@@ -6,7 +6,7 @@ import { join, relative, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { type GovernanceLock, treeDigest } from "@piship/core";
 import { resourceTrustDecision } from "@piship/policy";
-import type { DeclaredResource } from "@piship/schema";
+import type { DeclaredResource, GovernanceManifest } from "@piship/schema";
 import type { GovernanceSession } from "../governance-session.js";
 import { KIND_ACTION, type ResourceEvidence } from "./options.js";
 
@@ -64,6 +64,7 @@ export async function resolveResources(
       });
     else session.loader[item.kind].push(absolute);
   }
+  await packageResources(session);
   for (const name of session.manifest.resources.builtin) {
     const trust = resourceTrustDecision(policy, "builtin", "extensions");
     let loaded = trust.allowed;
@@ -90,6 +91,95 @@ export async function resolveResources(
       reason,
       integrity: "not-applicable",
     });
+  }
+}
+
+/**
+ * Files of the vendored Pi packages (spec §8.2): each locked resource enters
+ * the loader on its own, after its package's trust class, its locked sha256,
+ * and the policy decision for its kind. Pi never sees a package, so its
+ * package manager installs nothing.
+ */
+/** The vendored root of a package: `pi-packages/<id>/{node_modules/<name>,package}`. */
+export function packageRoot(
+  distributionDir: string,
+  manifest: GovernanceManifest,
+  id: string,
+): string {
+  const declaration = manifest.resources.packages?.find(
+    (item) => item.id === id,
+  );
+  return join(
+    distributionDir,
+    "pi-packages",
+    id,
+    ...(declaration?.source === "npm"
+      ? ["node_modules", ...declaration.package.split("/")]
+      : ["package"]),
+  );
+}
+
+export function fileMatches(path: string, expected: string): boolean {
+  return existsSync(path) && sha256(readFileSync(path)) === expected;
+}
+
+async function packageResources(session: GovernanceSession): Promise<void> {
+  const { lock, distributionDir } = session.options;
+  for (const entry of lock.packages ?? []) {
+    const root = packageRoot(distributionDir, session.manifest, entry.id);
+    const label = `${entry.id}@${entry.version ?? entry.commit ?? "local"}`;
+    for (const file of entry.resources) {
+      const path = `packages/${entry.id}/${file.path}`;
+      const resource = `${entry.class}:${path}`;
+      const detail = { kind: file.kind, class: entry.class, package: label };
+      const record = (loaded: boolean, reason: string) =>
+        session.resources.push({
+          kind: file.kind,
+          class: entry.class,
+          path,
+          loaded,
+          reason,
+          integrity: loaded ? "verified" : "not-applicable",
+          origin: label,
+        });
+      const trust = resourceTrustDecision(
+        session.manifest.policy,
+        entry.class,
+        file.kind,
+      );
+      if (!trust.allowed) {
+        session.emit("resource.denied", { resource, detail });
+        record(false, trust.reason);
+        continue;
+      }
+      const absolute = join(root, ...file.path.split("/"));
+      if (!fileMatches(absolute, file.sha256)) {
+        session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `Package ${entry.id} file ${file.path} does not match the lock`,
+          { userAction: "Reinstall the distribution from a trusted artifact" },
+        );
+      }
+      const decision = await session.decide(
+        KIND_ACTION[file.kind] ?? "resource.load",
+        resource,
+        session.startupChannel(),
+      );
+      if (decision.outcome !== "allow") {
+        session.emit("resource.denied", { resource, detail });
+        record(false, `policy ${decision.ruleId}`);
+        continue;
+      }
+      session.emit("resource.load", {
+        resource,
+        policy: decision.policyId,
+        rule: decision.ruleId,
+        detail,
+      });
+      record(true, trust.reason);
+      session.loader[file.kind].push(absolute);
+    }
   }
 }
 

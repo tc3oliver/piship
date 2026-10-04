@@ -132,6 +132,12 @@ export interface ReleaseManifest {
      */
     readonly registry?: string;
   };
+  /**
+   * piship/v1alpha6: reviewed npm lifecycle scripts in Pi package closures,
+   * as `pi-packages/<id>/node_modules/<name>@<version>`. Each one lets that
+   * exact dependency through the install-script gate; PiShip never runs it.
+   */
+  readonly installScripts?: readonly string[];
 }
 export interface LifecycleManifest {
   readonly updates: UpdatesManifest;
@@ -637,6 +643,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
     "targets",
     "sources",
     "vulnerabilities",
+    ...(v6 ? ["installScripts"] : []),
   ]);
   const targets =
     release.targets === undefined
@@ -702,6 +709,22 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
           vulnerabilities.registry,
           "release.vulnerabilities.registry",
         );
+  const installScripts =
+    release.installScripts === undefined
+      ? undefined
+      : list(release.installScripts, "release.installScripts").map(
+          (entry, index) => {
+            const at = `release.installScripts[${index}]`;
+            const text = plainString(entry, at, 512);
+            if (!INSTALL_SCRIPT_KEY.test(text))
+              fail(
+                at,
+                "Expected pi-packages/<id>/node_modules/<name>@<exact version>",
+              );
+            return text;
+          },
+        );
+  if (installScripts) unique(installScripts, "release.installScripts");
   return {
     targets,
     sources,
@@ -710,8 +733,15 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
       allow,
       ...(registry === undefined ? {} : { registry }),
     },
+    ...(installScripts === undefined ? {} : { installScripts }),
   };
 }
+
+const NPM_SEGMENT = "(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*";
+/** `pi-packages/<id>/node_modules/<name>[/node_modules/<name>...]@<semver>`. */
+const INSTALL_SCRIPT_KEY = new RegExp(
+  `^pi-packages/[a-z][a-z0-9-]{0,63}/node_modules/${NPM_SEGMENT}(?:/node_modules/${NPM_SEGMENT})*@\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$`,
+);
 
 /** An https registry URL without credentials, query, or fragment. */
 function auditRegistry(value: unknown, path: string): string {

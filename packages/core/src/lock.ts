@@ -28,6 +28,7 @@ import {
 } from "./lock-schema.js";
 import { checkDataContract } from "./data/contract.js";
 import { sessionExportStatus } from "./data/session-export.js";
+import { currentPiPackages, lockPiPackages } from "./pi-packages/lock.js";
 import { resolveResources } from "./resources.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
 import { checkToolExposure, lockedTools } from "./tool-exposure.js";
@@ -70,7 +71,16 @@ export function checkPiVersion(manifest: Manifest): void {
     );
 }
 
-export function resolveLock(manifestPath: string): DistributionLock {
+/**
+ * The lock for a manifest. Pi packages are resolved over the network only
+ * when `packages` is `"resolve"` (`piship lock`); otherwise their recorded
+ * entries are re-checked offline, so a stale-lock check never reaches a
+ * registry.
+ */
+export function resolveLock(
+  manifestPath: string,
+  options: { readonly packages?: "resolve" | "recorded" } = {},
+): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
   checkDataContract(manifest);
@@ -86,6 +96,12 @@ export function resolveLock(manifestPath: string): DistributionLock {
   const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const policy = governance?.manifest;
   const runtime = runtimeDependencies(v4);
+  const base = dirname(resolve(manifestPath));
+  const packages = v6
+    ? options.packages === "resolve"
+      ? lockPiPackages(manifest, base)
+      : currentPiPackages(manifest, base)
+    : [];
   const virtualModels = (manifest.access?.models.catalog ?? []).flatMap(
     (model) =>
       model.virtual
@@ -134,6 +150,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
             sandbox: digest(policy?.sandbox),
             audit: digest(policy?.audit),
             access: digest(manifest.access),
+            ...(packages.length ? { packages: digest(packages) } : {}),
           },
           updates: manifest.lifecycle.updates,
           release: manifest.lifecycle.release,
@@ -141,6 +158,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
       : {}),
     ...(v6
       ? {
+          ...(packages.length ? { packages } : {}),
           ...(virtualModels.length ? { virtualModels } : {}),
           ...(manifest.runtime.tools
             ? {
@@ -163,7 +181,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
   };
 }
 export function lockManifest(manifestPath: string): string {
-  const lock = resolveLock(manifestPath);
+  const lock = resolveLock(manifestPath, { packages: "resolve" });
   const path = join(dirname(resolve(manifestPath)), "piship.lock");
   writeFileSync(path, `${JSON.stringify(lock, null, 2)}\n`);
   return path;

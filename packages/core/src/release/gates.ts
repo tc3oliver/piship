@@ -1,6 +1,8 @@
 // Static release gates: lock, schema, update trust, target, Pi compatibility
 // surfaces, package sources and install scripts, policy, certification, and
 // sandbox.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { manifestContainment, unenforcedRules } from "@piship/policy";
 import { type ReleaseManifest, sharedRoleKeyIds } from "@piship/schema";
@@ -12,10 +14,16 @@ import {
   LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_V1ALPHA6,
   PI_COMPATIBILITY,
-  REVIEWED_INSTALL_SCRIPTS,
   requireCurrentLock,
 } from "../index.js";
+import { checkLockedPiPackage } from "../pi-packages/gates.js";
+import {
+  packageLockFiles,
+  reviewedInstallScripts,
+} from "../pi-packages/lock.js";
+import { effectivePackageTrust } from "../pi-packages/trust.js";
 import { gate } from "./shared.js";
+import { checkLockedPackageSources } from "./sources.js";
 
 /** The release name `<id>-<version>-<target>`. */
 export function releaseName(lock: DistributionLock, target: string): string {
@@ -117,66 +125,41 @@ export function checkPackageSources(
   lock: DistributionLock,
   stage: "Release" | "Build" = "Release",
 ): void {
+  if (!lock.release) return;
+  checkLockedPackageSources(lock.runtime.packages, lock.release.sources, stage);
+}
+
+/**
+ * The package gates over every locked Pi package (spec §17): its stored npm
+ * lockfile matches the lock, its closure holds only immutable sources with
+ * integrity, comes from `release.sources`, and runs no unreviewed lifecycle
+ * script. The tree digest and file count are checked when the build vendors
+ * it.
+ */
+function checkLockedPiPackages(
+  lock: DistributionLock,
+  manifestPath: string,
+): void {
   const release = lock.release;
   if (!release) return;
-  for (const item of lock.runtime.packages) {
-    // The lock keeps every registry entry, so one the npm lock records
-    // without integrity is refused here instead of going unchecked.
-    if (!item.integrity)
+  const base = dirname(resolve(manifestPath));
+  for (const entry of lock.packages ?? []) {
+    const { lockfile } = packageLockFiles(base, entry.id);
+    if (!existsSync(lockfile))
       throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} is missing integrity in the npm lock`,
-        "Record the registry dist.integrity for this package in package-lock.json and lock again",
-        stage,
+        "LOCK_INVALID",
+        "package",
+        `${entry.id} has no stored npm lockfile`,
+        "Run piship lock",
       );
-    if (!item.resolved)
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no recorded source`,
-        undefined,
-        stage,
-      );
-    let origin: string;
-    try {
-      origin = new URL(item.resolved).origin;
-    } catch {
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has an unparsable source`,
-        undefined,
-        stage,
-      );
-    }
-    if (!release.sources.includes(origin))
-      throw gate(
-        "POLICY_DENIED",
-        "source",
-        `${item.path}@${item.version} comes from ${origin}, which is not in release.sources (${release.sources.join(", ")})`,
-        undefined,
-        stage,
-      );
-    if (!/^sha512-[A-Za-z0-9+/]+=*$/.test(item.integrity))
-      throw gate(
-        "INTEGRITY_FAILED",
-        "source",
-        `${item.path}@${item.version} has no sha512 integrity`,
-        undefined,
-        stage,
-      );
-    if (
-      item.installScript &&
-      !REVIEWED_INSTALL_SCRIPTS.includes(`${item.path}@${item.version}`)
-    )
-      throw gate(
-        "POLICY_DENIED",
-        "install-script",
-        `${item.path}@${item.version} runs npm lifecycle scripts that were not reviewed for this PiShip version`,
-        undefined,
-        stage,
-      );
+    checkLockedPiPackage(entry, readFileSync(lockfile, "utf8"), {
+      trust: effectivePackageTrust(
+        lock.governance?.manifest.packageTrust,
+        lock.deployment.mode,
+      ),
+      sources: release.sources,
+      reviewed: reviewedInstallScripts(release),
+    });
   }
 }
 
@@ -264,6 +247,7 @@ export function checkReleaseInputs(
       `Pi ${lock.runtime.version} is not in this PiShip build's compatibility matrix`,
     );
   checkPackageSources(lock);
+  checkLockedPiPackages(lock, manifestPath);
   const conflicts = policyConflicts(lock);
   if (conflicts.length)
     throw gate("POLICY_DENIED", "policy", conflicts.join("; "));

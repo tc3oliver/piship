@@ -489,6 +489,28 @@ describe("piship/v1alpha6 schema", () => {
     );
   });
 
+  it("parses reviewed install scripts of Pi package closures", () => {
+    const manifest = parseManifest(
+      personal({
+        release: {
+          installScripts: [
+            "pi-packages/company-platform/node_modules/esbuild@0.28.2",
+            "pi-packages/company-platform/node_modules/@scope/a/node_modules/b@1.0.0-rc.1",
+          ],
+        },
+      }),
+    );
+    expect(manifest.lifecycle?.release.installScripts).toHaveLength(2);
+    for (const entry of [
+      "node_modules/esbuild@0.28.2",
+      "pi-packages/x/node_modules/esbuild@^0.28.2",
+      "pi-packages/x/node_modules/../esbuild@0.28.2",
+    ])
+      expect(() =>
+        parseManifest(personal({ release: { installScripts: [entry] } })),
+      ).toThrow(/release\.installScripts\[0\]/);
+  });
+
   it("accepts the new policy actions and reads model.use as model.select", () => {
     const manifest = parseManifest(
       personal({

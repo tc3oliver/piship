@@ -27,6 +27,7 @@ import {
   createReadTool,
   createReadToolDefinition,
   createWriteToolDefinition,
+  DefaultPackageManager,
   DefaultResourceLoader,
   type EditOperations,
   type InlineExtension,
@@ -62,6 +63,7 @@ import {
   installCrashRedaction,
   uninstallCrashRedaction,
 } from "./launch/crash-redaction.js";
+import { PI_SETTINGS } from "./launch/pi-defaults.js";
 import {
   ASSISTANT_MESSAGE_FIELDS,
   providerErrorRedaction,
@@ -648,6 +650,50 @@ describe("DefaultResourceLoader with ambient discovery disabled", () => {
         .extensions.map((item) => item.path)
         .filter((path) => path.startsWith("builtin:")),
     ).toEqual([]);
+  });
+});
+
+// PiShip vendors Pi packages itself (spec v0.9.0 §8.2): Pi's installer runs
+// npm lifecycle scripts, so the settings PiShip generates must never declare
+// a package for Pi's package manager to install.
+describe("Pi's package manager under PiShip's generated settings", () => {
+  const resolveWith = async (settingsManager: SettingsManager) => {
+    const missing: string[] = [];
+    const resolved = await new DefaultPackageManager({
+      cwd: join(temp, "project"),
+      agentDir: join(temp, "agent"),
+      settingsManager,
+    }).resolve(async (source) => {
+      missing.push(source);
+      return "skip";
+    });
+    const fromPackages = [
+      ...resolved.extensions,
+      ...resolved.skills,
+      ...resolved.prompts,
+      ...resolved.themes,
+    ].filter((item) => item.metadata.origin === "package");
+    return { missing, fromPackages };
+  };
+
+  it("would install an npm package declared in settings, proving the probe reaches the installer", async () => {
+    const { missing } = await resolveWith(
+      SettingsManager.inMemory({
+        ...PI_SETTINGS,
+        packages: ["npm:@piship-compat/never-installed@1.0.0"],
+      }),
+    );
+    expect(missing).toEqual(["npm:@piship-compat/never-installed@1.0.0"]);
+  });
+
+  it("sees an empty package list in the settings PiShip generates", async () => {
+    expect(PI_SETTINGS).not.toHaveProperty("packages");
+    const settingsManager = SettingsManager.inMemory({ ...PI_SETTINGS });
+    expect(settingsManager.getPackages()).toEqual([]);
+    expect(await resolveWith(settingsManager)).toEqual({
+      missing: [],
+      fromPackages: [],
+    });
   });
 });
 

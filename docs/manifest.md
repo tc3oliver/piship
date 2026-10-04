@@ -208,6 +208,32 @@ Sandbox paths are `workspace`, `tmp`, `~/...`, or absolute paths, without `.` or
 | `audit.buffer` | `maxEvents: 1000`, `flushInterval: 2s` | Bounded in-memory buffer per sink |
 | `audit.capture` | all `false` | `promptContent`, `responseContent`, `commandText`, `sourceContent`: opt-in content classes. Events are metadata only otherwise |
 
+### Pi packages (v1alpha6)
+
+`resources.packages` declares Pi packages (`source: npm`, `git`, or `local`) with a declarable trust class and Pi's own object-form filters (`extensions`, `skills`, `prompts`, `themes`: globs with `!`, `+`, and `-`; `[]` selects none; an omitted kind selects all). PiShip resolves and vendors them; Pi never installs a package, because Pi's installer runs npm lifecycle scripts. The settings PiShip gives Pi never contain `packages`.
+
+```yaml
+resources:
+  packages:
+    - { id: company-platform, source: npm, package: "@company/pi-platform", version: 1.4.2, registry: https://registry.company.example, class: company }
+    - { id: pi-security, source: git, repository: https://git.company.example/platform/pi-security, ref: <40-hex commit>, class: company, themes: [] }
+    - { id: team, source: local, path: ./packages/team, class: user }
+packageTrust:
+  npm: { requireIntegrity: true }
+  git: { hosts: [git.company.example], requireCommitSha: true }
+  local: { paths: [./packages] }
+```
+
+- `piship lock` resolves each package to an immutable identity: an npm exact version and `dist.integrity` (personal manifests may declare a range, never a dist-tag or alias), a full git commit SHA (a branch or tag only in personal, and never an abbreviated SHA), or a local content digest. A git source must be an https URL on a host in `packageTrust.git.hosts` when set; shorthands, ssh, scp-form, `git://`, and `file://` sources are refused. A local path stays inside the distribution directory and inside `packageTrust.local.paths` (managed default: none), with no `..` and no symlink out. `piship validate` and `piship lock` reject a managed manifest that sets `packageTrust.npm.requireIntegrity` or `packageTrust.git.requireCommitSha` to `false`.
+- The lock generates one npm lockfile per package with `npm install --package-lock-only --ignore-scripts --omit=peer --omit=dev --legacy-peer-deps` over a generated npm root that lists only the package (npm) or its `dependencies` and `optionalDependencies` (git, local), and stores it beside the lock in `piship.lock.d/packages/<id>/package-lock.json` with that `package.json`. Commit the directory with `piship.lock`. `--legacy-peer-deps` keeps npm from resolving peers at all: Pi's docs have packages declare the host-provided Pi packages as peers, and with `--omit=peer` alone npm would still resolve Pi's whole dependency tree into the lockfile.
+- Across the whole closure, every entry must be an exact version from a pinned registry tarball with sha512 integrity (unless `packageTrust.npm.requireIntegrity: false`, personal only), with no `npm:` alias, link, `file:`, `workspace:`, or git dependency, no URL with userinfo or a query, and no host-provided package (`@earendil-works/pi-*`, `typebox`) in any `dependencies` or vendored.
+- The closure then passes the release gates: its origins must be in `release.sources`, and a dependency with an npm lifecycle script or a `binding.gyp` must be reviewed, either by PiShip or in `release.installScripts` as `pi-packages/<id>/node_modules/<name>@<version>` (v1alpha6). PiShip never runs the script either way.
+- `piship build` re-fetches exactly what the lock pins (git with `git archive <sha>`, never a checkout), installs the stored lockfile with `npm ci --ignore-scripts --omit=peer --legacy-peer-deps --no-bin-links` into `pi-packages/<id>/` in the payload, and requires the same version or commit, integrity, tree digest, file count, and resource inventory. The vendored files are in the payload inventory and the SBOM.
+- `piship release` re-checks every stored lockfile against the lock and audits each one with `npm audit` under `release.vulnerabilities` (asking `release.vulnerabilities.registry` when set, else the package's registry). A managed release fails when no audit endpoint answers; a personal one records a warning. Results and scan times are in `vulnerabilities.json` under `packages`.
+- At launch each locked resource file is checked against its sha256 and decided on its own (`extension.load`, `skill.load`, or `resource.load` with the resource `<class>:packages/<id>/<path>`) before it enters Pi's loader, and audit records carry `detail.package` (`<id>@<version|commit|local>`).
+
+Credentials for a private registry or repository come only from npm or git configuration in the build environment; a URL with credentials is refused and never recorded.
+
 ## Lifecycle fields (v1alpha4)
 
 `piship/v1alpha4` and `piship/v1alpha5` require `updates` and accept an optional `release`; both are rejected in earlier schemas. What they control is described in [release](release.md). The example is v1alpha5; v1alpha4 differs only in `updates.trust` ([below](#update-trust-bootstrap-v1alpha5)).
@@ -386,6 +412,8 @@ A v1alpha5 manifest produces `piship-lock/v1alpha5`, which keeps every v1alpha4 
 | `runtimeTools` | piship-lock/v1alpha6: `runtime.tools` with defaults applied (`codemode`, `toolSearch`, `exposure` rules), which a launch applies. A v1alpha5 lock has none and launches with Codemode and tool search off and every tool direct |
 | `tools` | piship-lock/v1alpha6: the exposure of PiShip's own tools resolved against `runtime.tools.exposure`, and each declared MCP server's rules as `<server>:<glob>` (its default as `<server>:*`). Extension tools register at run time and are checked at launch, never locked. Two exposure globs of equal specificity that can match the same tool fail the lock, and in managed mode so does Codemode while a PiShip tool it can reach has no policy rule for `tool.execute` |
 
+A v1alpha6 manifest with Pi packages records each one in `packages` (source, class, canonical source URL without userinfo, npm version and integrity or git commit, `tree` digest and file count of the package's own files, the sha256 of its stored npm lockfile, the expanded resource inventory with each file's sha256, and the optional dependencies each release target installs) and adds `digests.packages`. The stale-lock check is offline: it re-reads the stored lockfiles and recomputes local package digests, and never reaches a registry or repository ([Pi packages](#pi-packages-v1alpha6)).
+
 Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
 
 The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. For a `piship/v1alpha4` or `piship/v1alpha5` lock, `piship build` also runs the release `source` and `install-script` gates ([owner workflow](release/owner-workflow.md)); `dev` and `test` do not. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
@@ -418,7 +446,6 @@ A maintainer-local product specification (v1.0) guided the design; it is not req
 | Update source | `updates.source`: an `https` URL, a loopback `http` URL (a private-host `http` URL with `updates.transport: http-allowed`), or a `${NAME}` runtime reference; `update --from` also accepts a directory | A symbolic `company` or `self` source |
 | State location | `~/.piship/<id>` (or `PISHIP_STATE_HOME`); project restrictions in `.piship/policy.json`; no `app.configDir` or `branding` section | A branded configuration directory |
 | Data retention | No `data` section; `logs/audit.jsonl` is rotated by size with fixed limits (10 MiB per file, five rotated files) | A `data` section with retention settings |
-| Pi packages as resources | No `resources.packages` class | `resources.packages` |
 | Distribution tests | `piship test` builds the payload and runs the branded `--smoke`; no `tests` section | A configured test suite |
 | Release provenance | GitHub artifact attestations made by CI, verified with `gh attestation verify`; no `provenance.json` in the archive; `install.sh` and `install.ps1` at the archive root | An embedded provenance file and an `installers/` directory |
 | Error codes | `PISHIP_ERROR_CODES` in `@piship/contracts`; a unit test requires every code to have a producing path. Five specification codes that nothing produced are not defined ([below](#removed-error-codes)). `PiShipError` has no `correlationId`, and its JSON form names the sanitized detail `detail` | Also `APPROVAL_REQUIRED`, `RESOURCE_DENIED`, `PROVIDER_UNRESOLVED`, `PROVIDER_UNHEALTHY`, and `SANDBOX_REQUIRED`; `correlationId` and `sanitizedDetail` |

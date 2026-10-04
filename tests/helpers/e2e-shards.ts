@@ -90,6 +90,8 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
     fixtures: ["personal"],
   },
   "personal-local-model": { seconds: { linux: 22, darwin: 31, win32: 63 } },
+  // Estimated from one darwin run (lock, build, install, launch); no fixtures.
+  "pi-packages": { seconds: { linux: 90, darwin: 150, win32: 240 } },
   "sandbox-credential": { seconds: { linux: 34, darwin: 43, win32: 93 } },
   "security-controls": { seconds: { linux: 126, darwin: 149, win32: 385 } },
   "security-findings-session": {

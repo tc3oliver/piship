@@ -13,9 +13,20 @@ import { gate } from "./shared.js";
 
 const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
 
-/** `npm audit` over the payload npm lock (registry access required). */
-export function npmAuditScanner(lockDirectory: string): unknown {
-  const args = ["audit", "--omit=dev", "--json"];
+/**
+ * `npm audit` over the npm lock in `lockDirectory` (registry access
+ * required): the payload's, or a Pi package's against its `registry`.
+ */
+export function npmAuditScanner(
+  lockDirectory: string,
+  registry?: string,
+): unknown {
+  const args = [
+    "audit",
+    "--omit=dev",
+    "--json",
+    ...(registry ? [`--registry=${registry}`] : []),
+  ];
   const result =
     process.platform === "win32"
       ? spawnSync("cmd.exe", ["/d", "/s", "/c", `npm ${args.join(" ")}`], {

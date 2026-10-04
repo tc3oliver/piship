@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory } from "@piship/contracts";
+import { readManifest } from "@piship/schema";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
 import {
@@ -17,6 +18,7 @@ import {
   removeForeignPlatformPackages,
   removeNpmBins,
 } from "./payload.js";
+import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import {
@@ -119,6 +121,14 @@ export function buildDistribution(
       copyFileSync(join(base, resource.path), target);
     }
     copyFileSync(join(base, "piship.lock"), join(stage, "piship.lock"));
+    if (lock.packages?.length) {
+      // Pi packages are vendored by PiShip from exactly what the lock pins,
+      // without lifecycle scripts; Pi never installs one.
+      options.progress?.("Vendoring the Pi packages (npm ci --ignore-scripts)");
+      vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
+        supplyChainGates: options.supplyChainGates !== false,
+      });
+    }
     writeFileSync(
       join(stage, "metadata", "target.json"),
       `${JSON.stringify({ platform: process.platform, arch: process.arch }, null, 2)}\n`,

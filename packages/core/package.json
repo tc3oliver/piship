@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./pi-packages": {
+      "types": "./dist/pi-packages/index.d.ts",
+      "import": "./dist/pi-packages/index.js"
     }
   },
   "files": [
