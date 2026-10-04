@@ -31,6 +31,6 @@
     "directory": "packages/contracts"
   },
   "dependencies": {
-    "undici": "8.10.2"
+    "undici": "8.11.2"
   }
 }
