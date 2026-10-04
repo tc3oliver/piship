@@ -1,0 +1,213 @@
+// Tool call audit keyed on Pi's tool_execution_start/end: every attempt is
+// recorded once, with where it came from (top-level, a Codemode script, or
+// another extension tool's ctx.executeTool), and a call Pi refuses before
+// PiShip's tool_call hook is classified without its error text.
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "vitest";
+import {
+  governanceHooks,
+  PRE_POLICY_RULE,
+  UNRESOLVED_EXPOSURE_RULE,
+} from "./builtins.js";
+import type { GovernanceSession } from "./governance-session.js";
+
+interface Emitted {
+  readonly event: string;
+  readonly fields: Record<string, unknown>;
+}
+
+function setup(
+  options: {
+    mode?: "managed" | "personal";
+    exposure?: Record<string, string>;
+    tools?: { name: string; exposure: string }[];
+    active?: string[];
+  } = {},
+) {
+  const emitted: Emitted[] = [];
+  const decided: { tool: string; detail: unknown }[] = [];
+  const exposure = options.exposure ?? {
+    read: "direct",
+    codemode: "model-only",
+    company_batch: "direct",
+  };
+  const gov = {
+    options: { lock: { deployment: { mode: options.mode ?? "personal" } } },
+    policyId: "unit",
+    workflowMode: null,
+    userAuto: { active: false },
+    metrics: { recordPolicyDenial: () => undefined },
+    exposure: { get: (name: string) => exposure[name] },
+    emit: (event: string, fields: Record<string, unknown> = {}) =>
+      emitted.push({ event, fields }),
+    attachNotices: () => undefined,
+    withChannel: (_channel: unknown, run: () => unknown) => run(),
+    currentChannel: () => undefined,
+    decide: async (
+      _action: string,
+      tool: string,
+      _channel: unknown,
+      events: { detail?: unknown },
+    ) => {
+      decided.push({ tool, detail: events.detail });
+      return { outcome: "allow" };
+    },
+  } as unknown as GovernanceSession;
+  const handlers = new Map<
+    string,
+    (event: unknown, ctx?: unknown) => unknown
+  >();
+  const extension = governanceHooks(gov);
+  (
+    (typeof extension === "function"
+      ? extension
+      : extension.factory) as ExtensionFactory
+  )({
+    on: (name: string, handler: (event: unknown) => unknown) =>
+      handlers.set(name, handler),
+    registerCommand: () => undefined,
+    getAllTools: () => options.tools ?? [],
+    getActiveTools: () => options.active ?? [],
+  } as never);
+  const ctx = { hasUI: false, ui: { notify: () => undefined } };
+  const on = (name: string) => {
+    const handler = handlers.get(name);
+    if (!handler) throw new Error(`no ${name} handler`);
+    return (event: object) => handler(event, ctx);
+  };
+  return { emitted, decided, on };
+}
+
+describe("tool call audit", () => {
+  it("records each attempt at its start, with its source, parent, and exposure", async () => {
+    const { emitted, decided, on } = setup();
+    on("tool_execution_start")({ toolCallId: "c1", toolName: "codemode" });
+    on("tool_execution_start")({
+      toolCallId: "c1/1",
+      toolName: "read",
+      parentToolCallId: "c1",
+    });
+    on("tool_execution_start")({ toolCallId: "c2", toolName: "company_batch" });
+    on("tool_execution_start")({
+      toolCallId: "c2/1",
+      toolName: "read",
+      parentToolCallId: "c2",
+    });
+    expect(
+      emitted.map(({ event, fields }) => [
+        event,
+        fields.resource,
+        fields.detail,
+      ]),
+    ).toEqual([
+      [
+        "tool.request",
+        "codemode",
+        { source: "top-level", exposure: "model-only" },
+      ],
+      [
+        "tool.request",
+        "read",
+        { source: "codemode", parent: "c1", exposure: "direct" },
+      ],
+      [
+        "tool.request",
+        "company_batch",
+        { source: "top-level", exposure: "direct" },
+      ],
+      [
+        "tool.request",
+        "read",
+        { source: "nested", parent: "c2", exposure: "direct" },
+      ],
+    ]);
+    await on("tool_call")({
+      toolCallId: "c1/1",
+      toolName: "read",
+      parentToolCallId: "c1",
+      input: {},
+    });
+    expect(decided).toEqual([
+      {
+        tool: "read",
+        detail: { source: "codemode", parent: "c1", exposure: "direct" },
+      },
+    ]);
+    // A call the policy decided is not recorded again when it ends.
+    on("tool_execution_end")({
+      toolCallId: "c1/1",
+      toolName: "read",
+      parentToolCallId: "c1",
+      isError: true,
+    });
+    expect(emitted.filter((item) => item.event === "tool.denied")).toEqual([]);
+  });
+
+  it("classifies a call Pi refused before policy as not-found or invalid-arguments", () => {
+    const { emitted, on } = setup({
+      tools: [
+        { name: "read", exposure: "direct" },
+        { name: "codemode", exposure: "model-only" },
+      ],
+      active: ["read", "codemode"],
+    });
+    const attempt = (id: string, toolName: string, parent?: string) => {
+      const event = {
+        toolCallId: id,
+        toolName,
+        ...(parent ? { parentToolCallId: parent } : {}),
+      };
+      on("tool_execution_start")(event);
+      on("tool_execution_end")({
+        ...event,
+        isError: true,
+        result: { content: [{ type: "text", text: "secret-canary" }] },
+      });
+    };
+    on("tool_execution_start")({ toolCallId: "p", toolName: "codemode" });
+    attempt("p/1", "read", "p"); // bad arguments
+    attempt("p/2", "hidden_tool", "p"); // excluded: not registered
+    attempt("p/3", "codemode", "p"); // model-only: never callable nested
+    attempt("t1", "nope"); // top-level unknown name
+    const denied = emitted.filter((item) => item.event === "tool.denied");
+    expect(
+      denied.map(({ fields }) => [
+        fields.resource,
+        fields.rule,
+        (fields.detail as Record<string, unknown>).error,
+        (fields.detail as Record<string, unknown>).source,
+      ]),
+    ).toEqual([
+      ["read", PRE_POLICY_RULE, "invalid-arguments", "codemode"],
+      ["hidden_tool", PRE_POLICY_RULE, "not-found", "codemode"],
+      ["codemode", PRE_POLICY_RULE, "not-found", "codemode"],
+      ["nope", PRE_POLICY_RULE, "not-found", "top-level"],
+    ]);
+    expect(JSON.stringify(emitted)).not.toContain("secret-canary");
+  });
+
+  it("managed: refuses a tool registered after the exposure was resolved", async () => {
+    const managed = setup({ mode: "managed" });
+    const result = await managed.on("tool_call")({
+      toolCallId: "late",
+      toolName: "late_tool",
+      input: {},
+    });
+    expect(result).toMatchObject({ block: true });
+    expect(managed.decided).toEqual([]);
+    expect(managed.emitted.at(-1)).toMatchObject({
+      event: "tool.denied",
+      fields: { resource: "late_tool", rule: UNRESOLVED_EXPOSURE_RULE },
+    });
+    // Personal: the policy decides it.
+    const personal = setup();
+    expect(
+      await personal.on("tool_call")({
+        toolCallId: "late",
+        toolName: "late_tool",
+        input: {},
+      }),
+    ).toBeUndefined();
+    expect(personal.decided.map((item) => item.tool)).toEqual(["late_tool"]);
+  });
+});

@@ -12,6 +12,7 @@ import {
   buildRelease,
   checkEnforceability,
   checkDataContract,
+  checkToolExposure,
   checkGovernance,
   checkPiVersion,
   checkStateMigration,
@@ -553,6 +554,7 @@ export async function runCli(
       checkGovernance(manifest, target, resolveResources(manifest, target));
       const unenforced = checkEnforceability(manifest);
       checkDataContract(manifest);
+      checkToolExposure(manifest);
       // updates.source is read only by update; launch never needs it.
       const variables = runtimeVariableUse(manifest);
       const unset = (names: readonly string[]) =>

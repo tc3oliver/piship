@@ -23,6 +23,13 @@ import {
   isCredentialRejection,
   isModelDenial,
 } from "../governance.js";
+import {
+  activateExposure,
+  buildExposureTable,
+  exposureConfigOf,
+  exposureFactories,
+  extensionToolsOf,
+} from "../governance/exposure.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { governedTools } from "../governed-tools.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -136,6 +143,9 @@ async function startRuntime(
       : activated?.selectedModel;
   const policy = gov ? await modelPolicy(gov, selectedKey) : undefined;
   const builtinExtensions = gov ? governanceExtensions(gov) : [];
+  const exposureConfig = gov ? exposureConfigOf(gov) : null;
+  const exposureExtensionFactories =
+    gov && exposureConfig ? exposureFactories(gov, exposureConfig) : [];
   const theme = activated?.config.values.theme ?? ctx.metadata.app.theme;
   const thinkingLevel = activated?.config.values.thinkingLevel;
   const context =
@@ -233,6 +243,7 @@ async function startRuntime(
         ownerExtension,
         ...(ctx.metadata.access ? [governanceExtension] : []),
         ...builtinExtensions,
+        ...exposureExtensionFactories,
         // Last, so the message Pi persists is the redacted one.
         providerErrorRedaction,
       ],
@@ -258,6 +269,18 @@ async function startRuntime(
       throw new Error(
         `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
       );
+    // Hidden and denied tools, and Pi's ungoverned base tools, are excluded
+    // from the session; an extension tool wider than the manifest allows
+    // fails the launch.
+    const table =
+      gov && exposureConfig
+        ? buildExposureTable(
+            gov,
+            exposureConfig,
+            extensionToolsOf(resourceLoader),
+          )
+        : null;
+    if (gov) gov.exposure = table;
     if (
       theme &&
       !["dark", "light"].includes(theme) &&
@@ -304,9 +327,14 @@ async function startRuntime(
       // Governed sessions replace Pi's built-in tools with governed ones of
       // the same names; SDK custom tools also win over extension tools.
       ...(gov
-        ? { noTools: "builtin" as const, customTools: governedTools(gov, cwd) }
+        ? {
+            noTools: "builtin" as const,
+            customTools: governedTools(gov, cwd, table),
+            excludeTools: table?.excluded() ?? [],
+          }
         : {}),
     });
+    if (table) activateExposure(result.session, table);
     const current = result.session.model;
     if (
       governed &&

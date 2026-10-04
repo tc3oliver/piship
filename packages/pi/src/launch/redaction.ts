@@ -70,8 +70,135 @@ export function redactProviderError(message: unknown): unknown {
   return Object.keys(changes).length ? { ...value, ...changes } : undefined;
 }
 
+type ToolResultMessage = Extract<
+  MessageEndEvent["message"],
+  { role: "toolResult" }
+>;
+
 /**
- * Redacts provider error text before Pi persists the message. Pi runs the
+ * Every field of Pi's tool result message, by what it holds. The calls a
+ * tool made to other tools (`nestedCalls`, attached by Pi; a Codemode
+ * result's `details.calls`) hold their arguments and error text, which
+ * PiShip redacts; the result content itself is tool output. A Pi upgrade
+ * that adds or removes a field fails to compile here until it is classified.
+ */
+export const TOOL_RESULT_MESSAGE_FIELDS: Record<
+  keyof ToolResultMessage,
+  "redacted" | "tool-output" | "metadata"
+> = {
+  role: "metadata",
+  toolCallId: "metadata",
+  toolName: "metadata",
+  content: "tool-output",
+  details: "redacted",
+  usage: "metadata",
+  nestedCalls: "redacted",
+  isError: "metadata",
+  timestamp: "metadata",
+};
+
+type NestedCall = {
+  arguments?: unknown;
+  argumentsBytes?: number;
+  error?: unknown;
+};
+type CodemodeCall = { args?: unknown; error?: unknown };
+
+const changed = (before: unknown, after: unknown) =>
+  JSON.stringify(before) !== JSON.stringify(after);
+
+/**
+ * The tool result with the nested calls' arguments and error text redacted,
+ * or undefined when there is nothing to redact: Pi's `nestedCalls` record,
+ * and the `details.calls` a Codemode result keeps (a 200-character argument
+ * preview and the error). Both are persisted with the message and shown in
+ * the HTML export.
+ */
+export function redactToolResult(message: unknown): unknown {
+  const value = message as
+    | {
+        role?: string;
+        toolName?: string;
+        nestedCalls?: { calls?: NestedCall[] };
+        details?: { calls?: CodemodeCall[] };
+      }
+    | null
+    | undefined;
+  if (value?.role !== "toolResult") return undefined;
+  const changes: Record<string, unknown> = {};
+  const nested = value.nestedCalls;
+  if (Array.isArray(nested?.calls)) {
+    const calls = nested.calls.map((call) => ({
+      ...call,
+      ...(call.arguments === undefined
+        ? {}
+        : { arguments: redactValue(call.arguments) }),
+      ...(typeof call.error === "string" ? { error: redact(call.error) } : {}),
+    }));
+    if (changed(nested.calls, calls))
+      changes.nestedCalls = { ...nested, calls };
+  }
+  const details = value.details;
+  if (value.toolName === "codemode" && Array.isArray(details?.calls)) {
+    const calls = details.calls.map((call) => ({
+      ...call,
+      ...(typeof call.args === "string" ? { args: redact(call.args) } : {}),
+      ...(typeof call.error === "string" ? { error: redact(call.error) } : {}),
+    }));
+    if (changed(details.calls, calls)) changes.details = { ...details, calls };
+  }
+  return Object.keys(changes).length ? { ...value, ...changes } : undefined;
+}
+
+/**
+ * `redactToolResult` that fails closed: the nested calls' arguments are
+ * dropped (Pi's own `argumentsBytes` form), their error text replaced by a
+ * fixed marker, and the Codemode argument previews blanked.
+ */
+export function redactToolResultOrDrop(message: unknown): unknown {
+  try {
+    return redactToolResult(message);
+  } catch {
+    const value = message as {
+      role?: string;
+      nestedCalls?: { calls?: NestedCall[] };
+      details?: { calls?: CodemodeCall[] };
+    };
+    if (value?.role !== "toolResult") return undefined;
+    const scrub = <T extends { error?: unknown }>(call: T) =>
+      call.error === undefined
+        ? call
+        : { ...call, error: REDACTION_FAILED_TEXT };
+    const nested = value.nestedCalls;
+    const details = value.details;
+    return {
+      ...value,
+      ...(Array.isArray(nested?.calls)
+        ? {
+            nestedCalls: {
+              ...nested,
+              complete: false,
+              calls: nested.calls.map(({ arguments: _dropped, ...call }) =>
+                scrub({ ...call, argumentsBytes: call.argumentsBytes ?? 0 }),
+              ),
+            },
+          }
+        : {}),
+      ...(Array.isArray(details?.calls)
+        ? {
+            details: {
+              ...details,
+              calls: details.calls.map((call) => scrub({ ...call, args: "" })),
+            },
+          }
+        : {}),
+    };
+  }
+}
+
+/**
+ * Redacts provider error text, and the nested tool calls a tool result
+ * records, before Pi persists the message. Pi runs the
  * handlers of extensions loaded from paths before inline ones, in order, and
  * persists the message the last replacement produced, so this extension goes
  * last: whatever an earlier handler returned is redacted too. At
@@ -83,7 +210,9 @@ export const providerErrorRedaction: InlineExtension = {
   factory: (pi) => {
     pi.on("session_start", () => installCrashRedaction());
     pi.on("message_end", (event) => {
-      const message = redactProviderErrorOrDrop(event.message);
+      const message =
+        redactProviderErrorOrDrop(event.message) ??
+        redactToolResultOrDrop(event.message);
       return message ? { message: message as typeof event.message } : undefined;
     });
   },

@@ -30,6 +30,7 @@ import { checkDataContract } from "./data/contract.js";
 import { sessionExportStatus } from "./data/session-export.js";
 import { resolveResources } from "./resources.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
+import { checkToolExposure, lockedTools } from "./tool-exposure.js";
 
 export function debugTiming(label: string, started: bigint): void {
   if (process.env.PISHIP_DEBUG_TIMING === "1")
@@ -73,6 +74,7 @@ export function resolveLock(manifestPath: string): DistributionLock {
   const manifest = readManifest(manifestPath);
   checkPiVersion(manifest);
   checkDataContract(manifest);
+  checkToolExposure(manifest);
   const resources = resolveResources(manifest, manifestPath);
   const governance = governanceLock(
     manifest,
@@ -140,6 +142,12 @@ export function resolveLock(manifestPath: string): DistributionLock {
     ...(v6
       ? {
           ...(virtualModels.length ? { virtualModels } : {}),
+          ...(manifest.runtime.tools
+            ? {
+                tools: lockedTools(manifest),
+                runtimeTools: manifest.runtime.tools,
+              }
+            : {}),
           enforcement: seamEvidence(runtime.version),
           data: {
             contract: DATA_CONTRACT_VERSION,

@@ -21,6 +21,7 @@ import {
   createAgentSession,
   createAgentSessionRuntime,
   createBashToolDefinition,
+  createCodemodeExtension,
   createEditToolDefinition,
   createLocalBashOperations,
   createReadTool,
@@ -38,19 +39,33 @@ import {
   VERSION,
   type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
-import { SecretValue } from "@piship/contracts";
-import { PI_VERSION } from "@piship/core";
+import { type AuditEvent, SecretValue } from "@piship/contracts";
+import { type DistributionLock, lockManifest, PI_VERSION } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
-import type { GovernanceSession } from "./governance-session.js";
-import { governedTools } from "./governed-tools.js";
+import { governanceHooks } from "./builtins.js";
+import {
+  buildExposureTable,
+  DEFAULT_EXPOSURE_CONFIG,
+  type ExposureConfig,
+  activateExposure,
+  exposureConfigOf,
+  exposureFactories,
+  extensionToolsOf,
+  UNGOVERNED_PI_BASE_TOOLS,
+} from "./governance/exposure.js";
+import { GovernanceSession } from "./governance-session.js";
+import { governedTools, STATE_RULE } from "./governed-tools.js";
 import { governModelRuntime, PINNED_PI_VERSION } from "./index.js";
 import {
   installCrashRedaction,
   uninstallCrashRedaction,
 } from "./launch/crash-redaction.js";
-import { ASSISTANT_MESSAGE_FIELDS } from "./launch/redaction.js";
+import {
+  ASSISTANT_MESSAGE_FIELDS,
+  providerErrorRedaction,
+} from "./launch/redaction.js";
 import { SessionOutputStore } from "./shell-output.js";
 
 // The scheduled Pi latest canary installs the newest published Pi over the
@@ -786,7 +801,9 @@ describe("Pi session seams used by governance", () => {
     for (const dialog of ["confirm", "select", "setStatus", "notify"])
       expect(typeof context.ui?.[dialog], dialog).toBe("function");
 
-    // noTools: "builtin" leaves no Pi built-in tool; registered tools remain.
+    // noTools: "builtin" leaves no Pi built-in tool active; registered tools
+    // remain. The base tools stay registered (getAllTools), which is why a
+    // governed session also excludes them (see the bypass suite below).
     expect(agent.getActiveToolNames()).toEqual(["compat_probe"]);
 
     await agent.prompt("run the probe");
@@ -1357,5 +1374,815 @@ describe("Pi's interactive crash handler runs after PiShip's crash redaction", (
     expect(printed.join("\n")).toContain("invalid header value");
     expect(printed.join("\n")).not.toContain(secret.reveal());
     expect(process.listeners("uncaughtException")).toEqual(before);
+  });
+});
+
+// The bypass regression suite (v0.9 spec §5.6): Codemode, tool search, and
+// tool exposure in a real Pi session under PiShip's own governance hooks,
+// governed tools, exposure table, and redaction. A Codemode script, a
+// deferred tool, or another extension's ctx.executeTool must never reach a
+// tool the policy or the exposure rules keep from the model.
+describe("Codemode, tool search, and exposure under PiShip governance", () => {
+  let services: Awaited<ReturnType<typeof startLocalServices>>;
+  const governedSessions: GovernanceSession[] = [];
+  beforeEach(async () => {
+    services = await startLocalServices({
+      knobs: { acceptedKeys: [API_KEY] },
+    });
+    services.knobs.gatewayMode = "script";
+  });
+  afterEach(async () => {
+    for (const gov of governedSessions.splice(0))
+      await gov.close().catch(() => undefined);
+    await services.close();
+  });
+
+  const allow = (id: string, action: string, resource: string) =>
+    `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: allow }`;
+  const ask = (id: string, action: string, resource: string) =>
+    `    - { id: ${id}, action: ${action}, resource: "${resource}", effect: ask }`;
+  const BASE_RULES = [
+    allow("codemode", "tool.execute", "codemode"),
+    allow("tool-search", "tool.execute", "tool_search"),
+    allow("read-tool", "tool.execute", "read"),
+    allow("company", "tool.execute", "company_*"),
+    allow("workspace-read", "filesystem.read", "workspace/**"),
+    allow("workspace-write", "filesystem.write", "workspace/**"),
+  ];
+  const mcpFixture = (name: string) =>
+    readFileSync(
+      new URL(`../../mcp/src/testing/${name}`, import.meta.url),
+      "utf8",
+    );
+
+  /** Every confirm the stub UI showed, and the most open at once. */
+  function stubUi(answer = true) {
+    const prompts: string[] = [];
+    let open = 0;
+    let maxOpen = 0;
+    const confirm = async (title: string, message: string) => {
+      open += 1;
+      maxOpen = Math.max(maxOpen, open);
+      prompts.push(`${title}: ${message}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      open -= 1;
+      return answer;
+    };
+    const ui = new Proxy({ confirm } as Record<string, unknown>, {
+      get: (target, key) =>
+        key in target ? target[key as string] : () => undefined,
+    });
+    return { ui, prompts, maxOpen: () => maxOpen };
+  }
+
+  async function governed(
+    options: {
+      rules?: string[];
+      config?: Partial<ExposureConfig>;
+      mcpExposure?: "direct" | "deferred";
+      extensions?: InlineExtension[];
+      ui?: Record<string, unknown>;
+      sessionManager?: SessionManager;
+    } = {},
+  ) {
+    const distribution = join(temp, "distribution");
+    const workspace = join(temp, "workspace");
+    const stateDir = join(temp, "state");
+    write(join(workspace, "notes.txt"), "source-canary\n");
+    if (options.mcpExposure)
+      for (const [name, source] of [
+        ["docs.mjs", "fixture-server.mjs"],
+        ["fixture-core.mjs", "fixture-core.mjs"],
+      ] as const)
+        for (const dir of ["mcp", "resources/mcp"])
+          write(join(distribution, dir, name), mcpFixture(source));
+    const tools = { ...DEFAULT_EXPOSURE_CONFIG, ...options.config };
+    // YAML is a superset of JSON: runtime.tools as the manifest declares it.
+    const runtimeTools = JSON.stringify({
+      codemode: tools.codemode,
+      toolSearch: tools.toolSearch,
+      exposure: Object.fromEntries(
+        tools.exposure.map((rule) => [rule.pattern, rule.exposure]),
+      ),
+    });
+    const manifest = write(
+      join(distribution, "piship.yaml"),
+      [
+        "schema: piship/v1alpha6",
+        "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+        `runtime: { pi: "${PI_VERSION}", tools: ${runtimeTools} }`,
+        "deployment: { mode: personal }",
+        "policy:",
+        "  id: unit",
+        "  version: 1",
+        "  default: deny",
+        "  defaults:",
+        ...BASE_RULES,
+        ...(options.rules ?? []),
+        ...(options.mcpExposure
+          ? [
+              "mcp:",
+              "  mode: allowlist",
+              "  servers:",
+              `    docs: { transport: stdio, module: ./mcp/docs.mjs, exposure: ${options.mcpExposure} }`,
+            ]
+          : []),
+        "audit:",
+        "  enabled: true",
+        "  sinks:",
+        "    - { id: local, type: file, required: false }",
+        "updates: { channel: stable, channels: [stable] }",
+        "",
+      ].join("\n"),
+    );
+    // The lock a launch reads is the file `piship lock` writes.
+    const lock = JSON.parse(
+      readFileSync(lockManifest(manifest), "utf8"),
+    ) as DistributionLock;
+    expect(lock.runtimeTools).toEqual(tools);
+    const gov = await GovernanceSession.open({
+      lock: lock as Parameters<typeof GovernanceSession.open>[0]["lock"],
+      distributionDir: distribution,
+      stateDir,
+      cwd: workspace,
+      piVersion: VERSION,
+      interactive: false,
+      fetch: (() => {
+        throw new Error("no network in compatibility tests");
+      }) as never,
+      resolveTemplate: (_key, template) => template,
+      homeDir: join(temp, "home"),
+      user: "alice",
+      auditCloseDeadlineMs: 300,
+    });
+    governedSessions.push(gov);
+    // What a launch reads: runtime.tools from the v1alpha6 lock.
+    const config = exposureConfigOf(gov);
+    const runtime = await managedRuntime(services.gatewayUrl);
+    const settingsManager = SettingsManager.inMemory({
+      retry: { enabled: false },
+    });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: temp,
+      agentDir: temp,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      extensionFactories: [
+        governanceHooks(gov),
+        ...(options.extensions ?? []),
+        ...exposureFactories(gov, config),
+        providerErrorRedaction,
+      ],
+    });
+    await resourceLoader.reload();
+    const table = buildExposureTable(
+      gov,
+      config,
+      extensionToolsOf(resourceLoader),
+    );
+    gov.exposure = table;
+    const selected = runtime.getModel("acmecode", "acme/coder");
+    if (!selected) throw new Error("fixture model missing");
+    const { session: agent } = await createAgentSession({
+      cwd: workspace,
+      agentDir: temp,
+      modelRuntime: runtime,
+      model: selected,
+      settingsManager,
+      sessionManager:
+        options.sessionManager ?? SessionManager.inMemory(workspace),
+      resourceLoader,
+      noTools: "builtin",
+      customTools: governedTools(gov, workspace, table),
+      excludeTools: table.excluded(),
+    });
+    activateExposure(agent, table);
+    await agent.bindExtensions(
+      options.ui ? { uiContext: options.ui as never } : {},
+    );
+    const events = async () => {
+      await gov.audit.flush();
+      return readFileSync(join(stateDir, "logs", "audit.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as AuditEvent);
+    };
+    return { agent, gov, lock, table, workspace, stateDir, events };
+  }
+
+  /** One model turn that runs `code` in Codemode. */
+  const script = (code: string) => ({ name: "codemode", arguments: { code } });
+  const results = () => services.state.toolResults as string[];
+  const lastTools = () =>
+    (
+      services.state.requests
+        .filter((item: { path: string }) =>
+          item.path.endsWith("/chat/completions"),
+        )
+        .map((item: { body: string }) => JSON.parse(item.body))
+        .at(-1)?.tools ?? []
+    ).map((tool: { function: { name: string } }) => tool.function.name);
+  const detailOf = (event: AuditEvent) =>
+    (event.detail ?? {}) as Record<string, unknown>;
+
+  /** An extension tool that calls other tools through ctx.executeTool. */
+  function nestedCaller(calls: { name: string; args: unknown }[]) {
+    const outcomes: { name: string; isError: boolean; text: string }[] = [];
+    const extension: InlineExtension = {
+      name: "compat-nested-caller",
+      factory: (pi) => {
+        pi.registerTool({
+          name: "company_nested",
+          label: "Nested caller",
+          description: "Calls other tools.",
+          parameters: { type: "object", properties: {} } as never,
+          async execute(_id, _params, _signal, _onUpdate, ctx) {
+            for (const call of calls) {
+              const outcome = await ctx.executeTool(call.name, call.args);
+              outcomes.push({
+                name: call.name,
+                isError: outcome.isError,
+                text: JSON.stringify(outcome.result.content),
+              });
+            }
+            return { content: [{ type: "text", text: "done" }], details: {} };
+          },
+        });
+      },
+    };
+    return { extension, outcomes };
+  }
+
+  it("end to end from a v1alpha6 manifest: the lock enables Codemode, a script writes through the governed tool, and the audit links the nested call to its parent", async () => {
+    services.knobs.toolScript = [
+      script(
+        'await tools.write({ path: "from-script.txt", content: "nested" }); return "written";',
+      ),
+    ];
+    const { agent, lock, table, events, workspace } = await governed({
+      rules: [
+        allow("write-tool", "tool.execute", "write"),
+        allow("bash-tool", "tool.execute", "bash"),
+      ],
+      config: {
+        codemode: "on",
+        exposure: [{ pattern: "bash", exposure: "codemode" }],
+      },
+    });
+    // What `piship lock` recorded, and what the launch derived from it.
+    expect(lock.schema).toBe("piship-lock/v1alpha6");
+    expect(lock.runtimeTools?.codemode).toBe("on");
+    expect(lock.tools).toContainEqual({
+      tool: "bash",
+      origin: "piship",
+      exposure: "codemode",
+    });
+    expect(table.codemodeOn).toBe(true);
+    expect(table.get("bash")).toBe("codemode");
+    expect(agent.getActiveToolNames()).toContain("codemode");
+    // bash is reachable from scripts only: not declared to the model.
+    expect(agent.getActiveToolNames()).not.toContain("bash");
+    await agent.prompt("run");
+    expect(lastTools()).toContain("codemode");
+    expect(results()[0]).toContain("written");
+    expect(readFileSync(join(workspace, "from-script.txt"), "utf8")).toBe(
+      "nested",
+    );
+    const nested = (await events()).filter(
+      (event) => event.resource === "write",
+    );
+    expect(
+      nested.map((event) => [
+        event.event,
+        detailOf(event).source,
+        detailOf(event).parent,
+      ]),
+    ).toEqual([
+      ["tool.request", "codemode", "call_script_1"],
+      ["tool.allowed", "codemode", "call_script_1"],
+    ]);
+    agent.dispose();
+  });
+
+  it("codemode → allowed tool: executes, audited with source codemode and its parent", async () => {
+    services.knobs.toolScript = [
+      script('return await tools.read({ path: "notes.txt" });'),
+    ];
+    const { agent, events } = await governed({ config: { codemode: "on" } });
+    expect(agent.getActiveToolNames()).toContain("codemode");
+    await agent.prompt("run");
+    expect(results()[0]).toContain("source-canary");
+    const all = await events();
+    const requests = all.filter((event) => event.event === "tool.request");
+    expect(
+      requests.map((event) => [event.resource, detailOf(event).source]),
+    ).toEqual([
+      ["codemode", "top-level"],
+      ["read", "codemode"],
+    ]);
+    expect(detailOf(requests[1] as AuditEvent).parent).toBe("call_script_1");
+    const allowed = all.filter(
+      (event) => event.event === "tool.allowed" && event.resource === "read",
+    );
+    expect(allowed).toHaveLength(1);
+    expect(detailOf(allowed[0] as AuditEvent)).toMatchObject({
+      source: "codemode",
+      parent: "call_script_1",
+      exposure: "direct",
+    });
+    agent.dispose();
+  });
+
+  it("codemode → ask tool: denied headless, and the script gets the refusal", async () => {
+    services.knobs.toolScript = [
+      script(
+        'try { await tools.write({ path: "out.txt", content: "x" }); return "wrote"; } catch (error) { return "refused: " + error.message; }',
+      ),
+    ];
+    const { agent, events, workspace } = await governed({
+      rules: [ask("write-tool", "tool.execute", "write")],
+      config: { codemode: "on" },
+    });
+    await agent.prompt("run");
+    expect(results()[0]).toContain("refused:");
+    expect(results()[0]).toContain("approval needs an interactive session");
+    expect(readdirSync(workspace)).not.toContain("out.txt");
+    const denied = (await events()).find(
+      (event) => event.event === "tool.denied" && event.resource === "write",
+    );
+    expect(detailOf(denied as AuditEvent)).toMatchObject({
+      source: "codemode",
+      parent: "call_script_1",
+    });
+    agent.dispose();
+  });
+
+  it("codemode → Promise.all of two asks: the prompts open one at a time, both audited", async () => {
+    services.knobs.toolScript = [
+      script(
+        'await Promise.all([tools.write({ path: "a.txt", content: "a" }), tools.write({ path: "b.txt", content: "b" })]); return "both";',
+      ),
+    ];
+    const ui = stubUi(true);
+    const { agent, events, workspace } = await governed({
+      rules: [ask("write-tool", "tool.execute", "write")],
+      config: { codemode: "on" },
+      ui: ui.ui,
+    });
+    await agent.prompt("run");
+    expect(results()[0]).toContain("both");
+    expect(ui.prompts).toHaveLength(2);
+    expect(ui.maxOpen()).toBe(1);
+    expect(readdirSync(workspace).sort()).toEqual([
+      "a.txt",
+      "b.txt",
+      "notes.txt",
+    ]);
+    const approved = (await events()).filter(
+      (event) => event.event === "tool.allowed" && event.resource === "write",
+    );
+    expect(approved.map((event) => event.decision)).toEqual([
+      "approved",
+      "approved",
+    ]);
+    agent.dispose();
+  });
+
+  it("Pi does not queue extension dialogs, so PiShip has to", async () => {
+    // If a Pi upgrade starts queueing confirm(), PiShip's own queue in
+    // GovernanceSession.decide becomes redundant (not wrong).
+    const ui = stubUi(true);
+    const opener: InlineExtension = {
+      name: "compat-two-dialogs",
+      factory: (pi) => {
+        pi.registerCommand("two", {
+          description: "Two dialogs at once",
+          handler: async (_args, ctx) => {
+            await Promise.all([
+              ctx.ui.confirm("one", "first"),
+              ctx.ui.confirm("two", "second"),
+            ]);
+          },
+        });
+      },
+    };
+    const { agent } = await governed({ extensions: [opener], ui: ui.ui });
+    await agent.prompt("/two");
+    expect(ui.prompts).toHaveLength(2);
+    expect(ui.maxOpen()).toBe(2);
+    agent.dispose();
+  });
+
+  it("codemode → hidden or denied tool: not listed, not searchable, and calling it fails the script", async () => {
+    services.knobs.toolScript = [
+      script(
+        'const names = ALL_TOOLS.map((tool) => tool.name); const found = (await searchTools("edit a file")).map((tool) => tool.name); return JSON.stringify({ names, found, edit: (await describeTool("edit")) ?? null, bash: (await describeTool("bash")) ?? null });',
+      ),
+      script(
+        'await tools.edit({ path: "notes.txt", edits: [] }); return "ran";',
+      ),
+    ];
+    const { agent, events, table } = await governed({
+      rules: [
+        "    - { id: no-bash, action: tool.execute, resource: bash, effect: deny }",
+      ],
+      config: {
+        codemode: "on",
+        exposure: [{ pattern: "edit", exposure: "hidden" }],
+      },
+    });
+    expect(table.excluded()).toEqual(expect.arrayContaining(["edit", "bash"]));
+    for (const name of ["edit", "bash"])
+      expect(agent.getAllTools().map((tool) => tool.name)).not.toContain(name);
+    await agent.prompt("run");
+    const listing = JSON.parse(
+      (results()[0] as string).slice((results()[0] as string).indexOf("{")),
+    ) as { names: string[]; found: string[]; edit: unknown; bash: unknown };
+    for (const name of ["edit", "bash", "codemode", "tool_search"]) {
+      expect(listing.names).not.toContain(name);
+      expect(listing.found).not.toContain(name);
+    }
+    expect(listing.edit).toBeNull();
+    expect(listing.bash).toBeNull();
+    expect(results()[1]).toContain("Script failed");
+    const all = await events();
+    // The call never reached the host: only the parent is recorded.
+    expect(
+      all.filter(
+        (event) =>
+          event.event === "tool.request" &&
+          (event.resource === "edit" || event.resource === "bash"),
+      ),
+    ).toEqual([]);
+    expect(
+      all.filter(
+        (event) =>
+          event.event === "tool.request" && event.resource === "codemode",
+      ),
+    ).toHaveLength(2);
+    agent.dispose();
+  });
+
+  it("an extension's ctx.executeTool on a hidden, unknown, or Codemode tool is refused before policy, and audited", async () => {
+    const nested = nestedCaller([
+      { name: "edit", args: { path: "notes.txt", edits: [] } },
+      { name: "nope", args: {} },
+      { name: "codemode", args: { code: "return 1" } },
+      { name: "tool_search", args: { query: "x" } },
+    ]);
+    services.knobs.toolScript = [{ name: "company_nested", arguments: {} }];
+    const { agent, events } = await governed({
+      config: {
+        codemode: "on",
+        toolSearch: "on",
+        exposure: [{ pattern: "edit", exposure: "hidden" }],
+      },
+      extensions: [nested.extension],
+    });
+    await agent.prompt("run");
+    expect(nested.outcomes.map((item) => item.isError)).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+    for (const outcome of nested.outcomes)
+      expect(outcome.text).toContain("not found");
+    const denied = (await events()).filter(
+      (event) => event.event === "tool.denied",
+    );
+    expect(
+      denied.map((event) => [
+        event.resource,
+        event.rule,
+        detailOf(event).error,
+        detailOf(event).source,
+        detailOf(event).parent,
+      ]),
+    ).toEqual(
+      ["edit", "nope", "codemode", "tool_search"].map((name) => [
+        name,
+        "piship.pre-policy",
+        "not-found",
+        "nested",
+        "call_script_1",
+      ]),
+    );
+    agent.dispose();
+  });
+
+  it("codemode → bad arguments: a validation error before policy, audited as invalid-arguments", async () => {
+    services.knobs.toolScript = [
+      script(
+        'try { await tools.read({}); } catch (error) { return "refused: " + error.message; }',
+      ),
+    ];
+    const { agent, events } = await governed({ config: { codemode: "on" } });
+    await agent.prompt("run");
+    expect(results()[0]).toContain("refused:");
+    const denied = (await events()).find(
+      (event) => event.event === "tool.denied" && event.resource === "read",
+    );
+    expect(denied?.rule).toBe("piship.pre-policy");
+    expect(detailOf(denied as AuditEvent)).toMatchObject({
+      error: "invalid-arguments",
+      source: "codemode",
+    });
+    agent.dispose();
+  });
+
+  it("codemode → MCP tool: mcp.tool.call policy applies, and a deferred MCP tool is discoverable and gated", async () => {
+    services.knobs.toolScript = [
+      script(
+        'const found = (await searchTools("search documents")).map((tool) => tool.name); const hit = await tools.mcp__docs__search({ query: "mcp-canary" }); let blocked; try { await tools.mcp__docs__delete_document({ id: "1" }); } catch (error) { blocked = error.message; } return JSON.stringify({ found, hit, blocked });',
+      ),
+    ];
+    const { agent, events, table } = await governed({
+      rules: [
+        allow("docs", "mcp.server.start", "docs"),
+        allow("docs-tools", "tool.execute", "mcp__docs__*"),
+        allow("docs-search", "mcp.tool.call", "docs:search"),
+        ask("docs-delete", "mcp.tool.call", "docs:delete_document"),
+      ],
+      config: { codemode: "on" },
+      mcpExposure: "deferred",
+    });
+    expect(table.get("mcp__docs__search")).toBe("deferred");
+    expect(table.toolSearchOn).toBe(true);
+    // Deferred: not declared to the model until tool_search loads it.
+    expect(agent.getActiveToolNames()).not.toContain("mcp__docs__search");
+    await agent.prompt("run");
+    const output = results()[0] as string;
+    expect(output).toContain("mcp__docs__search");
+    expect(output).toContain("mcp-canary");
+    expect(output).toContain("blocked");
+    const all = await events();
+    expect(
+      all
+        .filter((event) => ["mcp.call", "mcp.denied"].includes(event.event))
+        .map((event) => [event.event, event.resource, event.decision]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["mcp.call", "docs:search", "allowed"],
+        ["mcp.denied", "docs:delete_document", "denied"],
+      ]),
+    );
+    agent.dispose();
+  });
+
+  it("codemode is refused in Plan mode; a nested bash through another tool is refused too", async () => {
+    const nested = nestedCaller([
+      { name: "bash", args: { command: "echo x" } },
+    ]);
+    services.knobs.toolScript = [
+      script("return 1;"),
+      { name: "company_nested", arguments: {} },
+    ];
+    const { agent, gov } = await governed({
+      rules: [
+        allow("plan-bash", "tool.execute", "bash"),
+        allow("plan-nested", "tool.execute", "company_nested"),
+      ],
+      config: { codemode: "on" },
+      extensions: [nested.extension],
+    });
+    gov.workflowMode = "plan";
+    await agent.prompt("run");
+    expect(results()[0]).toContain("Plan mode does not allow codemode");
+    expect(results()[1]).toContain("Plan mode does not allow company_nested");
+    expect(nested.outcomes).toEqual([]);
+    agent.dispose();
+  });
+
+  it("codemode → read of PiShip state: the built-in denial applies inside a script", async () => {
+    write(join(temp, "state", "config", "policy.json"), "[]\n");
+    const secretPath = join(temp, "state", "config", "policy.json");
+    services.knobs.toolScript = [
+      script(
+        `try { return await tools.read({ path: ${JSON.stringify(secretPath)} }); } catch (error) { return \`refused: \${error.message}\`; }`,
+      ),
+    ];
+    const { agent, events } = await governed({
+      rules: [allow("everywhere", "filesystem.read", "**")],
+      config: { codemode: "on" },
+    });
+    await agent.prompt("run");
+    expect(results()[0]).toContain("refused:");
+    const denied = (await events()).find((event) => event.rule === STATE_RULE);
+    expect(denied?.rule).toBe(STATE_RULE);
+    agent.dispose();
+  });
+
+  it("codemode scripts get no models global", async () => {
+    services.knobs.toolScript = [script("return typeof models;")];
+    const { agent } = await governed({ config: { codemode: "on" } });
+    await agent.prompt("run");
+    expect(results()[0]).toMatch(/Output:\n[\s\S]*undefined/);
+    agent.dispose();
+  });
+
+  it("redacts a secret in nested call arguments in the session file and the HTML export", async () => {
+    const secret = new SecretValue("piship-nested-secret-0123456789abcdef");
+    services.knobs.toolScript = [
+      script(
+        'const name = ["piship-nested", "secret-0123456789abcdef"].join("-"); try { await tools.read({ path: "missing-" + name + ".txt" }); } catch {} return "done";',
+      ),
+    ];
+    const sessionDir = join(temp, "sessions");
+    let seenAtEnd: unknown;
+    const observer: InlineExtension = {
+      name: "compat-nested-observer",
+      factory: (pi) => {
+        pi.on("message_end", (event) => {
+          const message = event.message as { role: string };
+          if (message.role === "toolResult") seenAtEnd = event.message;
+        });
+      },
+    };
+    const { agent } = await governed({
+      config: { codemode: "on" },
+      extensions: [observer],
+      sessionManager: SessionManager.create(temp, sessionDir),
+    });
+    await agent.prompt("run");
+    // Pi attaches nestedCalls before message_end, where PiShip redacts.
+    expect(
+      (seenAtEnd as { nestedCalls?: { calls: unknown[] } }).nestedCalls?.calls,
+    ).toHaveLength(1);
+    const file = readFileSync(
+      agent.sessionManager.getSessionFile() ?? "",
+      "utf8",
+    );
+    expect(file).toContain("nestedCalls");
+    expect(file).not.toContain(secret.reveal());
+    const html = readFileSync(
+      await agent.exportToHtml(join(temp, "export.html")),
+      "utf8",
+    );
+    expect(html).not.toContain(secret.reveal());
+    agent.dispose();
+  });
+
+  it("tool_search finds no hidden tool, and loads a codemode tool the model then calls under policy", async () => {
+    const calls: unknown[] = [];
+    const extension: InlineExtension = {
+      name: "compat-deferred-tools",
+      factory: (pi) => {
+        for (const name of ["company_probe", "company_secret"])
+          pi.registerTool({
+            name,
+            label: name,
+            description: `Probe the ${name === "company_secret" ? "vault" : "workbench"} tool.`,
+            parameters: { type: "object", properties: {} } as never,
+            exposure: "codemode",
+            async execute() {
+              calls.push(name);
+              return {
+                content: [{ type: "text", text: `${name} ran` }],
+                details: {},
+              };
+            },
+          });
+      },
+    };
+    services.knobs.toolScript = [
+      { name: "tool_search", arguments: { query: "vault" } },
+      { name: "tool_search", arguments: { query: "workbench" } },
+      { name: "company_probe", arguments: {} },
+    ];
+    const { agent, events } = await governed({
+      config: {
+        codemode: "on",
+        toolSearch: "on",
+        exposure: [
+          { pattern: "company_secret", exposure: "hidden" },
+          { pattern: "company_*", exposure: "codemode" },
+        ],
+      },
+      extensions: [extension],
+    });
+    expect(agent.getAllTools().map((tool) => tool.name)).not.toContain(
+      "company_secret",
+    );
+    await agent.prompt("run");
+    expect(results()[0]).toContain("No matching tools found.");
+    expect(results()[1]).toContain("company_probe");
+    expect(results()[2]).toContain("company_probe ran");
+    expect(calls).toEqual(["company_probe"]);
+    const allowed = (await events()).find(
+      (event) =>
+        event.event === "tool.allowed" && event.resource === "company_probe",
+    );
+    expect(detailOf(allowed as AuditEvent)).toMatchObject({
+      source: "top-level",
+      exposure: "codemode",
+    });
+    agent.dispose();
+  });
+
+  it("a package extension tool the manifest hides is excluded, also on resume after a relock", async () => {
+    const extension: InlineExtension = {
+      name: "compat-package-tool",
+      factory: (pi) => {
+        pi.registerTool({
+          name: "company_pkg",
+          label: "company_pkg",
+          description: "A package tool.",
+          parameters: { type: "object", properties: {} } as never,
+          async execute() {
+            return {
+              content: [{ type: "text", text: "pkg ran" }],
+              details: {},
+            };
+          },
+        });
+      },
+    };
+    services.knobs.toolScript = [{ name: "company_pkg", arguments: {} }];
+    const sessionDir = join(temp, "sessions");
+    const first = await governed({
+      extensions: [extension],
+      sessionManager: SessionManager.create(temp, sessionDir),
+    });
+    expect(first.agent.getActiveToolNames()).toContain("company_pkg");
+    await first.agent.prompt("run");
+    expect(results()[0]).toContain("pkg ran");
+    const file = first.agent.sessionManager.getSessionFile() as string;
+    first.agent.dispose();
+    services.state.requests.length = 0;
+    services.knobs.toolScript = [];
+    const resumed = await governed({
+      extensions: [extension],
+      config: { exposure: [{ pattern: "company_pkg", exposure: "hidden" }] },
+      sessionManager: SessionManager.open(file, sessionDir),
+    });
+    expect(resumed.agent.getAllTools().map((tool) => tool.name)).not.toContain(
+      "company_pkg",
+    );
+    await resumed.agent.prompt("continue");
+    expect(lastTools()).not.toContain("company_pkg");
+    resumed.agent.dispose();
+  });
+
+  it("excludes Pi's ungoverned base tools, so no extension can activate them", async () => {
+    const activator: InlineExtension = {
+      name: "compat-activator",
+      factory: (pi) => {
+        pi.on("session_start", () => {
+          pi.setActiveTools([...pi.getActiveTools(), "grep", "find", "ls"]);
+        });
+      },
+    };
+    const { agent } = await governed({ extensions: [activator] });
+    const names = agent.getAllTools().map((tool) => tool.name);
+    for (const name of UNGOVERNED_PI_BASE_TOOLS) {
+      expect(names).not.toContain(name);
+      expect(agent.getActiveToolNames()).not.toContain(name);
+    }
+    agent.dispose();
+  });
+
+  it("noTools ignores defaultTools, so PiShip activates Codemode itself", async () => {
+    const runtime = await managedRuntime(services.gatewayUrl);
+    const settingsManager = SettingsManager.inMemory({
+      defaultTools: ["+codemode"],
+    } as never);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: temp,
+      agentDir: temp,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ models: false })],
+    });
+    await resourceLoader.reload();
+    const { session: agent } = await createAgentSession({
+      cwd: temp,
+      agentDir: temp,
+      modelRuntime: runtime,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(temp),
+      resourceLoader,
+      noTools: "builtin",
+    });
+    const all = agent.getAllTools();
+    expect(all.find((tool) => tool.name === "codemode")?.exposure).toBe(
+      "model-only",
+    );
+    // The base tools are still registered with noTools alone.
+    expect(all.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([...UNGOVERNED_PI_BASE_TOOLS]),
+    );
+    expect(agent.getActiveToolNames()).not.toContain("codemode");
+    agent.setActiveToolsByName(["codemode"]);
+    expect(agent.getActiveToolNames()).toEqual(["codemode"]);
+    agent.dispose();
   });
 });

@@ -6,8 +6,15 @@ import type {
   ExtensionContext,
   InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { formatError, PiShipError, redact } from "@piship/contracts";
+import {
+  type AuditExecutionSource,
+  formatError,
+  PiShipError,
+  redact,
+  type ToolCallFailure,
+} from "@piship/contracts";
 import { describeUserAuto } from "@piship/core";
+import { CODEMODE_TOOL } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import {
   governedBashOperations,
@@ -67,20 +74,78 @@ function attach(gov: GovernanceSession, ctx: ExtensionContext): void {
     gov.attachNotices((message) => ctx.ui.notify(message, "warning"));
 }
 
+/** Where a call came from, its parent, and its exposure (audit `detail`). */
+type CallDetail = Readonly<Record<string, string>>;
+
+/** A tool call PiShip saw start: gated once its tool_call hook ran. */
+interface TrackedCall {
+  readonly name: string;
+  readonly detail: CallDetail;
+  gated: boolean;
+}
+
+/** Recorded when a call fails before PiShip's tool_call hook decides it. */
+export const PRE_POLICY_RULE = "piship.pre-policy";
+/** Managed: a tool registered after the session's exposure was resolved. */
+export const UNRESOLVED_EXPOSURE_RULE = "piship.exposure.unresolved";
+
+const lateNoticed = new WeakMap<GovernanceSession, Set<string>>();
+
+/**
+ * A tool registered after the session's exposure was resolved (in
+ * `session_start` or later) has an exposure nobody checked against the
+ * manifest. Managed: it is refused. Personal: policy alone decides, with a
+ * notice once per tool.
+ */
+function lateRegistration(
+  gov: GovernanceSession,
+  tool: string,
+  ctx: ExtensionContext,
+): { block: true; reason: string } | undefined {
+  if (!gov.exposure || gov.exposure.get(tool) !== undefined) return undefined;
+  if (gov.options.lock.deployment.mode !== "managed") {
+    const noticed = lateNoticed.get(gov) ?? new Set<string>();
+    lateNoticed.set(gov, noticed);
+    if (!noticed.has(tool) && ctx.hasUI)
+      ctx.ui.notify(
+        `${tool} was registered after the session started, so its exposure was not checked against the distribution; the policy still decides each call.`,
+        "warning",
+      );
+    noticed.add(tool);
+    return undefined;
+  }
+  gov.metrics.recordPolicyDenial("tool.execute");
+  gov.emit("tool.denied", {
+    resource: tool,
+    decision: "denied",
+    policy: gov.policyId,
+    rule: UNRESOLVED_EXPOSURE_RULE,
+    enforcement: "control-plane",
+    detail: { action: "tool.execute" },
+  });
+  return {
+    block: true,
+    reason: redact(
+      `${tool} was registered after the session started, and this distribution only runs tools whose exposure it resolved at launch`,
+    ),
+  };
+}
+
 async function decideToolCall(
   gov: GovernanceSession,
   tool: string,
   ctx: ExtensionContext,
+  detail: CallDetail = {},
 ): Promise<{ block: true; reason: string } | undefined> {
   attach(gov, ctx);
   const refusal = planRefusal(gov, tool);
   if (refusal) return { block: true, reason: refusal };
-  gov.emit("tool.request", { resource: tool });
   const decision = await gov.withChannel(uiChannel(ctx), () =>
     gov.decide("tool.execute", tool, gov.currentChannel(), {
       allowed: "tool.allowed",
       denied: "tool.denied",
       resource: tool,
+      detail,
     }),
   );
   if (decision.outcome === "allow") return undefined;
@@ -108,10 +173,76 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
             "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply",
           handler: (args, ctx) => autoCommand(gov, args, ctx),
         });
+      // Audit is keyed on tool_execution_start/end, not tool_call: a call
+      // to an unknown tool or with invalid arguments ends before tool_call.
+      // Nested calls (Codemode scripts, an extension's ctx.executeTool)
+      // pass through the same hooks with their parent's call ID.
+      const calls = new Map<string, TrackedCall>();
+      const callDetail = (
+        name: string,
+        parent: string | undefined,
+      ): CallDetail => {
+        const source: AuditExecutionSource = !parent
+          ? "top-level"
+          : calls.get(parent)?.name === CODEMODE_TOOL
+            ? "codemode"
+            : "nested";
+        const exposure = gov.exposure?.get(name);
+        return {
+          source,
+          ...(parent ? { parent } : {}),
+          ...(exposure ? { exposure } : {}),
+        };
+      };
+      pi.on("tool_execution_start", (event) => {
+        const detail = callDetail(event.toolName, event.parentToolCallId);
+        calls.set(event.toolCallId, {
+          name: event.toolName,
+          detail,
+          gated: false,
+        });
+        gov.emit("tool.request", { resource: event.toolName, detail });
+      });
+      pi.on("tool_execution_end", (event) => {
+        const call = calls.get(event.toolCallId);
+        calls.delete(event.toolCallId);
+        if (!call || call.gated || !event.isError) return;
+        // Pi refused the call before PiShip's policy hook ran.
+        const tool = event.toolName;
+        const info = pi.getAllTools().find((item) => item.name === tool);
+        const callable = event.parentToolCallId
+          ? info !== undefined &&
+            (info.exposure === "codemode" ||
+              info.exposure === "deferred" ||
+              (info.exposure === "direct" &&
+                pi.getActiveTools().includes(tool)))
+          : pi.getActiveTools().includes(tool);
+        const error: ToolCallFailure = callable
+          ? "invalid-arguments"
+          : "not-found";
+        gov.emit("tool.denied", {
+          resource: tool,
+          decision: "denied",
+          policy: gov.policyId,
+          rule: PRE_POLICY_RULE,
+          enforcement: "control-plane",
+          detail: { action: "tool.execute", ...call.detail, error },
+        });
+      });
+      pi.on("agent_end", () => calls.clear());
       pi.on("tool_call", async (event, ctx) => {
         const tool = event.toolName;
+        const call = calls.get(event.toolCallId);
+        if (call) call.gated = true;
         try {
-          return await decideToolCall(gov, tool, ctx);
+          const late = lateRegistration(gov, tool, ctx);
+          if (late) return late;
+          return await decideToolCall(
+            gov,
+            tool,
+            ctx,
+            call?.detail ?? callDetail(tool, event.parentToolCallId),
+          );
         } catch (error) {
           // Fail closed: a tool call whose decision failed never runs.
           const code = error instanceof PiShipError ? error.code : undefined;

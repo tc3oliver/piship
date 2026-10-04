@@ -383,6 +383,8 @@ A v1alpha5 manifest produces `piship-lock/v1alpha5`, which keeps every v1alpha4 
 | --- | --- |
 | `manifest.sha256` | The canonical manifest digest: `sha256-<64 lowercase hex>` of the canonical JSON (sorted keys) of the parsed manifest, so YAML comments, key order, flow or block style, and line endings never change it, and any semantic change does. Older locks keep the bare hex SHA-256 of the parsed manifest's JSON |
 | `updates.trust.bootstrap` | The exact validated bootstrap root (`version`, `expires`, `keys`, `roles`), or no `bootstrap` when updates are disabled. It is only the bootstrap trust of a fresh installation |
+| `runtimeTools` | piship-lock/v1alpha6: `runtime.tools` with defaults applied (`codemode`, `toolSearch`, `exposure` rules), which a launch applies. A v1alpha5 lock has none and launches with Codemode and tool search off and every tool direct |
+| `tools` | piship-lock/v1alpha6: the exposure of PiShip's own tools resolved against `runtime.tools.exposure`, and each declared MCP server's rules as `<server>:<glob>` (its default as `<server>:*`). Extension tools register at run time and are checked at launch, never locked. Two exposure globs of equal specificity that can match the same tool fail the lock, and in managed mode so does Codemode while a PiShip tool it can reach has no policy rule for `tool.execute` |
 
 Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)).
 

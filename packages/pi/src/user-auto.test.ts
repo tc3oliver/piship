@@ -563,6 +563,74 @@ describe("user auto mode in a governed session", () => {
   });
 });
 
+describe("approval prompts of concurrent tool calls", () => {
+  // Pi does not queue extension dialogs: a second confirm replaces the
+  // first, whose promise never settles. GovernanceSession.decide does.
+  it("open one at a time, and every call is decided", async () => {
+    const { session, workspace } = await open();
+    const log: string[] = [];
+    let open_ = 0;
+    const channel = async (_decision: unknown, detail: { message: string }) => {
+      open_ += 1;
+      log.push(`open ${open_}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      open_ -= 1;
+      return detail.message.includes("b.txt") ? "denied" : "approved";
+    };
+    const decisions = await Promise.all(
+      ["a.txt", "b.txt", "c.txt"].map((name) =>
+        session.decide(
+          "filesystem.write",
+          join(workspace, name),
+          channel as never,
+        ),
+      ),
+    );
+    expect(log).toEqual(["open 1", "open 1", "open 1"]);
+    expect(decisions.map((item) => item.outcome)).toEqual([
+      "allow",
+      "deny",
+      "allow",
+    ]);
+  });
+
+  it("approves a waiting call without its prompt once auto mode is switched on", async () => {
+    const { session, workspace } = await open({ userAuto: "allowed" });
+    let prompts = 0;
+    const channel = async () => {
+      prompts += 1;
+      await session.switchUserAuto(true);
+      return "approved" as const;
+    };
+    const [first, second] = await Promise.all(
+      ["a.txt", "b.txt"].map((name) =>
+        session.decide("filesystem.write", join(workspace, name), channel),
+      ),
+    );
+    expect(prompts).toBe(1);
+    expect(first).toMatchObject({ outcome: "allow", approval: "approved" });
+    expect(second).toMatchObject({ outcome: "allow", approval: "auto" });
+  });
+
+  it("moves on when a prompt fails", async () => {
+    const { session, workspace } = await open();
+    let calls = 0;
+    const channel = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("dialog closed");
+      return "approved" as const;
+    };
+    const [first, second] = await Promise.all(
+      ["a.txt", "b.txt"].map((name) =>
+        session.decide("filesystem.write", join(workspace, name), channel),
+      ),
+    );
+    expect(first?.outcome).toBe("deny");
+    expect(second?.outcome).toBe("allow");
+    expect(calls).toBe(2);
+  });
+});
+
 describe("policy explain and doctor with auto mode", () => {
   function launchContext(built: ReturnType<typeof distribution>) {
     const out: string[] = [];

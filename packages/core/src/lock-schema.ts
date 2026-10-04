@@ -14,6 +14,7 @@ import type {
   PackageSourceKind,
   PishipSchemaVersion,
   ReleaseManifest,
+  RuntimeToolsConfig,
   ToolExposure,
   UpdatesManifest,
 } from "@piship/schema";
@@ -214,6 +215,11 @@ export interface DistributionLock {
   readonly packages?: readonly LockedPiPackage[];
   /** v1alpha6: the resolved exposure of PiShip tools and declared MCP rules. */
   readonly tools?: readonly LockedToolExposure[];
+  /**
+   * v1alpha6: `runtime.tools` as resolved (defaults applied): the Codemode
+   * and tool search modes and the exposure rules a launch applies.
+   */
+  readonly runtimeTools?: RuntimeToolsConfig;
   /** v1alpha6: virtual models and their physical routes. */
   readonly virtualModels?: readonly LockedVirtualModel[];
   /** v1alpha6: the runtime seam evidence. */

@@ -50,6 +50,66 @@ describe("the provider error redaction when redaction fails", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
+  it("drops nested call arguments and replaces their error text instead of keeping them", () => {
+    const secret = "piship-fake-unredacted-credential-0123";
+    const result = messageEnd()({
+      type: "message_end",
+      message: {
+        role: "toolResult",
+        toolName: "codemode",
+        content: [],
+        isError: false,
+        nestedCalls: {
+          complete: true,
+          calls: [
+            {
+              id: "call_1/1",
+              name: "bash",
+              arguments: { command: `echo ${secret}` },
+              status: "error",
+              error: `failed: ${secret}`,
+            },
+          ],
+        },
+        details: {
+          calls: [
+            {
+              id: "call_1/1",
+              name: "bash",
+              args: `{"command":"echo ${secret}"}`,
+              status: "error",
+              error: `failed: ${secret}`,
+            },
+          ],
+        },
+      },
+    }) as { message: Record<string, unknown> };
+    expect(result.message.nestedCalls).toEqual({
+      complete: false,
+      calls: [
+        {
+          id: "call_1/1",
+          name: "bash",
+          argumentsBytes: 0,
+          status: "error",
+          error: REDACTION_FAILED_TEXT,
+        },
+      ],
+    });
+    expect(result.message.details).toEqual({
+      calls: [
+        {
+          id: "call_1/1",
+          name: "bash",
+          args: "",
+          status: "error",
+          error: REDACTION_FAILED_TEXT,
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
   it("leaves messages of other roles alone", () => {
     expect(
       messageEnd()({ type: "message_end", message: { role: "user" } }),

@@ -52,6 +52,7 @@ import {
   gitProtection,
   sandboxConfig,
 } from "./governance/engine.js";
+import type { ToolExposureTable } from "./governance/exposure.js";
 import { startMcp } from "./governance/mcp.js";
 import type {
   DecisionEvents,
@@ -384,7 +385,16 @@ export class GovernanceSession {
       .reduce((current, next) =>
         STRICTNESS[next.effect] > STRICTNESS[current.effect] ? next : current,
       );
-    const auto =
+    const prompt = {
+      title: `${this.options.lock.app.name} policy approval`,
+      message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
+    };
+    // Pi does not queue extension dialogs: a second confirm replaces the
+    // first, whose promise never settles. Approvals of concurrent tool
+    // calls (parallel top-level calls, Codemode's nested calls) wait their
+    // turn; the queue is held only while a prompt is open. A call that waited
+    // while the user switched auto mode on is approved without its prompt.
+    let auto =
       this.#userAuto.active &&
       decision.effect === "ask" &&
       !resources.some((item) =>
@@ -392,10 +402,22 @@ export class GovernanceSession {
       );
     const resolved: ResolvedDecision = auto
       ? { ...decision, outcome: "allow", approval: "auto" }
-      : await resolveDecision(decision, channel, {
-          title: `${this.options.lock.app.name} policy approval`,
-          message: `${action} ${approvalSubject(events?.prompt ?? events?.resource ?? decision.resource)}${decision.reason ? `\n${decision.reason}` : ""}`,
-        });
+      : decision.effect === "ask" && channel
+        ? await this.#serialized(async () => {
+            auto =
+              this.#userAuto.active &&
+              !resources.some((item) =>
+                this.engine.keepsPrompt({ action, resource: item }),
+              );
+            return auto
+              ? {
+                  ...decision,
+                  outcome: "allow" as const,
+                  approval: "auto" as const,
+                }
+              : resolveDecision(decision, channel, prompt);
+          })
+        : await resolveDecision(decision, channel, prompt);
     const fields = {
       resource: events?.resource ?? redact(decision.resource),
       policy: decision.policyId,
@@ -432,6 +454,15 @@ export class GovernanceSession {
     return resolved;
   }
 
+  #approvalTail: Promise<unknown> = Promise.resolve();
+
+  /** Run `prompt` after every approval prompt queued before it settled. */
+  #serialized<T>(prompt: () => Promise<T>): Promise<T> {
+    const next = this.#approvalTail.then(prompt, prompt);
+    this.#approvalTail = next.catch(() => undefined);
+    return next;
+  }
+
   /** Approval before the TUI starts: the terminal, or none when headless. */
   startupChannel(): ApprovalChannel | undefined {
     return (
@@ -455,6 +486,11 @@ export class GovernanceSession {
   currentChannel(): ApprovalChannel | undefined {
     return this.#channelScope.getStore() ?? this.toolApproval;
   }
+  /**
+   * The exposure table of the current Pi session; set when the runtime
+   * creates a session (again for `/new`, `/resume`, and fork).
+   */
+  exposure: ToolExposureTable | null = null;
   /** Current piship-workflow mode; null when the workflow is not active. */
   workflowMode: "plan" | "build" | null = null;
 

@@ -17,6 +17,37 @@ const ALL_CAPTURE: AuditCapture = {
   sourceContent: true,
 };
 const fixed = () => new Date("2026-09-28T10:00:00.000Z");
+
+describe("tool execution detail (v0.9)", () => {
+  it("keeps the source, parent, exposure, and pre-policy failure of a tool call", () => {
+    const detail = {
+      action: "tool.execute",
+      source: "codemode",
+      parent: "call_script_1",
+      exposure: "deferred",
+      error: "not-found",
+    };
+    for (const [event, rule] of [
+      ["tool.request", undefined],
+      ["tool.denied", "piship.pre-policy"],
+      ["tool.denied", "piship.exposure.unresolved"],
+    ] as const) {
+      const sanitized = sanitizeEvent(
+        {
+          event,
+          distribution: "acme",
+          resource: "read",
+          ...(rule ? { rule, decision: "denied" as const } : {}),
+          detail,
+        },
+        NO_CONTENT_CAPTURE,
+        fixed,
+      );
+      expect(sanitized.detail).toEqual(detail);
+      if (rule) expect(sanitized.rule).toBe(rule);
+    }
+  });
+});
 const TOKENS = [
   "Bearer abc.def.ghi1234567",
   "sk-live0123456789abcdef",

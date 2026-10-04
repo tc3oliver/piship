@@ -549,6 +549,26 @@ describe("CLI", () => {
     expect(existsSync(join(payload, "metadata", "distribution.json"))).toBe(
       false,
     );
+    // Codemode loads its QuickJS sandbox and worker from the payload.
+    const piModules = join(
+      payload,
+      "node_modules",
+      "@earendil-works",
+      "pi-coding-agent",
+      "node_modules",
+    );
+    for (const path of [
+      join(piModules, "quickjs-wasi", "quickjs.wasm"),
+      join(
+        piModules,
+        "@earendil-works",
+        "pi-codemode",
+        "dist",
+        "runtime",
+        "worker.js",
+      ),
+    ])
+      expect(existsSync(path), path).toBe(true);
     const resource = join(payload, "resources", "resources", "AGENTS.md");
     const original = readFileSync(resource);
     writeFileSync(resource, "tampered\n");

@@ -18,12 +18,97 @@ import {
 import { SecretValue } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { uninstallCrashRedaction } from "./crash-redaction.js";
-import { providerErrorRedaction, redactProviderError } from "./redaction.js";
+import {
+  providerErrorRedaction,
+  redactProviderError,
+  redactToolResult,
+  TOOL_RESULT_MESSAGE_FIELDS,
+} from "./redaction.js";
 
 // An obvious fake: registered as a SecretValue, as PiShip registers the
 // runtime credential it holds, and sent as the provider's bearer.
 const CREDENTIAL = "piship-fake-runtime-credential-0123456789";
 new SecretValue(CREDENTIAL);
+
+describe("redactToolResult", () => {
+  const nestedMessage = (toolName: string) => ({
+    role: "toolResult",
+    toolCallId: "call_1",
+    toolName,
+    content: [{ type: "text", text: "Script completed" }],
+    isError: false,
+    timestamp: 1,
+    nestedCalls: {
+      complete: true,
+      calls: [
+        {
+          id: "call_1/1",
+          name: "bash",
+          arguments: {
+            command: `curl -H "Authorization: Bearer ${CREDENTIAL}"`,
+          },
+          status: "error",
+          error: `401 for ${CREDENTIAL}`,
+        },
+        {
+          id: "call_1/2",
+          name: "read",
+          arguments: { path: "a.txt" },
+          status: "ok",
+        },
+      ],
+    },
+    details: {
+      calls: [
+        {
+          id: "call_1/1",
+          name: "bash",
+          args: `{"command":"curl ${CREDENTIAL}"}`,
+          status: "error",
+          error: `401 for ${CREDENTIAL}`,
+        },
+      ],
+    },
+  });
+
+  it("redacts nested call arguments and errors, and a Codemode result's call previews", () => {
+    const message = nestedMessage("codemode");
+    const redacted = redactToolResult(message) as typeof message;
+    expect(JSON.stringify(redacted)).not.toContain(CREDENTIAL);
+    expect(redacted.nestedCalls.calls[0]?.error).toContain("401 for");
+    expect(redacted.nestedCalls.calls[1]).toEqual(message.nestedCalls.calls[1]);
+    expect(redacted.nestedCalls.complete).toBe(true);
+    expect(redacted.details.calls[0]?.status).toBe("error");
+    expect(redacted.content).toBe(message.content);
+    // The original is left alone; Pi applies the replacement itself.
+    expect(JSON.stringify(message)).toContain(CREDENTIAL);
+  });
+
+  it("leaves another tool's details, and a result with nothing to redact, alone", () => {
+    const other = redactToolResult(nestedMessage("company_batch")) as {
+      details: unknown;
+    };
+    expect(JSON.stringify(other.details)).toContain(CREDENTIAL);
+    expect(
+      redactToolResult({
+        role: "toolResult",
+        toolName: "read",
+        content: [],
+        isError: false,
+      }),
+    ).toBeUndefined();
+    expect(redactToolResult({ role: "assistant" })).toBeUndefined();
+  });
+
+  it("classifies the nested calls and details as redacted", () => {
+    expect(
+      Object.entries(TOOL_RESULT_MESSAGE_FIELDS)
+        .filter(([, kind]) => kind === "redacted")
+        .map(([field]) => field)
+        .sort(),
+    ).toEqual(["details", "nestedCalls"]);
+  });
+});
 
 describe("redactProviderError", () => {
   it("redacts a registered credential and bearer shapes in an assistant's error text", () => {

@@ -6,6 +6,7 @@ import {
   type McpServerConfig,
 } from "@piship/mcp";
 import type { GovernanceSession } from "../governance-session.js";
+import { mcpToolExposure } from "./exposure.js";
 
 /** Start the declared and admitted project MCP servers under policy. */
 export async function startMcp(
@@ -53,11 +54,11 @@ export async function startMcp(
           },
         }
       : {}),
-    // A tool the policy always denies is never offered to the model;
-    // every call is still authorized when it happens.
-    expose: ({ resource }) =>
-      session.engine.evaluate({ action: "mcp.tool.call", resource }).effect !==
-      "deny",
+    // A hidden tool (by its server's exposure rules, or because the policy
+    // always denies it) is never offered to the model; every call is still
+    // authorized when it happens.
+    expose: ({ server, tool }) =>
+      mcpToolExposure(session, server, tool) !== "hidden",
     authorize: async (request) => {
       const channelNow =
         request.action === "mcp.server.start"

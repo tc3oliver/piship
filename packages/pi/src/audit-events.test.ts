@@ -277,12 +277,25 @@ describe("governed session audit events (real flows)", () => {
       event: unknown,
       ctx: unknown,
     ) => Promise<unknown>;
-    expect(
-      await toolCall({ toolName: "read", input: {} }, context()),
-    ).toBeUndefined();
+    // Pi starts a tool execution, then asks the tool_call hooks.
+    const start = hooks.get("tool_execution_start") as (
+      event: unknown,
+    ) => unknown;
+    start({ toolCallId: "call_read", toolName: "read", args: {} });
     expect(
       await toolCall(
-        { toolName: "bash", input: { command: "echo command-canary" } },
+        { toolCallId: "call_read", toolName: "read", input: {} },
+        context(),
+      ),
+    ).toBeUndefined();
+    start({ toolCallId: "call_bash", toolName: "bash", args: {} });
+    expect(
+      await toolCall(
+        {
+          toolCallId: "call_bash",
+          toolName: "bash",
+          input: { command: "echo command-canary" },
+        },
         context(),
       ),
     ).toMatchObject({ block: true });

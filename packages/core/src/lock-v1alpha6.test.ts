@@ -8,9 +8,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seamEvidence } from "@piship/policy";
-import { DATA_CONTRACT_VERSION, migrateManifestSource } from "@piship/schema";
+import {
+  DATA_CONTRACT_VERSION,
+  type Manifest,
+  migrateManifestSource,
+  readManifest,
+} from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  checkToolExposure,
   LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_V1ALPHA6,
   lockManifest,
@@ -106,6 +112,93 @@ describe("lock piship-lock/v1alpha6", () => {
     expect(lock.governance?.manifest.policy.defaults[0]?.action).toBe(
       "model.select",
     );
+  });
+
+  it("records runtime.tools and the static tool exposure", () => {
+    const lock = resolveLock(
+      project(
+        V6.replace(
+          'runtime: { pi: "1.0.2" }',
+          'runtime:\n  pi: "1.0.2"\n  tools:\n    codemode: on\n    exposure: { bash: deferred, "e*": hidden }',
+        ),
+      ),
+    );
+    expect(lock.runtimeTools).toEqual({
+      codemode: "on",
+      toolSearch: "off",
+      exposure: [
+        { pattern: "bash", exposure: "deferred" },
+        { pattern: "e*", exposure: "hidden" },
+      ],
+    });
+    expect(lock.tools).toEqual([
+      { tool: "read", origin: "piship", exposure: "direct" },
+      { tool: "write", origin: "piship", exposure: "direct" },
+      { tool: "edit", origin: "piship", exposure: "hidden" },
+      { tool: "bash", origin: "piship", exposure: "deferred" },
+      { tool: "docs:*", origin: "mcp", exposure: "direct" },
+      { tool: "docs:delete_document", origin: "mcp", exposure: "hidden" },
+    ]);
+    // Defaults applied when runtime.tools is omitted.
+    expect(resolveLock(project(V6)).runtimeTools).toEqual({
+      codemode: "off",
+      toolSearch: "off",
+      exposure: [],
+    });
+    expect(resolveLock(project(V5))).not.toHaveProperty("runtimeTools");
+  });
+
+  it("rejects exposure globs that tie for the same tool", () => {
+    expect(() =>
+      resolveLock(
+        project(
+          V6.replace(
+            "      tools: { delete_document: hidden }",
+            '      tools: { "get_*": direct, "*_all": hidden }',
+          ),
+        ),
+      ),
+    ).toThrow(
+      /mcp\.servers\.docs\.tools.*get_\* and \*_all are equally specific/,
+    );
+    expect(() =>
+      resolveLock(
+        project(
+          V6.replace(
+            'runtime: { pi: "1.0.2" }',
+            'runtime:\n  pi: "1.0.2"\n  tools:\n    exposure: { "r*": hidden, "*d": direct }',
+          ),
+        ),
+      ),
+    ).toThrow(/runtime\.tools\.exposure/);
+  });
+
+  it("managed: refuses Codemode while a tool it reaches is decided only by the default", () => {
+    // The policy check reads only the deployment mode; a managed manifest
+    // would also need identity and credential sections.
+    const managed = (source: string): Manifest => {
+      const manifest = readManifest(project(source));
+      return { ...manifest, deployment: { mode: "managed" } };
+    };
+    const codemode = V6.replace(
+      'runtime: { pi: "1.0.2" }',
+      'runtime:\n  pi: "1.0.2"\n  tools: { codemode: on, exposure: { bash: hidden, edit: hidden, write: hidden } }',
+    );
+    expect(() => checkToolExposure(managed(codemode))).toThrow(
+      expect.objectContaining({
+        code: "POLICY_DENIED",
+        message: expect.stringContaining("tool.execute read"),
+      }),
+    );
+    const decided = codemode.replace(
+      "  defaults:\n",
+      "  defaults:\n    - { id: read-tool, action: tool.execute, resource: read, effect: allow }\n",
+    );
+    expect(() => checkToolExposure(managed(decided))).not.toThrow();
+    // Personal mode leaves the policy to its owner.
+    expect(() =>
+      checkToolExposure(readManifest(project(codemode))),
+    ).not.toThrow();
   });
 
   it("records no virtual models when none is declared", () => {
