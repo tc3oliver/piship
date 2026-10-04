@@ -20,13 +20,15 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runCommand } from "./command.js";
+import { type CommandRunner, runCommand } from "./command.js";
 import {
   auditPiPackage,
   checkPiPackageInstallScripts,
   checkPiPackageSources,
 } from "./gates.js";
 import {
+  foldsToNodeModules,
+  hasNodeModulesAlias,
   type PackageContext,
   resolvePiPackage,
   vendorPiPackage,
@@ -394,11 +396,34 @@ function recorded(base: PackageContext): {
       ...base,
       run: (command, args, options) => {
         calls.push([command, ...args]);
-        return runCommand(command, args, options);
+        return (base.run ?? runCommand)(command, args, options);
       },
     },
   };
 }
+
+/**
+ * Resolution refuses npm older than 11 (Node 22 bundles npm 10). Where the
+ * real npm is older, `npmEleven` answers `npm --version` with 11 and runs
+ * every other command for real: these fixtures hold no git dependency, the
+ * one thing npm 10 mishandles. With npm 11 on PATH nothing is stubbed.
+ */
+const NPM_MAJOR = Number(
+  /^(\d+)\./.exec(
+    spawnSync("npm", ["--version"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+    }).stdout ?? "",
+  )?.[1] ?? 0,
+);
+const npmAnswering =
+  (version: string): CommandRunner =>
+  (command, args, options) =>
+    command === "npm" && args[0] === "--version"
+      ? { status: 0, stdout: Buffer.from(`${version}\n`), stderr: "" }
+      : runCommand(command, args, options);
+const npmEleven: CommandRunner =
+  NPM_MAJOR >= 11 ? runCommand : npmAnswering("11.0.0");
 
 const npmCalls = (calls: string[][]) =>
   calls.filter(([command]) => command === "npm");
@@ -449,6 +474,7 @@ function context(mode: "managed" | "personal" = "managed"): PackageContext {
     targets: ["darwin-arm64", "linux-x64", "win32-x64"],
     env,
     workDir: root,
+    run: npmEleven,
   };
 }
 
@@ -921,7 +947,11 @@ describe("lock-time script execution and shipped modules", () => {
       expect(() =>
         resolvePiPackage(npmPackage("git-dependency", "1.0.0"), ctx),
       ).toThrow(/evil@"github:attacker/);
-      expect(npmCalls(calls).map((call) => call[1])).toEqual(["view", "view"]);
+      expect(npmCalls(calls).map((call) => call[1])).toEqual([
+        "--version",
+        "view",
+        "view",
+      ]);
     },
     SLOW,
   );
@@ -934,7 +964,7 @@ describe("lock-time script execution and shipped modules", () => {
       resolvePiPackage(npmPackage("@company/pi-platform", "1.4.2"), {
         ...base,
         run: (command, args, options) => {
-          if (command === "npm") {
+          if (command === "npm" && args[0] !== "--version") {
             const git = args.find((arg) => arg.startsWith("--git="));
             expect(git).toBeDefined();
             stubs.push(
@@ -943,7 +973,7 @@ describe("lock-time script execution and shipped modules", () => {
               }),
             );
           }
-          return runCommand(command, args, options);
+          return npmEleven(command, args, options);
         },
       });
       expect(stubs.length).toBeGreaterThanOrEqual(4);
@@ -980,19 +1010,21 @@ describe("lock-time script execution and shipped modules", () => {
         run: (command, args, options) => {
           if (command === "npm")
             envs.push({ args, env: options.env ?? process.env });
-          return runCommand(command, args, options);
+          return npmEleven(command, args, options);
         },
       });
       expect(envs.map(({ args }) => args[0])).toEqual(
         declaration().source === "npm"
-          ? ["view", "view", "install", "ci"]
-          : ["install", "ci"],
+          ? ["--version", "view", "view", "install", "ci"]
+          : ["--version", "install", "ci"],
       );
       for (const { args, env: callEnv } of envs) {
         expect(callEnv.npm_config_ignore_scripts).toBe("true");
-        expect(`--git=${callEnv.npm_config_git}`).toBe(
-          args.find((arg) => arg.startsWith("--git=")),
-        );
+        expect(callEnv.npm_config_git).toMatch(/refuse-git/);
+        if (args[0] !== "--version")
+          expect(`--git=${callEnv.npm_config_git}`).toBe(
+            args.find((arg) => arg.startsWith("--git=")),
+          );
       }
     },
     SLOW,
@@ -1024,11 +1056,119 @@ describe("lock-time script execution and shipped modules", () => {
           },
           ctx,
         ),
-      ).toThrow(/Node_Modules is a case variant of node_modules/);
+      ).toThrow(/Node_Modules is a variant of node_modules/);
       expect(npmCalls(calls)).toEqual([]);
     },
     SLOW,
   );
+
+  it.each([
+    ["npm", () => npmPackage("@company/pi-platform", "1.4.2")],
+    [
+      "local",
+      (): DeclaredPackage => ({
+        id: "env-local",
+        source: "local",
+        path: "./packages/env-local",
+        class: "company",
+        filters: {},
+      }),
+    ],
+  ] as const)(
+    "refuse to resolve a %s package with npm 10, before any resolving npm call",
+    (_, declaration) => {
+      const base = context();
+      write(join(base.distributionDir, "packages", "env-local"), {
+        "package.json": JSON.stringify({ name: "env-local" }),
+      });
+      const { context: ctx, calls } = recorded({
+        ...base,
+        run: npmAnswering("10.9.2"),
+      });
+      expect(() => resolvePiPackage(declaration(), ctx)).toThrow(
+        /npm 10 runs a git dependency's prepare despite --ignore-scripts; lock packages with npm 11 or later/,
+      );
+      expect(npmCalls(calls)).toEqual([["npm", "--version"]]);
+    },
+    SLOW,
+  );
+
+  it(
+    "vendor a locked package without asking npm's version: npm ci from a checked lockfile resolves nothing",
+    () => {
+      const declaration = npmPackage("@company/pi-platform", "1.4.2");
+      const resolved = resolvePiPackage(declaration, context());
+      const { context: ctx, calls } = recorded({
+        ...context(),
+        run: npmAnswering("10.9.2"),
+      });
+      vendorPiPackage(
+        declaration,
+        resolved,
+        ctx,
+        join(root, "vendor", "npm-ten-build"),
+      );
+      expect(npmCalls(calls).map((call) => call[1])).toEqual(["ci"]);
+    },
+    SLOW,
+  );
+
+  it("fold node_modules as a filesystem may: case and compatibility characters", () => {
+    for (const name of [
+      "node_modules",
+      "Node_Modules",
+      "NODE_MODULES",
+      "node_moduleſ",
+      "ｎｏｄｅ_ｍｏｄｕｌｅｓ",
+    ])
+      expect(foldsToNodeModules(name)).toBe(true);
+    for (const name of ["node-modules", "node_module", "modules"])
+      expect(foldsToNodeModules(name)).toBe(false);
+  });
+
+  it(
+    "refuse node_moduleſ in a git or local package",
+    () => {
+      const fixture = gitFixture("ships-long-s-modules", {
+        "package.json": JSON.stringify({ name: "ships", version: "1.0.0" }),
+        "lib/node_moduleſ/evil/index.js": "module.exports = 1;\n",
+      });
+      const { context: ctx, calls } = recorded(context());
+      expect(() =>
+        resolvePiPackage(gitPackage("ships-long-s-modules", fixture), ctx),
+      ).toThrow(/lib\/node_moduleſ ships its own node_modules/);
+      write(join(ctx.distributionDir, "packages", "long-s-modules"), {
+        "package.json": JSON.stringify({ name: "long-s-modules" }),
+        "node_moduleſ/evil/index.js": "module.exports = 1;\n",
+      });
+      expect(() =>
+        resolvePiPackage(
+          {
+            id: "long-s-modules",
+            source: "local",
+            path: "./packages/long-s-modules",
+            class: "company",
+            filters: {},
+          },
+          ctx,
+        ),
+      ).toThrow(/node_moduleſ is a variant of node_modules/);
+      expect(npmCalls(calls)).toEqual([]);
+    },
+    SLOW,
+  );
+
+  it("ask the filesystem whether node_modules resolves to another entry", () => {
+    const dir = mkdtempSync(join(root, "fold-"));
+    mkdirSync(join(dir, "node_moduleſ"));
+    // Only a filesystem that folds ſ to s (APFS does) resolves node_modules
+    // here; elsewhere there is nothing to find.
+    const folds = existsSync(join(dir, "node_modules"));
+    expect(hasNodeModulesAlias(dir, ["node_moduleſ"])).toBe(folds);
+    expect(hasNodeModulesAlias(dir, ["node_modules", "node_moduleſ"])).toBe(
+      false,
+    );
+  });
 
   it(
     "refuse a git package that ships node_modules, before npm runs",

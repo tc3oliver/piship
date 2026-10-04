@@ -20,8 +20,13 @@ import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { lockManifest, requireCurrentLock } from "../lock.js";
 import type { DistributionLock } from "../lock-schema.js";
+import { type CommandRunner, runCommand } from "./command.js";
 import { checkCertifiedPackage } from "./gates.js";
-import { PACKAGE_LOCK_DIRECTORY, vendorPiPackages } from "./lock.js";
+import {
+  lockPiPackages,
+  PACKAGE_LOCK_DIRECTORY,
+  vendorPiPackages,
+} from "./lock.js";
 
 const REPOSITORY = "https://git.example.test/platform/pi-review";
 let root: string;
@@ -121,8 +126,34 @@ const readLock = (manifest: string): DistributionLock =>
     readFileSync(join(dirname(manifest), "piship.lock"), "utf8"),
   ) as DistributionLock;
 
+/**
+ * `piship lock` refuses to resolve with npm older than 11 (Node 22 bundles
+ * npm 10). The tests that lock through `lockManifest`, which takes no
+ * runner, need a real npm 11 and are skipped without one; the others call
+ * `lockPiPackages` with a runner that answers `npm --version` with 11 when
+ * the real npm is older. Their fixtures hold no git dependency, the one
+ * thing npm 10 mishandles, so every other npm call stays real.
+ */
+const NPM_MAJOR = Number(
+  /^(\d+)\./.exec(
+    spawnSync("npm", ["--version"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+    }).stdout ?? "",
+  )?.[1] ?? 0,
+);
+const NPM_RESOLVES = NPM_MAJOR >= 11;
+const NPM_SKIP = `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`;
+const run: CommandRunner = (command, args, options) =>
+  !NPM_RESOLVES && command === "npm" && args[0] === "--version"
+    ? { status: 0, stdout: Buffer.from("11.0.0\n"), stderr: "" }
+    : runCommand(command, args, options);
+const lockPackages = (manifest: string) =>
+  lockPiPackages(readManifest(manifest), dirname(manifest), { run });
+
 describe("Pi packages in the lock", () => {
-  it("lock records each package, stores its npm root beside the lock, and stays current offline", () => {
+  it("lock records each package, stores its npm root beside the lock, and stays current offline", (context) => {
+    context.skip(!NPM_RESOLVES, NPM_SKIP);
     const manifest = distribution();
     lockManifest(manifest);
     const lock = readLock(manifest);
@@ -162,7 +193,8 @@ describe("Pi packages in the lock", () => {
     }
   }, 120_000);
 
-  it("a changed local package or a changed stored lockfile makes the lock stale", () => {
+  it("a changed local package or a changed stored lockfile makes the lock stale", (context) => {
+    context.skip(!NPM_RESOLVES, NPM_SKIP);
     const manifest = distribution();
     lockManifest(manifest);
     const base = dirname(manifest);
@@ -183,7 +215,8 @@ describe("Pi packages in the lock", () => {
     expect(() => requireCurrentLock(manifest)).toThrow(/stale/);
   }, 120_000);
 
-  it("an undeclared package's npm root is removed when the lock is written", () => {
+  it("an undeclared package's npm root is removed when the lock is written", (context) => {
+    context.skip(!NPM_RESOLVES, NPM_SKIP);
     const manifest = distribution();
     lockManifest(manifest);
     const source = readFileSync(manifest, "utf8");
@@ -203,15 +236,14 @@ describe("Pi packages in the lock", () => {
   it("the install-script review applies without lifecycle.release, to a package root's own binding.gyp too", () => {
     const manifest = distribution();
     write(dirname(manifest), { "packages/team/binding.gyp": "{}\n" });
-    expect(() => lockManifest(manifest)).toThrow(
+    expect(() => lockPackages(manifest)).toThrow(
       /install-script: pi-packages\/team\/package@sha256-[0-9a-f]{64} runs npm lifecycle scripts/,
     );
   }, 120_000);
 
   it("a certified package's evidence must match the locked tree", () => {
     const manifest = distribution();
-    lockManifest(manifest);
-    const tree = readLock(manifest).packages?.[1]?.tree;
+    const tree = lockPackages(manifest)[1]?.tree;
     expect(tree).toMatch(/^sha256-[0-9a-f]{64}$/);
     const company = readFileSync(manifest, "utf8");
     const certified = (integrity: string) =>
@@ -230,12 +262,11 @@ describe("Pi packages in the lock", () => {
         ].join("\n"),
       );
     writeFileSync(manifest, certified(`sha256-${"0".repeat(64)}`));
-    expect(() => lockManifest(manifest)).toThrow(
+    expect(() => lockPackages(manifest)).toThrow(
       /pi-review: the locked package does not match its certified integrity/,
     );
     writeFileSync(manifest, certified(tree as string));
-    lockManifest(manifest);
-    expect(readLock(manifest).packages?.[1]?.class).toBe("certified");
+    expect(lockPackages(manifest)[1]?.class).toBe("certified");
   }, 120_000);
 
   it("a certified npm package's evidence must name the locked version", () => {
@@ -280,7 +311,8 @@ describe("Pi packages in the lock", () => {
     ).toThrow(/without certification evidence/);
   });
 
-  it("the build vendors every package under pi-packages/<id> from the lock", () => {
+  it("the build vendors every package under pi-packages/<id> from the lock", (context) => {
+    context.skip(!NPM_RESOLVES, NPM_SKIP);
     const manifest = distribution();
     lockManifest(manifest);
     const lock = requireCurrentLock(manifest);

@@ -23,6 +23,7 @@ import {
   checkPiPackageSources,
   PI_PACKAGE_VENDOR_DIRECTORY,
 } from "./gates.js";
+import type { CommandRunner } from "./command.js";
 import { checkLocalDeclaration, packageError } from "./refs.js";
 import {
   copyLocalPackage,
@@ -62,7 +63,10 @@ export function declaredPackages(
 export function packageContext(
   manifest: Manifest,
   base: string,
-  options: { readonly env?: NodeJS.ProcessEnv } = {},
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly run?: CommandRunner;
+  } = {},
 ): PackageContext {
   return {
     distributionDir: base,
@@ -73,6 +77,7 @@ export function packageContext(
     ),
     targets: manifest.lifecycle?.release.targets ?? [currentTarget()],
     ...(options.env ? { env: options.env } : {}),
+    ...(options.run ? { run: options.run } : {}),
   };
 }
 
@@ -95,7 +100,10 @@ export function reviewedInstallScripts(
 export function lockPiPackages(
   manifest: Manifest,
   base: string,
-  options: { readonly env?: NodeJS.ProcessEnv } = {},
+  options: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly run?: CommandRunner;
+  } = {},
 ): LockedPiPackage[] {
   const declared = declaredPackages(manifest);
   const root = join(base, ...PACKAGE_LOCK_DIRECTORY.split("/"));

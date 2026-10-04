@@ -210,9 +210,42 @@ function bindingGypPaths(directory: string): Set<string> {
 }
 
 /**
- * Copy a local package without node_modules, .git, or symlinks. A case
- * variant of `node_modules` (such as `Node_Modules`) is refused rather than
- * copied: on a case-insensitive filesystem Node resolves modules from it.
+ * `name` spells `node_modules` as a filesystem may fold it: in any case, or
+ * with a compatibility character such as `ſ` (U+017F), which APFS folds to
+ * `s` and `toLowerCase` keeps.
+ */
+export function foldsToNodeModules(name: string): boolean {
+  return name.normalize("NFKC").toUpperCase().toLowerCase() === "node_modules";
+}
+
+/**
+ * The filesystem resolves `node_modules` in `dir` to an entry whose listed
+ * name is not `node_modules`: a variant only the filesystem's own folding
+ * matches. Node would load modules from it.
+ */
+export function hasNodeModulesAlias(
+  dir: string,
+  names: readonly string[],
+): boolean {
+  return (
+    !names.includes("node_modules") &&
+    lstatSync(join(dir, "node_modules"), { throwIfNoEntry: false }) !==
+      undefined
+  );
+}
+
+function refuseNodeModulesVariant(id: string, name: string): never {
+  throw packageError(
+    "POLICY_DENIED",
+    id,
+    `${name} is a variant of node_modules the filesystem resolves; dependencies are installed only from the package npm lockfile`,
+  );
+}
+
+/**
+ * Copy a local package without node_modules, .git, or symlinks. A variant
+ * of `node_modules` (such as `Node_Modules` or `node_moduleſ`) is refused
+ * rather than copied: a folding filesystem resolves modules from it.
  */
 export function copyLocalPackage(
   id: string,
@@ -220,14 +253,15 @@ export function copyLocalPackage(
   target: string,
 ): void {
   mkdirSync(target, { recursive: true });
-  for (const name of readdirSync(source).sort()) {
+  const names = readdirSync(source).sort();
+  const variant = names.find(
+    (name) => name !== "node_modules" && foldsToNodeModules(name),
+  );
+  if (variant !== undefined) refuseNodeModulesVariant(id, variant);
+  if (hasNodeModulesAlias(source, names))
+    refuseNodeModulesVariant(id, "node_modules");
+  for (const name of names) {
     if (name === "node_modules" || name === ".git") continue;
-    if (name.toLowerCase() === "node_modules")
-      throw packageError(
-        "POLICY_DENIED",
-        id,
-        `${name} is a case variant of node_modules; dependencies are installed only from the package npm lockfile`,
-      );
     const from = join(source, name);
     const to = join(target, name);
     const stat = lstatSync(from);
@@ -250,7 +284,8 @@ export function copyLocalPackage(
  */
 function checkSourceTree(id: string, root: string): void {
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isSymbolicLink())
         throw packageError(
@@ -259,8 +294,8 @@ function checkSourceTree(id: string, root: string): void {
           `${posix(relative(root, path))} is a symlink; packages are vendored without symlinks`,
         );
       if (!entry.isDirectory()) continue;
-      // Any case: a case-insensitive filesystem resolves modules from it.
-      if (entry.name.toLowerCase() === "node_modules")
+      // Any variant a folding filesystem resolves modules from.
+      if (foldsToNodeModules(entry.name))
         throw packageError(
           "POLICY_DENIED",
           id,
@@ -268,6 +303,18 @@ function checkSourceTree(id: string, root: string): void {
         );
       walk(path);
     }
+    // A variant only the filesystem's folding matches, found by asking it.
+    if (
+      hasNodeModulesAlias(
+        dir,
+        entries.map((entry) => entry.name),
+      )
+    )
+      throw packageError(
+        "POLICY_DENIED",
+        id,
+        `${posix(relative(root, join(dir, "node_modules")))} resolves to a variant of node_modules; dependencies are installed only from the package npm lockfile`,
+      );
   };
   walk(root);
 }
@@ -554,6 +601,36 @@ function archiveGitCommit(
   });
 }
 
+/** The first npm whose pacote (20) honours --ignore-scripts when it prepares a git dependency. */
+const MINIMUM_NPM_MAJOR = 11;
+
+/**
+ * Refuse to resolve with an npm older than 11. npm 10 (pacote 19, bundled
+ * with Node 22) prepares a git dependency it meets while resolving by
+ * running its `prepare` in the npm process itself, with no `ignoreScripts`
+ * check, so neither `--ignore-scripts` nor the refusing git stops it. `npm
+ * ci` from a lockfile whose closure was checked (no git entries) is not a
+ * resolving call and needs no check.
+ */
+function checkNpmVersion(
+  run: CommandRunner,
+  id: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const version = mustRun(run, id, "npm", ["--version"], { cwd, env })
+    .toString()
+    .trim();
+  const major = Number(/^(\d+)\./.exec(version)?.[1] ?? Number.NaN);
+  if (!(major >= MINIMUM_NPM_MAJOR))
+    throw packageError(
+      "POLICY_DENIED",
+      id,
+      `npm ${Number.isNaN(major) ? JSON.stringify(version) : major} runs a git dependency's prepare despite --ignore-scripts; lock packages with npm ${MINIMUM_NPM_MAJOR} or later`,
+      `Install npm ${MINIMUM_NPM_MAJOR} or later (npm install -g npm@${MINIMUM_NPM_MAJOR}) and run piship lock again`,
+    );
+}
+
 interface Pin {
   readonly locked: LockedPiPackage;
   readonly lockfile: string;
@@ -581,6 +658,7 @@ function materialize(
   const env = environment(context, git);
   if (declaration.source === "npm") {
     checkNpmDeclaration(declaration, context.mode);
+    if (!pin) checkNpmVersion(run, id, work, env);
     const npm = pin
       ? {
           version: pin.locked.version ?? "",
@@ -640,7 +718,9 @@ function materialize(
         "Run piship lock again and review the package changes",
       );
     writeFileSync(lockfilePath, pin.lockfile);
-  } else
+  } else {
+    // npm has already been checked for an npm package.
+    if (declaration.source !== "npm") checkNpmVersion(run, id, directory, env);
     mustRun(
       run,
       id,
@@ -653,6 +733,7 @@ function materialize(
       ],
       { cwd: directory, env },
     );
+  }
   const lockfile = readFileSync(lockfilePath, "utf8");
   const parsed = JSON.parse(lockfile) as NpmLockfile;
   const closure = checkLockfileClosure(id, parsed, context.trust);

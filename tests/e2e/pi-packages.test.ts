@@ -53,8 +53,27 @@ function run(
     : spawnSync(command, args, { cwd, env, encoding: "utf8" });
 }
 
+/**
+ * `piship lock` refuses to resolve packages with npm older than 11: npm 10
+ * (bundled with Node 22) runs a git dependency's `prepare` despite
+ * `--ignore-scripts`. This test locks through the CLI, so it needs a real
+ * npm 11 and is skipped, with that reason, where npm is older.
+ */
+const NPM_MAJOR = Number(
+  /^(\d+)\./.exec(
+    spawnSync("npm", ["--version"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+    }).stdout ?? "",
+  )?.[1] ?? 0,
+);
+
 describe("Pi packages", () => {
-  it("a local and a git package are locked, vendored, installed, and loaded per file", () => {
+  it("a local and a git package are locked, vendored, installed, and loaded per file", (context) => {
+    context.skip(
+      NPM_MAJOR < 11,
+      `npm ${NPM_MAJOR} cannot lock Pi packages; piship lock requires npm 11 or later`,
+    );
     const temp = mkdtempSync(join(tmpdir(), "piship-e2e-packages-"));
     temporary.push(temp);
     const env: NodeJS.ProcessEnv = {
