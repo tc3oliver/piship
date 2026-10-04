@@ -676,6 +676,50 @@ function modelType(value: unknown, path: string): ModelType {
   return value as ModelType;
 }
 
+/**
+ * A virtual model's routes are a closed set of physical chat models it may
+ * be dispatched to: each is allowed, and none is itself virtual (Pi routes
+ * only to a physical model) or a classifier or image model. With an
+ * openai-compatible endpoint each is a catalog entry, the only models the
+ * gateway credential serves; with pi-native inference Pi's own catalog
+ * serves them.
+ */
+function assertVirtualRoutes(
+  catalog: readonly CatalogModel[],
+  allowed: readonly string[],
+  inference: InferenceConfig,
+): void {
+  const managed = inference.provider === "openai-compatible";
+  for (const item of catalog) {
+    if (!item.virtual) continue;
+    const path = `models.catalog.${item.id}`;
+    if (item.type !== "chat")
+      conflict(`${path}.type`, "A virtual model is a chat model");
+    if (allowed.length && !allowed.includes(item.id))
+      conflict(path, `${item.id} is not in models.allowed`);
+    for (const [index, route] of item.virtual.routes.entries()) {
+      const at = `${path}.virtual.routes[${index}]`;
+      const entry = catalog.find((candidate) => candidate.id === route);
+      if (entry?.virtual)
+        conflict(
+          at,
+          `${route} is a virtual model; a route is a physical model`,
+        );
+      if (entry && entry.type !== "chat")
+        conflict(
+          at,
+          `${route} is a ${entry.type} model; a route is a chat model`,
+        );
+      if (managed && !entry)
+        conflict(at, `${route} has no models.catalog metadata`);
+      if (!managed && !/^[^/]+\/.+$/.test(route))
+        fail(at, "pi-native routes use provider/model");
+      if (allowed.length && !allowed.includes(route))
+        conflict(at, `${route} is not in models.allowed`);
+    }
+  }
+}
+
 function parseModels(
   value: unknown,
   mode: DeploymentMode,
@@ -816,6 +860,7 @@ function parseModels(
     !allowed.includes(defaultModel)
   )
     conflict("models.default", `${defaultModel} is not in models.allowed`);
+  assertVirtualRoutes(catalog, allowed, inference);
   return {
     ...(defaultModel === undefined ? {} : { default: defaultModel }),
     allowed,

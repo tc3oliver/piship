@@ -19,6 +19,8 @@ import {
   governModelRuntime,
   isCredentialRejection,
   isModelDenial,
+  type ModelPolicy,
+  PI_VIRTUAL_MODEL_API,
   requestFailure,
 } from "./governance.js";
 
@@ -445,7 +447,7 @@ describe("personal Pi-native governance", () => {
         },
       },
       {
-        allows: () => true,
+        selects: () => true,
         available: () => {
           if (down)
             throw new PiShipError(
@@ -674,5 +676,356 @@ describe("acceptance request failures without a status (#85)", () => {
       retryable: false,
     });
     session.dispose();
+  });
+});
+
+describe("model.select and model.dispatch", () => {
+  async function routed(
+    options: {
+      /** Ids model.select denies. */
+      selectDeny?: string[];
+      /** Ids model.dispatch denies; without it, dispatch falls back to select. */
+      dispatchDeny?: string[];
+      routes?: string[];
+      available?: () => void;
+    } = {},
+  ) {
+    const runtime = await ModelRuntime.create({
+      credentials: memoryCredentials() as never,
+      modelsPath: null,
+      refreshOnCreate: false,
+      allowModelNetwork: false,
+    });
+    const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    runtime.registerProvider("acmecode", {
+      name: "AcmeCode",
+      baseUrl: services.gatewayUrl,
+      api: "openai-completions",
+      models: [
+        model("acme/coder"),
+        model("acme/general"),
+        model("acme/other"),
+        {
+          id: "acme/classify",
+          name: "Classify",
+          type: "classifier",
+          api: "llama-cpp-classify",
+          input: ["text"],
+          cost,
+          contextWindow: 4096,
+        },
+        {
+          id: "acme/image",
+          name: "Image",
+          type: "image",
+          api: "openrouter-images",
+          input: ["text"],
+          output: ["image"],
+          cost,
+        },
+      ],
+    });
+    const events: string[] = [];
+    let keyRequests = 0;
+    const policy: ModelPolicy = {
+      selects: (_provider, id) => !options.selectDeny?.includes(id),
+      ...(options.dispatchDeny
+        ? {
+            dispatches: (_provider: string, id: string) =>
+              !options.dispatchDeny?.includes(id),
+          }
+        : {}),
+      denied: (action, provider, id, detail) =>
+        events.push(
+          `${action} ${provider}/${id}${detail?.reason ? ` (${detail.reason})` : ""}`,
+        ),
+      dispatched: (dispatch) =>
+        events.push(
+          `dispatch ${dispatch.selected} -> ${dispatch.dispatched} by ${dispatch.router}`,
+        ),
+      ...(options.available ? { available: options.available } : {}),
+    };
+    const physicalIds = [
+      "acme/coder",
+      "acme/general",
+      "acme/other",
+      "acme/classify",
+      "acme/image",
+    ];
+    const governed = governModelRuntime(
+      runtime,
+      {
+        kind: "managed-endpoint",
+        providerId: "acmecode",
+        allowedModelIds: [...physicalIds, "acme/auto"],
+        dispatchModelIds: physicalIds,
+        apiKey: async () => {
+          keyRequests += 1;
+          return "sk-routed";
+        },
+      },
+      policy,
+      [
+        {
+          provider: "acmecode",
+          id: "acme/auto",
+          routes: (options.routes ?? ["acme/coder"]).map((id) => ({
+            provider: "acmecode",
+            id,
+          })),
+          router: "./extensions/router.ts",
+        },
+      ],
+    );
+    let target = "acme/coder";
+    governed.withRegistrationWindow(() =>
+      runtime.registerVirtualModel({
+        provider: "acmecode",
+        id: "acme/auto",
+        name: "Auto",
+        route: () => ({
+          model: { ...model(target), provider: "acmecode" } as never,
+          thinkingLevel: "off",
+        }),
+      }),
+    );
+    // Listed unless model.select denies it.
+    const auto = runtime.getModel("acmecode", "acme/auto") ?? {
+      ...model("acme/auto"),
+      provider: "acmecode",
+      api: PI_VIRTUAL_MODEL_API,
+      baseUrl: "",
+    };
+    return {
+      runtime,
+      governed,
+      auto,
+      events,
+      keyRequests: () => keyRequests,
+      routeTo: (id: string) => {
+        target = id;
+      },
+      resolve: () =>
+        runtime.resolveModel(auto, [], {
+          reason: "direct",
+          thinkingLevel: "off",
+        }),
+    };
+  }
+  const physical = (id: string, extra: Record<string, unknown> = {}) => ({
+    ...model(id),
+    provider: "acmecode",
+    api: "openai-completions",
+    baseUrl: services.gatewayUrl,
+    ...extra,
+  });
+  const classifier = () =>
+    physical("acme/classify", {
+      api: "llama-cpp-classify",
+      type: "classifier",
+    });
+  const stream = (runtime: ModelRuntime, target: unknown) =>
+    runtime.streamSimple(target as never, { messages: [] } as never);
+
+  it("refuses a physical request that model.select or model.dispatch denies", async () => {
+    const select = await routed({ selectDeny: ["acme/general"] });
+    expect(() => stream(select.runtime, physical("acme/general"))).toThrow(
+      "not allowed",
+    );
+    // Selection is refused first; dispatch is not consulted.
+    expect(select.events).toEqual(["model.select acmecode/acme/general"]);
+    const dispatch = await routed({ dispatchDeny: ["acme/general"] });
+    expect(() => stream(dispatch.runtime, physical("acme/general"))).toThrow(
+      "not allowed",
+    );
+    expect(dispatch.events).toEqual(["model.dispatch acmecode/acme/general"]);
+    expect(select.keyRequests() + dispatch.keyRequests()).toBe(0);
+  });
+
+  it("routes to a model the session cannot select, and only through the route", async () => {
+    const { runtime, governed, events, resolve } = await routed({
+      selectDeny: ["acme/coder"],
+      dispatchDeny: [],
+    });
+    expect(governed.isSelectable("acmecode", "acme/coder")).toBe(false);
+    expect(runtime.getModel("acmecode", "acme/coder")).toBeUndefined();
+    expect((await runtime.getAvailable()).map((item) => item.id)).not.toContain(
+      "acme/coder",
+    );
+    const route = await resolve();
+    expect(route.model.id).toBe("acme/coder");
+    expect(events).toEqual([
+      "dispatch acmecode/acme/auto -> acmecode/acme/coder by ./extensions/router.ts",
+    ]);
+    // The routed request has a credential and passes the guard.
+    expect(await runtime.getAuth(route.model)).toMatchObject({
+      auth: { apiKey: "sk-routed" },
+    });
+    expect(() => stream(runtime, route.model)).not.toThrow();
+    // The same model, not routed: model.select is still required.
+    expect(() => stream(runtime, physical("acme/coder"))).toThrow(
+      "not allowed",
+    );
+    expect(() => stream(runtime, { ...route.model })).toThrow("not allowed");
+  });
+
+  it("checks a routed model by model.select when no model.dispatch rule decides it", async () => {
+    const { resolve, events } = await routed({ selectDeny: ["acme/coder"] });
+    await expect(resolve()).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    expect(events).toEqual(["model.dispatch acmecode/acme/coder"]);
+  });
+
+  it("refuses a route outside the declared routes before any request", async () => {
+    const { runtime, auto, routeTo, resolve, events, keyRequests } =
+      await routed();
+    routeTo("acme/general");
+    await expect(resolve()).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    expect(events).toEqual([
+      "model.dispatch acmecode/acme/general (not a declared route)",
+    ]);
+    const result = await stream(runtime, auto).result();
+    expect(result).toMatchObject({ stopReason: "error" });
+    expect(result.errorMessage).toContain("not a declared route");
+    expect(keyRequests()).toBe(0);
+  });
+
+  it("refuses an undeclared or unselectable virtual model in resolveModel", async () => {
+    const options = {
+      reason: "direct" as const,
+      thinkingLevel: "off" as const,
+    };
+    const denied = await routed({ selectDeny: ["acme/auto"] });
+    await expect(
+      denied.runtime.resolveModel({ ...denied.auto }, [], options),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    const undeclared = await routed();
+    await expect(
+      undeclared.runtime.resolveModel(
+        { ...undeclared.auto, id: "acme/other-auto" },
+        [],
+        options,
+      ),
+    ).rejects.toMatchObject({ code: "MODEL_DENIED" });
+    expect(undeclared.events).toEqual([
+      "model.select acmecode/acme/other-auto",
+    ]);
+  });
+
+  it("returns an error result for a denied classifier or image model, without a request", async () => {
+    const { runtime, events, keyRequests } = await routed({
+      selectDeny: ["acme/classify", "acme/image"],
+    });
+    const classified = await runtime.classify(
+      classifier() as never,
+      { messages: [] } as never,
+    );
+    expect(classified).toMatchObject({
+      stopReason: "error",
+      answers: {},
+      model: "acme/classify",
+    });
+    expect(classified.errorMessage).toMatch(/^MODEL_DENIED: /);
+    const images = await runtime.generateImages(
+      physical("acme/image", {
+        api: "openrouter-images",
+        type: "image",
+        output: ["image"],
+      }) as never,
+      { messages: [] } as never,
+    );
+    expect(images).toMatchObject({ stopReason: "error", output: [] });
+    expect(images.errorMessage).toMatch(/^MODEL_DENIED: /);
+    expect(events).toEqual([
+      "model.select acmecode/acme/classify",
+      "model.select acmecode/acme/image",
+    ]);
+    expect(keyRequests()).toBe(0);
+  });
+
+  it("refuses deferred requests for a denied model before any request", async () => {
+    const { runtime, keyRequests } = await routed({
+      selectDeny: ["acme/general"],
+    });
+    const general = physical("acme/general") as never;
+    const handle = { id: "deferred" } as never;
+    expect(() => runtime.streamDeferred(general, handle)).toThrow(
+      "not allowed",
+    );
+    await expect(runtime.fetchDeferred(general, handle)).rejects.toMatchObject({
+      code: "MODEL_DENIED",
+    });
+    await expect(runtime.cancelDeferred(general, handle)).rejects.toMatchObject(
+      { code: "MODEL_DENIED" },
+    );
+    expect(keyRequests()).toBe(0);
+  });
+
+  it("hides denied classifier and image models from the type-aware listings", async () => {
+    const { runtime } = await routed({ selectDeny: ["acme/classify"] });
+    expect(runtime.getModelsOfType("classifier", "acmecode")).toEqual([]);
+    expect(
+      runtime.getModelOfType("classifier", "acmecode", "acme/classify"),
+    ).toBeUndefined();
+    expect(
+      runtime.getModelsOfType("image", "acmecode").map((item) => item.id),
+    ).toEqual(["acme/image"]);
+    expect(await runtime.getAvailableOfType("classifier")).toEqual([]);
+    expect(
+      runtime.getAllModels("acmecode").map((item) => item.id),
+    ).not.toContain("acme/classify");
+    expect(
+      (await runtime.getAllAvailable()).map((item) => item.id),
+    ).not.toContain("acme/classify");
+  });
+
+  it("refuses registering or unregistering a virtual model outside PiShip's registration", async () => {
+    const { runtime, governed, events } = await routed();
+    const definition = {
+      provider: "acmecode",
+      id: "acme/late",
+      name: "Late",
+      route: () => ({
+        model: physical("acme/coder") as never,
+        thinkingLevel: "off" as const,
+      }),
+    };
+    expect(() => runtime.registerVirtualModel(definition)).toThrow(
+      expect.objectContaining({ code: "POLICY_DENIED" }),
+    );
+    expect(() =>
+      runtime.unregisterVirtualModel("acmecode", "acme/auto"),
+    ).toThrow(expect.objectContaining({ code: "POLICY_DENIED" }));
+    expect(runtime.getModel("acmecode", "acme/auto")).toBeDefined();
+    expect(runtime.getModel("acmecode", "acme/late")).toBeUndefined();
+    expect(events).toEqual([
+      "model.select acmecode/acme/late",
+      "model.select acmecode/acme/auto",
+    ]);
+    governed.withRegistrationWindow(() =>
+      runtime.unregisterVirtualModel("acmecode", "acme/auto"),
+    );
+    expect(runtime.getModel("acmecode", "acme/auto")).toBeUndefined();
+  });
+
+  it("keeps the required-control gate on routed, classifier, and deferred requests", async () => {
+    let down = false;
+    const { runtime, resolve, keyRequests } = await routed({
+      available: () => {
+        if (down)
+          throw new PiShipError("AUDIT_UNAVAILABLE", "Audit is unavailable");
+      },
+    });
+    const route = await resolve();
+    down = true;
+    expect(() => stream(runtime, route.model)).toThrow("Audit is unavailable");
+    const classified = await runtime.classify(
+      classifier() as never,
+      { messages: [] } as never,
+    );
+    expect(classified.errorMessage).toMatch(/^AUDIT_UNAVAILABLE: /);
+    await expect(
+      runtime.fetchDeferred(physical("acme/coder") as never, {} as never),
+    ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+    expect(keyRequests()).toBe(0);
   });
 });

@@ -40,8 +40,13 @@ import {
   modelPolicy,
 } from "./governance.js";
 import { piSettings } from "./pi-defaults.js";
-import { createModelRuntime, type Model } from "./model-runtime.js";
+import {
+  createModelRuntime,
+  launchVirtualModels,
+  type Model,
+} from "./model-runtime.js";
 import { providerErrorRedaction } from "./redaction.js";
+import { governVirtualModels } from "./virtual-models.js";
 import {
   cacheWarmingSetting,
   enforcedRuntime,
@@ -152,7 +157,8 @@ async function startRuntime(
     activated?.selectedModel && activated.runtime.kind === "managed-endpoint"
       ? `${activated.runtime.providerId}/${activated.selectedModel}`
       : activated?.selectedModel;
-  const policy = gov ? await modelPolicy(gov, selectedKey) : undefined;
+  const virtual = launchVirtualModels(ctx, prepared);
+  const policy = gov ? await modelPolicy(gov, selectedKey, virtual) : undefined;
   const builtinExtensions = gov ? governanceExtensions(gov) : [];
   const exposureConfig = gov ? exposureConfigOf(gov) : null;
   const exposureExtensionFactories =
@@ -238,6 +244,7 @@ async function startRuntime(
       ctx,
       prepared,
       policy,
+      virtual,
     );
     governedRef = governed;
     // Discovery uses the built distribution, never the user's cwd or personal ~/.pi.
@@ -289,6 +296,17 @@ async function startRuntime(
       throw new Error(
         `Pi theme load failed: ${themeDiagnostics.map((item) => item.message).join("; ")}`,
       );
+    // Virtual models are registered here, before the launch model and a
+    // resumed session's model are looked up, and again after each /reload;
+    // Pi would register them later and drop a refusal unheard.
+    if (governed) {
+      governVirtualModels(resourceLoader, governed, modelRuntime, virtual);
+      for (const rule of virtual)
+        if (!modelRuntime.getModel(rule.provider, rule.id))
+          ctx.err(
+            `Notice: virtual model ${rule.provider}/${rule.id} is declared, but its router ${rule.router} did not register it.`,
+          );
+    }
     // Hidden and denied tools, and Pi's ungoverned base tools, are excluded
     // from the session; an extension tool wider than the manifest allows
     // fails the launch.
@@ -359,7 +377,7 @@ async function startRuntime(
     if (
       governed &&
       current &&
-      !governed.isAllowed(current.provider, current.id)
+      !governed.isSelectable(current.provider, current.id)
     ) {
       if (!model)
         throw new PiShipError(

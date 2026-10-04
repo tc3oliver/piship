@@ -66,6 +66,44 @@ export function piCompatibility(
   return COMPATIBILITY_ORDER[Math.min(...ranks)] as string;
 }
 
+/**
+ * The virtual model gate: in a managed lock, every route of a virtual model
+ * is an allowed physical chat model of the catalog, which is all the
+ * gateway credential can be scoped to; in every lock, its router is a
+ * declared extension (a `./` path or a certified id). Whether the credential
+ * a user receives is entitled to a route is known only at runtime, where the
+ * model runtime refuses a route outside it and the gateway enforces it again.
+ */
+export function virtualRouteProblems(lock: DistributionLock): string[] {
+  const models = lock.access?.models;
+  const problems: string[] = [];
+  for (const virtual of lock.virtualModels ?? []) {
+    const name = `virtual model ${virtual.id}`;
+    if (lock.deployment.mode === "managed")
+      for (const route of virtual.routes) {
+        const entry = models?.catalog.find((item) => item.id === route);
+        if (!models?.allowed.includes(route))
+          problems.push(`${name} routes to ${route}, which is not allowed`);
+        else if (!entry || entry.virtual || (entry.type ?? "chat") !== "chat")
+          problems.push(
+            `${name} routes to ${route}, which is not a physical chat model of the catalog`,
+          );
+      }
+    const router = virtual.router;
+    const declared = router.startsWith("./")
+      ? lock.declared.extensions.includes(router)
+      : (lock.governance?.certified ?? []).some(
+          (entry) =>
+            entry.kind === "extensions" && entry.evidence.id === router,
+        );
+    if (!declared)
+      problems.push(
+        `${name} names router ${router}, which is not a declared extension`,
+      );
+  }
+  return problems;
+}
+
 /** Enforced rules that contradict each other or a declared trust class. */
 function policyConflicts(lock: DistributionLock): string[] {
   const governance = lock.governance?.manifest;
@@ -264,6 +302,14 @@ export function checkReleaseInputs(
       "POLICY_UNENFORCEABLE",
       "policy",
       unenforced.map((item) => item.message).join("; "),
+    );
+  const routes = virtualRouteProblems(lock);
+  if (routes.length)
+    throw gate(
+      "POLICY_DENIED",
+      "models",
+      routes.join("; "),
+      "Declare each route as an allowed catalog model and the router as a declared extension, then lock again",
     );
   for (const provider of lock.governance?.providers ?? [])
     if (provider.class === "certified" && !provider.certified)

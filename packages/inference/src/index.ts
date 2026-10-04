@@ -27,6 +27,11 @@ export interface CatalogEntry {
   /** Absent when the catalog does not declare it (unknown). */
   readonly structuredOutput?: boolean;
   readonly policyTags: readonly string[];
+  /**
+   * A virtual model: the gateway never lists it, so it is available when one
+   * of its physical routes is.
+   */
+  readonly virtual?: { readonly routes: readonly string[] };
 }
 
 export interface CatalogConstraints {
@@ -46,15 +51,28 @@ export function buildModelDefinitions(
   catalog: readonly CatalogEntry[],
   constraints: CatalogConstraints,
 ): ModelDefinition[] {
+  const served = (id: string): string | undefined =>
+    constraints.entitled && !constraints.entitled.includes(id)
+      ? "not included in the runtime credential entitlement"
+      : constraints.live && !constraints.live.includes(id)
+        ? "not currently listed by the inference gateway"
+        : undefined;
   return catalog
     .filter((entry) => constraints.allowed.includes(entry.id))
     .map((entry) => {
-      let reason: string | undefined;
-      if (constraints.entitled && !constraints.entitled.includes(entry.id))
-        reason = "not included in the runtime credential entitlement";
-      else if (constraints.live && !constraints.live.includes(entry.id))
-        reason = "not currently listed by the inference gateway";
-      else if (
+      // A user narrowing applies to the virtual model itself, the
+      // entitlement and the gateway listing to its routes.
+      let reason = entry.virtual
+        ? entry.virtual.routes.some(
+            (route) =>
+              constraints.allowed.includes(route) &&
+              served(route) === undefined,
+          )
+          ? undefined
+          : "none of its routes is available"
+        : served(entry.id);
+      if (
+        !reason &&
         constraints.userAllowed &&
         !constraints.userAllowed.includes(entry.id)
       )

@@ -52,15 +52,12 @@ const OUTSIDE_A_SESSION = [
 ];
 /**
  * v0.9 event types the contract already carries but no runtime flow emits
- * yet: model dispatch (09-B4). Each task removes its names from this list
- * when its flow emits them.
+ * yet. Each task removes its names from this list when its flow emits
+ * them.
  * `session.export` stays until an export flow exists: Pi's /share and
  * /export have no seam, and PiShip has no command that exports a session.
  */
-const NOT_YET_EMITTED: readonly AuditEventType[] = [
-  "model.dispatch",
-  "session.export",
-];
+const NOT_YET_EMITTED: readonly AuditEventType[] = ["session.export"];
 
 const roots: string[] = [];
 const sessions: GovernanceSession[] = [];
@@ -320,8 +317,16 @@ describe("governed session audit events (real flows)", () => {
       context(),
     );
     const policy = await modelPolicy(session, "unit/allowed");
-    if (!policy.denied) throw new Error("the model policy reports no denial");
-    policy.denied("unit", "other");
+    if (!policy.denied || !policy.dispatched)
+      throw new Error("the model policy reports no denial or dispatch");
+    policy.denied("model.select", "unit", "other");
+    // What the model runtime reports for a request a virtual model routed.
+    policy.dispatched({
+      selected: "unit/auto",
+      dispatched: "unit/allowed",
+      router: "./extensions/router.ts",
+      type: "chat",
+    });
     await expect(modelPolicy(session, "unit/denied")).rejects.toMatchObject({
       code: "MODEL_DENIED",
     });

@@ -532,6 +532,92 @@ describe("piship/v1alpha6 schema", () => {
       manifest.governance?.policy.enforced.map((rule) => rule.action),
     ).toEqual(["session.export", "model.dispatch", "model.select"]);
   });
+
+  it("closes a virtual model's routes over allowed physical chat models", () => {
+    const entry = { name: "M", contextWindow: 1000, maxOutputTokens: 100 };
+    const withCatalog = (catalog: Json, allowed = Object.keys(catalog)): Json =>
+      managed({ models: { default: "acme/coder", allowed, catalog } });
+    const auto = (routes: string[], extra: Json = {}) => ({
+      ...entry,
+      virtual: { router: "company-router", routes },
+      ...extra,
+    });
+    const classifier = {
+      ...entry,
+      type: "classifier",
+      api: "openai-moderations",
+    };
+    rejects(
+      withCatalog(
+        {
+          "acme/coder": entry,
+          "acme/general": entry,
+          "acme/auto": auto(["acme/general"]),
+        },
+        ["acme/coder", "acme/auto"],
+      ),
+      "models.catalog.acme/general",
+    );
+    rejects(
+      withCatalog({ "acme/coder": entry, "acme/auto": auto(["acme/missing"]) }),
+      "models.catalog.acme/auto.virtual.routes[0]",
+      "no models.catalog metadata",
+    );
+    rejects(
+      withCatalog({
+        "acme/coder": entry,
+        "acme/auto": auto(["acme/coder"]),
+        "acme/chain": auto(["acme/auto"]),
+      }),
+      "models.catalog.acme/chain.virtual.routes[0]",
+      "a route is a physical model",
+    );
+    rejects(
+      withCatalog({
+        "acme/coder": entry,
+        "acme/classify": classifier,
+        "acme/auto": auto(["acme/classify"]),
+      }),
+      "models.catalog.acme/auto.virtual.routes[0]",
+      "a route is a chat model",
+    );
+    rejects(
+      withCatalog({
+        "acme/coder": entry,
+        "acme/auto": auto(["acme/coder"], { type: "classifier", api: "x" }),
+      }),
+      "models.catalog.acme/auto.type",
+      "A virtual model is a chat model",
+    );
+    // Pi-native: a route outside a non-empty allowlist is refused.
+    const piNative = (allowed: string[]) =>
+      personal({
+        identity: { mode: "none" },
+        credential: { provider: "pi-native" },
+        inference: { provider: "pi-native" },
+        models: {
+          allowed,
+          catalog: {
+            "company/auto": {
+              ...entry,
+              virtual: {
+                router: "./extensions/router",
+                routes: ["anthropic/claude-x"],
+              },
+            },
+          },
+        },
+      });
+    rejects(
+      piNative(["company/auto"]),
+      "models.catalog.company/auto.virtual.routes[0]",
+      "not in models.allowed",
+    );
+    expect(
+      parseManifest(piNative(["company/auto", "anthropic/claude-x"])).access
+        ?.models.catalog[0]?.virtual?.routes,
+    ).toEqual(["anthropic/claude-x"]);
+  });
 });
 
 describe("piship/v1alpha6 validation", () => {

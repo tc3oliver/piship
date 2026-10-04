@@ -7,6 +7,7 @@ import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
   PiShipError,
+  type PolicyAction,
   principalId,
   principalKey,
 } from "@piship/contracts";
@@ -17,14 +18,14 @@ import {
   governedLock,
   openSandboxCredential,
 } from "@piship/core";
-import type { ModelEvidence } from "@piship/policy";
+import { BUILTIN_DEFAULT_RULE, type ModelEvidence } from "@piship/policy";
 import { resolveTemplate } from "@piship/schema";
 import {
   askUserTool,
   governanceHooks,
   workflowExtension,
 } from "../builtins.js";
-import type { ModelPolicy } from "../governance.js";
+import type { ModelPolicy, VirtualModelRule } from "../governance.js";
 import {
   type GovernanceOptions,
   GovernanceSession,
@@ -233,15 +234,33 @@ export function governedCustomTools(
 }
 
 /**
- * model.select from the distribution policy. `ask` is resolved before the
- * session starts for the model it starts with; other models that need
- * approval are not offered for switching mid-session.
+ * model.select and model.dispatch from the distribution policy. `ask` is
+ * resolved before the session starts for the model it starts with and, when
+ * that model is virtual, for each of its declared routes; other models that
+ * need approval are not offered for switching or routing mid-session.
+ *
+ * Without a model.dispatch rule for a physical model, model.select decides
+ * it (§18.3), so a v0.8 `model.use` deny cannot be routed around.
  */
 export async function modelPolicy(
   gov: GovernanceSession,
   selected: string | undefined,
+  virtual: readonly VirtualModelRule[] = [],
 ): Promise<ModelPolicy> {
   const approved = new Set<string>();
+  const approvedDispatch = new Set<string>();
+  /** The rule that decides a dispatch: model.dispatch, else model.select. */
+  const dispatchAction = (key: string): PolicyAction =>
+    gov.engine.evaluate({ action: "model.dispatch", resource: key }).ruleId ===
+    BUILTIN_DEFAULT_RULE
+      ? "model.select"
+      : "model.dispatch";
+  const startup = async (action: PolicyAction, key: string) =>
+    (
+      await gov.decide(action, key, gov.startupChannel(), {
+        denied: "model.denied",
+      })
+    ).outcome === "allow";
   if (selected) {
     const decision = await gov.decide(
       "model.select",
@@ -256,21 +275,70 @@ export async function modelPolicy(
         { component: "policy" },
       );
     approved.add(selected);
+    const rule = virtual.find((item) => key(item) === selected);
+    const targets = rule ? rule.routes.map(key) : [selected];
+    for (const target of targets) {
+      const action = dispatchAction(target);
+      if (action === "model.select" && approved.has(target)) {
+        approvedDispatch.add(target);
+        continue;
+      }
+      if (
+        gov.engine.evaluate({ action, resource: target }).effect === "ask" &&
+        (await startup(action, target))
+      )
+        approvedDispatch.add(target);
+    }
+    // A virtual model needs one route it may dispatch to.
+    if (!targets.some((target) => dispatches(target)))
+      throw new PiShipError(
+        "MODEL_DENIED",
+        rule
+          ? `No route of virtual model ${selected} (${targets.join(", ")}) may receive a request`
+          : `Model ${selected} may not receive a request (model.dispatch)`,
+        { component: "policy" },
+      );
+  }
+  function selects(key: string): boolean {
+    const effect = gov.engine.evaluate({
+      action: "model.select",
+      resource: key,
+    }).effect;
+    return effect === "allow" || (effect === "ask" && approved.has(key));
+  }
+  function dispatches(key: string): boolean {
+    const action = dispatchAction(key);
+    const effect = gov.engine.evaluate({ action, resource: key }).effect;
+    return (
+      effect === "allow" ||
+      (effect === "ask" &&
+        (approvedDispatch.has(key) ||
+          (action === "model.select" && approved.has(key))))
+    );
   }
   return {
-    allows: (provider, id) => {
-      const key = `${provider}/${id}`;
-      const effect = gov.engine.evaluate({
-        action: "model.select",
-        resource: key,
-      }).effect;
-      return effect === "allow" || (effect === "ask" && approved.has(key));
-    },
-    denied: (provider, id) =>
-      gov.emit("model.denied", { resource: `${provider}/${id}` }),
+    selects: (provider, id) => selects(`${provider}/${id}`),
+    dispatches: (provider, id) => dispatches(`${provider}/${id}`),
+    denied: (action, provider, id, detail) =>
+      gov.emit("model.denied", {
+        resource: `${provider}/${id}`,
+        decision: "denied",
+        enforcement: "control-plane",
+        detail: { action, ...detail },
+      }),
+    dispatched: (dispatch) =>
+      gov.emit("model.dispatch", {
+        resource: dispatch.dispatched,
+        decision: "allowed",
+        enforcement: "control-plane",
+        detail: { ...dispatch },
+      }),
     available: () => {
       gov.assertAuditAvailable();
       gov.assertRuntimeIntact();
     },
   };
 }
+
+const key = (model: { provider: string; id: string }) =>
+  `${model.provider}/${model.id}`;

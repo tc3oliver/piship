@@ -19,6 +19,7 @@ export {
   piCompatibility,
   piCompatibilitySurfaces,
   releaseName,
+  virtualRouteProblems,
 } from "./gates.js";
 export {
   CHANNEL_SCHEMA,

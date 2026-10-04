@@ -16,10 +16,10 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
-    "test": "vitest run --exclude 'tests/e2e/**' --exclude 'tests/compatibility/**' --exclude 'tests/enterprise-reference/**' --exclude 'examples/enterprise-reference/tests/**' --exclude 'packages/pi/src/compatibility.test.ts'",
+    "test": "vitest run --exclude 'tests/e2e/**' --exclude 'tests/compatibility/**' --exclude 'tests/enterprise-reference/**' --exclude 'examples/enterprise-reference/tests/**' --exclude 'packages/pi/src/compatibility*.test.ts'",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:reference": "vitest run --config vitest.reference.config.ts",
-    "test:compatibility": "vitest run packages/pi/src/compatibility.test.ts tests/compatibility",
+    "test:compatibility": "vitest run packages/pi/src/compatibility.test.ts packages/pi/src/compatibility-models.test.ts tests/compatibility",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run check:boundaries && npm run build && npm test"
   },
