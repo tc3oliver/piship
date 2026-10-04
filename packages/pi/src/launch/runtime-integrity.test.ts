@@ -59,7 +59,7 @@ function harness(
     // What ctx.getSystemPrompt() renders from: the run's prompt options.
     options: undefined as
       | {
-          forceSystemPrompt?: string;
+          forceSystemPrompt?: string | undefined;
           contextFiles?: { content: string }[];
           sections?: Record<string, string>;
         }
@@ -324,7 +324,7 @@ describe("runtime integrity: context_with_system", () => {
     });
     expect(
       fire("context_with_system", {
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        messages: [...intact(), { role: "user", content: "hi", timestamp: 1 }],
       }),
     ).toBeUndefined();
     expect(reverted()).toEqual(["prompt:forced"]);
@@ -340,7 +340,7 @@ describe("runtime integrity: context_with_system", () => {
     opts.forceSystemPrompt = "late";
     expect(
       fire("context_with_system", {
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        messages: [...intact(), { role: "user", content: "hi", timestamp: 1 }],
       }),
     ).toBeUndefined();
     expect(opts.forceSystemPrompt).toContain("late");
@@ -393,6 +393,44 @@ describe("runtime integrity: context_with_system", () => {
     expect(blocks).toEqual(["prompt:live"]);
   });
 
+  it("ignores a flag set on the kept object after the first turn, and still repairs the request", () => {
+    const { fire, blocks, reverted, state } = harness();
+    const opts: Forceable = options();
+    fire("before_agent_start", { systemPromptOptions: opts });
+    fire("turn_end");
+    // Pi projects only turn 2's copy, which is not forced.
+    state.options = { ...opts };
+    opts.forceSystemPrompt = "STALE";
+    const result = fire("context_with_system", {
+      messages: [
+        system(
+          { preamble: "Pi" },
+          { toolsAdded: [{ name: "read" }, { name: "ask_user" }] },
+        ),
+      ],
+    }) as { messages: { sections?: Record<string, string> }[] };
+    expect(result.messages[0]?.sections?.piship_enforced).toContain(COMPANY);
+    expect(opts.forceSystemPrompt).toBe("STALE");
+    expect(reverted()).toEqual(["prompt:system"]);
+    expect(blocks).toEqual([]);
+  });
+
+  it("requires only the instructions of a run that started without before_agent_start", () => {
+    const { fire, blocks, state } = harness();
+    fire("before_agent_start", { systemPromptOptions: options() });
+    fire("agent_start");
+    fire("agent_settled");
+    // A continue: Pi renders its base options, without PiShip's sections.
+    fire("agent_start");
+    state.options = options({ sections: {} });
+    fire("context_with_system", { messages: intact() });
+    expect(blocks).toEqual([]);
+    // They still have to hold the instructions.
+    state.options = options({ sections: {}, contextFiles: [] });
+    fire("context_with_system", { messages: intact() });
+    expect(blocks).toEqual(["prompt:live"]);
+  });
+
   it("blocks when the forced prompt Pi will send still lacks the enforced text", () => {
     const { fire, blocks, state } = harness();
     const opts: Forceable = options();
@@ -401,7 +439,7 @@ describe("runtime integrity: context_with_system", () => {
     // A later turn's options object, which PiShip cannot reach.
     state.options = { forceSystemPrompt: "late" };
     fire("context_with_system", {
-      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      messages: [...intact(), { role: "user", content: "hi", timestamp: 1 }],
     });
     expect(blocks).toEqual(["prompt:forced"]);
   });

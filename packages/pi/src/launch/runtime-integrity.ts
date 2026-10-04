@@ -264,6 +264,12 @@ export function runtimeIntegrityExtension(
   // later turn, which PiShip never sees, so what the prompt Pi renders lost
   // after the first turn cannot be repaired, only refused.
   let runRequired: readonly string[] | undefined;
+  // Pi projects a forced prompt from the object before_agent_start handed
+  // out only until the first turn ends; later turns use copies, so that
+  // object says nothing about them.
+  let firstTurn = false;
+  // before_agent_start ran for the run agent_start opens.
+  let prepared = false;
   return {
     name: INTEGRITY_EXTENSION,
     factory: (pi: ExtensionAPI) => {
@@ -302,6 +308,8 @@ export function runtimeIntegrityExtension(
           // An accessor would answer this check and the request differently.
           pinForced(options);
           runOptions = options;
+          firstTurn = true;
+          prepared = true;
           for (const item of enforced.instructions) {
             const at = options.contextFiles.findIndex(
               (file) => file.path === item.path,
@@ -385,6 +393,7 @@ export function runtimeIntegrityExtension(
       pi.on(
         "turn_end",
         guarded("turn_end", () => {
+          firstTurn = false;
           restoreLive("turn_end");
           checkExposure("turn_end");
           return undefined;
@@ -397,9 +406,10 @@ export function runtimeIntegrityExtension(
           "context_with_system",
           (event: ContextWithSystemEvent, ctx: ExtensionContext) => {
             const phase = "context_with_system";
-            if (runOptions) pinForced(runOptions);
-            const forcedPrompt = runOptions?.forceSystemPrompt;
-            if (forcedPrompt !== undefined && runOptions) {
+            const kept = firstTurn ? runOptions : undefined;
+            if (kept) pinForced(kept);
+            const forcedPrompt = kept?.forceSystemPrompt;
+            if (forcedPrompt !== undefined && kept) {
               // Pi replaces every system message with the forced text after
               // this handler. The first turn's options are the object
               // before_agent_start handed out, so it can still be repaired.
@@ -407,7 +417,7 @@ export function runtimeIntegrityExtension(
                 (text) => !forcedPrompt.includes(text),
               );
               if (missing.length) {
-                runOptions.forceSystemPrompt = `${forcedPrompt}\n\n${enforcedBlock(missing)}`;
+                kept.forceSystemPrompt = `${forcedPrompt}\n\n${enforcedBlock(missing)}`;
                 reverted("prompt:forced", "appended", phase);
               }
             }
@@ -422,7 +432,9 @@ export function runtimeIntegrityExtension(
                   `${phase}: the prompt Pi renders for this turn lost enforced text`,
                 );
             }
-            if (forcedPrompt !== undefined) return undefined;
+            // The request is repaired whether or not the prompt is forced:
+            // a forced projection replaces it anyway, and only the live
+            // check above can tell whether Pi forces this turn.
             const messages = event.messages;
             // The first system message is not always at index 0: a session
             // that began with entries appended outside a prompt gets its
@@ -477,9 +489,23 @@ export function runtimeIntegrityExtension(
 
       // Pi drops the run's prompt options when the run settles, and its
       // projection forces only a run's prompt.
+      // A run without before_agent_start (a retry, or a continue) has no
+      // options object of its own, and Pi may render its base options,
+      // which hold the instructions but not PiShip's sections.
+      pi.on("agent_start", () => {
+        if (!prepared) {
+          runOptions = undefined;
+          firstTurn = false;
+          runRequired = enforced.instructions.map((item) => item.content);
+        }
+        prepared = false;
+      });
+
       pi.on("agent_settled", () => {
         runOptions = undefined;
         runRequired = undefined;
+        firstTurn = false;
+        prepared = false;
       });
 
       pi.on(
