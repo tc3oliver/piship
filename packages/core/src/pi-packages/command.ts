@@ -1,7 +1,7 @@
 // npm, git, and tar invocations for package resolution. Credentials come only
 // from npm / git configuration in the environment; PiShip passes none.
 import { spawnSync } from "node:child_process";
-import { windowsNpmCommandLine } from "../windows-npm.js";
+import { windowsNpmInvocation } from "../windows-npm.js";
 import { packageError } from "./refs.js";
 
 export interface CommandOptions {
@@ -23,7 +23,7 @@ export type CommandRunner = (
   options: CommandOptions,
 ) => CommandOutput;
 
-/** Runs the command; npm goes through cmd.exe on Windows, where it is a .cmd shim. */
+/** Runs the command; on Windows npm runs as node + npm-cli.js, never through a shell. */
 export const runCommand: CommandRunner = (command, args, options) => {
   const spawnOptions = {
     cwd: options.cwd,
@@ -32,13 +32,11 @@ export const runCommand: CommandRunner = (command, args, options) => {
     timeout: 600_000,
     ...(options.input ? { input: options.input } : {}),
   };
-  const result =
+  const invocation =
     command === "npm" && process.platform === "win32"
-      ? spawnSync("cmd.exe", ["/d", "/s", "/c", windowsNpmCommandLine(args)], {
-          ...spawnOptions,
-          windowsVerbatimArguments: true,
-        })
-      : spawnSync(command, [...args], spawnOptions);
+      ? windowsNpmInvocation(args, spawnOptions.env, options.cwd)
+      : { file: command, args };
+  const result = spawnSync(invocation.file, [...invocation.args], spawnOptions);
   return {
     status: result.status,
     stdout: result.stdout ?? Buffer.alloc(0),

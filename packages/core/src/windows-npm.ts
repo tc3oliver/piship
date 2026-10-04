@@ -1,27 +1,80 @@
-// npm is a .cmd shim on Windows and only runs through cmd.exe. Arguments can
-// carry manifest values (a registry URL, a version range), so each one is
-// quoted, and one that cmd.exe would still interpret inside quotes is refused.
+// npm is a .cmd shim on Windows. Going through cmd.exe would let a manifest
+// value (a registry URL, a version range) be read as shell syntax, so PiShip
+// runs the shim's own target instead: node with npm's CLI script and the
+// arguments as an array, with no shell in between.
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 
-// Inside double quotes cmd.exe still ends the quote at `"`, expands `%VAR%`
-// (and `!VAR!` under delayed expansion), and ends the line at a line break.
-// `&`, `|`, `<`, `>` and `^` are literal there, so a range such as ^1.2 is safe.
-const CMD_INTERPRETED = /["%!\r\n\0]/;
+export interface NpmInvocation {
+  readonly file: string;
+  readonly args: readonly string[];
+}
 
-/** The `cmd.exe /d /s /c` argument for npm; spawn it with `windowsVerbatimArguments`. */
-export function windowsNpmCommandLine(args: readonly string[]): string {
-  for (const arg of args)
-    if (CMD_INTERPRETED.test(arg))
-      throw new PiShipError(
-        "POLICY_DENIED",
-        `npm argument ${JSON.stringify(arg)} contains a character cmd.exe interprets inside quotes`,
-        {
-          component: "packages",
-          userAction:
-            'Remove ", %, ! and line breaks from the registry URL or version in the manifest',
-        },
-      );
-  // node reads `\"` as a literal quote, so trailing backslashes are doubled
-  // to keep the closing quote; cmd.exe treats backslashes literally.
-  return `"npm ${args.map((arg) => `"${arg.replace(/(\\+)$/, "$1$1")}"`).join(" ")}"`;
+const npmCli = (directory: string) =>
+  join(directory, "node_modules", "npm", "bin", "npm-cli.js");
+
+/**
+ * The npm that `npm` on PATH would run, as node + npm-cli.js. The shim and
+ * npm itself sit side by side in Node's directory and in a global prefix
+ * (`<dir>\npm.cmd`, `<dir>\node_modules\npm\bin\npm-cli.js`). Like npm.cmd,
+ * it prefers the npm installed in npm's global prefix, which is where
+ * `npm install -g npm` puts an upgrade.
+ */
+export function windowsNpmInvocation(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+): NpmInvocation {
+  const pathKey = Object.keys(env).find((key) => /^path$/i.test(key));
+  const directories = (pathKey ? (env[pathKey] ?? "") : "")
+    .split(delimiter)
+    .map((entry) => entry.replace(/^"(.*)"$/, "$1"))
+    // A relative entry would resolve against PiShip's working directory.
+    .filter((entry) => entry.length > 0 && isAbsolute(entry));
+  for (const directory of directories) {
+    if (!existsSync(join(directory, "npm.cmd"))) continue;
+    const cli = npmCli(directory);
+    if (!existsSync(cli)) continue;
+    // The shim prefers the node.exe beside it, as npm.cmd itself does.
+    const besideNode = join(directory, "node.exe");
+    const node = existsSync(besideNode) ? besideNode : process.execPath;
+    return {
+      file: node,
+      args: [prefixCli(node, directory, env, cwd) ?? cli, ...args],
+    };
+  }
+  throw new PiShipError("UPDATE_FAILED", "npm was not found on PATH", {
+    component: "packages",
+    userAction: "Install Node.js with npm and make sure npm is on PATH",
+  });
+}
+
+/** npm.cmd's redirect: npm-prefix.js prints the global prefix to prefer. */
+function prefixCli(
+  node: string,
+  directory: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string | undefined,
+): string | undefined {
+  const prefixJs = join(
+    directory,
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-prefix.js",
+  );
+  if (!existsSync(prefixJs)) return undefined;
+  const result = spawnSync(node, [prefixJs], {
+    env,
+    encoding: "utf8",
+    timeout: 30_000,
+    ...(cwd ? { cwd } : {}),
+  });
+  const prefix =
+    result.status === 0 ? (result.stdout.trim().split(/\r?\n/)[0] ?? "") : "";
+  if (!prefix || !isAbsolute(prefix)) return undefined;
+  const redirected = npmCli(prefix);
+  return existsSync(redirected) ? redirected : undefined;
 }
