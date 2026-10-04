@@ -6,7 +6,9 @@ import { join } from "node:path";
 import {
   AUDIT_BATCH_SCHEMA,
   AUDIT_EVENT_TYPES,
+  type AUDIT_GOVERNANCE_DETAIL_KEYS,
   type AuditEvent,
+  ENFORCEMENT_PLANES,
   SecretValue,
 } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -218,11 +220,7 @@ describe("piship-audit-batch/v1 wire schema", () => {
       "asked",
       "approved",
     ]);
-    expect(properties.enforcement?.enum).toEqual([
-      "control-plane",
-      "sandbox",
-      "audit-only",
-    ]);
+    expect(properties.enforcement?.enum).toEqual([...ENFORCEMENT_PLANES]);
     expect(Object.keys(properties.content?.properties as object)).toEqual(
       Object.keys(AUDIT_CONTENT_CLASSES),
     );
@@ -287,6 +285,47 @@ describe("piship-audit-batch/v1 wire schema", () => {
       expect(validate(schema, JSON.parse(JSON.stringify(variant)))).not.toEqual(
         [],
       );
+  });
+
+  it("sends the v0.9 events, the gateway plane, and the v0.9 detail keys unchanged", async () => {
+    const schema = documentedSchema();
+    const { log, bodies } = await capturingLog(false);
+    const detail = {
+      source: "codemode",
+      error: "not-found",
+      parent: "call-1",
+      exposure: "deferred",
+      selected: "company/auto",
+      dispatched: "anthropic/claude-opus-x",
+      router: "company-router",
+      package: "company-platform@1.4.2",
+    } satisfies Record<(typeof AUDIT_GOVERNANCE_DETAIL_KEYS)[number], string>;
+    for (const event of [
+      "model.dispatch",
+      "session.export",
+      "runtime.mutation.reverted",
+      "data.swept",
+    ] as const)
+      log.emit({
+        event,
+        user: "alice",
+        session: "s1",
+        enforcement: "gateway",
+        detail,
+      });
+    await log.close();
+    const batch = JSON.parse(bodies[1] as string) as { events: AuditEvent[] };
+    expect(validate(schema, batch)).toEqual([]);
+    expect(batch.events.map((item) => item.event)).toEqual([
+      "model.dispatch",
+      "session.export",
+      "runtime.mutation.reverted",
+      "data.swept",
+    ]);
+    for (const item of batch.events) {
+      expect(item.enforcement).toBe("gateway");
+      expect(item.detail).toEqual(detail);
+    }
   });
 
   it("gives every event a unique id", async () => {

@@ -603,7 +603,7 @@ describe("policy explain and doctor with auto mode", () => {
     // An ask the session never resolves through auto mode: a mid-session
     // model switch, and actions without a runtime hook.
     for (const [action, resource] of [
-      ["model.use", "acme/other"],
+      ["model.select", "acme/other"],
       ["network.connect", "example.org:443"],
       ["web.request", "example.org"],
     ] as const) {

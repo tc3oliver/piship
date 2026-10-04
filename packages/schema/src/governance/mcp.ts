@@ -1,9 +1,12 @@
 // MCP: server admission, transports, child environment, and tool filters.
 import type { DeploymentMode } from "../access.js";
-import type {
-  McpConfig,
-  McpServerConfig,
-  TrustSetting,
+import {
+  defaultMcpServerClass,
+  DEFAULT_MCP_EXPOSURE,
+  MCP_SERVER_CLASSES,
+  type McpConfig,
+  type McpServerConfig,
+  type TrustSetting,
 } from "../governance.js";
 import {
   bool,
@@ -24,6 +27,7 @@ import {
   unsafe,
 } from "./fields.js";
 import { TRUST } from "./policy.js";
+import { exposure, exposureRules } from "./runtime.js";
 
 const SERVER_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
@@ -40,6 +44,8 @@ function parseServer(
   id: string,
   value: unknown,
   variables: readonly string[],
+  mode: DeploymentMode,
+  v6: boolean,
 ): McpServerConfig {
   const path = `mcp.servers.${id}`;
   if (!SERVER_ID.test(id))
@@ -61,6 +67,7 @@ function parseServer(
     "retry",
     "required",
     "tools",
+    ...(v6 ? ["exposure", "class"] : []),
   ]);
   if (
     typeof server.transport === "string" &&
@@ -119,18 +126,53 @@ function parseServer(
     launch = { url: referenceUrl(server.url, `${path}.url`, variables) };
   }
   const retry = optionalRecord(server.retry, `${path}.retry`, ["attempts"]);
-  const tools = optionalRecord(server.tools, `${path}.tools`, [
-    "allow",
-    "deny",
-  ]);
-  const allow = list(tools.allow, `${path}.tools.allow`, toolName);
-  const deny = list(tools.deny, `${path}.tools.deny`, toolName);
-  for (const [index, name] of deny.entries())
-    if (allow.includes(name))
-      conflict(
-        `${path}.tools.deny[${index}]`,
-        `${name} is both allowed and denied`,
+  let tools: McpServerConfig["tools"];
+  let v6Fields: Pick<McpServerConfig, "class" | "exposure" | "toolExposure"> =
+    {};
+  if (v6) {
+    // piship/v1alpha6: `tools` maps tool globs to an exposure.
+    if (
+      isRecord(server.tools) &&
+      (Array.isArray(server.tools.allow) || Array.isArray(server.tools.deny))
+    )
+      fail(
+        `${path}.tools`,
+        "piship/v1alpha6 maps tool globs to an exposure (such as get_*: deferred or delete_*: hidden); run piship migrate to convert tools.allow and tools.deny",
       );
+    const serverExposure = exposure(
+      server.exposure,
+      `${path}.exposure`,
+      DEFAULT_MCP_EXPOSURE,
+    );
+    const toolExposure = exposureRules(server.tools, `${path}.tools`);
+    // The v0.8 allow/deny filter is not used: which tools are visible is
+    // resolved from `exposure` and `toolExposure` where tools are registered.
+    tools = { allow: [], deny: [] };
+    v6Fields = {
+      class: oneOf(
+        server.class,
+        `${path}.class`,
+        MCP_SERVER_CLASSES,
+        defaultMcpServerClass(mode),
+      ),
+      exposure: serverExposure,
+      toolExposure,
+    };
+  } else {
+    const filter = optionalRecord(server.tools, `${path}.tools`, [
+      "allow",
+      "deny",
+    ]);
+    const allow = list(filter.allow, `${path}.tools.allow`, toolName);
+    const deny = list(filter.deny, `${path}.tools.deny`, toolName);
+    for (const [index, name] of deny.entries())
+      if (allow.includes(name))
+        conflict(
+          `${path}.tools.deny[${index}]`,
+          `${name} is both allowed and denied`,
+        );
+    tools = { allow, deny };
+  }
   return {
     id,
     transport,
@@ -162,7 +204,8 @@ function parseServer(
       ),
     },
     required: bool(server.required, `${path}.required`, false),
-    tools: { allow, deny },
+    tools,
+    ...v6Fields,
   };
 }
 
@@ -190,6 +233,8 @@ export function parseMcp(
   value: unknown,
   mode: DeploymentMode,
   variables: readonly string[],
+  /** piship/v1alpha6 and later: server `class`, `exposure`, and exposure `tools`. */
+  v6 = false,
 ): McpConfig {
   const mcp = optionalRecord(value, "mcp", [
     "mode",
@@ -215,7 +260,7 @@ export function parseMcp(
   if (!isRecord(serversSource))
     fail("mcp.servers", "Expected an object keyed by server ID");
   const servers = Object.entries(serversSource).map(([id, entry]) =>
-    parseServer(id, entry, variables),
+    parseServer(id, entry, variables, mode, v6),
   );
   if (mcpMode === "off" && servers.length)
     conflict("mcp.servers", "mcp.mode off cannot declare servers");

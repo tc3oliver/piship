@@ -1,5 +1,9 @@
 // Policy: rules, resource and provider trust, and project trust dimensions.
-import { POLICY_ACTIONS, type PolicyEffect } from "@piship/contracts";
+import {
+  normalizePolicyAction,
+  POLICY_ACTIONS,
+  type PolicyEffect,
+} from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
   type PolicyConfig,
@@ -41,7 +45,8 @@ const ACTION_PREFIXES = new Set(
 );
 
 function ruleAction(value: unknown, path: string): PolicyRule["action"] {
-  const action = plainString(value, path, 128);
+  // `model.use` (piship/v1alpha5 and earlier) is read as `model.select`.
+  const action = normalizePolicyAction(plainString(value, path, 128));
   if (action === "*") return action;
   if ((POLICY_ACTIONS as readonly string[]).includes(action))
     return action as PolicyRule["action"];
@@ -240,11 +245,31 @@ function parseUserAuto(
   return oneOf(value, "policy.userAuto", USER_AUTO_SETTINGS);
 }
 
+/**
+ * `policy.acknowledgeUnenforced` (piship/v1alpha6): `<action>:<resource>`
+ * entries naming one exact action. Whether the action is actually
+ * unenforceable is decided by validation, not here.
+ */
+function acknowledged(entry: unknown, path: string): string {
+  const text = plainString(entry, path, 1024);
+  const colon = text.indexOf(":");
+  const action = normalizePolicyAction(colon < 0 ? text : text.slice(0, colon));
+  if (colon <= 0 || colon === text.length - 1)
+    fail(path, "Expected <action>:<resource>, such as session.export:public");
+  if (!(POLICY_ACTIONS as readonly string[]).includes(action))
+    fail(path, `Expected one policy action (${POLICY_ACTIONS.join(", ")})`);
+  return `${action}${text.slice(colon)}`;
+}
+
 export function parsePolicy(
   value: unknown,
   mode: DeploymentMode,
   app: { readonly id: string },
-  options: { readonly userAuto?: boolean } = {},
+  options: {
+    readonly userAuto?: boolean;
+    /** piship/v1alpha6 and later: accepts `policy.acknowledgeUnenforced`. */
+    readonly acknowledgeUnenforced?: boolean;
+  } = {},
 ): PolicyConfig {
   const policy = optionalRecord(value, "policy", [
     "id",
@@ -257,6 +282,7 @@ export function parsePolicy(
     "enforced",
     "defaults",
     ...(options.userAuto ? ["userAuto"] : []),
+    ...(options.acknowledgeUnenforced ? ["acknowledgeUnenforced"] : []),
   ]);
   const userAuto = parseUserAuto(policy.userAuto, mode);
   const id =
@@ -318,6 +344,15 @@ export function parsePolicy(
       ? {}
       : { adapter: modulePath(policy.adapter, "policy.adapter") }),
     ...(userAuto === undefined ? {} : { userAuto }),
+    ...(options.acknowledgeUnenforced
+      ? {
+          acknowledgeUnenforced: list(
+            policy.acknowledgeUnenforced,
+            "policy.acknowledgeUnenforced",
+            acknowledged,
+          ),
+        }
+      : {}),
     resourceTrust: {
       upstream: trustOf(
         resourceTrust,

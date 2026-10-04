@@ -2226,6 +2226,7 @@ describe("migration to piship/v1alpha3", () => {
       from: PISHIP_SCHEMA_V1ALPHA3,
       to: PISHIP_SCHEMA_V1ALPHA3,
       changes: [],
+      effective: [],
       source,
     });
   });

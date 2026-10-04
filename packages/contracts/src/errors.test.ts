@@ -70,14 +70,28 @@ describe("error codes", () => {
 
   // A code no runtime path produces is a dead contract: remove it rather than
   // keeping it exported.
-  it.each(PISHIP_ERROR_CODES)(
-    "%s has a producing path in package source",
-    (code) => {
-      const pattern = producer(code);
-      expect(
-        corpus.some((source) => pattern.test(source)),
-        `${code} is never produced; produce it somewhere or remove it`,
-      ).toBe(true);
-    },
-  );
+  // v0.9 codes the contract carries before their producer lands:
+  // POLICY_UNENFORCEABLE (09-B2, managed validate) and
+  // RADIUS_PROVIDER_RESERVED (09-B7, session export). Each task removes its
+  // code from this list when it produces it.
+  const NOT_YET_PRODUCED: readonly string[] = [
+    "POLICY_UNENFORCEABLE",
+    "RADIUS_PROVIDER_RESERVED",
+  ];
+  it("lists only declared, still unproduced codes as not yet produced", () => {
+    for (const code of NOT_YET_PRODUCED) {
+      expect(PISHIP_ERROR_CODES).toContain(code);
+      expect(corpus.some((source) => producer(code).test(source))).toBe(false);
+    }
+  });
+
+  it.each(
+    PISHIP_ERROR_CODES.filter((code) => !NOT_YET_PRODUCED.includes(code)),
+  )("%s has a producing path in package source", (code) => {
+    const pattern = producer(code);
+    expect(
+      corpus.some((source) => pattern.test(source)),
+      `${code} is never produced; produce it somewhere or remove it`,
+    ).toBe(true);
+  });
 });

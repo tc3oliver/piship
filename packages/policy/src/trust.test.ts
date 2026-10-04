@@ -5,6 +5,8 @@ import {
   type DeploymentMode,
   type ProviderTrustClass,
   type ResourceTrustClass,
+  TRUST_CLASSES,
+  TRUST_SUBJECTS,
 } from "@piship/schema";
 import { describe, expect, it } from "vitest";
 import { makePolicy } from "./fixtures.test-helpers.js";
@@ -14,6 +16,8 @@ import {
   defaultResourceTrust,
   providerTrustDecision,
   resourceTrustDecision,
+  TRUST_SUBJECT_DIMENSION,
+  trustDecision,
 } from "./trust.js";
 
 const RESOURCE_EXPECTED: Record<
@@ -191,5 +195,48 @@ describe("project dimension defaults", () => {
       mcp: "ask",
       providers: "ask",
     });
+  });
+});
+
+describe("trustDecision (one evaluation for every governed object)", () => {
+  const policy = makePolicy({
+    resourceTrust: { ...defaultResourceTrust("managed"), company: "deny" },
+    providerTrust: defaultProviderTrust("managed"),
+  });
+
+  it("decides resources, packages, and MCP servers by resource trust", () => {
+    for (const subject of TRUST_SUBJECTS) {
+      if (subject === "providers") continue;
+      for (const cls of TRUST_CLASSES) {
+        if (cls === "project") continue;
+        const decision = trustDecision(policy, subject, cls);
+        expect(decision.allowed).toBe(policy.resourceTrust[cls] === "allow");
+        expect(decision.class).toBe(cls);
+      }
+    }
+    // Same result as the resource function for a resource kind.
+    for (const kind of RESOURCE_KINDS)
+      expect(trustDecision(policy, kind, "user")).toEqual(
+        resourceTrustDecision(policy, "user", kind),
+      );
+  });
+
+  it("decides capability providers by provider trust, never from a project", () => {
+    expect(trustDecision(policy, "providers", "company")).toEqual(
+      providerTrustDecision(policy, "company"),
+    );
+    expect(trustDecision(policy, "providers", "company").allowed).toBe(true);
+    expect(trustDecision(policy, "providers", "project")).toMatchObject({
+      allowed: false,
+      setting: "deny",
+    });
+  });
+
+  it("resolves project packages and MCP servers through their project dimension", () => {
+    expect(TRUST_SUBJECT_DIMENSION.packages).toBe("extensions");
+    expect(TRUST_SUBJECT_DIMENSION["mcp-servers"]).toBe("mcp");
+    const decision = trustDecision(policy, "mcp-servers", "project", "company");
+    expect(decision.dimension).toBe("mcp");
+    expect(decision.effect).toBe(policy.projectTrust.company.dimensions.mcp);
   });
 });

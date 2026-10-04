@@ -266,7 +266,7 @@ export class GovernanceSession {
   /**
    * The actions whose `ask` this session resolves through `decide`, where
    * the user's auto mode applies. Others are never auto-approved: a
-   * mid-session `model.use` switch accepts only a model approved at start,
+   * mid-session `model.select` switch accepts only a model approved at start,
    * and `network.connect`, `web.request`, `browser.execute`, `memory.*`, and
    * `agent.invoke` have no runtime hook (audit-only, or the sandbox).
    * `policy explain` reports AUTO-APPROVED only for these.

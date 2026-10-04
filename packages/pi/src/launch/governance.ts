@@ -198,7 +198,7 @@ export function governanceExtensions(
 }
 
 /**
- * model.use from the distribution policy. `ask` is resolved before the
+ * model.select from the distribution policy. `ask` is resolved before the
  * session starts for the model it starts with; other models that need
  * approval are not offered for switching mid-session.
  */
@@ -209,7 +209,7 @@ export async function modelPolicy(
   const approved = new Set<string>();
   if (selected) {
     const decision = await gov.decide(
-      "model.use",
+      "model.select",
       selected,
       gov.startupChannel(),
       { denied: "model.denied" },
@@ -226,7 +226,7 @@ export async function modelPolicy(
     allows: (provider, id) => {
       const key = `${provider}/${id}`;
       const effect = gov.engine.evaluate({
-        action: "model.use",
+        action: "model.select",
         resource: key,
       }).effect;
       return effect === "allow" || (effect === "ask" && approved.has(key));

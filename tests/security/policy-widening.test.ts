@@ -77,7 +77,7 @@ const rules = (
 // One request per family of action the layers decide: a model, a shell
 // command, a file, and an MCP tool.
 const REQUESTS: readonly { action: PolicyAction; resource: string }[] = [
-  { action: "model.use", resource: "acme/coder" },
+  { action: "model.select", resource: "acme/coder" },
   { action: "shell.execute", resource: "git status" },
   { action: "filesystem.read", resource: "src/index.ts" },
   { action: "mcp.tool.call", resource: "docs:delete_document" },

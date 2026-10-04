@@ -1,6 +1,8 @@
 import {
   AUDIT_EVENT_TYPES,
   type AuditCapture,
+  ENFORCEMENT_PLANES,
+  ENFORCEMENT_STATUSES,
   NO_CONTENT_CAPTURE,
   PiShipError,
   SecretValue,
@@ -251,6 +253,67 @@ describe("sanitizeEvent", () => {
     expect(event.detail).toEqual({ source: "project" });
     expect(JSON.stringify(event)).not.toContain(secret.reveal());
     expectNoTokens(event);
+  });
+
+  it("keeps every enforcement plane, gateway included, and never unsupported", () => {
+    for (const enforcement of ENFORCEMENT_PLANES)
+      expect(
+        sanitizeEvent(
+          { event: "model.dispatch", distribution: "acmecode", enforcement },
+          NO_CONTENT_CAPTURE,
+        ).enforcement,
+      ).toBe(enforcement);
+    // A status is not a plane: `unsupported` is never recorded.
+    expect(ENFORCEMENT_STATUSES).toContain("unsupported");
+    expect(
+      sanitizeEvent(
+        {
+          event: "session.export",
+          distribution: "acmecode",
+          enforcement: "unsupported" as never,
+        },
+        NO_CONTENT_CAPTURE,
+      ),
+    ).not.toHaveProperty("enforcement");
+  });
+
+  it("accepts the v0.9 event types and keeps their governance detail", () => {
+    for (const type of [
+      "model.dispatch",
+      "session.export",
+      "runtime.mutation.reverted",
+      "data.swept",
+    ]) {
+      expect(AUDIT_EVENT_TYPES).toContain(type);
+      const event = sanitizeEvent(
+        {
+          event: type,
+          distribution: "acmecode",
+          detail: {
+            source: "nested",
+            error: "invalid-arguments",
+            parent: "call-7",
+            exposure: "codemode",
+            selected: "company/auto",
+            dispatched: "openai/gpt-y",
+            router: "company-router",
+            package: "company-platform@1.4.2",
+          },
+        },
+        NO_CONTENT_CAPTURE,
+      );
+      expect(event.event).toBe(type);
+      expect(event.detail).toEqual({
+        source: "nested",
+        error: "invalid-arguments",
+        parent: "call-7",
+        exposure: "codemode",
+        selected: "company/auto",
+        dispatched: "openai/gpt-y",
+        router: "company-router",
+        package: "company-platform@1.4.2",
+      });
+    }
   });
 
   it("drops invalid decision and enforcement values", () => {

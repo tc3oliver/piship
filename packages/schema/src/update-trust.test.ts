@@ -416,7 +416,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
     `        publicKey: ${ROOT_B}`,
   ].join("\n");
   it("keeps legacy keys as a compatibility trust set in both roles", () => {
-    const plan = migrateManifestSource(v4(legacy));
+    const plan = migrateManifestSource(v4(legacy), PISHIP_SCHEMA_V1ALPHA5);
     expect(plan.from).toBe(PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA5);
     expect(plan.source).toContain("# keep comments");
@@ -463,7 +463,10 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
       "  catalog:",
       "    acme/coder: { name: Acme Coder, contextWindow: 128000, maxOutputTokens: 8192 }",
     ].join("\n");
-    const plan = migrateManifestSource(v4(legacy, "managed", header));
+    const plan = migrateManifestSource(
+      v4(legacy, "managed", header),
+      PISHIP_SCHEMA_V1ALPHA5,
+    );
     expect(plan.changes.join("\n")).toContain(
       "Managed rollout requires an explicit root / channel split",
     );
@@ -475,7 +478,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
   });
   it("keeps an update-disabled distribution update-disabled", () => {
     for (const trust of ["  trust:\n    keys: []", "  trust: {}", ""]) {
-      const plan = migrateManifestSource(v4(trust));
+      const plan = migrateManifestSource(v4(trust), PISHIP_SCHEMA_V1ALPHA5);
       const parsed = parseManifest(parseYaml(plan.source) as Json);
       expect(parsed.lifecycle?.updates.trust).toEqual({});
       expect(plan.source).not.toContain("bootstrap");
@@ -486,6 +489,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
   it("keeps a source without keys, which still fails closed", () => {
     const plan = migrateManifestSource(
       v4("  source: https://updates.acme.example\n  trust:\n    keys: []"),
+      PISHIP_SCHEMA_V1ALPHA5,
     );
     const parsed = parseManifest(parseYaml(plan.source) as Json);
     expect(parsed.lifecycle?.updates.source).toBe(
@@ -495,14 +499,19 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
     expect(plan.changes.join("\n")).toContain("update fails closed");
   });
   it("is deterministic and idempotent", () => {
-    const first = migrateManifestSource(v4(legacy));
-    expect(migrateManifestSource(v4(legacy))).toEqual(first);
-    expect(migrateManifestSource(first.source)).toEqual({
-      from: PISHIP_SCHEMA_V1ALPHA5,
-      to: PISHIP_SCHEMA_V1ALPHA5,
-      changes: [],
-      source: first.source,
-    });
+    const first = migrateManifestSource(v4(legacy), PISHIP_SCHEMA_V1ALPHA5);
+    expect(migrateManifestSource(v4(legacy), PISHIP_SCHEMA_V1ALPHA5)).toEqual(
+      first,
+    );
+    expect(migrateManifestSource(first.source, PISHIP_SCHEMA_V1ALPHA5)).toEqual(
+      {
+        from: PISHIP_SCHEMA_V1ALPHA5,
+        to: PISHIP_SCHEMA_V1ALPHA5,
+        changes: [],
+        effective: [],
+        source: first.source,
+      },
+    );
   });
   it("migrates v1alpha3 through v1alpha4 to an update-disabled v1alpha5", () => {
     const plan = migrateManifestSource(
@@ -513,6 +522,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
         "deployment: { mode: personal }",
         "",
       ].join("\n"),
+      PISHIP_SCHEMA_V1ALPHA5,
     );
     expect(
       plan.changes.filter((change) => change.startsWith("schema: ")),

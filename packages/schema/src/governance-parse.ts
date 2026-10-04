@@ -7,6 +7,7 @@ import type { GovernanceManifest } from "./governance.js";
 import { parseAudit } from "./governance/audit.js";
 import { parseCapabilities } from "./governance/capabilities.js";
 import { parseMcp } from "./governance/mcp.js";
+import { parsePackageTrust } from "./governance/packages.js";
 import { parsePolicy } from "./governance/policy.js";
 import { parseGovernanceResources } from "./governance/resources.js";
 import { parseSandbox } from "./governance/sandbox.js";
@@ -18,6 +19,11 @@ export {
   parseCapabilities,
 } from "./governance/capabilities.js";
 export { parseMcp } from "./governance/mcp.js";
+export { parsePackages, parsePackageTrust } from "./governance/packages.js";
+export {
+  parseCacheWarming,
+  parseRuntimeTools,
+} from "./governance/runtime.js";
 export { defaultProjectDimensions, parsePolicy } from "./governance/policy.js";
 export { parseGovernanceResources } from "./governance/resources.js";
 export {
@@ -35,6 +41,9 @@ export const GOVERNANCE_KEYS = [
   "sandbox",
   "audit",
 ] as const;
+
+/** Top-level manifest sections added by piship/v1alpha6 to governance. */
+export const V1ALPHA6_GOVERNANCE_KEYS = ["packageTrust"] as const;
 
 /** Governance fields that accept `${NAME}` runtime references. */
 export const GOVERNANCE_RUNTIME_REFERENCE_FIELDS = [
@@ -56,14 +65,23 @@ export function parseGovernance(
   app: { readonly id: string },
   /** piship/v1alpha5 and later: accepts `policy.userAuto`. */
   v5 = false,
+  /**
+   * piship/v1alpha6 and later: `resources.packages`, `packageTrust`, MCP
+   * server class and exposure, and `policy.acknowledgeUnenforced`.
+   */
+  v6 = false,
 ): GovernanceManifest {
   return {
-    resources: parseGovernanceResources(root.resources),
+    resources: parseGovernanceResources(root.resources, { packages: v6 }),
     capabilities: parseCapabilities(root.capabilities),
-    policy: parsePolicy(root.policy, mode, app, { userAuto: v5 }),
-    mcp: parseMcp(root.mcp, mode, variables),
+    policy: parsePolicy(root.policy, mode, app, {
+      userAuto: v5,
+      acknowledgeUnenforced: v6,
+    }),
+    mcp: parseMcp(root.mcp, mode, variables, v6),
     sandbox: parseSandbox(root.sandbox, variables),
     audit: parseAudit(root.audit, mode, variables),
+    ...(v6 ? { packageTrust: parsePackageTrust(root.packageTrust, mode) } : {}),
   };
 }
 

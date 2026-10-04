@@ -8,6 +8,7 @@ import {
   type PolicyAction,
   type PolicyEffect,
 } from "@piship/contracts";
+import type { PolicyRule } from "@piship/schema";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   NO_CONTAINMENT,
@@ -36,7 +37,9 @@ function engine(
 
 describe("decision tables for every action", () => {
   const cases: readonly (readonly [PolicyAction, string])[] = [
-    ["model.use", "acme/general"],
+    ["model.select", "acme/general"],
+    ["model.dispatch", "anthropic/claude-opus-x"],
+    ["session.export", "public"],
     ["resource.load", "company:skills/review"],
     ["extension.load", "piship-workflow"],
     ["skill.load", "review"],
@@ -80,7 +83,7 @@ describe("decision tables for every action", () => {
     for (const effect of ["allow", "ask", "deny"] as PolicyEffect[]) {
       const decision = engine({
         policy: makePolicy({ default: effect }),
-      }).evaluate({ action: "model.use", resource: "x" });
+      }).evaluate({ action: "model.select", resource: "x" });
       expect(decision).toMatchObject({
         effect,
         ruleId: "builtin:default",
@@ -107,7 +110,7 @@ describe("decision tables for every action", () => {
     expect(
       e.evaluate({ action: "memory.read", resource: "secret" }).ruleId,
     ).toBe("all");
-    expect(e.evaluate({ action: "model.use", resource: "mcp" }).effect).toBe(
+    expect(e.evaluate({ action: "model.select", resource: "mcp" }).effect).toBe(
       "allow",
     );
   });
@@ -180,8 +183,8 @@ describe("precedence", () => {
   });
   it("a user rule relaxes the policy default", () => {
     const decision = engine({
-      userRules: [rule("me.model", "model.use", "acme/*", "allow")],
-    }).evaluate({ action: "model.use", resource: "acme/general" });
+      userRules: [rule("me.model", "model.select", "acme/*", "allow")],
+    }).evaluate({ action: "model.select", resource: "acme/general" });
     expect(decision.effect).toBe("allow");
   });
   it("a user rule cannot relax an enforced ask", () => {
@@ -247,8 +250,8 @@ describe("precedence", () => {
     });
     it("a user allow cannot relax the policy default", () => {
       const decision = managed({
-        userRules: [rule("me.model", "model.use", "acme/*", "allow")],
-      }).evaluate({ action: "model.use", resource: "acme/general" });
+        userRules: [rule("me.model", "model.select", "acme/*", "allow")],
+      }).evaluate({ action: "model.select", resource: "acme/general" });
       expect(decision).toMatchObject({
         effect: "ask",
         ruleId: "builtin:default",
@@ -400,16 +403,16 @@ describe("precedence", () => {
   it("ignores team and project allow rules with diagnostics", () => {
     const e = engine({
       policy: makePolicy({ default: "deny" }),
-      teamRules: [rule("t.allow", "model.use", "**", "allow")],
-      projectRules: [rule("p.allow", "model.use", "**", "allow")],
+      teamRules: [rule("t.allow", "model.select", "**", "allow")],
+      projectRules: [rule("p.allow", "model.select", "**", "allow")],
     });
-    const decision = e.evaluate({ action: "model.use", resource: "any" });
+    const decision = e.evaluate({ action: "model.select", resource: "any" });
     expect(decision).toMatchObject({
       effect: "deny",
       ruleId: "builtin:default",
     });
     expect(e.diagnostics.map((d) => d.ruleId)).toEqual(["t.allow", "p.allow"]);
-    const explanation = e.explain({ action: "model.use", resource: "any" });
+    const explanation = e.explain({ action: "model.select", resource: "any" });
     expect(
       explanation.ignored.map((item) => [item.rule.id, item.matches]),
     ).toEqual([
@@ -574,7 +577,7 @@ describe("enforcement planes", () => {
   const contained = { filesystem: true, network: true, shell: true };
   it("maps control-plane actions", () => {
     for (const action of [
-      "model.use",
+      "model.select",
       "resource.load",
       "extension.load",
       "skill.load",
@@ -665,9 +668,9 @@ describe("filesystem resources", () => {
   it("does not expand tokens for non-filesystem actions", () => {
     const decision = engine({
       policy: makePolicy({
-        defaults: [rule("lit", "model.use", "workspace/**", "deny")],
+        defaults: [rule("lit", "model.select", "workspace/**", "deny")],
       }),
-    }).evaluate({ action: "model.use", resource: "workspace/x" });
+    }).evaluate({ action: "model.select", resource: "workspace/x" });
     expect(decision.ruleId).toBe("lit");
   });
 });
@@ -699,6 +702,42 @@ describe("parseRuleList", () => {
         },
       ).rules[0]?.resource,
     ).toBe("**");
+  });
+  it("reads a model.use rule from an older state file as model.select", () => {
+    const value = [
+      {
+        id: "me.model",
+        action: "model.use",
+        resource: "acme/*",
+        effect: "deny",
+      },
+    ];
+    const before = JSON.stringify(value);
+    const parsed = parseRuleList(value, "config/policy.json", {
+      narrowingOnly: false,
+    });
+    expect(parsed.rules[0]?.action).toBe("model.select");
+    // The input is read, never rewritten.
+    expect(JSON.stringify(value)).toBe(before);
+    const decision = engine({ userRules: parsed.rules }).evaluate({
+      action: "model.select",
+      resource: "acme/general",
+    });
+    expect(decision.effect).toBe("deny");
+    expect(decision.ruleId).toBe("me.model");
+  });
+  it("applies a model.use rule from a lock written before the rename", () => {
+    const legacy = {
+      id: "no.model",
+      action: "model.use",
+      resource: "acme/*",
+      effect: "deny",
+    } as unknown as PolicyRule;
+    const decision = engine({
+      policy: makePolicy({ enforced: [legacy] }),
+    }).evaluate({ action: "model.select", resource: "acme/general" });
+    expect(decision.effect).toBe("deny");
+    expect(decision.ruleId).toBe("no.model");
   });
   it("drops allow rules when narrowing only", () => {
     const parsed = parseRuleList(

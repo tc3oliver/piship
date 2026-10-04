@@ -2,7 +2,11 @@
 // server configuration mirrors `McpServerConfig` from @piship/schema
 // structurally; MCP is a governance leaf and does not import the schema.
 
-import type { PolicyDecision, SecretValue } from "@piship/contracts";
+import type {
+  EnforcementPlane,
+  PolicyDecision,
+  SecretValue,
+} from "@piship/contracts";
 import type { SandboxWrapper } from "@piship/sandbox";
 import type { Readable, Writable } from "node:stream";
 
@@ -171,7 +175,7 @@ export interface McpAuditEvent {
   readonly decision?: "allowed" | "denied";
   readonly policy?: string;
   readonly rule?: string;
-  readonly enforcement?: "control-plane" | "sandbox" | "audit-only";
+  readonly enforcement?: EnforcementPlane;
   readonly detail?: Readonly<Record<string, string | number | boolean | null>>;
 }
 

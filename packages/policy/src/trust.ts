@@ -11,7 +11,9 @@ import type {
   ProviderTrustClass,
   ResourceKind,
   ResourceTrustClass,
+  TrustClass,
   TrustSetting,
+  TrustSubject,
 } from "@piship/schema";
 
 export type ResourceTrustTable = PolicyConfig["resourceTrust"];
@@ -105,6 +107,18 @@ export const RESOURCE_KIND_DIMENSION: Readonly<
   themes: "passiveContext",
 };
 
+/**
+ * The project trust dimension that governs each kind of governed object
+ * when it comes from a project. Providers are never project objects.
+ */
+export const TRUST_SUBJECT_DIMENSION: Readonly<
+  Record<Exclude<TrustSubject, "providers">, ProjectTrustDimension>
+> = {
+  ...RESOURCE_KIND_DIMENSION,
+  packages: "extensions",
+  "mcp-servers": "mcp",
+};
+
 export interface TrustDecision<C extends string> {
   readonly allowed: boolean;
   readonly class: C;
@@ -148,10 +162,55 @@ export function resourceTrustDecision(
   kind: ResourceKind,
   origin: ProjectOrigin = "unknown",
 ): ResourceTrustDecision {
+  return resourceTableDecision(
+    policy,
+    cls,
+    RESOURCE_KIND_DIMENSION[kind],
+    origin,
+  );
+}
+
+/**
+ * The one trust evaluation for every governed object: capability providers
+ * are decided by `policy.providerTrust` (and can never be `project`); every
+ * other subject, Pi packages and MCP servers included, by
+ * `policy.resourceTrust`, with `project` resolved through project trust.
+ */
+export function trustDecision(
+  policy: Pick<
+    PolicyConfig,
+    "resourceTrust" | "providerTrust" | "projectTrust"
+  >,
+  subject: TrustSubject,
+  cls: TrustClass,
+  origin: ProjectOrigin = "unknown",
+): ResourceTrustDecision {
+  if (subject === "providers")
+    return cls === "project"
+      ? {
+          allowed: false,
+          class: cls,
+          setting: "deny",
+          reason: "Capability providers are never trusted from a project",
+        }
+      : providerTrustDecision(policy, cls);
+  return resourceTableDecision(
+    policy,
+    cls,
+    TRUST_SUBJECT_DIMENSION[subject],
+    origin,
+  );
+}
+
+function resourceTableDecision(
+  policy: Pick<PolicyConfig, "resourceTrust" | "projectTrust">,
+  cls: ResourceTrustClass,
+  dimension: ProjectTrustDimension,
+  origin: ProjectOrigin,
+): ResourceTrustDecision {
   if (cls !== "project")
     return tableDecision(cls, policy.resourceTrust[cls], "Resource");
   const setting = policy.resourceTrust.project;
-  const dimension = RESOURCE_KIND_DIMENSION[kind];
   if (setting === "deny")
     return {
       allowed: false,

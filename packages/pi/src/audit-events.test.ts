@@ -22,6 +22,7 @@ import { LocalMetrics } from "@piship/audit";
 import {
   AUDIT_EVENT_TYPES,
   type AuditEvent,
+  type AuditEventType,
   type ManagedFetch,
 } from "@piship/contracts";
 import { resolveLock } from "@piship/core";
@@ -44,6 +45,18 @@ const OUTSIDE_A_SESSION = [
   "credential.revoke",
   "runtime.update",
   "runtime.rollback",
+];
+/**
+ * v0.9 event types the contract already carries but no runtime flow emits
+ * yet: model dispatch (09-B4), runtime mutation repair (09-B5), and the data
+ * sweep and session export (09-B7). Each task removes its names from this
+ * list when its flow emits them.
+ */
+const NOT_YET_EMITTED: readonly AuditEventType[] = [
+  "model.dispatch",
+  "session.export",
+  "runtime.mutation.reverted",
+  "data.swept",
 ];
 
 const roots: string[] = [];
@@ -249,7 +262,7 @@ describe("governed session audit events (real flows)", () => {
       rule("provider-extension", "extension.load", "company:./providers/flow"),
       rule("docs", "mcp.server.start", "docs"),
       rule("docs-search", "mcp.tool.call", "docs:search"),
-      rule("model", "model.use", "unit/allowed"),
+      rule("model", "model.select", "unit/allowed"),
       "resources:",
       "  extensions:",
       "    builtin: [piship-ask-user, piship-workflow]",
@@ -354,13 +367,17 @@ describe("governed session audit events (real flows)", () => {
     const emitted = new Set(events.map((event) => event.event));
     expect(
       AUDIT_EVENT_TYPES.filter(
-        (name) => !emitted.has(name) && !OUTSIDE_A_SESSION.includes(name),
+        (name) =>
+          !emitted.has(name) &&
+          !OUTSIDE_A_SESSION.includes(name) &&
+          !NOT_YET_EMITTED.includes(name),
       ),
     ).toEqual([]);
-    // Together with the branded commands, the flows cover all 27 names.
-    expect(new Set([...emitted, ...OUTSIDE_A_SESSION])).toEqual(
-      new Set(AUDIT_EVENT_TYPES),
-    );
+    expect(NOT_YET_EMITTED.filter((name) => emitted.has(name))).toEqual([]);
+    // Together with the branded commands, the flows cover all 27 v0.8 names.
+    expect(
+      new Set([...emitted, ...OUTSIDE_A_SESSION, ...NOT_YET_EMITTED]),
+    ).toEqual(new Set(AUDIT_EVENT_TYPES));
     expect(events.every((event) => typeof event.id === "string")).toBe(true);
     expect(events.find((event) => event.event === "mcp.call")).toMatchObject({
       user: "alice",

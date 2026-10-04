@@ -915,6 +915,78 @@ describe("init", () => {
   });
 });
 
+describe("migrate --check", () => {
+  beforeEach(() => {
+    temp = mkdtempSync(join(tmpdir(), "piship-cli-migrate-"));
+  });
+  afterEach(() => {
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  async function run(args: string[]) {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const status = await runCli(args, {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    });
+    return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  }
+
+  const manifest = (schema: string, runtime = 'runtime: { pi: "1.0.0" }') => {
+    const path = join(temp, "piship.yaml");
+    writeFileSync(
+      path,
+      [
+        `schema: ${schema}`,
+        "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
+        runtime,
+        "deployment: { mode: personal }",
+        "updates: { channel: stable, channels: [stable] }",
+        "",
+      ].join("\n"),
+    );
+    return path;
+  };
+
+  it("exits 1, writing nothing, when migrating changes an effective decision", async () => {
+    const path = manifest("piship/v1alpha5");
+    const before = readFileSync(path, "utf8");
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Migration check piship/v1alpha5 -> piship/v1alpha6",
+    );
+    expect(result.stderr).toContain("would change 1 effective decision(s)");
+    expect(result.stderr).toContain("runtime.cacheWarming");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("exits 0 when the manifest is already current", async () => {
+    const path = manifest(
+      "piship/v1alpha6",
+      'runtime: { pi: "1.0.0", cacheWarming: { mode: streaming } }',
+    );
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Already piship/v1alpha6; nothing to migrate.");
+  });
+
+  it("exits 0 for a manifest written by --write", async () => {
+    const path = manifest("piship/v1alpha5");
+    expect((await run(["migrate", path, "--write"])).status).toBe(0);
+    expect(readFileSync(path, "utf8")).toContain("schema: piship/v1alpha6");
+    expect((await run(["migrate", path, "--check"])).status).toBe(0);
+  });
+
+  it("refuses --check together with --write", async () => {
+    const path = manifest("piship/v1alpha5");
+    const result = await run(["migrate", path, "--write", "--check"]);
+    expect(result.status).toBe(2);
+    expect(readFileSync(path, "utf8")).toContain("piship/v1alpha5");
+  });
+});
+
 describe("docs/agent-setup.md", () => {
   it("names only piship commands and options the CLI has", async () => {
     const text = readFileSync(

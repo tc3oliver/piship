@@ -26,7 +26,7 @@ export interface PiNativeGovernance {
 
 export type ModelGovernance = ManagedEndpointGovernance | PiNativeGovernance;
 
-/** A further model.use check from the distribution policy (v1alpha3). */
+/** A further model.select check from the distribution policy (v1alpha3). */
 export interface ModelPolicy {
   allows(provider: string, id: string): boolean;
   /** Called when a request for a disallowed model is refused. */

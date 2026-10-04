@@ -1,0 +1,16 @@
+schema: piship/v1alpha3
+# A governed personal distribution.
+app:
+  id: mypi
+  name: MyPi
+  command: mypi
+  version: 1.0.0
+runtime:
+  pi: "1.0.0"
+deployment:
+  mode: personal
+resources:
+  instructions:
+    user: [./instructions/AGENTS.md]
+policy:
+  default: allow

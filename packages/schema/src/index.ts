@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { systemError } from "@piship/contracts";
-import { isCollection, parseDocument } from "yaml";
+import { parseDocument } from "yaml";
 import { valid as validSemver } from "semver";
 import {
   AccessFieldError,
@@ -10,21 +10,39 @@ import {
   type AccessManifest,
   type DeploymentMode,
 } from "./access.js";
-import type { GovernanceManifest } from "./governance.js";
+import { type DataManifest, DATA_KEYS, parseData } from "./data.js";
+import type {
+  CacheWarmingConfig,
+  GovernanceManifest,
+  RuntimeToolsConfig,
+} from "./governance.js";
 import { assertLaunchable } from "./launch.js";
 import {
   GOVERNANCE_KEYS,
   governanceReferences,
+  parseCacheWarming,
   parseGovernance,
+  parseRuntimeTools,
+  V1ALPHA6_GOVERNANCE_KEYS,
 } from "./governance-parse.js";
 import {
-  DEFAULT_PACKAGE_SOURCES,
-  DEFAULT_RELEASE_TARGETS,
   LIFECYCLE_KEYS,
   lifecycleReferences,
   parseLifecycle,
   type LifecycleManifest,
 } from "./lifecycle.js";
+import { migrationPath } from "./migrations/index.js";
+import {
+  LATEST_SCHEMA,
+  PISHIP_SCHEMA_V1ALPHA2,
+  PISHIP_SCHEMA_V1ALPHA3,
+  PISHIP_SCHEMA_V1ALPHA4,
+  PISHIP_SCHEMA_V1ALPHA5,
+  PISHIP_SCHEMA_V1ALPHA6,
+  PISHIP_SCHEMA_VERSION,
+  type PishipSchemaVersion,
+  SUPPORTED_SCHEMAS,
+} from "./versions.js";
 
 export * from "./access.js";
 export * from "./variables.js";
@@ -32,30 +50,18 @@ export * from "./governance.js";
 export * from "./governance-parse.js";
 export * from "./lifecycle.js";
 export * from "./launch.js";
+export * from "./data.js";
+export * from "./versions.js";
+export {
+  MANIFEST_MIGRATIONS,
+  MIGRATED_BOOTSTRAP_EXPIRES,
+  type ManifestMigration,
+  type MigrationContext,
+  type MigrationStepResult,
+  manifestMigration,
+  migrationPath,
+} from "./migrations/index.js";
 
-/** The v0.1 personal alpha schema; still accepted for personal pi-native distributions. */
-export const PISHIP_SCHEMA_VERSION = "piship/v1alpha1" as const;
-/** The v0.2 alpha schema with managed and personal access configuration. */
-export const PISHIP_SCHEMA_V1ALPHA2 = "piship/v1alpha2" as const;
-/** The v0.3 alpha schema: v1alpha2 access plus governance sections. */
-export const PISHIP_SCHEMA_V1ALPHA3 = "piship/v1alpha3" as const;
-/** The v0.4 alpha schema: v1alpha3 plus update channels and release policy. */
-export const PISHIP_SCHEMA_V1ALPHA4 = "piship/v1alpha4" as const;
-/**
- * The v0.8 alpha schema: v1alpha4 with `updates.trust.bootstrap` (a versioned
- * update root with root and channel roles) replacing `updates.trust.keys`.
- */
-export const PISHIP_SCHEMA_V1ALPHA5 = "piship/v1alpha5" as const;
-export const SUPPORTED_SCHEMAS = [
-  PISHIP_SCHEMA_VERSION,
-  PISHIP_SCHEMA_V1ALPHA2,
-  PISHIP_SCHEMA_V1ALPHA3,
-  PISHIP_SCHEMA_V1ALPHA4,
-  PISHIP_SCHEMA_V1ALPHA5,
-] as const;
-/** The newest schema; `migrateManifestSource` targets it by default. */
-export const LATEST_SCHEMA = PISHIP_SCHEMA_V1ALPHA5;
-export type PishipSchemaVersion = (typeof SUPPORTED_SCHEMAS)[number];
 export interface ValidationDiagnostic {
   readonly path: string;
   readonly message: string;
@@ -76,7 +82,13 @@ export interface Manifest {
     readonly banner?: string;
     readonly theme?: string;
   };
-  readonly runtime: { readonly pi: string };
+  readonly runtime: {
+    readonly pi: string;
+    /** Present for piship/v1alpha6 and later (defaults applied). */
+    readonly tools?: RuntimeToolsConfig;
+    /** Present for piship/v1alpha6 and later; an omitted mode is `off`. */
+    readonly cacheWarming?: CacheWarmingConfig;
+  };
   readonly deployment: { readonly mode: DeploymentMode };
   readonly resources: {
     readonly instructions: readonly string[];
@@ -89,8 +101,13 @@ export interface Manifest {
   readonly access?: AccessManifest;
   /** Present for piship/v1alpha3 and later manifests. */
   readonly governance?: GovernanceManifest;
-  /** Present exactly for piship/v1alpha4 and v1alpha5 manifests (release defaults applied). */
+  /** Present for piship/v1alpha4 and later manifests (release defaults applied). */
   readonly lifecycle?: LifecycleManifest;
+  /**
+   * piship/v1alpha6: the data lifecycle. Absent when the manifest has no
+   * `data` section, which runs no retention sweep.
+   */
+  readonly data?: DataManifest;
 }
 export class ManifestError extends Error {
   constructor(
@@ -312,7 +329,8 @@ export function parseManifest(value: unknown): Manifest {
       `Expected ${SUPPORTED_SCHEMAS.join(" or ")}`,
     );
   }
-  const v5 = schema === PISHIP_SCHEMA_V1ALPHA5;
+  const v6 = schema === PISHIP_SCHEMA_V1ALPHA6;
+  const v5 = schema === PISHIP_SCHEMA_V1ALPHA5 || v6;
   const v4 = schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const v3 = schema === PISHIP_SCHEMA_V1ALPHA3 || v4;
   const v2 = schema === PISHIP_SCHEMA_V1ALPHA2 || v3;
@@ -325,6 +343,7 @@ export function parseManifest(value: unknown): Manifest {
     ...(v2 ? V1ALPHA2_KEYS : []),
     ...(v3 ? GOVERNANCE_KEYS : []),
     ...(v4 ? LIFECYCLE_KEYS : []),
+    ...(v6 ? [...V1ALPHA6_GOVERNANCE_KEYS, ...DATA_KEYS] : []),
   ]);
   const app = record(root.app, "app", [
     "id",
@@ -334,7 +353,11 @@ export function parseManifest(value: unknown): Manifest {
     "banner",
     "theme",
   ]);
-  const runtime = record(root.runtime, "runtime", ["pi"]);
+  const runtime = record(
+    root.runtime,
+    "runtime",
+    v6 ? ["pi", "tools", "cacheWarming"] : ["pi"],
+  );
   const deployment = record(root.deployment, "deployment", ["mode"]);
   const resources = v3
     ? {}
@@ -350,7 +373,7 @@ export function parseManifest(value: unknown): Manifest {
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "managed requires schema piship/v1alpha2, piship/v1alpha3, piship/v1alpha4, or piship/v1alpha5 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
+      "managed requires schema piship/v1alpha2, piship/v1alpha3, piship/v1alpha4, piship/v1alpha5, or piship/v1alpha6 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
     );
   if (mode !== "personal" && mode !== "managed")
     throw new ManifestError(
@@ -361,6 +384,8 @@ export function parseManifest(value: unknown): Manifest {
   let access: AccessManifest | undefined;
   let governance: GovernanceManifest | undefined;
   let lifecycle: LifecycleManifest | undefined;
+  let v6Runtime: Pick<Manifest["runtime"], "tools" | "cacheWarming"> = {};
+  let data: DataManifest | undefined;
   if (v2)
     try {
       if (v3) {
@@ -371,13 +396,26 @@ export function parseManifest(value: unknown): Manifest {
           variables,
           { id: name(app.id, "app.id") },
           v5,
+          v6,
         );
-        if (v4) lifecycle = parseLifecycle(root, variables, v5);
+        if (v4) lifecycle = parseLifecycle(root, variables, v5, v6);
+        if (v6) {
+          v6Runtime = {
+            tools: parseRuntimeTools(runtime.tools),
+            cacheWarming: parseCacheWarming(runtime.cacheWarming),
+          };
+          data = parseData(root.data);
+        }
       }
-      access = parseAccess(root, mode, [
-        ...(governance ? governanceReferences(governance) : []),
-        ...(lifecycle ? lifecycleReferences(lifecycle) : []),
-      ]);
+      access = parseAccess(
+        root,
+        mode,
+        [
+          ...(governance ? governanceReferences(governance) : []),
+          ...(lifecycle ? lifecycleReferences(lifecycle) : []),
+        ],
+        { v6 },
+      );
       assertLaunchable({ mode, access, governance });
     } catch (error) {
       if (error instanceof AccessFieldError)
@@ -392,15 +430,17 @@ export function parseManifest(value: unknown): Manifest {
       "Expected an exact Pi version",
     );
   return {
-    schema: v5
-      ? PISHIP_SCHEMA_V1ALPHA5
-      : v4
-        ? PISHIP_SCHEMA_V1ALPHA4
-        : v3
-          ? PISHIP_SCHEMA_V1ALPHA3
-          : v2
-            ? PISHIP_SCHEMA_V1ALPHA2
-            : PISHIP_SCHEMA_VERSION,
+    schema: v6
+      ? PISHIP_SCHEMA_V1ALPHA6
+      : v5
+        ? PISHIP_SCHEMA_V1ALPHA5
+        : v4
+          ? PISHIP_SCHEMA_V1ALPHA4
+          : v3
+            ? PISHIP_SCHEMA_V1ALPHA3
+            : v2
+              ? PISHIP_SCHEMA_V1ALPHA2
+              : PISHIP_SCHEMA_VERSION,
     app: {
       id: name(app.id, "app.id"),
       name: displayText(app.name, "app.name"),
@@ -422,7 +462,7 @@ export function parseManifest(value: unknown): Manifest {
         ? {}
         : { theme: name(app.theme, "app.theme") }),
     },
-    runtime: { pi },
+    runtime: { pi, ...v6Runtime },
     deployment: { mode },
     resources: governance
       ? flatResources(governance)
@@ -436,6 +476,7 @@ export function parseManifest(value: unknown): Manifest {
     ...(access ? { access } : {}),
     ...(governance ? { governance } : {}),
     ...(lifecycle ? { lifecycle } : {}),
+    ...(data ? { data } : {}),
   };
 }
 /** Declared paths per kind in certified, company, user order. */
@@ -497,181 +538,21 @@ export function readManifestDocument(path: string): unknown {
 export interface MigrationPlan {
   readonly from: PishipSchemaVersion;
   readonly to: PishipSchemaVersion;
+  /** Every change, one warning line each. */
   readonly changes: readonly string[];
+  /**
+   * The changes that alter an effective decision; `piship migrate --check`
+   * fails when there is any.
+   */
+  readonly effective: readonly string[];
   readonly source: string;
 }
-type YamlDocument = ReturnType<typeof parseDocument>;
-const SCHEMA_ORDER: readonly PishipSchemaVersion[] = SUPPORTED_SCHEMAS;
-const RESOURCE_KIND_KEYS = [
-  "instructions",
-  "skills",
-  "extensions",
-  "prompts",
-  "themes",
-] as const;
 
 /**
- * v1alpha1 -> v1alpha2: an equivalent personal profile with no identity,
- * explicit Pi-native credential delegation, and Pi-native inference.
- */
-function migrateToV1alpha2(document: YamlDocument): string[] {
-  document.set("schema", PISHIP_SCHEMA_V1ALPHA2);
-  document.set("identity", document.createNode({ mode: "none" }));
-  document.set("credential", document.createNode({ provider: "pi-native" }));
-  document.set("inference", document.createNode({ provider: "pi-native" }));
-  return [
-    "schema: piship/v1alpha1 -> piship/v1alpha2",
-    "identity.mode: none (unchanged behavior: no enterprise identity)",
-    "credential.provider: pi-native (explicit delegation to Pi auth in isolated state)",
-    "inference.provider: pi-native (Pi model catalog, as in v0.1)",
-  ];
-}
-
-/**
- * v1alpha2 -> v1alpha3: flat resource lists gain a trust class, and the new
- * governance sections are written with values that keep v1alpha2 behavior
- * (no tool policy, no sandbox, no audit, no MCP).
- */
-function migrateToV1alpha3(
-  document: YamlDocument,
-  mode: DeploymentMode,
-): string[] {
-  const trust = mode === "managed" ? "company" : "user";
-  const changes = ["schema: piship/v1alpha2 -> piship/v1alpha3"];
-  document.set("schema", PISHIP_SCHEMA_V1ALPHA3);
-  for (const kind of RESOURCE_KIND_KEYS) {
-    const node = document.getIn(["resources", kind], true);
-    if (node === undefined || node === null) continue;
-    document.setIn(["resources", kind], document.createNode({ [trust]: node }));
-    changes.push(
-      `resources.${kind}: flat list -> ${trust} trust class (${mode} distribution resources)`,
-    );
-  }
-  // v1alpha2 never loaded project resources, not even themes (its resource
-  // loader ran with noThemes against the distribution directory); only tool
-  // access to project files.
-  const closed = {
-    passiveContext: "deny",
-    instructions: "deny",
-    skills: "deny",
-    agents: "deny",
-    hooks: "deny",
-    extensions: "deny",
-    mcp: "deny",
-    providers: "deny",
-  };
-  document.set(
-    "policy",
-    document.createNode({
-      default: "allow",
-      projectTrust: {
-        company: closed,
-        external: closed,
-        unknown: closed,
-      },
-    }),
-  );
-  document.set("sandbox", document.createNode({ required: false }));
-  document.set("audit", document.createNode({ enabled: false }));
-  document.set("mcp", document.createNode({ mode: "off" }));
-  changes.push(
-    "policy.default: allow (v1alpha2 had no tool policy)",
-    "policy.projectTrust: project files stay tool-readable; project instructions, skills, extensions, themes, and MCP stay unloaded (as in v1alpha2)",
-    "sandbox.required: false (v1alpha2 had no OS sandbox)",
-    "audit.enabled: false (v1alpha2 had no audit log)",
-    "mcp.mode: off (v1alpha2 had no MCP servers)",
-    `Review the new governance defaults for ${mode} mode: resource, provider, and project trust (policy.resourceTrust, policy.providerTrust, policy.projectTrust) and capabilities now apply`,
-  );
-  return changes;
-}
-
-/**
- * v1alpha3 -> v1alpha4: adds the required update channel section with no
- * trust keys and no source, so updates stay disabled; release policy defaults.
- */
-function migrateToV1alpha4(document: YamlDocument): string[] {
-  document.set("schema", PISHIP_SCHEMA_V1ALPHA4);
-  document.set(
-    "updates",
-    document.createNode({
-      channel: "stable",
-      channels: ["stable"],
-      rollback: true,
-    }),
-  );
-  return [
-    "schema: piship/v1alpha3 -> piship/v1alpha4",
-    "updates.channel: stable, updates.channels: [stable], updates.rollback: true",
-    "Updates stay disabled until updates.trust.keys and updates.source are configured",
-    `release defaults apply: targets ${DEFAULT_RELEASE_TARGETS.join(", ")}; package sources ${DEFAULT_PACKAGE_SOURCES.join(", ")}; vulnerabilities.failOn high`,
-  ];
-}
-
-/**
- * The expiry a migrated v1alpha4 key set's bootstrap root gets. A fixed
- * value keeps migration deterministic; the owner reviews it with the role
- * split.
- */
-export const MIGRATED_BOOTSTRAP_EXPIRES = "2027-10-01T00:00:00Z";
-
-/**
- * v1alpha4 -> v1alpha5: `updates.trust.keys` becomes a bootstrap root that
- * keeps the legacy keys as a compatibility trust set: every key is in both
- * the root and the channel role, threshold 1, so trust is exactly as strong
- * as before and no key is invented. No keys migrate to no bootstrap
- * (updates stay disabled).
- */
-function migrateToV1alpha5(
-  document: YamlDocument,
-  mode: DeploymentMode,
-): string[] {
-  const changes = ["schema: piship/v1alpha4 -> piship/v1alpha5"];
-  document.set("schema", PISHIP_SCHEMA_V1ALPHA5);
-  const legacy = document.getIn(["updates", "trust", "keys"], true);
-  const json = document.toJS() as {
-    updates?: { source?: unknown; trust?: { keys?: { id: string }[] } };
-  };
-  const ids = (json.updates?.trust?.keys ?? []).map((key) => key.id);
-  if (ids.length === 0) {
-    // v1alpha4 trust holds only keys, so nothing else is dropped.
-    if (document.hasIn(["updates", "trust"]))
-      document.deleteIn(["updates", "trust"]);
-    changes.push(
-      "updates.trust: no trusted update keys, so no bootstrap root; updates stay disabled (no key is invented)",
-    );
-    if (json.updates?.source !== undefined)
-      changes.push(
-        "updates.source is kept, but update fails closed and piship release refuses the distribution until updates.trust.bootstrap is configured",
-      );
-    return changes;
-  }
-  const role = () => {
-    const node = document.createNode({ keyIds: ids, threshold: 1 });
-    const keyIds = node.get("keyIds", true);
-    if (isCollection(keyIds)) keyIds.flow = true;
-    return node;
-  };
-  const bootstrap = document.createNode({
-    version: 1,
-    expires: MIGRATED_BOOTSTRAP_EXPIRES,
-    keys: legacy,
-    roles: { root: role(), channel: role() },
-  });
-  document.deleteIn(["updates", "trust", "keys"]);
-  document.setIn(["updates", "trust", "bootstrap"], bootstrap);
-  changes.push(
-    `updates.trust.keys -> updates.trust.bootstrap: version 1, expires ${MIGRATED_BOOTSTRAP_EXPIRES}; the legacy keys (${ids.join(", ")}) are kept as a compatibility trust set in both the root and the channel role, threshold 1. No key is added and trust is no stronger than before`,
-    mode === "managed"
-      ? "Warning: the root and channel roles share the legacy keys. Managed rollout requires an explicit root / channel split: add an offline root key to updates.trust.bootstrap.roles.root and keep the release key in roles.channel; piship validate warns and piship release refuses this distribution until the roles are split"
-      : "Review updates.trust.bootstrap: the root and channel roles share the legacy keys; an offline root key separate from the channel release key is recommended",
-  );
-  return changes;
-}
-
-/**
- * Versioned, step-wise migration. The default target is the latest schema;
- * pass `to` to stop at an earlier one (for example piship/v1alpha2). Each
- * step is behavior-preserving and comments are kept.
+ * Versioned, step-wise migration through the registered steps. The default
+ * target is the latest schema; pass `to` to stop at an earlier one (for
+ * example piship/v1alpha2). Each step is deterministic, never broadens what
+ * the distribution allows, and keeps comments.
  */
 export function migrateManifestSource(
   source: string,
@@ -686,27 +567,26 @@ export function migrateManifestSource(
     );
   const current = parseManifest(document.toJS() as unknown);
   const from = current.schema;
-  if (SCHEMA_ORDER.indexOf(from) > SCHEMA_ORDER.indexOf(to))
+  if (SUPPORTED_SCHEMAS.indexOf(from) > SUPPORTED_SCHEMAS.indexOf(to))
     throw new ManifestError(
       "schema mismatch",
       "schema",
       `Cannot migrate ${from} back to ${to}; downgrades are not supported`,
     );
-  if (from === to) return { from, to, changes: [], source };
+  if (from === to) return { from, to, changes: [], effective: [], source };
   const changes: string[] = [];
-  const steps = (target: PishipSchemaVersion) =>
-    SCHEMA_ORDER.indexOf(from) < SCHEMA_ORDER.indexOf(target) &&
-    SCHEMA_ORDER.indexOf(target) <= SCHEMA_ORDER.indexOf(to);
-  if (steps(PISHIP_SCHEMA_V1ALPHA2))
-    changes.push(...migrateToV1alpha2(document));
-  if (steps(PISHIP_SCHEMA_V1ALPHA3))
-    changes.push(...migrateToV1alpha3(document, current.deployment.mode));
-  if (steps(PISHIP_SCHEMA_V1ALPHA4))
-    changes.push(...migrateToV1alpha4(document));
-  if (steps(PISHIP_SCHEMA_V1ALPHA5))
-    changes.push(...migrateToV1alpha5(document, current.deployment.mode));
+  const effective: string[] = [];
+  const context = {
+    mode: current.deployment.mode,
+    parse: () => parseManifest(document.toJS() as unknown),
+  };
+  for (const step of migrationPath(from, to)) {
+    const result = step.migrate(document, context);
+    changes.push(...result.changes);
+    effective.push(...result.effective);
+  }
   const migrated = document.toString();
   parseManifest(parseDocument(migrated).toJS() as unknown);
   changes.push("Regenerate piship.lock with piship lock, then rebuild");
-  return { from, to, changes, source: migrated };
+  return { from, to, changes, effective, source: migrated };
 }

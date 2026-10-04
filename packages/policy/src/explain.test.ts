@@ -109,14 +109,14 @@ describe("formatDecision", () => {
       context,
     });
     expect(
-      formatDecision(e.explain({ action: "model.use", resource: "m" })),
+      formatDecision(e.explain({ action: "model.select", resource: "m" })),
     ).toMatch(/^APPROVAL REQUIRED\n/);
     const a = new PolicyEngine({
       policy: makePolicy({ default: "allow" }),
       context,
     });
     const text = formatDecision(
-      a.explain({ action: "model.use", resource: "m" }),
+      a.explain({ action: "model.select", resource: "m" }),
     );
     expect(text).toMatch(/^ALLOWED\n/);
     expect(text).toContain("Rule:\n  builtin:default");

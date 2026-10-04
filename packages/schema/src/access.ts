@@ -50,6 +50,32 @@ export interface InferenceConfig {
   readonly liveCatalog: boolean;
 }
 
+/** Pi model types; Pi has no `embedding` type. */
+export const MODEL_TYPES = ["chat", "classifier", "image"] as const;
+export type ModelType = (typeof MODEL_TYPES)[number];
+
+/**
+ * A virtual model: an extension routes each request to one of a closed set
+ * of physical models.
+ */
+export interface VirtualModelConfig {
+  /**
+   * The declared extension that registers the virtual model: its `./` path,
+   * the `id` of a certified extension, or `package:<id>` for a Pi package.
+   * The lock resolves it to a built path.
+   */
+  readonly router: string;
+  /**
+   * The physical catalog entries it may route to: bare ids in managed
+   * (`openai-compatible`) mode, `provider/id` with pi-native inference.
+   */
+  readonly routes: readonly string[];
+}
+
+/** Model output modalities (image models). */
+export const MODEL_OUTPUTS = ["text", "image"] as const;
+export type ModelOutput = (typeof MODEL_OUTPUTS)[number];
+
 export interface CatalogModel {
   readonly id: string;
   readonly name: string;
@@ -62,6 +88,17 @@ export interface CatalogModel {
   /** Present only when declared; absent means unknown. */
   readonly structuredOutput?: boolean;
   readonly policyTags: readonly string[];
+  /** piship/v1alpha6: the Pi model type (default `chat`). */
+  readonly type?: ModelType;
+  /**
+   * piship/v1alpha6: the Pi API for this model; required for `classifier`
+   * and `image` models, whose API differs from the provider's chat API.
+   */
+  readonly api?: string;
+  /** piship/v1alpha6: output modalities; required for `image` models. */
+  readonly output?: readonly ModelOutput[];
+  /** piship/v1alpha6: present for a virtual model. */
+  readonly virtual?: VirtualModelConfig;
 }
 
 export interface ModelsConfig {
@@ -555,10 +592,96 @@ function parseInference(
   };
 }
 
+function parseVirtualModel(value: unknown, path: string): VirtualModelConfig {
+  const item = record(value, path, ["router", "routes"]);
+  const routes = stringList(item.routes, `${path}.routes`, modelId);
+  if (!routes.length)
+    fail(
+      `${path}.routes`,
+      "A virtual model lists the physical models it may route to",
+    );
+  for (const [index, route] of routes.entries())
+    if (routes.indexOf(route) !== index)
+      fail(`${path}.routes[${index}]`, `Duplicate route ${route}`);
+  return { router: virtualRouter(item.router, `${path}.router`), routes };
+}
+
+const ROUTER_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const ROUTER_PACKAGE = /^package:[a-z][a-z0-9-]{0,63}$/;
+
+/**
+ * A router reference: a `./` extension path without traversal, a certified
+ * extension id, or `package:<id>`. Whether it names a declared extension is
+ * checked where the extensions are resolved.
+ */
+function virtualRouter(value: unknown, path: string): string {
+  const router = plainString(value, path);
+  if (router.startsWith("./")) {
+    const segments = router.slice(2).split("/");
+    if (
+      router.includes("\\") ||
+      segments.some(
+        (segment) => !segment || segment === "." || segment === "..",
+      )
+    )
+      fail(path, "Use a ./ relative extension path without traversal");
+    return router;
+  }
+  if (ROUTER_PACKAGE.test(router) || ROUTER_ID.test(router)) return router;
+  fail(
+    path,
+    "Expected a declared extension: its ./ path, a certified extension id, or package:<id>",
+  );
+}
+
+/** `type`, `api`, and `output` of a piship/v1alpha6 catalog entry. */
+function v6TypeFields(
+  item: Json,
+  path: string,
+): Pick<CatalogModel, "type" | "api" | "output"> {
+  const type = modelType(item.type, `${path}.type`);
+  if (type !== "chat" && item.api === undefined)
+    fail(
+      `${path}.api`,
+      `A ${type} model names its Pi API; the provider's chat API does not serve it`,
+    );
+  if (type !== "image" && item.output !== undefined)
+    fail(`${path}.output`, "output applies to image models");
+  if (type === "image" && item.output === undefined)
+    fail(`${path}.output`, "An image model lists its output (text, image)");
+  return {
+    type,
+    ...(item.api === undefined
+      ? {}
+      : { api: plainString(item.api, `${path}.api`) }),
+    ...(item.output === undefined
+      ? {}
+      : {
+          output: stringList(item.output, `${path}.output`, (entry, at) => {
+            if (entry !== "text" && entry !== "image")
+              fail(at, "Expected text or image");
+            return entry;
+          }) as ModelOutput[],
+        }),
+  };
+}
+
+function modelType(value: unknown, path: string): ModelType {
+  if (value === undefined) return "chat";
+  if (
+    typeof value !== "string" ||
+    !(MODEL_TYPES as readonly string[]).includes(value)
+  )
+    fail(path, `Expected ${MODEL_TYPES.join(", ")}`);
+  return value as ModelType;
+}
+
 function parseModels(
   value: unknown,
   mode: DeploymentMode,
   inference: InferenceConfig,
+  /** piship/v1alpha6 and later: catalog `type` and `virtual`. */
+  v6 = false,
 ): ModelsConfig {
   const models = record(value ?? {}, "models", [
     "default",
@@ -592,6 +715,7 @@ function parseModels(
         "streaming",
         "structuredOutput",
         "policyTags",
+        ...(v6 ? ["type", "api", "output", "virtual"] : []),
       ]);
       const input = stringList(
         item.input ?? ["text"],
@@ -627,6 +751,16 @@ function parseModels(
               ),
             }),
         policyTags: stringList(item.policyTags, `${path}.policyTags`, tag),
+        ...(v6
+          ? {
+              ...v6TypeFields(item, path),
+              ...(item.virtual === undefined
+                ? {}
+                : {
+                    virtual: parseVirtualModel(item.virtual, `${path}.virtual`),
+                  }),
+            }
+          : {}),
       };
     },
   );
@@ -652,8 +786,23 @@ function parseModels(
     if (mode === "managed" && defaultModel === undefined)
       fail("models.default", "Managed mode requires a default model");
   } else {
-    if (catalog.length)
-      conflict("models.catalog", "pi-native inference uses Pi's model catalog");
+    // Pi's own catalog serves physical chat models. From piship/v1alpha6 the
+    // manifest may still declare virtual and non-chat (classifier, image)
+    // entries, keyed `provider/id`.
+    for (const item of catalog) {
+      if (!v6 || (!item.virtual && item.type === "chat"))
+        conflict(
+          v6 ? `models.catalog.${item.id}` : "models.catalog",
+          v6
+            ? "pi-native inference uses Pi's model catalog for chat models; only virtual and classifier or image entries are declared"
+            : "pi-native inference uses Pi's model catalog",
+        );
+      if (!/^[^/]+\/.+$/.test(item.id))
+        fail(
+          `models.catalog.${item.id}`,
+          "pi-native catalog entries use provider/model",
+        );
+    }
     for (const [index, id] of allowed.entries())
       if (!/^[^/]+\/.+$/.test(id))
         fail(
@@ -848,6 +997,8 @@ export function parseAccess(
   root: Json,
   mode: DeploymentMode,
   extraReferences: readonly string[] = [],
+  /** piship/v1alpha6 and later: model catalog `type` and `virtual`. */
+  options: { readonly v6?: boolean } = {},
 ): AccessManifest {
   const variables = parseVariables(root.variables);
   const identity = parseIdentity(root.identity, mode, variables);
@@ -859,7 +1010,7 @@ export function parseAccess(
     identity,
     variables,
   );
-  const models = parseModels(root.models, mode, inference);
+  const models = parseModels(root.models, mode, inference, options.v6);
   const config = parseConfig(root.config, models);
   const network = parseNetwork(root.network, mode, variables);
   const used = new Set<string>(extraReferences);

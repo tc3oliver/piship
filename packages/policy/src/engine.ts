@@ -1,6 +1,7 @@
 // The policy engine: layered rule precedence, enforcement planes, and rule
 // list parsing for user, project, and adapter rule files.
 import {
+  normalizePolicyAction,
   POLICY_ACTIONS,
   PiShipError,
   redact,
@@ -44,7 +45,7 @@ export const NO_CONTAINMENT: PolicyContainment = {
  * evaluated for explanation and audit only, so they are not listed here.
  */
 const CONTROL_PLANE_ACTIONS: ReadonlySet<string> = new Set([
-  "model.use",
+  "model.select",
   "resource.load",
   "extension.load",
   "skill.load",
@@ -113,6 +114,18 @@ export function chainsBeyondPattern(pattern: string, command: string): boolean {
   for (const [char] of command.matchAll(SHELL_METACHARACTERS))
     if (!pattern.includes(char)) return true;
   return false;
+}
+
+/**
+ * A rule with a former action name (`model.use`) under its current name.
+ * Rules from a lock written before the rename still match the action the
+ * runtime evaluates.
+ */
+function normalizeRuleAction(rule: PolicyRule): PolicyRule {
+  const action = normalizePolicyAction(rule.action);
+  return action === rule.action
+    ? rule
+    : { ...rule, action: action as PolicyRule["action"] };
 }
 
 export function isPathAction(action: string): boolean {
@@ -212,7 +225,14 @@ function parseRule(value: unknown, source: string, path: string): PolicyRule {
       `${path}.id`,
       "rule ids use lowercase letters, digits, and . _ - (at most 128)",
     );
-  const { action, effect } = record;
+  const { effect } = record;
+  // A former action name (`model.use`) is read as its current name, so a
+  // rule file written for an older release keeps applying; it is never
+  // rewritten on disk.
+  const action =
+    typeof record.action === "string"
+      ? normalizePolicyAction(record.action)
+      : record.action;
   if (typeof action !== "string" || !isActionPattern(action))
     throw invalid(
       source,
@@ -372,7 +392,7 @@ export class PolicyEngine {
       source: string,
     ): LayerRule[] =>
       rules.map((rule) => ({
-        rule,
+        rule: normalizeRuleAction(rule),
         layer,
         source,
         pathPattern: expandPathTokens(rule.resource, this.context),

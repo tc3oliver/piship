@@ -6,7 +6,9 @@ import {
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
+  DATA_CONTRACT_VERSION,
   PISHIP_SCHEMA_V1ALPHA5,
+  PISHIP_SCHEMA_V1ALPHA6,
   readManifest,
   type UpdateTrustKey,
   channelTrustKeys,
@@ -20,6 +22,7 @@ import {
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
+  LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
 } from "./lock-schema.js";
 import { resolveResources } from "./resources.js";
@@ -38,7 +41,8 @@ export function debugTiming(label: string, started: bigint): void {
  * already record.
  */
 export function manifestDigest(manifest: Manifest): string {
-  return manifest.schema === PISHIP_SCHEMA_V1ALPHA5
+  return manifest.schema === PISHIP_SCHEMA_V1ALPHA5 ||
+    manifest.schema === PISHIP_SCHEMA_V1ALPHA6
     ? digest(manifest)
     : hash(JSON.stringify(manifest));
 }
@@ -71,19 +75,34 @@ export function resolveLock(manifestPath: string): DistributionLock {
     dirname(resolve(manifestPath)),
     resources,
   );
-  const v5 = manifest.schema === PISHIP_SCHEMA_V1ALPHA5;
+  const v6 = manifest.schema === PISHIP_SCHEMA_V1ALPHA6;
+  const v5 = manifest.schema === PISHIP_SCHEMA_V1ALPHA5 || v6;
   const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const policy = governance?.manifest;
+  const virtualModels = (manifest.access?.models.catalog ?? []).flatMap(
+    (model) =>
+      model.virtual
+        ? [
+            {
+              id: model.id,
+              router: model.virtual.router,
+              routes: model.virtual.routes,
+            },
+          ]
+        : [],
+  );
   return {
-    schema: v5
-      ? LOCK_SCHEMA_V1ALPHA5
-      : v4
-        ? LOCK_SCHEMA_V1ALPHA4
-        : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
-          ? LOCK_SCHEMA_V1ALPHA3
-          : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
-            ? LOCK_SCHEMA_V1ALPHA2
-            : LOCK_SCHEMA_VERSION,
+    schema: v6
+      ? LOCK_SCHEMA_V1ALPHA6
+      : v5
+        ? LOCK_SCHEMA_V1ALPHA5
+        : v4
+          ? LOCK_SCHEMA_V1ALPHA4
+          : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
+            ? LOCK_SCHEMA_V1ALPHA3
+            : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
+              ? LOCK_SCHEMA_V1ALPHA2
+              : LOCK_SCHEMA_VERSION,
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,
@@ -111,6 +130,12 @@ export function resolveLock(manifestPath: string): DistributionLock {
           },
           updates: manifest.lifecycle.updates,
           release: manifest.lifecycle.release,
+        }
+      : {}),
+    ...(v6
+      ? {
+          ...(virtualModels.length ? { virtualModels } : {}),
+          data: { contract: DATA_CONTRACT_VERSION },
         }
       : {}),
   };

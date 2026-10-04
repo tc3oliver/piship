@@ -107,7 +107,7 @@ const simpleUsage: Record<string, string> = {
   inspect: "inspect <manifest|artifact|id> [--json]",
   doctor: "doctor <artifact|id> [--json]",
   purge: "purge <id> --yes [--without-logout]",
-  migrate: "migrate <manifest> [--write]",
+  migrate: "migrate <manifest> [--write | --check]",
   config: "config explain <manifest|artifact|id>",
 };
 /** Commands with named options: positional count and accepted flags. */
@@ -361,7 +361,7 @@ const allowedOptions: Record<string, readonly string[]> = {
   build: ["--reclaim-staging"],
   purge: ["--yes", "--yes --without-logout"],
   init: ["--personal", "--managed"],
-  migrate: ["--write"],
+  migrate: ["--write", "--check"],
   test: [
     "--model-request",
     "--json",
@@ -599,9 +599,23 @@ export async function runCli(
         );
     } else if (command === "migrate") {
       const plan = migrateManifestSource(readManifestSource(target));
+      const list = (items: readonly string[]) =>
+        items.map((item) => `  - ${item}`).join("\n");
       if (!plan.changes.length)
         output.stdout(`Already ${plan.to}; nothing to migrate.`);
-      else if (rest[0] === "--write") {
+      else if (rest[0] === "--check") {
+        // Nothing is written; the exit status says whether migrating would
+        // change what the distribution decides.
+        output.stdout(
+          `Migration check ${plan.from} -> ${plan.to}:\n${list(plan.changes)}`,
+        );
+        if (plan.effective.length) {
+          output.stderr(
+            `Migrating ${target} would change ${plan.effective.length} effective decision(s):\n${list(plan.effective)}`,
+          );
+          return 1;
+        }
+      } else if (rest[0] === "--write") {
         writeFileSync(target, plan.source);
         output.stdout(
           `Migrated ${target} from ${plan.from} to ${plan.to}:\n${plan.changes.map((item) => `  - ${item}`).join("\n")}`,

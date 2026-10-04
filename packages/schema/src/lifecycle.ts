@@ -126,6 +126,11 @@ export interface ReleaseManifest {
   readonly vulnerabilities: {
     readonly failOn: VulnerabilitySeverity;
     readonly allow: readonly VulnerabilityException[];
+    /**
+     * piship/v1alpha6: the registry `npm audit` asks for advisories, when it
+     * is not the configured registry.
+     */
+    readonly registry?: string;
   };
 }
 export interface LifecycleManifest {
@@ -627,7 +632,7 @@ function expiryDate(value: unknown, path: string): string {
     fail(path, "Expected a valid calendar date in YYYY-MM-DD form");
   return text;
 }
-function parseRelease(value: unknown): ReleaseManifest {
+function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
   const release = optionalRecord(value, "release", [
     "targets",
     "sources",
@@ -654,7 +659,7 @@ function parseRelease(value: unknown): ReleaseManifest {
   const vulnerabilities = optionalRecord(
     release.vulnerabilities,
     "release.vulnerabilities",
-    ["failOn", "allow"],
+    ["failOn", "allow", ...(v6 ? ["registry"] : [])],
   );
   const failOn =
     vulnerabilities.failOn === undefined
@@ -690,7 +695,39 @@ function parseRelease(value: unknown): ReleaseManifest {
         `release.vulnerabilities.allow[${index}].id`,
         `Duplicate advisory id ${entry.id}`,
       );
-  return { targets, sources, vulnerabilities: { failOn, allow } };
+  const registry =
+    vulnerabilities.registry === undefined
+      ? undefined
+      : auditRegistry(
+          vulnerabilities.registry,
+          "release.vulnerabilities.registry",
+        );
+  return {
+    targets,
+    sources,
+    vulnerabilities: {
+      failOn,
+      allow,
+      ...(registry === undefined ? {} : { registry }),
+    },
+  };
+}
+
+/** An https registry URL without credentials, query, or fragment. */
+function auditRegistry(value: unknown, path: string): string {
+  const text = plainString(value, path, 2048);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    fail(path, "Expected an https registry URL");
+  }
+  if (url.protocol !== "https:") fail(path, "Expected an https registry URL");
+  if (url.username || url.password)
+    fail(path, "URLs must not embed credentials");
+  if (url.search || url.hash || text.includes("?") || text.includes("#"))
+    fail(path, "URLs must not carry a query or fragment");
+  return text;
 }
 
 // --------------------------------------------------------------- lifecycle
@@ -706,10 +743,12 @@ export function parseLifecycle(
   root: Readonly<Record<string, unknown>>,
   variables: readonly string[],
   bootstrap = false,
+  /** piship/v1alpha6 and later: `release.vulnerabilities.registry`. */
+  v6 = false,
 ): LifecycleManifest {
   return {
     updates: parseUpdates(root.updates, variables, bootstrap),
-    release: parseRelease(root.release),
+    release: parseRelease(root.release, v6),
   };
 }
 

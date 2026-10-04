@@ -11,6 +11,7 @@ import {
   type ResourceKind,
 } from "../governance.js";
 import { checkUrl } from "../access.js";
+import { parsePackages } from "./packages.js";
 import {
   conflict,
   exactPiVersion,
@@ -165,12 +166,15 @@ function parseKind(
   return { declared, builtin };
 }
 
-export function parseGovernanceResources(value: unknown): GovernanceResources {
-  const resources = optionalRecord(
-    value ?? undefined,
-    "resources",
-    RESOURCE_KINDS,
-  );
+export function parseGovernanceResources(
+  value: unknown,
+  /** piship/v1alpha6 and later: accepts `resources.packages`. */
+  options: { readonly packages?: boolean } = {},
+): GovernanceResources {
+  const resources = optionalRecord(value ?? undefined, "resources", [
+    ...RESOURCE_KINDS,
+    ...(options.packages ? ["packages"] : []),
+  ]);
   const declared: DeclaredResource[] = [];
   const builtin: BuiltinExtension[] = [];
   for (const kind of RESOURCE_KINDS) {
@@ -179,5 +183,10 @@ export function parseGovernanceResources(value: unknown): GovernanceResources {
     declared.push(...parsed.declared);
     builtin.push(...parsed.builtin);
   }
-  return { declared, builtin };
+  if (!options.packages) return { declared, builtin };
+  return {
+    declared,
+    builtin,
+    packages: parsePackages(resources.packages ?? undefined),
+  };
 }

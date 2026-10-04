@@ -615,12 +615,12 @@ describe.runIf(HOST_EVIDENCED)("release gates", () => {
     expect(error.message).toMatch(/Release gate schema: .*piship\/v1alpha3/);
   });
 
-  it("schema: refuses a v1alpha4 manifest; v0.8 releases need v1alpha5", () => {
+  it("schema: refuses a v1alpha4 manifest; releases need v1alpha5 or later", () => {
     const { path } = project({ schema: "piship/v1alpha4" });
     const error = caught(() => checkReleaseInputs(path));
     expect(error.code).toBe("CONFIG_INVALID");
     expect(error.message).toMatch(
-      /Release gate schema: production releases need a piship\/v1alpha5 manifest \(found piship\/v1alpha4\)/,
+      /Release gate schema: production releases need a piship\/v1alpha5 or piship\/v1alpha6 manifest \(found piship\/v1alpha4\)/,
     );
   });
 
