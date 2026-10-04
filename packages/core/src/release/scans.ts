@@ -9,6 +9,7 @@ import {
   type VulnerabilityFinding,
   type VulnerabilityReport,
 } from "./metadata.js";
+import { windowsNpmCommandLine } from "../windows-npm.js";
 import { gate } from "./shared.js";
 
 const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
@@ -29,10 +30,11 @@ export function npmAuditScanner(
   ];
   const result =
     process.platform === "win32"
-      ? spawnSync("cmd.exe", ["/d", "/s", "/c", `npm ${args.join(" ")}`], {
+      ? spawnSync("cmd.exe", ["/d", "/s", "/c", windowsNpmCommandLine(args)], {
           cwd: lockDirectory,
           encoding: "utf8",
           maxBuffer: 64 * 1024 * 1024,
+          windowsVerbatimArguments: true,
         })
       : spawnSync("npm", args, {
           cwd: lockDirectory,
