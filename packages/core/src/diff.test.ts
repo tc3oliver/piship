@@ -44,6 +44,26 @@ resources:
     - ./resources/themes/mypi.json
 `;
 
+// The demo company's manifest as it was before its migration to
+// piship/v1alpha6, so these comparisons run on a piship-lock/v1alpha5 lock and
+// the v1alpha6 fields are added to it below.
+const V1ALPHA5_DEMO = readFileSync(
+  join(repo, "examples", "demo-company", "piship.yaml"),
+  "utf8",
+)
+  .replace("schema: piship/v1alpha6", "schema: piship/v1alpha5")
+  .replace("action: model.select", "action: model.use")
+  .replace(
+    `        search: direct
+        get_document: direct
+        delete_document: direct
+        "*": hidden
+      class: company
+      exposure: direct
+`,
+    "        allow: [search, get_document, delete_document]\n",
+  );
+
 /**
  * Lock a temporary copy of an example with the built CLI, optionally with a
  * replacement manifest.
@@ -71,7 +91,7 @@ let personal: DistributionLock;
 const clone = (lock: DistributionLock): Mutable => structuredClone(lock);
 
 beforeAll(() => {
-  base = lockExample("demo-company");
+  base = lockExample("demo-company", V1ALPHA5_DEMO);
   personal = lockExample("personal", V1ALPHA1_PERSONAL);
 });
 afterAll(() => {

@@ -1090,7 +1090,7 @@ describe("config explain from a manifest", () => {
     });
     expect(status).toBe(0);
     const text = out.join("\n");
-    expect(text).toMatch(/^schema\s+"piship\/v1alpha5"/m);
+    expect(text).toMatch(/^schema\s+"piship\/v1alpha6"/m);
     for (const key of ["policy", "mcp\\.mode", "sandbox\\.required"])
       expect(text).toMatch(new RegExp(`^${key}\\s`, "m"));
     expect(text).toMatch(

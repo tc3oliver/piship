@@ -1,4 +1,4 @@
-schema: piship/v1alpha5
+schema: piship/v1alpha6
 
 app:
   id: mypi
@@ -69,6 +69,8 @@ mcp:
       module: ./resources/mcp/notes-server.mjs
       expectedServerName: mypi-notes
       timeout: 10s
+      class: user
+      exposure: direct
 
 # Optional for a personal distribution. On Linux or macOS, `required: true`
 # contains bash, `!` commands, and the MCP server.

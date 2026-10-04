@@ -1,6 +1,6 @@
 {
   "name": "@piship/adapter-sdk",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,8 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/contracts": "0.8.1",
-    "@piship/sandbox": "0.8.1"
+    "@piship/contracts": "0.9.0",
+    "@piship/sandbox": "0.9.0"
   },
   "description": "The supported surface for writing PiShip identity, credential, sandbox, and audit adapters.",
   "keywords": [
