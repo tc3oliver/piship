@@ -78,7 +78,8 @@ models:
       policyTags: [code]
 
 # Managed launches are private-only: pi-code's web tools and anything else that
-# reaches the public Internet fail unless the company lists the host here.
+# uses the default HTTP dispatcher fails unless its host is listed. Child
+# processes need organization egress controls; this is not a firewall.
 network:
   proxy:
     inheritEnvironment: true
@@ -170,16 +171,53 @@ resources:
               edit: allow
               path:
                 "*": allow
-                "~/.ssh/*": deny
-                "*/id_rsa": deny
-                "*/id_ed25519": deny
-                "~/.aws/credentials": deny
-                "~/.netrc": deny
                 "*.pem": deny
                 "*.key": deny
                 "*.env": deny
                 "*.env.*": deny
                 "*.env.example": allow
+                "~/.ssh": deny
+                "~/.ssh/*": deny
+                "*/id_rsa": deny
+                "*/id_dsa": deny
+                "*/id_ecdsa": deny
+                "*/id_ecdsa_sk": deny
+                "*/id_ed25519": deny
+                "*/id_ed25519_sk": deny
+                "~/.gnupg": deny
+                "~/.gnupg/*": deny
+                "~/.aws/credentials": deny
+                "~/.aws/sso/*": deny
+                "~/.aws/cli/cache/*": deny
+                "~/.config/gcloud/*": deny
+                "~/.azure/*": deny
+                "~/.kube/config": deny
+                "~/.docker/config.json": deny
+                "~/.netrc": deny
+                "~/_netrc": deny
+                "~/.npmrc": deny
+                "~/.pypirc": deny
+                "~/.git-credentials": deny
+                "~/.config/gh/hosts.yml": deny
+                "~/.cargo/credentials": deny
+                "~/.cargo/credentials.toml": deny
+                "~/.gem/credentials": deny
+                "~/.vault-token": deny
+                "~/.terraform.d/credentials.tfrc.json": deny
+                "~/.config/op/*": deny
+                "~/.password-store/*": deny
+                "~/Library/Keychains/*": deny
+                "/Library/Keychains/*": deny
+                "~/.local/share/keyrings/*": deny
+                "*.kdbx": deny
+                "/etc/shadow*": deny
+                "/etc/gshadow*": deny
+                "/etc/master.passwd": deny
+                "/etc/ssh/ssh_host_*": deny
+                "~/.pi/agent/auth.json": deny
+                "~/.pi/browser-profile/*": deny
+                "*/.piship/*/agent/auth.json": deny
+                "*/.piship/*/secrets/*": deny
               external_directory:
                 "*": ask
               bash:
@@ -254,17 +292,92 @@ policy:
       action: filesystem.*
       resource: "~/.ssh/**"
       effect: deny
-      reason: SSH keys stay outside the agent
+      reason: SSH keys are never read or written by the agent
+    - id: dev.secret.key-rsa
+      action: filesystem.*
+      resource: "**/id_rsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-dsa
+      action: filesystem.*
+      resource: "**/id_dsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ecdsa
+      action: filesystem.*
+      resource: "**/id_ecdsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ed25519
+      action: filesystem.*
+      resource: "**/id_ed25519"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.gnupg
+      action: filesystem.*
+      resource: "~/.gnupg/**"
+      effect: deny
+      reason: GnuPG keys are never read or written by the agent
     - id: dev.secret.aws
       action: filesystem.*
       resource: "~/.aws/credentials"
       effect: deny
-      reason: Cloud credentials stay outside the agent
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.gcloud
+      action: filesystem.*
+      resource: "~/.config/gcloud/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.azure
+      action: filesystem.*
+      resource: "~/.azure/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.kube
+      action: filesystem.*
+      resource: "~/.kube/config"
+      effect: deny
+      reason: Cluster credentials are never read or written by the agent
+    - id: dev.secret.docker
+      action: filesystem.*
+      resource: "~/.docker/config.json"
+      effect: deny
+      reason: Registry credentials are never read or written by the agent
     - id: dev.secret.netrc
       action: filesystem.*
       resource: "~/.netrc"
       effect: deny
-      reason: Stored logins stay outside the agent
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.npmrc
+      action: filesystem.*
+      resource: "~/.npmrc"
+      effect: deny
+      reason: Registry tokens are never read or written by the agent
+    - id: dev.secret.git-credentials
+      action: filesystem.*
+      resource: "~/.git-credentials"
+      effect: deny
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.gh
+      action: filesystem.*
+      resource: "~/.config/gh/hosts.yml"
+      effect: deny
+      reason: The GitHub CLI token is never read or written by the agent
+    - id: dev.secret.keychains
+      action: filesystem.*
+      resource: "~/Library/Keychains/**"
+      effect: deny
+      reason: Keychains are never read or written by the agent
+    - id: dev.secret.keyrings
+      action: filesystem.*
+      resource: "~/.local/share/keyrings/**"
+      effect: deny
+      reason: Keyrings are never read or written by the agent
+    - id: dev.secret.browser-profile
+      action: filesystem.*
+      resource: "~/.pi/browser-profile/**"
+      effect: deny
+      reason: The browser profile holds logged-in sessions
     - id: dev.shell.sudo
       action: shell.execute
       resource: "sudo **"
@@ -329,6 +442,24 @@ sandbox:
         - ~/.npmrc
         - ~/.pi
         - ~/.claude
+        - ~/_netrc
+        - ~/.pypirc
+        - ~/.git-credentials
+        - ~/.config/gh/hosts.yml
+        - ~/.cargo/credentials
+        - ~/.cargo/credentials.toml
+        - ~/.gem/credentials
+        - ~/.vault-token
+        - ~/.terraform.d/credentials.tfrc.json
+        - ~/.config/op
+        - ~/.password-store
+        - ~/Library/Keychains
+        - /Library/Keychains
+        - ~/.local/share/keyrings
+        - /etc/shadow
+        - /etc/gshadow
+        - /etc/master.passwd
+        - /etc/ssh
     write:
       allow: [workspace, tmp]
   network:

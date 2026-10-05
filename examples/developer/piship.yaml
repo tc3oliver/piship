@@ -471,13 +471,8 @@ resources:
                 "docker volume ls*": allow
                 "docker volume inspect*": allow
 
-                # Local HTTP. Anything off this machine asks.
-                "curl *localhost*": allow
-                "curl *127.0.0.1*": allow
-                "curl *[::1]*": allow
-                "curl *0.0.0.0*": allow
-                "wget *localhost*": allow
-                "wget *127.0.0.1*": allow
+                # curl/wget keep the ask fallback: wildcard commands cannot
+                # validate URL hosts, userinfo, or multiple destinations.
 
                 # --- The risky forms, after the broad rules above. ---
 
@@ -517,11 +512,19 @@ resources:
                 "git branch* -D*": ask
                 "git branch*--delete*--force*": ask
                 "git branch* -f *": ask
+                "git checkout *": ask
+                "git checkout -b *": allow
+                "git restore *": ask
+                "git restore --staged *": allow
+                "git restore *--w*": ask
+                "git restore * -*W*": ask
                 "git checkout* -f*": ask
-                "git checkout*--force*": ask
-                "git checkout -- .": ask
-                "git checkout .": ask
-                "git restore .": ask
+                "git checkout -b * -*": ask
+                "git checkout*--for*": ask
+                "git checkout*--dis*": ask
+                # Global options can reposition a destructive subcommand.
+                # Unrecognized forms prompt instead of inheriting git allow.
+                "git -*": ask
                 "git stash drop*": ask
                 "git stash clear*": ask
                 "git reflog expire*": ask

@@ -25,6 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { branded, launcher } from "../helpers/distribution.js";
 
@@ -449,7 +450,7 @@ describe.skipIf(windows)(
       ["allow", "bash", { command: "FOO=1 npm test" }],
       ["allow", "bash", { command: "docker compose up -d" }],
       ["allow", "bash", { command: "git push origin feature-fix" }],
-      ["allow", "bash", { command: "curl http://localhost:3000/health" }],
+      ["ask", "bash", { command: "curl http://localhost:3000/health" }],
       ["allow", "bash", { command: "rm build.log" }],
       ["allow", "bash", { command: "cat .env.example" }],
       ["allow", "read", { path: "src/index.ts" }],
@@ -478,6 +479,25 @@ describe.skipIf(windows)(
       ["ask", "bash", { command: "cd x && rm -rf y" }],
       ["ask", "bash", { command: "git reset --hard HEAD~1" }],
       ["ask", "bash", { command: "git clean -fd" }],
+      ["ask", "bash", { command: "git restore src/app.ts" }],
+      ["ask", "bash", { command: "git checkout -- src/app.ts" }],
+      ["ask", "bash", { command: "git -C . reset --hard HEAD" }],
+      ["ask", "bash", { command: "git --git-dir=.git clean -fd" }],
+      [
+        "ask",
+        "bash",
+        { command: "curl https://localhost.attacker.example/path" },
+      ],
+      ["ask", "bash", { command: "curl https://example.com/?label=localhost" }],
+      ["allow", "bash", { command: "git restore --staged src/app.ts" }],
+      [
+        "ask",
+        "bash",
+        { command: "git restore --staged --worktree src/app.ts" },
+      ],
+      ["ask", "bash", { command: "git restore --staged -SW src/app.ts" }],
+      ["ask", "bash", { command: "git checkout -b fix --force" }],
+      ["allow", "bash", { command: "git checkout -b fix" }],
       ["ask", "bash", { command: "git push --force origin main" }],
       ["ask", "bash", { command: "git push -f origin main" }],
       ["ask", "bash", { command: "git branch -D feature" }],
@@ -521,6 +541,50 @@ describe.skipIf(windows)(
         },
       ],
     ];
+
+    it("keeps managed credential-store reads denied by the actual provider", async () => {
+      const where = area("managed-secrets");
+      await smoke(where);
+      const manifest = readManifest(join(example, "managed.piship.yaml"));
+      const provider = manifest.governance?.resources.packages?.find(
+        (item) => item.id === "pi-permission-system",
+      );
+      const config = provider?.agentFiles?.[0]?.json;
+      expect(config).toBeDefined();
+      writeFileSync(join(where.agentDir, ...CONFIG), JSON.stringify(config));
+      const paths = [
+        "~/.config/gh/hosts.yml",
+        "~/.git-credentials",
+        "~/.pypirc",
+        "~/.cargo/credentials.toml",
+        "~/.vault-token",
+        "~/Library/Keychains/login.keychain-db",
+        "~/.local/share/keyrings/login.keyring",
+      ];
+      const file = join(temp, "managed-secret-cases.json");
+      writeFileSync(
+        file,
+        JSON.stringify([
+          ...paths.map((path) => ["read", { path }]),
+          ["read", { path: ".env.example" }],
+        ]),
+      );
+      const results = probed<{ verdict: Verdict }[]>(
+        where,
+        "permissions",
+        where.workspace,
+        [file],
+        {
+          ...where.env,
+          HOME,
+          USERPROFILE: HOME,
+        },
+      );
+      expect(results.map((result) => result.verdict)).toEqual([
+        ...paths.map(() => "deny"),
+        "allow",
+      ]);
+    }, 300_000);
 
     it("allows the routine, asks for the risky, and denies the clear secrets", async () => {
       const where = area("permissions");

@@ -2,7 +2,7 @@
 
 DevCode (`devcode`) is a batteries-included personal distribution on `piship/v1alpha6` for everyday software development. It is meant to be copied and edited. The point of the profile is that ordinary development work never prompts, and that the few actions with a real blast radius do:
 
-- **No prompt for normal work.** Reading, editing, and writing files in the workspace, `grep` and `find`, `git status`, `diff`, and `log`, `npm`, `pnpm`, and `yarn`, `pytest`, `cargo`, `go`, compilers, linters, formatters, local servers and `curl` to localhost, read-style MCP tools, and the tools of the packages below.
+- **No prompt for normal work.** Reading, editing, and writing files in the workspace, `grep` and `find`, `git status`, `diff`, and `log`, `npm`, `pnpm`, and `yarn`, `pytest`, `cargo`, `go`, compilers, linters, formatters, local servers, read-style MCP tools, and the tools of the packages below.
 - **A prompt for the risky.** `sudo`, recursive deletes, destructive git, writes outside the workspace and outside temporary and cache directories, publishing and signing in, an executable the profile does not know, MCP tools that write, and the browser's script and upload tools.
 - **A denial only for clear secrets.** Private keys, credential stores, `~/.ssh`, keychains, `~/.netrc`, `~/.config/gh/hosts.yml`, and the like. The rules name paths, never broad globs, so `.env.example`, a test fixture, and project configuration stay usable. A real `.env` and a non-fixture `.pem` ask.
 - **Every default is a default.** A managed distribution built from [`managed.piship.yaml`](managed.piship.yaml) tightens it ([below](#hardening-for-a-company)), and a project's own configuration never loosens it.
@@ -70,7 +70,6 @@ The decisions come from the permission provider, configured by the file the mani
 | Python | `python`, `pytest`, `uv`, `pip`, `poetry`, `pdm`, `tox`, `nox`, `ruff`, `black`, `mypy`, `pyright`, and similar |
 | Other languages | `cargo`, `go`, `java`, `mvn`, `gradle`, `dotnet`, `ruby`, `bundle`, `php`, `composer`, `swift`, `flutter`, `dart`, `make`, `cmake`, `gcc`, `clang`, and similar |
 | Containers | `docker ps`, `build`, `compose`, `exec`, `run`, `logs`, `inspect`, `pull`, and the like |
-| Local HTTP | `curl` and `wget` to `localhost`, `127.0.0.1`, and `[::1]` |
 | MCP | `get_*`, `list_*`, `search_*`, `read_*`, `find_*`, `describe_*`, `fetch_*`, `query*`, and similar read-style tools, and the MCP status tools |
 | Everything else the packages add | `web_search`, `web_fetch`, `todo`, `question`, `memory`, `subagent`, pi-lens tools, `bg_*`, and `browser_*` except the five below |
 
@@ -80,11 +79,11 @@ The decisions come from the permission provider, configured by the file the mani
 | --- | --- |
 | Privilege | `sudo`, `doas`, `su`, `pkexec` |
 | Bulk deletes | `rm -r`, `rm -rf`, `rm --recursive`, `find ... -delete`, `chmod -R` |
-| Destructive git | `reset --hard`, `clean` (not the dry run), `push --force`, `-f`, `--delete`, `--mirror`, `branch -D`, `checkout -f`, `checkout .`, `restore .`, `stash drop` and `clear`, `reflog expire`, `filter-branch`, `remote add` and `set-url`, and `git config` writes |
+| Destructive git | `reset --hard`, `clean` (not the dry run), `push --force`, `-f`, `--delete`, `--mirror`, `branch -D`, `checkout -f`, `checkout` of existing paths, `restore` (except `--staged`), `stash drop` and `clear`, `reflog expire`, `filter-branch`, `remote add` and `set-url`, and `git config` writes |
 | Publishing and signing in | `npm publish` and `login`, global installs (`-g`), `cargo publish`, `twine`, `docker push` and `login`, `docker ... prune`, `rm -f`, `--privileged`, and `down -v`, `gh api` |
 | Outside the workspace | A write or edit outside it, except the temporary and cache directories above |
 | Settings that change what runs next | A write to `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.mcp.json`, `.pi/settings.json`, `.pi/extensions/`, `.git/hooks/`, and `.git/config` |
-| Unknown executables | Any command not listed above, for example `ssh`, `scp`, `kubectl`, `terraform`, `brew`, `apt`, and `curl` to a host that is not local |
+| Unknown executables | Any command not listed above, for example `ssh`, `scp`, `kubectl`, `terraform`, `brew`, `apt`, and `curl` and `wget` HTTP requests |
 | Possible secrets | A read or write of `.env` and `.env.*` (not `.example`, `.sample`, `.template`, or `.dist`), and of `.pem`, `.key`, `.p12`, `.pfx`, `.jks`, and `.keystore` files that are not under a `fixtures`, `fixture`, `__fixtures__`, `testdata`, `test`, `tests`, or `spec` directory |
 | MCP that changes things | A tool whose name holds `create`, `update`, `delete`, `remove`, `write`, `replace`, `execute`, `merge`, `push`, `send`, `deploy`, or `drop`, and any tool the list does not recognize |
 | Browser | `browser_evaluate_script`, `browser_upload_file`, `browser_switch_mode`, `browser_setup`, and `browser_reauth` |
@@ -200,14 +199,14 @@ Pi renames a command two packages register: pi-code's `/tasks` and the backgroun
 - `pi-lens` installs nothing and uses what the machine has. Codemode is off, because a managed distribution must give every tool a script can reach an explicit policy rule.
 - The permission configuration is `enforce` mode: rewritten at every launch. `permissionReviewLog` is off.
 - All five Claude dimensions are declared for all three origins: `claudeHooks` is `deny`, and the other four are `company-approved`, which admits no project content until the company declares `allow` for an origin it trusts. Its `company.match` combines `remote` with `path`.
-- The sandbox is required, and the network is private-only.
+- The sandbox is required. The default HTTP dispatcher admits declared hosts only; child processes require organization egress controls.
 
 ## Known limits
 
 - **User scope of pi-code.** `~/.claude`, `CLAUDE_CONFIG_DIR`, `~/.claude.json`, and Claude plugins load whatever the project's trust is, and are not decided by PiShip. See [Claude Code compatibility](#not-governed) and [security](../../docs/security.md#project-configuration-that-an-extension-loads-itself).
 - **pi-code's MCP client** starts MCP servers itself, bypassing `mcp.server.start` and the sandbox.
 - **An admitted `.claude/settings.json`** can run hooks, environment, and a status-line command. PiShip decides by dimension and by presence, not by content. Set `claudeHooks: deny` to close it.
-- **The permission provider's project file.** Once a project is trusted, the provider reads `.pi/extensions/pi-permission-system/config.json` from the repository over the seeded one, and a repository can change its rules for that project. The `path_write` deny stops the agent writing that file. The provider withholds an untrusted project's file by its own code (`includeProjectScope` follows the session's trust flag); that was read in the package and not exercised here. PiShip's enforced secret denies are not affected.
+- **The permission provider's project file.** In personal mode, once a project is trusted, the provider reads `.pi/extensions/pi-permission-system/config.json` from the repository over the seeded one, and a repository can change its rules for that project. The `path_write` deny stops the agent writing that file. The provider withholds an untrusted project's file by its own code (`includeProjectScope` follows the session's trust flag); that was read in the package and not exercised here. PiShip's enforced secret denies are not affected.
 - **The sandbox does not reach everything.** With `sandbox.required: true` in a copy on Linux or macOS, `bash` and `!` commands run inside it. `bg_run`, the browser, and each package's own file access do not.
 - **The review log holds command strings.** `permissionReviewLog` is `true` in this profile, and the provider writes each decision with the command under `<state>/agent/extensions/pi-permission-system/logs/`. A secret typed on a command line ends up there. It is off in the managed variant.
 - **`--yolo` in a managed distribution** that declares `policy.userAuto: allowed` and names a provider's auto-approval key approves the provider's own asks as well as PiShip's. The example declares neither.
@@ -228,6 +227,8 @@ The build installs each package with `--ignore-scripts`, and PiShip never runs a
 - `tests/developer-example.test.ts` (unit tier) checks both manifests parse, the committed lock is current, every package version is exact, the packages the profile does not add are absent, the certified provider's integrity equals the locked tree digest, the permission configuration is well formed and denies no name a developer needs, the managed variant, the release wiring, and that the example has no private product name.
 - `tests/e2e/developer-profile.test.ts` (Portable E2E tier) builds the distribution from the committed lock and runs: the payload inventory; `--smoke` tools, commands, skills, and duplicate-free registration; the effective, locked provider; `PI_LENS_HOME` in the state; the seeded file, owner-only and never overwritten once edited; about seventy allow, ask, and deny cases through the real provider; `--yolo` setting and restoring the provider key, and recovering from a killed launch; `doctor`; the browser tools (skipped without Chrome); and a Claude Code fixture repository, closed for an unknown origin and loaded for a matched company origin.
 - `packages/schema`, `packages/core`, and `packages/pi` carry the unit tests of the `environment` and `agentFiles` fields ([manifest](../../docs/manifest.md#what-a-package-is-given-environment-and-files)), the lock and diff of them, and the package-provider capability.
-- The Release candidate workflow builds DevCode twice per target, compares the two builds byte for byte, and runs the offline `--smoke` and `doctor` on the release.
+- The Release candidate workflow builds DevCode twice per target, compares the payload files by SHA-256, and runs the offline `--smoke` and `doctor` on the release.
 
-Not verified: a real model session with these tools (no model request was made); a Codemode script through the provider; a page interaction in the browser beyond starting it and listing its tools; Windows, where the permission and `--yolo` cases are skipped; the managed variant built and launched against a real identity provider, broker, and gateway; and the behavior of an untrusted repository's `.pi/extensions/pi-permission-system/config.json` end to end.
+Not verified: a real model session with these tools (no model request was made); a Codemode script through the provider; a page interaction in the browser beyond starting it and listing its tools; Windows, where the permission, `--yolo`, and Claude fixture cases are skipped; the managed variant built and launched against a real identity provider, broker, and gateway; and the behavior of an untrusted repository's `.pi/extensions/pi-permission-system/config.json` end to end.
+
+Shell HTTP clients always ask, including loopback requests: wildcard command rules cannot validate every URL host or safely handle multiple destinations. Git commands starting with global options also ask because their subcommand cannot be classified by these command patterns. `env` and `timeout` wrappers ask; direct commands and shell variable assignments retain their ordinary decisions. Safe wrapper normalization requires upstream provider support.

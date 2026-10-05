@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha6",
   "manifest": {
     "schema": "piship/v1alpha6",
-    "sha256": "sha256-7c111713171a0a0b6c85135fe6880b945eeab2c7269887585217579af101bc6d"
+    "sha256": "sha256-7984dede059e590e2a83352b82f3481332f3a7282903a502c6402185d5223102"
   },
   "app": {
     "id": "devcode",
@@ -1435,12 +1435,6 @@
                       "docker network *": "allow",
                       "docker volume ls*": "allow",
                       "docker volume inspect*": "allow",
-                      "curl *localhost*": "allow",
-                      "curl *127.0.0.1*": "allow",
-                      "curl *[::1]*": "allow",
-                      "curl *0.0.0.0*": "allow",
-                      "wget *localhost*": "allow",
-                      "wget *127.0.0.1*": "allow",
                       "sudo *": "ask",
                       "doas *": "ask",
                       "su *": "ask",
@@ -1472,11 +1466,17 @@
                       "git branch* -D*": "ask",
                       "git branch*--delete*--force*": "ask",
                       "git branch* -f *": "ask",
+                      "git checkout *": "ask",
+                      "git checkout -b *": "allow",
+                      "git restore *": "ask",
+                      "git restore --staged *": "allow",
+                      "git restore *--w*": "ask",
+                      "git restore * -*W*": "ask",
                       "git checkout* -f*": "ask",
-                      "git checkout*--force*": "ask",
-                      "git checkout -- .": "ask",
-                      "git checkout .": "ask",
-                      "git restore .": "ask",
+                      "git checkout -b * -*": "ask",
+                      "git checkout*--for*": "ask",
+                      "git checkout*--dis*": "ask",
+                      "git -*": "ask",
                       "git stash drop*": "ask",
                       "git stash clear*": "ask",
                       "git reflog expire*": "ask",
@@ -1961,7 +1961,7 @@
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
     "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
-    "packages": "sha256-566b9dc8c32d96deec27641fa7acffde46a9fb5c5fd3a784a83ff55f42ed9baa"
+    "packages": "sha256-1e5da8f7792b3c305e7bdc2743f5a55d9fe0c583d89b89a4e07a970014d64bba"
   },
   "updates": {
     "channel": "stable",
@@ -2308,7 +2308,7 @@
         {
           "path": "extensions/pi-permission-system/config.json",
           "mode": "seed",
-          "sha256": "sha256-420fea10419995b3890b2e86dd66c8dc4dc46111c93c0836eac940f5a73b5752"
+          "sha256": "sha256-5cfdaf297f499fcde0a020805c65e986ddc25732592f69ec3a3359774293e5d9"
         }
       ]
     }

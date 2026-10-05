@@ -350,6 +350,8 @@ describe("the permission provider", () => {
       "git diff HEAD~1",
       "git log --oneline -5",
       "git clean -n",
+      "git checkout -b fix",
+      "git restore --staged src/app.ts",
       "npm test",
       "npm run build",
       "pnpm install",
@@ -367,7 +369,6 @@ describe("the permission provider", () => {
       "mkdir -p build",
       "rm file.txt",
       "docker compose up -d",
-      "curl http://localhost:3000/health",
       "gh pr view 12",
     ])
       expect(decide(bash, command), command).toBe("allow");
@@ -386,6 +387,13 @@ describe("the permission provider", () => {
       "docker push img",
       "docker compose down -v",
       "curl https://example.com",
+      "curl http://localhost:3000/health",
+      "curl https://localhost.attacker.example/path",
+      "curl https://example.com/?label=localhost",
+      "git restore src/app.ts",
+      "git checkout -- src/app.ts",
+      "git -C . reset --hard HEAD",
+      "git --git-dir=.git clean -fd",
       "ssh host",
       "unknown-tool --flag",
       "gh api /user",
@@ -577,6 +585,18 @@ describe("the managed variant", () => {
       codemode: "off",
       toolSearch: "off",
     });
+  });
+
+  it("preserves every personal enforced secret rule and provider credential deny", () => {
+    const enforced = policy?.enforced ?? [];
+    for (const rule of personal.governance?.policy.enforced ?? [])
+      expect(enforced).toContainEqual(rule);
+    const personalPaths = rules(seeded(personal), "path");
+    const managedPaths = rules(seeded(managed), "path");
+    for (const [pattern, effect] of Object.entries(personalPaths))
+      if (effect === "deny")
+        expect(managedPaths[pattern], pattern).toBe("deny");
+    expect(decide(managedPaths, "/work/.env.example", "allow")).toBe("allow");
   });
 
   it("ships no package of the user class and not the browser or background tasks", () => {
