@@ -353,13 +353,29 @@ export const PROJECT_TRUST_DIMENSIONS = [
 ] as const;
 export type ProjectTrustDimension = (typeof PROJECT_TRUST_DIMENSIONS)[number];
 /**
+ * Dimensions for the Claude Code project configuration an extension such as
+ * pi-code loads (`.claude/rules`, `commands`, `skills`, `agents`, `hooks`).
+ * Unlike the dimensions above they are optional: one the manifest does not
+ * declare is absent from the parsed policy, and the mode default applies when
+ * the project is evaluated, so a lock written before they existed is unchanged.
+ */
+export const CLAUDE_TRUST_DIMENSIONS = [
+  "claudeRules",
+  "claudeCommands",
+  "claudeSkills",
+  "claudeAgents",
+  "claudeHooks",
+] as const;
+export type ClaudeTrustDimension = (typeof CLAUDE_TRUST_DIMENSIONS)[number];
+/**
  * `company-approved` admits only distribution-approved items (for example an
  * allowlisted MCP server); project-supplied executable code is never admitted.
  */
 export type ProjectDimensionEffect = PolicyEffect | "company-approved";
 export type ProjectDimensions = Readonly<
   Record<ProjectTrustDimension, ProjectDimensionEffect>
->;
+> &
+  Readonly<Partial<Record<ClaudeTrustDimension, ProjectDimensionEffect>>>;
 
 export interface ProjectMatcher {
   /** Glob over the normalized origin remote, such as `git.example.com/team/**`. */
