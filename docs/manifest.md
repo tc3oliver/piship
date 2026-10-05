@@ -138,7 +138,7 @@ A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, 
 
 Resource globs are anchored and case-sensitive. `*` matches any run of characters except `/`, `:`, and line breaks; `**` matches anything. A trailing `/**` also matches the directory itself (`~/.ssh/**` covers `~/.ssh`), and `/**/` also matches a single `/`. Filesystem rules may start with the path tokens `workspace` (the project root), `~/` (the home directory), and `tmp/` (the session temp directory, or the system one without a sandbox); they are expanded and symlink-resolved like the requested path.
 
-`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with `remote` (a glob over `host/path`), `path` (a glob over the absolute root), or both, in which case both must match; company is checked first, and anything else is `unknown`. The remote comes from the checkout's own git configuration, so `remote` alone is a claim, not proof; in managed distributions combine it with `path`, as in `{ remote: "git.acme.example/**", path: "/srv/src/**" }`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved`:
+`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with `remote` (a glob over `host/path`), `path` (a glob over the absolute root), or both, in which case both must match; company is checked first, and anything else is `unknown`. The remote comes from the checkout's own git configuration, so `remote` alone is a claim, not proof; in managed distributions combine it with `path`, as in `{ remote: "git.acme.example/**", path: "/srv/src/**" }`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved` (five optional [Claude Code dimensions](#claude-code-project-configuration) follow):
 
 | Dimension | Project items | Managed default (company / external / unknown) | Personal default (company, external / unknown) |
 | --- | --- | --- | --- |
@@ -150,6 +150,57 @@ Resource globs are anchored and case-sensitive. `*` matches any run of character
 | `agents`, `hooks`, `providers` | `.pi/agents`, `.pi/settings.json`, `.piship/providers` | deny | allow (`hooks` deny) / ask (`hooks` deny) |
 
 `company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny. The user's [auto mode](#user-auto-mode) never answers these project trust prompts: they decide whether to trust a workspace's content, not whether to run an action.
+
+### Claude Code project configuration
+
+A repository that already works with Claude Code holds `CLAUDE.md`, `.claude/rules`, `.claude/commands`, `.claude/skills`, `.claude/agents`, hooks (declared in `.claude/settings.json`, with scripts often under `.claude/hooks`), and often `.mcp.json`. Pi's own project discovery is off in a distribution, and PiShip itself loads none of this except the root `CLAUDE.md`, an `instructions` item as before. A distribution that includes an extension for it, such as the [pi-code](https://www.npmjs.com/package/pi-code) package, gets it loaded by that extension, which reads the files itself once Pi reports the project as trusted. PiShip owns that answer, so a project's own `.claude/` never admits itself under company policy ([security](security.md#project-trust)). Five optional dimensions, set per origin like the eight above, decide it:
+
+| Dimension | Project items, found in every directory from the working directory up to the project root | Managed default (company / external / unknown) | Personal default (company / external / unknown) |
+| --- | --- | --- | --- |
+| `claudeRules` | `.claude/rules`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/output-styles` | company-approved / deny / deny | allow / allow / ask |
+| `claudeCommands` | `.claude/commands` | company-approved / deny / deny | allow / allow / ask |
+| `claudeSkills` | `.claude/skills` | company-approved / deny / deny | allow / allow / ask |
+| `claudeAgents` | `.claude/agents` | company-approved / deny / deny | allow / allow / ask |
+| `claudeHooks` | `.claude/hooks`, `.claude/settings.json`, `.claude/settings.local.json` | deny / deny / deny | allow / allow / ask |
+
+- **Optional.** A dimension the manifest does not declare takes the default above when the project is evaluated. It is not written to the parsed policy or the lock, so the lock of an existing distribution does not change, and `piship diff` reads an undeclared one as its default (declaring the default is no change) and reports a changed one like any other dimension. Personal mode loads the configuration of a company or external project without a prompt and asks once per launch for an unknown one; managed mode loads none of it until the company declares `allow` for an origin it trusts, because `company-approved` admits no project content here (an extension's code cannot be held to an allowlist). `policy.resourceTrust.project: deny` denies all five, and `allow` admits rules, commands, and skills but not agents or hooks.
+- **Admitted as a unit.** Pi gives an extension one answer per session, never one per kind. PiShip therefore admits the configuration an extension reads as a whole: the five kinds above, `.mcp.json` and `.pi/mcp.json` (the `mcp` dimension), and `.pi/agents` (`agents`), which pi-code reads under the same answer. Each is looked for in every directory from the working directory up to the project root, where an extension finds the nearest one. Every item found must be admitted: one that is denied, or `company-approved`, leaves all of them unloaded. `claudeHooks` covers `.claude/settings.json` and `settings.local.json` because Claude hooks, `env`, and a status-line command are declared there, and PiShip does not read them; a project that has a settings file stays closed while `claudeHooks` is `deny`.
+- **Per item.** Each item is then decided as `resource.load` with the resource `project:<path under the project root>`, such as `project:.claude/hooks` or `project:packages/app/.claude/rules`, so `policy.enforced`, `policy.defaults`, `policy.default`, and a project's narrowing-only `.piship/policy.json` apply to it: `{ id: no-project-hooks, action: resource.load, resource: "project:.claude/hooks", effect: deny }` keeps hooks out whatever the dimension says. An `ask` dimension asks once for the whole configuration, on the terminal before Pi starts; headless, it resolves to deny.
+- **Nothing found.** A personal project with no such configuration is trusted. A managed one is trusted only when policy admits all five dimensions for its origin, because an extension can search where PiShip did not (the main checkout of a linked worktree, a directory below the working directory) and PiShip cannot prove nothing is there.
+- **Recorded.** Each item produces a `resource.load` or `resource.denied` audit event (`detail.kind` `claude` or `extension-config`, `detail.dimension`), and the unit produces one more for `project:.claude` with `detail.seam: project-trust`. `--smoke` lists the items under `governance.resources` with the reason each did not load. `doctor` shows each item in the Project group and, last, `project trust for extensions` with the static decision. A launch that leaves configuration unloaded prints one notice saying so.
+
+A company that trusts its own repositories and wants rules, commands, skills, and agents to work, but not hooks, declares:
+
+```yaml
+policy:
+  projectTrust:
+    company:
+      match: [{ remote: "git.acme.example/**", path: "/srv/src/**" }]
+      claudeRules: allow
+      claudeCommands: allow
+      claudeSkills: allow
+      claudeAgents: allow
+      claudeHooks: deny   # the default: a project with hooks or a settings file stays closed
+  defaults:
+    - { id: project-claude, action: resource.load, resource: "project:.claude/**", effect: allow }
+```
+
+The seam reaches only an extension that asks Pi whether the project is trusted. What PiShip does and does not enforce, including the user-scope files pi-code reads and the MCP servers it starts itself, is in [security](security.md#project-trust). For a managed distribution that includes pi-code 1.4.2, also leave out its MCP client, which starts the servers named in `~/.claude.json`, the distribution's `<state>/agent/mcp.json`, plugins, and (when trusted) the project outside PiShip's `mcp.server.start` decisions, exposure, and sandbox, and, when no hooks should run at all, its hooks extension:
+
+```yaml
+resources:
+  packages:
+    - id: pi-code
+      source: npm
+      package: pi-code
+      version: 1.4.2
+      registry: https://registry.company.example
+      class: company
+      # Package filters match the paths of the entry files inside the package.
+      extensions: ["!extensions/mcp/**"]   # add "!extensions/hooks/**" to run no Claude hooks
+```
+
+`piship lock` writes the resulting extension inventory into `piship.lock`; review it there, since a later pi-code release can lay its files out differently.
 
 ### Local rule files
 
@@ -536,7 +587,7 @@ v1alpha3 and later branded commands add:
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
 - `auto on | auto off | auto status` (managed): the user's [auto mode](#user-auto-mode), where `policy.userAuto` allows it; `/auto` inside a session.
-- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
+- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin, each discovered project item with its effect, and the static project trust for extensions that load `.claude/*`), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
 Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 or later release with update trust: the installation's update root, started from the release's `updates.trust.bootstrap` (or v1alpha4 `updates.trust.keys`) at install ([installation trust state](release/trust-root.md#installation-trust-state)).
