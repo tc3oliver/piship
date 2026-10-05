@@ -1,9 +1,11 @@
 // `<command> auto on|off|status`: the user's auto mode switch, which the
 // distribution must allow (`policy.userAuto: allowed`).
 import { formatError, PiShipError, principalId } from "@piship/contracts";
+import type { DistributionLock } from "../index.js";
 import {
   describeUserAuto,
   setUserAuto,
+  userAutoAllowed,
   userAutoPrincipal,
   userAutoStatus,
 } from "../user-auto.js";
@@ -33,6 +35,39 @@ export function userAutoDenied(
             "Ask the distribution administrator to allow auto mode, or to allow the actions you need in the policy",
         },
       );
+}
+
+/**
+ * Why `--yolo` cannot start this distribution's session, or undefined when
+ * it can. It relaxes a policy, so a distribution that declares none has
+ * nothing for it to do; and where the administrator owns the policy
+ * (managed), it works only if the distribution allows auto-approval
+ * (`policy.userAuto: allowed`), as `auto on` does.
+ */
+export function yoloRefusal(
+  metadata: DistributionLock,
+): PiShipError | undefined {
+  const command = metadata.app.command;
+  const policy = metadata.governance?.manifest.policy;
+  if (!policy)
+    return new PiShipError(
+      "CONFIG_INVALID",
+      `--yolo has no meaning for ${command}: it declares no policy (piship/v1alpha3 or later), so nothing asks for approval`,
+      { userAction: `Start ${command} without --yolo` },
+    );
+  if (
+    metadata.deployment.mode === "personal" ||
+    userAutoAllowed(policy, metadata.deployment.mode)
+  )
+    return undefined;
+  return new PiShipError(
+    "POLICY_DENIED",
+    "--yolo is not allowed: this distribution does not allow auto-approval (policy.userAuto is off)",
+    {
+      component: "policy",
+      userAction: `Start ${command} without --yolo and answer the prompts, or ask the distribution administrator to allow auto-approval (policy.userAuto: allowed) or to allow the actions you need in the policy`,
+    },
+  );
 }
 
 export async function runAuto(
