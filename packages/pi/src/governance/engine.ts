@@ -101,6 +101,8 @@ export function discoverProject(options: GovernanceOptions, homeDir: string) {
   });
   const candidates = discoverProjectResources(project, manifest.policy, {
     homeDir,
+    cwd: options.cwd,
+    mode: options.lock.deployment.mode,
   });
   return { project, candidates };
 }

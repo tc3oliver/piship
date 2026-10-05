@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { redact } from "@piship/contracts";
 import { type UserAutoStatus, userAutoStatus } from "@piship/core";
 import {
+  assessExtensionProjectTrust,
   type CapabilityState,
+  type ExtensionTrustAssessment,
   type PolicyEngine,
   type ProjectIdentity,
   type ProjectResourceCandidate,
@@ -34,6 +36,11 @@ import { sandboxBackend } from "./sandbox.js";
 export interface GovernanceInspection {
   readonly project: ProjectIdentity;
   readonly candidates: readonly ProjectResourceCandidate[];
+  /**
+   * What policy says about project configuration that extensions load by
+   * themselves (Claude Code files), before any approval a launch asks for.
+   */
+  readonly extensionTrust: ExtensionTrustAssessment;
   readonly sandbox: ContainmentReport;
   readonly containment: string;
   readonly engine: PolicyEngine;
@@ -215,6 +222,11 @@ export async function inspectGovernance(
   return {
     project,
     candidates,
+    extensionTrust: assessExtensionProjectTrust(candidates, {
+      policy: manifest.policy,
+      identity: project,
+      mode: options.lock.deployment.mode,
+    }),
     sandbox: report,
     containment: describeContainment(report, workspace),
     engine,
