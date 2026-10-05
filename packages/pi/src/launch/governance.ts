@@ -63,6 +63,8 @@ export function governanceOptions(
     piVersion: VERSION,
     interactive,
     fetch: createManagedFetch(network, "governance"),
+    plainHttpFetch: (plainHttp) =>
+      createManagedFetch(network, "governance", { plainHttp }),
     // Plain HTTP beyond loopback only for MCP servers that declare
     // httpTransport: http-allowed, to a private or internal host, and only
     // on this fetch. Private-only network policy still applies.

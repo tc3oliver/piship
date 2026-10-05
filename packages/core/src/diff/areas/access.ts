@@ -69,6 +69,23 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
       ["low", "Requests fewer identity scopes."],
     );
   }
+  // An absent httpTransport is https.
+  const plainHttp =
+    (exposed: string) =>
+    (_: string, v: string): Verdict =>
+      v === "http-allowed"
+        ? [
+            "high",
+            `May be reached over plain HTTP to a private or internal host; ${exposed} unencrypted on the network path.`,
+          ]
+        : ["low", "Reached over https only."];
+  out.scalar(
+    "access",
+    "identity httpTransport",
+    xo?.httpTransport,
+    yo?.httpTransport,
+    plainHttp("sign-in tokens, including the refresh token, are then"),
+  );
   const xa = x.identity?.mode === "adapter" ? x.identity.adapter : undefined;
   const ya = y.identity?.mode === "adapter" ? y.identity.adapter : undefined;
   if (xa && ya)
@@ -96,6 +113,13 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(x.credential?.broker?.revokeEndpoint),
     safeUrl(y.credential?.broker?.revokeEndpoint),
     endpoint,
+  );
+  out.scalar(
+    "access",
+    "credential broker httpTransport",
+    x.credential?.broker?.httpTransport,
+    y.credential?.broker?.httpTransport,
+    plainHttp("the identity token and the issued gateway credential are then"),
   );
   out.scalar(
     "access",
@@ -147,6 +171,13 @@ export function access(out: Collector, b: AnyLock, a: AnyLock): void {
     safeUrl(x.inference?.baseUrl),
     safeUrl(y.inference?.baseUrl),
     endpoint,
+  );
+  out.scalar(
+    "access",
+    "inference httpTransport",
+    x.inference?.httpTransport,
+    y.inference?.httpTransport,
+    plainHttp("the gateway credential and every prompt and response are then"),
   );
   out.scalar("access", "inference api", x.inference?.api, y.inference?.api, [
     "medium",

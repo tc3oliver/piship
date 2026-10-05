@@ -202,6 +202,32 @@ export function isPrivateNetworkHost(hostname: string): boolean {
   return INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
+/**
+ * A `plainHttp` predicate for an endpoint that opted in to plain HTTP
+ * (`httpTransport: http-allowed`): it admits plain HTTP only to the exact
+ * origin (scheme, host, and port) of each given URL that is plain HTTP to a
+ * private or internal host (`isPrivateNetworkHost`), and to nothing else.
+ * Undefined when no URL is one, so a caller keeps the loopback-only rule.
+ */
+export function plainHttpOrigins(
+  urls: readonly (string | URL | undefined)[],
+): ((target: URL) => boolean) | undefined {
+  const origins = new Set<string>();
+  for (const value of urls) {
+    if (value === undefined) continue;
+    let url: URL;
+    try {
+      url = new URL(value.toString());
+    } catch {
+      continue;
+    }
+    if (url.protocol === "http:" && isPrivateNetworkHost(url.hostname))
+      origins.add(url.origin);
+  }
+  if (!origins.size) return undefined;
+  return (target) => target.protocol === "http:" && origins.has(target.origin);
+}
+
 /** Refuse to run managed network flows when TLS verification was disabled. */
 export function assertTlsVerificationEnabled(
   env: NodeJS.ProcessEnv = process.env,
@@ -676,9 +702,10 @@ function transportFailure(
 
 /**
  * Validate a destination against transport and private-only policy.
- * `plainHttp` may permit plain HTTP to a non-loopback destination; only the
- * update channel passes it (`updates.transport: http-allowed`), so every
- * other endpoint keeps the loopback-only rule.
+ * `plainHttp` may permit plain HTTP to a non-loopback destination. Only an
+ * endpoint that opted in passes it (`updates.transport: http-allowed`, or
+ * `httpTransport: http-allowed`, usually through `plainHttpOrigins` for its
+ * own origin), so every other request keeps the loopback-only rule.
  */
 export function checkDestination(
   target: URL,
@@ -730,7 +757,7 @@ export function createManagedFetch(
   options: {
     /**
      * Permit plain HTTP to a non-loopback destination it accepts. Only the
-     * update channel's fetch passes it; see checkDestination.
+     * fetch of an endpoint that opted in passes it; see checkDestination.
      */
     readonly plainHttp?: (target: URL) => boolean;
   } = {},
@@ -816,14 +843,28 @@ let processNetwork: ApprovedNetworkEnvironment | undefined;
  */
 export function applyProcessNetworkPolicy(
   policy: NetworkPolicy,
-  options: { readonly restrictChildren?: boolean } = {},
+  options: {
+    readonly restrictChildren?: boolean;
+    /**
+     * Plain HTTP destinations a private-only policy also accepts: only the
+     * inference gateway's own origin with `inference.httpTransport:
+     * http-allowed` (`plainHttpOrigins`). Without a private-only policy the
+     * process dispatcher checks no destination, as before.
+     */
+    readonly plainHttp?: (target: URL) => boolean;
+  } = {},
 ): void {
   assertTlsVerificationEnabled();
   const extra = loadCertificates(policy.additionalCA);
   const roots = trustRoots(extra);
   if (roots && typeof tls.setDefaultCACertificates === "function")
     tls.setDefaultCACertificates(roots);
-  setGlobalDispatcher(createDispatcher(policy));
+  setGlobalDispatcher(
+    createDispatcher(
+      policy,
+      options.plainHttp ? { plainHttp: options.plainHttp } : {},
+    ),
+  );
   processNetwork = options.restrictChildren
     ? approvedNetworkEnvironment(policy)
     : undefined;

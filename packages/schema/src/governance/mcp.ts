@@ -1,6 +1,5 @@
 // MCP: server admission, transports, child environment, and tool filters.
 import {
-  isPrivateNetworkHost,
   MCP_IDENTITY_HEADER_CLAIMS,
   mcpIdentityHeaderProblem,
 } from "@piship/contracts";
@@ -15,8 +14,6 @@ import {
   type McpServerConfig,
   type TrustSetting,
 } from "../governance.js";
-import { PRIVATE_UPDATE_HOSTS } from "../lifecycle.js";
-import { checkTemplate, hasRuntimeReference } from "../variables.js";
 import {
   bool,
   conflict,
@@ -150,10 +147,12 @@ function parseServer(
         "http-allowed cannot be combined with credential: runtime; the runtime credential is never sent over plain HTTP",
       );
     launch = {
-      url:
-        httpTransport === "http-allowed"
-          ? plainHttpUrl(server.url, `${path}.url`, variables)
-          : referenceUrl(server.url, `${path}.url`, variables),
+      url: referenceUrl(
+        server.url,
+        `${path}.url`,
+        variables,
+        httpTransport === "http-allowed",
+      ),
     };
     const headers =
       server.headers === undefined
@@ -247,44 +246,6 @@ function parseServer(
     ...v6Fields,
     ...http,
   };
-}
-
-/**
- * A server url with `httpTransport: http-allowed`: https, or plain HTTP to
- * a private or internal host. A `${NAME}` reference is checked the same way
- * once it resolves at launch.
- */
-function plainHttpUrl(
-  value: unknown,
-  path: string,
-  variables: readonly string[],
-): string {
-  if (typeof value !== "string" || value.trim() === "")
-    fail(path, "Expected a non-empty string");
-  if (hasRuntimeReference(value) || value.includes("$")) {
-    const problem = checkTemplate(value, variables);
-    if (problem) fail(path, problem.message);
-    return value;
-  }
-  const text = plainString(value, path, 2048);
-  let url: URL;
-  try {
-    url = new URL(text);
-  } catch {
-    fail(path, "Expected an absolute URL");
-  }
-  if (url.protocol !== "http:") return referenceUrl(text, path, variables);
-  if (url.username || url.password)
-    fail(path, "URLs must not embed credentials");
-  if (url.search || url.hash)
-    fail(path, "URLs must not contain query strings or fragments");
-  // Only the name is judged, never DNS.
-  if (!isPrivateNetworkHost(url.hostname))
-    fail(
-      path,
-      `httpTransport: http-allowed permits plain HTTP only to a private or internal host (${PRIVATE_UPDATE_HOSTS}); ${url.hostname} is public, so serve it over https`,
-    );
-  return text;
 }
 
 function parseHeaders(

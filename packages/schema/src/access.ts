@@ -1,4 +1,9 @@
 import {
+  HTTP_TRANSPORTS,
+  type HttpTransport,
+  plainHttpProblem,
+} from "./http-transport.js";
+import {
   checkTemplate,
   checkVariableName,
   hasRuntimeReference,
@@ -18,6 +23,12 @@ export type IdentityConfig =
         readonly scopes: readonly string[];
         readonly audience?: string;
         readonly redirectUri: string;
+        /**
+         * piship/v1alpha6: `http-allowed` also permits plain HTTP to a
+         * private or internal host for the issuer and every endpoint its
+         * discovery document names. Absent means `https`.
+         */
+        readonly httpTransport?: HttpTransport;
       };
     }
   | { readonly mode: "adapter"; readonly adapter: string };
@@ -34,6 +45,12 @@ export interface CredentialConfig {
   readonly broker?: {
     readonly endpoint: string;
     readonly revokeEndpoint?: string;
+    /**
+     * piship/v1alpha6: `http-allowed` also permits plain HTTP to a private
+     * or internal host for `endpoint` and `revokeEndpoint`. Absent means
+     * `https`.
+     */
+    readonly httpTransport?: HttpTransport;
   };
   readonly adapter?: string;
   readonly storage: {
@@ -48,6 +65,11 @@ export interface InferenceConfig {
   readonly baseUrl?: string;
   readonly api?: "openai-completions" | "openai-responses";
   readonly liveCatalog: boolean;
+  /**
+   * piship/v1alpha6: `http-allowed` also permits plain HTTP to a private or
+   * internal host for `baseUrl`. Absent means `https`.
+   */
+  readonly httpTransport?: HttpTransport;
 }
 
 /** Pi model types; Pi has no `embedding` type. */
@@ -203,6 +225,8 @@ function referenceString(
   path: string,
   variables: readonly string[],
   kind: "url" | "id" | "path",
+  /** `httpTransport: http-allowed`; see checkUrl. */
+  plainHttp = false,
 ): string {
   if (typeof value !== "string" || value.trim() === "")
     fail(path, "Expected a non-empty string");
@@ -212,10 +236,16 @@ function referenceString(
     return value;
   }
   const text = plainString(value, path);
-  if (kind === "url") checkUrl(text, path);
+  if (kind === "url") checkUrl(text, path, plainHttp);
   return text;
 }
-export function checkUrl(value: string, path: string): URL {
+/**
+ * An endpoint URL: https, or plain HTTP to loopback. With `plainHttp` (the
+ * endpoint's `httpTransport: http-allowed`) plain HTTP to a private or
+ * internal host is accepted too, and to a public host refused. Only the URL
+ * text is judged, never DNS.
+ */
+export function checkUrl(value: string, path: string, plainHttp = false): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -226,6 +256,11 @@ export function checkUrl(value: string, path: string): URL {
     fail(path, "URLs must not embed credentials");
   if (url.search || url.hash)
     fail(path, "URLs must not contain query strings or fragments");
+  if (plainHttp && url.protocol === "http:") {
+    const problem = plainHttpProblem(url);
+    if (problem) fail(path, problem);
+    return url;
+  }
   const loopback = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/.test(
     url.hostname,
   );
@@ -280,6 +315,16 @@ function adapterPath(value: unknown, path: string): string {
     fail(path, "Adapters must be ECMAScript modules ending in .mjs or .js");
   return item;
 }
+/** `<endpoint>.httpTransport`; absent is `https`. */
+function httpTransport(value: unknown, path: string): HttpTransport {
+  if (value === undefined) return "https";
+  if (
+    typeof value !== "string" ||
+    !(HTTP_TRANSPORTS as readonly string[]).includes(value)
+  )
+    fail(path, `Expected ${HTTP_TRANSPORTS.join(", ")}`);
+  return value as HttpTransport;
+}
 function positiveInteger(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
     fail(path, "Expected a positive integer");
@@ -309,6 +354,7 @@ function parseIdentity(
   value: unknown,
   mode: DeploymentMode,
   variables: readonly string[],
+  v6 = false,
 ): IdentityConfig {
   if (value === undefined) {
     if (mode === "managed")
@@ -343,7 +389,12 @@ function parseIdentity(
     "audience",
     "redirectUri",
     "clientSecret",
+    ...(v6 ? ["httpTransport"] : []),
   ]);
+  const transport = httpTransport(
+    oidc.httpTransport,
+    "identity.oidc.httpTransport",
+  );
   if (oidc.clientSecret !== undefined)
     fail(
       "identity.oidc.clientSecret",
@@ -385,6 +436,7 @@ function parseIdentity(
         "identity.oidc.issuer",
         variables,
         "url",
+        transport === "http-allowed",
       ),
       clientId: referenceString(
         oidc.clientId,
@@ -405,6 +457,7 @@ function parseIdentity(
             ),
           }),
       redirectUri: redirect,
+      ...(transport === "http-allowed" ? { httpTransport: transport } : {}),
     },
   };
 }
@@ -415,6 +468,7 @@ function parseCredential(
   inferenceProvider: InferenceConfig["provider"],
   identity: IdentityConfig,
   variables: readonly string[],
+  v6 = false,
 ): CredentialConfig {
   const credential = record(
     value ?? {
@@ -471,13 +525,20 @@ function parseCredential(
     const section = record(credential.broker, "credential.broker", [
       "endpoint",
       "revokeEndpoint",
+      ...(v6 ? ["httpTransport"] : []),
     ]);
+    const transport = httpTransport(
+      section.httpTransport,
+      "credential.broker.httpTransport",
+    );
+    const plainHttp = transport === "http-allowed";
     broker = {
       endpoint: referenceString(
         section.endpoint,
         "credential.broker.endpoint",
         variables,
         "url",
+        plainHttp,
       ),
       ...(section.revokeEndpoint === undefined
         ? {}
@@ -487,8 +548,10 @@ function parseCredential(
               "credential.broker.revokeEndpoint",
               variables,
               "url",
+              plainHttp,
             ),
           }),
+      ...(plainHttp ? { httpTransport: transport } : {}),
     };
   } else if (credential.broker !== undefined)
     conflict(
@@ -552,12 +615,14 @@ function parseInference(
   value: unknown,
   mode: DeploymentMode,
   variables: readonly string[],
+  v6 = false,
 ): InferenceConfig {
   const inference = record(value ?? { provider: "pi-native" }, "inference", [
     "provider",
     "baseUrl",
     "api",
     "liveCatalog",
+    ...(v6 ? ["httpTransport"] : []),
   ]);
   const provider = inference.provider;
   if (provider !== "openai-compatible" && provider !== "pi-native")
@@ -568,7 +633,7 @@ function parseInference(
       "Managed mode requires an explicit openai-compatible gateway; pi-native would inherit ambient provider access",
     );
   if (provider === "pi-native") {
-    for (const key of ["baseUrl", "api", "liveCatalog"])
+    for (const key of ["baseUrl", "api", "liveCatalog", "httpTransport"])
       if (inference[key] !== undefined)
         conflict(
           `inference.${key}`,
@@ -579,6 +644,10 @@ function parseInference(
   const api = inference.api ?? "openai-completions";
   if (api !== "openai-completions" && api !== "openai-responses")
     fail("inference.api", "Expected openai-completions or openai-responses");
+  const transport = httpTransport(
+    inference.httpTransport,
+    "inference.httpTransport",
+  );
   return {
     provider,
     baseUrl: referenceString(
@@ -586,9 +655,11 @@ function parseInference(
       "inference.baseUrl",
       variables,
       "url",
+      transport === "http-allowed",
     ),
     api,
     liveCatalog: bool(inference.liveCatalog, "inference.liveCatalog", false),
+    ...(transport === "http-allowed" ? { httpTransport: transport } : {}),
   };
 }
 
@@ -1042,18 +1113,22 @@ export function parseAccess(
   root: Json,
   mode: DeploymentMode,
   extraReferences: readonly string[] = [],
-  /** piship/v1alpha6 and later: model catalog `type` and `virtual`. */
+  /**
+   * piship/v1alpha6 and later: model catalog `type` and `virtual`, and the
+   * endpoints' `httpTransport`.
+   */
   options: { readonly v6?: boolean } = {},
 ): AccessManifest {
   const variables = parseVariables(root.variables);
-  const identity = parseIdentity(root.identity, mode, variables);
-  const inference = parseInference(root.inference, mode, variables);
+  const identity = parseIdentity(root.identity, mode, variables, options.v6);
+  const inference = parseInference(root.inference, mode, variables, options.v6);
   const credential = parseCredential(
     root.credential,
     mode,
     inference.provider,
     identity,
     variables,
+    options.v6,
   );
   const models = parseModels(root.models, mode, inference, options.v6);
   const config = parseConfig(root.config, models);

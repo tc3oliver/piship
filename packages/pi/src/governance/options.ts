@@ -32,6 +32,15 @@ export interface GovernanceOptions {
    */
   readonly mcpPlainHttpFetch?: ManagedFetch;
   /**
+   * The governance fetch that also admits plain HTTP where `plainHttp`
+   * accepts (usually `plainHttpOrigins` of one endpoint): for the audit
+   * sinks and the sandbox with `httpTransport: http-allowed`. Absent, such
+   * an endpoint over plain HTTP is refused.
+   */
+  readonly plainHttpFetch?: (
+    plainHttp: (target: URL) => boolean,
+  ) => ManagedFetch;
+  /**
    * The claims of the identity this launch activated, for MCP identity
    * headers. Each call checks only the stored identity metadata and fails
    * when the launch's principal is signed out or replaced. Absent without an

@@ -22,6 +22,7 @@ import {
   type AuditEvent,
   type AuditSink,
   isLoopbackHost,
+  isPrivateNetworkHost,
   NO_CONTENT_CAPTURE,
   PiShipError,
 } from "@piship/contracts";
@@ -34,6 +35,8 @@ export interface AuditSinkConfig {
   /** HTTP sinks: endpoint URL or `${NAME}` runtime reference. */
   readonly url?: string;
   readonly required: boolean;
+  /** `http-allowed`: plain HTTP to a private or internal host too. */
+  readonly httpTransport?: "https" | "http-allowed";
 }
 
 /** Structurally identical to `@piship/schema` AuditConfig. */
@@ -82,6 +85,13 @@ export interface AuditLogOptions {
   readonly stateDir: string;
   /** Injected (managed) fetch used by HTTP sinks. */
   readonly fetch?: AuditFetch;
+  /**
+   * For a sink with `httpTransport: http-allowed` whose URL is plain HTTP
+   * to a private or internal host: a managed fetch that also admits plain
+   * HTTP to that URL's origin, and to nothing else. Without it such a sink
+   * is not opened.
+   */
+  readonly plainHttpFetch?: (url: URL) => AuditFetch;
   /** Resolves `${NAME}` references in HTTP sink URLs. */
   readonly resolveUrl?: (template: string) => string;
   readonly now?: () => Date;
@@ -552,13 +562,29 @@ function resolveHttpUrl(
   if (url.username || url.password)
     throw new Error("HTTP sink url must not embed credentials");
   if (
-    url.protocol !== "https:" &&
-    !(url.protocol === "http:" && isLoopbackHost(url.hostname))
+    sink.httpTransport === "http-allowed" &&
+    url.protocol === "http:" &&
+    !isPrivateNetworkHost(url.hostname)
   )
     throw new Error(
-      "HTTP sink url must use https (plain http only for loopback)",
+      `HTTP sink url is plain HTTP to ${url.hostname}, which is public; httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+    );
+  if (
+    url.protocol !== "https:" &&
+    !(
+      url.protocol === "http:" &&
+      (isLoopbackHost(url.hostname) || sink.httpTransport === "http-allowed")
+    )
+  )
+    throw new Error(
+      "HTTP sink url must use https (plain http only for loopback, or for a private or internal host with httpTransport: http-allowed)",
     );
   return url;
+}
+
+/** Plain HTTP beyond loopback, which only an opted-in sink reaches. */
+function plainHttpSink(url: URL): boolean {
+  return url.protocol === "http:" && !isLoopbackHost(url.hostname);
 }
 
 class Sink {
@@ -892,14 +918,21 @@ async function openSink(
   } catch (error) {
     return markOpenFailure(new Sink(config, undefined, undefined), error);
   }
-  if (!options.fetch)
+  const fetch = plainHttpSink(url)
+    ? options.plainHttpFetch?.(url)
+    : options.fetch;
+  if (!fetch)
     return markOpenFailure(
       new Sink(config, undefined, url.href),
-      new Error("no fetch was provided"),
+      new Error(
+        plainHttpSink(url)
+          ? "no plain-HTTP fetch was provided"
+          : "no fetch was provided",
+      ),
     );
   const writer = new HttpSinkWriter(
     url,
-    options.fetch,
+    fetch,
     options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
   );
   const sink = new Sink(config, writer, url.href);

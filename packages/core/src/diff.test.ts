@@ -318,6 +318,52 @@ describe("diffLocks", () => {
     ).toEqual(["low", "low"]);
   });
 
+  it("flags plain HTTP on the gateway, broker, identity, audit sinks, and sandbox as high", () => {
+    const https = clone(base);
+    https.governance.manifest.audit.sinks.push({
+      id: "collector",
+      type: "http",
+      url: "http://10.0.0.6:9000/events",
+      required: false,
+    });
+    const plain = clone(https);
+    plain.access.inference.httpTransport = "http-allowed";
+    plain.access.credential.broker.httpTransport = "http-allowed";
+    plain.access.identity.oidc.httpTransport = "http-allowed";
+    plain.governance.manifest.audit.sinks.at(-1).httpTransport = "http-allowed";
+    plain.governance.manifest.sandbox.httpTransport = "http-allowed";
+    const report = diffLocks(https, plain);
+    expect(report.risk).toBe("high");
+    expect(
+      report.changes.map(({ item, risk, after }) => ({ item, risk, after })),
+    ).toEqual([
+      { item: "sandbox httpTransport", risk: "high", after: "http-allowed" },
+      {
+        item: "audit sink collector httpTransport",
+        risk: "high",
+        after: "http-allowed",
+      },
+      {
+        item: "credential broker httpTransport",
+        risk: "high",
+        after: "http-allowed",
+      },
+      {
+        item: "identity httpTransport",
+        risk: "high",
+        after: "http-allowed",
+      },
+      {
+        item: "inference httpTransport",
+        risk: "high",
+        after: "http-allowed",
+      },
+    ]);
+    expect(
+      diffLocks(plain, https).changes.map((change) => change.risk),
+    ).toEqual(["low", "low", "low", "low", "low"]);
+  });
+
   it("names plain HTTP and identity headers of an added server", () => {
     const added = clone(base);
     added.governance.manifest.mcp.servers.push({

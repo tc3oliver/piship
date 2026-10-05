@@ -7,6 +7,7 @@ import type {
   PolicyAction,
   PolicyEffect,
 } from "@piship/contracts";
+import type { HttpTransport } from "./http-transport.js";
 
 export const RESOURCE_KINDS = [
   "instructions",
@@ -519,6 +520,12 @@ export interface SandboxConfig {
    * bound to the principal and the endpoint origins. Omitted is `none`.
    */
   readonly credential?: "runtime" | "stored";
+  /**
+   * piship/v1alpha6, remote providers: `http-allowed` also permits plain
+   * HTTP to a private or internal host for `endpoint` and `router`. Absent
+   * means `https`.
+   */
+  readonly httpTransport?: HttpTransport;
   readonly filesystem: {
     /** Path tokens: `workspace`, `tmp`, `~/...`, or absolute paths. */
     readonly read: { readonly deny: readonly string[] };
@@ -538,6 +545,11 @@ export interface AuditSinkConfig {
   /** HTTP sinks: endpoint URL or `${NAME}` runtime reference. */
   readonly url?: string;
   readonly required: boolean;
+  /**
+   * piship/v1alpha6, http sinks: `http-allowed` also permits plain HTTP to
+   * a private or internal host. Absent means `https`.
+   */
+  readonly httpTransport?: HttpTransport;
 }
 
 export interface AuditConfig {

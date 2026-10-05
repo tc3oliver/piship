@@ -3,10 +3,100 @@
 // commands (the bash tool) receive; MCP stdio servers only get env.allow.
 // Proxies are shown as scheme://host:port only; NO_PROXY and withheld
 // variables by name, never by value.
+import { resolveTemplate } from "@piship/schema";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
+/**
+ * Endpoints that opted in to plain HTTP (`httpTransport: http-allowed`),
+ * other than MCP servers (reported with each server): by host only.
+ */
+function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
+  const metadata = data.ctx.metadata;
+  const access = metadata.access;
+  const governance = metadata.governance?.manifest;
+  // Doctor reports whatever the lock holds; a section may be partial.
+  const oidc =
+    access?.identity?.mode === "oidc" ? access.identity.oidc : undefined;
+  const endpoints: {
+    readonly key: string;
+    readonly urls: readonly (readonly [string, string | undefined])[];
+    readonly exposed: string;
+  }[] = [];
+  if (oidc?.httpTransport === "http-allowed")
+    endpoints.push({
+      key: "identity.oidc.httpTransport",
+      urls: [["identity.oidc.issuer", oidc.issuer]],
+      exposed: "sign-in tokens, including the refresh token, are",
+    });
+  const broker = access?.credential?.broker;
+  if (broker?.httpTransport === "http-allowed")
+    endpoints.push({
+      key: "credential.broker.httpTransport",
+      urls: [
+        ["credential.broker.endpoint", broker.endpoint],
+        ["credential.broker.revokeEndpoint", broker.revokeEndpoint],
+      ],
+      exposed: "the identity token and the issued gateway credential are",
+    });
+  if (access?.inference?.httpTransport === "http-allowed")
+    endpoints.push({
+      key: "inference.httpTransport",
+      urls: [["inference.baseUrl", access.inference.baseUrl]],
+      exposed: "the gateway credential and every prompt and response are",
+    });
+  for (const sink of governance?.audit?.sinks ?? [])
+    if (sink.httpTransport === "http-allowed")
+      endpoints.push({
+        key: `audit sink ${sink.id} httpTransport`,
+        urls: [["audit.sinks.url", sink.url]],
+        exposed: "audit events are",
+      });
+  if (governance?.sandbox?.httpTransport === "http-allowed")
+    endpoints.push({
+      key: "sandbox.httpTransport",
+      urls: [
+        ["sandbox.endpoint", governance.sandbox.endpoint],
+        ["sandbox.router", governance.sandbox.router],
+      ],
+      exposed: "sandbox commands, their output, and files are",
+    });
+  for (const endpoint of endpoints) {
+    const plain: string[] = [];
+    let unresolved = false;
+    for (const [field, template] of endpoint.urls) {
+      if (template === undefined) continue;
+      try {
+        const url = new URL(
+          resolveTemplate(
+            field,
+            template,
+            access?.variables ?? [],
+            process.env,
+          ),
+        );
+        if (url.protocol === "http:") plain.push(url.host);
+      } catch {
+        unresolved = true;
+      }
+    }
+    if (plain.length)
+      out.warn(
+        endpoint.key,
+        `http-allowed: plain HTTP to ${plain.join(", ")}; ${endpoint.exposed} unencrypted on the network path`,
+      );
+    else
+      out.info(
+        endpoint.key,
+        unresolved
+          ? "http-allowed; the URL does not resolve here"
+          : "http-allowed; the URL resolves to https",
+      );
+  }
+}
+
 export function networkGroup(data: DoctorData, out: DoctorSection): void {
+  plainHttpGroup(data, out);
   const access = data.access;
   if (!access) {
     out.info("outbound", "any host (personal mode; no PiShip network policy)");

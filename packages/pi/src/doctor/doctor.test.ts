@@ -766,6 +766,57 @@ describe("Network group", () => {
     expect(output).not.toContain("acme.internal");
   });
 
+  it("shows each endpoint that opted in to plain HTTP, by host, and whether it is unencrypted", () => {
+    const data = doctorData("managed", { access: accessData() });
+    const metadata = data.ctx.metadata as unknown as Record<string, unknown>;
+    metadata.access = {
+      variables: [],
+      identity: {
+        mode: "oidc",
+        oidc: {
+          issuer: "https://idp.acme.example/realms/acme",
+          httpTransport: "http-allowed",
+        },
+      },
+      credential: {
+        provider: "http-broker",
+        broker: {
+          endpoint: "http://10.99.236.70:8080/token",
+          httpTransport: "http-allowed",
+        },
+      },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.99.236.70:4000/v1",
+        httpTransport: "http-allowed",
+      },
+    };
+    metadata.governance = {
+      manifest: {
+        audit: {
+          sinks: [
+            {
+              id: "collector",
+              type: "http",
+              url: "http://10.0.0.6/events",
+              required: false,
+              httpTransport: "http-allowed",
+            },
+          ],
+        },
+        sandbox: { httpTransport: "https" },
+      },
+    };
+    const lines = group(renderDoctor(data).render(), "Network");
+    expect(lines.slice(0, 4)).toEqual([
+      `  - ${"identity.oidc.httpTransport".padEnd(20)} http-allowed; the URL resolves to https`,
+      `  ! ${"credential.broker.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:8080; the identity token and the issued gateway credential are unencrypted on the network path`,
+      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
+      `  ! ${"audit sink collector httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.0.0.6; audit events are unencrypted on the network path`,
+    ]);
+    expect(lines[4]).toContain("TLS verification");
+  });
+
   it("says when no proxy is set and when the proxy environment is ignored", () => {
     const base = accessData();
     const unset = group(

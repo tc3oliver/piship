@@ -87,8 +87,9 @@ sandbox:
 | --- | --- | --- |
 | `provider` | all | `native` (default), `custom`, `e2b-compatible`, or `kubernetes-agent-sandbox` |
 | `adapter` | `custom` | Module path (`./...`, `.mjs` or `.js`) whose default export is a factory returning a backend |
-| `endpoint` | remote and `custom` | Control endpoint URL or `${NAME}` [runtime reference](manifest.md#runtime-references). HTTPS, or HTTP to loopback only |
+| `endpoint` | remote and `custom` | Control endpoint URL or `${NAME}` [runtime reference](manifest.md#runtime-references). HTTPS, or HTTP to loopback only, unless `httpTransport` allows more |
 | `router` | `kubernetes-agent-sandbox` | Sandbox router URL or `${NAME}` reference |
+| `httpTransport` | remote and `custom` with an `endpoint` | piship/v1alpha6: `https` (default) or `http-allowed`, which also accepts plain HTTP to a private or internal host for `endpoint` and `router` (and an e2b-compatible backend's command host `<port>-<id>.<domain>` under the endpoint's domain). Not with `credential: runtime`; commands, output, files, and a `stored` credential then travel unencrypted ([security](security.md#plain-http-to-internal-endpoints)) |
 | `namespace` | `kubernetes-agent-sandbox` | Namespace of the SandboxClaims |
 | `template` | `e2b-compatible`, `kubernetes-agent-sandbox` | E2B template ID, or the SandboxWarmPool name |
 | `workdir` | `e2b-compatible`, `kubernetes-agent-sandbox` | Absolute remote directory that maps to the workspace |

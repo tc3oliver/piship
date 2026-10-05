@@ -138,10 +138,16 @@ export function modulePath(value: unknown, path: string): string {
     fail(path, "Modules must be ECMAScript modules ending in .mjs or .js");
   return item;
 }
+/**
+ * An endpoint URL or `${NAME}` reference. With `plainHttp` (the endpoint's
+ * `httpTransport: http-allowed`) plain HTTP to a private or internal host is
+ * accepted too; a reference is checked the same way once it resolves.
+ */
 export function referenceUrl(
   value: unknown,
   path: string,
   variables: readonly string[],
+  plainHttp = false,
 ): string {
   if (typeof value !== "string" || value.trim() === "")
     fail(path, "Expected a non-empty string");
@@ -151,7 +157,7 @@ export function referenceUrl(
     return value;
   }
   const text = plainString(value, path, 2048);
-  checkUrl(text, path);
+  checkUrl(text, path, plainHttp);
   return text;
 }
 const SEMVER_PATTERN = /^[0-9]/;

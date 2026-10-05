@@ -67,7 +67,8 @@ export function parseGovernance(
   v5 = false,
   /**
    * piship/v1alpha6 and later: `resources.packages`, `packageTrust`, MCP
-   * server class and exposure, and `policy.acknowledgeUnenforced`.
+   * server class and exposure, `policy.acknowledgeUnenforced`, and the
+   * `httpTransport` of the audit sinks and the sandbox.
    */
   v6 = false,
 ): GovernanceManifest {
@@ -79,8 +80,8 @@ export function parseGovernance(
       acknowledgeUnenforced: v6,
     }),
     mcp: parseMcp(root.mcp, mode, variables, v6),
-    sandbox: parseSandbox(root.sandbox, variables),
-    audit: parseAudit(root.audit, mode, variables),
+    sandbox: parseSandbox(root.sandbox, variables, v6),
+    audit: parseAudit(root.audit, mode, variables, v6),
     ...(v6 ? { packageTrust: parsePackageTrust(root.packageTrust, mode) } : {}),
   };
 }

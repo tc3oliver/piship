@@ -13,6 +13,7 @@ import {
   formatError,
   type NetworkPolicy,
   PiShipError,
+  plainHttpOrigins,
 } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import { auditRotation } from "../data/lifecycle.js";
@@ -101,6 +102,16 @@ export async function recordAudit(
       stateDir: ctx.stateDir,
       rotation: auditRotation(lock),
       fetch: createManagedFetch(network, "audit"),
+      // A sink with httpTransport: http-allowed: plain HTTP to its own
+      // origin only.
+      plainHttpFetch: (url) => {
+        const plainHttp = plainHttpOrigins([url]);
+        return createManagedFetch(
+          network,
+          "audit",
+          plainHttp ? { plainHttp } : {},
+        );
+      },
       resolveUrl: (template) =>
         resolveTemplate(
           "audit.sinks.url",

@@ -50,6 +50,7 @@ export * from "./governance.js";
 export * from "./governance-parse.js";
 export * from "./lifecycle.js";
 export * from "./launch.js";
+export * from "./http-transport.js";
 export * from "./data.js";
 export * from "./versions.js";
 export {
