@@ -38,6 +38,9 @@ interface E2EFile {
  */
 export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   cli: { seconds: { linux: 171, darwin: 110, win32: 241 } },
+  // Estimated, not yet measured: a build of the developer example from its
+  // committed lock, one more with a locked copy, and about a dozen launches.
+  "developer-profile": { seconds: { linux: 240, darwin: 300, win32: 420 } },
   governance: { seconds: { linux: 54, darwin: 79, win32: 197 } },
   headless: { seconds: { linux: 59, darwin: 77, win32: 160 } },
   "lifecycle-credentials": {
