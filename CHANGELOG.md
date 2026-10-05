@@ -1,10 +1,16 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, v0.9.0, and v0.9.1 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0), [v0.9.1](https://github.com/tc3oliver/piship/releases/tag/v0.9.1)); every package is versioned `0.9.1`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, v0.9.0, and v0.9.1 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0), [v0.9.1](https://github.com/tc3oliver/piship/releases/tag/v0.9.1)); every package is versioned `0.10.0`.
 
 ## Unreleased
 
-Changes on `main` after v0.9.1. Not released.
+No changes yet.
+
+## v0.10.0 (candidate)
+
+Unpublished minor milestone on Pi 1.0.3 and `piship/v1alpha6` / `piship-lock/v1alpha6`. It adds the developer distribution, new manifest mechanisms, and managed project trust controls. Qualification and publication are pending; v0.9.1 remains the production-validation baseline.
+
+Changes since v0.9.1:
 
 ### Added
 
@@ -19,6 +25,9 @@ Changes on `main` after v0.9.1. Not released.
 - The `--smoke` summary lists the registered `tools` (with exposure and source), the `activeTools`, the `commands`, and any `duplicateTools`, so a name two extensions both register, which Pi resolves silently, is visible.
 
 ### Changed
+
+- Managed project hook configuration stays read-only when hooks are not admitted, and managed permission-provider project configuration cannot override enforced defaults. Provider `--yolo` uses live-session ownership to prevent shared configuration from changing another terminal's approvals.
+- Every `@piship/*` package and `PISHIP_VERSION` are `0.10.0`; the shipped examples are relocked with that version.
 
 - Pi is pinned to 1.0.3 (`@earendil-works/pi-coding-agent`, exact), up from 1.0.2. `compatibility/pi.json` and the copy in `@piship/core` list 1.0.3 with the statuses of 1.0.2, and keep 1.0.2, 1.0.0, and 0.87.1 so that releases built on them are still recognized; the launcher runs only 1.0.3, so a manifest that pins 1.0.2 fails `validate` until its `runtime.pi` is updated. The root `package.json` `overrides` and `PI_SIBLING_PINS` in `@piship/pi` pin the seven sibling packages to exactly 1.0.3. Regenerating the npm lock moved only the eight `@earendil-works` entries, since every third-party dependency they declare is unchanged, and the reviewed install scripts are the same. Every example is relocked with `runtime.pi: "1.0.3"`. The public API PiShip uses is unchanged, the session format stays version 3, and no `builtin:*` extension loads; no Release qualification has run on 1.0.3 yet ([upgrade notes](docs/compatibility.md#upgrade-to-pi-103)).
 - Pi 1.0.3 renames its Azure provider from `azure-openai-responses` to `azure`, in `auth.json`, `models.json`, and `settings.json` as well. PiShip references neither id and a managed launch is unaffected, but a personal distribution's user who signed in to Azure renames the key under `<state>/agent` or signs in again, and a personal manifest whose `models.allowed` names `azure-openai-responses/<model>` must name `azure/<model>`. PiShip auto-resumes the latest session; an old provider id falls back to another model and loses its prompt cache. Set `models.default` to a renamed model also listed in `models.allowed`.

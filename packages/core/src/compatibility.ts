@@ -1,6 +1,6 @@
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "1.0.3";
-export const PISHIP_VERSION = "0.9.1";
+export const PISHIP_VERSION = "0.10.0";
 /** OS/CPU targets with installed lifecycle evidence; others are never advertised. */
 export const EVIDENCED_TARGETS = ["linux-x64", "darwin-arm64", "win32-x64"];
 /**

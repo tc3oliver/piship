@@ -36,9 +36,13 @@ The six archives on the [v0.9.1 pre-release](https://github.com/tc3oliver/piship
 | `mypi-1.0.0-darwin-arm64.tar.gz` | `eb6a01dccea679da790021a8327dd6f6db4732b1999c5aadec6b9903d2c4faf0` |
 | `mypi-1.0.0-win32-x64.tar.gz` | `05a7c1c3d40540e146bbb060fb2b9ba8d56012e0b6d363a7402501736b1365cb` |
 
+## v0.10.0 candidate
+
+Every package and `PISHIP_VERSION` is `0.10.0`, on Pi 1.0.3 with the unchanged `piship/v1alpha6` and `piship-lock/v1alpha6` schema ids. The candidate adds `devcode`, session `--yolo`, package environment and agent-file declarations, package capability providers, and managed Claude project trust controls. Qualification and publication are pending. v0.9.1 remains the production-validation baseline until the exact merged candidate and its archives are qualified and published.
+
 ## On `main` after v0.9.1
 
-`main` has moved past v0.9.1. These changes are not in v0.9.1, the production-validation baseline, and are not released; the [changelog](../CHANGELOG.md#unreleased) lists them.
+`main` has moved past v0.9.1. These changes are not in v0.9.1, the production-validation baseline, and are not released; the [candidate changelog](../CHANGELOG.md#v0100-candidate) lists them.
 
 - Pi 1.0.3: `main` pins `@earendil-works/pi-coding-agent` exactly at 1.0.3, with its seven sibling packages pinned exactly. `compatibility/pi.json` and the copy in `@piship/core` list 1.0.3 beside 1.0.2, 1.0.0, and 0.87.1 with the same four surface statuses (`personal` `supported`; `managed`, `governance`, and `lifecycle` `candidate`), and the launcher runs only 1.0.3. v0.9.0 and v0.9.1 stay on 1.0.2. The upgrade notes, including Pi's renamed Azure provider id, are in [compatibility](compatibility.md#upgrade-to-pi-103).
 - Evidence for Pi 1.0.3: the Pi compatibility suite, the unit tier, and `npm run check` were run locally on the upgrade branch and passed. No CI tier is recorded for it yet: the fast merge gate, Portable E2E, Reference E2E, and a Release qualification on a commit with 1.0.3 are listed as not recorded until they run ([recorded evidence](#recorded-evidence)). The statuses of 1.0.3 are carried over from 1.0.2, not earned again, and the production-validation baseline stays v0.9.1 on Pi 1.0.2 until a release is qualified on 1.0.3.
