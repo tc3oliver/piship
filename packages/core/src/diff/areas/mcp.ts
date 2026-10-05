@@ -11,6 +11,24 @@ import {
 } from "../collector.js";
 import type { Verdict } from "../types.js";
 
+const PLAIN_HTTP: Verdict = [
+  "high",
+  "Server may be reached over plain HTTP to a private or internal host; its traffic, including identity headers, is unencrypted.",
+];
+const IDENTITY_HEADER: Verdict = [
+  "medium",
+  "Sends an identity claim to the server in a header.",
+];
+
+/** Identity headers as `<Header>: <claim>`; never a value. */
+function headerEntries(
+  server: GovernanceManifest["mcp"]["servers"][number],
+): string[] {
+  return Object.entries(server.headers ?? {}).map(
+    ([name, { identityClaim }]) => `${name}: ${identityClaim}`,
+  );
+}
+
 export function mcp(
   out: Collector,
   b: GovernanceManifest,
@@ -50,6 +68,24 @@ export function mcp(
         undefined,
         y.transport,
       );
+      if (y.httpTransport === "http-allowed")
+        out.push(
+          "mcp",
+          "added",
+          `${item} httpTransport`,
+          PLAIN_HTTP,
+          undefined,
+          y.httpTransport,
+        );
+      for (const header of headerEntries(y))
+        out.push(
+          "mcp",
+          "added",
+          `${item} headers ${header}`,
+          IDENTITY_HEADER,
+          undefined,
+          header,
+        );
       continue;
     }
     if (x && !y) {
@@ -93,22 +129,15 @@ export function mcp(
       y.httpTransport,
       (_, v) =>
         v === "http-allowed"
-          ? [
-              "high",
-              "Server may now be reached over plain HTTP to a private or internal host; its traffic, including identity headers, is unencrypted.",
-            ]
+          ? PLAIN_HTTP
           : ["low", "Server is reached over https only."],
     );
-    const headers = (server: typeof x) =>
-      Object.entries(server.headers ?? {}).map(
-        ([name, { identityClaim }]) => `${name}: ${identityClaim}`,
-      );
     out.set(
       "mcp",
       `${item} headers`,
-      headers(x),
-      headers(y),
-      ["medium", "Sends an identity claim to the server in a header."],
+      headerEntries(x),
+      headerEntries(y),
+      IDENTITY_HEADER,
       ["low", "No longer sends this identity header."],
     );
     out.scalar(

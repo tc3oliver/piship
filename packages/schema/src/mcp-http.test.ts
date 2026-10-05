@@ -243,14 +243,31 @@ describe("mcp.servers.<id>.headers", () => {
       ).toThrow(ManifestError);
   });
 
-  it("accepts only retained string identity claims", () => {
+  it("accepts only sub, preferred_username, and email", () => {
+    for (const claim of ["groups", "name", "email_verified"])
+      rejects(
+        managed({
+          url: "https://mcp.acme.example/mcp",
+          headers: { "X-MiTAC-User": { identityClaim: claim } },
+        }),
+        "mcp.servers.tools.headers.X-MiTAC-User.identityClaim",
+        "Expected sub, preferred_username, email",
+      );
+  });
+
+  it("rejects an empty headers map and a __proto__ name", () => {
+    rejects(
+      managed({ url: "https://mcp.acme.example/mcp", headers: {} }),
+      "mcp.servers.tools.headers",
+      "at least one header",
+    );
     rejects(
       managed({
         url: "https://mcp.acme.example/mcp",
-        headers: { "X-MiTAC-User": { identityClaim: "groups" } },
+        headers: JSON.parse('{"__proto__": {"identityClaim": "sub"}}'),
       }),
-      "mcp.servers.tools.headers.X-MiTAC-User.identityClaim",
-      "Expected sub, preferred_username, email, name",
+      "mcp.servers.tools.headers.__proto__",
+      "HTTP tokens",
     );
   });
 
@@ -277,6 +294,10 @@ describe("mcp.servers.<id>.headers", () => {
       "Mcp-Session-Id",
       "MCP-Protocol-Version",
       "Sec-Fetch-Mode",
+      "X-Forwarded-For",
+      "x-forwarded-user",
+      "X-Real-IP",
+      "X-HTTP-Method-Override",
     ])
       rejects(
         managed({
@@ -326,6 +347,38 @@ describe("mcp.servers.<id>.headers", () => {
       "mcp.servers.tools.headers",
       "streamable-http",
     );
+  });
+});
+
+describe("plain HTTP to a name others can answer for", () => {
+  it("warns for .local and single-label hosts, not for IPs or FQDNs", () => {
+    const warned = (url: string) =>
+      launchWarnings(
+        parseManifest(
+          managed(
+            { url, httpTransport: "http-allowed" },
+            {
+              network: {
+                allowHosts: [
+                  "mcp",
+                  "mcp.local",
+                  "10.99.236.70",
+                  "mcp.corp.internal",
+                ],
+              },
+            },
+          ),
+        ),
+      ).some(
+        (warning) =>
+          warning.path === "mcp.servers.tools.url" &&
+          warning.message.includes("mDNS"),
+      );
+    expect(warned("http://mcp/mcp")).toBe(true);
+    expect(warned("http://mcp.local/mcp")).toBe(true);
+    expect(warned("http://10.99.236.70/mcp")).toBe(false);
+    expect(warned("http://mcp.corp.internal/mcp")).toBe(false);
+    expect(warned("https://mcp/mcp")).toBe(false);
   });
 });
 

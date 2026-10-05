@@ -3,6 +3,7 @@
 // secret-free declarations; enforcement lives in the runtime packages.
 import type {
   AuditCapture,
+  McpIdentityHeaderClaim,
   PolicyAction,
   PolicyEffect,
 } from "@piship/contracts";
@@ -447,19 +448,6 @@ export interface McpServerConfig {
 /** `mcp.servers.<id>.httpTransport`: `https` (default) or `http-allowed`. */
 export const MCP_HTTP_TRANSPORTS = ["https", "http-allowed"] as const;
 export type McpHttpTransport = (typeof MCP_HTTP_TRANSPORTS)[number];
-
-/**
- * The identity claims an MCP header may carry: string claims of the signed-in
- * OIDC identity that PiShip keeps (`RETAINED_CLAIMS`).
- */
-export const MCP_IDENTITY_HEADER_CLAIMS = [
-  "sub",
-  "preferred_username",
-  "email",
-  "name",
-] as const;
-export type McpIdentityHeaderClaim =
-  (typeof MCP_IDENTITY_HEADER_CLAIMS)[number];
 
 export interface McpIdentityHeader {
   readonly identityClaim: McpIdentityHeaderClaim;

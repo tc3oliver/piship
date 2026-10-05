@@ -73,23 +73,31 @@ export function governanceOptions(
           }),
         }
       : {}),
-    // MCP identity headers: the claims of the identity signed in now, read
-    // per request and never cached, and only while it is still the launch's
-    // principal. A user switch takes effect at the next launch.
+    // MCP identity headers: the claims of the identity this launch
+    // activated, held in memory. Each request only checks, without the
+    // secret store or the identity provider, that the identity metadata
+    // still names the launch's principal: after a logout or a user switch
+    // the header is not sent, and the next launch uses the new user's claims.
     ...(access &&
     principal &&
+    activated?.identity &&
     servers.some((server) => server.headers !== undefined)
       ? {
           identityClaims: async () => {
-            const identity = await access.currentIdentity({ required: true });
-            if (!identity) return null;
-            if (!samePrincipal(principalKey(identity), principal))
+            const stored = access.readIdentityMetadata();
+            if (!stored)
               throw new PiShipError(
                 "IDENTITY_REQUIRED",
-                "The signed-in identity changed since launch",
+                "You signed out since launch",
                 { component: "identity" },
               );
-            return identity.claims ?? {};
+            if (!samePrincipal(principalKey(stored), principal))
+              throw new PiShipError(
+                "IDENTITY_REQUIRED",
+                "Another identity signed in since launch",
+                { component: "identity" },
+              );
+            return activated.identity?.claims ?? {};
           },
         }
       : {}),

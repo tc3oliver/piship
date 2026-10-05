@@ -93,7 +93,14 @@ describe("plain HTTP to a private or internal host", () => {
     });
 
   it("is refused beyond loopback without http-allowed", () => {
-    expect(() => transport("http://127.0.0.1:9/mcp")).not.toThrow();
+    for (const url of [
+      "http://127.0.0.1:9/mcp",
+      "http://localhost:9/mcp",
+      "http://[::1]:9/mcp",
+    ]) {
+      expect(() => transport(url)).not.toThrow();
+      expect(() => transport(url, { credential: true })).not.toThrow();
+    }
     for (const url of [
       "http://10.99.236.70/mcp",
       "http://mcp.corp.internal/mcp",
@@ -199,7 +206,7 @@ describe("identity headers", () => {
     expect(JSON.stringify([audit, g.health()])).not.toContain(user);
   });
 
-  it("reads the claim per request, so a new identity's claim is used", async () => {
+  it("asks for the claims on every request, never caching a value", async () => {
     const fixture = await startFixtureHttpServer({
       serverName: "tickets",
       recordHeader: "X-MiTAC-User",
@@ -232,7 +239,17 @@ describe("identity headers", () => {
       async () => {
         throw new PiShipError("IDENTITY_REQUIRED", "You are not signed in");
       },
-      /signed-in identity is unavailable/,
+      /signed-in identity is unavailable: You are not signed in/,
+    ],
+    [
+      "an unverified email",
+      async () => ({ email: "alice@acme.example", email_verified: false }),
+      /email claim is not verified/,
+    ],
+    [
+      "an email without email_verified",
+      async () => ({ email: "alice@acme.example" }),
+      /email claim is not verified/,
     ],
     [
       "a missing claim",
@@ -269,9 +286,12 @@ describe("identity headers", () => {
     it(`fails the start with ${name}`, async () => {
       const fixture = await startFixtureHttpServer({ serverName: "tickets" });
       cleanup.push(() => fixture.close());
+      const declared = name.includes("email")
+        ? { "X-MiTAC-User": { identityClaim: "email" } }
+        : headers;
       const optional = governor({
         identityClaims: claims,
-        servers: [server(fixture.url, { headers })],
+        servers: [server(fixture.url, { headers: declared })],
       });
       const [report] = await optional.governor.start();
       expect(report?.state).toBe("failed");
@@ -280,7 +300,7 @@ describe("identity headers", () => {
 
       const required = governor({
         identityClaims: claims,
-        servers: [server(fixture.url, { headers, required: true })],
+        servers: [server(fixture.url, { headers: declared, required: true })],
       });
       const error = await required.governor
         .start()
@@ -288,6 +308,83 @@ describe("identity headers", () => {
       expect(error).toMatchObject({ code: "MCP_UNHEALTHY" });
       expect(String((error as Error).message)).not.toContain("X-Admin");
     });
+
+  it("sends a verified email", async () => {
+    const fixture = await startFixtureHttpServer({
+      serverName: "tickets",
+      recordHeader: "X-MiTAC-Mail",
+    });
+    cleanup.push(() => fixture.close());
+    const { governor: g } = governor({
+      identityClaims: async () => ({
+        email: "alice@acme.example",
+        email_verified: true,
+      }),
+      servers: [
+        server(fixture.url, {
+          headers: { "X-MiTAC-Mail": { identityClaim: "email" } },
+        }),
+      ],
+    });
+    expect((await g.start())[0]?.state).toBe("healthy");
+    expect(fixture.requests[0]?.recorded).toBe("alice@acme.example");
+  });
+
+  it("re-checks header names and claims when the transport is built", () => {
+    const build = (
+      headers: Record<string, { identityClaim: string }>,
+    ): StreamableHttpTransport =>
+      new StreamableHttpTransport({
+        serverId: "tickets",
+        url: "https://mcp.acme.example/mcp",
+        fetch: notCalled,
+        identityHeaders: headers,
+        identityClaims: async () => ({ sub: "u-1" }),
+      });
+    expect(() => build({ "X-User": { identityClaim: "sub" } })).not.toThrow();
+    for (const name of ["Authorization", "x-forwarded-for", "X Bad"])
+      expect(() => build({ [name]: { identityClaim: "sub" } })).toThrow(
+        PiShipError,
+      );
+    for (const claim of ["name", "groups"])
+      expect(() => build({ "X-User": { identityClaim: claim } })).toThrow(
+        /not an identity claim a header may carry/,
+      );
+  });
+
+  it("fails a running session's tool call after the principal changes", async () => {
+    const fixture = await startFixtureHttpServer({
+      serverName: "tickets",
+      recordHeader: "X-MiTAC-User",
+    });
+    cleanup.push(() => fixture.close());
+    let switched = false;
+    const { governor: g, audit } = governor({
+      identityClaims: async () => {
+        if (switched)
+          throw new PiShipError(
+            "IDENTITY_REQUIRED",
+            "Another identity signed in since launch",
+          );
+        return { preferred_username: user };
+      },
+      servers: [server(fixture.url, { headers })],
+    });
+    expect((await g.start())[0]?.state).toBe("healthy");
+    const sent = fixture.requests.length;
+    switched = true;
+    const search = g.tools().find((tool) => tool.tool === "search");
+    const failed = await search?.call({ query: "q" }).then(
+      (result) => JSON.stringify(result),
+      (error: unknown) => String(error),
+    );
+    expect(failed).toMatch(/Another identity signed in since launch/);
+    // The server itself stays up; only requests that need the header fail.
+    expect(g.health()[0]?.state).toBe("healthy");
+    // Nothing more reached the server, and no value was recorded anywhere.
+    expect(fixture.requests.length).toBe(sent);
+    expect(JSON.stringify(audit)).not.toContain(user);
+  });
 
   it("fails the start when no identity is offered at all", async () => {
     const { governor: g } = governor({

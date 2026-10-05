@@ -1,5 +1,6 @@
 // The launch's MCP wiring: the plain-HTTP fetch only for servers that opt
-// in, and identity claims read from the identity signed in now.
+// in, and identity claims from the identity this launch activated, checked
+// per request against the stored identity metadata only.
 import type { IdentitySession } from "@piship/contracts";
 import type { GovernedLock } from "@piship/core";
 import { describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceOptions } from "./governance.js";
 
 const ISSUER = "https://login.acme.example";
+const HEADERS = { "X-MiTAC-User": { identityClaim: "preferred_username" } };
 
 function identity(subject: string, username: string): IdentitySession {
   return {
@@ -16,9 +18,21 @@ function identity(subject: string, username: string): IdentitySession {
   };
 }
 
+/** Stored identity metadata: what `readIdentityMetadata` returns. */
+function metadata(subject: string) {
+  return { subject, issuer: ISSUER, claims: {}, secretRef: "ref" };
+}
+
+interface FakeAccess {
+  stored: ReturnType<typeof metadata> | null;
+  /** Calls that reach the secret store or the identity provider. */
+  expensive: number;
+}
+
 function options(
   servers: readonly Record<string, unknown>[],
-  current: () => Promise<IdentitySession | null>,
+  activated: IdentitySession,
+  fake: FakeAccess,
 ) {
   const ctx = {
     distributionDir: "/nonexistent",
@@ -31,10 +45,27 @@ function options(
       manifest: { sandbox: { credential: "none" }, mcp: { servers } },
     },
   } as unknown as GovernedLock;
+  const access = {
+    readIdentityMetadata: () => fake.stored,
+    currentIdentity: async () => {
+      fake.expensive++;
+      return activated;
+    },
+    requestSecret: async () => {
+      fake.expensive++;
+      return undefined;
+    },
+    store: {
+      get: async () => {
+        fake.expensive++;
+        return null;
+      },
+    },
+  };
   const prepared = {
-    access: { currentIdentity: current },
+    access,
     activated: {
-      identity: identity("u-1", "alice.chen"),
+      identity: activated,
       runtime: { requiresCredential: false },
       models: [],
     },
@@ -43,12 +74,12 @@ function options(
   return governanceOptions(ctx, lock, prepared, false);
 }
 
-const HEADERS = { "X-MiTAC-User": { identityClaim: "preferred_username" } };
-
 describe("launch MCP options", () => {
   it("adds neither seam when no server opts in", () => {
-    const built = options([{ id: "docs", transport: "stdio" }], async () =>
+    const built = options(
+      [{ id: "docs", transport: "stdio" }],
       identity("u-1", "alice.chen"),
+      { stored: metadata("u-1"), expensive: 0 },
     );
     expect(built.mcpPlainHttpFetch).toBeUndefined();
     expect(built.identityClaims).toBeUndefined();
@@ -57,62 +88,56 @@ describe("launch MCP options", () => {
   it("adds the plain-HTTP fetch only for http-allowed", () => {
     const built = options(
       [{ id: "tickets", httpTransport: "http-allowed" }],
-      async () => null,
+      identity("u-1", "alice.chen"),
+      { stored: metadata("u-1"), expensive: 0 },
     );
     expect(built.mcpPlainHttpFetch).toBeTypeOf("function");
     expect(built.fetch).not.toBe(built.mcpPlainHttpFetch);
   });
 
-  it("reads the claims of the identity signed in now, never a stale one", async () => {
-    let current: IdentitySession | null = identity("u-1", "alice.chen");
+  it("uses the activated claims without the secret store or the IdP", async () => {
+    const fake: FakeAccess = { stored: metadata("u-1"), expensive: 0 };
     const built = options(
       [{ id: "tickets", headers: HEADERS }],
-      async () => current,
+      identity("u-1", "alice.chen"),
+      fake,
     );
     const claims = built.identityClaims;
     if (!claims) throw new Error("identityClaims is offered");
-    expect((await claims())?.preferred_username).toBe("alice.chen");
-    // The same principal's renewed session with a changed claim.
-    current = identity("u-1", "alice.wang");
-    expect((await claims())?.preferred_username).toBe("alice.wang");
-    // Signed out: no claims, so the server cannot send the header.
-    current = null;
-    expect(await claims()).toBeNull();
-    // Another user signed in meanwhile: refused, never that user's claim
-    // under this launch, and never the launch user's old one.
-    current = identity("u-2", "bob.lin");
+    for (let request = 0; request < 5; request++)
+      expect((await claims())?.preferred_username).toBe("alice.chen");
+    expect(fake.expensive).toBe(0);
+  });
+
+  it("refuses after a logout and after another user signs in", async () => {
+    const fake: FakeAccess = { stored: metadata("u-1"), expensive: 0 };
+    const built = options(
+      [{ id: "tickets", headers: HEADERS }],
+      identity("u-1", "alice.chen"),
+      fake,
+    );
+    const claims = built.identityClaims;
+    if (!claims) throw new Error("identityClaims is offered");
+    // Logout deletes the identity metadata.
+    fake.stored = null;
     await expect(claims()).rejects.toMatchObject({
       code: "IDENTITY_REQUIRED",
+      message: expect.stringContaining("signed out"),
     });
+    // Another user signed in meanwhile: never this launch's old claim.
+    fake.stored = metadata("u-2");
+    await expect(claims()).rejects.toMatchObject({
+      code: "IDENTITY_REQUIRED",
+      message: expect.stringContaining("Another identity signed in"),
+    });
+    expect(fake.expensive).toBe(0);
   });
 
   it("uses the new user's claim at the next launch", async () => {
-    const next = identity("u-2", "bob.lin");
-    const built = governanceOptions(
-      {
-        distributionDir: "/nonexistent",
-        stateDir: "/nonexistent",
-        metadata: { app: { id: "acmecode", command: "acmecode" }, access: {} },
-      } as unknown as LaunchContext,
-      {
-        app: { id: "acmecode", command: "acmecode" },
-        governance: {
-          manifest: {
-            sandbox: { credential: "none" },
-            mcp: { servers: [{ id: "tickets", headers: HEADERS }] },
-          },
-        },
-      } as unknown as GovernedLock,
-      {
-        access: { currentIdentity: async () => next },
-        activated: {
-          identity: next,
-          runtime: { requiresCredential: false },
-          models: [],
-        },
-        events: {},
-      } as unknown as PreparedAccess,
-      false,
+    const built = options(
+      [{ id: "tickets", headers: HEADERS }],
+      identity("u-2", "bob.lin"),
+      { stored: metadata("u-2"), expensive: 0 },
     );
     expect((await built.identityClaims?.())?.preferred_username).toBe(
       "bob.lin",

@@ -6,6 +6,9 @@
 import {
   isLoopbackHost,
   isPrivateNetworkHost,
+  MCP_IDENTITY_HEADER_CLAIMS,
+  mcpIdentityHeaderProblem,
+  PiShipError,
   redact,
   SecretValue,
 } from "@piship/contracts";
@@ -46,7 +49,7 @@ export interface StreamableHttpTransportOptions {
    * internal host. Without it plain HTTP is accepted only on loopback.
    */
   readonly plainHttp?: boolean;
-  /** Header name to identity claim; each value is read per request. */
+  /** Header name to identity claim; the claims are asked for per request. */
   readonly identityHeaders?: Readonly<
     Record<string, { readonly identityClaim: string }>
   >;
@@ -122,6 +125,23 @@ export class StreamableHttpTransport implements McpTransport {
       if (options.credential)
         throw mcpUnhealthy(
           `MCP server ${options.serverId} URL is plain HTTP; the runtime credential is never sent over plain HTTP`,
+        );
+    }
+    // The manifest parser checks these too; a header is never sent unless
+    // both hold here as well.
+    for (const [name, { identityClaim }] of Object.entries(
+      options.identityHeaders ?? {},
+    )) {
+      const problem = mcpIdentityHeaderProblem(name);
+      if (problem)
+        throw mcpUnhealthy(`MCP server ${options.serverId}: ${problem}`);
+      if (
+        !(MCP_IDENTITY_HEADER_CLAIMS as readonly string[]).includes(
+          identityClaim,
+        )
+      )
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} header ${name} names ${identityClaim}, which is not an identity claim a header may carry`,
         );
     }
     if (options.identityHeaders && !options.identityClaims)
@@ -260,9 +280,15 @@ export class StreamableHttpTransport implements McpTransport {
     let claims: Readonly<Record<string, unknown>> | null;
     try {
       claims = (await this.#options.identityClaims?.()) ?? null;
-    } catch {
+    } catch (error) {
+      // An identity error says why (signed out, or another user signed in);
+      // anything else is not quoted.
+      const reason =
+        error instanceof PiShipError && error.code.startsWith("IDENTITY_")
+          ? `: ${redact(error.message)}`
+          : "";
       throw mcpUnhealthy(
-        `MCP server ${id} sends identity headers, but the signed-in identity is unavailable`,
+        `MCP server ${id} sends identity headers, but the signed-in identity is unavailable${reason}`,
       );
     }
     if (!claims)
@@ -280,6 +306,11 @@ export class StreamableHttpTransport implements McpTransport {
       if (!usableHeaderValue(value))
         throw mcpUnhealthy(
           `MCP server ${id} cannot send header ${name}: the ${identityClaim} claim is not a usable header value (a non-empty string of printable ASCII, at most ${MAX_IDENTITY_HEADER_LENGTH} characters, without leading or trailing spaces)`,
+        );
+      // An unverified email address can be any address the user typed.
+      if (identityClaim === "email" && claims.email_verified !== true)
+        throw mcpUnhealthy(
+          `MCP server ${id} cannot send header ${name}: the identity's email claim is not verified (email_verified is not true); use preferred_username or sub`,
         );
       headers.set(name, value);
     }

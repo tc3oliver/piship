@@ -216,6 +216,21 @@ function mcpServers(
           ? "http-allowed: if this URL resolves to plain HTTP, traffic to the server, including any identity headers, is unencrypted and unauthenticated on the network path; it must resolve to https or a private or internal host, or the server does not start"
           : "http-allowed: traffic to this server, including any identity headers, is unencrypted and unauthenticated on the network path; serve it over https where possible",
       });
+    const plainName = plainHost(url);
+    if (
+      server.httpTransport === "http-allowed" &&
+      plainName !== undefined &&
+      new URL(url).protocol === "http:" &&
+      (plainName.endsWith(".local") ||
+        (!plainName.includes(".") &&
+          !plainName.includes(":") &&
+          plainName !== "localhost"))
+    )
+      findings.push({
+        path: `${path}.url`,
+        certain: false,
+        message: `${plainName} is resolved through mDNS or the machine's DNS search domains, which another device on the network can answer for; over plain HTTP nothing verifies the server, so use an IP address or a fully qualified name under .internal or .corp`,
+      });
     // `always`: the server can never start; `otherwise`: it starts only if
     // a runtime value resolves as the message says.
     const [always, otherwise] = server.required

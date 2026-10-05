@@ -1,11 +1,14 @@
 // MCP: server admission, transports, child environment, and tool filters.
-import { isPrivateNetworkHost } from "@piship/contracts";
+import {
+  isPrivateNetworkHost,
+  MCP_IDENTITY_HEADER_CLAIMS,
+  mcpIdentityHeaderProblem,
+} from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
   defaultMcpServerClass,
   DEFAULT_MCP_EXPOSURE,
   MCP_HTTP_TRANSPORTS,
-  MCP_IDENTITY_HEADER_CLAIMS,
   MCP_SERVER_CLASSES,
   type McpConfig,
   type McpIdentityHeader,
@@ -38,43 +41,7 @@ import { exposure, exposureRules } from "./runtime.js";
 const SERVER_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 const LEGACY_TRANSPORTS = ["sse", "http+sse", "http-sse"];
-/** An HTTP field name (RFC 9110 token). */
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/;
 const MAX_HEADERS = 8;
-/**
- * Header names an identity header may not use: authentication, cookies,
- * hop-by-hop and framing headers, content negotiation, and the headers the
- * Streamable HTTP transport sets itself. Compared case-insensitively.
- */
-const RESERVED_HEADERS = new Set([
-  "accept",
-  "accept-encoding",
-  "authorization",
-  "connection",
-  "content-encoding",
-  "content-length",
-  "content-type",
-  "cookie",
-  "expect",
-  "forwarded",
-  "host",
-  "keep-alive",
-  "last-event-id",
-  "mcp-protocol-version",
-  "mcp-session-id",
-  "origin",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "proxy-connection",
-  "set-cookie",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-  "user-agent",
-  "via",
-  "www-authenticate",
-]);
 
 function toolName(value: unknown, path: string): string {
   const name = plainString(value, path, 128);
@@ -326,23 +293,17 @@ function parseHeaders(
 ): Record<string, McpIdentityHeader> {
   if (!isRecord(value)) fail(path, "Expected an object keyed by header name");
   const entries = Object.entries(value);
+  if (entries.length === 0)
+    fail(path, "Declare at least one header, or leave headers out");
   if (entries.length > MAX_HEADERS)
     fail(path, `At most ${MAX_HEADERS} headers may be declared`);
   const seen = new Set<string>();
   const headers: Record<string, McpIdentityHeader> = {};
   for (const [name, entry] of entries) {
     const at = `${path}.${name}`;
-    if (!HEADER_NAME.test(name))
-      fail(
-        at,
-        "Header names are HTTP tokens: letters, digits, and !#$%&'*+.^_`|~- (at most 64)",
-      );
+    const problem = mcpIdentityHeaderProblem(name);
+    if (problem) unsafe(at, problem);
     const lower = name.toLowerCase();
-    if (RESERVED_HEADERS.has(lower) || lower.startsWith("sec-"))
-      unsafe(
-        at,
-        `${name} is reserved: authentication, cookie, hop-by-hop, framing, and MCP transport headers cannot be set`,
-      );
     if (seen.has(lower))
       conflict(
         at,

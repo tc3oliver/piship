@@ -81,7 +81,7 @@ function governanceRows(
               Object.entries(server.headers).map(
                 ([name, { identityClaim }]) => `${name}: ${identityClaim}`,
               ),
-              "each value is the signed-in identity's claim, read per request; not authentication",
+              "each value is the signed-in identity's claim, never shown; not authentication",
             ),
           ]
         : []),

@@ -59,7 +59,8 @@ export interface McpGovernorOptions {
   readonly plainHttpFetch?: McpFetch;
   /**
    * The signed-in identity's claims, for servers that declare identity
-   * `headers`; read for every request, so a value is never stale.
+   * `headers`; asked for by every request, so a sign-out or user switch
+   * stops the header at once.
    */
   readonly identityClaims?: McpIdentityClaimsProvider;
   /** Runtime bearer for `credential: runtime` servers. */

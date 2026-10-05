@@ -158,8 +158,9 @@ export type McpFetch = (
 ) => Promise<Response>;
 
 /**
- * The verified claims of the identity signed in now, read for every request
- * that carries an identity header, or null when nobody is signed in. Only
+ * The claims of the signed-in identity, asked for by every request that
+ * carries an identity header; throws (or returns null) when that identity is
+ * no longer signed in. Called per request, so it must be cheap. Only
  * PiShip's retained, non-secret claims; never a token.
  */
 export type McpIdentityClaimsProvider = () => Promise<Readonly<

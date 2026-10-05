@@ -32,9 +32,10 @@ export interface GovernanceOptions {
    */
   readonly mcpPlainHttpFetch?: ManagedFetch;
   /**
-   * The verified claims of the identity signed in now, for MCP identity
-   * headers. Read for every request; fails when the launch's principal is no
-   * longer the signed-in one. Absent without an OIDC identity.
+   * The claims of the identity this launch activated, for MCP identity
+   * headers. Each call checks only the stored identity metadata and fails
+   * when the launch's principal is signed out or replaced. Absent without an
+   * OIDC identity.
    */
   readonly identityClaims?: () => Promise<Readonly<
     Record<string, unknown>
