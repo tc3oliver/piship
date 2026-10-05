@@ -335,6 +335,18 @@ export async function installDistribution(
   }
 }
 
+/**
+ * What a distribution repository commits: the manifest, the lock, the
+ * resources, and the Pi packages with their stored npm lockfiles.
+ */
+const DISTRIBUTION_FILES = [
+  "piship.yaml",
+  "piship.lock",
+  "piship.lock.d",
+  "resources",
+  "packages",
+];
+
 async function assemble(
   stack: Stack,
   options: InstallOptions,
@@ -343,10 +355,11 @@ async function assemble(
   const store = storeMode();
   const directory = join(temp, "distribution");
   mkdirSync(directory);
-  for (const entry of ["piship.yaml", "piship.lock", "resources"])
-    cpSync(join(referenceDirectory, entry), join(directory, entry), {
-      recursive: true,
-    });
+  for (const entry of DISTRIBUTION_FILES)
+    if (existsSync(join(referenceDirectory, entry)))
+      cpSync(join(referenceDirectory, entry), join(directory, entry), {
+        recursive: true,
+      });
   const manifest = join(directory, "piship.yaml");
   const committed = readFileSync(manifest, "utf8");
 
@@ -449,9 +462,9 @@ async function assemble(
   function stageUpdate(installedManifest: string): void {
     const next = join(temp, "next");
     mkdirSync(next);
-    cpSync(join(directory, "resources"), join(next, "resources"), {
-      recursive: true,
-    });
+    for (const entry of ["resources", "packages", "piship.lock.d"])
+      if (existsSync(join(directory, entry)))
+        cpSync(join(directory, entry), join(next, entry), { recursive: true });
     const bumped = installedManifest.replace(
       /^ {2}version: 1\.0\.0$/m,
       "  version: 1.1.0",
