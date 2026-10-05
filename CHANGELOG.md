@@ -1,10 +1,14 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, and v0.9.0 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0)); every package is versioned `0.9.0`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, and v0.9.0 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0)); every package is versioned `0.9.1`.
 
 ## Unreleased
 
-Changes on `main` after v0.9.0. Not released.
+Changes on `main` after v0.9.1. Not released.
+
+## v0.9.1
+
+Preview milestone, to be published as a GitHub pre-release from tag `v0.9.1` after Release qualification; not published to npm. v0.9.1 is a patch milestone that collects the changes made on `main` after v0.9.0: plain HTTP to a private or internal host as an explicit opt-in for MCP servers and for the gateway, credential broker, OIDC issuer, audit sinks, and sandbox, identity-derived MCP request headers, `fd` and `rg` bundled with the release (`runtime.searchTools`), and the fix for Pi's tool directory. It stays on Pi 1.0.2 and `piship/v1alpha6` / `piship-lock/v1alpha6`: the new fields are additive and optional, and the schema ids are unchanged. The production-validation baseline stays [v0.9.0](docs/status.md#v090-production-validation-baseline) until v0.9.1 is qualified and published ([status](docs/status.md#v091-release-candidate)).
 
 ### Added
 
@@ -14,6 +18,10 @@ Changes on `main` after v0.9.0. Not released.
 - `piship/v1alpha6` field `runtime.searchTools` ([manifest](docs/manifest.md#bundled-search-tools-v1alpha6)): `mode: bundled` ships `fd` and `rg` with the release, so Pi's find and grep tools and `@` completion work on a managed machine without anything installed and without Pi going online. `piship lock` downloads the official upstream release archives (sharkdp/fd and BurntSushi/ripgrep; defaults fd 10.5.0 and ripgrep 15.2.0, or the exact versions `fd` and `rg` pin) for every target in `release.targets`, through the managed fetch with the lock environment's proxy and CA, into PiShip's download cache, and records per target the archive URL and sha256, the executable's path and sha256, and its size (`searchTools`, `digests.searchTools`). `https://github.com` must be in `release.sources`; the `source` gate also refuses an archive that is not the official asset, and `piship build` refuses such a lock before it downloads or reads anything. `piship build` and `piship release` check the cached archive and executable against the lock, read the archive with the release extractor's rules (no links, special files, or traversal), and place the executable in the payload's `tools/` (with its license files), where the inventory, `verify-release`, and the SBOM cover it. At launch the executables are checked again and copied into Pi's tool directory, `<state>/agent/bin`, which Pi searches before `PATH`, so a user's own `fd` or `rg` never replaces them. `--smoke` runs Pi's find and grep tools, `doctor` and `config explain` show the tools and versions, and `piship diff` reports an added tool or changed bytes as high risk and a removed tool or a version change as medium. `PI_OFFLINE`, the private-only launch policy, and the `session.export` status are unchanged. Without the field nothing changes, and existing locks keep their digests.
 - Fixed: Pi fixes its tool directory (`<agent dir>/bin`, where it looks for `fd` and `rg` before `PATH` and puts the ones it downloads) when it is imported, before PiShip set `PI_CODING_AGENT_DIR`, so Pi used `~/.pi/agent/bin` instead of the distribution's state: a personal distribution downloaded `fd` and `rg` there, and every distribution preferred a copy found there. The launcher now sets the variable before it imports Pi, through `@piship/pi/environment`. A user's `fd` or `rg` in `~/.pi/agent/bin` is no longer used; Pi uses one on `PATH` or, where Pi is online, downloads its own into `<state>/agent/bin`.
 - Behavior change: a plain-HTTP request admitted by an opt-in (`httpTransport: http-allowed` on any endpoint, MCP servers included, and `updates.transport: http-allowed`) is refused with `NETWORK_DENIED` when an inherited `HTTP_PROXY` would carry it and the proxy is not itself a private or internal host, since the request would cross the proxy in clear; `NO_PROXY` is honored, and the error and `doctor` say to add the host to it ([security](docs/security.md#plain-http-to-internal-endpoints)).
+
+### Changed
+
+- Every `@piship/*` package and `PISHIP_VERSION` are `0.9.1`, and every example is relocked with it.
 
 ## v0.9.0
 

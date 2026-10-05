@@ -1,6 +1,6 @@
 {
   "name": "@piship/policy",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,8 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/contracts": "0.9.0",
-    "@piship/schema": "0.9.0"
+    "@piship/contracts": "0.9.1",
+    "@piship/schema": "0.9.1"
   },
   "description": "Policy decisions, precedence, resource/provider/project trust, and capability state for PiShip.",
   "keywords": [
