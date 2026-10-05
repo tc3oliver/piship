@@ -79,7 +79,10 @@ describe("spawnManaged", () => {
       args: ["-e", TREE, heartbeat, token],
       cwd: dir,
       env: { PATH: process.env.PATH ?? "" },
-      timeoutMs: 1000,
+      // Long enough for a loaded Windows runner to start the child and its
+      // grandchild before the deadline; at 1 s the child was sometimes killed
+      // before it printed "started".
+      timeoutMs: 5000,
       graceMs: 300,
       onStdout: (chunk) => {
         output += chunk.toString();
