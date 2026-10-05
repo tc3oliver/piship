@@ -4,8 +4,17 @@
 // non-secret values from the lock; PiShip sets them before Pi loads the
 // package, so a user's shell or an old copy of a file cannot change what the
 // distribution declared, except where a file is a `seed` the user has edited.
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { writeFileAtomic } from "@piship/credentials";
@@ -119,6 +128,8 @@ interface SeedState {
 }
 
 interface SessionOverride {
+  readonly owner?: string;
+  readonly pid?: number;
   readonly path: string;
   readonly key: string;
   readonly hadKey: boolean;
@@ -159,6 +170,16 @@ function writeSeedState(agentDir: string, state: SeedState): void {
 
 /** A declared file's absolute path, refusing a link anywhere below `agentDir`. */
 function filePath(agentDir: string, path: string): string {
+  if (
+    !path ||
+    path.split("/").some((part) => part === ".." || part === "." || !part) ||
+    path.startsWith("/") ||
+    path.includes("\\")
+  )
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      "Invalid package configuration path",
+    );
   let current = agentDir;
   for (const segment of path.split("/")) {
     current = join(current, segment);
@@ -252,6 +273,7 @@ export interface AgentFilesResult {
   readonly reports: readonly AgentFileReport[];
   /** Undo the session override; idempotent, and a no-op without one. */
   readonly restore: () => void;
+  readonly endAutoApprove?: () => void;
 }
 
 /**
@@ -262,10 +284,14 @@ export interface AgentFilesResult {
  * auto-approval key on for this launch only: it is taken back by `restore`,
  * and by the next launch if this one never got to run it.
  */
-export function applyAgentFiles(
+function applyAgentFilesLocked(
   lock: DistributionLock,
   agentDir: string,
-  options: { readonly sessionAutoApprove?: boolean } = {},
+  options: {
+    readonly sessionAutoApprove?: boolean;
+    readonly session?: boolean;
+    readonly owner?: string;
+  } = {},
 ): AgentFilesResult {
   const files = declaredFiles(lock);
   const target = sessionAutoApproveTarget(lock);
@@ -273,7 +299,17 @@ export function applyAgentFiles(
   let state = readSeedState(agentDir);
   if (state.override) {
     // A launch that never reached its end left the override on.
-    takeBack(agentDir, state.override);
+    if (state.override.pid && liveProcess(state.override.pid))
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "Another live session owns the permission provider auto-approval; close it before starting this session",
+      );
+    if (
+      target &&
+      state.override.path === target.path &&
+      state.override.key === target.key
+    )
+      takeBack(agentDir, state.override);
     state = { schema: SEED_SCHEMA, files: state.files };
     writeSeedState(agentDir, state);
   }
@@ -318,6 +354,8 @@ export function applyAgentFiles(
         { userAction: "Fix or remove the file and start again" },
       );
     override = {
+      ...(options.owner ? { owner: options.owner } : {}),
+      pid: process.pid,
       path: target.path,
       key: target.key,
       hadKey: target.key in current,
@@ -340,9 +378,177 @@ export function applyAgentFiles(
     reports,
     restore: () => {
       if (restored || !override) return;
-      restored = true;
+      const currentState = readSeedState(agentDir);
+      if (currentState.override?.owner !== override.owner) return;
       takeBack(agentDir, override);
-      writeSeedState(agentDir, { schema: SEED_SCHEMA, files: recorded });
+      writeSeedState(agentDir, {
+        schema: SEED_SCHEMA,
+        files: currentState.files,
+      });
+      restored = true;
+    },
+  };
+}
+
+function liveProcess(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+// Serialize the registration and configuration change, so two launches cannot
+// both decide the shared provider file is free. Sessions keep separate leases.
+function agentFilesTransaction<T>(agentDir: string, operation: () => T): T {
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  const guard = filePath(agentDir, ".piship-agent-files-lock");
+  const recovery = filePath(agentDir, ".piship-agent-files-recovery");
+  const busy = () =>
+    new PiShipError(
+      "CONFIG_INVALID",
+      "Package configuration is being changed by another launch; retry when it finishes",
+    );
+  if (existsSync(recovery)) throw busy();
+  try {
+    mkdirSync(guard, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    try {
+      mkdirSync(recovery, { mode: 0o700 });
+    } catch {
+      throw busy();
+    }
+    try {
+      const holder = readJsonObject(
+        filePath(agentDir, ".piship-agent-files-lock/owner.json"),
+      );
+      if (!holder || typeof holder.pid !== "number" || liveProcess(holder.pid))
+        throw busy();
+      // Every acquirer checks recovery after recording its live owner, so no
+      // newcomer can mutate the config while this dead directory is removed.
+      const abandoned = `${guard}.${randomUUID()}.stale`;
+      renameSync(guard, abandoned);
+      rmSync(abandoned, { recursive: true });
+    } finally {
+      rmSync(recovery, { recursive: true });
+    }
+    try {
+      mkdirSync(guard, { mode: 0o700 });
+    } catch {
+      throw busy();
+    }
+  }
+  try {
+    writeFileSync(
+      join(guard, "owner.json"),
+      JSON.stringify({ pid: process.pid }),
+      { mode: 0o600, flag: "wx" },
+    );
+    if (existsSync(recovery)) throw busy();
+    try {
+      return operation();
+    } catch (error) {
+      if (error instanceof PiShipError) throw error;
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "The distribution package configuration could not be updated",
+        {
+          userAction:
+            "Check permissions and file types in the distribution agent directory",
+        },
+      );
+    }
+  } finally {
+    rmSync(guard, { recursive: true });
+  }
+}
+
+export function applyAgentFiles(
+  lock: DistributionLock,
+  agentDir: string,
+  options: {
+    readonly sessionAutoApprove?: boolean;
+    readonly session?: boolean;
+  } = {},
+): AgentFilesResult {
+  if (
+    !(lock.packages ?? []).some((item) => item.agentFiles?.length) &&
+    !sessionAutoApproveTarget(lock)
+  )
+    return { reports: [], restore: () => {} };
+  const owner = randomUUID();
+  const leases = filePath(agentDir, ".piship-provider-sessions");
+  let registered = false;
+  const result = agentFilesTransaction(agentDir, () => {
+    const target = sessionAutoApproveTarget(lock);
+    if (target && (options.session || options.sessionAutoApprove)) {
+      mkdirSync(leases, { recursive: true, mode: 0o700 });
+      for (const entry of readdirSync(leases)) {
+        const path = filePath(agentDir, `.piship-provider-sessions/${entry}`);
+        const lease = readJsonObject(path);
+        if (!lease || typeof lease.pid !== "number")
+          throw new PiShipError(
+            "CONFIG_INVALID",
+            "Invalid permission provider session ownership record",
+          );
+        if (!liveProcess(lease.pid)) {
+          rmSync(path);
+          continue;
+        }
+        if (options.sessionAutoApprove || lease.yolo === true)
+          throw new PiShipError(
+            "CONFIG_INVALID",
+            "Concurrent sessions cannot share the permission provider while --yolo is active; close the other session or start without --yolo",
+          );
+      }
+    }
+    const applied = applyAgentFilesLocked(lock, agentDir, {
+      ...options,
+      owner,
+    });
+    if (target && (options.session || options.sessionAutoApprove)) {
+      writeFileSync(
+        join(leases, owner),
+        JSON.stringify({
+          pid: process.pid,
+          yolo: options.sessionAutoApprove === true,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
+      registered = true;
+    }
+    return applied;
+  });
+  let ended = false;
+  return {
+    reports: result.reports,
+    endAutoApprove: () => {
+      if (ended) return;
+      agentFilesTransaction(agentDir, () => {
+        const state = readSeedState(agentDir);
+        const target = sessionAutoApproveTarget(lock);
+        if (
+          state.override?.owner === owner &&
+          target &&
+          state.override.path === target.path &&
+          state.override.key === target.key
+        )
+          takeBack(agentDir, state.override);
+      });
+    },
+    restore: () => {
+      if (ended) return;
+      agentFilesTransaction(agentDir, () => {
+        result.restore();
+        if (registered)
+          rmSync(filePath(agentDir, `.piship-provider-sessions/${owner}`), {
+            force: true,
+          });
+        ended = true;
+      });
     },
   };
 }
@@ -367,6 +573,7 @@ export function inspectAgentFiles(
   lock: DistributionLock,
   agentDir: string,
 ): AgentFileStatus[] {
+  const seeds = readSeedState(agentDir);
   return declaredFiles(lock).map(({ package: owner, file }) => {
     const path = join(agentDir, ...file.path.split("/"));
     const found = existsSync(path)
@@ -375,7 +582,9 @@ export function inspectAgentFiles(
     const state: AgentFileState =
       found === file.sha256
         ? "current"
-        : found !== undefined && file.mode === "seed"
+        : found !== undefined &&
+            file.mode === "seed" &&
+            found !== seeds.files[file.path]
           ? "edited"
           : "pending";
     return { package: owner, path: file.path, mode: file.mode, state };

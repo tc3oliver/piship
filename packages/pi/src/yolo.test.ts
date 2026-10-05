@@ -77,6 +77,7 @@ interface Setup {
   readonly yolo?: boolean;
   /** Switch the stored auto mode on before the session opens. */
   readonly stored?: boolean;
+  readonly onYoloEnd?: () => void;
 }
 
 /**
@@ -143,6 +144,7 @@ function distribution(setup: Setup) {
     piVersion: PI_VERSION,
     interactive: false,
     ...(setup.yolo ? { yolo: true } : {}),
+    ...(setup.onYoloEnd ? { onYoloEnd: setup.onYoloEnd } : {}),
     fetch: (() => {
       throw new Error("no network in unit tests");
     }) as unknown as ManagedFetch,
@@ -449,6 +451,33 @@ describe("--yolo in a managed session", () => {
     expect(
       events().filter((event) => event.event === "policy.auto_enabled"),
     ).toEqual([expect.objectContaining({ detail: { source: "yolo" } })]);
+  });
+
+  it("auto off clears stored mode and audits even if provider restoration fails", async () => {
+    const { session, stateDir, events } = await open({
+      mode: "managed",
+      userAuto: "allowed",
+      yolo: true,
+      stored: true,
+      onYoloEnd: () => {
+        throw new Error("restore failed");
+      },
+    });
+    const off = await session.switchUserAuto(false);
+    expect(session.yolo).toBe(false);
+    expect(off.active).toBe(false);
+    expect(off.warning).toContain("provider override could not be restored");
+    expect(existsSync(userAutoPath(stateDir))).toBe(false);
+    await session.close();
+    expect(events()).toContainEqual(
+      expect.objectContaining({ event: "policy.auto_disabled" }),
+    );
+    expect(events()).toContainEqual(
+      expect.objectContaining({
+        event: "policy.auto_enabled",
+        detail: expect.objectContaining({ providerAutoApprove: true }),
+      }),
+    );
   });
 
   it("leaves a stored auto mode as it was, on or off", async () => {

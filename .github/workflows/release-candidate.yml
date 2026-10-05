@@ -356,7 +356,7 @@ jobs:
 
   # A fresh runner per target installs the first build with the install
   # script shipped inside it, which verifies the release itself. It needs no
-  # PiShip CLI, so it runs alongside verification. The personal example then
+  # PiShip CLI, so it runs alongside verification. The personal and developer examples then
   # runs the installed offline `--smoke` and `doctor`; the managed demo needs
   # a sign-in (fixtures, a secret store, and on Linux bubblewrap) for those,
   # which the Portable E2E covers, so it checks the version only.

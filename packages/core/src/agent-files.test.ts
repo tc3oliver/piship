@@ -325,10 +325,76 @@ describe("a session auto-approval", () => {
     const declared = lock({ autoApprove: true });
     applyAgentFiles(declared, agentDir, { sessionAutoApprove: true });
     expect(key()).toBe(true);
-    // The process was killed: nothing restored. The next launch, without the
-    // option, finds the recorded override first.
+    const statePath = join(agentDir, ".piship-agent-files.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.override.pid = 2147483647;
+    writeFileSync(statePath, JSON.stringify(state));
+    // Simulate a dead owner; a live owner must never be taken back.
     applyAgentFiles(declared, agentDir);
     expect(key()).toBe(false);
+  });
+
+  it("keeps ordinary sessions concurrent but refuses yolo while either is live", () => {
+    const declared = lock({ autoApprove: true });
+    const first = applyAgentFiles(declared, agentDir, { session: true });
+    const second = applyAgentFiles(declared, agentDir, { session: true });
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { sessionAutoApprove: true }),
+    ).toThrow(/Concurrent sessions/);
+    expect(key()).toBe(false);
+    first.restore();
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { sessionAutoApprove: true }),
+    ).toThrow(/Concurrent sessions/);
+    second.restore();
+    const yolo = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    expect(key()).toBe(true);
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { session: true }),
+    ).toThrow(/Concurrent sessions/);
+    yolo.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("keeps the session lease after auto off and restores a provider's stale save at exit", () => {
+    const declared = lock({ autoApprove: true });
+    const yolo = applyAgentFiles(declared, agentDir, {
+      sessionAutoApprove: true,
+    });
+    yolo.endAutoApprove?.();
+    expect(key()).toBe(false);
+    expect(() =>
+      applyAgentFiles(declared, agentDir, { session: true }),
+    ).toThrow(/Concurrent sessions/);
+    const stale = JSON.parse(read());
+    stale.yoloMode = true;
+    writeFileSync(target(), JSON.stringify(stale));
+    yolo.restore();
+    expect(key()).toBe(false);
+  });
+
+  it("never follows a tampered stale override outside the declared provider target", () => {
+    const declared = lock({ autoApprove: true });
+    applyAgentFiles(declared, agentDir);
+    const victim = join(temp, "victim.json");
+    writeFileSync(victim, JSON.stringify({ yoloMode: true }));
+    writeFileSync(
+      join(agentDir, ".piship-agent-files.json"),
+      JSON.stringify({
+        schema: "piship-agent-files/v1",
+        files: {},
+        override: {
+          path: "../victim.json",
+          key: "yoloMode",
+          hadKey: true,
+          original: false,
+        },
+      }),
+    );
+    applyAgentFiles(declared, agentDir);
+    expect(JSON.parse(readFileSync(victim, "utf8")).yoloMode).toBe(true);
   });
 
   it("removes a key the file did not have before the session", () => {

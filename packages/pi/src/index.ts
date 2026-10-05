@@ -2,8 +2,8 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  VERSION,
   type createAgentSession,
+  VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
 import {
@@ -11,15 +11,15 @@ import {
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
+  reclaimLaunchTemporaries,
+  runAuto,
   runConfig,
   runLogin,
   runLogout,
   runRollback,
   runSandbox,
-  reclaimLaunchTemporaries,
-  runAuto,
-  runUpdate,
   runtimeStateDirectory,
+  runUpdate,
   sessionAutoApproveTarget,
   sweepDistributionData,
   sweepStateTemporaries,
@@ -29,25 +29,25 @@ import { runDoctor } from "./commands/doctor.js";
 import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
-import type { LaunchContext } from "./launch/context.js";
 import { piAgentDirectory } from "./environment.js";
+import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import { installSearchTools } from "./launch/search-tools.js";
 import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
+  type GovernedRuntime,
   governModelRuntime,
   isCredentialRejection,
   isModelDenial,
   type ModelGovernance,
   type ModelPolicy,
-  type GovernedRuntime,
 } from "./governance.js";
 export {
-  GovernanceSession,
-  inspectGovernance,
   type GovernanceInspection,
   type GovernanceOptions,
+  GovernanceSession,
+  inspectGovernance,
 } from "./governance-session.js";
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 
@@ -174,10 +174,25 @@ export async function launchPiDistribution(
   // to switch.
   const sessionAutoApprove =
     yolo && sessionAutoApproveTarget(metadata) !== undefined;
-  const agentFiles = applyAgentFiles(metadata, agentDir, {
-    sessionAutoApprove,
+  const startsSession =
+    args.length === 0 ||
+    (args.length === 1 &&
+      (args[0] === "--smoke" || args[0] === "--smoke-model"));
+  const agentFiles = startsSession
+    ? applyAgentFiles(metadata, agentDir, {
+        sessionAutoApprove,
+        session: true,
+      })
+    : { restore: () => {}, endAutoApprove: undefined };
+  process.once("exit", () => {
+    try {
+      agentFiles.restore();
+    } catch {
+      console.error(
+        "The provider session settings could not be restored; the next launch will recover the abandoned override.",
+      );
+    }
   });
-  process.once("exit", agentFiles.restore);
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
   // Pi's agent directory here before Pi was imported (environment.ts).
   installSearchTools(metadata, options.distributionDir, agentDir);
@@ -198,8 +213,8 @@ export async function launchPiDistribution(
     out: (message) => console.log(message),
     err: (message) => console.error(message),
     ...(yolo ? { yolo: true } : {}),
-    ...(yolo && sessionAutoApprove
-      ? { endProviderAutoApprove: agentFiles.restore }
+    ...(yolo && sessionAutoApprove && agentFiles.endAutoApprove
+      ? { endProviderAutoApprove: agentFiles.endAutoApprove }
       : {}),
   };
   const [command, ...rest] = args;

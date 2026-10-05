@@ -194,7 +194,7 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
-For a batteries-included coding agent, the [developer example](examples/developer/README.md) (`devcode`) ships six Pi packages: Claude Code compatibility, diagnostics and LSP, background tasks, review, a browser, and a permission provider. Its profile runs normal work without asking, and asks before `sudo`, recursive deletes, destructive git, and writes outside the workspace. A [hardened variant](examples/developer/managed.piship.yaml) shows how a company tightens it.
+For a batteries-included coding agent, the [developer example](examples/developer/README.md) (`devcode`) ships six Pi packages: Claude Code compatibility, diagnostics and LSP, background tasks, review, a browser, and a permission provider. Its profile runs normal work without asking, and asks before `sudo`, recursive deletes, destructive git, and writes outside the workspace. A [hardened variant](examples/developer/managed.piship.yaml) shows how a company tightens it. Read the [requirements](examples/developer/README.md#requirements) for Chrome and the browser package's Node 24.18.0 requirement.
 
 ```bash
 node packages/cli/dist/bin.js build examples/developer/piship.yaml

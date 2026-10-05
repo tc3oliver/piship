@@ -2,8 +2,8 @@
 // origin, sandbox, policy, resource and provider trust, capability state, and
 // MCP. Every mandatory control that cannot be established fails the launch.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Extension } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
+import type { Extension } from "@earendil-works/pi-coding-agent";
 import {
   AuditLog,
   type AuditStatus,
@@ -14,9 +14,9 @@ import {
   type ApprovalChannel,
   type AuditEventType,
   formatError,
+  PiShipError,
   type PolicyAction,
   type PolicyDecision,
-  PiShipError,
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
@@ -119,7 +119,7 @@ export class GovernanceSession {
   };
   /** Set by `resolveProject`; what Pi's `isProjectTrusted()` reports. */
   projectTrust: ProjectTrustResult = {
-    trusted: true,
+    trusted: false,
     surfaces: 0,
     reason: "project trust was not resolved",
   };
@@ -260,7 +260,10 @@ export class GovernanceSession {
       if (session.yolo)
         session.emit("policy.auto_enabled", {
           policy: engine.id,
-          detail: { source: "yolo" },
+          detail: {
+            source: "yolo",
+            ...(options.onYoloEnd ? { providerAutoApprove: true } : {}),
+          },
         });
       // A team, project, or managed user file that tries to widen the policy
       // is recorded; a rule it names is what tried.
@@ -368,8 +371,13 @@ export class GovernanceSession {
       // `off` ends `--yolo` for the rest of the session as well.
       const wasYolo = this.#yolo;
       this.#yolo = false;
-      if (wasYolo) this.options.onYoloEnd?.();
       setUserAuto(this.options.stateDir, false);
+      if (wasYolo)
+        try {
+          this.options.onYoloEnd?.();
+        } catch (error) {
+          warning = `Auto mode is off, but the provider override could not be restored: ${formatError(error)}`;
+        }
       if (this.#userAuto.allowed || wasYolo)
         try {
           this.audit.assertAvailable();
