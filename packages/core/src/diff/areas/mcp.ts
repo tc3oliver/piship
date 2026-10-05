@@ -85,6 +85,32 @@ export function mcp(
           ? ["high", "Server now receives the runtime credential."]
           : ["medium", "Server no longer receives the runtime credential."],
     );
+    // An absent httpTransport is https.
+    out.scalar(
+      "mcp",
+      `${item} httpTransport`,
+      x.httpTransport,
+      y.httpTransport,
+      (_, v) =>
+        v === "http-allowed"
+          ? [
+              "high",
+              "Server may now be reached over plain HTTP to a private or internal host; its traffic, including identity headers, is unencrypted.",
+            ]
+          : ["low", "Server is reached over https only."],
+    );
+    const headers = (server: typeof x) =>
+      Object.entries(server.headers ?? {}).map(
+        ([name, { identityClaim }]) => `${name}: ${identityClaim}`,
+      );
+    out.set(
+      "mcp",
+      `${item} headers`,
+      headers(x),
+      headers(y),
+      ["medium", "Sends an identity claim to the server in a header."],
+      ["low", "No longer sends this identity header."],
+    );
     out.scalar(
       "mcp",
       `${item} expectedServerName`,

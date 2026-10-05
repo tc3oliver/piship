@@ -1712,6 +1712,52 @@ describe("doctor secret scan", () => {
   });
 });
 
+describe("MCP group", () => {
+  it("shows plain HTTP and identity header names, never a value", () => {
+    const output = renderDoctor(
+      doctorData("managed", {
+        governance: governanceData({
+          manifest: {
+            policy: {
+              default: "deny",
+              enforced: [],
+              defaults: [],
+              adapter: null,
+            },
+            capabilities: [],
+            mcp: {
+              servers: [
+                {
+                  id: "tickets",
+                  transport: "streamable-http",
+                  httpTransport: "http-allowed",
+                  headers: {
+                    "X-MiTAC-User": { identityClaim: "preferred_username" },
+                  },
+                },
+              ],
+            },
+            audit: { sinks: [] },
+          } as unknown as GovernanceData["manifest"],
+          mcp: [
+            {
+              id: "tickets",
+              state: "healthy",
+              transport: "streamable-http",
+              plainHttp: true,
+              tools: ["mcp__tickets__search"],
+              required: true,
+            },
+          ] as unknown as NonNullable<GovernanceData["mcp"]>,
+        }),
+      }),
+    ).render();
+    expect(group(output, "MCP")).toEqual([
+      `  ! ${"mcp tickets".padEnd(20)} healthy (streamable-http; plain HTTP, unencrypted; identity headers X-MiTAC-User from preferred_username; 1 tool(s))`,
+    ]);
+  });
+});
+
 describe("Governance group", () => {
   const v6 = (
     data: DoctorData,

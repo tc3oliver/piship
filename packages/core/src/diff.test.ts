@@ -281,6 +281,43 @@ describe("diffLocks", () => {
     ]);
   });
 
+  it("flags plain HTTP as high and an identity header as medium", () => {
+    const https = clone(base);
+    https.governance.manifest.mcp.servers.push({
+      ...structuredClone(https.governance.manifest.mcp.servers[0]),
+      id: "tickets",
+      transport: "streamable-http",
+      module: undefined,
+      url: "http://10.99.236.70/mcp",
+    });
+    const plain = clone(https);
+    const tickets = plain.governance.manifest.mcp.servers.at(-1);
+    Object.assign(tickets, {
+      httpTransport: "http-allowed",
+      headers: { "X-MiTAC-User": { identityClaim: "preferred_username" } },
+    });
+    const report = diffLocks(https, plain);
+    expect(report.risk).toBe("high");
+    expect(report.changes).toEqual([
+      expect.objectContaining({
+        area: "mcp",
+        kind: "added",
+        item: "mcp server tickets headers X-MiTAC-User: preferred_username",
+        risk: "medium",
+      }),
+      expect.objectContaining({
+        area: "mcp",
+        kind: "added",
+        item: "mcp server tickets httpTransport",
+        after: "http-allowed",
+        risk: "high",
+      }),
+    ]);
+    expect(
+      diffLocks(plain, https).changes.map((change) => change.risk),
+    ).toEqual(["low", "low"]);
+  });
+
   it("flags a sandbox that no longer fails closed", () => {
     const after = clone(base);
     after.governance.manifest.sandbox.required = false;

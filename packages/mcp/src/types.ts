@@ -34,6 +34,15 @@ export interface McpServerConfig {
     readonly allow: readonly string[];
     readonly deny: readonly string[];
   };
+  /**
+   * `http-allowed` also permits plain HTTP to a private or internal host;
+   * absent or `https` keeps plain HTTP to loopback only.
+   */
+  readonly httpTransport?: "https" | "http-allowed";
+  /** Request headers whose value is a claim of the signed-in identity. */
+  readonly headers?: Readonly<
+    Record<string, { readonly identityClaim: string }>
+  >;
 }
 
 // ------------------------------------------------------------ JSON-RPC
@@ -148,6 +157,15 @@ export type McpFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+/**
+ * The verified claims of the identity signed in now, read for every request
+ * that carries an identity header, or null when nobody is signed in. Only
+ * PiShip's retained, non-secret claims; never a token.
+ */
+export type McpIdentityClaimsProvider = () => Promise<Readonly<
+  Record<string, unknown>
+> | null>;
+
 /** Supplies the runtime bearer for `credential: runtime` HTTP servers. */
 export type McpCredentialProvider = (
   serverId: string,
@@ -187,6 +205,8 @@ export interface McpServerReport {
   readonly required: boolean;
   readonly reason?: string;
   readonly transport: "stdio" | "streamable-http";
+  /** The resolved URL is plain HTTP to a host other than loopback. */
+  readonly plainHttp?: boolean;
   /** Negotiated protocol version, once initialized. */
   readonly protocolVersion?: string;
   readonly serverName?: string;

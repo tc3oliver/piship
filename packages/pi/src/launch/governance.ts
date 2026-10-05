@@ -6,10 +6,12 @@ import {
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  isPrivateNetworkHost,
   PiShipError,
   type PolicyAction,
   principalId,
   principalKey,
+  samePrincipal,
 } from "@piship/contracts";
 import {
   configuredModel,
@@ -50,6 +52,8 @@ export function governanceOptions(
     : null;
   const known = !ctx.metadata.access || !!activated;
   const onSandboxCredentialEvent = prepared?.events.listener;
+  const servers = lock.governance.manifest.mcp.servers;
+  const network = access?.network ?? DEFAULT_NETWORK_POLICY;
   return {
     lock,
     ...(metrics ? { metrics } : {}),
@@ -58,10 +62,37 @@ export function governanceOptions(
     cwd: process.cwd(),
     piVersion: VERSION,
     interactive,
-    fetch: createManagedFetch(
-      access?.network ?? DEFAULT_NETWORK_POLICY,
-      "governance",
-    ),
+    fetch: createManagedFetch(network, "governance"),
+    // Plain HTTP beyond loopback only for MCP servers that declare
+    // httpTransport: http-allowed, to a private or internal host, and only
+    // on this fetch. Private-only network policy still applies.
+    ...(servers.some((server) => server.httpTransport === "http-allowed")
+      ? {
+          mcpPlainHttpFetch: createManagedFetch(network, "governance", {
+            plainHttp: (target) => isPrivateNetworkHost(target.hostname),
+          }),
+        }
+      : {}),
+    // MCP identity headers: the claims of the identity signed in now, read
+    // per request and never cached, and only while it is still the launch's
+    // principal. A user switch takes effect at the next launch.
+    ...(access &&
+    principal &&
+    servers.some((server) => server.headers !== undefined)
+      ? {
+          identityClaims: async () => {
+            const identity = await access.currentIdentity({ required: true });
+            if (!identity) return null;
+            if (!samePrincipal(principalKey(identity), principal))
+              throw new PiShipError(
+                "IDENTITY_REQUIRED",
+                "The signed-in identity changed since launch",
+                { component: "identity" },
+              );
+            return identity.claims ?? {};
+          },
+        }
+      : {}),
     resolveTemplate: (key, template) =>
       resolveTemplate(
         key,

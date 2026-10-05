@@ -198,6 +198,24 @@ function mcpServers(
       continue;
     const path = `mcp.servers.${server.id}`;
     const url = server.url;
+    if (server.headers && access?.identity.mode !== "oidc")
+      findings.push({
+        path: `${path}.headers`,
+        certain: true,
+        message:
+          "Identity headers take their value from the signed-in OIDC identity and need identity.mode: oidc",
+      });
+    if (
+      server.httpTransport === "http-allowed" &&
+      (hasRuntimeReference(url) || new URL(url).protocol === "http:")
+    )
+      findings.push({
+        path: `${path}.httpTransport`,
+        certain: false,
+        message: hasRuntimeReference(url)
+          ? "http-allowed: if this URL resolves to plain HTTP, traffic to the server, including any identity headers, is unencrypted and unauthenticated on the network path; it must resolve to https or a private or internal host, or the server does not start"
+          : "http-allowed: traffic to this server, including any identity headers, is unencrypted and unauthenticated on the network path; serve it over https where possible",
+      });
     // `always`: the server can never start; `otherwise`: it starts only if
     // a runtime value resolves as the message says.
     const [always, otherwise] = server.required

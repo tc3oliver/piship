@@ -1,7 +1,7 @@
 // Governed MCP: every server start and every tool call is authorized before
 // anything is spawned, connected, or sent.
 
-import { PiShipError } from "@piship/contracts";
+import { isLoopbackHost, PiShipError } from "@piship/contracts";
 import type { SandboxWrapper } from "@piship/sandbox";
 import { StreamableHttpTransport } from "./http.js";
 import {
@@ -31,6 +31,7 @@ import type {
   McpAuthorizeResult,
   McpCredentialProvider,
   McpFetch,
+  McpIdentityClaimsProvider,
   McpServerConfig,
   McpServerReport,
   McpServerState,
@@ -50,6 +51,17 @@ export interface McpGovernorOptions {
   readonly workspace: string;
   /** Managed fetch for Streamable HTTP servers. */
   readonly fetch?: McpFetch;
+  /**
+   * Managed fetch that also permits plain HTTP to a private or internal
+   * host, used only for servers with `httpTransport: http-allowed`. Without
+   * it those servers use `fetch`, which keeps plain HTTP to loopback.
+   */
+  readonly plainHttpFetch?: McpFetch;
+  /**
+   * The signed-in identity's claims, for servers that declare identity
+   * `headers`; read for every request, so a value is never stale.
+   */
+  readonly identityClaims?: McpIdentityClaimsProvider;
   /** Runtime bearer for `credential: runtime` servers. */
   readonly credential?: McpCredentialProvider;
   /**
@@ -99,6 +111,8 @@ interface ServerEntry {
   tools: McpToolDefinition[];
   exposed: string[];
   withheld: string[];
+  /** The resolved URL is plain HTTP to a host other than loopback. */
+  plainHttp?: boolean;
 }
 
 const DEFAULT_CLIENT: McpClientInfo = { name: "piship", version: "0.3.0" };
@@ -255,7 +269,7 @@ export class McpGovernor {
 
   async #connect(entry: ServerEntry): Promise<void> {
     const { config } = entry;
-    const transport = this.#transport(config);
+    const transport = this.#transport(entry);
     const session = new McpSession(transport, config.id);
     const deadline = Date.now() + config.startupTimeoutMs;
     try {
@@ -291,7 +305,8 @@ export class McpGovernor {
     }
   }
 
-  #transport(config: McpServerConfig): McpTransport {
+  #transport(entry: ServerEntry): McpTransport {
+    const { config } = entry;
     if (config.transport === "stdio")
       return new StdioTransport({
         server: config,
@@ -316,17 +331,35 @@ export class McpGovernor {
       throw mcpUnhealthy(
         `MCP server ${config.id} requires the runtime credential, which is not available`,
       );
-    return new StreamableHttpTransport({
+    const url = this.#resolveUrl(config);
+    const plainHttp = config.httpTransport === "http-allowed";
+    const transport = new StreamableHttpTransport({
       serverId: config.id,
-      url: this.#resolveUrl(config),
-      fetch: this.#options.fetch,
+      url,
+      fetch:
+        plainHttp && this.#options.plainHttpFetch
+          ? this.#options.plainHttpFetch
+          : this.#options.fetch,
+      ...(plainHttp ? { plainHttp } : {}),
       ...(config.credential === "runtime" && this.#options.credential
         ? {
             credential: this.#options.credential,
             credentialOrigins: this.#options.credentialOrigins ?? [],
           }
         : {}),
+      ...(config.headers && Object.keys(config.headers).length
+        ? {
+            identityHeaders: config.headers,
+            ...(this.#options.identityClaims
+              ? { identityClaims: this.#options.identityClaims }
+              : {}),
+          }
+        : {}),
     });
+    const target = new URL(url);
+    entry.plainHttp =
+      target.protocol === "http:" && !isLoopbackHost(target.hostname);
+    return transport;
   }
 
   #resolveUrl(config: McpServerConfig): string {
@@ -518,6 +551,7 @@ function report(entry: ServerEntry): McpServerReport {
     state: entry.state === "pending" ? "failed" : entry.state,
     required: entry.config.required,
     transport: entry.config.transport,
+    ...(entry.plainHttp ? { plainHttp: true } : {}),
     ...(entry.state === "pending"
       ? { reason: "not started" }
       : entry.reason

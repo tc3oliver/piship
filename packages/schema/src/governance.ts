@@ -430,6 +430,39 @@ export interface McpServerConfig {
   readonly exposure?: ToolExposure;
   /** piship/v1alpha6: per-tool exposure globs (`tools:` in the manifest). */
   readonly toolExposure?: readonly ToolExposureRule[];
+  /**
+   * piship/v1alpha6, streamable-http only: `http-allowed` also permits plain
+   * HTTP to a private or internal host (`isPrivateNetworkHost`). Absent
+   * means `https` (plain HTTP only on loopback).
+   */
+  readonly httpTransport?: McpHttpTransport;
+  /**
+   * piship/v1alpha6, streamable-http only: request headers whose value is a
+   * claim of the signed-in OIDC identity, keyed by header name. Only the
+   * header and claim names are declared and locked, never a value.
+   */
+  readonly headers?: Readonly<Record<string, McpIdentityHeader>>;
+}
+
+/** `mcp.servers.<id>.httpTransport`: `https` (default) or `http-allowed`. */
+export const MCP_HTTP_TRANSPORTS = ["https", "http-allowed"] as const;
+export type McpHttpTransport = (typeof MCP_HTTP_TRANSPORTS)[number];
+
+/**
+ * The identity claims an MCP header may carry: string claims of the signed-in
+ * OIDC identity that PiShip keeps (`RETAINED_CLAIMS`).
+ */
+export const MCP_IDENTITY_HEADER_CLAIMS = [
+  "sub",
+  "preferred_username",
+  "email",
+  "name",
+] as const;
+export type McpIdentityHeaderClaim =
+  (typeof MCP_IDENTITY_HEADER_CLAIMS)[number];
+
+export interface McpIdentityHeader {
+  readonly identityClaim: McpIdentityHeaderClaim;
 }
 
 /**

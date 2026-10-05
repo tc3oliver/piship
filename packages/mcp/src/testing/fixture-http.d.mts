@@ -12,6 +12,8 @@ export interface FixtureHttpOptions {
   readonly session?: boolean;
   /** Answer every POST with a 307. */
   readonly redirect?: boolean;
+  /** A request header whose value each request records as `recorded`. */
+  readonly recordHeader?: string;
 }
 
 /** One request the fixture received, with the headers it checks. */
@@ -21,6 +23,7 @@ export interface FixtureHttpRequest {
   readonly sessionId: string | undefined;
   readonly protocolVersion: string | undefined;
   readonly authorized: boolean | undefined;
+  readonly recorded?: string | string[] | undefined;
 }
 
 export interface FixtureToolCall {
