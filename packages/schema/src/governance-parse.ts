@@ -23,6 +23,7 @@ export { parsePackages, parsePackageTrust } from "./governance/packages.js";
 export {
   parseCacheWarming,
   parseRuntimeTools,
+  parseSearchTools,
 } from "./governance/runtime.js";
 export { defaultProjectDimensions, parsePolicy } from "./governance/policy.js";
 export { parseGovernanceResources } from "./governance/resources.js";

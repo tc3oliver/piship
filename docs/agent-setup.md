@@ -82,6 +82,7 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **M10. Governed MCP.** The approved servers from S9 and the tools each may expose.
 - **M11. Audit.** An audit collector URL, and whether a launch must fail when it is unreachable.
 - **M12. Managed update source** (can wait until the first version works): where releases will be hosted, and who holds the release signing keys. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway each have their own opt-in (M1 to M3).
+- **M13. Search tools.** Should each release ship `fd` and `rg`, so Pi's find and grep tools and `@` file completion work on machines that do not have them installed? A managed launch never downloads them. Default: yes, unless every machine already has both on `PATH`. Any version the company has reviewed, or PiShip's defaults?
 
 ## 3. Create the repository
 
@@ -141,6 +142,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M11 Audit | an `audit.sinks` entry with `id`, `type: http`, `url`, `required` | The template keeps a local file sink and shows the collector entry as a comment |
 | M12 Update source | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
 | M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. Every other endpoint has its own `httpTransport` (M2, M3, M10; OIDC, audit sinks, and the sandbox too), and needs HTTPS without it ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
+| M13 Search tools | `runtime.searchTools: { mode: bundled }`, optionally `fd: "<version>"` and `rg: "<version>"`; add `https://github.com` to `release.sources` | `piship lock` needs network access to download the upstream archives for every `release.targets` entry. Commit only `piship.lock`; the archives stay in PiShip's download cache ([manifest](manifest.md#bundled-search-tools-v1alpha6)) |
 
 Then `piship config explain <directory>/piship.yaml` shows the effective configuration and where each value comes from.
 

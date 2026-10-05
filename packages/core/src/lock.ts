@@ -30,6 +30,7 @@ import { checkDataContract } from "./data/contract.js";
 import { sessionExportStatus } from "./data/session-export.js";
 import { currentPiPackages, lockPiPackages } from "./pi-packages/lock.js";
 import { resolveResources } from "./resources.js";
+import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
 import { checkToolExposure, lockedTools } from "./tool-exposure.js";
 
@@ -72,10 +73,10 @@ export function checkPiVersion(manifest: Manifest): void {
 }
 
 /**
- * The lock for a manifest. Pi packages are resolved over the network only
- * when `packages` is `"resolve"` (`piship lock`); otherwise their recorded
- * entries are re-checked offline, so a stale-lock check never reaches a
- * registry.
+ * The lock for a manifest. Pi packages are resolved over the network, and
+ * bundled search tools read from the download cache, only when `packages` is
+ * `"resolve"` (`piship lock`); otherwise their recorded entries are
+ * re-checked offline, so a stale-lock check never reaches a registry.
  */
 export function resolveLock(
   manifestPath: string,
@@ -102,6 +103,14 @@ export function resolveLock(
       ? lockPiPackages(manifest, base)
       : currentPiPackages(manifest, base)
     : [];
+  // Bundled search tools are read from the download cache only by `piship
+  // lock`; the stale-lock check takes the recorded entries.
+  const searchTools =
+    v6 && manifest.runtime.searchTools
+      ? options.packages === "resolve"
+        ? lockSearchTools(manifest)
+        : currentSearchTools(manifest, base)
+      : undefined;
   const virtualModels = (manifest.access?.models.catalog ?? []).flatMap(
     (model) =>
       model.virtual
@@ -151,6 +160,7 @@ export function resolveLock(
             audit: digest(policy?.audit),
             access: digest(manifest.access),
             ...(packages.length ? { packages: digest(packages) } : {}),
+            ...(searchTools ? { searchTools: digest(searchTools) } : {}),
           },
           updates: manifest.lifecycle.updates,
           release: manifest.lifecycle.release,
@@ -159,6 +169,7 @@ export function resolveLock(
     ...(v6
       ? {
           ...(packages.length ? { packages } : {}),
+          ...(searchTools ? { searchTools } : {}),
           ...(virtualModels.length ? { virtualModels } : {}),
           ...(manifest.runtime.tools
             ? {

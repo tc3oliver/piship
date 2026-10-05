@@ -26,6 +26,7 @@ import {
   reviewedInstallScripts,
 } from "../pi-packages/lock.js";
 import { effectivePackageTrust } from "../pi-packages/trust.js";
+import { checkSearchToolSources } from "../search-tools/index.js";
 import { gate } from "./shared.js";
 import { checkLockedPackageSources } from "./sources.js";
 
@@ -180,6 +181,7 @@ export function checkPackageSources(
 ): void {
   if (!lock.release) return;
   checkLockedPackageSources(lock.runtime.packages, lock.release.sources, stage);
+  checkSearchToolSources(lock, stage);
 }
 
 /**

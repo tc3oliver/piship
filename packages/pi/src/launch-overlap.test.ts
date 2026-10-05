@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePiEnvironment } from "./environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "./index.js";
 
 const KEYS = [
   "PISHIP_STATE_HOME",
   "PISHIP_INSTALL_HOME",
   "PISHIP_BIN_HOME",
+  "PI_CODING_AGENT_DIR",
 ] as const;
 let temp: string;
 let saved: Record<string, string | undefined> = {};
@@ -44,8 +46,11 @@ const metadata = {
   deployment: { mode: "managed" },
 } as unknown as DistributionLock;
 
-const launch = (args: string[]) =>
-  launchPiDistribution({ distributionDir: temp, metadata, args });
+/** Launch as the branded command does: Pi's agent directory set first. */
+const launch = (args: string[]) => {
+  preparePiEnvironment("acmecode");
+  return launchPiDistribution({ distributionDir: temp, metadata, args });
+};
 
 describe("launch with overlapping PiShip roots (#49)", () => {
   it("starts when the state, install, and bin homes are separate", async () => {
@@ -70,4 +75,31 @@ describe("launch with overlapping PiShip roots (#49)", () => {
     expect(log).not.toHaveBeenCalled();
     expect(existsSync(join(temp, "install", "apps", "acmecode"))).toBe(false);
   });
+});
+
+describe("launch without Pi's agent directory prepared", () => {
+  it.each([
+    ["unset", undefined],
+    ["the user's own", join(tmpdir(), "home", ".pi", "agent")],
+  ])(
+    "refuses before creating any state when PI_CODING_AGENT_DIR is %s",
+    async (_, value) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      if (value === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = value;
+      const error = await launchPiDistribution({
+        distributionDir: temp,
+        metadata,
+        args: ["--version"],
+      }).then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+      expect(error).toBeInstanceOf(PiShipError);
+      expect((error as PiShipError).code).toBe("CONFIG_INVALID");
+      expect((error as PiShipError).message).toContain("PI_CODING_AGENT_DIR");
+      expect(log).not.toHaveBeenCalled();
+      expect(existsSync(join(temp, "state", "acmecode"))).toBe(false);
+    },
+  );
 });

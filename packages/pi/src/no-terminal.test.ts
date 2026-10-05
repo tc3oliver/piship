@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { preparePiEnvironment } from "./environment.js";
 import { launchPiDistribution, PINNED_PI_VERSION } from "./index.js";
 
 let temp: string;
 const saved = {
   home: process.env.PISHIP_STATE_HOME,
+  agentDir: process.env.PI_CODING_AGENT_DIR,
   stdin: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
   stdout: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
 };
@@ -29,6 +31,8 @@ beforeEach(() => {
 afterEach(() => {
   if (saved.home === undefined) delete process.env.PISHIP_STATE_HOME;
   else process.env.PISHIP_STATE_HOME = saved.home;
+  if (saved.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
   restore(process.stdin, saved.stdin);
   restore(process.stdout, saved.stdout);
   rmSync(temp, { recursive: true, force: true });
@@ -43,8 +47,10 @@ const metadata = {
   deployment: { mode: "managed" },
 } as unknown as DistributionLock;
 
-const launch = (args: string[]) =>
-  launchPiDistribution({ distributionDir: temp, metadata, args });
+const launch = (args: string[]) => {
+  preparePiEnvironment("acmecode");
+  return launchPiDistribution({ distributionDir: temp, metadata, args });
+};
 
 describe("interactive launch without a terminal", () => {
   it.each([

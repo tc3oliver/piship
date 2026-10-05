@@ -24,6 +24,16 @@ export async function runConfig(
       schema: ctx.metadata.manifest.schema,
       ...(governance ? { governance } : {}),
       ...(ctx.metadata.updates ? { updates: ctx.metadata.updates } : {}),
+      ...(ctx.metadata.searchTools
+        ? {
+            searchTools: Object.fromEntries(
+              Object.entries(ctx.metadata.searchTools).map(([tool, entry]) => [
+                tool,
+                entry.version,
+              ]),
+            ),
+          }
+        : {}),
     });
     if (key === "--json") ctx.out(redact(JSON.stringify(rows, null, 2)));
     else ctx.out(formatExplanation(ctx.metadata.app.name, rows));

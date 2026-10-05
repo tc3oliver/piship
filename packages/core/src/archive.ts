@@ -401,8 +401,11 @@ function parsePax(data: Buffer): Map<string, string> {
   return records;
 }
 
-/** Validated `/` segments of an entry path; throws on anything unsafe. */
-function entrySegments(path: string, directory: boolean): string[] {
+/**
+ * Validated `/` segments of an entry path; throws on anything unsafe. The
+ * search tool reader applies the same rules to upstream archives.
+ */
+export function entrySegments(path: string, directory: boolean): string[] {
   const unsafe = () =>
     new Error(`Unsafe archive entry path: ${JSON.stringify(path)}`);
   const trimmed = directory && path.endsWith("/") ? path.slice(0, -1) : path;

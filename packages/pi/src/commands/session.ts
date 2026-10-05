@@ -2,6 +2,8 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+  createFindTool,
+  createGrepTool,
   createReadTool,
   InteractiveMode,
   VERSION,
@@ -164,6 +166,7 @@ export async function runSmoke(
     const toolText = toolResult.content.find((item) => item.type === "text");
     if (toolText?.type !== "text" || !toolText.text.includes("schema: piship/"))
       throw new Error("Pi safe read tool failed on the packaged manifest");
+    const searchTools = await checkSearchTools(ctx);
     let modelRequest: Record<string, unknown> | undefined;
     if (withModelRequest) {
       if (!runtime.session.model)
@@ -240,6 +243,7 @@ export async function runSmoke(
           .filter((path) => !path.startsWith("<inline")),
         prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
         themes: resourceLoader.getThemes().themes.map((item) => item.name),
+        ...(searchTools ? { searchTools } : {}),
         ...(access ? { access } : {}),
         ...(gov ? { governance: governanceSummary(gov) } : {}),
         ...(modelRequest ? { modelRequest } : {}),
@@ -257,6 +261,42 @@ export async function runSmoke(
   } finally {
     await endSession(ctx, prepared, runtime, gov, sessionFailed, ownership);
   }
+}
+
+/**
+ * With bundled search tools, Pi's own find and grep tools must find the
+ * packaged manifest: they run fd and rg the way a session does, so a tool
+ * Pi cannot locate (and, offline, would not download) fails the smoke.
+ */
+async function checkSearchTools(
+  ctx: LaunchContext,
+): Promise<Record<string, string> | undefined> {
+  const locked = ctx.metadata.searchTools;
+  if (!locked) return undefined;
+  const text = (result: { content: { type: string; text?: string }[] }) =>
+    result.content.map((item) => item.text ?? "").join("");
+  const found = text(
+    await createFindTool(ctx.distributionDir).execute("piship-smoke-find", {
+      pattern: "piship.yaml",
+      limit: 5,
+    }),
+  );
+  if (!found.split("\n").some((line) => line.trim() === "piship.yaml"))
+    throw new Error("Pi find tool did not find the packaged manifest with fd");
+  const matched = text(
+    await createGrepTool(ctx.distributionDir).execute("piship-smoke-grep", {
+      pattern: "schema: piship/",
+      path: "piship.yaml",
+      literal: true,
+    }),
+  );
+  if (!matched.includes("schema: piship/"))
+    throw new Error(
+      "Pi grep tool did not search the packaged manifest with rg",
+    );
+  return Object.fromEntries(
+    Object.entries(locked).map(([tool, entry]) => [tool, entry.version]),
+  );
 }
 
 function governanceSummary(gov: GovernanceSession) {

@@ -1,6 +1,6 @@
 /** The only Pi package integration boundary. All imports use the public package entrypoint. */
 import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   VERSION,
   type createAgentSession,
@@ -26,7 +26,9 @@ import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
 import type { LaunchContext } from "./launch/context.js";
+import { piAgentDirectory } from "./environment.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import { installSearchTools } from "./launch/search-tools.js";
 import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
@@ -82,6 +84,20 @@ export async function launchPiDistribution(
     throw new Error(
       "Built Pi metadata does not match the pinned upstream runtime",
     );
+  // Pi fixed its tool directory from PI_CODING_AGENT_DIR when it was
+  // imported, before this ran. An entry point that skipped
+  // `preparePiEnvironment` would leave Pi on `~/.pi/agent/bin` and PATH.
+  const agentDir = piAgentDirectory(metadata.app.id);
+  const imported = process.env.PI_CODING_AGENT_DIR;
+  if (!imported || resolve(imported) !== agentDir)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Pi was loaded with PI_CODING_AGENT_DIR ${imported ? `set to ${imported}` : "unset"}, not ${agentDir}`,
+      {
+        userAction:
+          "Start the distribution through its branded command, which calls preparePiEnvironment from @piship/pi/environment before it imports @piship/pi",
+      },
+    );
   let args = [...options.args];
   let requestedModel: string | undefined;
   let newSession = false;
@@ -115,10 +131,12 @@ export async function launchPiDistribution(
   // could delete another's files.
   assertDisjointRoots();
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
-  const agentDir = join(stateDir, "agent");
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   applyPiEnvironment(agentDir, metadata.deployment.mode);
+  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
+  // Pi's agent directory here before Pi was imported (environment.ts).
+  installSearchTools(metadata, options.distributionDir, agentDir);
   // Temporaries of state writers killed before their rename.
   sweepStateTemporaries(stateDir);
   // Directories of PiShip operations killed before they cleaned up: session

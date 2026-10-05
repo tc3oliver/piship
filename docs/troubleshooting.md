@@ -13,7 +13,7 @@ This page lists what PiShip needs on a machine and what each PiShip error code m
 | Windows | The same | There is no native sandbox on Windows: a required `native` sandbox fails with `SANDBOX_UNAVAILABLE`. Use a remote backend ([sandbox](sandbox.md)) or `sandbox.required: false` |
 | A secret store | `storage.provider: system` (the managed demo, `login`) | macOS Keychain (`/usr/bin/security`), Linux Secret Service (`secret-tool` from libsecret, with an unlocked keyring such as GNOME Keyring), or Windows Credential Manager. Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`; PiShip never falls back to a file on its own. `storage: {provider: file}` keeps owner-only plaintext files instead (a managed manifest must also set `acknowledgePlaintext: true`) ([credentials](credentials.md#secret-stores)) |
 
-Releases are built for `linux-x64`, `darwin-arm64`, and `win32-x64`. Pi's interactive mode can download `fd` and `rg` on its first start ([security](security.md#secrets)).
+Releases are built for `linux-x64`, `darwin-arm64`, and `win32-x64`. Pi's interactive mode can download `fd` and `rg` on its first start ([security](security.md#secrets)); a managed launch never does, and warns `fd not found. Offline mode enabled, skipping download.` unless the distribution bundles them ([bundled search tools](manifest.md#bundled-search-tools-v1alpha6)) or they are on `PATH`.
 
 ## Error codes
 

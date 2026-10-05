@@ -7,12 +7,22 @@ import {
   type CacheWarmingConfig,
   CODEMODE_MODES,
   type RuntimeToolsConfig,
+  SEARCH_TOOL_MODES,
+  SEARCH_TOOLS,
+  type SearchToolsConfig,
   TOOL_EXPOSURES,
   TOOL_SEARCH_MODES,
   type ToolExposure,
   type ToolExposureRule,
 } from "../governance.js";
-import { bool, fail, isRecord, oneOf, optionalRecord } from "./fields.js";
+import {
+  bool,
+  fail,
+  isRecord,
+  oneOf,
+  optionalRecord,
+  record,
+} from "./fields.js";
 
 /** A tool name, or a glob over tool names with `*`. */
 const TOOL_GLOB = /^[A-Za-z0-9_.*-]{1,128}$/;
@@ -100,4 +110,26 @@ export function parseCacheWarming(value: unknown): CacheWarmingConfig {
       false,
     ),
   };
+}
+
+/**
+ * `runtime.searchTools`: `mode: bundled` and an optional exact upstream
+ * version per tool. Only the versions the manifest declares are kept, so
+ * the manifest digest records the declaration, not PiShip's defaults.
+ */
+export function parseSearchTools(value: unknown): SearchToolsConfig {
+  const tools = record(value, "runtime.searchTools", ["mode", ...SEARCH_TOOLS]);
+  const mode = oneOf(tools.mode, "runtime.searchTools.mode", SEARCH_TOOL_MODES);
+  const versions: { fd?: string; rg?: string } = {};
+  for (const tool of SEARCH_TOOLS) {
+    const version = tools[tool];
+    if (version === undefined) continue;
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version))
+      fail(
+        `runtime.searchTools.${tool}`,
+        "Expected an exact upstream release version such as 10.5.0 (quote it in YAML)",
+      );
+    versions[tool] = version;
+  }
+  return { mode, ...versions };
 }

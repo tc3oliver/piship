@@ -12,6 +12,7 @@ import {
   buildRelease,
   checkEnforceability,
   checkDataContract,
+  checkSearchTools,
   checkToolExposure,
   checkGovernance,
   checkPiVersion,
@@ -19,6 +20,8 @@ import {
   storageOf,
   compareReleases,
   diffLocks,
+  downloadLockedSearchTools,
+  downloadSearchToolArchives,
   explainConfiguration,
   formatDiff,
   formatExplanation,
@@ -47,6 +50,7 @@ import {
   requireCurrentLock,
   resolveResources,
   runtimeStateDirectory,
+  SEARCH_TOOL_SPECS,
   signChannel,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
@@ -555,6 +559,7 @@ export async function runCli(
       const unenforced = checkEnforceability(manifest);
       checkDataContract(manifest);
       checkToolExposure(manifest);
+      const searchTools = checkSearchTools(manifest);
       // updates.source is read only by update; launch never needs it.
       const variables = runtimeVariableUse(manifest);
       const unset = (names: readonly string[]) =>
@@ -580,6 +585,11 @@ export async function runCli(
           ...(variables.update.length
             ? [
                 `Runtime variables needed only by update: ${variables.update.join(", ")}`,
+              ]
+            : []),
+          ...(searchTools.length
+            ? [
+                `Bundled search tools: ${searchTools.map((item) => `${item.tool} ${item.version}`).join(", ")} for ${searchTools[0]?.targets.join(", ")}; piship lock downloads the upstream archives.`,
               ]
             : []),
           ...(manifest.lifecycle?.updates.transport
@@ -657,6 +667,18 @@ export async function runCli(
               ...(manifest.lifecycle
                 ? { updates: manifest.lifecycle.updates }
                 : {}),
+              ...(manifest.runtime.searchTools
+                ? {
+                    searchTools: {
+                      fd:
+                        manifest.runtime.searchTools.fd ??
+                        SEARCH_TOOL_SPECS.fd.defaultVersion,
+                      rg:
+                        manifest.runtime.searchTools.rg ??
+                        SEARCH_TOOL_SPECS.rg.defaultVersion,
+                    },
+                  }
+                : {}),
             }),
           ),
         );
@@ -671,10 +693,17 @@ export async function runCli(
           throw new Error(result.stderr || String(result.status));
         output.stdout(result.stdout.trimEnd());
       }
-    } else if (command === "lock")
-      output.stdout(`Wrote ${lockManifest(target)}`);
-    else if (command === "build") {
+    } else if (command === "lock") {
       const progress = progressReporter(output.stderr);
+      await downloadSearchToolArchives(target, progress ? { progress } : {});
+      output.stdout(`Wrote ${lockManifest(target)}`);
+    } else if (command === "build") {
+      const progress = progressReporter(output.stderr);
+      await downloadLockedSearchTools(
+        requireCurrentLock(target),
+        undefined,
+        progress ? { progress } : {},
+      );
       const built = buildDistribution(target, undefined, {
         reclaimStaging: rest[0] === "--reclaim-staging",
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
@@ -722,6 +751,7 @@ export async function runCli(
           : `${formatInspection(info)}\nRun piship inspect ${target} --json for the full locked configuration.`,
       );
     } else if (command === "dev" || command === "test") {
+      await downloadLockedSearchTools(requireCurrentLock(target));
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,

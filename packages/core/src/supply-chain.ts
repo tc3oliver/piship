@@ -8,6 +8,8 @@ import {
 } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
+import { SEARCH_TOOLS } from "@piship/schema";
+import { searchToolFileName } from "./search-tools/catalog.js";
 
 export interface PayloadPackage {
   readonly name: string;
@@ -173,6 +175,59 @@ export interface SbomInput {
   }[];
 }
 
+/** A bundled search tool of a payload, as its lock and target record it. */
+interface PayloadSearchTool {
+  readonly name: string;
+  readonly version: string;
+  /** Payload-relative path of the executable, such as `tools/fd`. */
+  readonly path: string;
+  readonly url: string;
+  /** Hex SHA-256 of the upstream archive. */
+  readonly archive: string;
+  readonly purl: string;
+}
+
+/**
+ * The bundled search tools of a payload, from its `piship.lock` and target.
+ * Empty for a payload without them.
+ */
+function payloadSearchTools(payloadDir: string): PayloadSearchTool[] {
+  const lockPath = join(payloadDir, "piship.lock");
+  const targetPath = join(payloadDir, "metadata", "target.json");
+  if (!existsSync(lockPath) || !existsSync(targetPath)) return [];
+  const lock = JSON.parse(readFileSync(lockPath, "utf8")) as {
+    searchTools?: Record<
+      string,
+      {
+        version: string;
+        source: string;
+        targets: Record<string, { url: string; archive: string }>;
+      }
+    >;
+  };
+  const { platform, arch } = JSON.parse(readFileSync(targetPath, "utf8")) as {
+    platform: string;
+    arch: string;
+  };
+  const target = `${platform}-${arch}`;
+  return SEARCH_TOOLS.flatMap((tool) => {
+    const locked = lock.searchTools?.[tool];
+    const entry = locked?.targets[target];
+    if (!locked || !entry) return [];
+    const tag = new URL(entry.url).pathname.split("/").at(-2) ?? locked.version;
+    return [
+      {
+        name: tool,
+        version: locked.version,
+        path: `tools/${searchToolFileName(tool, target)}`,
+        url: entry.url,
+        archive: entry.archive.replace(/^sha256-/, ""),
+        purl: `pkg:github/${new URL(locked.source).pathname.slice(1)}@${encodeURIComponent(tag)}`,
+      },
+    ];
+  });
+}
+
 const DOCUMENT_ID = "SPDXRef-DOCUMENT";
 const DISTRIBUTION_ID = "SPDXRef-Distribution";
 const SOURCE_PREFIX = "payload:";
@@ -240,7 +295,10 @@ function purl(name: string, version: string): string {
 }
 
 /** Allocates SPDX-safe ids; callers pass packages in path order so suffixes are stable. */
-function spdxIdAllocator(): (item: PayloadPackage) => string {
+function spdxIdAllocator(): (item: {
+  readonly name: string;
+  readonly version: string;
+}) => string {
   const used = new Set<string>([DOCUMENT_ID, DISTRIBUTION_ID]);
   return (item) => {
     const base = `SPDXRef-Package-${`${item.name}-${item.version}`.replace(/[^A-Za-z0-9.-]+/g, "-").replace(/^-+|-+$/g, "")}`;
@@ -293,6 +351,28 @@ export function generateSbom(input: SbomInput): SpdxDocument {
       ],
     };
   });
+  // Bundled search tools: upstream executables outside node_modules.
+  for (const tool of payloadSearchTools(input.payloadDir))
+    entries.push({
+      SPDXID: spdxId(tool),
+      name: tool.name,
+      versionInfo: tool.version,
+      downloadLocation: tool.url,
+      filesAnalyzed: false,
+      licenseConcluded: "NOASSERTION",
+      licenseDeclared: "NOASSERTION",
+      copyrightText: "NOASSERTION",
+      supplier: "NOASSERTION",
+      sourceInfo: `${SOURCE_PREFIX}${tool.path}`,
+      checksums: [{ algorithm: "SHA256", checksumValue: tool.archive }],
+      externalRefs: [
+        {
+          referenceCategory: "PACKAGE-MANAGER",
+          referenceType: "purl",
+          referenceLocator: tool.purl,
+        },
+      ],
+    });
   return {
     spdxVersion: "SPDX-2.3",
     dataLicense: "CC0-1.0",
@@ -390,7 +470,10 @@ export function verifySbom(payloadDir: string, sbom: unknown): void {
   if (!relationships.has(`${DOCUMENT_ID} DESCRIBES ${DISTRIBUTION_ID}`))
     fail("SBOM is missing the DESCRIBES relationship for the distribution");
   const installed = new Set<string>();
-  for (const item of listPayloadPackages(payloadDir)) {
+  for (const item of [
+    ...listPayloadPackages(payloadDir),
+    ...payloadSearchTools(payloadDir),
+  ]) {
     const key = `${item.name}@${item.version} (${item.path})`;
     installed.add(key);
     const entry = described.get(key);

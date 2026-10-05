@@ -135,6 +135,7 @@ interface Smoke {
   readonly extensions?: number;
   readonly prompts?: readonly string[];
   readonly themes?: readonly string[];
+  readonly searchTools?: Readonly<Record<string, string>>;
   readonly access?: { readonly selectedModel?: string | null };
   readonly governance?: {
     readonly policy?: string;
@@ -173,6 +174,15 @@ export function formatSmokeSummary(output: string): string {
       `instructions ${length(smoke.instructions)}, skills ${length(smoke.skills)}, extensions ${smoke.extensions ?? 0}, prompts ${length(smoke.prompts)}, themes ${length(smoke.themes)}`,
     ),
   ];
+  if (smoke.searchTools)
+    lines.push(
+      row(
+        "search",
+        `${Object.entries(smoke.searchTools)
+          .map(([tool, version]) => `${tool} ${version}`)
+          .join(", ")} bundled, used by Pi's find and grep`,
+      ),
+    );
   // Pi names no model as unknown/unknown (pi-native before /login).
   const model = smoke.access?.selectedModel;
   if (model)
