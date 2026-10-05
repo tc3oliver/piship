@@ -219,12 +219,29 @@ export async function computeCapabilities(
     const locked = session.options.lock.packages?.find(
       (item) => item.id === provider.package,
     );
-    if (locked)
+    if (locked) {
       await loadPackageFiles(
         session,
         locked,
         (file) => file.kind === "extensions",
       );
+      // An extension of the package that was not loaded (a policy rule on its
+      // file, a certified package on another Pi) leaves the capability not
+      // effective, as a refused provider does.
+      const refused = session.resources.find(
+        (item) =>
+          item.kind === "extensions" &&
+          item.path.startsWith(`packages/${locked.id}/`) &&
+          !item.loaded,
+      );
+      if (refused) {
+        denied[state.name] = refused.reason;
+        session.emit("provider.denied", {
+          resource: provider.id,
+          detail: { capability: state.name, version: provider.version },
+        });
+      }
+    }
   }
   session.capabilities = capabilityStates(
     session.options,
