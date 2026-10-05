@@ -239,6 +239,9 @@ function referenceString(
   if (kind === "url") checkUrl(text, path, plainHttp);
   return text;
 }
+/** Endpoint URL fields that have an `httpTransport` opt-in beside them. */
+const PLAIN_HTTP_ENDPOINT =
+  /^(?:identity\.oidc\.issuer|credential\.broker\.(?:endpoint|revokeEndpoint)|inference\.baseUrl|audit\.sinks\[\d+\]\.url|sandbox\.(?:endpoint|router)|mcp\.servers\.[^.]+\.url)$/;
 /**
  * An endpoint URL: https, or plain HTTP to loopback. With `plainHttp` (the
  * endpoint's `httpTransport: http-allowed`) plain HTTP to a private or
@@ -264,8 +267,19 @@ export function checkUrl(value: string, path: string, plainHttp = false): URL {
   const loopback = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/.test(
     url.hostname,
   );
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    fail(path, "Use https; plain http is accepted only for loopback fixtures");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    // An endpoint with an httpTransport opt-in, on a host it would accept.
+    const optIn =
+      url.protocol === "http:" &&
+      PLAIN_HTTP_ENDPOINT.test(path) &&
+      !plainHttpProblem(url)
+        ? `, or for a private or internal host with ${path.replace(/\.[^.]+$/, ".httpTransport")}: http-allowed (piship/v1alpha6)`
+        : "";
+    fail(
+      path,
+      `Use https; plain http is accepted only for loopback fixtures${optIn}`,
+    );
+  }
   return url;
 }
 function bool(value: unknown, path: string, fallback: boolean): boolean {

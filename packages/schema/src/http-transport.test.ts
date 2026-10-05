@@ -187,18 +187,29 @@ describe("httpTransport on access endpoints", () => {
     rejects(
       manifest(gateway({ baseUrl: "http://10.99.236.70:4000/v1" })),
       "inference.baseUrl",
-      "Use https",
+      "or for a private or internal host with inference.httpTransport: http-allowed (piship/v1alpha6)",
     );
     rejects(
       manifest(broker({ endpoint: "http://10.99.236.70:8080/token" })),
       "credential.broker.endpoint",
-      "Use https",
+      "credential.broker.httpTransport: http-allowed",
     );
     rejects(
       manifest(oidc({ issuer: "http://keycloak.corp.internal" })),
       "identity.oidc.issuer",
-      "Use https",
+      "identity.oidc.httpTransport: http-allowed",
     );
+    // A public host gets no hint: the opt-in would not admit it.
+    let message = "";
+    try {
+      parseManifest(
+        manifest(gateway({ baseUrl: "http://gw.acme.example/v1" })),
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("Use https");
+    expect(message).not.toContain("httpTransport");
   });
 
   it("refuses userinfo, a query, and an unknown value", () => {

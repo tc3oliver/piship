@@ -232,6 +232,26 @@ export class DistributionAccess {
   readonly #brokerFetch: ManagedFetch;
   readonly #identityFetch: ManagedFetch;
   readonly #identityPlainHttp: boolean;
+  /** Origins the identity fetch may reach over plain HTTP. */
+  readonly #identityOrigins = new Set<string>();
+  /** Admit the private plain-HTTP origins among `urls` to the identity fetch. */
+  readonly #admitIdentityOrigins = (
+    urls: readonly (string | undefined)[],
+  ): void => {
+    for (const url of urls) {
+      if (url === undefined) continue;
+      try {
+        const parsed = new URL(url);
+        if (
+          parsed.protocol === "http:" &&
+          isPrivateNetworkHost(parsed.hostname)
+        )
+          this.#identityOrigins.add(parsed.origin);
+      } catch {
+        // Not a URL: never admitted.
+      }
+    }
+  };
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
   #secret: SecretValue | null = null;
@@ -297,15 +317,18 @@ export class DistributionAccess {
             this.endpoints.brokerRevokeEndpoint,
           ])
         : this.#fetch;
-    // The issuer's discovery document names the other endpoints, so the
-    // identity fetch admits plain HTTP to any private or internal host;
-    // the provider refuses a discovered plain-HTTP endpoint on a public one.
+    // The identity fetch admits plain HTTP to the issuer's origin, then to
+    // the origins of the private endpoints discovery names; the provider
+    // refuses a discovered plain-HTTP endpoint on a public host.
     this.#identityPlainHttp =
       access?.identity.mode === "oidc" &&
       access.identity.oidc.httpTransport === "http-allowed";
+    const identityOrigins = this.#identityOrigins;
+    this.#admitIdentityOrigins([this.endpoints.issuer]);
     this.#identityFetch = this.#identityPlainHttp
       ? createManagedFetch(this.network, "access", {
-          plainHttp: (target) => isPrivateNetworkHost(target.hostname),
+          plainHttp: (target) =>
+            target.protocol === "http:" && identityOrigins.has(target.origin),
         })
       : this.#fetch;
     this.paths = accessStatePaths(options.stateDir);
@@ -631,7 +654,12 @@ export class DistributionAccess {
           : {}),
         redirectUri: identity.oidc.redirectUri,
         fetch: this.#identityFetch,
-        ...(this.#identityPlainHttp ? { plainHttp: true } : {}),
+        ...(this.#identityPlainHttp
+          ? {
+              plainHttp: true,
+              onDiscoveredEndpoints: this.#admitIdentityOrigins,
+            }
+          : {}),
       });
     return this.#identity;
   }

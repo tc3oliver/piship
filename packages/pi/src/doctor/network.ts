@@ -3,13 +3,19 @@
 // commands (the bash tool) receive; MCP stdio servers only get env.allow.
 // Proxies are shown as scheme://host:port only; NO_PROXY and withheld
 // variables by name, never by value.
+import {
+  DEFAULT_NETWORK_POLICY,
+  isPrivateNetworkHost,
+  plainHttpProxy,
+} from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
 import type { DoctorData } from "./data.js";
 import type { DoctorSection } from "./report.js";
 
 /**
  * Endpoints that opted in to plain HTTP (`httpTransport: http-allowed`),
- * other than MCP servers (reported with each server): by host only.
+ * by host only. MCP servers are reported with each server; here only when
+ * a proxy would refuse them.
  */
 function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
   const metadata = data.ctx.metadata;
@@ -22,6 +28,8 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
     readonly key: string;
     readonly urls: readonly (readonly [string, string | undefined])[];
     readonly exposed: string;
+    /** Reported elsewhere; only a proxy refusal is shown here. */
+    readonly proxyOnly?: boolean;
   }[] = [];
   if (oidc?.httpTransport === "http-allowed")
     endpoints.push({
@@ -61,8 +69,21 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
       ],
       exposed: "sandbox commands, their output, and files are",
     });
+  for (const server of governance?.mcp?.servers ?? [])
+    if (server.httpTransport === "http-allowed")
+      endpoints.push({
+        key: `mcp ${server.id} proxy`,
+        urls: [[`mcp.servers.${server.id}.url`, server.url]],
+        exposed: "",
+        proxyOnly: true,
+      });
+  const policy = {
+    ...DEFAULT_NETWORK_POLICY,
+    inheritProxyEnvironment: data.access?.network.inheritProxy ?? true,
+  };
   for (const endpoint of endpoints) {
     const plain: string[] = [];
+    const proxied: string[] = [];
     let unresolved = false;
     for (const [field, template] of endpoint.urls) {
       if (template === undefined) continue;
@@ -75,11 +96,24 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
             process.env,
           ),
         );
-        if (url.protocol === "http:") plain.push(url.host);
+        if (url.protocol === "http:") {
+          plain.push(url.host);
+          // A plain-HTTP request is refused through a proxy that is not
+          // itself private (it would cross it unencrypted).
+          const proxy = plainHttpProxy(url, policy);
+          if (proxy && !isPrivateNetworkHost(proxy.hostname))
+            proxied.push(url.hostname);
+        }
       } catch {
         unresolved = true;
       }
     }
+    if (proxied.length)
+      out.bad(
+        endpoint.key,
+        `plain HTTP to ${proxied.join(", ")} would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add ${proxied.join(", ")} to NO_PROXY`,
+      );
+    if (endpoint.proxyOnly) continue;
     if (plain.length)
       out.warn(
         endpoint.key,
@@ -90,7 +124,9 @@ function plainHttpGroup(data: DoctorData, out: DoctorSection): void {
         endpoint.key,
         unresolved
           ? "http-allowed; the URL does not resolve here"
-          : "http-allowed; the URL resolves to https",
+          : endpoint.key === "identity.oidc.httpTransport"
+            ? "http-allowed; the issuer resolves to https"
+            : "http-allowed; the URL resolves to https",
       );
   }
 }

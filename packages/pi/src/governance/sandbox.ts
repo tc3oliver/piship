@@ -307,12 +307,16 @@ function sandboxFetch(
     config.provider === "e2b-compatible" && endpoint?.protocol === "http:"
       ? endpoint.hostname.replace(/^api\./, "")
       : undefined;
-  // envd is `<port>-<sandbox id>.<domain>`.
+  // envd is `<port>-<sandbox id>.<domain>` on the scheme's default port, as
+  // the backend builds its URL (no port of its own). It is matched by name:
+  // the sandbox ID is known only once the sandbox exists. An IP-literal
+  // endpoint has no domain to put it under, so envd is never admitted then.
   const envd = (target: URL) => {
     const [label = "", ...domain] = target.hostname.split(".");
     return (
       envdDomain !== undefined &&
       target.protocol === "http:" &&
+      target.port === "" &&
       /^\d+-[a-z0-9-]+$/i.test(label) &&
       domain.join(".") === envdDomain &&
       isPrivateNetworkHost(target.hostname)

@@ -127,6 +127,10 @@ describe("the declared sandbox backend", () => {
       true,
     );
     expect(admit?.(new URL("http://10.0.0.9:3000/"))).toBe(false);
+    expect(
+      admit?.(new URL("http://49983-sbx1.sandbox.corp.internal:8080/")),
+    ).toBe(false);
+    expect(admit?.(new URL("http://other.sandbox.corp.internal/"))).toBe(false);
     expect(admit?.(new URL("http://api.sandbox.corp.internal:3001/"))).toBe(
       false,
     );

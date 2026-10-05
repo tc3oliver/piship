@@ -524,8 +524,32 @@ function buildDispatcher(
       })
     : new Agent({ connect, ...pooling, ...timeouts, factory });
   const pendingTunnel = (hostPort: string) => tunnels.get(hostPort)?.proxy;
-  if (!policy.privateOnly) return { dispatcher: base, pendingTunnel };
   const { plainHttp } = options;
+  if (!policy.privateOnly) {
+    if (!plainHttp) return { dispatcher: base, pendingTunnel };
+    // Without private-only nothing else is checked here, but a plain-HTTP
+    // destination admitted by opt-in must not cross a proxy that is not
+    // itself private (see plainHttpProxyProblem).
+    return {
+      dispatcher: base.compose((dispatch) => (options, handler) => {
+        const origin =
+          typeof options.origin === "string"
+            ? options.origin
+            : options.origin?.toString();
+        if (origin) {
+          const target = new URL(origin);
+          if (
+            target.protocol === "http:" &&
+            !isLoopbackHost(target.hostname) &&
+            plainHttp(target)
+          )
+            refusePublicProxy(target, policy, "network");
+        }
+        return dispatch(options, handler);
+      }),
+      pendingTunnel,
+    };
+  }
   // Private-only: refuse undeclared origins for every request that uses this
   // dispatcher, including Pi's in-process provider requests and extensions'
   // fetch calls. Raw sockets and child processes are not covered.
@@ -701,6 +725,82 @@ function transportFailure(
 }
 
 /**
+ * The proxy a plain-HTTP request to `target` is sent through under
+ * `policy`, as undici's EnvHttpProxyAgent chooses it from the environment
+ * now (`http_proxy`, then `HTTP_PROXY`, unless `no_proxy` or `NO_PROXY`
+ * names the host), or undefined when it goes direct.
+ */
+export function plainHttpProxy(
+  target: URL,
+  policy: NetworkPolicy,
+  env: NodeJS.ProcessEnv = process.env,
+): URL | undefined {
+  if (!policy.inheritProxyEnvironment || target.protocol !== "http:")
+    return undefined;
+  const value = env.http_proxy ?? env.HTTP_PROXY;
+  if (!value) return undefined;
+  let proxy: URL;
+  try {
+    proxy = new URL(value);
+  } catch {
+    return undefined;
+  }
+  const hostname = target.hostname
+    .replace(/^\[(.+)\]$/, "$1")
+    .toLowerCase()
+    .replace(/(.)\.$/, "$1");
+  const port = Number.parseInt(target.port, 10) || 80;
+  const noProxy = env.no_proxy ?? env.NO_PROXY ?? "";
+  if (noProxy === "*") return undefined;
+  for (const entry of noProxy.split(/[,\s]/)) {
+    if (!entry) continue;
+    const ipv6 = /^\[(.+)\]:(\d+)$/.exec(entry);
+    let name: string;
+    let entryPort = 0;
+    if (ipv6) {
+      name = ipv6[1] ?? "";
+      entryPort = Number.parseInt(ipv6[2] ?? "", 10);
+    } else {
+      const bare = entry.replace(/^\[(.+)\]$/, "$1");
+      const parsed =
+        (bare.match(/:/g) ?? []).length === 1 && /^(.+):(\d+)$/.exec(bare);
+      name = parsed ? (parsed[1] ?? "") : bare;
+      entryPort = parsed ? Number.parseInt(parsed[2] ?? "", 10) : 0;
+    }
+    name = name
+      .replace(/^\*?\./, "")
+      .replace(/^(.+)\.$/, "$1")
+      .toLowerCase();
+    if (entryPort && entryPort !== port) continue;
+    if (hostname === name || hostname.endsWith(`.${name}`)) return undefined;
+  }
+  return proxy;
+}
+
+/**
+ * A plain-HTTP request admitted by opt-in (`httpTransport: http-allowed`)
+ * is sent in clear to the proxy, so it may go through a proxy only when the
+ * proxy is itself a private or internal host; otherwise the credential and
+ * content would cross it unencrypted. NETWORK_DENIED names the host.
+ */
+function refusePublicProxy(
+  target: URL,
+  policy: NetworkPolicy,
+  component: string,
+): void {
+  const proxy = plainHttpProxy(target, policy);
+  if (!proxy || isPrivateNetworkHost(proxy.hostname)) return;
+  throw new PiShipError(
+    "NETWORK_DENIED",
+    `Refusing plain HTTP to ${target.host} through the proxy ${shownProxy(proxy)}, which is not a private or internal host; the request would cross it unencrypted`,
+    {
+      component,
+      userAction: `Add ${target.hostname} to NO_PROXY so it is reached directly, or serve it over https`,
+    },
+  );
+}
+
+/**
  * Validate a destination against transport and private-only policy.
  * `plainHttp` may permit plain HTTP to a non-loopback destination. Only an
  * endpoint that opted in passes it (`updates.transport: http-allowed`, or
@@ -719,11 +819,15 @@ export function checkDestination(
       "Endpoint URLs must not embed credentials",
       { component },
     );
+  const optedIn =
+    target.protocol === "http:" &&
+    !isLoopbackHost(target.hostname) &&
+    plainHttp?.(target) === true;
   if (
     target.protocol !== "https:" &&
     !(
       target.protocol === "http:" &&
-      (isLoopbackHost(target.hostname) || plainHttp?.(target) === true)
+      (isLoopbackHost(target.hostname) || optedIn)
     )
   )
     throw new PiShipError(
@@ -731,6 +835,7 @@ export function checkDestination(
       `Refusing non-HTTPS endpoint ${target.protocol}//${target.host}; plain HTTP is only allowed for loopback test fixtures`,
       { component },
     );
+  if (optedIn) refusePublicProxy(target, policy, component);
   if (
     policy.privateOnly &&
     !policy.allowHosts.includes(target.hostname.toLowerCase())

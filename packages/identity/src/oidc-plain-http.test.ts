@@ -62,6 +62,21 @@ describe("OIDC discovery with httpTransport: http-allowed", () => {
     );
   });
 
+  it("reports the discovered endpoints so the fetch can admit exactly those", async () => {
+    const reported: string[] = [];
+    await new OidcPkceIdentityProvider({
+      issuer: services.issuer,
+      clientId: services.clientId,
+      scopes: ["openid"],
+      redirectUri: "http://127.0.0.1/callback",
+      fetch: rewriting({ jwks_uri: "http://10.0.0.8/jwks" }),
+      plainHttp: true,
+      onDiscoveredEndpoints: (urls) => reported.push(...urls),
+    }).configuration();
+    expect(reported).toContain("http://10.0.0.8/jwks");
+    expect(reported.some((url) => url.endsWith("/token"))).toBe(true);
+  });
+
   it("refuses a plain-HTTP endpoint on a public host, including the browser's", async () => {
     await expect(
       provider(

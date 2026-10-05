@@ -144,7 +144,8 @@ function parseServer(
     if (httpTransport === "http-allowed" && credential === "runtime")
       conflict(
         `${path}.httpTransport`,
-        "http-allowed cannot be combined with credential: runtime; the runtime credential is never sent over plain HTTP",
+        // No `credential: <word>` text: the CLI redactor reads it as a value.
+        "http-allowed cannot be combined with the credential field set to runtime; the runtime credential is never sent over plain HTTP",
       );
     launch = {
       url: referenceUrl(

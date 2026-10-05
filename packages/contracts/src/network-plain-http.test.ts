@@ -13,6 +13,7 @@ import {
   DEFAULT_NETWORK_POLICY,
   type NetworkPolicy,
   plainHttpOrigins,
+  plainHttpProxy,
 } from "./network.js";
 
 const PROXY_NAMES = [
@@ -126,6 +127,81 @@ describe("an opted-in endpoint's managed fetch", () => {
         "http://10.1.1.1/v1",
       ),
     ).rejects.toThrow(/Private-only network policy denies/);
+  });
+});
+
+describe("plain HTTP through a proxy", () => {
+  /** Run with exactly these proxy variables, restored afterwards. */
+  function environment(values: Record<string, string>): void {
+    const saved = new Map(PROXY_NAMES.map((name) => [name, process.env[name]]));
+    cleanup.push(() => {
+      for (const [name, value] of saved)
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+    });
+    for (const name of PROXY_NAMES) delete process.env[name];
+    Object.assign(process.env, values);
+  }
+
+  it("names the proxy undici would use, honoring NO_PROXY", () => {
+    const target = new URL(`${GATEWAY}/models`);
+    const env = { HTTP_PROXY: "http://proxy.acme.example:3128" };
+    expect(plainHttpProxy(target, DEFAULT_NETWORK_POLICY, env)?.host).toBe(
+      "proxy.acme.example:3128",
+    );
+    expect(
+      plainHttpProxy(
+        target,
+        { ...DEFAULT_NETWORK_POLICY, inheritProxyEnvironment: false },
+        env,
+      ),
+    ).toBeUndefined();
+    for (const noProxy of ["10.99.236.70", "localhost, 10.99.236.70:4000", "*"])
+      expect(
+        plainHttpProxy(target, DEFAULT_NETWORK_POLICY, {
+          ...env,
+          NO_PROXY: noProxy,
+        }),
+        noProxy,
+      ).toBeUndefined();
+    expect(
+      plainHttpProxy(target, DEFAULT_NETWORK_POLICY, {
+        ...env,
+        NO_PROXY: "10.99.236.70:8080",
+      }),
+    ).toBeDefined();
+    expect(
+      plainHttpProxy(
+        new URL("http://gw.corp.internal/v1"),
+        DEFAULT_NETWORK_POLICY,
+        { ...env, no_proxy: ".corp.internal" },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses an opted-in plain-HTTP request through a public proxy, on the fetch and the dispatcher", async () => {
+    environment({ HTTP_PROXY: "http://proxy.acme.example:3128" });
+    const plainHttp = plainHttpOrigins([GATEWAY]);
+    if (!plainHttp) throw new Error("expected a predicate");
+    const refusal = {
+      code: "NETWORK_DENIED",
+      message: expect.stringContaining(
+        "through the proxy http://proxy.acme.example:3128, which is not a private or internal host",
+      ),
+      userAction: expect.stringContaining("Add 10.99.236.70 to NO_PROXY"),
+    };
+    for (const policy of [privateOnly, DEFAULT_NETWORK_POLICY])
+      await expect(
+        createManagedFetch(policy, "access", { plainHttp })(
+          `${GATEWAY}/models`,
+        ),
+      ).rejects.toMatchObject(refusal);
+    const saved = getGlobalDispatcher();
+    cleanup.push(() => setGlobalDispatcher(saved));
+    for (const policy of [privateOnly, DEFAULT_NETWORK_POLICY]) {
+      applyProcessNetworkPolicy(policy, { plainHttp });
+      await expect(fetch(`${GATEWAY}/models`)).rejects.toThrow();
+    }
   });
 });
 

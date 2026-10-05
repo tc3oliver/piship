@@ -30,6 +30,12 @@ export interface OidcIdentityOptions {
    * authorization endpoint the browser opens.
    */
   readonly plainHttp?: boolean;
+  /**
+   * With `plainHttp`: called after discovery with the endpoints it names
+   * (each `*_endpoint` and `jwks_uri`), so the caller's fetch can admit
+   * plain HTTP to exactly those origins.
+   */
+  readonly onDiscoveredEndpoints?: (urls: readonly string[]) => void;
   readonly timeoutSeconds?: number;
   readonly clockToleranceSeconds?: number;
 }
@@ -197,7 +203,8 @@ function session(
  * checks the endpoints PiShip requests; this also covers the authorization
  * and end-session endpoints, which the browser opens.
  */
-function refusePublicPlainHttp(metadata: client.ServerMetadata): void {
+function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
+  const endpoints: string[] = [];
   for (const [key, value] of Object.entries(metadata)) {
     if (
       typeof value !== "string" ||
@@ -216,7 +223,9 @@ function refusePublicPlainHttp(metadata: client.ServerMetadata): void {
         `The identity provider's ${key} is plain HTTP to ${url.hostname}, which is public; identity.oidc.httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
         { component: "identity" },
       );
+    endpoints.push(value);
   }
+  return endpoints;
 }
 
 /**
@@ -264,7 +273,11 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
             ],
           },
         );
-        if (plainHttp) refusePublicPlainHttp(config.serverMetadata());
+        if (plainHttp) {
+          // Checked whether or not anyone is told the endpoints.
+          const endpoints = refusePublicPlainHttp(config.serverMetadata());
+          this.options.onDiscoveredEndpoints?.(endpoints);
+        }
         const methods =
           config.serverMetadata().code_challenge_methods_supported;
         if (Array.isArray(methods) && !methods.includes("S256"))

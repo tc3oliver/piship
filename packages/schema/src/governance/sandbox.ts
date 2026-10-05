@@ -190,7 +190,8 @@ function parseBackend(
   if (plainHttp && credential === "runtime")
     conflict(
       "sandbox.httpTransport",
-      "http-allowed cannot be combined with sandbox.credential: runtime; the runtime credential is never sent to the sandbox over plain HTTP",
+      // No `credential: <word>` text: the CLI redactor reads it as a value.
+      "http-allowed cannot be combined with sandbox.credential set to runtime; the runtime credential is never sent to the sandbox over plain HTTP",
     );
   return {
     provider,
