@@ -56,9 +56,11 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22.19.x
+          # The developer browser package requires Node >=24.18.
+          # The fast CI gate continues to verify PiShip on Node 22.
+          node-version: 24.21.x
           cache: npm
-      # npm 10, which Node 22 bundles, runs a git dependency's prepare script
+      # npm 10 runs a git dependency's prepare script
       # while resolving, so `piship lock` refuses to lock Pi packages without
       # npm 11, and the tests that lock them fail under CI without it.
       # On Windows `npm install -g` writes to a separate global prefix and the

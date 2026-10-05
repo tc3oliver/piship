@@ -179,12 +179,8 @@ beforeAll(() => {
     PISHIP_BIN_HOME: join(temp, "bin"),
   };
   delete env.PISHIP_BUILD_INPUT;
-  // This repository's .npmrc sets engine-strict, and `npm run` and `npx` hand
-  // it on to the process they start. pi-browser-use declares Node 24.18 or
-  // newer, so a strict install of it fails on the qualified Node 22.19. A
-  // person building the example runs the CLI by path, with their own npm
-  // configuration, where an engine mismatch is a warning.
-  delete env.npm_config_engine_strict;
+  // Keep inherited npm engine checks: the browser package requires Node
+  // >=24.18, as documented and used by Portable E2E/release qualification.
   // The committed lock is used as it is: `piship lock` is not run.
   cli(["build", join(example, "piship.yaml")]);
   artifact = join(temp, "dist", "devcode");

@@ -28,10 +28,10 @@ Deliberately not added, because another package in the set already provides the 
 
 ## Requirements
 
-- Node.js 22.19.0 or newer, as for every PiShip distribution. `piship lock` also needs npm 11 or newer and registry access. Building from the committed lock needs the registry too (it installs each package with `npm ci --ignore-scripts`); installing and the headless commands do not.
+- Node.js 24.18.0 or newer, required by the included browser package. `piship lock` also needs npm 11 or newer and registry access. Building from the committed lock needs the registry too (it installs each package with `npm ci --ignore-scripts`); installing and the headless commands do not.
 - `git` for the project-trust and review features. The GitHub CLI `gh` is optional: `/review` of a pull request uses it, and the profile lets it read pull requests, issues, and runs without a prompt.
 - A system Chrome for the `browser_*` tools. `pi-browser-use` finds it through `CHROME_PATH` or the usual install locations and downloads no browser. Without Chrome the browser tools are not available and nothing else is affected.
-- Node versions. `pi-browser-use` declares `engines.node >=24.18.0`, and PiShip itself is qualified on Node 22.19.0. npm only warns about an engine mismatch (`EBADENGINE`) unless `engine-strict` is on, and the package install PiShip runs takes its npm configuration from the environment it is started in. This repository's `.npmrc` sets `engine-strict=true`, and `npm run` and `npx` hand that on to what they start, so building this example through an npm script on Node 22 fails with `UPDATE_FAILED ... EBADENGINE` for `pi-browser-use`. Run the CLI by path, as in the commands below, or use Node 24.18 or newer; an `engine-strict=true` in your own npm configuration has the same effect on Node 22. On Node 22.19.0 with npm 10.9.3 (the release job) or npm 11.21.0 and `engine-strict` off, the distribution builds and the end to end test passes. In a probe, the package's extension started `chrome-devtools-mcp` and registered all of its `browser_*` tools under Node 22.19.0 and under Node 24.21.0; that covers loading and listing the tools, not every page interaction. Treat Node 24.18 or newer as the package's own requirement.
+- Node versions. PiShip itself supports Node 22.19.0, but this distribution requires Node 24.18.0 or newer because `pi-browser-use` declares that minimum. Full Portable E2E and release candidates use Node 24.21; the fast CI gate still checks PiShip on Node 22.19. Node 22 probes only established browser tool registration, not page interaction. Keep npm engine checks enabled and use a supported Node version.
 
 ## Build, install, and run
 
@@ -213,7 +213,7 @@ Pi renames a command two packages register: pi-code's `/tasks` and the backgroun
 - **Browser state** is in `~/.pi`, not in DevCode's state, and the browser's update check cannot be turned off here ([the browser](#the-browser)).
 - **pi-lens** installs tools and uses a GitHub token ([pi-lens](#pi-lens)).
 - **Seeded configuration is a default.** `seed` keeps a file you edited. A rule that must hold goes in `enforce` mode or in `policy.enforced`, as the managed variant does.
-- **Node.** `pi-browser-use` declares Node 24.18 or newer. On Node 22.19.0 it was only checked to load and register its tools, and a strict engine check (`engine-strict=true`, which this repository's `.npmrc` sets and npm scripts pass on) stops the build there ([requirements](#requirements)).
+- **Node.** This distribution requires Node 24.18 or newer because of `pi-browser-use` ([requirements](#requirements)). Browser page interaction still needs separate validation.
 
 ## Install scripts
 
