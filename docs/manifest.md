@@ -311,10 +311,10 @@ Rules beyond the field checks:
 
 `updates.transport: http-allowed` lets the update channel be served over plain HTTP from an internal host, such as an intranet nginx without a certificate. It is off by default: with `https` (or the field absent), plain HTTP is accepted only on loopback, as before.
 
-- It covers only the update channel: channel metadata and signatures, `root/<N>.json` files, and release archives, read by `update` (including `update --from <url>`). OIDC, the credential broker, the gateway, MCP servers, audit sinks, and remote sandboxes keep the `https`-only rule (plain HTTP only on loopback) whatever this field says; an MCP server has its own opt-in, [`httpTransport`](#mcp-plain-http-and-identity-headers-v1alpha6).
+- It covers only the update channel: channel metadata and signatures, `root/<N>.json` files, and release archives, read by `update` (including `update --from <url>`). OIDC, the credential broker, the gateway, MCP servers, audit sinks, and remote sandboxes keep the `https`-only rule (plain HTTP only on loopback) whatever this field says; from v1alpha6 each has its own opt-in, `httpTransport` ([MCP](#mcp-plain-http-and-identity-headers-v1alpha6), [the others](#plain-http-to-internal-endpoints-v1alpha6)).
 - The host must be private or internal: loopback, an IP address in 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, or fe80::/10, a single-label name that is not a public top-level domain, or a name ending in `.internal`, `.local`, `.lan`, `.corp`, `.home.arpa`, or `.intranet`. A single label of two letters (a country-code TLD such as `io`, `ai`, or `co`) or a common generic TLD (`com`, `net`, `org`, `dev`, `app`, and a few more) is public; the list is short on purpose, not the public suffix list. A public host is a `piship validate` error, and a `${NAME}` source (or `--from` URL) that resolves to one fails with `NETWORK_DENIED` before any request. Only the name is judged, not DNS: a single label is completed with the machine's DNS search domains, so `http://updates/` reaches whatever `updates.<search domain>` resolves to, and an internal-looking name can resolve to a public address. Making sure the name resolves to an internal address on every client is the owner's responsibility; a fully qualified internal name (`updates.corp.internal`) avoids the search-domain dependence.
 - It requires `updates.trust.bootstrap`; without it `piship validate` fails. Signature thresholds, archive digests, the channel sequence floor, expiry, and root refresh are verified exactly as over HTTPS ([security](security.md#releases-and-updates)).
-- The configured proxy policy still applies; plain HTTP needs no CA setting. Redirects stay within the source's origin, and an `https` source is never redirected to plain HTTP.
+- The configured proxy policy still applies, except that a plain-HTTP request is refused through a proxy that is not itself a private or internal host ([below](#plain-http-to-internal-endpoints-v1alpha6)); plain HTTP needs no CA setting. Redirects stay within the source's origin, and an `https` source is never redirected to plain HTTP.
 - `piship validate` and `config explain` show the transport, `piship diff` reports a change to it as high risk, `doctor` warns `source  http (integrity by signature only)`, and an update or check over plain HTTP is audited with `transport: http`.
 
 ### Update trust from v1alpha4
@@ -336,6 +336,11 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `mcp.servers.<id>.exposure` | `direct` | The exposure of the server's tools |
 | `mcp.servers.<id>.tools` | none | An exposure map of tool globs, as `runtime.tools.exposure`, such as `get_*: deferred` or `delete_*: hidden`. It replaces v1alpha5's `tools.allow` / `tools.deny`, which v1alpha6 rejects |
 | `mcp.servers.<id>.httpTransport` | `https` | `https` or `http-allowed` (`streamable-http` only): also permit plain HTTP to a private or internal host ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
+| `inference.httpTransport` | `https` | `https` or `http-allowed`: `inference.baseUrl` may also be plain HTTP to a private or internal host ([below](#plain-http-to-internal-endpoints-v1alpha6)) |
+| `credential.broker.httpTransport` | `https` | The same for `credential.broker.endpoint` and `revokeEndpoint` |
+| `identity.oidc.httpTransport` | `https` | The same for `identity.oidc.issuer` and every endpoint its discovery document names; the redirect stays a loopback URI |
+| `audit.sinks[].httpTransport` | `https` | The same for one `http` sink's `url` |
+| `sandbox.httpTransport` | `https` | The same for `sandbox.endpoint` and `sandbox.router` of a remote provider; not with `sandbox.credential: runtime` |
 | `mcp.servers.<id>.headers` | none | `streamable-http` only: request headers whose value is a claim (`sub`, `preferred_username`, or a verified `email`) of the signed-in OIDC identity, as `<Header-Name>: { identityClaim: <claim> }` ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
 | `models.catalog.<id>.type` | `chat` | `chat`, `classifier`, or `image`. A non-chat model names its `api`; an `image` model lists its `output` (`text`, `image`) |
 | `models.catalog.<id>.virtual` | none | `router` (the declared extension that registers the virtual model: its `./` path, a certified extension ID, or `package:<id>`) and `routes`, the closed set of physical catalog entries it may route to |
@@ -377,7 +382,7 @@ network:
 - It cannot be combined with `credential: runtime`; the runtime credential is never sent over plain HTTP.
 - The private-only network policy applies unchanged: in managed mode the host must be in `network.allowHosts`. Only this server's requests may use plain HTTP; every other endpoint keeps the loopback-only rule.
 - `validate` warns that the server's traffic is unencrypted, and also when the host is a `.local` or single-label name, which mDNS or the DNS search domains resolve and another device can spoof (use an IP address or a fully qualified name under `.internal` or `.corp`). `config explain` shows `mcp.servers.<id>.httpTransport`, `doctor` shows a server it reached over plain HTTP as `plain HTTP, unencrypted`, and `piship diff` reports turning it on, or adding a server with it, as high risk.
-- Tool results can be altered on the network path and reach the model, and a configured `HTTP_PROXY` sees the traffic in clear (list the host in `NO_PROXY` to bypass it). See [security](security.md#mcp).
+- Tool results can be altered on the network path and reach the model, and a configured private `HTTP_PROXY` sees the traffic in clear, while a proxy that is not a private host is refused (list the host in `NO_PROXY` to reach it directly). See [security](security.md#mcp).
 
 `headers` maps a header name to `{ identityClaim: <claim> }`, where the claim is `sub`, `preferred_username`, or `email` of the signed-in OIDC identity, taken from the ID token at login. `sub` is the stable key; `preferred_username` and `email` are only as trustworthy as the identity provider's policy on who may change them. `email` is sent only when the identity also has `email_verified: true`, or the server fails to start; Microsoft Entra ID usually omits `email_verified`, so with Entra use `preferred_username`, which in a work tenant is the administrator-managed UPN.
 
@@ -389,6 +394,59 @@ network:
 - The header is not authentication. The claims are kept in a file in the user's state directory, which the user can edit, and the server receives nothing it could verify; it trusts the client and the network path ([security](security.md#mcp)). Prefer https.
 
 `piship migrate` needs nothing for these fields, and earlier schemas reject them.
+
+### Plain HTTP to internal endpoints (v1alpha6)
+
+Every other network endpoint has the same opt-in as an MCP server, declared per endpoint, for a company that runs its gateway, broker, identity provider, audit collector, or sandbox service on an internal host without TLS:
+
+```yaml
+identity:
+  mode: oidc
+  oidc:
+    issuer: http://keycloak.corp.internal/realms/acme
+    clientId: acmecode
+    redirectUri: http://127.0.0.1:8765/callback
+    httpTransport: http-allowed
+credential:
+  provider: http-broker
+  broker:
+    endpoint: http://10.99.236.70:8080/v1/llm-credential
+    revokeEndpoint: http://10.99.236.70:8080/v1/revoke
+    httpTransport: http-allowed
+inference:
+  provider: openai-compatible
+  baseUrl: http://10.99.236.70:4000/v1
+  httpTransport: http-allowed
+audit:
+  sinks:
+    - { id: collector, type: http, url: http://10.99.236.71:9000/events, httpTransport: http-allowed }
+network:
+  allowHosts: [10.99.236.71]
+```
+
+| Field | What may be plain HTTP | What then travels unencrypted |
+| --- | --- | --- |
+| `inference.httpTransport` | `inference.baseUrl` | The gateway credential (a bearer) on every request, and every prompt, file excerpt, tool result, and response |
+| `credential.broker.httpTransport` | `credential.broker.endpoint`, `revokeEndpoint` | The identity access token PiShip presents, and the gateway credential the broker issues |
+| `identity.oidc.httpTransport` | The issuer, and each endpoint its discovery document names (authorization, token, JWKS, revocation, end session) | The authorization code, ID and access tokens, and the refresh token. The authorization page the browser opens may be plain HTTP too |
+| `audit.sinks[].httpTransport` | That sink's `url` | Audit events, including any captured content |
+| `sandbox.httpTransport` | `sandbox.endpoint`, `sandbox.router` (and, for e2b-compatible, its command host `<port>-<id>.<domain>` under the endpoint's domain) | Commands, their output, files sent to the sandbox, and a `stored` sandbox credential |
+
+The rules are the MCP server's ([above](#mcp-plain-http-and-identity-headers-v1alpha6)), for each endpoint separately:
+
+- Without the field (or with `https`) nothing changes and nothing is added to the lock, so an existing lock's digests are the same.
+- Only a private or internal host is accepted over plain HTTP; a public one fails `validate`. A `${NAME}` URL is checked again when it resolves at launch, and a public plain-HTTP host then fails with `CONFIG_INVALID` (access endpoints), `AUDIT_UNAVAILABLE` or a dropped optional sink (audit), or `SANDBOX_UNAVAILABLE` (sandbox). URLs with credentials are refused, and redirects are still not followed.
+- Plain HTTP is admitted only for that endpoint's own origin (scheme, host, and port), on the fetch its client uses. Another private host, another port on the same host, and every other endpoint keep the loopback-only rule. A credential adapter keeps the base fetch, which admits plain HTTP to loopback only. For OIDC, the identity client admits the issuer's origin, then, once discovery has run, the origins of the private endpoints it names; a plain-HTTP endpoint on a public host is refused, the browser's authorization endpoint included.
+- Pi's model requests go through the process dispatcher. With a private-only policy (every managed launch, or `network.privateOnly`), `inference.httpTransport: http-allowed` makes it admit plain HTTP to the gateway's origin for every in-process request, an extension's `fetch` included, and to no other host. Without a private-only policy (a personal distribution by default) the process dispatcher checks no destination at all, as before; only the proxy rule below applies to the gateway's origin.
+- A plain-HTTP request is sent to an `HTTP_PROXY` in clear, so an opted-in request is refused with `NETWORK_DENIED` when it would go through a proxy that is not itself a private or internal host; `NO_PROXY` is honored as the proxy agent applies it. Add the host to `NO_PROXY` to reach it directly. `doctor` reports an opted-in host that would be refused this way. This applies to every opt-in, MCP servers and `updates.transport` included.
+- For e2b-compatible, the command host is matched by name (`<digits>-<id>.<domain>` on port 80, where the domain is the endpoint's host without a leading `api.`), because the sandbox ID is known only once the sandbox exists. An IP-literal endpoint has no such domain, so its command host cannot be reached over plain HTTP; use a name under `.internal` or `.corp`.
+- The private-only network policy applies unchanged; in managed mode a governance host still needs `network.allowHosts`.
+- `identity.oidc.redirectUri` stays a loopback URI. `credential: runtime` on an MCP server and `sandbox.credential: runtime` stay refused with plain HTTP: the gateway credential goes over plain HTTP only to the gateway itself, even when the MCP server or sandbox shares the gateway's origin.
+- `validate` warns what travels unencrypted, and about a `.local` or single-label host name. `config explain` shows each field that is set, `doctor` shows each opted-in endpoint by host and warns when it resolves to plain HTTP, and `piship diff` reports turning one on as high risk.
+
+What this costs is in [security](security.md#plain-http-to-internal-endpoints): prefer https, and keep the gateway credential's lifetime short.
+
+`updates.transport` predates these fields and keeps its name; it is the same opt-in for the update channel.
 
 ### Enforcement status
 
@@ -414,7 +472,7 @@ The effective value of `model`, `theme`, and `thinkingLevel` comes from Distribu
 
 `${NAME}` is accepted only in `identity.oidc.issuer`, `identity.oidc.clientId`, `identity.oidc.audience`, `credential.broker.endpoint`, `credential.broker.revokeEndpoint`, `inference.baseUrl`, `network.tls.additionalCA`, in v1alpha3 and v1alpha4 `mcp.servers.<id>.url`, `audit.sinks[].url`, `sandbox.endpoint`, and `sandbox.router`, and from v1alpha4 `updates.source`. Each name must be listed in `variables`, use uppercase letters, digits, and underscores, and be referenced at least once. Names containing `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD`, `API_KEY`, `PRIVATE_KEY`, or `SESSION` are rejected: references carry endpoints and identifiers, never secrets.
 
-The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts. `updates.source` is resolved only when `update` runs, not at launch; its resolved value must pass the same URL checks or be an absolute local directory (`--from` also accepts a relative directory). `piship validate` lists the variables launch needs separately from those only `update` reads, and notes which are unset in the current shell. The branded command reads only its own process environment, so a variable set in a shell profile does not reach an IDE or desktop launch; a plain `https` URL needs no variable ([company setup](enterprise-integration.md#plain-urls-or-runtime-variables)).
+The manifest and lock keep the unresolved template, so a lock is not machine-specific. The branded command resolves references from its launch environment. A missing or empty variable fails with `CONFIG_UNAVAILABLE`; resolved values may not contain a further `${...}` or control characters, and resolved URLs must use HTTPS except for loopback hosts (or, for an endpoint with [`httpTransport: http-allowed`](#plain-http-to-internal-endpoints-v1alpha6), a private or internal host). `updates.source` is resolved only when `update` runs, not at launch; its resolved value must pass the same URL checks or be an absolute local directory (`--from` also accepts a relative directory). `piship validate` lists the variables launch needs separately from those only `update` reads, and notes which are unset in the current shell. The branded command reads only its own process environment, so a variable set in a shell profile does not reach an IDE or desktop launch; a plain `https` URL needs no variable ([company setup](enterprise-integration.md#plain-urls-or-runtime-variables)).
 
 ## Commands
 

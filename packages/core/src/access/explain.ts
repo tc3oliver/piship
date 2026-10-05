@@ -92,6 +92,15 @@ function governanceRows(
       "run doctor for the effective containment level",
     ),
     row("sandbox.provider", sandbox.provider ?? "native"),
+    ...(sandbox.httpTransport === "http-allowed"
+      ? [
+          row(
+            "sandbox.httpTransport",
+            sandbox.httpTransport,
+            "plain HTTP to a private or internal sandbox endpoint is allowed; commands, their output, and files sent to the sandbox are then unencrypted",
+          ),
+        ]
+      : []),
     ...(sandbox.user ? [row("sandbox.user", sandbox.user)] : []),
     row("sandbox.network", sandbox.network.mode),
     row(
@@ -105,6 +114,17 @@ function governanceRows(
       audit.enabled
         ? "metadata only unless content capture is opted in"
         : "disabled",
+    ),
+    ...audit.sinks.flatMap((sink, index) =>
+      sink.httpTransport === "http-allowed"
+        ? [
+            row(
+              `audit.sinks[${index}].httpTransport`,
+              sink.httpTransport,
+              `sink ${sink.id}: plain HTTP to a private or internal collector is allowed; audit events are then unencrypted`,
+            ),
+          ]
+        : [],
     ),
   ];
 }
@@ -158,6 +178,17 @@ export async function explainConfiguration(
       note,
     });
   };
+  // Shown only when an endpoint opted in; absent is https.
+  const plainHttp = (key: string, value: string | undefined, note: string) => {
+    if (value === "http-allowed")
+      rows.push({
+        key,
+        value,
+        source: "distribution-enforced",
+        overridable: false,
+        note,
+      });
+  };
   if (!access) {
     rows.push(
       {
@@ -191,6 +222,11 @@ export async function explainConfiguration(
       reference("identity.oidc.issuer", access.identity.oidc.issuer);
       reference("identity.oidc.clientId", access.identity.oidc.clientId);
       reference("identity.oidc.audience", access.identity.oidc.audience);
+      plainHttp(
+        "identity.oidc.httpTransport",
+        access.identity.oidc.httpTransport,
+        "the issuer and the endpoints its discovery names may use plain HTTP to a private or internal host; sign-in tokens, including the refresh token, are then unencrypted",
+      );
       rows.push(
         {
           key: "identity.oidc.flow",
@@ -230,6 +266,11 @@ export async function explainConfiguration(
       "credential.broker.revokeEndpoint",
       access.credential.broker?.revokeEndpoint,
     );
+    plainHttp(
+      "credential.broker.httpTransport",
+      access.credential.broker?.httpTransport,
+      "plain HTTP to a private or internal broker is allowed; the identity token and the issued gateway credential are then unencrypted",
+    );
     if (!["pi-native", "none"].includes(access.credential.provider))
       rows.push(
         {
@@ -257,6 +298,11 @@ export async function explainConfiguration(
       overridable: false,
     });
     reference("inference.baseUrl", access.inference.baseUrl);
+    plainHttp(
+      "inference.httpTransport",
+      access.inference.httpTransport,
+      "plain HTTP to a private or internal gateway is allowed; the gateway credential and every prompt and response are then unencrypted",
+    );
     if (access.models.catalog.length)
       rows.push({
         key: "models.catalog",

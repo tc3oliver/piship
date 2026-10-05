@@ -766,6 +766,74 @@ describe("Network group", () => {
     expect(output).not.toContain("acme.internal");
   });
 
+  it("shows each endpoint that opted in to plain HTTP, by host, and whether it is unencrypted", () => {
+    const data = doctorData("managed", { access: accessData() });
+    const metadata = data.ctx.metadata as unknown as Record<string, unknown>;
+    metadata.access = {
+      variables: [],
+      identity: {
+        mode: "oidc",
+        oidc: {
+          issuer: "https://idp.acme.example/realms/acme",
+          httpTransport: "http-allowed",
+        },
+      },
+      credential: {
+        provider: "http-broker",
+        broker: {
+          endpoint: "http://10.99.236.70:8080/token",
+          httpTransport: "http-allowed",
+        },
+      },
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.99.236.70:4000/v1",
+        httpTransport: "http-allowed",
+      },
+    };
+    metadata.governance = {
+      manifest: {
+        audit: {
+          sinks: [
+            {
+              id: "collector",
+              type: "http",
+              url: "http://10.0.0.6/events",
+              required: false,
+              httpTransport: "http-allowed",
+            },
+          ],
+        },
+        sandbox: { httpTransport: "https" },
+      },
+    };
+    const lines = group(renderDoctor(data).render(), "Network");
+    expect(lines.slice(0, 4)).toEqual([
+      `  - ${"identity.oidc.httpTransport".padEnd(20)} http-allowed; the issuer resolves to https`,
+      `  ! ${"credential.broker.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:8080; the identity token and the issued gateway credential are unencrypted on the network path`,
+      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
+      `  ! ${"audit sink collector httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.0.0.6; audit events are unencrypted on the network path`,
+    ]);
+    expect(lines[4]).toContain("TLS verification");
+    // Through a proxy that is not private, the request would be refused.
+    // Clear before setting: on Windows process.env ignores case, so
+    // deleting http_proxy after setting HTTP_PROXY would remove it again.
+    for (const name of ["http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"])
+      delete process.env[name];
+    process.env.HTTP_PROXY = "http://proxy.acme.example:3128";
+    process.env.NO_PROXY = "10.0.0.6";
+    const proxied = group(renderDoctor(data).render(), "Network");
+    expect(proxied).toContain(
+      `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.99.236.70 would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add 10.99.236.70 to NO_PROXY`,
+    );
+    // NO_PROXY names the audit collector, so it goes direct.
+    expect(
+      proxied.filter(
+        (line) => line.includes("audit sink") && line.includes("NO_PROXY"),
+      ),
+    ).toEqual([]);
+  });
+
   it("says when no proxy is set and when the proxy environment is ignored", () => {
     const base = accessData();
     const unset = group(

@@ -16,6 +16,7 @@ import {
   formatError,
   type PolicyAction,
   PiShipError,
+  plainHttpOrigins,
   type ResolvedDecision,
   redact,
   resolveDecision,
@@ -155,6 +156,14 @@ export class GovernanceSession {
         stateDir: options.stateDir,
         rotation: auditRotation(options.lock),
         fetch: options.fetch,
+        // A sink with httpTransport: http-allowed: plain HTTP to its own
+        // origin only.
+        plainHttpFetch: (url) => {
+          const plainHttp = plainHttpOrigins([url]);
+          return plainHttp && options.plainHttpFetch
+            ? options.plainHttpFetch(plainHttp)
+            : options.fetch;
+        },
         resolveUrl: (template) =>
           options.resolveTemplate("audit.sinks.url", template),
       });

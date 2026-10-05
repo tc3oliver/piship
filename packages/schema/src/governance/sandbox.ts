@@ -4,6 +4,7 @@ import {
   type SandboxConfig,
   type SandboxProvider,
 } from "../governance.js";
+import { HTTP_TRANSPORTS } from "../http-transport.js";
 import {
   bool,
   conflict,
@@ -127,6 +128,11 @@ function parseBackend(
         `sandbox.${field}`,
         `${field} applies only to the ${providers.join(", ")} provider${providers.length > 1 ? "s" : ""}`,
       );
+  if (provider === "native" && sandbox.httpTransport !== undefined)
+    conflict(
+      "sandbox.httpTransport",
+      "httpTransport applies only to the custom, e2b-compatible, kubernetes-agent-sandbox providers",
+    );
   if (provider === "native") return {};
   if (!required)
     conflict(
@@ -167,6 +173,26 @@ function parseBackend(
       "sandbox.endpoint",
       "sandbox.credential: stored needs the endpoint the credential is sent to",
     );
+  const httpTransport = oneOf(
+    sandbox.httpTransport,
+    "sandbox.httpTransport",
+    HTTP_TRANSPORTS,
+    "https",
+  );
+  const plainHttp = httpTransport === "http-allowed";
+  if (plainHttp && sandbox.endpoint === undefined)
+    conflict(
+      "sandbox.httpTransport",
+      "httpTransport applies to the sandbox endpoint (and router); this sandbox declares no endpoint",
+    );
+  // As for MCP servers: the runtime credential goes over plain HTTP only to
+  // the inference gateway itself, never to another service on its origin.
+  if (plainHttp && credential === "runtime")
+    conflict(
+      "sandbox.httpTransport",
+      // No `credential: <word>` text: the CLI redactor reads it as a value.
+      "http-allowed cannot be combined with sandbox.credential set to runtime; the runtime credential is never sent to the sandbox over plain HTTP",
+    );
   return {
     provider,
     ...(sandbox.adapter === undefined
@@ -179,11 +205,19 @@ function parseBackend(
             sandbox.endpoint,
             "sandbox.endpoint",
             variables,
+            plainHttp,
           ),
         }),
     ...(sandbox.router === undefined
       ? {}
-      : { router: referenceUrl(sandbox.router, "sandbox.router", variables) }),
+      : {
+          router: referenceUrl(
+            sandbox.router,
+            "sandbox.router",
+            variables,
+            plainHttp,
+          ),
+        }),
     ...(sandbox.namespace === undefined
       ? {}
       : {
@@ -219,17 +253,21 @@ function parseBackend(
           ),
         }),
     ...(credential === "none" ? {} : { credential }),
+    ...(plainHttp ? { httpTransport } : {}),
   };
 }
 
 export function parseSandbox(
   value: unknown,
   variables: readonly string[] = [],
+  /** piship/v1alpha6 and later: `sandbox.httpTransport`. */
+  v6 = false,
 ): SandboxConfig {
   const sandbox = optionalRecord(value, "sandbox", [
     "required",
     "provider",
     ...Object.keys(BACKEND_FIELDS),
+    ...(v6 ? ["httpTransport"] : []),
     "filesystem",
     "network",
     "environment",

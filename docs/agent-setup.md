@@ -6,7 +6,7 @@ A distribution is either **personal** (one person, no company services) or **man
 
 ## Rules
 
-- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, `piship.lock.d/`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain URLs (`https`, or `http` on loopback). Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`, Pi's `/login`), never by you.
+- **No secrets in files or commands.** `piship.yaml`, `piship.lock`, `piship.lock.d/`, and `resources/` are committed, and the schema rejects secret-looking values anyway. Never put an API key, client secret, token, password, or private signing key in them, in a shell command, or in your reply. Endpoints go in as runtime variables (`${NAME}`) or plain URLs (`https`, or `http` on loopback, or on an internal host for an endpoint the person explicitly opted in with `httpTransport: http-allowed`). Keys are typed by the person at the branded command's own prompts (`login`, `sandbox login`, Pi's `/login`), never by you.
 - **Leave the person's existing setup alone.** Do not read, change, or delete `~/.pi`, and do not uninstall or overwrite another installed distribution. A distribution keeps its own state under `~/.piship/<id>`.
 - **Ask before installing.** `install` writes a command into `~/.local/bin`. Say what it will add and get a yes first. The same goes for `uninstall`, `purge`, and editing a shell profile.
 - **Run the CLI by path.** PiShip is not on npm. Use `node <piship>/packages/cli/dist/bin.js`; npx or `npm exec` would fetch an unrelated package from the public registry.
@@ -65,13 +65,13 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **P2. Personal resources.** Answers S4 to S7 go under the `user` class.
 - **P3. Sandbox.** Off, best effort, or required (S10).
 - **P4. MCP.** The personal servers from S9, if any.
-- **P5. Signed updates** (optional, only if S11 asked for them): where the channel will be hosted. The person runs their own signing key. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway still need HTTPS.
+- **P5. Signed updates** (optional, only if S11 asked for them): where the channel will be hosted. The person runs their own signing key. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway each have their own opt-in (M1 to M3).
 
 ### Managed branch
 
-- **M1. OIDC.** Issuer URL and the client ID of a **public** client (PKCE, no client secret). Its allowed redirect URIs must include the loopback `redirectUri` in the manifest, by default `http://127.0.0.1:8765/callback`. Does the broker need an `audience` or extra scopes?
-- **M2. Broker.** Credential broker endpoint and its revoke endpoint.
-- **M3. Gateway.** LLM gateway base URL, and whether it speaks `openai-completions` (the default) or `openai-responses`.
+- **M1. OIDC.** Issuer URL and the client ID of a **public** client (PKCE, no client secret). Its allowed redirect URIs must include the loopback `redirectUri` in the manifest, by default `http://127.0.0.1:8765/callback`. Does the broker need an `audience` or extra scopes? Is the identity provider served over HTTPS? If not, it can be opted in with `identity.oidc.httpTransport: http-allowed`, but sign-in tokens, including the refresh token, then travel unencrypted; recommend an internal CA instead. (Default: HTTPS only.)
+- **M2. Broker.** Credential broker endpoint and its revoke endpoint. Is it served over HTTPS? If not, is it on an internal host, and does the company accept that the identity token and the issued credential travel unencrypted? (Default: HTTPS only.)
+- **M3. Gateway.** LLM gateway base URL, and whether it speaks `openai-completions` (the default) or `openai-responses`. Is it served over HTTPS? If not (such as `http://10.99.236.70:4000/v1`), does the company accept that the credential and every prompt travel unencrypted on the LAN? (Default: HTTPS only.)
 - **M4. Model governance.** The model IDs people may use, which one is the default, and each model's context window and maximum output tokens.
 - **M5. Runtime variables.** Endpoints as runtime variables set on each machine (the template's default) or fixed `https` URLs in the manifest? How will the variables reach each machine?
 - **M6. Proxy and enterprise CA.** A company proxy or CA bundle, if the network needs one, and the bundle's path on each machine.
@@ -81,7 +81,7 @@ A personal distribution needs no OIDC provider, credential broker, company gatew
 - **M9. Sandbox.** The OS sandbox on each machine, or a remote one (a CubeSandbox or other E2B-compatible service, Kubernetes Agent Sandbox, or the company's own adapter)? For a remote one: its API URL, template or pool, working directory, and how it authenticates. Should commands in it reach the network (with `deny`, `npm install`, `pip install`, and `git fetch` fail inside it)? Extra paths the agent may write, or must never read?
 - **M10. Governed MCP.** The approved servers from S9 and the tools each may expose.
 - **M11. Audit.** An audit collector URL, and whether a launch must fail when it is unreachable.
-- **M12. Managed update source** (can wait until the first version works): where releases will be hosted, and who holds the release signing keys. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway still need HTTPS.
+- **M12. Managed update source** (can wait until the first version works): where releases will be hosted, and who holds the release signing keys. Does the update host have HTTPS? If not, may updates be fetched over plain HTTP from that internal host? (Integrity is still guaranteed by signatures; default: HTTPS only.) This is about the update channel only: OIDC, the broker, and the gateway each have their own opt-in (M1 to M3).
 
 ## 3. Create the repository
 
@@ -128,8 +128,8 @@ The managed template validates as generated. Every company-specific endpoint in 
 | Answer | Field | Watch out for |
 | --- | --- | --- |
 | M1 OIDC | `identity.oidc.issuer`, `clientId`, `redirectUri`, `scopes`, `audience` | `scopes` must include `openid`; no `clientSecret` |
-| M2 Broker | `credential.broker.endpoint`, `revokeEndpoint` | It must follow the [broker contract](enterprise-integration.md#credential-broker-http-broker) |
-| M3 Gateway | `inference.baseUrl`, `inference.api` | |
+| M2 Broker | `credential.broker.endpoint`, `revokeEndpoint`; `credential.broker.httpTransport: http-allowed` only for a broker without HTTPS | It must follow the [broker contract](enterprise-integration.md#credential-broker-http-broker). `http-allowed` accepts plain HTTP only to a private or internal host (a public one fails `validate`), for the broker's own origin; tell the person what travels unencrypted ([security](security.md#plain-http-to-internal-endpoints)) |
+| M3 Gateway | `inference.baseUrl`, `inference.api`; `inference.httpTransport: http-allowed` only for a gateway without HTTPS | As for M2. The credential is replayable by anyone on the network path until it expires, so also suggest a short key lifetime. An MCP server with `credential: runtime` on the gateway's origin still needs HTTPS |
 | M4 Models | `models.default`, `models.allowed`, `models.catalog.<id>` | Replace `example/coder`. Every allowed ID needs a catalog entry. The template's `distribution.models` rule (`model.select` on `<app.id>/**`) covers them; to narrow it, write `<app.id>/<model>` |
 | M5 Runtime variables | `variables` plus `${NAME}`, or plain `https` URLs | Every `${NAME}` used must be listed in `variables`, and every listed name used. Names that look like secrets are rejected |
 | M6 Proxy, CA | `network.proxy.inheritEnvironment`, `network.tls.additionalCA` | An absolute path on each machine |
@@ -140,7 +140,7 @@ The managed template validates as generated. Every company-specific endpoint in 
 | M10 Governed MCP | `mcp.servers.<id>` (the template's `mcp.mode` is already `allowlist`) | Also add allow rules for `mcp.server.start` (the server ID) and `mcp.tool.call` (`<server>:<tool>`), as the demo does. A server host must be allowed by the private-only network policy. Limit a server's tools with a `tools` exposure map (`<tool>: direct`, then `"*": hidden`), not `tools.allow`. An internal server without HTTPS on a private host takes `httpTransport: http-allowed` (not with `credential: runtime`; `validate` warns the traffic is unencrypted); a server that identifies the user by a header takes `headers: { <Header>: { identityClaim: preferred_username } }` (or `sub`, the stable key), never a literal value ([manifest](manifest.md#mcp-plain-http-and-identity-headers-v1alpha6)) |
 | M11 Audit | an `audit.sinks` entry with `id`, `type: http`, `url`, `required` | The template keeps a local file sink and shows the collector entry as a comment |
 | M12 Update source | `updates.source` and the update trust fields | See [step 7](#7-signed-updates-and-rollback) |
-| M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. OIDC, the broker, the gateway, MCP servers without `httpTransport: http-allowed` (M10), and audit still need HTTPS ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
+| M12 Update host without HTTPS | `updates.transport: https` (default, omit it) or `http-allowed` | `http-allowed` only with `updates.trust.bootstrap`, and only for a private or internal host (an RFC 1918 address, a single-label name that is not a public TLD, or a name such as `*.internal`, `*.corp`, `*.lan`); a public host fails `validate`. Every other endpoint has its own `httpTransport` (M2, M3, M10; OIDC, audit sinks, and the sandbox too), and needs HTTPS without it ([manifest](manifest.md#plain-http-update-channel-v1alpha5)) |
 
 Then `piship config explain <directory>/piship.yaml` shows the effective configuration and where each value comes from.
 

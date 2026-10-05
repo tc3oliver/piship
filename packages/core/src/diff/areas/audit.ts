@@ -1,5 +1,11 @@
 import type { GovernanceManifest } from "@piship/schema";
 import { byKey, type Collector, compare, keys, safeUrl } from "../collector.js";
+import type { Verdict } from "../types.js";
+
+const PLAIN_HTTP: Verdict = [
+  "high",
+  "Audit sink may be reached over plain HTTP to a private or internal host; audit events are unencrypted and can be dropped or altered in transit.",
+];
 
 export function audit(
   out: Collector,
@@ -28,6 +34,15 @@ export function audit(
         undefined,
         as.type,
       );
+      if (as.httpTransport === "http-allowed")
+        out.push(
+          "audit",
+          "added",
+          `${item} httpTransport`,
+          PLAIN_HTTP,
+          undefined,
+          as.httpTransport,
+        );
       continue;
     }
     if (bs && !as) {
@@ -56,6 +71,17 @@ export function audit(
       "medium",
       "Audit sink endpoint changed.",
     ]);
+    // An absent httpTransport is https.
+    out.scalar(
+      "audit",
+      `${item} httpTransport`,
+      bs.httpTransport,
+      as.httpTransport,
+      (_, v) =>
+        v === "http-allowed"
+          ? PLAIN_HTTP
+          : ["low", "Audit sink is reached over https only."],
+    );
   }
   const bc: Record<string, boolean> = { ...(x?.capture ?? {}) };
   const ac: Record<string, boolean> = { ...(y?.capture ?? {}) };

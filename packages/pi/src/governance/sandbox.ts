@@ -8,7 +8,9 @@ import {
   ADAPTER_CALL_TIMEOUT_MS,
   type CredentialProvider,
   callWithDeadline,
+  isPrivateNetworkHost,
   PiShipError,
+  plainHttpOrigins,
   redact,
 } from "@piship/contracts";
 import {
@@ -270,14 +272,74 @@ async function loadCustom(
   return own ? releasing(backend, () => own.revoke()) : backend;
 }
 
+/**
+ * The fetch for the sandbox backend. With `sandbox.httpTransport:
+ * http-allowed` a resolved endpoint or router may be plain HTTP to a
+ * private or internal host, and only those origins are admitted over plain
+ * HTTP; an e2b-compatible backend's command endpoint (envd) is a host
+ * under the endpoint's domain, admitted when it is private too.
+ */
+function sandboxFetch(
+  options: GovernanceOptions,
+  fields: readonly (readonly [string, string | undefined])[],
+): GovernanceOptions["fetch"] {
+  const config = options.lock.governance.manifest.sandbox;
+  if (config.httpTransport !== "http-allowed") return options.fetch;
+  const urls: URL[] = [];
+  for (const [field, value] of fields) {
+    if (value === undefined) continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw unavailable(`${field} resolved to a value that is not a URL`);
+    }
+    if (url.protocol === "http:" && !isPrivateNetworkHost(url.hostname))
+      throw unavailable(
+        `${field} is plain HTTP to ${url.hostname}, which is public; sandbox.httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+      );
+    urls.push(url);
+  }
+  const exact = plainHttpOrigins(urls);
+  if (!exact || !options.plainHttpFetch) return options.fetch;
+  const endpoint = urls[0];
+  const envdDomain =
+    config.provider === "e2b-compatible" && endpoint?.protocol === "http:"
+      ? endpoint.hostname.replace(/^api\./, "")
+      : undefined;
+  // envd is `<port>-<sandbox id>.<domain>` on the scheme's default port, as
+  // the backend builds its URL (no port of its own). It is matched by name:
+  // the sandbox ID is known only once the sandbox exists. An IP-literal
+  // endpoint has no domain to put it under, so envd is never admitted then.
+  const envd = (target: URL) => {
+    const [label = "", ...domain] = target.hostname.split(".");
+    return (
+      envdDomain !== undefined &&
+      target.protocol === "http:" &&
+      target.port === "" &&
+      /^\d+-[a-z0-9-]+$/i.test(label) &&
+      domain.join(".") === envdDomain &&
+      isPrivateNetworkHost(target.hostname)
+    );
+  };
+  return options.plainHttpFetch((target) => exact(target) || envd(target));
+}
+
 /** The declared backend, or undefined for the native OS sandbox. */
 export async function sandboxBackend(
-  options: GovernanceOptions,
+  governance: GovernanceOptions,
 ): Promise<SandboxBackend | undefined> {
-  const config = options.lock.governance.manifest.sandbox;
+  const config = governance.lock.governance.manifest.sandbox;
   if (!config.required || config.provider === undefined) return undefined;
-  const endpoint = resolve(options, "sandbox.endpoint", config.endpoint);
-  const router = resolve(options, "sandbox.router", config.router);
+  const endpoint = resolve(governance, "sandbox.endpoint", config.endpoint);
+  const router = resolve(governance, "sandbox.router", config.router);
+  const options = {
+    ...governance,
+    fetch: sandboxFetch(governance, [
+      ["sandbox.endpoint", endpoint],
+      ["sandbox.router", router],
+    ]),
+  };
   const targets = [endpoint, router].filter(
     (url): url is string => url !== undefined,
   );

@@ -97,6 +97,63 @@ describe("the declared sandbox backend", () => {
     ).toBeInstanceOf(KubernetesAgentSandboxBackend);
   });
 
+  it("reaches an http-allowed endpoint over plain HTTP through a fetch scoped to it", async () => {
+    let admit: ((target: URL) => boolean) | undefined;
+    const used: string[] = [];
+    const plainHttpFetch = (plainHttp: (target: URL) => boolean) => {
+      admit = plainHttp;
+      return async (url: string | URL) => {
+        used.push(String(url));
+        return new Response(null, { status: 204 });
+      };
+    };
+    const backend = await sandboxBackend(
+      options(
+        {
+          provider: "e2b-compatible",
+          endpoint: "http://api.sandbox.corp.internal:3000",
+          httpTransport: "http-allowed",
+        },
+        { plainHttpFetch } as Partial<GovernanceOptions>,
+      ),
+    );
+    await backend?.available();
+    expect(used).toEqual(["http://api.sandbox.corp.internal:3000/health"]);
+    expect(admit?.(new URL("http://api.sandbox.corp.internal:3000/x"))).toBe(
+      true,
+    );
+    // envd, a host under the endpoint's domain, is admitted; nothing else.
+    expect(admit?.(new URL("http://49983-sbx1.sandbox.corp.internal/"))).toBe(
+      true,
+    );
+    expect(admit?.(new URL("http://10.0.0.9:3000/"))).toBe(false);
+    expect(
+      admit?.(new URL("http://49983-sbx1.sandbox.corp.internal:8080/")),
+    ).toBe(false);
+    expect(admit?.(new URL("http://other.sandbox.corp.internal/"))).toBe(false);
+    expect(admit?.(new URL("http://api.sandbox.corp.internal:3001/"))).toBe(
+      false,
+    );
+    // A runtime value that resolves to a public plain-HTTP host fails closed.
+    variables.ACME_PUBLIC = "http://sandbox.acme.example";
+    await expect(
+      sandboxBackend(
+        options(
+          {
+            provider: "e2b-compatible",
+            endpoint: `\${ACME_PUBLIC}`,
+            httpTransport: "http-allowed",
+          },
+          { plainHttpFetch } as Partial<GovernanceOptions>,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: "SANDBOX_UNAVAILABLE",
+      message: expect.stringContaining("which is public"),
+    });
+    delete variables.ACME_PUBLIC;
+  });
+
   it("passes sandbox.user to the e2b-compatible data plane", async () => {
     const seen: string[] = [];
     const fetch = async (url: string | URL, init: RequestInit = {}) => {

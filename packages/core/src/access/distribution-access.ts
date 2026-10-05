@@ -9,6 +9,7 @@ import {
   type IdentitySession,
   formatError,
   type InferenceProvider,
+  isPrivateNetworkHost,
   type LoginContext,
   type ManagedFetch,
   type ModelDefinition,
@@ -16,6 +17,7 @@ import {
   PiShipError,
   type PrincipalKey,
   pishipClientHeader,
+  plainHttpOrigins,
   principalKey,
   redact,
   type SecretStore,
@@ -219,7 +221,37 @@ export class DistributionAccess {
   readonly store: SecretStore | null;
   /** The configured `credential.storage.provider`, recorded in metadata. */
   readonly storeProvider: SecretStoreProvider;
+  /**
+   * With `inference.httpTransport: http-allowed` and a plain-HTTP gateway:
+   * admits plain HTTP to the gateway's origin only, for the process
+   * dispatcher Pi's provider requests use (`applyProcessNetworkPolicy`).
+   */
+  readonly inferencePlainHttp: ((target: URL) => boolean) | undefined;
   readonly #fetch: ManagedFetch;
+  readonly #gatewayFetch: ManagedFetch;
+  readonly #brokerFetch: ManagedFetch;
+  readonly #identityFetch: ManagedFetch;
+  readonly #identityPlainHttp: boolean;
+  /** Origins the identity fetch may reach over plain HTTP. */
+  readonly #identityOrigins = new Set<string>();
+  /** Admit the private plain-HTTP origins among `urls` to the identity fetch. */
+  readonly #admitIdentityOrigins = (
+    urls: readonly (string | undefined)[],
+  ): void => {
+    for (const url of urls) {
+      if (url === undefined) continue;
+      try {
+        const parsed = new URL(url);
+        if (
+          parsed.protocol === "http:" &&
+          isPrivateNetworkHost(parsed.hostname)
+        )
+          this.#identityOrigins.add(parsed.origin);
+      } catch {
+        // Not a URL: never admitted.
+      }
+    }
+  };
   #identity: IdentityProvider | null | undefined;
   #credential: CredentialManager | undefined;
   #secret: SecretValue | null = null;
@@ -261,6 +293,44 @@ export class DistributionAccess {
       options.mode,
     );
     this.#fetch = createManagedFetch(this.network, "access");
+    // `httpTransport: http-allowed`: each opted-in endpoint has a fetch of
+    // its own that admits plain HTTP to its own origin only; every other
+    // request keeps the loopback-only rule.
+    const access = options.access;
+    const scoped = (urls: readonly (string | undefined)[]) => {
+      const plainHttp = plainHttpOrigins(urls);
+      return plainHttp
+        ? createManagedFetch(this.network, "access", { plainHttp })
+        : this.#fetch;
+    };
+    this.inferencePlainHttp =
+      access?.inference.httpTransport === "http-allowed"
+        ? plainHttpOrigins([this.endpoints.baseUrl])
+        : undefined;
+    this.#gatewayFetch = this.inferencePlainHttp
+      ? scoped([this.endpoints.baseUrl])
+      : this.#fetch;
+    this.#brokerFetch =
+      access?.credential.broker?.httpTransport === "http-allowed"
+        ? scoped([
+            this.endpoints.brokerEndpoint,
+            this.endpoints.brokerRevokeEndpoint,
+          ])
+        : this.#fetch;
+    // The identity fetch admits plain HTTP to the issuer's origin, then to
+    // the origins of the private endpoints discovery names; the provider
+    // refuses a discovered plain-HTTP endpoint on a public host.
+    this.#identityPlainHttp =
+      access?.identity.mode === "oidc" &&
+      access.identity.oidc.httpTransport === "http-allowed";
+    const identityOrigins = this.#identityOrigins;
+    this.#admitIdentityOrigins([this.endpoints.issuer]);
+    this.#identityFetch = this.#identityPlainHttp
+      ? createManagedFetch(this.network, "access", {
+          plainHttp: (target) =>
+            target.protocol === "http:" && identityOrigins.has(target.origin),
+        })
+      : this.#fetch;
     this.paths = accessStatePaths(options.stateDir);
     const needsStore =
       !!options.access &&
@@ -583,7 +653,13 @@ export class DistributionAccess {
           ? { audience: this.endpoints.audience }
           : {}),
         redirectUri: identity.oidc.redirectUri,
-        fetch: this.#fetch,
+        fetch: this.#identityFetch,
+        ...(this.#identityPlainHttp
+          ? {
+              plainHttp: true,
+              onDiscoveredEndpoints: this.#admitIdentityOrigins,
+            }
+          : {}),
       });
     return this.#identity;
   }
@@ -602,7 +678,7 @@ export class DistributionAccess {
         ...(this.endpoints.baseUrl
           ? { expectedBaseUrl: this.endpoints.baseUrl }
           : {}),
-        fetch: this.#fetch,
+        fetch: this.#brokerFetch,
         client: this.#client(),
       });
     else if (mode === "local-secret")
@@ -674,7 +750,7 @@ export class DistributionAccess {
       allowed: access.models.allowed,
       ...(userAllowed ? { userAllowed } : {}),
       liveCatalog: access.inference.liveCatalog,
-      fetch: this.#fetch,
+      fetch: this.#gatewayFetch,
       secret: () => this.#secret,
       client: this.#client(),
     });

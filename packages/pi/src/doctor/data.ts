@@ -21,6 +21,7 @@ import {
   type ManagedFetch,
   type NetworkPolicy,
   PiShipError,
+  plainHttpOrigins,
   sanitizeManagedEnvironment,
 } from "@piship/contracts";
 import {
@@ -181,6 +182,7 @@ const PATH_TIMEOUT_MS = 5_000;
 export async function networkChecks(
   policy: NetworkPolicy,
   endpoints: readonly { label: string; url: string | undefined }[],
+  plainHttp?: (target: URL) => boolean,
 ): Promise<
   Pick<NetworkData, "proxyChecks" | "caCertificates" | "caError" | "paths">
 > {
@@ -201,7 +203,11 @@ export async function networkChecks(
   } catch (error) {
     return { proxyChecks, caError: formatError(error) };
   }
-  const fetch = createManagedFetch(policy, "doctor");
+  const fetch = createManagedFetch(
+    policy,
+    "doctor",
+    plainHttp ? { plainHttp } : {},
+  );
   const paths = await Promise.all(
     endpoints.flatMap(({ label, url }) =>
       url ? [checkPath(fetch, label, url)] : [],
@@ -467,6 +473,9 @@ async function collectAccess(
       // governed session below starts.
       applyProcessNetworkPolicy(opened.network, {
         restrictChildren: ctx.mode === "managed",
+        ...(opened.inferencePlainHttp
+          ? { plainHttp: opened.inferencePlainHttp }
+          : {}),
       });
       activated = await opened.activate();
       if (activated.runtime.kind === "managed-endpoint")
@@ -506,6 +515,23 @@ async function collectAccess(
             : manifest.identity.mode === "oidc" && !workload
               ? [{ label: "identity", url: opened.endpoints.issuer }]
               : [],
+          // Opted-in endpoints (httpTransport: http-allowed) are checked
+          // over plain HTTP to their own origins, as their clients reach them.
+          plainHttpOrigins([
+            manifest.identity.mode === "oidc" &&
+            manifest.identity.oidc.httpTransport === "http-allowed"
+              ? opened.endpoints.issuer
+              : undefined,
+            ...(manifest.credential.broker?.httpTransport === "http-allowed"
+              ? [
+                  opened.endpoints.brokerEndpoint,
+                  opened.endpoints.brokerRevokeEndpoint,
+                ]
+              : []),
+            manifest.inference.httpTransport === "http-allowed"
+              ? opened.endpoints.baseUrl
+              : undefined,
+          ]),
         )
       : {};
   if (opened) saveMetrics(metrics);

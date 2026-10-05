@@ -3,6 +3,7 @@ import {
   type IdentityProvider,
   type IdentitySession,
   isLoopbackHost,
+  isPrivateNetworkHost,
   type LoginContext,
   type ManagedFetch,
   PiShipError,
@@ -21,6 +22,20 @@ export interface OidcIdentityOptions {
   readonly redirectUri: string;
   /** Managed fetch honoring proxy, CA, and private-only policy. */
   readonly fetch: ManagedFetch;
+  /**
+   * `identity.oidc.httpTransport: http-allowed`: the issuer and the
+   * endpoints its discovery document names may use plain HTTP to a private
+   * or internal host. `fetch` must admit those requests; this provider
+   * refuses a plain-HTTP endpoint on any other host, including the
+   * authorization endpoint the browser opens.
+   */
+  readonly plainHttp?: boolean;
+  /**
+   * With `plainHttp`: called after discovery with the endpoints it names
+   * (each `*_endpoint` and `jwks_uri`), so the caller's fetch can admit
+   * plain HTTP to exactly those origins.
+   */
+  readonly onDiscoveredEndpoints?: (urls: readonly string[]) => void;
   readonly timeoutSeconds?: number;
   readonly clockToleranceSeconds?: number;
 }
@@ -183,6 +198,37 @@ function session(
 }
 
 /**
+ * With `http-allowed`, every endpoint the discovery document names is https,
+ * or plain HTTP to loopback or a private or internal host. The managed fetch
+ * checks the endpoints PiShip requests; this also covers the authorization
+ * and end-session endpoints, which the browser opens.
+ */
+function refusePublicPlainHttp(metadata: client.ServerMetadata): string[] {
+  const endpoints: string[] = [];
+  for (const [key, value] of Object.entries(metadata)) {
+    if (
+      typeof value !== "string" ||
+      !(key.endsWith("_endpoint") || key === "jwks_uri")
+    )
+      continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      continue;
+    }
+    if (url.protocol === "http:" && !isPrivateNetworkHost(url.hostname))
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        `The identity provider's ${key} is plain HTTP to ${url.hostname}, which is public; identity.oidc.httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+        { component: "identity" },
+      );
+    endpoints.push(value);
+  }
+  return endpoints;
+}
+
+/**
  * Native public-client OIDC login with Authorization Code + PKCE (S256), state,
  * nonce, and ID token issuer/audience/authorized-party/signature/time checks,
  * implemented with the maintained openid-client library.
@@ -201,6 +247,7 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
   configuration(): Promise<client.Configuration> {
     this.#config ??= (async () => {
       const issuer = new URL(this.options.issuer);
+      const plainHttp = this.options.plainHttp === true;
       const insecureLoopback =
         issuer.protocol === "http:" && isLoopbackHost(issuer.hostname);
       try {
@@ -220,10 +267,17 @@ export class OidcPkceIdentityProvider implements IdentityProvider {
             timeout: this.options.timeoutSeconds ?? 30,
             execute: [
               client.enableNonRepudiationChecks,
-              ...(insecureLoopback ? [client.allowInsecureRequests] : []),
+              ...(insecureLoopback || plainHttp
+                ? [client.allowInsecureRequests]
+                : []),
             ],
           },
         );
+        if (plainHttp) {
+          // Checked whether or not anyone is told the endpoints.
+          const endpoints = refusePublicPlainHttp(config.serverMetadata());
+          this.options.onDiscoveredEndpoints?.(endpoints);
+        }
         const methods =
           config.serverMetadata().code_challenge_methods_supported;
         if (Array.isArray(methods) && !methods.includes("S256"))

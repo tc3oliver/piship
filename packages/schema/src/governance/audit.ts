@@ -2,6 +2,7 @@
 import type { AuditCapture } from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import type { AuditConfig, AuditSinkConfig } from "../governance.js";
+import { HTTP_TRANSPORTS } from "../http-transport.js";
 import {
   bool,
   conflict,
@@ -29,8 +30,15 @@ function parseSink(
   entry: unknown,
   path: string,
   variables: readonly string[],
+  v6: boolean,
 ): AuditSinkConfig {
-  const sink = record(entry, path, ["id", "type", "url", "required"]);
+  const sink = record(entry, path, [
+    "id",
+    "type",
+    "url",
+    "required",
+    ...(v6 ? ["httpTransport"] : []),
+  ]);
   const id = plainString(sink.id, `${path}.id`, 32);
   if (!SINK_ID.test(id))
     unsafe(
@@ -45,13 +53,32 @@ function parseSink(
     );
   if (type === "http" && sink.url === undefined)
     fail(`${path}.url`, "An http sink needs a url");
+  if (type === "file" && sink.httpTransport !== undefined)
+    conflict(
+      `${path}.httpTransport`,
+      "httpTransport applies only to http sinks",
+    );
+  const httpTransport = oneOf(
+    sink.httpTransport,
+    `${path}.httpTransport`,
+    HTTP_TRANSPORTS,
+    "https",
+  );
   return {
     id,
     type,
     ...(type === "http"
-      ? { url: referenceUrl(sink.url, `${path}.url`, variables) }
+      ? {
+          url: referenceUrl(
+            sink.url,
+            `${path}.url`,
+            variables,
+            httpTransport === "http-allowed",
+          ),
+        }
       : {}),
     required: bool(sink.required, `${path}.required`, false),
+    ...(httpTransport === "http-allowed" ? { httpTransport } : {}),
   };
 }
 
@@ -59,6 +86,8 @@ export function parseAudit(
   value: unknown,
   mode: DeploymentMode,
   variables: readonly string[],
+  /** piship/v1alpha6 and later: a sink's `httpTransport`. */
+  v6 = false,
 ): AuditConfig {
   const audit = optionalRecord(value, "audit", [
     "enabled",
@@ -75,7 +104,7 @@ export function parseAudit(
       : list(
           audit.sinks,
           "audit.sinks",
-          (entry, at) => parseSink(entry, at, variables),
+          (entry, at) => parseSink(entry, at, variables, v6),
           (sink) => sink.id,
         );
   if (enabled && !sinks.length)

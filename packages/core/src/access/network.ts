@@ -55,12 +55,19 @@ export function resolveRuntimeReferences(
   access: AccessManifest,
   env: Environment = process.env,
 ): ResolvedEndpoints {
-  const one = (field: string, value: string | undefined, url: boolean) => {
+  // `plainHttp`: the endpoint's `httpTransport: http-allowed`; the resolved
+  // URL is checked as a static one is, so a public plain-HTTP host fails.
+  const one = (
+    field: string,
+    value: string | undefined,
+    url: boolean,
+    plainHttp = false,
+  ) => {
     if (value === undefined) return undefined;
     const resolved = resolveReference(access, env, field, value);
     if (url)
       try {
-        checkUrl(resolved, field);
+        checkUrl(resolved, field, plainHttp);
       } catch (error) {
         throw new PiShipError(
           "CONFIG_INVALID",
@@ -74,21 +81,35 @@ export function resolveRuntimeReferences(
   };
   const identity =
     access.identity.mode === "oidc" ? access.identity.oidc : undefined;
+  const brokerPlainHttp =
+    access.credential.broker?.httpTransport === "http-allowed";
   const values = {
-    issuer: one("identity.oidc.issuer", identity?.issuer, true),
+    issuer: one(
+      "identity.oidc.issuer",
+      identity?.issuer,
+      true,
+      identity?.httpTransport === "http-allowed",
+    ),
     clientId: one("identity.oidc.clientId", identity?.clientId, false),
     audience: one("identity.oidc.audience", identity?.audience, false),
     brokerEndpoint: one(
       "credential.broker.endpoint",
       access.credential.broker?.endpoint,
       true,
+      brokerPlainHttp,
     ),
     brokerRevokeEndpoint: one(
       "credential.broker.revokeEndpoint",
       access.credential.broker?.revokeEndpoint,
       true,
+      brokerPlainHttp,
     ),
-    baseUrl: one("inference.baseUrl", access.inference.baseUrl, true),
+    baseUrl: one(
+      "inference.baseUrl",
+      access.inference.baseUrl,
+      true,
+      access.inference.httpTransport === "http-allowed",
+    ),
   };
   const output: Record<string, unknown> = {
     additionalCA: resolveAdditionalCA(access, env),

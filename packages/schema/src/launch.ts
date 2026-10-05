@@ -10,6 +10,7 @@ import {
 } from "./access.js";
 import type { GovernanceManifest } from "./governance.js";
 import { governanceReferences } from "./governance-parse.js";
+import { spoofableHostName, spoofableHostWarning } from "./http-transport.js";
 import type { Manifest, ValidationDiagnostic } from "./index.js";
 import { lifecycleReferences, updateTrustWarnings } from "./lifecycle.js";
 import { hasRuntimeReference, referencedVariables } from "./variables.js";
@@ -299,6 +300,105 @@ function mcpServers(
 }
 
 /**
+ * Endpoints that opted in to plain HTTP (`httpTransport: http-allowed`),
+ * other than MCP servers: what travels unencrypted, and a host name that
+ * another device on the network can answer for.
+ */
+function plainHttpEndpoints(
+  access: AccessManifest | undefined,
+  governance: GovernanceManifest | undefined,
+): Finding[] {
+  const endpoints: {
+    readonly path: string;
+    readonly urls: readonly (readonly [string, string | undefined])[];
+    readonly exposed: string;
+    readonly always?: boolean;
+  }[] = [];
+  const oidc =
+    access?.identity.mode === "oidc" ? access.identity.oidc : undefined;
+  if (oidc?.httpTransport === "http-allowed")
+    endpoints.push({
+      path: "identity.oidc.httpTransport",
+      urls: [["identity.oidc.issuer", oidc.issuer]],
+      exposed:
+        "the authorization code and the identity tokens, including the refresh token, which anyone on the network path can read and replay",
+      // The discovery document may name plain-HTTP endpoints even when the
+      // issuer is https.
+      always: true,
+    });
+  const broker = access?.credential.broker;
+  if (broker?.httpTransport === "http-allowed")
+    endpoints.push({
+      path: "credential.broker.httpTransport",
+      urls: [
+        ["credential.broker.endpoint", broker.endpoint],
+        ["credential.broker.revokeEndpoint", broker.revokeEndpoint],
+      ],
+      exposed:
+        "the identity token sent to the broker and the gateway credential it issues, which anyone on the network path can read and replay until they expire",
+    });
+  if (access?.inference.httpTransport === "http-allowed")
+    endpoints.push({
+      path: "inference.httpTransport",
+      urls: [["inference.baseUrl", access.inference.baseUrl]],
+      exposed:
+        "the gateway credential, which anyone on the network path can read and replay until it expires, and every prompt, file excerpt, and response, which can also be altered in transit",
+    });
+  for (const [index, sink] of (governance?.audit.sinks ?? []).entries())
+    if (sink.httpTransport === "http-allowed")
+      endpoints.push({
+        path: `audit.sinks[${index}].httpTransport`,
+        urls: [[`audit.sinks[${index}].url`, sink.url]],
+        exposed:
+          "audit events, including any captured content, which can also be dropped or altered in transit",
+      });
+  const sandbox = governance?.sandbox;
+  if (sandbox?.httpTransport === "http-allowed")
+    endpoints.push({
+      path: "sandbox.httpTransport",
+      urls: [
+        ["sandbox.endpoint", sandbox.endpoint],
+        ["sandbox.router", sandbox.router],
+      ],
+      exposed: `commands, their output, and files sent to the sandbox${sandbox.credential === "stored" ? ", and the stored sandbox credential" : ""}, which can also be altered in transit`,
+    });
+  const findings: Finding[] = [];
+  for (const endpoint of endpoints) {
+    const declared = endpoint.urls.flatMap(([path, url]) =>
+      url === undefined ? [] : [[path, url] as const],
+    );
+    const templated = declared.some(([, url]) => hasRuntimeReference(url));
+    const plain = declared.some(
+      ([, url]) =>
+        !hasRuntimeReference(url) && new URL(url).protocol === "http:",
+    );
+    if (plain || templated || endpoint.always)
+      findings.push({
+        path: endpoint.path,
+        certain: false,
+        message:
+          plain || endpoint.always
+            ? `http-allowed: over plain HTTP, ${endpoint.exposed}, travel unencrypted and unauthenticated on the network path; serve it over https where possible`
+            : `http-allowed: if this URL resolves to plain HTTP, ${endpoint.exposed}, travel unencrypted and unauthenticated on the network path; it must resolve to https or a private or internal host, or it is refused`,
+      });
+    for (const [path, url] of declared) {
+      const host = plainHost(url);
+      if (
+        host !== undefined &&
+        new URL(url).protocol === "http:" &&
+        spoofableHostName(host)
+      )
+        findings.push({
+          path,
+          certain: false,
+          message: spoofableHostWarning(host),
+        });
+    }
+  }
+  return findings;
+}
+
+/**
  * The sandbox is activated only when required. An optional sandbox defaults
  * to network allow, so deny was declared and is silently not enforced.
  */
@@ -323,6 +423,7 @@ function findings(sections: LaunchSections): Finding[] {
     ...(access && governance ? auditHosts(mode, access, governance) : []),
     ...(governance ? sandboxCredential(access, governance) : []),
     ...(governance ? mcpServers(mode, access, governance) : []),
+    ...plainHttpEndpoints(access, governance),
   ];
 }
 

@@ -569,6 +569,51 @@ describe("AuditLog http sink", () => {
     ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
   });
 
+  it("sends an http-allowed sink over plain HTTP to a private host through its own fetch only", async () => {
+    const scoped: string[] = [];
+    const sent: string[] = [];
+    const open = (url: string, httpTransport?: "http-allowed") =>
+      AuditLog.open({
+        config: config([
+          {
+            id: "company",
+            type: "http",
+            url,
+            required: true,
+            ...(httpTransport ? { httpTransport } : {}),
+          },
+        ]),
+        distribution: "acmecode",
+        stateDir: temp,
+        fetch: async () => {
+          throw new Error("the default fetch is not used");
+        },
+        plainHttpFetch: (target) => {
+          scoped.push(target.origin);
+          return async (url) => {
+            sent.push(String(url));
+            return new Response(null, { status: 204 });
+          };
+        },
+      });
+    const log = await open("http://10.0.0.6:9000/events", "http-allowed");
+    await log.close();
+    expect(scoped).toEqual(["http://10.0.0.6:9000"]);
+    expect(sent).toEqual(["http://10.0.0.6:9000/events"]);
+    // A public host, or a private one without the opt-in, is refused.
+    await expect(
+      open("http://audit.acme.example/events", "http-allowed"),
+    ).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringContaining("which is public"),
+    });
+    await expect(open("http://10.0.0.6:9000/events")).rejects.toMatchObject({
+      code: "AUDIT_UNAVAILABLE",
+      message: expect.stringContaining("must use https"),
+    });
+    expect(sent).toHaveLength(1);
+  });
+
   it("fails launch when a required http sink is unreachable at open", async () => {
     const collector = await startCollector();
     collector.status = 503;

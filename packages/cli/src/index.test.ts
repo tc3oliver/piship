@@ -357,6 +357,57 @@ describe("validate", () => {
     );
   });
 
+  it("prints the http-allowed and runtime credential refusals unredacted", async () => {
+    const v6 = { schema: "piship/v1alpha6" };
+    const sandbox = await validate({
+      ...v6,
+      sandbox: {
+        required: true,
+        provider: "e2b-compatible",
+        endpoint: "http://sandbox.corp.internal:3000",
+        credential: "runtime",
+        httpTransport: "http-allowed",
+      },
+    });
+    expect(sandbox.status).not.toBe(0);
+    expect(sandbox.stderr).toContain(
+      "http-allowed cannot be combined with sandbox.credential set to runtime; the runtime credential is never sent to the sandbox over plain HTTP",
+    );
+    const mcp = await validate({
+      ...v6,
+      mcp: {
+        servers: {
+          tickets: {
+            transport: "streamable-http",
+            url: "http://10.99.236.70/mcp",
+            credential: "runtime",
+            httpTransport: "http-allowed",
+          },
+        },
+      },
+    });
+    expect(mcp.status).not.toBe(0);
+    expect(mcp.stderr).toContain(
+      "http-allowed cannot be combined with the credential field set to runtime",
+    );
+    for (const output of [sandbox.stderr, mcp.stderr])
+      expect(output).not.toContain("[REDACTED]");
+  });
+
+  it("names the opt-in when a private endpoint is plain HTTP without it", async () => {
+    const result = await validate({
+      schema: "piship/v1alpha6",
+      inference: {
+        provider: "openai-compatible",
+        baseUrl: "http://10.99.236.70:4000/v1",
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "inference.httpTransport: http-allowed (piship/v1alpha6)",
+    );
+  });
+
   it("rejects a required MCP server that fails every launch and warns about an optional one", async () => {
     const mcp = (required: boolean) => ({
       mcp: {

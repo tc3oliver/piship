@@ -46,6 +46,20 @@ export function sandbox(
             "Stops sending the runtime credential to the sandbox endpoint.",
           ],
   );
+  // An absent httpTransport is https.
+  out.scalar(
+    "sandbox",
+    "sandbox httpTransport",
+    x?.httpTransport,
+    y?.httpTransport,
+    (_, v) =>
+      v === "http-allowed"
+        ? [
+            "high",
+            "Sandbox endpoint may be reached over plain HTTP to a private or internal host; commands, their output, and files sent to the sandbox are unencrypted and can be altered in transit.",
+          ]
+        : ["low", "Sandbox endpoint is reached over https only."],
+  );
   out.set(
     "sandbox",
     "sandbox filesystem.read.deny",

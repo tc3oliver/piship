@@ -85,8 +85,14 @@ export async function prepareAccess(
   applyPiEnvironment(ctx.agentDir, ctx.mode);
   // Only a managed distribution narrows what child processes inherit; a
   // personal one keeps the environment of the user's shell.
+  // Pi's provider requests use the process dispatcher: with
+  // inference.httpTransport: http-allowed it admits plain HTTP to the
+  // gateway's own origin, and to no other host.
   applyProcessNetworkPolicy(access.network, {
     restrictChildren: ctx.mode === "managed",
+    ...(access.inferencePlainHttp
+      ? { plainHttp: access.inferencePlainHttp }
+      : {}),
   });
   try {
     const activated = await access.activate({
