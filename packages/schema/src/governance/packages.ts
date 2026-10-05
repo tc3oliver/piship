@@ -3,19 +3,25 @@
 // release gates run when the lock is written.
 import type { DeploymentMode } from "../access.js";
 import {
+  AGENT_FILE_MODES,
   DECLARABLE_RESOURCE_CLASSES,
   type DeclaredPackage,
   PACKAGE_RESOURCE_KINDS,
   PACKAGE_SOURCE_KINDS,
+  type PackageAgentFile,
+  type PackageEnvironmentValue,
   type PackageFilters,
   type PackageResourceKind,
   type PackageTrustConfig,
 } from "../governance.js";
 import {
   bool,
+  conflict,
+  envName,
   fail,
   isRecord,
   list,
+  nonSecretValue,
   oneOf,
   optionalRecord,
   plainString,
@@ -69,6 +75,8 @@ const COMMON = [
   "source",
   "class",
   "certified",
+  "environment",
+  "agentFiles",
   ...PACKAGE_RESOURCE_KINDS,
 ];
 const SOURCE_FIELDS = {
@@ -76,6 +84,106 @@ const SOURCE_FIELDS = {
   git: ["repository", "ref"],
   local: ["path"],
 } as const;
+
+/**
+ * A package's environment variable names: uppercase words joined by at least
+ * one underscore (so never `PATH`, `HOME`, or `LANG`); `envName` also refuses
+ * the credential-looking ones.
+ */
+const PACKAGE_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+/**
+ * Names that PiShip, the process, or the network policy own. A package never
+ * sets them: they change where Pi keeps its state, what PiShip itself reads,
+ * how Node or the dynamic loader behaves, or which proxy and trust roots
+ * every request uses.
+ */
+const RESERVED_ENVIRONMENT_NAME =
+  /^(?:PISHIP_|PI_CODING_AGENT_|PI_OFFLINE$|PI_SKIP_VERSION_CHECK$|PI_TELEMETRY$|NODE_|LD_|DYLD_|SSL_|CURL_|REQUESTS_|GIT_|SSH_|NPM_CONFIG_|PIP_|(?:HTTPS?|ALL|FTP|NO|SOCKS)_PROXY$|CARGO_HTTP_|DENO_CERT$|JAVA_TOOL_OPTIONS$|_JAVA_OPTIONS$)/;
+const STATE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const AGENT_FILE_PATH =
+  /^extensions\/(?:[a-z0-9][a-z0-9._-]{0,63}\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.json$/;
+const MAX_AGENT_FILES = 8;
+const MAX_AGENT_FILE_BYTES = 64 * 1024;
+
+function environmentValue(
+  value: unknown,
+  path: string,
+): PackageEnvironmentValue {
+  if (typeof value === "number" || typeof value === "boolean")
+    fail(path, "Environment values are strings; quote the value");
+  if (!isRecord(value)) return nonSecretValue(value, path);
+  const item = record(value, path, ["statePath"]);
+  const text = plainString(item.statePath, `${path}.statePath`, 256);
+  if (
+    text.includes("\\") ||
+    text.split("/").some((segment) => !STATE_PATH_SEGMENT.test(segment))
+  )
+    fail(
+      `${path}.statePath`,
+      "Expected a relative path of letters, digits, dots, hyphens, and underscores, without traversal",
+    );
+  return { statePath: text };
+}
+
+/** `environment`: variable names to non-secret values the launch sets. */
+function parseEnvironment(
+  value: unknown,
+  path: string,
+): Record<string, PackageEnvironmentValue> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) fail(path, "Expected an object keyed by variable name");
+  const output: Record<string, PackageEnvironmentValue> = {};
+  for (const [name, entry] of Object.entries(value)) {
+    const at = `${path}.${name}`;
+    envName(name, at);
+    if (!PACKAGE_ENVIRONMENT_NAME.test(name))
+      fail(
+        at,
+        "Package variable names use uppercase words joined by underscores, such as PI_BG_FEATURES",
+      );
+    if (RESERVED_ENVIRONMENT_NAME.test(name))
+      conflict(
+        at,
+        `${name} belongs to PiShip, the process, or the network policy; a package cannot set it`,
+      );
+    output[name] = environmentValue(entry, at);
+  }
+  if (!Object.keys(output).length)
+    fail(path, "Declare at least one variable or omit the field");
+  return output;
+}
+
+function agentFile(entry: unknown, path: string): PackageAgentFile {
+  const item = record(entry, path, ["path", "mode", "json"]);
+  const file = plainString(item.path, `${path}.path`, 256);
+  if (!AGENT_FILE_PATH.test(file))
+    fail(
+      `${path}.path`,
+      "Expected extensions/<file>.json or extensions/<name>/<file>.json, relative to Pi's agent directory",
+    );
+  if (!isRecord(item.json))
+    fail(`${path}.json`, "Expected the JSON document as an object");
+  if (JSON.stringify(item.json).length > MAX_AGENT_FILE_BYTES)
+    fail(`${path}.json`, `Use at most ${MAX_AGENT_FILE_BYTES} bytes of JSON`);
+  return {
+    path: file,
+    mode: oneOf(item.mode, `${path}.mode`, AGENT_FILE_MODES, "seed"),
+    json: item.json,
+  };
+}
+
+/** `agentFiles`: configuration files written into the agent directory. */
+function parseAgentFiles(
+  value: unknown,
+  path: string,
+): PackageAgentFile[] | undefined {
+  if (value === undefined) return undefined;
+  const files = list(value, path, agentFile, (item) => item.path);
+  if (!files.length) fail(path, "Declare at least one file or omit the field");
+  if (files.length > MAX_AGENT_FILES)
+    fail(path, `Use at most ${MAX_AGENT_FILES} files`);
+  return files;
+}
 
 function parsePackage(entry: unknown, path: string): DeclaredPackage {
   if (!isRecord(entry)) fail(path, "Expected an object");
@@ -111,11 +219,15 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
             semver(fields.version, `${at}.version`),
           );
         })();
+  const environment = parseEnvironment(item.environment, `${path}.environment`);
+  const agentFiles = parseAgentFiles(item.agentFiles, `${path}.agentFiles`);
   const common = {
     id,
     class: cls,
     ...(certified ? { certified } : {}),
     filters: filters(item, path),
+    ...(environment ? { environment } : {}),
+    ...(agentFiles ? { agentFiles } : {}),
   };
   switch (source) {
     case "npm": {
@@ -148,9 +260,43 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
   }
 }
 
-/** `resources.packages`: a list of packages with unique IDs. */
+/**
+ * `resources.packages`: a list of packages with unique IDs. The environment
+ * is one process's, and the files one directory's: two packages may share a
+ * variable only at the same value, and no two may write the same file.
+ */
 export function parsePackages(value: unknown): DeclaredPackage[] {
-  return list(value, "resources.packages", parsePackage, (item) => item.id);
+  const packages = list(
+    value,
+    "resources.packages",
+    parsePackage,
+    (item) => item.id,
+  );
+  const variables = new Map<string, { value: string; owner: string }>();
+  const files = new Map<string, string>();
+  for (const [index, item] of packages.entries()) {
+    const at = `resources.packages[${index}]`;
+    for (const [name, declared] of Object.entries(item.environment ?? {})) {
+      const text = JSON.stringify(declared);
+      const earlier = variables.get(name);
+      if (earlier && earlier.value !== text)
+        conflict(
+          `${at}.environment.${name}`,
+          `${name} is already set to another value by package ${earlier.owner}`,
+        );
+      variables.set(name, { value: text, owner: item.id });
+    }
+    for (const file of item.agentFiles ?? []) {
+      const earlier = files.get(file.path);
+      if (earlier)
+        conflict(
+          `${at}.agentFiles`,
+          `${file.path} is already written by package ${earlier}`,
+        );
+      files.set(file.path, item.id);
+    }
+  }
+  return packages;
 }
 
 /**

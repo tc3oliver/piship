@@ -1,4 +1,5 @@
 export * from "./access/index.js";
+export * from "./agent-files.js";
 export * from "./archive.js";
 export * from "./branded/index.js";
 export { buildDistribution } from "./build.js";
@@ -45,6 +46,7 @@ export {
   LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
   type LockDigests,
+  type LockedAgentFile,
   type LockedDataContract,
   type LockedEnforcement,
   type LockedPackage,

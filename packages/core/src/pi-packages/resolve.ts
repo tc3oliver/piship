@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { lockedAgentFiles } from "../agent-files.js";
 import { canonicalJson } from "../digest.js";
 import { type CommandRunner, mustRun, runCommand } from "./command.js";
 import { expandPackageResources } from "./expand.js";
@@ -804,6 +805,12 @@ function materialize(
         .sort()
         .map((target) => [target, optionalDependenciesFor(parsed, target)]),
     ),
+    ...(declaration.environment
+      ? { environment: declaration.environment }
+      : {}),
+    ...(declaration.agentFiles
+      ? { agentFiles: lockedAgentFiles(declaration.agentFiles) }
+      : {}),
   };
   return {
     locked,

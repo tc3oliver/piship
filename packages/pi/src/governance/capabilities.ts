@@ -13,12 +13,28 @@ import {
 } from "@piship/policy";
 import type { GovernanceSession } from "../governance-session.js";
 import type { GovernanceOptions } from "./options.js";
-import { payloadTree } from "./resources.js";
+import {
+  fileMatches,
+  loadPackageFiles,
+  packageRoot,
+  payloadTree,
+} from "./resources.js";
 
 /** Provider trust and payload verification, from the lock and the payload. */
 interface ProviderEvidence {
   trust: Record<string, ProviderTrustDecision>;
   verification: Record<string, VerificationResult>;
+}
+
+/** The extension files of the package a provider is, from the lock. */
+function providerPackageFiles(
+  lock: GovernanceOptions["lock"],
+  provider: GovernanceLock["providers"][number],
+) {
+  return (lock.packages ?? [])
+    .filter((item) => item.id === provider.package)
+    .flatMap((item) => item.resources)
+    .filter((file) => file.kind === "extensions");
 }
 
 function providerEvidence(options: GovernanceOptions): ProviderEvidence {
@@ -37,6 +53,26 @@ function providerEvidence(options: GovernanceOptions): ProviderEvidence {
         found === entry.integrity
           ? { ok: true }
           : { ok: false, reason: "provider files do not match the lock" };
+    }
+    if (entry.package) {
+      const files = providerPackageFiles(lock, entry);
+      const root = packageRoot(
+        distributionDir,
+        lock.governance.manifest,
+        entry.package,
+      );
+      verification[entry.id] =
+        files.length > 0 &&
+        files.every((file) =>
+          fileMatches(join(root, ...file.path.split("/")), file.sha256),
+        )
+          ? { ok: true }
+          : {
+              ok: false,
+              reason: files.length
+                ? "provider package files do not match the lock"
+                : "the provider package has no extension to load",
+            };
     }
   }
   return { trust, verification };
@@ -97,7 +133,18 @@ export function staticProviderDenials(
   const denied: Record<string, string> = {};
   for (const provider of options.lock.governance.providers) {
     if (provider.class === "builtin") continue;
-    for (const [action, resource] of providerRequests(provider)) {
+    // A package provider's extension files are decided one by one as they
+    // load; a policy that always denies one of them denies the provider.
+    const requests: [PolicyAction, string][] = [
+      ...providerRequests(provider),
+      ...providerPackageFiles(options.lock, provider).map(
+        (file): [PolicyAction, string] => [
+          "extension.load",
+          `${provider.class}:packages/${provider.package}/${file.path}`,
+        ],
+      ),
+    ];
+    for (const [action, resource] of requests) {
       const decision = engine.evaluate({ action, resource });
       if (decision.effect !== "deny") continue;
       denied[provider.capability] = `policy ${decision.ruleId} (${action})`;
@@ -167,6 +214,17 @@ export async function computeCapabilities(
     });
     const extension = providerExtension(session, state.name);
     if (extension) session.loader.extensions.push(extension);
+    // A package provider's extensions load now, file by file, each after its
+    // own `extension.load` decision.
+    const locked = session.options.lock.packages?.find(
+      (item) => item.id === provider.package,
+    );
+    if (locked)
+      await loadPackageFiles(
+        session,
+        locked,
+        (file) => file.kind === "extensions",
+      );
   }
   session.capabilities = capabilityStates(
     session.options,

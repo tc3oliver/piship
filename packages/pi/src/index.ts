@@ -7,6 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
 import {
+  applyAgentFiles,
+  applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
   runConfig,
@@ -69,6 +71,15 @@ export interface LaunchOptions {
   readonly distributionDir: string;
   readonly metadata: DistributionLock;
   readonly args: readonly string[];
+  /**
+   * Internal, for the launch option that approves every `ask` for one
+   * session: switches on the permission provider's own session-wide
+   * auto-approval, for this launch only (the distribution declares the key
+   * as `autoApproveFile` and `autoApproveKey` on its `permissions`
+   * capability). The file it changes is put back when the process exits, and
+   * by the next launch if this one is killed. A `deny` never changes.
+   */
+  readonly sessionAutoApprove?: boolean;
 }
 
 /** Starts Pi's real SDK/runtime and the branded management commands. */
@@ -134,6 +145,14 @@ export async function launchPiDistribution(
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   applyPiEnvironment(agentDir, metadata.deployment.mode);
+  // What the packages declare for themselves: their environment, and the
+  // configuration files they read from the agent directory. A managed launch
+  // sets the environment again after it removed the shell's `PI_*` variables.
+  applyPackageEnvironment(metadata, stateDir);
+  const agentFiles = applyAgentFiles(metadata, agentDir, {
+    sessionAutoApprove: options.sessionAutoApprove === true,
+  });
+  process.once("exit", agentFiles.restore);
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
   // Pi's agent directory here before Pi was imported (environment.ts).
   installSearchTools(metadata, options.distributionDir, agentDir);
