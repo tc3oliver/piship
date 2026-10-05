@@ -14,12 +14,19 @@ type Json = Record<string, unknown>;
 
 const INTEGRITY = `sha256-${"b".repeat(64)}`;
 const CONFIG_FILE = "extensions/permissions/config.json";
+// Any exact version: the manifest and the certified evidence only have to agree.
+const PI = "1.0.0";
 
 function base(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA6,
-    app: { id: "devcode", name: "DevCode", command: "devcode", version: "1.0.0" },
-    runtime: { pi: "1.0.2" },
+    app: {
+      id: "devcode",
+      name: "DevCode",
+      command: "devcode",
+      version: "1.0.0",
+    },
+    runtime: { pi: PI },
     deployment: { mode: "personal" },
     updates: { channel: "stable", channels: ["stable"] },
     ...extra,
@@ -128,6 +135,7 @@ describe("package environment", () => {
       "quote",
     );
     rejects(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is what this rejects
       withPackages(pkg({ environment: { PI_A_FLAG: "${HOME}" } })),
       "resources.packages[0].environment.PI_A_FLAG",
     );
@@ -202,11 +210,8 @@ describe("package agent files", () => {
       ["extensions/own.json", "enforce"],
     ]);
     // Rules are read in order: the declared order survives parsing.
-    expect(
-      Object.keys(
-        (item?.agentFiles?.[0]?.json as { permission: Json }).permission,
-      ),
-    ).toEqual(["*", "*.env"]);
+    const first = item?.agentFiles?.[0]?.json as { permission: Json };
+    expect(Object.keys(first.permission)).toEqual(["*", "*.env"]);
   });
 
   it.each([
@@ -293,7 +298,7 @@ describe("a capability provider that is a package", () => {
     source: "https://www.npmjs.com/package/pi-tools",
     integrity: INTEGRITY,
     license: "MIT",
-    pi: ["1.0.2"],
+    pi: [PI],
   };
   const provider = (extra: Json = {}): Json => ({
     id: "certified/tools",
@@ -387,7 +392,10 @@ describe("a capability provider that is a package", () => {
       parsed(manifest({ agentFiles: files, settings })),
     ).not.toThrow();
     rejects(
-      manifest({ agentFiles: files, settings: { autoApproveFile: CONFIG_FILE } }),
+      manifest({
+        agentFiles: files,
+        settings: { autoApproveFile: CONFIG_FILE },
+      }),
       "capabilities.permissions.settings",
       "go together",
     );

@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -91,7 +92,9 @@ const read = () => readFileSync(target(), "utf8");
 describe("what is written", () => {
   it("is the declared JSON in its declared key order, with a digest of those bytes", () => {
     const content = agentFileContent({ b: 1, a: { z: 1, y: 2 } });
-    expect(content).toBe('{\n  "b": 1,\n  "a": {\n    "z": 1,\n    "y": 2\n  }\n}\n');
+    expect(content).toBe(
+      '{\n  "b": 1,\n  "a": {\n    "z": 1,\n    "y": 2\n  }\n}\n',
+    );
     expect(
       lockedAgentFiles([{ path: PATH, mode: "enforce", json: { b: 1 } }]),
     ).toEqual([
@@ -176,8 +179,12 @@ describe("a seed file", () => {
     );
 
     // A newer release's default replaces a file nobody edited.
-    const newer = lock({ json: { yoloMode: false, permission: { "*": "ask" } } });
-    expect(applyAgentFiles(newer, agentDir).reports[0]?.outcome).toBe("updated");
+    const newer = lock({
+      json: { yoloMode: false, permission: { "*": "ask" } },
+    });
+    expect(applyAgentFiles(newer, agentDir).reports[0]?.outcome).toBe(
+      "updated",
+    );
     expect(JSON.parse(read()).permission).toEqual({ "*": "ask" });
 
     // The user edits it: the next default is not applied, and says so.
@@ -200,7 +207,7 @@ describe("a seed file", () => {
     if (process.platform !== "win32")
       expect(
         // 0600: the bits of group and others are clear.
-        require("node:fs").statSync(target()).mode & 0o077,
+        statSync(target()).mode & 0o077,
       ).toBe(0);
   });
 });
@@ -211,13 +218,16 @@ describe("an enforced file", () => {
       applyAgentFiles(lock({ mode: "enforce" }), agentDir).reports[0]?.outcome,
     ).toBe("seeded");
     writeFileSync(target(), '{"permission":{"*":"allow"}}\n');
-    expect(inspectAgentFiles(lock({ mode: "enforce" }), agentDir)[0]?.state).toBe(
-      "pending",
-    );
+    expect(
+      inspectAgentFiles(lock({ mode: "enforce" }), agentDir)[0]?.state,
+    ).toBe("pending");
     expect(
       applyAgentFiles(lock({ mode: "enforce" }), agentDir).reports[0]?.outcome,
     ).toBe("enforced");
-    expect(JSON.parse(read()).permission).toEqual({ "*": "allow", "*.env": "ask" });
+    expect(JSON.parse(read()).permission).toEqual({
+      "*": "allow",
+      "*.env": "ask",
+    });
     expect(
       applyAgentFiles(lock({ mode: "enforce" }), agentDir).reports[0]?.outcome,
     ).toBe("unchanged");
@@ -305,8 +315,9 @@ describe("a session auto-approval", () => {
     session.restore();
     expect(key()).toBe(false);
     expect(
-      JSON.parse(readFileSync(join(agentDir, ".piship-agent-files.json"), "utf8"))
-        .override,
+      JSON.parse(
+        readFileSync(join(agentDir, ".piship-agent-files.json"), "utf8"),
+      ).override,
     ).toBeUndefined();
   });
 

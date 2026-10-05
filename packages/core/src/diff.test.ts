@@ -840,6 +840,94 @@ describe("diffLocks", () => {
       expect(changed.requiredTests).toContain(DIFF_TESTS.compatibility);
     });
 
+    it("reports what a package is given: its environment and its configuration files", () => {
+      const pkg = {
+        id: "pi-bg",
+        source: "npm",
+        class: "user",
+        url: "https://registry.npmjs.org/",
+        version: "1.0.0",
+        integrity: `sha512-${"A".repeat(86)}==`,
+        tree: `sha256-${"c".repeat(64)}`,
+        files: 4,
+        resources: [],
+      };
+      const file = (sha: string, mode = "seed") => ({
+        path: "extensions/pi-bg/config.json",
+        mode,
+        sha256: `sha256-${sha.repeat(64)}`,
+      });
+      const before = v6();
+      before.packages = [
+        {
+          ...pkg,
+          environment: { PI_BG_FEATURES: "process", PI_BG_OLD_FLAG: "1" },
+          agentFiles: [file("a")],
+        },
+      ];
+      const after = v6();
+      after.packages = [
+        {
+          ...pkg,
+          environment: {
+            PI_BG_FEATURES: "process,delegate",
+            PI_BG_NEW_FLAG: "1",
+            PI_BG_HOME: { statePath: "bg" },
+          },
+          agentFiles: [file("b", "enforce")],
+        },
+      ];
+      const report = diffLocks(before, after);
+      expect(
+        find(report, "Pi package pi-bg environment PI_BG_FEATURES"),
+      ).toMatchObject({
+        area: "packages",
+        kind: "changed",
+        before: "process",
+        after: "process,delegate",
+        risk: "medium",
+      });
+      expect(
+        find(report, "Pi package pi-bg environment PI_BG_NEW_FLAG"),
+      ).toMatchObject({
+        kind: "added",
+        risk: "medium",
+      });
+      expect(
+        find(report, "Pi package pi-bg environment PI_BG_HOME")?.after,
+      ).toBe('{"statePath":"bg"}');
+      expect(
+        find(report, "Pi package pi-bg environment PI_BG_OLD_FLAG"),
+      ).toMatchObject({
+        kind: "removed",
+        risk: "low",
+      });
+      expect(
+        find(
+          report,
+          "Pi package pi-bg file extensions/pi-bg/config.json content",
+        )?.risk,
+      ).toBe("high");
+      expect(
+        find(report, "Pi package pi-bg file extensions/pi-bg/config.json mode"),
+      ).toMatchObject({ before: "seed", after: "enforce", risk: "medium" });
+      // A configuration file that appears is high; one that goes is low.
+      const bare = v6();
+      bare.packages = [pkg];
+      expect(
+        find(
+          diffLocks(bare, before),
+          "Pi package pi-bg file extensions/pi-bg/config.json",
+        )?.risk,
+      ).toBe("high");
+      expect(
+        find(
+          diffLocks(before, bare),
+          "Pi package pi-bg file extensions/pi-bg/config.json",
+        )?.risk,
+      ).toBe("low");
+    });
+
     it("reports cache warming, absent as off", () => {
       const after = v6();
       after.cacheWarming = { mode: "streaming", userOverride: true };
