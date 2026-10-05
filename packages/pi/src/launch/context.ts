@@ -18,6 +18,8 @@ import { applyPiEnvironment } from "./pi-defaults.js";
 
 export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
+  /** The session was started with `--yolo`. */
+  readonly yolo?: boolean;
 }
 
 /**

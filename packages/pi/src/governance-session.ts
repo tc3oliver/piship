@@ -15,6 +15,7 @@ import {
   type AuditEventType,
   formatError,
   type PolicyAction,
+  type PolicyDecision,
   PiShipError,
   plainHttpOrigins,
   type ResolvedDecision,
@@ -27,6 +28,7 @@ import {
   type UserAutoStatus,
   userAutoDenied,
   userAutoStatus,
+  yoloRefusal,
 } from "@piship/core";
 import type {
   McpGovernor,
@@ -120,6 +122,8 @@ export class GovernanceSession {
   outputStore = new SessionOutputStore();
   #closed = false;
   #userAuto: UserAutoStatus;
+  /** `--yolo`: approves asks for this session only; stored nowhere. */
+  #yolo: boolean;
 
   private constructor(
     readonly options: GovernanceOptions,
@@ -138,9 +142,13 @@ export class GovernanceSession {
       this.manifest.policy,
       options.lock.deployment.mode,
     );
+    this.#yolo = options.yolo === true;
   }
 
   static async open(options: GovernanceOptions): Promise<GovernanceSession> {
+    // The launch refuses this first; a session opened by other means must too.
+    const refusal = options.yolo ? yoloRefusal(options.lock) : undefined;
+    if (refusal) throw refusal;
     const started = Date.now();
     const manifest = options.lock.governance.manifest;
     const metrics = options.metrics ?? LocalMetrics.load(options.stateDir);
@@ -228,6 +236,7 @@ export class GovernanceSession {
         detail: {
           diagnostics: engine.diagnostics.length,
           ...(session.userAuto.active ? { userAuto: true } : {}),
+          ...(session.yolo ? { yolo: true } : {}),
         },
       });
       // The stored switch is audited when it is switched; a session that
@@ -237,6 +246,13 @@ export class GovernanceSession {
         session.emit("policy.auto_enabled", {
           policy: engine.id,
           detail: { source: "state" },
+        });
+      // `--yolo` is recorded the same way: it is the one switch this session
+      // was started with, and nothing of it is stored.
+      if (session.yolo)
+        session.emit("policy.auto_enabled", {
+          policy: engine.id,
+          detail: { source: "yolo" },
         });
       // A team, project, or managed user file that tries to widen the policy
       // is recorded; a rule it names is what tried.
@@ -304,6 +320,11 @@ export class GovernanceSession {
     return this.#userAuto;
   }
 
+  /** Whether `--yolo` is approving asks in this session. */
+  get yolo(): boolean {
+    return this.#yolo;
+  }
+
   /**
    * Switch the user's auto mode from inside the session (`/auto`), and store
    * it for later sessions. Switching on is refused with POLICY_DENIED unless
@@ -336,8 +357,11 @@ export class GovernanceSession {
       if (loss) throw loss;
       setUserAuto(this.options.stateDir, true);
     } else {
+      // `off` ends `--yolo` for the rest of the session as well.
+      const wasYolo = this.#yolo;
+      this.#yolo = false;
       setUserAuto(this.options.stateDir, false);
-      if (this.#userAuto.allowed)
+      if (this.#userAuto.allowed || wasYolo)
         try {
           this.audit.assertAvailable();
           this.emit("policy.auto_disabled", {
@@ -408,9 +432,9 @@ export class GovernanceSession {
 
   /**
    * Evaluate, resolve `ask` through the channel (headless: deny), or approve
-   * it without a prompt while the user's auto mode is on (recorded as
-   * `policy.auto_approved`), record denials, and fail closed when a required
-   * audit sink is down. Auto mode never touches `deny`. Several
+   * it without a prompt while the user's auto mode or `--yolo` is on (recorded
+   * as `policy.auto_approved`), record denials, and fail closed when a required
+   * audit sink is down. Neither ever touches `deny`. Several
    * resources (a lexical and a symlink-resolved path) are decided together:
    * the strictest decision wins and at most one approval is asked.
    */
@@ -437,28 +461,18 @@ export class GovernanceSession {
     // calls (parallel top-level calls, Codemode's nested calls) wait their
     // turn; the queue is held only while a prompt is open. A call that waited
     // while the user switched auto mode on is approved without its prompt.
-    let auto =
-      this.#userAuto.active &&
-      decision.effect === "ask" &&
-      !resources.some((item) =>
-        this.engine.keepsPrompt({ action, resource: item }),
-      );
+    const approved = {
+      ...decision,
+      outcome: "allow" as const,
+      approval: "auto" as const,
+    };
+    let auto = this.#autoApproval(action, resources, decision);
     const resolved: ResolvedDecision = auto
-      ? { ...decision, outcome: "allow", approval: "auto" }
+      ? approved
       : decision.effect === "ask" && channel
         ? await this.#serialized(async () => {
-            auto =
-              this.#userAuto.active &&
-              !resources.some((item) =>
-                this.engine.keepsPrompt({ action, resource: item }),
-              );
-            return auto
-              ? {
-                  ...decision,
-                  outcome: "allow" as const,
-                  approval: "auto" as const,
-                }
-              : resolveDecision(decision, channel, prompt);
+            auto = this.#autoApproval(action, resources, decision);
+            return auto ? approved : resolveDecision(decision, channel, prompt);
           })
         : await resolveDecision(decision, channel, prompt);
     const fields = {
@@ -470,6 +484,10 @@ export class GovernanceSession {
         action,
         ...(events?.detail ?? {}),
         ...(resolved.approval ? { approval: resolved.approval } : {}),
+        // `source` is taken (a tool call's origin), so the switch that
+        // approved gets its own key. The stored auto mode, the usual one,
+        // leaves none.
+        ...(auto === "yolo" ? { autoSource: "yolo" } : {}),
       },
       ...(events?.content ? { content: events.content } : {}),
     };
@@ -495,6 +513,33 @@ export class GovernanceSession {
             : "allowed",
       });
     return resolved;
+  }
+
+  /**
+   * Which switch approves this ask without a prompt, if one does: `--yolo`
+   * (this session only) or the user's stored auto mode. Both keep the prompt
+   * of an explicit `ask` that an enforced, team, project, or managed user
+   * rule wrote to keep it. A personal user owns every layer, so `--yolo`
+   * there approves every ask.
+   */
+  #autoApproval(
+    action: PolicyAction,
+    resources: readonly string[],
+    decision: PolicyDecision,
+  ): "yolo" | "state" | undefined {
+    const switchedOn = this.#yolo
+      ? "yolo"
+      : this.#userAuto.active
+        ? "state"
+        : undefined;
+    if (!switchedOn || decision.effect !== "ask") return undefined;
+    if (this.#yolo && this.options.lock.deployment.mode === "personal")
+      return switchedOn;
+    return resources.some((item) =>
+      this.engine.keepsPrompt({ action, resource: item }),
+    )
+      ? undefined
+      : switchedOn;
   }
 
   #approvalTail: Promise<unknown> = Promise.resolve();

@@ -91,6 +91,12 @@ export interface GovernanceOptions {
   /** Receives sandbox credential lifecycle events (purpose sandbox). */
   readonly onSandboxCredentialEvent?: (event: AccessEvent) => void;
   readonly homeDir?: string;
+  /**
+   * `--yolo`: approve asks for this session only, without storing anything.
+   * A managed distribution must allow auto-approval (`policy.userAuto`);
+   * `GovernanceSession.open` refuses it otherwise.
+   */
+  readonly yolo?: boolean;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
   /**
