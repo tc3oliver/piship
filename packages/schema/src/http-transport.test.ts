@@ -56,7 +56,7 @@ function manifest(extra: Json = {}): Json {
       },
     },
     network: {
-      allowHosts: ["10.99.236.70", "10.0.0.6", "sandbox.corp.internal"],
+      allowHosts: ["10.20.30.40", "10.0.0.6", "sandbox.corp.internal"],
     },
     ...extra,
   };
@@ -114,7 +114,7 @@ describe("httpTransport on access endpoints", () => {
 
   it("accepts plain HTTP to a private or internal host with http-allowed", () => {
     for (const baseUrl of [
-      "http://10.99.236.70:4000/v1",
+      "http://10.20.30.40:4000/v1",
       "http://172.16.0.1/v1",
       "http://192.168.1.10:4000/v1",
       "http://100.64.0.1/v1",
@@ -131,8 +131,8 @@ describe("httpTransport on access endpoints", () => {
     const access = parseManifest(
       manifest({
         ...broker({
-          endpoint: "http://10.99.236.70:8080/token",
-          revokeEndpoint: "http://10.99.236.70:8080/revoke",
+          endpoint: "http://10.20.30.40:8080/token",
+          revokeEndpoint: "http://10.20.30.40:8080/revoke",
           httpTransport: "http-allowed",
         }),
         ...oidc({
@@ -185,12 +185,12 @@ describe("httpTransport on access endpoints", () => {
 
   it("keeps plain HTTP to a private host refused without the opt-in", () => {
     rejects(
-      manifest(gateway({ baseUrl: "http://10.99.236.70:4000/v1" })),
+      manifest(gateway({ baseUrl: "http://10.20.30.40:4000/v1" })),
       "inference.baseUrl",
       "or for a private or internal host with inference.httpTransport: http-allowed (piship/v1alpha6)",
     );
     rejects(
-      manifest(broker({ endpoint: "http://10.99.236.70:8080/token" })),
+      manifest(broker({ endpoint: "http://10.20.30.40:8080/token" })),
       "credential.broker.endpoint",
       "credential.broker.httpTransport: http-allowed",
     );
@@ -216,7 +216,7 @@ describe("httpTransport on access endpoints", () => {
     rejects(
       manifest(
         gateway({
-          baseUrl: "http://user:pw@10.99.236.70:4000/v1",
+          baseUrl: "http://user:pw@10.20.30.40:4000/v1",
           httpTransport: "http-allowed",
         }),
       ),
@@ -226,7 +226,7 @@ describe("httpTransport on access endpoints", () => {
     rejects(
       manifest(
         gateway({
-          baseUrl: "http://10.99.236.70:4000/v1?x=1",
+          baseUrl: "http://10.20.30.40:4000/v1?x=1",
           httpTransport: "http-allowed",
         }),
       ),
@@ -236,7 +236,7 @@ describe("httpTransport on access endpoints", () => {
     rejects(
       manifest(
         gateway({
-          baseUrl: "http://10.99.236.70:4000/v1",
+          baseUrl: "http://10.20.30.40:4000/v1",
           httpTransport: "http",
         }),
       ),
@@ -355,7 +355,7 @@ describe("httpTransport on access endpoints", () => {
       warnings(
         manifest(
           gateway({
-            baseUrl: "http://10.99.236.70:4000/v1",
+            baseUrl: "http://10.20.30.40:4000/v1",
             httpTransport: "http-allowed",
           }),
         ),

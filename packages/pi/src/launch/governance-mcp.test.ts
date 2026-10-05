@@ -8,7 +8,7 @@ import type { LaunchContext, PreparedAccess } from "./context.js";
 import { governanceOptions } from "./governance.js";
 
 const ISSUER = "https://login.acme.example";
-const HEADERS = { "X-MiTAC-User": { identityClaim: "preferred_username" } };
+const HEADERS = { "X-Company-User": { identityClaim: "preferred_username" } };
 
 function identity(subject: string, username: string): IdentitySession {
   return {
@@ -90,7 +90,7 @@ describe("launch MCP options", () => {
       [
         {
           id: "tickets",
-          url: "http://10.99.236.70/mcp",
+          url: "http://10.20.30.40/mcp",
           httpTransport: "http-allowed",
         },
       ],
@@ -101,7 +101,7 @@ describe("launch MCP options", () => {
     if (!plain) throw new Error("expected the plain-HTTP fetch");
     expect(built.fetch).not.toBe(plain);
     // Another private host, or another port, is not a declared server.
-    for (const url of ["http://10.99.236.71/mcp", "http://10.99.236.70:8080/"])
+    for (const url of ["http://10.20.30.41/mcp", "http://10.20.30.40:8080/"])
       await expect(plain(url)).rejects.toMatchObject({
         code: "NETWORK_DENIED",
       });

@@ -379,7 +379,7 @@ describe("validate", () => {
         servers: {
           tickets: {
             transport: "streamable-http",
-            url: "http://10.99.236.70/mcp",
+            url: "http://10.20.30.40/mcp",
             credential: "runtime",
             httpTransport: "http-allowed",
           },
@@ -399,7 +399,7 @@ describe("validate", () => {
       schema: "piship/v1alpha6",
       inference: {
         provider: "openai-compatible",
-        baseUrl: "http://10.99.236.70:4000/v1",
+        baseUrl: "http://10.20.30.40:4000/v1",
       },
     });
     expect(result.status).not.toBe(0);

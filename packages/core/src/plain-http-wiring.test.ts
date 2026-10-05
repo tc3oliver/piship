@@ -34,8 +34,8 @@ const PROXY_NAMES = [
   "NO_PROXY",
   "no_proxy",
 ];
-const GATEWAY = "http://10.99.236.70:4000";
-const BROKER = "http://10.99.236.70:8080";
+const GATEWAY = "http://10.20.30.40:4000";
+const BROKER = "http://10.20.30.40:8080";
 const IDP = "http://keycloak.corp.internal";
 
 type Services = Awaited<ReturnType<typeof startLocalServices>>;

@@ -288,13 +288,13 @@ describe("diffLocks", () => {
       id: "tickets",
       transport: "streamable-http",
       module: undefined,
-      url: "http://10.99.236.70/mcp",
+      url: "http://10.20.30.40/mcp",
     });
     const plain = clone(https);
     const tickets = plain.governance.manifest.mcp.servers.at(-1);
     Object.assign(tickets, {
       httpTransport: "http-allowed",
-      headers: { "X-MiTAC-User": { identityClaim: "preferred_username" } },
+      headers: { "X-Company-User": { identityClaim: "preferred_username" } },
     });
     const report = diffLocks(https, plain);
     expect(report.risk).toBe("high");
@@ -302,7 +302,7 @@ describe("diffLocks", () => {
       expect.objectContaining({
         area: "mcp",
         kind: "added",
-        item: "mcp server tickets headers X-MiTAC-User: preferred_username",
+        item: "mcp server tickets headers X-Company-User: preferred_username",
         risk: "medium",
       }),
       expect.objectContaining({
@@ -371,9 +371,9 @@ describe("diffLocks", () => {
       id: "tickets",
       transport: "streamable-http",
       module: undefined,
-      url: "http://10.99.236.70/mcp",
+      url: "http://10.20.30.40/mcp",
       httpTransport: "http-allowed",
-      headers: { "X-MiTAC-User": { identityClaim: "preferred_username" } },
+      headers: { "X-Company-User": { identityClaim: "preferred_username" } },
     });
     const report = diffLocks(base, added);
     expect(
@@ -391,9 +391,9 @@ describe("diffLocks", () => {
           after: "http-allowed",
         },
         {
-          item: "mcp server tickets headers X-MiTAC-User: preferred_username",
+          item: "mcp server tickets headers X-Company-User: preferred_username",
           risk: "medium",
-          after: "X-MiTAC-User: preferred_username",
+          after: "X-Company-User: preferred_username",
         },
       ]),
     );
