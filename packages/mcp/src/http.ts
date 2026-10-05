@@ -3,7 +3,15 @@
 // messages until the response for the request arrives. The legacy HTTP+SSE
 // transport is not implemented.
 
-import { SecretValue, redact } from "@piship/contracts";
+import {
+  isLoopbackHost,
+  isPrivateNetworkHost,
+  MCP_IDENTITY_HEADER_CLAIMS,
+  mcpIdentityHeaderProblem,
+  PiShipError,
+  redact,
+  SecretValue,
+} from "@piship/contracts";
 import {
   DEFAULT_MAX_MESSAGE_BYTES,
   isAbortError,
@@ -16,6 +24,7 @@ import type {
   JsonRpcMessage,
   McpCredentialProvider,
   McpFetch,
+  McpIdentityClaimsProvider,
   McpTransport,
 } from "./types.js";
 
@@ -35,7 +44,21 @@ export interface StreamableHttpTransportOptions {
   readonly maxMessageBytes?: number;
   /** Upper bound on a whole response body or event stream. */
   readonly maxResponseBytes?: number;
+  /**
+   * `httpTransport: http-allowed`: also permit plain HTTP to a private or
+   * internal host. Without it plain HTTP is accepted only on loopback.
+   */
+  readonly plainHttp?: boolean;
+  /** Header name to identity claim; the claims are asked for per request. */
+  readonly identityHeaders?: Readonly<
+    Record<string, { readonly identityClaim: string }>
+  >;
+  /** The signed-in identity's claims; required with `identityHeaders`. */
+  readonly identityClaims?: McpIdentityClaimsProvider;
 }
+
+/** The longest identity header value sent. */
+export const MAX_IDENTITY_HEADER_LENGTH = 256;
 
 /** Normalized origins; entries that are not URLs are dropped. */
 function credentialOrigins(values: readonly string[]): string[] {
@@ -88,6 +111,43 @@ export class StreamableHttpTransport implements McpTransport {
           `MCP server ${options.serverId} is at ${url.origin}, but the runtime credential is only sent to ${allowed.length ? allowed.join(", ") : "the inference gateway origin, which is not configured"}`,
         );
     }
+    // Plain HTTP beyond loopback only with http-allowed, to a private or
+    // internal host, and never with the runtime credential.
+    if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
+      if (!options.plainHttp)
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} URL must use https; plain HTTP is accepted only for loopback, or for a private or internal host with httpTransport: http-allowed`,
+        );
+      if (!isPrivateNetworkHost(url.hostname))
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} URL is plain HTTP to ${url.hostname}, which is public; httpTransport: http-allowed permits plain HTTP only to a private or internal host`,
+        );
+      if (options.credential)
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} URL is plain HTTP; the runtime credential is never sent over plain HTTP`,
+        );
+    }
+    // The manifest parser checks these too; a header is never sent unless
+    // both hold here as well.
+    for (const [name, { identityClaim }] of Object.entries(
+      options.identityHeaders ?? {},
+    )) {
+      const problem = mcpIdentityHeaderProblem(name);
+      if (problem)
+        throw mcpUnhealthy(`MCP server ${options.serverId}: ${problem}`);
+      if (
+        !(MCP_IDENTITY_HEADER_CLAIMS as readonly string[]).includes(
+          identityClaim,
+        )
+      )
+        throw mcpUnhealthy(
+          `MCP server ${options.serverId} header ${name} names ${identityClaim}, which is not an identity claim a header may carry`,
+        );
+    }
+    if (options.identityHeaders && !options.identityClaims)
+      throw mcpUnhealthy(
+        `MCP server ${options.serverId} sends identity headers, but no signed-in identity is available`,
+      );
     this.#url = url;
     this.#maxMessage = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     this.#maxResponse = options.maxResponseBytes ?? this.#maxMessage * 4;
@@ -205,7 +265,55 @@ export class StreamableHttpTransport implements McpTransport {
       }
       headers.set("authorization", `Bearer ${secret.reveal()}`);
     }
+    await this.#identityHeaders(headers);
     return headers;
+  }
+
+  /**
+   * Set each identity header from the identity signed in now. The value is
+   * identity data: it is never logged, and no error message quotes it.
+   */
+  async #identityHeaders(headers: Headers): Promise<void> {
+    const declared = Object.entries(this.#options.identityHeaders ?? {});
+    if (!declared.length) return;
+    const id = this.#options.serverId;
+    let claims: Readonly<Record<string, unknown>> | null;
+    try {
+      claims = (await this.#options.identityClaims?.()) ?? null;
+    } catch (error) {
+      // An identity error says why (signed out, or another user signed in);
+      // anything else is not quoted.
+      const reason =
+        error instanceof PiShipError && error.code.startsWith("IDENTITY_")
+          ? `: ${redact(error.message)}`
+          : "";
+      throw mcpUnhealthy(
+        `MCP server ${id} sends identity headers, but the signed-in identity is unavailable${reason}`,
+      );
+    }
+    if (!claims)
+      throw mcpUnhealthy(
+        `MCP server ${id} sends identity headers, but nobody is signed in`,
+      );
+    for (const [name, { identityClaim }] of declared) {
+      const value = Object.hasOwn(claims, identityClaim)
+        ? claims[identityClaim]
+        : undefined;
+      if (value === undefined || value === null)
+        throw mcpUnhealthy(
+          `MCP server ${id} cannot send header ${name}: the signed-in identity has no ${identityClaim} claim`,
+        );
+      if (!usableHeaderValue(value))
+        throw mcpUnhealthy(
+          `MCP server ${id} cannot send header ${name}: the ${identityClaim} claim is not a usable header value (a non-empty string of printable ASCII, at most ${MAX_IDENTITY_HEADER_LENGTH} characters, without leading or trailing spaces)`,
+        );
+      // An unverified email address can be any address the user typed.
+      if (identityClaim === "email" && claims.email_verified !== true)
+        throw mcpUnhealthy(
+          `MCP server ${id} cannot send header ${name}: the identity's email claim is not verified (email_verified is not true); use preferred_username or sub`,
+        );
+      headers.set(name, value);
+    }
   }
 
   async #fetch(init: RequestInit): Promise<Response> {
@@ -302,6 +410,19 @@ export class StreamableHttpTransport implements McpTransport {
       await reader.cancel().catch(() => undefined);
     }
   }
+}
+
+/**
+ * A claim value that can be sent as a header as it is: printable ASCII
+ * (no CR, LF, or other control characters), not padded, at most 256.
+ */
+function usableHeaderValue(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_IDENTITY_HEADER_LENGTH &&
+    /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(value)
+  );
 }
 
 function answers(message: unknown, id: JsonRpcId): boolean {

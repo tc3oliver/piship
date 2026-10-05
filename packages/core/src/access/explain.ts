@@ -63,6 +63,29 @@ function governanceRows(
         ]
       : []),
     row("mcp.mode", mcp.mode, `${mcp.servers.length} server(s)`),
+    ...mcp.servers.flatMap((server) => [
+      ...(server.httpTransport === "http-allowed"
+        ? [
+            row(
+              `mcp.servers.${server.id}.httpTransport`,
+              server.httpTransport,
+              "plain HTTP to a private or internal host is allowed; that traffic, including identity headers, is unencrypted",
+            ),
+          ]
+        : []),
+      // Header and claim names only: a header value is identity data.
+      ...(server.headers
+        ? [
+            row(
+              `mcp.servers.${server.id}.headers`,
+              Object.entries(server.headers).map(
+                ([name, { identityClaim }]) => `${name}: ${identityClaim}`,
+              ),
+              "each value is the signed-in identity's claim, never shown; not authentication",
+            ),
+          ]
+        : []),
+    ]),
     row(
       "sandbox.required",
       sandbox.required,

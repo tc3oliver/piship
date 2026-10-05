@@ -7,7 +7,8 @@ import { createFixture } from "./fixture-core.mjs";
  * Start a fixture on 127.0.0.1. Options: mode ("json" | "sse"), serverName,
  * protocolVersion, bearer (required Authorization bearer value), session
  * (issue an Mcp-Session-Id, default true), redirect (answer every POST with
- * a 307). Resolves to { url, calls, cancelled, requests, deleted, close() }.
+ * a 307), recordHeader (a request header whose value each request records
+ * as `recorded`). Resolves to { url, calls, cancelled, requests, deleted, close() }.
  */
 export async function startFixtureHttpServer(options = {}) {
   const fixture = createFixture({ ...options, envNames: () => [] });
@@ -22,6 +23,9 @@ export async function startFixtureHttpServer(options = {}) {
       authorized: options.bearer
         ? req.headers.authorization === `Bearer ${options.bearer}`
         : undefined,
+      ...(options.recordHeader
+        ? { recorded: req.headers[options.recordHeader.toLowerCase()] }
+        : {}),
     };
     if (options.redirect) {
       res.writeHead(307, { location: "http://127.0.0.1:9/elsewhere" }).end();

@@ -1,13 +1,22 @@
 // MCP: server admission, transports, child environment, and tool filters.
+import {
+  isPrivateNetworkHost,
+  MCP_IDENTITY_HEADER_CLAIMS,
+  mcpIdentityHeaderProblem,
+} from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
   defaultMcpServerClass,
   DEFAULT_MCP_EXPOSURE,
+  MCP_HTTP_TRANSPORTS,
   MCP_SERVER_CLASSES,
   type McpConfig,
+  type McpIdentityHeader,
   type McpServerConfig,
   type TrustSetting,
 } from "../governance.js";
+import { PRIVATE_UPDATE_HOSTS } from "../lifecycle.js";
+import { checkTemplate, hasRuntimeReference } from "../variables.js";
 import {
   bool,
   conflict,
@@ -32,6 +41,7 @@ import { exposure, exposureRules } from "./runtime.js";
 const SERVER_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 const LEGACY_TRANSPORTS = ["sse", "http+sse", "http-sse"];
+const MAX_HEADERS = 8;
 
 function toolName(value: unknown, path: string): string {
   const name = plainString(value, path, 128);
@@ -67,7 +77,7 @@ function parseServer(
     "retry",
     "required",
     "tools",
-    ...(v6 ? ["exposure", "class"] : []),
+    ...(v6 ? ["exposure", "class", "httpTransport", "headers"] : []),
   ]);
   if (
     typeof server.transport === "string" &&
@@ -90,9 +100,14 @@ function parseServer(
   let launch: Pick<McpServerConfig, "module" | "command" | "url">;
   let args: string[] = [];
   let env: McpServerConfig["env"] = { allow: [], set: {} };
+  let http: Pick<McpServerConfig, "httpTransport" | "headers"> = {};
   if (transport === "stdio") {
-    if (server.url !== undefined)
-      conflict(`${path}.url`, "url applies only to streamable-http servers");
+    for (const key of ["url", "httpTransport", "headers"])
+      if (server[key] !== undefined)
+        conflict(
+          `${path}.${key}`,
+          `${key} applies only to streamable-http servers`,
+        );
     if (credential === "runtime")
       conflict(
         `${path}.credential`,
@@ -123,7 +138,31 @@ function parseServer(
         conflict(`${path}.${key}`, `${key} applies only to stdio servers`);
     if (server.url === undefined)
       fail(`${path}.url`, "A streamable-http server needs a url");
-    launch = { url: referenceUrl(server.url, `${path}.url`, variables) };
+    const httpTransport = oneOf(
+      server.httpTransport,
+      `${path}.httpTransport`,
+      MCP_HTTP_TRANSPORTS,
+      "https",
+    );
+    if (httpTransport === "http-allowed" && credential === "runtime")
+      conflict(
+        `${path}.httpTransport`,
+        "http-allowed cannot be combined with credential: runtime; the runtime credential is never sent over plain HTTP",
+      );
+    launch = {
+      url:
+        httpTransport === "http-allowed"
+          ? plainHttpUrl(server.url, `${path}.url`, variables)
+          : referenceUrl(server.url, `${path}.url`, variables),
+    };
+    const headers =
+      server.headers === undefined
+        ? undefined
+        : parseHeaders(server.headers, `${path}.headers`);
+    http = {
+      ...(httpTransport === "http-allowed" ? { httpTransport } : {}),
+      ...(headers ? { headers } : {}),
+    };
   }
   const retry = optionalRecord(server.retry, `${path}.retry`, ["attempts"]);
   let tools: McpServerConfig["tools"];
@@ -206,7 +245,86 @@ function parseServer(
     required: bool(server.required, `${path}.required`, false),
     tools,
     ...v6Fields,
+    ...http,
   };
+}
+
+/**
+ * A server url with `httpTransport: http-allowed`: https, or plain HTTP to
+ * a private or internal host. A `${NAME}` reference is checked the same way
+ * once it resolves at launch.
+ */
+function plainHttpUrl(
+  value: unknown,
+  path: string,
+  variables: readonly string[],
+): string {
+  if (typeof value !== "string" || value.trim() === "")
+    fail(path, "Expected a non-empty string");
+  if (hasRuntimeReference(value) || value.includes("$")) {
+    const problem = checkTemplate(value, variables);
+    if (problem) fail(path, problem.message);
+    return value;
+  }
+  const text = plainString(value, path, 2048);
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    fail(path, "Expected an absolute URL");
+  }
+  if (url.protocol !== "http:") return referenceUrl(text, path, variables);
+  if (url.username || url.password)
+    fail(path, "URLs must not embed credentials");
+  if (url.search || url.hash)
+    fail(path, "URLs must not contain query strings or fragments");
+  // Only the name is judged, never DNS.
+  if (!isPrivateNetworkHost(url.hostname))
+    fail(
+      path,
+      `httpTransport: http-allowed permits plain HTTP only to a private or internal host (${PRIVATE_UPDATE_HOSTS}); ${url.hostname} is public, so serve it over https`,
+    );
+  return text;
+}
+
+function parseHeaders(
+  value: unknown,
+  path: string,
+): Record<string, McpIdentityHeader> {
+  if (!isRecord(value)) fail(path, "Expected an object keyed by header name");
+  const entries = Object.entries(value);
+  if (entries.length === 0)
+    fail(path, "Declare at least one header, or leave headers out");
+  if (entries.length > MAX_HEADERS)
+    fail(path, `At most ${MAX_HEADERS} headers may be declared`);
+  const seen = new Set<string>();
+  const headers: Record<string, McpIdentityHeader> = {};
+  for (const [name, entry] of entries) {
+    const at = `${path}.${name}`;
+    const problem = mcpIdentityHeaderProblem(name);
+    if (problem) unsafe(at, problem);
+    const lower = name.toLowerCase();
+    if (seen.has(lower))
+      conflict(
+        at,
+        `${name} is declared more than once (header names ignore case)`,
+      );
+    seen.add(lower);
+    if (!isRecord(entry))
+      fail(
+        at,
+        "Expected { identityClaim: <claim> }; a header value comes only from the signed-in identity, never a literal or an environment variable",
+      );
+    const header = record(entry, at, ["identityClaim"]);
+    headers[name] = {
+      identityClaim: oneOf(
+        header.identityClaim,
+        `${at}.identityClaim`,
+        MCP_IDENTITY_HEADER_CLAIMS,
+      ),
+    };
+  }
+  return headers;
 }
 
 function parseServerEnv(value: unknown, path: string): McpServerConfig["env"] {

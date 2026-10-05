@@ -182,7 +182,7 @@ Switching it on is recorded as `policy.auto_enabled` (`detail.source`: `command`
 A server declares `transport`:
 
 - `stdio`: exactly one of `module` (a `./` `.mjs` or `.js` file in the distribution, run with the distribution's Node.js) or `command` (a bare executable name found on `PATH`), plus `args` and `env` (`allow`: variable names inherited from the launch environment; `set`: fixed non-secret values). Credential-looking names are rejected.
-- `streamable-http`: `url`, which may be a `${NAME}` runtime reference resolved from the launch environment at startup. An unset variable fails a required server with `CONFIG_UNAVAILABLE` and marks an optional one failed (`MCP_UNHEALTHY`). Project `.mcp.json` URLs are never interpolated. The legacy HTTP+SSE transport is rejected.
+- `streamable-http`: `url`, which may be a `${NAME}` runtime reference resolved from the launch environment at startup. An unset variable fails a required server with `CONFIG_UNAVAILABLE` and marks an optional one failed (`MCP_UNHEALTHY`). Project `.mcp.json` URLs are never interpolated. The legacy HTTP+SSE transport is rejected. The URL is `https`, or plain `http` on loopback; from v1alpha6, `httpTransport: http-allowed` also permits plain HTTP to a private or internal host, and `headers` sends claims of the signed-in identity ([MCP plain HTTP and identity headers](#mcp-plain-http-and-identity-headers-v1alpha6)).
 
 Other server fields: `credential` (`none`, the default, or `runtime`, which sends the distribution's runtime credential as a bearer; `streamable-http` only, and only when the server URL has the same origin as `inference.baseUrl`, otherwise the server fails to start), `expectedServerName` (the `serverInfo.name` the server must report, or the start fails), `timeout` (per call, default `30s`), `startupTimeout` (default `10s`), `retry.attempts` (start attempts for retryable failures, default `1`, at most `10`), `required` (default `false`; a required server that is denied or cannot start fails the launch with `MCP_DENIED` or `MCP_UNHEALTHY`), and, up to v1alpha5, `tools.allow` / `tools.deny` (exact tool names; deny wins, an empty allow list admits every tool not denied, and a name may not appear in both; v1alpha6 replaces them with `class`, `exposure`, and an exposure map in `tools`, see [v1alpha6 fields](#v1alpha6-fields)). Exposed tools are named `mcp__<server>__<tool>`. A required `streamable-http` server that can never start is rejected by `validate`, `lock`, and `build`: a plain `url` whose host a private-only network policy refuses (always private-only in managed mode; declare the host in `network.allowHosts`), or `credential: runtime` with a plain `url` on another origin than a plain `inference.baseUrl`, or with no runtime credential at all. When a runtime variable is involved, or the server is optional, `validate` prints a warning instead ([company setup](enterprise-integration.md#company-setup)).
 
@@ -311,7 +311,7 @@ Rules beyond the field checks:
 
 `updates.transport: http-allowed` lets the update channel be served over plain HTTP from an internal host, such as an intranet nginx without a certificate. It is off by default: with `https` (or the field absent), plain HTTP is accepted only on loopback, as before.
 
-- It covers only the update channel: channel metadata and signatures, `root/<N>.json` files, and release archives, read by `update` (including `update --from <url>`). OIDC, the credential broker, the gateway, MCP servers, audit sinks, and remote sandboxes keep the `https`-only rule (plain HTTP only on loopback) whatever this field says.
+- It covers only the update channel: channel metadata and signatures, `root/<N>.json` files, and release archives, read by `update` (including `update --from <url>`). OIDC, the credential broker, the gateway, MCP servers, audit sinks, and remote sandboxes keep the `https`-only rule (plain HTTP only on loopback) whatever this field says; an MCP server has its own opt-in, [`httpTransport`](#mcp-plain-http-and-identity-headers-v1alpha6).
 - The host must be private or internal: loopback, an IP address in 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, or fe80::/10, a single-label name that is not a public top-level domain, or a name ending in `.internal`, `.local`, `.lan`, `.corp`, `.home.arpa`, or `.intranet`. A single label of two letters (a country-code TLD such as `io`, `ai`, or `co`) or a common generic TLD (`com`, `net`, `org`, `dev`, `app`, and a few more) is public; the list is short on purpose, not the public suffix list. A public host is a `piship validate` error, and a `${NAME}` source (or `--from` URL) that resolves to one fails with `NETWORK_DENIED` before any request. Only the name is judged, not DNS: a single label is completed with the machine's DNS search domains, so `http://updates/` reaches whatever `updates.<search domain>` resolves to, and an internal-looking name can resolve to a public address. Making sure the name resolves to an internal address on every client is the owner's responsibility; a fully qualified internal name (`updates.corp.internal`) avoids the search-domain dependence.
 - It requires `updates.trust.bootstrap`; without it `piship validate` fails. Signature thresholds, archive digests, the channel sequence floor, expiry, and root refresh are verified exactly as over HTTPS ([security](security.md#releases-and-updates)).
 - The configured proxy policy still applies; plain HTTP needs no CA setting. Redirects stay within the source's origin, and an `https` source is never redirected to plain HTTP.
@@ -335,6 +335,8 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `mcp.servers.<id>.class` | `company` (managed), `user` (personal) | The server's trust class, decided by `policy.resourceTrust` like a resource of that class |
 | `mcp.servers.<id>.exposure` | `direct` | The exposure of the server's tools |
 | `mcp.servers.<id>.tools` | none | An exposure map of tool globs, as `runtime.tools.exposure`, such as `get_*: deferred` or `delete_*: hidden`. It replaces v1alpha5's `tools.allow` / `tools.deny`, which v1alpha6 rejects |
+| `mcp.servers.<id>.httpTransport` | `https` | `https` or `http-allowed` (`streamable-http` only): also permit plain HTTP to a private or internal host ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
+| `mcp.servers.<id>.headers` | none | `streamable-http` only: request headers whose value is a claim (`sub`, `preferred_username`, or a verified `email`) of the signed-in OIDC identity, as `<Header-Name>: { identityClaim: <claim> }` ([below](#mcp-plain-http-and-identity-headers-v1alpha6)) |
 | `models.catalog.<id>.type` | `chat` | `chat`, `classifier`, or `image`. A non-chat model names its `api`; an `image` model lists its `output` (`text`, `image`) |
 | `models.catalog.<id>.virtual` | none | `router` (the declared extension that registers the virtual model: its `./` path, a certified extension ID, or `package:<id>`) and `routes`, the closed set of physical catalog entries it may route to |
 | `data.<class>.retention` | none (not swept) | For `sessions`, `audit`, `cache`, and `temp`: a duration such as `30d` or `12h`. Audit retention is a minimum, the others maximums; there is no user retention preference yet, so the declared value applies ([limits](security.md#audit)) |
@@ -350,6 +352,43 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 Policy gains the actions `model.select` (the v1alpha5 `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` ([Policy](#policy)).
 
 Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
+
+### MCP plain HTTP and identity headers (v1alpha6)
+
+Two opt-in fields of a `streamable-http` server let it reach an internal MCP server that has no certificate and identifies the user by a request header:
+
+```yaml
+mcp:
+  servers:
+    tickets:
+      transport: streamable-http
+      url: http://10.99.236.70/mcp
+      httpTransport: http-allowed
+      headers:
+        X-MiTAC-User: { identityClaim: preferred_username }
+network:
+  allowHosts: [10.99.236.70]
+```
+
+`httpTransport: http-allowed` permits plain HTTP to a private or internal host, the same hosts as the [plain-HTTP update channel](#plain-http-update-channel-v1alpha5): loopback, an IP address in 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, or fe80::/10, a single-label name that is not a public top-level domain, or a name ending in `.internal`, `.local`, `.lan`, `.corp`, `.home.arpa`, or `.intranet`. Only the name is judged, never DNS.
+
+- Without it (or with `https`, the default) nothing changes: `https`, or plain HTTP on loopback only.
+- A public host fails `validate`. A `${NAME}` URL is checked once it resolves at launch: a public plain-HTTP host fails the server's start (a required server fails the launch with `MCP_UNHEALTHY`). An `https` URL is always accepted.
+- It cannot be combined with `credential: runtime`; the runtime credential is never sent over plain HTTP.
+- The private-only network policy applies unchanged: in managed mode the host must be in `network.allowHosts`. Only this server's requests may use plain HTTP; every other endpoint keeps the loopback-only rule.
+- `validate` warns that the server's traffic is unencrypted, and also when the host is a `.local` or single-label name, which mDNS or the DNS search domains resolve and another device can spoof (use an IP address or a fully qualified name under `.internal` or `.corp`). `config explain` shows `mcp.servers.<id>.httpTransport`, `doctor` shows a server it reached over plain HTTP as `plain HTTP, unencrypted`, and `piship diff` reports turning it on, or adding a server with it, as high risk.
+- Tool results can be altered on the network path and reach the model, and a configured `HTTP_PROXY` sees the traffic in clear (list the host in `NO_PROXY` to bypass it). See [security](security.md#mcp).
+
+`headers` maps a header name to `{ identityClaim: <claim> }`, where the claim is `sub`, `preferred_username`, or `email` of the signed-in OIDC identity, taken from the ID token at login. `sub` is the stable key; `preferred_username` and `email` are only as trustworthy as the identity provider's policy on who may change them. `email` is sent only when the identity also has `email_verified: true`, or the server fails to start; Microsoft Entra ID usually omits `email_verified`, so with Entra use `preferred_username`, which in a work tenant is the administrator-managed UPN.
+
+- It needs `identity.mode: oidc`; otherwise `validate` fails. Only identity claims are accepted: no literal value and no environment variable, so a user cannot send another user's name by editing a value.
+- One to 8 headers. A header name is an HTTP token of at most 64 characters, and names are unique ignoring case. Authentication, cookie, framing, hop-by-hop, proxy, method-override, and MCP transport headers are refused in any case, by `validate` and again by the transport: `Accept`, `Accept-Encoding`, `Authorization`, `Connection`, `Content-Encoding`, `Content-Length`, `Content-Type`, `Cookie`, `Expect`, `Forwarded`, `Host`, `Keep-Alive`, `Last-Event-ID`, `Mcp-Protocol-Version`, `Mcp-Session-Id`, `Origin`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `Set-Cookie`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `User-Agent`, `Via`, `WWW-Authenticate`, `X-HTTP-Method`, `X-HTTP-Method-Override`, `X-Method-Override`, `X-Real-IP`, and any `Sec-` or `X-Forwarded-` header.
+- The claim is the one of the identity the launch activated, held in memory. A claim that is missing, not a string, empty, padded with spaces, longer than 256 characters, or not printable ASCII (CR, LF, and other control characters included) fails the server's start: an optional server is marked failed (`MCP_UNHEALTHY`) and a required one fails the launch.
+- Each request checks the stored identity metadata (no secret store or identity provider call). After a logout, or when another user signs in while a session runs, that session's requests to the server fail with the reason (signed out, or another identity signed in) rather than send a claim; the server's health stays as it was. The next launch uses the new user's claims.
+- The value is identity data: the lock, `doctor`, and `config explain` show only the header and claim names, and audit events and metrics record nothing about identity headers. The names are part of the lock's `mcp` digest, and `piship diff` reports a header added to a server or declared by an added server.
+- The header is not authentication. The claims are kept in a file in the user's state directory, which the user can edit, and the server receives nothing it could verify; it trusts the client and the network path ([security](security.md#mcp)). Prefer https.
+
+`piship migrate` needs nothing for these fields, and earlier schemas reject them.
 
 ### Enforcement status
 

@@ -42,6 +42,12 @@ export async function startMcp(
     distributionDir: join(session.options.distributionDir, "resources"),
     workspace: session.project.root,
     fetch: session.options.fetch,
+    ...(session.options.mcpPlainHttpFetch
+      ? { plainHttpFetch: session.options.mcpPlainHttpFetch }
+      : {}),
+    ...(session.options.identityClaims
+      ? { identityClaims: session.options.identityClaims }
+      : {}),
     resolveUrl: (server) =>
       declared.has(server.id)
         ? session.options.resolveTemplate(

@@ -25,6 +25,21 @@ export interface GovernanceOptions {
   /** Whether a person can answer startup approvals on this terminal. */
   readonly interactive: boolean;
   readonly fetch: ManagedFetch;
+  /**
+   * The governance fetch that also permits plain HTTP to a private or
+   * internal host; only MCP servers with `httpTransport: http-allowed` use
+   * it. Absent when no declared server opts in.
+   */
+  readonly mcpPlainHttpFetch?: ManagedFetch;
+  /**
+   * The claims of the identity this launch activated, for MCP identity
+   * headers. Each call checks only the stored identity metadata and fails
+   * when the launch's principal is signed out or replaced. Absent without an
+   * OIDC identity.
+   */
+  readonly identityClaims?: () => Promise<Readonly<
+    Record<string, unknown>
+  > | null>;
   readonly resolveTemplate: (key: string, template: string) => string;
   /** Identity subject for audit events; never a token. */
   readonly user?: string | null;

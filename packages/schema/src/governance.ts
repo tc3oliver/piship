@@ -3,6 +3,7 @@
 // secret-free declarations; enforcement lives in the runtime packages.
 import type {
   AuditCapture,
+  McpIdentityHeaderClaim,
   PolicyAction,
   PolicyEffect,
 } from "@piship/contracts";
@@ -430,6 +431,26 @@ export interface McpServerConfig {
   readonly exposure?: ToolExposure;
   /** piship/v1alpha6: per-tool exposure globs (`tools:` in the manifest). */
   readonly toolExposure?: readonly ToolExposureRule[];
+  /**
+   * piship/v1alpha6, streamable-http only: `http-allowed` also permits plain
+   * HTTP to a private or internal host (`isPrivateNetworkHost`). Absent
+   * means `https` (plain HTTP only on loopback).
+   */
+  readonly httpTransport?: McpHttpTransport;
+  /**
+   * piship/v1alpha6, streamable-http only: request headers whose value is a
+   * claim of the signed-in OIDC identity, keyed by header name. Only the
+   * header and claim names are declared and locked, never a value.
+   */
+  readonly headers?: Readonly<Record<string, McpIdentityHeader>>;
+}
+
+/** `mcp.servers.<id>.httpTransport`: `https` (default) or `http-allowed`. */
+export const MCP_HTTP_TRANSPORTS = ["https", "http-allowed"] as const;
+export type McpHttpTransport = (typeof MCP_HTTP_TRANSPORTS)[number];
+
+export interface McpIdentityHeader {
+  readonly identityClaim: McpIdentityHeaderClaim;
 }
 
 /**

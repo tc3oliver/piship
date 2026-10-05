@@ -6,10 +6,12 @@ import {
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
+  isPrivateNetworkHost,
   PiShipError,
   type PolicyAction,
   principalId,
   principalKey,
+  samePrincipal,
 } from "@piship/contracts";
 import {
   configuredModel,
@@ -50,6 +52,8 @@ export function governanceOptions(
     : null;
   const known = !ctx.metadata.access || !!activated;
   const onSandboxCredentialEvent = prepared?.events.listener;
+  const servers = lock.governance.manifest.mcp.servers;
+  const network = access?.network ?? DEFAULT_NETWORK_POLICY;
   return {
     lock,
     ...(metrics ? { metrics } : {}),
@@ -58,10 +62,45 @@ export function governanceOptions(
     cwd: process.cwd(),
     piVersion: VERSION,
     interactive,
-    fetch: createManagedFetch(
-      access?.network ?? DEFAULT_NETWORK_POLICY,
-      "governance",
-    ),
+    fetch: createManagedFetch(network, "governance"),
+    // Plain HTTP beyond loopback only for MCP servers that declare
+    // httpTransport: http-allowed, to a private or internal host, and only
+    // on this fetch. Private-only network policy still applies.
+    ...(servers.some((server) => server.httpTransport === "http-allowed")
+      ? {
+          mcpPlainHttpFetch: createManagedFetch(network, "governance", {
+            plainHttp: (target) => isPrivateNetworkHost(target.hostname),
+          }),
+        }
+      : {}),
+    // MCP identity headers: the claims of the identity this launch
+    // activated, held in memory. Each request only checks, without the
+    // secret store or the identity provider, that the identity metadata
+    // still names the launch's principal: after a logout or a user switch
+    // the header is not sent, and the next launch uses the new user's claims.
+    ...(access &&
+    principal &&
+    activated?.identity &&
+    servers.some((server) => server.headers !== undefined)
+      ? {
+          identityClaims: async () => {
+            const stored = access.readIdentityMetadata();
+            if (!stored)
+              throw new PiShipError(
+                "IDENTITY_REQUIRED",
+                "You signed out since launch",
+                { component: "identity" },
+              );
+            if (!samePrincipal(principalKey(stored), principal))
+              throw new PiShipError(
+                "IDENTITY_REQUIRED",
+                "Another identity signed in since launch",
+                { component: "identity" },
+              );
+            return activated.identity?.claims ?? {};
+          },
+        }
+      : {}),
     resolveTemplate: (key, template) =>
       resolveTemplate(
         key,
