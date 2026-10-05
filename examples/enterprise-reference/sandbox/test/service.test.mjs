@@ -744,11 +744,60 @@ describe("creating a sandbox", () => {
     const workspace = service.workspace("missing-hooks");
     const before = runCalls(service).length;
     const answer = await service.create("bob", workspace, {
-      writeProtect: { directories: [join(workspace, ".githooks")] },
+      writeProtect: { files: [join(workspace, ".gitconfig")] },
     });
     assert.equal(answer.status, 409);
     assert.equal(answer.json().error.code, "protected_path_missing");
     assert.equal(runCalls(service).length, before);
+  });
+
+  it("protects missing Claude directories without creating configuration files", async () => {
+    const workspace = service.workspace("missing-claude");
+    const claude = join(workspace, ".claude");
+    const answer = await service.create("alice", workspace, {
+      writeProtect: {
+        directories: [join(claude, "hooks"), claude],
+        files: [
+          join(claude, "settings.json"),
+          join(claude, "settings.local.json"),
+        ],
+      },
+    });
+    assert.equal(answer.status, 201, answer.text);
+    assert.deepEqual(flagValues(runCalls(service).at(-1).args, "--tmpfs"), [
+      "/tmp:rw,nosuid,nodev,size=256m",
+      "/workspace/.claude:ro,nosuid,nodev,size=64k,mode=0555",
+    ]);
+    assert.equal(existsSync(join(claude, "settings.json")), false);
+    await service.call(`/v1/sandboxes/${answer.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
+  });
+
+  it("pins existing ancestors of a missing protected directory", async () => {
+    const workspace = service.workspace("missing-nested-hooks");
+    const tools = join(workspace, "tools");
+    mkdirSync(tools);
+    const answer = await service.create("alice", workspace, {
+      writeProtect: { directories: [join(tools, "git", "hooks")] },
+    });
+    assert.equal(answer.status, 201, answer.text);
+    const args = runCalls(service).at(-1).args;
+    assert.ok(
+      flagValues(args, "--mount").includes(
+        `type=bind,src=${tools},dst=/workspace/tools`,
+      ),
+    );
+    assert.ok(
+      flagValues(args, "--tmpfs").includes(
+        "/workspace/tools/git:ro,nosuid,nodev,size=64k,mode=0555",
+      ),
+    );
+    await service.call(`/v1/sandboxes/${answer.id}`, {
+      method: "DELETE",
+      key: "alice",
+    });
   });
 
   it("holds each key to its own number of sandboxes", async () => {
@@ -953,6 +1002,28 @@ describe("a path swapped between the check and the mount", () => {
       }),
       before,
     );
+  });
+
+  it("refuses an empty protected mount at another path, writable, or unverifiable", async () => {
+    for (const fault of [
+      "TMPFS_WRONG_PATH",
+      "TMPFS_WRITABLE",
+      "NO_MOUNTINFO",
+    ]) {
+      const workspace = service.workspace(`missing-claude-${fault}`);
+      const before = service.containers();
+      service.fault(fault);
+      try {
+        const answer = await service.create("alice", workspace, {
+          writeProtect: { directories: [join(workspace, ".claude")] },
+        });
+        assert.equal(answer.status, 409, answer.text);
+        assert.equal(answer.json().error.code, "workspace_changed");
+        assert.deepEqual(service.containers(), before);
+      } finally {
+        service.fault(fault, false);
+      }
+    }
   });
 
   it("compares every mount, and starts the sandbox when each is the file checked", async () => {

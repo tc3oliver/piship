@@ -175,6 +175,27 @@ if (command === "version") {
     }
     process.exit(0);
   }
+  if (args[2] === "cat" && args[3] === "/proc/self/mountinfo") {
+    log({ command: "mountinfo", args });
+    if (existsSync(join(dir, "NO_MOUNTINFO"))) fail("mount table unavailable");
+    const container = JSON.parse(readFileSync(containerFile(args[1])));
+    for (const [index, option] of container.args.entries()) {
+      if (container.args[index - 1] !== "--tmpfs") continue;
+      const [target, flags] = option.split(":");
+      const escaped = (
+        existsSync(join(dir, "TMPFS_WRONG_PATH"))
+          ? `${target}-elsewhere`
+          : target
+      ).replaceAll(" ", "\\040");
+      const options = existsSync(join(dir, "TMPFS_WRITABLE"))
+        ? flags.replace("ro", "rw")
+        : flags;
+      process.stdout.write(
+        `1 0 0:1 / ${escaped} ${options} - tmpfs tmpfs ro\n`,
+      );
+    }
+    process.exit(0);
+  }
   const main = args.indexOf("piship-main");
   if (main > 0) {
     // The service's question at creation: which process is the sandbox's own.
