@@ -687,7 +687,10 @@ describe("a lock whose archive URL is not the official one", () => {
       ...lock,
       searchTools: {
         ...lock.searchTools,
-        fd: { ...fd, targets: { ...fd.targets, "linux-x64": { ...linux, url } } },
+        fd: {
+          ...fd,
+          targets: { ...fd.targets, "linux-x64": { ...linux, url } },
+        },
       },
     } as DistributionLock;
   }
