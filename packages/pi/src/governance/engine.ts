@@ -6,12 +6,16 @@ import { pathToFileURL } from "node:url";
 import { PiShipError, redact } from "@piship/contracts";
 import { withSessionExportRules } from "@piship/core";
 import {
-  type ProjectIdentity,
-  type ProjectResourceCandidate,
-  PolicyEngine,
+  claudeDirectories,
   discoverProjectResources,
   identifyProject,
+  linkedClaudeSettings,
+  normalizePathResource,
+  PolicyEngine,
+  type ProjectIdentity,
+  type ProjectResourceCandidate,
   parseRuleList,
+  projectDimensionEffect,
   projectGitControlDirectories,
   projectGitControlFiles,
   projectGitControlLinks,
@@ -214,4 +218,53 @@ export async function buildEngine(
       },
     },
   });
+}
+
+/** Managed projects cannot plant executable extension configuration while
+ * admitted rules keep the session trusted. Whole directories are protected
+ * because Linux cannot protect a file that does not exist yet.
+ */
+export function projectProtection(
+  options: GovernanceOptions,
+  project: ProjectIdentity,
+  homeDir: string,
+) {
+  const git = gitProtection(project.root);
+  if (options.lock.deployment.mode !== "managed") return git;
+  const policy = options.lock.governance.manifest.policy;
+  const directories = [...git.directories];
+  for (const directory of claudeDirectories(
+    project.root,
+    options.cwd,
+    homeDir,
+  )) {
+    if (
+      projectDimensionEffect(policy, project, "claudeHooks", "managed") !==
+      "allow"
+    ) {
+      const path = join(directory, ".claude");
+      if (normalizePathResource(path, { workspaceRoot: project.root }) !== path)
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "Managed projects cannot protect a linked .claude directory while hooks are denied",
+        );
+      directories.push(path);
+    }
+    if (
+      options.lock.governance.providers.some(
+        (item) => item.capability === "permissions" && item.package,
+      )
+    ) {
+      const path = join(directory, ".pi");
+      if (normalizePathResource(path, { workspaceRoot: project.root }) !== path)
+        throw new PiShipError(
+          "POLICY_DENIED",
+          "Managed package permission providers cannot use a linked project .pi directory",
+        );
+      directories.push(path);
+    }
+  }
+  const main = linkedClaudeSettings(project.root, homeDir);
+  if (main) directories.push(join(main, ".."));
+  return { ...git, directories };
 }

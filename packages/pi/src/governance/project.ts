@@ -1,7 +1,7 @@
 // Project resources and project MCP definitions, admitted by project trust
 // and policy.
-import { readFileSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import {
   type ApprovalChannel,
   redact,
@@ -10,6 +10,7 @@ import {
 import { type McpServerConfig, parseExternalMcpDefinitions } from "@piship/mcp";
 import {
   assessExtensionProjectTrust,
+  claudeDirectories,
   type ProjectResourceCandidate,
   resourceTrustDecision,
 } from "@piship/policy";
@@ -155,6 +156,34 @@ async function resolveExtensionConfig(
     assessment.effect === "deny"
       ? `${blocker ? `${projectPath(session, blocker.path)}: ` : ""}${assessment.reason}`
       : undefined;
+  if (
+    mode === "managed" &&
+    session.options.lock.governance.providers.some(
+      (item) => item.capability === "permissions" && item.package,
+    ) &&
+    claudeDirectories(
+      session.project.root,
+      session.options.cwd,
+      session.sandbox.profile.homeDir,
+    ).some((directory) =>
+      [
+        ".pi/extensions/pi-permission-system/config.json",
+        ".pi/agent/pi-permissions.jsonc",
+      ].some((path) => existsSync(join(directory, path))),
+    )
+  )
+    blocked = "managed permission provider project overrides are not admitted";
+  if (
+    !blocked &&
+    mode === "managed" &&
+    session.options.lock.governance.providers.some(
+      (item) => item.capability === "permissions" && item.package,
+    ) &&
+    (session.sandbox.report.level !== "enforced" ||
+      !session.sandbox.report.planes.includes("git-control-protection"))
+  )
+    blocked =
+      "managed permission provider project trust requires enforced protected paths";
   if (!blocked && assessment.effect === "ask") {
     const answer = await resolveDecision(
       {
@@ -169,7 +198,7 @@ async function resolveExtensionConfig(
       channel,
       {
         title: "Project Claude Code configuration",
-        message: `Load the Claude Code configuration of ${session.project.origin} project ${session.project.root}?\n${shownPaths.join("\n")}`,
+        message: `Load the Claude Code configuration of ${session.project.origin} project ${safePrompt(session.project.root)}?\n${shownPaths.map(safePrompt).join("\n")}`,
       },
     );
     if (answer.outcome !== "allow")
@@ -217,7 +246,7 @@ async function resolveExtensionConfig(
       origin: item.origin,
     });
   }
-  if (surfaces.length === 0) return;
+  if (surfaces.length === 0 && trusted) return;
   session.emit(trusted ? "resource.load" : "resource.denied", {
     resource: "project:.claude",
     detail: {
@@ -309,4 +338,11 @@ async function projectMcp(
   for (const server of parsed.servers)
     if (!declared.has(server.id)) projectServers.push(server);
   return parsed.servers.length > 0;
+}
+
+function safePrompt(value: string): string {
+  return Array.from(value, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || (code >= 127 && code <= 159) ? "?" : character;
+  }).join("");
 }

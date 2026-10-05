@@ -34,12 +34,14 @@ function syncTrustStore(
   cwd: string,
   trusted: boolean,
   applicable: boolean,
+  personal: boolean,
 ): boolean {
   try {
     const store = new ProjectTrustStore(agentDir);
     const entry = store.getEntry(cwd);
     const exact = entry !== null && samePath(entry.path, cwd);
     if (trusted) {
+      if (personal && exact && !entry.decision) return false;
       if (applicable && !(exact && entry.decision)) store.set(cwd, true);
     } else if (exact && entry.decision) store.set(cwd, false);
     return true;
@@ -58,7 +60,7 @@ function syncTrustStore(
 export function sessionProjectTrust(
   gov: Pick<
     GovernanceSession,
-    "projectTrust" | "options" | "emit" | "notice"
+    "projectTrust" | "options" | "emit" | "notice" | "resources"
   > | null,
   cwd: string,
   agentDir: string,
@@ -81,7 +83,40 @@ export function sessionProjectTrust(
     return false;
   }
   const applicable = decision.surfaces > 0;
-  if (!syncTrustStore(agentDir, cwd, decision.trusted, applicable)) {
+  if (
+    !syncTrustStore(
+      agentDir,
+      cwd,
+      decision.trusted,
+      applicable,
+      gov.options.lock?.deployment.mode === "personal",
+    )
+  ) {
+    gov.projectTrust = {
+      ...decision,
+      trusted: false,
+      reason: "project trust state did not admit this session",
+    };
+    for (const [index, item] of (gov.resources ?? []).entries()) {
+      if (
+        item.class === "project" &&
+        (item.kind === "claude" || item.kind === "extension-config")
+      )
+        gov.resources[index] = {
+          ...item,
+          loaded: false,
+          reason: "project trust store denied or could not record approval",
+        };
+    }
+    gov.emit("resource.denied", {
+      resource: "project:.claude",
+      detail: {
+        kind: "claude",
+        class: "project",
+        seam: "project-trust",
+        reason: "trust-store",
+      },
+    });
     gov.notice(
       "The project trust decision could not be recorded in the distribution's state, so project configuration is not trusted this session.",
     );

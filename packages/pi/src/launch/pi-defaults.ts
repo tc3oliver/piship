@@ -49,5 +49,8 @@ export function applyPiEnvironment(
   env.PI_SKIP_VERSION_CHECK = "1";
   env.PI_TELEMETRY = "0";
   env.PI_CODING_AGENT_DIR = agentDir;
-  if (mode === "managed") env.PI_OFFLINE = "1";
+  if (mode === "managed") {
+    env.PI_OFFLINE = "1";
+    delete env.CLAUDE_CONFIG_DIR;
+  }
 }

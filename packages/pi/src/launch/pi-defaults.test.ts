@@ -14,9 +14,13 @@ describe("Pi defaults", () => {
   });
 
   it("takes a managed launch offline", () => {
-    const env: NodeJS.ProcessEnv = { PI_OFFLINE: undefined };
+    const env: NodeJS.ProcessEnv = {
+      PI_OFFLINE: undefined,
+      CLAUDE_CONFIG_DIR: ".claude",
+    };
     applyPiEnvironment("/state/agent", "managed", env);
     expect(env.PI_OFFLINE).toBe("1");
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
   });
 
   it("are read back by Pi's in-memory settings", () => {

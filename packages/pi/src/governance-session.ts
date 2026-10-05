@@ -53,7 +53,7 @@ import { computeCapabilities } from "./governance/capabilities.js";
 import {
   buildEngine,
   discoverProject,
-  gitProtection,
+  projectProtection,
   sandboxConfig,
 } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
@@ -193,7 +193,7 @@ export class GovernanceSession {
         workspace: project.root,
         homeDir,
         extraReadOnly: [options.distributionDir],
-        protectedPaths: gitProtection(project.root),
+        protectedPaths: projectProtection(options, project, homeDir),
         // A backend's working-tree sentinel directory is used only in a
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,

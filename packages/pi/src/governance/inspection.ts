@@ -12,9 +12,9 @@ import {
   resourceTrustDecision,
 } from "@piship/policy";
 import {
-  type ContainmentReport,
   activateSandbox,
   adapterIdFor,
+  type ContainmentReport,
   describeContainment,
   type WorkspaceReport,
 } from "@piship/sandbox";
@@ -22,7 +22,7 @@ import { capabilityStates, staticProviderDenials } from "./capabilities.js";
 import {
   buildEngine,
   discoverProject,
-  gitProtection,
+  projectProtection,
   sandboxConfig,
 } from "./engine.js";
 import {
@@ -75,7 +75,7 @@ export async function inspectGovernance(
       // MCP modules run from the installed payload, which may sit under a
       // directory the sandbox otherwise replaces (such as /tmp).
       extraReadOnly: [options.distributionDir],
-      protectedPaths: gitProtection(project.root),
+      protectedPaths: projectProtection(options, project, homeDir),
       projectOrigin: project.origin,
     });
     report = sandbox.report;

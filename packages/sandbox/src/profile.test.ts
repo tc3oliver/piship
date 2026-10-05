@@ -176,6 +176,24 @@ describe("resolveProfile", () => {
     ).toEqual([]);
   });
 
+  it("pins existing ancestors of an absent protected directory against rename", () => {
+    const ws = join(root, "workspace");
+    mkdirSync(join(ws, "packages/app"), { recursive: true });
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "tmp"),
+      protectedPaths: {
+        files: [],
+        directories: [join(ws, "packages/app/.claude")],
+      },
+    });
+    expect(protectedAncestors(profile, writableProtected(profile))).toEqual([
+      join(ws, "packages"),
+      join(ws, "packages/app"),
+    ]);
+  });
+
   it("carries the reason a protected list is incomplete into the profile and its warnings", () => {
     const ctx = { workspace: join(root, "ws"), homeDir: root, tmpDir: root };
     const complete = resolveProfile(policy(), {

@@ -49,6 +49,7 @@ import {
   realpathNearest,
   withApprovedNetwork,
 } from "@piship/sandbox";
+import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
@@ -130,6 +131,7 @@ export function pathClass(gov: GovernanceSession, path: string): string {
 }
 
 export const STATE_RULE = "piship.state";
+export const CLAUDE_CONFIG_RULE = "piship.project.executable-config";
 export const GIT_CONFIG_RULE = "piship.project.git-config";
 export const CHANGED_RULE = "piship.path-changed";
 
@@ -153,6 +155,23 @@ function builtinDenial(
   if (posix.some((path) => isWithinPosix(state, path))) return STATE_RULE;
   if (action !== "filesystem.write") return undefined;
   if (isProtectedGitPath(gov.project.root, posix)) return GIT_CONFIG_RULE;
+  if (gov.options.lock.deployment.mode === "managed") {
+    const protection = projectProtection(
+      gov.options,
+      gov.project,
+      gov.sandbox.profile.homeDir,
+    );
+    if (
+      posix.some((path) =>
+        protection.directories.some(
+          (dir) =>
+            isWithinPosix(toPosixPath(dir), path) ||
+            isWithinPosix(path, toPosixPath(dir)),
+        ),
+      )
+    )
+      return CLAUDE_CONFIG_RULE;
+  }
   return undefined;
 }
 
@@ -223,7 +242,9 @@ export async function gatePath(
     throw blocked(
       builtin === STATE_RULE
         ? `${path} is in the distribution state directory, which tools never read or write.`
-        : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
+        : builtin === CLAUDE_CONFIG_RULE
+          ? `${path} controls executable project configuration; managed tools may not change it or its ancestors.`
+          : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
     );
   }
   if (gov.sandbox.report.level === "enforced") {
@@ -879,6 +900,11 @@ export function governedTools(
       operations: {
         writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
+          // Existing parents need no filesystem mutation; guarding a project
+          // root against replacement must not prevent ordinary file writes.
+          try {
+            if ((await stat(absolute(dir))).isDirectory()) return;
+          } catch {}
           await gatePath(gov, "filesystem.write", absolute(dir), "write");
           await mkdir(dir, { recursive: true });
         },

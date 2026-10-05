@@ -1,11 +1,11 @@
 // Declared and builtin resources of a governed session: trust, certified
 // integrity, and the policy decision for each before it loads.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { type GovernanceLock, treeDigest } from "@piship/core";
-import { resourceTrustDecision } from "@piship/policy";
+import { projectDimensionEffect, resourceTrustDecision } from "@piship/policy";
 import type {
   DeclaredResource,
   GovernanceManifest,
@@ -216,6 +216,30 @@ export async function loadPackageFiles(
     if (!trust.allowed) {
       session.emit("resource.denied", { resource, detail });
       record(false, trust.reason);
+      continue;
+    }
+    if (
+      session.options.lock.deployment.mode === "managed" &&
+      session.manifest.resources.packages?.some(
+        (item) =>
+          item.id === entry.id &&
+          item.source === "npm" &&
+          item.package === "pi-code",
+      ) &&
+      file.kind === "extensions" &&
+      /^extensions\/hooks(?:\/|\.)/.test(file.path) &&
+      projectDimensionEffect(
+        session.manifest.policy,
+        session.project,
+        "claudeHooks",
+        "managed",
+      ) !== "allow"
+    ) {
+      session.emit("resource.denied", { resource, detail });
+      record(
+        false,
+        "managed project hooks are not admitted; hooks extension is excluded",
+      );
       continue;
     }
     const absolute = join(root, ...file.path.split("/"));

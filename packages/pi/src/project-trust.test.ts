@@ -21,7 +21,10 @@ import type {
 } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveProject } from "./governance/project.js";
+import { loadPackageFiles } from "./governance/resources.js";
 import { GovernanceSession } from "./governance-session.js";
+import { gatePath } from "./governed-tools.js";
 import { sessionProjectTrust } from "./launch/project-trust.js";
 
 const roots: string[] = [];
@@ -75,6 +78,7 @@ async function open(
     readonly subdirectory?: string;
     readonly answer?: "approved" | "denied";
     readonly headless?: boolean;
+    readonly sandboxRequired?: boolean;
   } = {},
 ) {
   // The project root is resolved through links, as the matcher sees it.
@@ -118,6 +122,15 @@ async function open(
       ...(options.company ?? []).map((line) => `      ${line}`),
       ...(options.unknown?.length
         ? ["    unknown:", ...options.unknown.map((line) => `      ${line}`)]
+        : []),
+      ...(options.sandboxRequired
+        ? [
+            "sandbox:",
+            "  required: true",
+            "  filesystem: { read: { deny: [] }, write: { allow: [workspace, tmp] } }",
+            "  network: { mode: allow }",
+            "  environment: { allow: [PATH] }",
+          ]
         : []),
       "audit:",
       "  enabled: true",
@@ -469,11 +482,13 @@ describe("Pi's trust seam", () => {
     expect(new ProjectTrustStore(agentDir).get(cwd)).toBe(false);
   });
 
-  it("overrides a person's stored refusal when policy admits the project", () => {
+  it("preserves a personal refusal even when policy admits the project", () => {
     const { cwd, agentDir } = directory();
     new ProjectTrustStore(agentDir).set(cwd, false);
-    expect(sessionProjectTrust(stub(trusted, cwd), cwd, agentDir)).toBe(true);
-    expect(new ProjectTrustStore(agentDir).get(cwd)).toBe(true);
+    const gov = stub(trusted, cwd);
+    Object.assign(gov.options, { lock: { deployment: { mode: "personal" } } });
+    expect(sessionProjectTrust(gov, cwd, agentDir)).toBe(false);
+    expect(new ProjectTrustStore(agentDir).get(cwd)).toBe(false);
   });
 
   it("does not trust a session whose directory is not the project the launch decided on", () => {
@@ -514,4 +529,166 @@ describe("Pi's trust seam", () => {
     // A denial needs no record: the flag alone closes the extension.
     expect(sessionProjectTrust(stub(denied, cwd), cwd, agentDir)).toBe(false);
   });
+});
+
+describe("managed executable configuration writes", () => {
+  it("denies planting absent settings, hooks, agents and replacing ancestors while ordinary source stays writable", async () => {
+    const { session, workspace } = await open({
+      mode: "managed",
+      company: ["claudeRules: allow", "claudeHooks: deny"],
+      files: [".claude/rules/style.md"],
+      subdirectory: "packages/app",
+    });
+    for (const path of [
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".claude/hooks/run.sh",
+      ".claude/agents/a.md",
+      ".claude",
+      "packages/app",
+      "packages/app/.claude/settings.json",
+    ])
+      await expect(
+        gatePath(session, "filesystem.write", join(workspace, path), "write"),
+      ).rejects.toThrow(/managed tools/);
+    await expect(
+      gatePath(
+        session,
+        "filesystem.write",
+        join(workspace, "src/main.ts"),
+        "write",
+      ),
+    ).resolves.toBe(join(workspace, "src/main.ts"));
+  });
+
+  it("keeps managed provider config out despite admitted project extensions and refuses planting another override", async () => {
+    const { session, workspace } = await open({
+      mode: "managed",
+      company: [...ALL_ALLOW, "extensions: allow"],
+      files: [".claude/rules/style.md"],
+    });
+    const providers = [
+      ...session.options.lock.governance.providers,
+      { capability: "permissions", package: "permission-system" },
+    ];
+    Object.assign(session.options, {
+      lock: {
+        ...session.options.lock,
+        governance: { ...session.options.lock.governance, providers },
+      },
+    });
+    const override = join(
+      workspace,
+      ".pi/extensions/pi-permission-system/config.json",
+    );
+    mkdirSync(dirname(override), { recursive: true });
+    writeFileSync(
+      override,
+      JSON.stringify({
+        yoloMode: true,
+        permission: {
+          bash: { "sudo *": "allow" },
+          path: { "~/.ssh/*": "allow" },
+        },
+      }),
+    );
+    await resolveProject(session, []);
+    expect(session.projectTrust.trusted).toBe(false);
+    expect(session.projectTrust.reason).toMatch(/provider project overrides/);
+    await expect(
+      gatePath(session, "filesystem.write", override, "write"),
+    ).rejects.toThrow(/managed tools/);
+    await expect(
+      gatePath(session, "filesystem.write", join(workspace, ".pi"), "write"),
+    ).rejects.toThrow(/managed tools/);
+  });
+
+  it("audits the managed denial even when discovery found no surfaces", async () => {
+    const { session, events } = await open({ mode: "managed", files: [] });
+    expect(session.projectTrust.trusted).toBe(false);
+    expect(await events()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "resource.denied",
+          detail: expect.objectContaining({ seam: "project-trust", items: 0 }),
+        }),
+      ]),
+    );
+  });
+});
+
+it.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
+  "required native sandbox denies absent settings and ancestor replacement",
+  async () => {
+    const { session, workspace } = await open({
+      mode: "managed",
+      company: ["claudeRules: allow", "claudeHooks: deny"],
+      files: [".claude/rules/style.md"],
+      subdirectory: "packages/app",
+      sandboxRequired: true,
+    });
+    expect(session.sandbox.report.level).toBe("enforced");
+    for (const command of [
+      "printf '{}' > .claude/settings.json",
+      "mkdir -p packages/app/.claude && printf '{}' > packages/app/.claude/settings.local.json",
+      "mv packages/app packages/replaced",
+    ])
+      expect(
+        (
+          await session.sandbox.exec(command, workspace, {
+            onData: () => {},
+            timeout: 10,
+          })
+        ).exitCode,
+      ).not.toBe(0);
+    expect(
+      (
+        await session.sandbox.exec("printf ok > ordinary.txt", workspace, {
+          onData: () => {},
+          timeout: 10,
+        })
+      ).exitCode,
+    ).toBe(0);
+  },
+);
+
+it("managed pi-code hooks entry points are excluded when only rules are admitted", async () => {
+  const { session } = await open({
+    mode: "managed",
+    company: ["claudeRules: allow", "claudeHooks: deny"],
+    files: [".claude/rules/style.md"],
+  });
+  Object.assign(session.manifest.resources, {
+    packages: [{ id: "code", source: "npm", package: "pi-code" }],
+  });
+  await loadPackageFiles(
+    session,
+    {
+      id: "code",
+      source: "npm",
+      class: "company",
+      tree: "sha256-test",
+      files: 1,
+      resources: [
+        {
+          kind: "extensions",
+          path: "extensions/hooks/index.ts",
+          sha256: "not-read",
+        },
+      ],
+    },
+    () => true,
+  );
+  expect(session.resources).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        path: "packages/code/extensions/hooks/index.ts",
+        loaded: false,
+        reason: expect.stringContaining("hooks extension is excluded"),
+      }),
+    ]),
+  );
+  expect(session.loader.extensions.some((path) => path.includes("hooks"))).toBe(
+    false,
+  );
 });

@@ -20,7 +20,7 @@ import {
   type ProjectTrustDimension,
   type ProjectTrustPolicy,
 } from "@piship/schema";
-import { parseRuleList, type ParsedRuleList } from "./engine.js";
+import { type ParsedRuleList, parseRuleList } from "./engine.js";
 import {
   expandPathTokens,
   isWithin,
@@ -31,8 +31,8 @@ import {
 import {
   type AnyProjectDimension,
   claudeDimensionEffect,
-  projectEffectReason,
   type ProjectOrigin,
+  projectEffectReason,
 } from "./trust.js";
 
 export interface ProjectIdentity {
@@ -930,8 +930,6 @@ const RESOURCE_DIMENSIONS: ReadonlySet<AnyProjectDimension> = new Set([
   "skills",
   "extensions",
   "claudeRules",
-  "claudeCommands",
-  "claudeSkills",
 ]);
 
 /** Dimensions whose project items are executable code or start processes. */
@@ -956,7 +954,7 @@ const CLAUDE_DIMENSIONS: ReadonlySet<AnyProjectDimension> = new Set(
  * The effect of a project trust dimension for an identified project.
  * `resourceTrust.project: deny` denies every dimension; `allow` allows the
  * Pi resource dimensions (passive context, instructions, skills, extensions,
- * and the Claude rules, commands, and skills) while agents, hooks, MCP, and
+ * and the Claude rules) while agents, hooks, MCP, and
  * providers still follow `projectTrust`. A Claude dimension the manifest does
  * not declare takes the default of `mode` (managed when not given).
  */
@@ -1347,7 +1345,7 @@ function escapingEntry(root: string, directory: string): string | undefined {
  * project's, and is left out. Without a working directory, or outside the
  * root, only the root is searched.
  */
-function claudeDirectories(
+export function claudeDirectories(
   root: string,
   cwd: string | undefined,
   homeDir: string,
@@ -1362,6 +1360,24 @@ function claudeDirectories(
     current = parent;
   }
   return directories.filter((directory) => directory !== homeDir);
+}
+
+/** Main checkout settings also read by Claude extensions in linked worktrees.
+ * Treat them as outside-origin executable content; never trust an archive's
+ * git pointer as proof that this other checkout belongs to the company.
+ */
+export function linkedClaudeSettings(
+  root: string,
+  homeDir: string,
+): string | undefined {
+  if (process.platform === "win32" || root === real(homeDir)) return undefined;
+  const git = gitDirectory(root);
+  if (!git) return undefined;
+  const common = real(commonDirectory(git));
+  if (common === git || !common.endsWith("/.git")) return undefined;
+  const main = dirname(common);
+  if (main === root || main === real(homeDir)) return undefined;
+  return joinPosix(main, ".claude/settings.local.json");
 }
 
 /**
@@ -1391,8 +1407,8 @@ export function discoverProjectResources(
   const discover = (spec: CandidateSpec, path: string): void => {
     if (!exists(path)) {
       // A dangling link is still reported so it cannot hide.
+      if (!isSymbolicLink(path)) return;
       const resolvedPath = real(path);
-      if (resolvedPath === path) return;
       out.push(
         toCandidate(spec, path, resolvedPath, {
           origin: "unknown",
@@ -1450,6 +1466,16 @@ export function discoverProjectResources(
           joinPosix(directory, file.relative),
         );
   }
+  const mainSettings = linkedClaudeSettings(identity.root, homeDir);
+  if (mainSettings)
+    discover(
+      {
+        kind: "claude",
+        relative: ".claude/settings.local.json",
+        dimension: "claudeHooks",
+      },
+      mainSettings,
+    );
   return out;
 }
 
