@@ -7,7 +7,7 @@ Six alpha schemas are accepted. All remain experimental, and unknown fields are 
 - `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit.
 - `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning.
 - `piship/v1alpha5` changes only the update-trust contract: `updates.trust.bootstrap`, a versioned update root with separate root and channel signing roles, replaces v1alpha4's `updates.trust.keys` ([update trust](#update-trust-bootstrap-v1alpha5)). Every other v1alpha4 field keeps its meaning. A v0.8 release requires v1alpha5.
-- `piship/v1alpha6` adds Pi 1.x-native governance: tool exposure, Codemode and tool search, cache warming, MCP server classes, model types and virtual models, the `data` lifecycle, Pi packages, and `policy.acknowledgeUnenforced` ([v1alpha6 fields](#v1alpha6-fields)). Every v1alpha5 field keeps its meaning except MCP `tools`, which becomes an exposure map; `piship migrate` converts a v1alpha5 manifest without broadening it ([migration](#migrating-from-v1alpha5-to-v1alpha6)). `piship release` accepts v1alpha5 and v1alpha6. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha6 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha6 manifests.
+- `piship/v1alpha6` adds Pi 1.x-native governance: tool exposure, Codemode and tool search, cache warming, MCP server classes, model types and virtual models, the `data` lifecycle, Pi packages, and `policy.acknowledgeUnenforced` ([v1alpha6 fields](#v1alpha6-fields)). Every v1alpha5 field keeps its meaning except MCP `tools`, which becomes an exposure map; `piship migrate` converts a v1alpha5 manifest without broadening it ([migration](#migrating-from-v1alpha5-to-v1alpha6)). `piship release` accepts v1alpha5 and v1alpha6. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha6 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha6 manifests, as is the [developer example](../examples/developer/piship.yaml), which also ships a [hardened managed variant](../examples/developer/managed.piship.yaml).
 
 ## Common fields
 
@@ -100,7 +100,7 @@ A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `
 | `workflow` | `piship.capability/workflow/v1` | Implemented by `builtin/workflow`; disabled by default |
 | `checkpoint`, `subagents`, `code-intel`, `acp` | `piship.capability/<name>/v1` (`subagents` uses `agents`) | Known but not implemented: reported as `supported: no` and never effective |
 
-A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`, or `user`; `upstream` is rejected because Pi ships no capability providers. A builtin provider declares only its `id`. Other providers declare `version`, `implements` (contract IDs such as `piship.capability/workflow/v1`), and a `./` `path` to their Pi extension; a certified provider adds the certified evidence fields. An enabled capability without a provider uses the builtin provider when one exists.
+A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`, or `user`; `upstream` is rejected because Pi ships no capability providers. A builtin provider declares only its `id`. Other providers declare `version`, `implements` (contract IDs such as `piship.capability/workflow/v1`), and a `./` `path` to their Pi extension (or, from v1alpha6, `package: <id>` naming a declared Pi package, see [what a package is given](#what-a-package-is-given-environment-and-files)); a certified provider adds the certified evidence fields. An enabled capability without a provider uses the builtin provider when one exists.
 
 The builtin workflow reads three settings: `defaultMode` (`plan`, the default, or `build`), `planPrompt`, and `buildPrompt`. The prompts are appended to the system prompt for the current mode; built-in defaults are used when they are omitted.
 
@@ -232,6 +232,8 @@ Switching it on is recorded as `policy.auto_enabled` (`detail.source`: `command`
 - It is visible: PiShip prints a `Notice:` line before the session starts, the status line shows `YOLO`, and the session opens with a warning notice. `/auto` (or `/auto status`) says that yolo is on, and `/auto off` ends it for the rest of the session; in a managed session `/auto off` also clears a stored auto mode, as it always does. The `--smoke` summary has `"yolo": true` under `governance`.
 - It is audited: the session records `policy.auto_enabled` with `detail.source: yolo` when it starts, `policy.loaded` with `detail.yolo: true`, and every approval as `policy.auto_approved` with `detail.approval: auto` and `detail.autoSource: yolo` (the stored auto mode leaves no `autoSource`; `detail.source` already names a tool call's origin, so it is not reused). `/auto off` records `policy.auto_disabled`.
 
+- It reaches a permission provider that declares how. A distribution whose `permissions` capability names `autoApproveFile` and `autoApproveKey` ([a package provider](#what-a-package-is-given-environment-and-files)) has that key set to `true` in the provider's own file for the launch: the provider's own prompts are approved too, which PiShip cannot do for a prompt the provider raises itself. The file is put back when the process exits, when `/auto off` ends yolo, and by the next launch when the process was killed; a `/permission-system` setting changed during the session is kept. Without those settings `--yolo` changes only PiShip's own asks, and a provider's prompts stay. In a managed distribution that allows `--yolo` and declares the key, the provider's own `ask` rules are approved as well, including ones the company meant to keep, so declare the key only where that is acceptable.
+
 ### MCP
 
 | Field | Default | Values |
@@ -300,6 +302,59 @@ packageTrust:
 - At launch each locked resource file is checked against its sha256 and decided on its own (`extension.load`, `skill.load`, or `resource.load` with the resource `<class>:packages/<id>/<path>`) before it enters Pi's loader, and audit records carry `detail.package` (`<id>@<version|commit|local>`). That check covers the inventory's entry files only; the modules they import (the package's other files and its vendored `node_modules`) are bound by the tree digest and lockfile at build, not rechecked per package at launch. A `pi` manifest entry that is absolute, a drive-letter or UNC path, or uses a backslash is refused at lock.
 
 Credentials for a private registry or repository come only from npm or git configuration in the build environment; a URL with credentials is refused and never recorded.
+
+#### What a package is given: environment and files
+
+Two optional fields of a package entry hand it what it needs around its code. Both are additive: a manifest that declares neither parses, locks, and diffs exactly as before. The [developer example](../examples/developer/piship.yaml) uses them for six packages, and its [hardened variant](../examples/developer/managed.piship.yaml) shows a company setting the same fields stricter.
+
+```yaml
+resources:
+  packages:
+    - id: pi-lens
+      source: npm
+      package: pi-lens
+      version: 4.3.0
+      class: user
+      environment:
+        PI_LENS_HOME: { statePath: pi-lens }   # <state>/pi-lens, resolved on each machine
+        PI_LENS_DISABLE_TOOL_INSTALL: "1"
+    - id: pi-permission-system
+      source: npm
+      package: "@gotgenes/pi-permission-system"
+      version: 39.0.4
+      class: certified
+      certified: { ... }
+      agentFiles:
+        - path: extensions/pi-permission-system/config.json
+          mode: seed          # or enforce
+          json:
+            permission: { "*": allow, bash: { "*": ask, "rm -rf *": ask } }
+```
+
+- **`environment`.** A map from variable name to a non-secret value: a quoted string, or `{ statePath: <relative path> }`, a path below the distribution's state directory that the launch resolves (letters, digits, dots, hyphens, and underscores in each segment, no traversal). A name is uppercase words joined by at least one underscore (`PI_BG_FEATURES`, never `PATH` or `HOME`), is not credential-looking (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, and the other names a runtime variable cannot have), and is not one PiShip, the process, or the network policy own: `PISHIP_*`, `PI_CODING_AGENT_*`, `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`, `NODE_*`, `LD_*`, `DYLD_*`, `SSL_*`, `CURL_*`, `REQUESTS_*`, `GIT_*`, `SSH_*`, `NPM_CONFIG_*`, `PIP_*`, and the proxy variables. A value is a plain string: no runtime reference, no secret shape (the manifest's secret check applies), and a number or a boolean must be quoted. Two packages may name the same variable only at the same value.
+- **When it applies.** The launch sets each variable on the process before Pi imports a package, and sets them again after a managed launch has removed the shell's `PI_*` and credential variables, so a managed value is never one the shell chose. A declared value replaces the shell's value in every mode, which is what makes a managed value one a user cannot override; a personal user who wants another value builds their own distribution. A variable reaches the extension in the Pi process. It does not reach a child process whose launcher passes only its own environment (the MCP SDK's stdio transport passes a fixed list), so a package that starts such a child needs the setting elsewhere ([the developer example's limits](../examples/developer/README.md#known-limits) name the one case).
+- **`agentFiles`.** A list of at most eight JSON documents PiShip writes into Pi's agent directory (`<state>/agent`), where an extension keeps its own configuration. `path` is `extensions/<file>.json` or `extensions/<name>/<file>.json`, relative to the agent directory; `json` is an object of at most 64 KiB, and its keys keep the order you wrote, which matters to a configuration that reads its rules last-match-wins. No two packages write the same file, and the secret check applies to every string. The files are written owner-only through an atomic replace, never through a link.
+- **`mode`.** `seed` (the default) writes the file when it is absent and replaces it on a later release only while it is still exactly what PiShip last wrote, a fact recorded in `<state>/agent/.piship-agent-files.json`; a file the user edited, or one that was there before, is kept, and `doctor` says so. `enforce` rewrites the file at every launch, so a user's edit does not outlive one. Use `enforce` where the file is part of the policy.
+- **The lock.** `packages[].environment` records the variables as declared (a state path stays relative), and `packages[].agentFiles` records each file's `path`, `mode`, and the `sha256` of the exact bytes written; the content itself is in `governance.manifest`, and a launch refuses a lock whose parts disagree (`LOCK_INVALID`). The stale-lock check recomputes the digest from the declaration, so reordering a file's rules, which the manifest's canonical digest ignores, still reads as stale.
+- **`piship diff`.** A new, changed, or removed variable is medium (low when removed); a new file or a changed `sha256` is high, a file no longer written is low, and a changed `mode` is medium (high when a user's edits now outlive a launch). `doctor` lists each variable in the Governance group and each file with its state: as declared, edited by the user and kept, or missing and written at the next launch.
+
+A capability provider can be one of these packages. Instead of a `./` `path`, a non-builtin provider declares `package: <id>`, which must name a declared package of the same trust class:
+
+```yaml
+capabilities:
+  permissions:
+    enabled: true
+    provider:
+      id: certified/pi-permission-system
+      version: 39.0.4
+      implements: [piship.capability/permissions/v1]
+      package: pi-permission-system
+    settings:
+      autoApproveFile: extensions/pi-permission-system/config.json
+      autoApproveKey: yoloMode
+```
+
+The provider takes its class and its review evidence from the package, so a certified provider declares none of its own; its extension files are the package's `extensions`, loaded through the provider (after `provider.load` and each file's `extension.load` decision) and not with the package's other files. The capability is effective only while the package's files match the lock, its trust class and evidence admit it, and the policy allows the provider and each of its extension files; otherwise it is reported as not effective and its extensions are not loaded, with PiShip's own policy still in force. `autoApproveFile` and `autoApproveKey` are the only provider settings besides `workflow`'s: they name a top-level boolean in one of the provider package's own `agentFiles` that switches the provider's own session-wide auto-approval on. They go together and need a package provider. `<command> --yolo` ([below](#the---yolo-launch-option)) sets that key for the one launch, and the file is put back when the process exits, when `/auto off` ends yolo, and by the next launch if the process was killed before it could.
 
 ### Bundled search tools (v1alpha6)
 
@@ -436,7 +491,8 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `data.purge.onUninstall` | `none` | `none` or `all`: recorded in the lock and shown by `doctor`, not yet acted on (`uninstall` keeps state either way; `purge` deletes it) |
 | `data.export.<resource>` | none | `allow`, `ask`, or `deny` for `public`, `local`, or `support`: sugar for a distribution-enforced `session.export` rule |
 | `policy.acknowledgeUnenforced` | `[]` | `"<action>:<resource>"` keys of `deny` or `ask` rules on an action no runtime seam enforces; a managed distribution needs the entry, or `validate` fails with `POLICY_UNENFORCEABLE` |
-| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, and resource filters per kind |
+| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, resource filters per kind, and optionally `environment` and `agentFiles` ([below](#what-a-package-is-given-environment-and-files)) |
+| `capabilities.<name>.provider.package` | none | A declared package of the provider's trust class as the provider, instead of a `./` `path`; with the `permissions` settings `autoApproveFile` and `autoApproveKey` ([below](#what-a-package-is-given-environment-and-files)) |
 | `packageTrust` | managed: npm integrity, full commit SHAs, no local paths; personal: npm integrity | `npm.requireIntegrity`, `git.hosts`, `git.requireCommitSha`, `local.paths` |
 | `release.vulnerabilities.registry` | the configured registry | An https registry URL that `npm audit` asks for advisories |
 | `release.installScripts` | `[]` | Reviewed install scripts in Pi package closures, as `pi-packages/<id>/node_modules/<name>@<version>`; PiShip never runs the script either way |

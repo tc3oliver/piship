@@ -91,7 +91,7 @@ piship init <directory> --personal
 piship init <directory> --managed
 ```
 
-Run exactly one, matching S1. `--personal` and `--managed` together are refused. `init` writes `piship.yaml` and `resources/AGENTS.md` into an empty or new directory. The [manifest reference](manifest.md) describes every field; the [personal example](../examples/personal/piship.yaml), its [local-model variant](../examples/personal/local-model/piship.yaml), and the [demo company manifest](../examples/demo-company/piship.yaml) are complete examples to copy from.
+Run exactly one, matching S1. `--personal` and `--managed` together are refused. `init` writes `piship.yaml` and `resources/AGENTS.md` into an empty or new directory. The [manifest reference](manifest.md) describes every field; the [personal example](../examples/personal/piship.yaml), its [local-model variant](../examples/personal/local-model/piship.yaml), the [developer example](../examples/developer/piship.yaml) (six Pi packages, a permission provider, and its [hardened managed variant](../examples/developer/managed.piship.yaml)), and the [demo company manifest](../examples/demo-company/piship.yaml) are complete examples to copy from.
 
 The managed template validates as generated. Every company-specific endpoint in it is a runtime variable named after the directory (`ACME_AGENT_OIDC_ISSUER` and so on, listed with a comment at the top of `variables`), and its model is a placeholder, `example/coder`, that must be replaced before the first build is handed out. Its updates stay disabled until an update source and its signing trust are configured.
 

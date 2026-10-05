@@ -194,6 +194,14 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
+For a batteries-included coding agent, the [developer example](examples/developer/README.md) (`devcode`) ships six Pi packages: Claude Code compatibility, diagnostics and LSP, background tasks, review, a browser, and a permission provider. Its profile runs normal work without asking, and asks before `sudo`, recursive deletes, destructive git, and writes outside the workspace. A [hardened variant](examples/developer/managed.piship.yaml) shows how a company tightens it.
+
+```bash
+node packages/cli/dist/bin.js build examples/developer/piship.yaml
+node dist/devcode/piship.mjs install dist/devcode
+~/.local/bin/devcode
+```
+
 To start your own, run `node packages/cli/dist/bin.js init ./my-agent --personal`. See the [personal example](examples/personal/README.md) and the [setup guide](docs/agent-setup.md).
 
 ## How it fits together

@@ -5,7 +5,7 @@ These decisions constrain every change to PiShip. Each names where it is enforce
 | # | Decision | Enforced by |
 | --- | --- | --- |
 | 1 | Pi stays upstream. No fork, vendored copy, source patch, or private import. | `scripts/check-boundaries.mjs` (only `packages/pi` imports Pi, public entrypoint only); [compatibility](compatibility.md) |
-| 2 | PiShip is open source and company-first. A first production consumer proves the managed model but does not own the generic API; personal mode reuses the same contracts. | Public examples are neutral (`examples/demo-company`, `examples/personal`); consumer-specific code lives in its own distribution repository |
+| 2 | PiShip is open source and company-first. A first production consumer proves the managed model but does not own the generic API; personal mode reuses the same contracts. | Public examples are neutral (`examples/demo-company`, `examples/personal`, `examples/developer`); consumer-specific code lives in its own distribution repository |
 | 3 | The manifest declares static intent, the lock records resolved static facts, and runtime diagnostics report dynamic state. | `@piship/schema`, the `piship.lock` builder in `@piship/core`, `doctor` |
 | 4 | Identity, runtime credential, and inference are separate contracts, and identity may be absent. | `IdentityProvider`, `CredentialProvider`, `SecretStore`, `InferenceProvider` in `@piship/contracts`; `identity`, `credentials`, and `inference` may import only `contracts` |
 | 5 | Runtime credentials never live in ordinary configuration. PiShip-managed secrets use a secret store and process- or provider-scoped injection; Pi-native auth is an explicit personal delegation. | Schema secret checks; `SecretValue` redaction; [credentials](credentials.md) |

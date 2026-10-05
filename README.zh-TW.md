@@ -194,6 +194,14 @@ node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
 ```
 
+想要開箱即用的 coding agent，可以看 [developer 範例](examples/developer/README.md)（`devcode`）：內建六個 Pi 套件，包括 Claude Code 相容、診斷與 LSP、背景工作、code review、瀏覽器和權限提供者。日常工作不會跳出詢問，只有在 `sudo`、遞迴刪除、破壞性 git、寫到工作區之外時才詢問。另有給公司用的[加固版本](examples/developer/managed.piship.yaml)。
+
+```bash
+node packages/cli/dist/bin.js build examples/developer/piship.yaml
+node dist/devcode/piship.mjs install dist/devcode
+~/.local/bin/devcode
+```
+
 要做自己的，執行 `node packages/cli/dist/bin.js init ./my-agent --personal`。見 [personal 範例](examples/personal/README.md) 和 [設定指南](docs/agent-setup.md)。
 
 ## 各自負責什麼
