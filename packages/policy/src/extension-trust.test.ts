@@ -24,6 +24,7 @@ import {
   readByExtensions,
 } from "./extension-trust.js";
 import { makePolicy } from "./fixtures.test-helpers.js";
+import { toPosixPath } from "./glob.js";
 import {
   discoverProjectResources,
   identifyProject,
@@ -82,7 +83,7 @@ function trust(
   const defaults = defaultProjectTrust(mode);
   return {
     company: {
-      match: [{ path: `${base}/**` }],
+      match: [{ path: `${toPosixPath(base)}/**` }],
       dimensions: { ...defaults.company.dimensions, ...company },
     },
     external: defaults.external,

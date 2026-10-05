@@ -20,6 +20,7 @@ import type {
   ManagedFetch,
 } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
+import { toPosixPath } from "@piship/policy";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveProject } from "./governance/project.js";
 import { loadPackageFiles } from "./governance/resources.js";
@@ -118,7 +119,7 @@ async function open(
       "    company:",
       ...(options.unmatched
         ? ["      match: []"]
-        : [`      match: [{ path: "${workspace}/**" }]`]),
+        : [`      match: [{ path: "${toPosixPath(workspace)}/**" }]`]),
       ...(options.company ?? []).map((line) => `      ${line}`),
       ...(options.unknown?.length
         ? ["    unknown:", ...options.unknown.map((line) => `      ${line}`)]

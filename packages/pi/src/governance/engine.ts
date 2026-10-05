@@ -21,6 +21,7 @@ import {
   projectGitControlLinks,
   projectGitControlUnverified,
   readProjectRestrictions,
+  toPosixPath,
 } from "@piship/policy";
 import { type ContainmentReport, enforcesPathPolicy } from "@piship/sandbox";
 import type { PolicyRule } from "@piship/schema";
@@ -243,7 +244,12 @@ export function projectProtection(
       "allow"
     ) {
       const path = join(directory, ".claude");
-      if (normalizePathResource(path, { workspaceRoot: project.root }) !== path)
+      if (
+        protectedPathRedirected(
+          path,
+          normalizePathResource(path, { workspaceRoot: project.root }),
+        )
+      )
         throw new PiShipError(
           "POLICY_DENIED",
           "Managed projects cannot protect a linked .claude directory while hooks are denied",
@@ -256,7 +262,12 @@ export function projectProtection(
       )
     ) {
       const path = join(directory, ".pi");
-      if (normalizePathResource(path, { workspaceRoot: project.root }) !== path)
+      if (
+        protectedPathRedirected(
+          path,
+          normalizePathResource(path, { workspaceRoot: project.root }),
+        )
+      )
         throw new PiShipError(
           "POLICY_DENIED",
           "Managed package permission providers cannot use a linked project .pi directory",
@@ -267,4 +278,16 @@ export function projectProtection(
   const main = linkedClaudeSettings(project.root, homeDir);
   if (main) directories.push(join(main, ".."));
   return { ...git, directories };
+}
+
+/** Policy paths use POSIX separators; native joins use backslashes on Windows.
+ * Compare the same spelling without collapsing real target differences.
+ */
+export function protectedPathRedirected(
+  lexical: string,
+  resolved: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const separator = platform === "win32" ? "\\" : "/";
+  return toPosixPath(lexical, separator) !== toPosixPath(resolved, separator);
 }

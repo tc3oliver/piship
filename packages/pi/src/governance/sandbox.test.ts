@@ -17,7 +17,11 @@ import type { SandboxConfig } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GovernanceSession } from "../governance-session.js";
 import { gatePath } from "../governed-tools.js";
-import { gitProtection, policyContainment } from "./engine.js";
+import {
+  gitProtection,
+  policyContainment,
+  protectedPathRedirected,
+} from "./engine.js";
 import type { GovernanceOptions } from "./options.js";
 import { sandboxBackend } from "./sandbox.js";
 
@@ -611,5 +615,57 @@ describe("the user's git config outside the project", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("protected configuration path spelling", () => {
+  it("matches native Windows paths with their POSIX policy spelling", () => {
+    expect(
+      protectedPathRedirected(
+        "C:\\workspace\\.claude",
+        "C:/workspace/.claude",
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      protectedPathRedirected(
+        "C:\\workspace\\.pi",
+        "C:/workspace/.pi",
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      protectedPathRedirected(
+        "\\\\server\\share\\project\\.claude",
+        "//server/share/project/.claude",
+        "win32",
+      ),
+    ).toBe(false);
+  });
+  it("keeps redirected targets denied, even inside the workspace", () => {
+    expect(
+      protectedPathRedirected(
+        "C:\\workspace\\.claude",
+        "C:/workspace/other",
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      protectedPathRedirected("C:\\workspace\\.pi", "D:/config/.pi", "win32"),
+    ).toBe(true);
+    expect(
+      protectedPathRedirected(
+        "/workspace/.claude",
+        "/workspace/other",
+        "darwin",
+      ),
+    ).toBe(true);
+    expect(
+      protectedPathRedirected(
+        "/workspace/back\\slash",
+        "/workspace/back/slash",
+        "linux",
+      ),
+    ).toBe(true);
   });
 });
