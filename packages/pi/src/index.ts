@@ -20,6 +20,7 @@ import {
   runAuto,
   runUpdate,
   runtimeStateDirectory,
+  sessionAutoApproveTarget,
   sweepDistributionData,
   sweepStateTemporaries,
   yoloRefusal,
@@ -72,15 +73,6 @@ export interface LaunchOptions {
   readonly distributionDir: string;
   readonly metadata: DistributionLock;
   readonly args: readonly string[];
-  /**
-   * Internal, for the launch option that approves every `ask` for one
-   * session: switches on the permission provider's own session-wide
-   * auto-approval, for this launch only (the distribution declares the key
-   * as `autoApproveFile` and `autoApproveKey` on its `permissions`
-   * capability). The file it changes is put back when the process exits, and
-   * by the next launch if this one is killed. A `deny` never changes.
-   */
-  readonly sessionAutoApprove?: boolean;
 }
 
 /** Starts Pi's real SDK/runtime and the branded management commands. */
@@ -175,8 +167,15 @@ export async function launchPiDistribution(
   // configuration files they read from the agent directory. A managed launch
   // sets the environment again after it removed the shell's `PI_*` variables.
   applyPackageEnvironment(metadata, stateDir);
+  // `--yolo` also switches on the permission provider's own session-wide
+  // auto-approval where the distribution declares its key, for this launch
+  // only: the file is put back when the process ends, and by the next launch
+  // if this one is killed. A distribution without such a provider has nothing
+  // to switch.
+  const sessionAutoApprove =
+    yolo && sessionAutoApproveTarget(metadata) !== undefined;
   const agentFiles = applyAgentFiles(metadata, agentDir, {
-    sessionAutoApprove: options.sessionAutoApprove === true,
+    sessionAutoApprove,
   });
   process.once("exit", agentFiles.restore);
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
@@ -199,6 +198,9 @@ export async function launchPiDistribution(
     out: (message) => console.log(message),
     err: (message) => console.error(message),
     ...(yolo ? { yolo: true } : {}),
+    ...(yolo && sessionAutoApprove
+      ? { endProviderAutoApprove: agentFiles.restore }
+      : {}),
   };
   const [command, ...rest] = args;
   if (

@@ -100,6 +100,9 @@ export function governanceOptions(
     piVersion: VERSION,
     interactive,
     ...(ctx.yolo ? { yolo: true } : {}),
+    ...(ctx.endProviderAutoApprove
+      ? { onYoloEnd: ctx.endProviderAutoApprove }
+      : {}),
     fetch: createManagedFetch(network, "governance"),
     plainHttpFetch: (plainHttp) =>
       createManagedFetch(network, "governance", { plainHttp }),

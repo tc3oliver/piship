@@ -186,7 +186,7 @@ interface DeclaredFile {
  * parts disagree fails before anything is written.
  */
 function declaredFiles(lock: DistributionLock): DeclaredFile[] {
-  const declared = lock.governance?.manifest.resources.packages ?? [];
+  const declared = lock.governance?.manifest.resources?.packages ?? [];
   const output: DeclaredFile[] = [];
   for (const item of lock.packages ?? []) {
     for (const file of item.agentFiles ?? []) {
@@ -215,7 +215,7 @@ function declaredFiles(lock: DistributionLock): DeclaredFile[] {
 export function sessionAutoApproveTarget(
   lock: Pick<DistributionLock, "governance">,
 ): { readonly path: string; readonly key: string } | undefined {
-  const settings = lock.governance?.manifest.capabilities.find(
+  const settings = lock.governance?.manifest.capabilities?.find(
     (item) => item.name === "permissions" && item.enabled,
   )?.settings;
   const path = settings?.autoApproveFile;

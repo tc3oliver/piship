@@ -21,6 +21,8 @@ export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
   /** The session was started with `--yolo`. */
   readonly yolo?: boolean;
+  /** Takes back the permission provider's auto-approval `--yolo` switched on. */
+  readonly endProviderAutoApprove?: () => void;
 }
 
 /**

@@ -97,6 +97,12 @@ export interface GovernanceOptions {
    * `GovernanceSession.open` refuses it otherwise.
    */
   readonly yolo?: boolean;
+  /**
+   * Called when `/auto off` ends `--yolo` for the rest of the session: the
+   * permission provider's own auto-approval, switched on with it, goes off
+   * too.
+   */
+  readonly onYoloEnd?: () => void;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
   /**

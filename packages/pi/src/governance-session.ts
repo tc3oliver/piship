@@ -368,6 +368,7 @@ export class GovernanceSession {
       // `off` ends `--yolo` for the rest of the session as well.
       const wasYolo = this.#yolo;
       this.#yolo = false;
+      if (wasYolo) this.options.onYoloEnd?.();
       setUserAuto(this.options.stateDir, false);
       if (this.#userAuto.allowed || wasYolo)
         try {
