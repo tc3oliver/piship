@@ -11,7 +11,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { PiShipError } from "@piship/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error The deterministic fixture is plain JavaScript.
 import { startLocalServices } from "../../../examples/demo-company/fixtures/local-services.mjs";
 import {
@@ -688,6 +688,7 @@ describe("model.select and model.dispatch", () => {
       dispatchDeny?: string[];
       routes?: string[];
       available?: () => void;
+      onDenied?: ModelPolicy["denied"];
     } = {},
   ) {
     const runtime = await ModelRuntime.create({
@@ -735,10 +736,12 @@ describe("model.select and model.dispatch", () => {
               !options.dispatchDeny?.includes(id),
           }
         : {}),
-      denied: (action, provider, id, detail) =>
+      denied: (action, provider, id, detail) => {
         events.push(
           `${action} ${provider}/${id}${detail?.reason ? ` (${detail.reason})` : ""}`,
-        ),
+        );
+        options.onDenied?.(action, provider, id, detail);
+      },
       dispatched: (dispatch) =>
         events.push(
           `dispatch ${dispatch.selected} -> ${dispatch.dispatched} by ${dispatch.router}`,
@@ -1108,9 +1111,33 @@ describe("model.select and model.dispatch", () => {
     expect(runtime.getModel("acmecode", "acme/auto")).toBeUndefined();
   });
 
+  it("preserves the required-control refusal when its denial audit fails", async () => {
+    const unavailable = new PiShipError(
+      "AUDIT_UNAVAILABLE",
+      "Audit is unavailable",
+    );
+    const denied = vi.fn(() => {
+      throw new Error("audit delivery failed");
+    });
+    const { runtime, keyRequests } = await routed({
+      available: () => {
+        throw unavailable;
+      },
+      onDenied: denied,
+    });
+    expect(() => stream(runtime, physical("acme/coder"))).toThrow(unavailable);
+    expect(denied).toHaveBeenCalledWith(
+      "model.dispatch",
+      "acmecode",
+      "acme/coder",
+      { error: "AUDIT_UNAVAILABLE" },
+    );
+    expect(keyRequests()).toBe(0);
+  });
+
   it("keeps the required-control gate on routed, classifier, and deferred requests", async () => {
     let down = false;
-    const { runtime, resolve, keyRequests } = await routed({
+    const { runtime, resolve, keyRequests, events } = await routed({
       available: () => {
         if (down)
           throw new PiShipError("AUDIT_UNAVAILABLE", "Audit is unavailable");
@@ -1128,5 +1155,10 @@ describe("model.select and model.dispatch", () => {
       runtime.fetchDeferred(physical("acme/coder") as never, {} as never),
     ).rejects.toMatchObject({ code: "AUDIT_UNAVAILABLE" });
     expect(keyRequests()).toBe(0);
+    expect(events.slice(-3)).toEqual([
+      "model.dispatch acmecode/acme/coder",
+      "model.dispatch acmecode/acme/classify",
+      "model.dispatch acmecode/acme/coder",
+    ]);
   });
 });

@@ -846,20 +846,31 @@ describe("audit: a required sink that stops taking events (case 13)", () => {
     expect(result.stderr).toContain("the audit buffer is full");
     // What ran is in the local log (the fixture only reports tool results of a
     // script that finished). The control: the agent did act while the buffer
-    // had room. Then it stopped: a tool call after the buffer filled was
-    // denied, and the model was not asked for the turns that would have
-    // followed.
-    const events = auditEvents(session.state).map((event) => event.event);
+    // had room. Then it stopped at the next governed tool or model boundary,
+    // and the model was not asked for the turns that would have followed.
+    const recorded = auditEvents(session.state);
+    const events = recorded.map((event) => event.event);
     const allowed = events.filter((event) => event === "tool.allowed").length;
     expect(allowed).toBeGreaterThan(0);
     expect(allowed).toBeLessThan(steps.length);
-    expect(events).toContain("tool.denied");
-    expect(chatCalls(services).length).toBeLessThan(steps.length + 1);
-    // And it stopped at the tool call that was denied: no later model turn.
-    expect(events.at(-1)).toBe("session.end");
-    expect(events.lastIndexOf("model.request")).toBeLessThan(
-      events.indexOf("tool.denied"),
+    // Backpressure can become visible at either the next tool decision or
+    // the next model dispatch, depending on which event filled the buffer.
+    const denied = recorded.findIndex(
+      (event) =>
+        ["tool.denied", "model.denied"].includes(String(event.event)) &&
+        (event.detail as Record<string, unknown> | undefined)?.error ===
+          "AUDIT_UNAVAILABLE",
     );
+    expect(denied).toBeGreaterThanOrEqual(0);
+    expect(chatCalls(services).length).toBeLessThan(steps.length + 1);
+    expect(chatCalls(services).length).toBe(
+      events.filter((event) => event === "model.request").length,
+    );
+    // The actual refusal must prevent both later tool execution and model
+    // requests, and must still report the loss when the session closes.
+    expect(events.at(-1)).toBe("session.end");
+    expect(events.slice(denied + 1)).not.toContain("tool.allowed");
+    expect(events.lastIndexOf("model.request")).toBeLessThan(denied);
   });
 
   it("reports the events a required sink did not take when the session ends", async () => {
