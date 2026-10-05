@@ -84,6 +84,20 @@ export async function launchPiDistribution(
     throw new Error(
       "Built Pi metadata does not match the pinned upstream runtime",
     );
+  // Pi fixed its tool directory from PI_CODING_AGENT_DIR when it was
+  // imported, before this ran. An entry point that skipped
+  // `preparePiEnvironment` would leave Pi on `~/.pi/agent/bin` and PATH.
+  const agentDir = piAgentDirectory(metadata.app.id);
+  const imported = process.env.PI_CODING_AGENT_DIR;
+  if (!imported || resolve(imported) !== agentDir)
+    throw new PiShipError(
+      "CONFIG_INVALID",
+      `Pi was loaded with PI_CODING_AGENT_DIR ${imported ? `set to ${imported}` : "unset"}, not ${agentDir}`,
+      {
+        userAction:
+          "Start the distribution through its branded command, which calls preparePiEnvironment from @piship/pi/environment before it imports @piship/pi",
+      },
+    );
   let args = [...options.args];
   let requestedModel: string | undefined;
   let newSession = false;
@@ -117,7 +131,6 @@ export async function launchPiDistribution(
   // could delete another's files.
   assertDisjointRoots();
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
-  const agentDir = piAgentDirectory(metadata.app.id);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   applyPiEnvironment(agentDir, metadata.deployment.mode);

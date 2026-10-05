@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import { PiShipError } from "@piship/contracts";
-import type { SearchTool } from "@piship/schema";
+import { readManifest, type SearchTool } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diffLocks } from "../diff/index.js";
 import {
@@ -32,6 +32,7 @@ import { buildInput } from "../runtime-dependencies.js";
 import { generateSbom, verifySbom } from "../supply-chain.js";
 import {
   checkSearchToolSources,
+  currentSearchTools,
   downloadLockedSearchTools,
   downloadSearchToolArchives,
   readSearchToolArchive,
@@ -671,10 +672,113 @@ describe("downloading the upstream archives", () => {
   });
 });
 
+describe("a lock whose archive URL is not the official one", () => {
+  type Fetch = (url: URL, init: RequestInit) => Promise<Response>;
+  const version = SEARCH_TOOL_SPECS.fd.defaultVersion;
+  const official = searchToolAsset("fd", version, "linux-x64");
+  const evil = "https://github.com/attacker/fd/releases/download/v1/x.tar.gz";
+
+  /** The lock with fd's linux-x64 URL rewritten, as a hand edit would. */
+  function tampered(lock: DistributionLock, url: string): DistributionLock {
+    const fd = lock.searchTools?.fd;
+    const linux = fd?.targets["linux-x64"];
+    if (!fd || !linux) throw new Error("fd not locked");
+    return {
+      ...lock,
+      searchTools: {
+        ...lock.searchTools,
+        fd: { ...fd, targets: { ...fd.targets, "linux-x64": { ...linux, url } } },
+      },
+    } as DistributionLock;
+  }
+
+  it("is refused at download and at staging before any fetch or cache write", async () => {
+    cacheArchives(["linux-x64", "win32-x64"]);
+    const lock = tampered(locked(project()), evil);
+    rmSync(join(cache, "search-tools"), { recursive: true });
+    const requests: string[] = [];
+    const fetch: Fetch = async (url) => {
+      requests.push(url.toString());
+      return new Response("evil");
+    };
+    await expect(
+      downloadLockedSearchTools(lock, "linux-x64", { fetch }),
+    ).rejects.toMatchObject({ code: "LOCK_INVALID" });
+    expect(requests).toEqual([]);
+    expect(existsSync(join(cache, "search-tools"))).toBe(false);
+    expect(
+      code(() => stageSearchTools(lock, temp("piship-stage-"), "linux-x64")),
+    ).toBe("LOCK_INVALID");
+  });
+
+  it("makes the lock stale, so piship lock resolves the official URL again", () => {
+    cacheArchives(["linux-x64", "win32-x64"]);
+    const path = project();
+    const lock = locked(path);
+    writeFileSync(
+      join(path, "..", "piship.lock"),
+      JSON.stringify(tampered(lock, evil), null, 2),
+    );
+    expect(() => requireCurrentLock(path)).toThrow(/Lockfile is stale/);
+    // Stale even when the edit also rewrote the digests: the recorded entry
+    // is not carried over.
+    const current = currentSearchTools(readManifest(path), join(path, ".."));
+    expect(current?.fd).toBeUndefined();
+    expect(current?.rg).toEqual(lock.searchTools?.rg);
+    expect(locked(path).searchTools?.fd?.targets["linux-x64"]?.url).toBe(
+      official.url,
+    );
+  });
+
+  it("cannot get a file planted in the cache pinned by a fresh lock", async () => {
+    const path = project();
+    const directory = join(cache, "search-tools");
+    mkdirSync(directory, { recursive: true });
+    const planted = tarGz([
+      { name: "x/fd", data: "#!/bin/sh\necho planted\n", mode: 0o755 },
+    ]);
+    writeFileSync(join(directory, official.name), planted);
+    const requests: string[] = [];
+    const fetch: Fetch = async (url) => {
+      requests.push(url.toString());
+      const tool = url.pathname.includes("sharkdp") ? "fd" : "rg";
+      return new Response(
+        new Uint8Array(
+          upstreamArchive(
+            tool,
+            SEARCH_TOOL_SPECS[tool].defaultVersion,
+            url.pathname.includes("windows") ? "win32-x64" : "linux-x64",
+          ),
+        ),
+      );
+    };
+    await downloadSearchToolArchives(path, { fetch });
+    expect(requests).toContain(official.url);
+    const lock = locked(path);
+    expect(lock.searchTools?.fd?.targets["linux-x64"]?.archive).toBe(
+      sha(upstreamArchive("fd", version, "linux-x64")),
+    );
+    expect(lock.searchTools?.fd?.targets["linux-x64"]?.archive).not.toBe(
+      sha(planted),
+    );
+    // Once the lock pins it, the cached archive is reused without a request.
+    requests.length = 0;
+    await downloadSearchToolArchives(path, { fetch });
+    expect(requests).toEqual([]);
+    // A cached file that differs from what the lock pins is downloaded again.
+    writeFileSync(join(directory, official.name), planted);
+    await downloadSearchToolArchives(path, { fetch });
+    expect(requests).toEqual([official.url]);
+    expect(sha(readFileSync(join(directory, official.name)))).toBe(
+      sha(upstreamArchive("fd", version, "linux-x64")),
+    );
+  });
+});
+
 // --------------------------------------------------------------- piship diff
 
 describe("piship diff of bundled search tools", () => {
-  it("reports adding a tool as high, a version change as medium, and new bytes at the same version as high", () => {
+  it("reports adding a tool as high, removing one or a version change as medium, and new bytes at the same version as high", () => {
     cacheArchives(["linux-x64", "win32-x64"]);
     const withTools = locked(project());
     const without = { ...withTools } as Record<string, unknown>;
@@ -694,6 +798,14 @@ describe("piship diff of bundled search tools", () => {
         item: "search tool rg",
         risk: "high",
       }),
+    ]);
+    const removed = diffLocks(
+      withTools,
+      without as unknown as DistributionLock,
+    ).changes.filter((change) => change.item.startsWith("search tool"));
+    expect(removed.map((change) => [change.kind, change.risk])).toEqual([
+      ["removed", "medium"],
+      ["removed", "medium"],
     ]);
     const fd = withTools.searchTools?.fd;
     if (!fd) throw new Error("fd not locked");

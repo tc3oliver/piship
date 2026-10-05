@@ -10,6 +10,7 @@ import {
   chmodSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -46,6 +47,29 @@ function matches(path: string, digest: string): boolean {
   return sha256(readFileSync(path)) === digest;
 }
 
+/** The suffix of an executable moved aside while it was running. */
+const REPLACED = ".piship-replaced-";
+
+/**
+ * Best effort: remove executables earlier launches moved aside. One that is
+ * still running stays until a later launch.
+ */
+function removeReplaced(directory: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const name of names)
+    if (name.includes(REPLACED))
+      try {
+        rmSync(join(directory, name), { force: true, maxRetries: 0 });
+      } catch {
+        // Still running; a later launch tries again.
+      }
+}
+
 /** Replace `path` with `content`, also over a running Windows executable. */
 function replace(path: string, content: Buffer): void {
   const temporary = `${path}.piship-${process.pid}.tmp`;
@@ -63,10 +87,16 @@ function replace(path: string, content: Buffer): void {
       const code = (error as NodeJS.ErrnoException).code;
       if (!existing || !["EPERM", "EBUSY", "EACCES"].includes(code ?? ""))
         throw error;
-      const aside = `${path}.piship-replaced-${process.pid}`;
+      const aside = `${path}${REPLACED}${process.pid}`;
       renameSync(path, aside);
       renameSync(temporary, path);
-      rmSync(aside, { force: true, maxRetries: 0 });
+      // The old executable is still running, so Windows may refuse to delete
+      // it too; a later launch removes it (`removeReplaced`).
+      try {
+        rmSync(aside, { force: true, maxRetries: 0 });
+      } catch {
+        // Left for a later launch.
+      }
     }
   } finally {
     rmSync(temporary, { force: true });
@@ -88,6 +118,7 @@ export function installSearchTools(
   const installed: InstalledSearchTool[] = [];
   if (!lock.searchTools) return installed;
   const directory = piToolDirectory(agentDir);
+  removeReplaced(directory);
   for (const tool of SEARCH_TOOLS) {
     const locked = lock.searchTools[tool];
     if (!locked) continue;

@@ -6,7 +6,8 @@ import type { AnyLock, Verdict } from "../types.js";
  * v1alpha6 `searchTools`: executables shipped in the payload. A new tool, a
  * new source, or different bytes at the same version are high risk; a
  * version change of a tool from the same upstream is medium, like a runtime
- * dependency's.
+ * dependency's, and so is removing a tool, after which Pi runs whatever the
+ * user's PATH holds.
  */
 export function searchTools(out: Collector, b: AnyLock, a: AnyLock): void {
   for (const tool of SEARCH_TOOLS) {
@@ -29,7 +30,10 @@ export function searchTools(out: Collector, b: AnyLock, a: AnyLock): void {
         "packages",
         "removed",
         item,
-        ["low", "Bundled executable removed; Pi uses one on PATH, if any."],
+        [
+          "medium",
+          "Bundled executable removed; Pi falls back to the user's own one on PATH, if any.",
+        ],
         x.version,
       );
       continue;

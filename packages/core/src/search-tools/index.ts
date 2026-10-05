@@ -260,10 +260,51 @@ function cachePath(asset: SearchToolAsset, env?: NodeJS.ProcessEnv): string {
   return join(searchToolCacheDirectory(env), asset.name);
 }
 
+/** The search tools the lock beside a manifest records, if it can be read. */
+function recordedSearchTools(base: string): LockedSearchTools | undefined {
+  try {
+    return (
+      JSON.parse(
+        readFileSync(join(base, "piship.lock"), "utf8"),
+      ) as Partial<DistributionLock>
+    ).searchTools;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The official asset for a locked entry. A lock whose URL is not the official
+ * upstream archive for its tool, version, and target (a hand-edited lock) is
+ * refused before anything is downloaded or read from the cache, so it cannot
+ * fill the cache under an official archive name.
+ */
+function lockedAsset(
+  tool: SearchTool,
+  version: string,
+  target: string,
+  entry: LockedSearchToolTarget,
+): SearchToolAsset {
+  const asset = searchToolAsset(tool, version, target);
+  if (entry.url !== asset.url)
+    throw new PiShipError(
+      "LOCK_INVALID",
+      `piship.lock records ${entry.url} for ${tool} ${version} on ${target}, which is not the official upstream release archive (${asset.url})`,
+      {
+        component: "build",
+        userAction:
+          "Do not build with it; restore piship.lock or run piship lock",
+      },
+    );
+  return asset;
+}
+
 /**
  * `piship lock`, before the lock is computed: download every archive the
- * manifest's search tools need for its release targets into the cache. An
- * archive already in the cache is reused; the lock pins what it holds.
+ * manifest's search tools need for its release targets into the cache. A
+ * cached archive is reused only when the lock beside the manifest already
+ * pins it (the same official URL and digest); any other cached file is
+ * downloaded again, so a file planted in the cache is never pinned.
  */
 export async function downloadSearchToolArchives(
   manifestPath: string,
@@ -271,11 +312,21 @@ export async function downloadSearchToolArchives(
 ): Promise<void> {
   const manifest = readManifest(manifestPath);
   const policy = lockNetworkPolicy(manifest.access);
+  const recorded = recordedSearchTools(dirname(resolve(manifestPath)));
   for (const request of checkSearchTools(manifest))
     for (const target of request.targets) {
       const asset = searchToolAsset(request.tool, request.version, target);
       const path = cachePath(asset, options.env);
-      if (existsSync(path)) continue;
+      const pinned =
+        recorded?.[request.tool]?.version === request.version
+          ? recorded[request.tool]?.targets?.[target]
+          : undefined;
+      if (
+        pinned?.url === asset.url &&
+        existsSync(path) &&
+        sha256(readFileSync(path)) === pinned.archive
+      )
+        continue;
       options.progress?.(`Downloading ${asset.name}`);
       store(path, await download(asset.url, policy, options));
     }
@@ -292,21 +343,28 @@ export async function downloadLockedSearchTools(
   options: SearchToolDownloadOptions = {},
 ): Promise<void> {
   const policy = lockNetworkPolicy(lock.access);
-  for (const tool of SEARCH_TOOLS) {
-    const entry = lock.searchTools?.[tool]?.targets[target];
-    if (!entry) continue;
-    const path = join(
-      searchToolCacheDirectory(options.env),
-      basename(entry.url),
-    );
+  // Every locked URL is checked before anything is fetched or read.
+  const wanted = SEARCH_TOOLS.flatMap((tool) => {
+    const locked = lock.searchTools?.[tool];
+    const entry = locked?.targets[target];
+    if (!locked || !entry) return [];
+    return [
+      {
+        entry,
+        asset: lockedAsset(tool, locked.version, target, entry),
+      },
+    ];
+  });
+  for (const { entry, asset } of wanted) {
+    const path = cachePath(asset, options.env);
     if (existsSync(path) && sha256(readFileSync(path)) === entry.archive)
       continue;
-    options.progress?.(`Downloading ${basename(entry.url)}`);
-    const content = await download(entry.url, policy, options);
+    options.progress?.(`Downloading ${asset.name}`);
+    const content = await download(asset.url, policy, options);
     if (sha256(content) !== entry.archive)
       throw new PiShipError(
         "INTEGRITY_FAILED",
-        `${basename(entry.url)} does not match the digest piship.lock records`,
+        `${asset.name} does not match the digest piship.lock records`,
         {
           component: "build",
           userAction:
@@ -398,8 +456,9 @@ export function lockSearchTools(
 
 /**
  * The stale-lock check, offline: the recorded entry of each tool whose
- * version, source, and targets still match the manifest. A tool that no
- * longer matches is left out, so the lock reads as stale.
+ * version, source, and targets still match the manifest, with each archive
+ * URL the official one. A tool that no longer matches is left out, so the
+ * lock reads as stale.
  */
 export function currentSearchTools(
   manifest: Manifest,
@@ -407,16 +466,7 @@ export function currentSearchTools(
 ): LockedSearchTools | undefined {
   const wanted = requests(manifest);
   if (!wanted.length) return undefined;
-  let recorded: LockedSearchTools | undefined;
-  try {
-    recorded = (
-      JSON.parse(
-        readFileSync(join(base, "piship.lock"), "utf8"),
-      ) as Partial<DistributionLock>
-    ).searchTools;
-  } catch {
-    recorded = undefined;
-  }
+  const recorded = recordedSearchTools(base);
   const output: Partial<Record<SearchTool, LockedSearchTool>> = {};
   for (const { tool, version, targets } of wanted) {
     const entry = recorded?.[tool];
@@ -425,7 +475,11 @@ export function currentSearchTools(
       entry.version !== version ||
       entry.source !== SEARCH_TOOL_SPECS[tool].source ||
       Object.keys(entry.targets ?? {}).length !== targets.length ||
-      targets.some((target) => !entry.targets[target])
+      targets.some(
+        (target) =>
+          entry.targets[target]?.url !==
+          searchToolAsset(tool, version, target).url,
+      )
     )
       continue;
     output[tool] = {
@@ -466,7 +520,7 @@ export function stageSearchTools(
           userAction: `Add ${target} to release.targets and run piship lock`,
         },
       );
-    const asset = searchToolAsset(tool, locked.version, target);
+    const asset = lockedAsset(tool, locked.version, target, entry);
     const path = cachePath(asset, env);
     const archive = existsSync(path) ? readFileSync(path) : undefined;
     if (!archive || sha256(archive) !== entry.archive)
