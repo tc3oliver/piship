@@ -98,7 +98,12 @@ const PACKAGE_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
  * every request uses.
  */
 const RESERVED_ENVIRONMENT_NAME =
-  /^(?:PISHIP_|PI_CODING_AGENT_|PI_OFFLINE$|PI_SKIP_VERSION_CHECK$|PI_TELEMETRY$|NODE_|LD_|DYLD_|SSL_|CURL_|REQUESTS_|GIT_|SSH_|NPM_CONFIG_|PIP_|(?:HTTPS?|ALL|FTP|NO|SOCKS)_PROXY$|CARGO_HTTP_|DENO_CERT$|JAVA_TOOL_OPTIONS$|_JAVA_OPTIONS$)/;
+  /^(?:PISHIP_|PI_|NODE_|LD_|DYLD_|SSL_|CURL_|REQUESTS_|GIT_|SSH_|NPM_CONFIG_|PIP_|(?:HTTPS?|ALL|FTP|NO|SOCKS)_PROXY$|CARGO_HTTP_|DENO_CERT$|JAVA_TOOL_OPTIONS$|_JAVA_OPTIONS$|JDK_JAVA_OPTIONS$|ELECTRON_RUN_AS_NODE$|BASH_ENV$|ENV$|PROMPT_COMMAND$|XDG_.*_HOME$)/;
+/** Names owned by known package code, tied to its declared npm identity. */
+const PACKAGE_PI_PREFIXES: Readonly<Record<string, readonly string[]>> = {
+  "pi-lens": ["PI_LENS_"],
+  "pi-background-tasks": ["PI_BG_"],
+};
 const STATE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const AGENT_FILE_PATH =
   /^extensions\/(?:[a-z0-9][a-z0-9._-]{0,63}\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.json$/;
@@ -129,6 +134,7 @@ function environmentValue(
 function parseEnvironment(
   value: unknown,
   path: string,
+  npmPackage: unknown,
 ): Record<string, PackageEnvironmentValue> | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) fail(path, "Expected an object keyed by variable name");
@@ -141,7 +147,12 @@ function parseEnvironment(
         at,
         "Package variable names use uppercase words joined by underscores, such as PI_BG_FEATURES",
       );
-    if (RESERVED_ENVIRONMENT_NAME.test(name))
+    const packageOwned =
+      typeof npmPackage === "string" &&
+      (PACKAGE_PI_PREFIXES[npmPackage] ?? []).some((prefix) =>
+        name.startsWith(prefix),
+      );
+    if (RESERVED_ENVIRONMENT_NAME.test(name) && !packageOwned)
       conflict(
         at,
         `${name} belongs to PiShip, the process, or the network policy; a package cannot set it`,
@@ -219,7 +230,11 @@ function parsePackage(entry: unknown, path: string): DeclaredPackage {
             semver(fields.version, `${at}.version`),
           );
         })();
-  const environment = parseEnvironment(item.environment, `${path}.environment`);
+  const environment = parseEnvironment(
+    item.environment,
+    `${path}.environment`,
+    source === "npm" ? item.package : undefined,
+  );
   const agentFiles = parseAgentFiles(item.agentFiles, `${path}.agentFiles`);
   const common = {
     id,

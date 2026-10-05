@@ -1,7 +1,11 @@
 // Capability state: provider trust, provider payload verification, and the
 // provider policy decisions of a governed session.
 import { join, resolve } from "node:path";
-import type { ApprovalChannel, PolicyAction } from "@piship/contracts";
+import {
+  PiShipError,
+  type ApprovalChannel,
+  type PolicyAction,
+} from "@piship/contracts";
 import type { GovernanceLock } from "@piship/core";
 import {
   type CapabilityState,
@@ -92,6 +96,11 @@ export function capabilityStates(
     capabilities: manifest.capabilities,
     providerTrust: trust,
     verification,
+    providerCertification: Object.fromEntries(
+      options.lock.governance.providers.flatMap((provider) =>
+        provider.certified ? [[provider.id, provider.certified]] : [],
+      ),
+    ),
     piVersion: options.piVersion,
     platform: process.platform,
     policyDenied,
@@ -180,8 +189,20 @@ export async function computeCapabilities(
       if (
         state.axes.enabled.value === "yes" &&
         verification[provider.id]?.ok === false
-      )
+      ) {
         session.metrics.recordLoadFailure("provider", "INTEGRITY_FAILED");
+        if (session.options.lock.deployment.mode === "managed")
+          throw new PiShipError(
+            "INTEGRITY_FAILED",
+            `Provider ${provider.id}: ${verification[provider.id]?.reason}`,
+            {
+              userAction: "Reinstall the distribution from a trusted artifact",
+            },
+          );
+        session.notice(
+          `Provider ${provider.id} was not loaded: ${verification[provider.id]?.reason}`,
+        );
+      }
       session.emit("provider.denied", {
         resource: provider.id,
         detail: { capability: state.name, version: provider.version },
@@ -224,6 +245,7 @@ export async function computeCapabilities(
         session,
         locked,
         (file) => file.kind === "extensions",
+        true,
       );
       // An extension of the package that was not loaded (a policy rule on its
       // file, a certified package on another Pi) leaves the capability not

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { ManagedFetch } from "@piship/contracts";
 import { PI_VERSION, resolveLock } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
+import { capabilityStates } from "./capabilities.js";
 import { GovernanceSession } from "../governance-session.js";
 
 const roots: string[] = [];
@@ -31,6 +32,10 @@ interface Options {
   /** The extension on disk, when it is not the one the lock pins. */
   readonly onDisk?: string;
   readonly enabled?: boolean;
+  readonly secondExtension?: boolean;
+  readonly reviewedPi?: string;
+  readonly reviewedPlatform?: string;
+  readonly managed?: boolean;
 }
 
 async function open(options: Options = {}) {
@@ -43,6 +48,8 @@ async function open(options: Options = {}) {
   mkdirSync(join(base, "skills", "guard-help"), { recursive: true });
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(base, "src", "index.ts"), options.onDisk ?? EXTENSION);
+  if (options.secondExtension)
+    writeFileSync(join(base, "src", "second.ts"), EXTENSION);
   writeFileSync(join(base, "skills", "guard-help", "SKILL.md"), SKILL);
   const manifest = join(distribution, "piship.yaml");
   writeFileSync(
@@ -67,8 +74,8 @@ async function open(options: Options = {}) {
     source: "https://example.org/guard",
     integrity: TREE,
     license: "MIT",
-    pi: [PI_VERSION],
-    platforms: [],
+    pi: [options.reviewedPi ?? PI_VERSION],
+    platforms: options.reviewedPlatform ? [options.reviewedPlatform] : [],
   };
   const provider = {
     id: "certified/guard",
@@ -82,6 +89,10 @@ async function open(options: Options = {}) {
   >;
   const lock = {
     ...resolved,
+    deployment: {
+      ...resolved.deployment,
+      mode: options.managed ? "managed" : "personal",
+    },
     packages: [
       {
         id: "guard",
@@ -91,6 +102,15 @@ async function open(options: Options = {}) {
         files: 2,
         resources: [
           { kind: "extensions", path: "src/index.ts", sha256: sha(EXTENSION) },
+          ...(options.secondExtension
+            ? [
+                {
+                  kind: "extensions",
+                  path: "src/second.ts",
+                  sha256: sha(EXTENSION),
+                },
+              ]
+            : []),
           {
             kind: "skills",
             path: "skills/guard-help/SKILL.md",
@@ -168,6 +188,44 @@ async function open(options: Options = {}) {
 }
 
 describe("a package that is the permissions provider", () => {
+  it("refuses all sibling extensions if one is denied", async () => {
+    const opened = await open({
+      secondExtension: true,
+      rules: [
+        "    - { id: no-second, action: extension.load, resource: 'certified:packages/guard/src/second.ts', effect: deny }",
+      ],
+    });
+    expect(opened.extensions).toEqual([]);
+    expect(opened.extensionRecord?.loaded).toBe(false);
+    expect(opened.permissions?.axes.effective.value).toBe("no");
+  });
+
+  it("reports lock certification in static capability inspection as launch does", async () => {
+    const opened = await open({ reviewedPi: "0.0.1" });
+    const inspected = capabilityStates(opened.session.options, false).find(
+      (item) => item.name === "permissions",
+    );
+    expect(inspected?.axes.compatible.value).toBe("no");
+    expect(inspected?.axes.compatible.reason).toContain("0.0.1");
+    expect(opened.extensions).toEqual([]);
+    expect(opened.permissions?.axes.effective.value).toBe("no");
+  });
+
+  it("reports platform certification consistently during inspection and launch", async () => {
+    const opened = await open({ reviewedPlatform: "other-platform" });
+    const inspected = capabilityStates(opened.session.options, false).find(
+      (item) => item.name === "permissions",
+    );
+    expect(inspected?.axes.compatible.value).toBe("no");
+    expect(inspected?.axes.compatible.reason).toContain("platform");
+    expect(opened.extensions).toEqual([]);
+  });
+
+  it("fails closed in managed mode when a provider extension is tampered", async () => {
+    await expect(
+      open({ managed: true, onDisk: "tampered" }),
+    ).rejects.toMatchObject({ code: "INTEGRITY_FAILED" });
+  });
   it("loads its extension through the provider, and its other files as a package", async () => {
     const opened = await open();
     expect(opened.permissions?.axes.effective.value).toBe("yes");
@@ -221,5 +279,10 @@ describe("a package that is the permissions provider", () => {
       /package files do not match the lock/,
     );
     expect(opened.extensions).toEqual([]);
+    const notices: string[] = [];
+    opened.session.attachNotices((notice) => notices.push(notice));
+    expect(notices).toContainEqual(
+      expect.stringContaining("provider package files do not match the lock"),
+    );
   });
 });

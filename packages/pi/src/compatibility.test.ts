@@ -13,6 +13,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseManifest } from "@piship/schema";
 import { tmpdir } from "node:os";
 import { inspect } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
@@ -2919,4 +2921,63 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
     expect(agent.getActiveToolNames()).toEqual(["codemode"]);
     agent.dispose();
   });
+});
+
+it("reserves every Pi-owned environment variable from package configuration", () => {
+  const root = fileURLToPath(
+    new URL(
+      "../../../node_modules/@earendil-works/pi-coding-agent/dist/",
+      import.meta.url,
+    ),
+  );
+  const names = new Set<string>();
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.name.endsWith(".js")) {
+        const source = readFileSync(path, "utf8");
+        for (const match of source.matchAll(
+          /process\.env(?:\.(PI_[A-Z0-9_]+)|\[["'](PI_[A-Z0-9_]+)["']\])/g,
+        )) {
+          const name = match[1] ?? match[2];
+          if (name) names.add(name);
+        }
+      }
+    }
+  }
+  visit(root);
+  expect(names.has("PI_PACKAGE_DIR")).toBe(true);
+  for (const name of names) {
+    for (const npmPackage of ["pi-lens", "pi-background-tasks", "pi-tools"]) {
+      expect(
+        () =>
+          parseManifest({
+            schema: "piship/v1alpha6",
+            app: {
+              id: "compat",
+              name: "Compat",
+              command: "compat",
+              version: "1.0.0",
+            },
+            runtime: { pi: PINNED_PI_VERSION },
+            deployment: { mode: "personal" },
+            updates: { channel: "stable", channels: ["stable"] },
+            resources: {
+              packages: [
+                {
+                  id: "lens",
+                  source: "npm",
+                  package: npmPackage,
+                  version: "1.0.0",
+                  class: "user",
+                  environment: { [name]: "1" },
+                },
+              ],
+            },
+          }),
+        name,
+      ).toThrow(`resources.packages[0].environment.${name}`);
+    }
+  }
 });

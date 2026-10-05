@@ -65,13 +65,31 @@ function rejects(input: Json, field: string, message?: string): void {
 }
 
 describe("package environment", () => {
+  it("allows only the owning npm package to set its Pi-prefixed variables", () => {
+    for (const [name, variable] of [
+      ["pi-lens", "PI_LENS_HOME"],
+      ["pi-background-tasks", "PI_BG_FEATURES"],
+    ] as const) {
+      expect(
+        parsed(
+          withPackages(
+            pkg({ package: name, environment: { [variable]: "1" } }),
+          ),
+        ).governance,
+      ).toBeDefined();
+      rejects(
+        withPackages(pkg({ environment: { [variable]: "1" } })),
+        `resources.packages[0].environment.${variable}`,
+      );
+    }
+  });
   it("parses literals and state paths, and is absent when not declared", () => {
     const manifest = parsed(
       withPackages(
         pkg({
           environment: {
-            PI_BG_FEATURES: "process",
-            PI_LENS_HOME: { statePath: "pi-lens/home" },
+            APP_BG_FEATURES: "process",
+            APP_LENS_HOME: { statePath: "pi-lens/home" },
           },
         }),
         pkg({ id: "plain", package: "pi-plain" }),
@@ -79,8 +97,8 @@ describe("package environment", () => {
     );
     const [first, second] = manifest.governance?.resources.packages ?? [];
     expect(first?.environment).toEqual({
-      PI_BG_FEATURES: "process",
-      PI_LENS_HOME: { statePath: "pi-lens/home" },
+      APP_BG_FEATURES: "process",
+      APP_LENS_HOME: { statePath: "pi-lens/home" },
     });
     // An existing manifest keeps its parsed shape, so its digest.
     expect(second).not.toHaveProperty("environment");
@@ -94,6 +112,20 @@ describe("package environment", () => {
     ["PISHIP_STATE_HOME", "PISHIP_STATE_HOME"],
     ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_DIR"],
     ["PI_OFFLINE", "PI_OFFLINE"],
+    ...[
+      "PI_PACKAGE_DIR",
+      "PI_MANAGED_INSTALL_ROOT",
+      "PI_INSTALLER_API_BASE",
+      "PI_RADIUS_GATEWAY",
+      "PI_SHARE_VIEWER_URL",
+      "PI_EXPERIMENTAL",
+      "PI_CODING_AGENT",
+      "ELECTRON_RUN_AS_NODE",
+      "BASH_ENV",
+      "PROMPT_COMMAND",
+      "XDG_CONFIG_HOME",
+      "JDK_JAVA_OPTIONS",
+    ].map((name) => [name, name]),
     ["NODE_OPTIONS", "NODE_OPTIONS"],
     ["NODE_EXTRA_CA_CERTS", "NODE_EXTRA_CA_CERTS"],
     ["LD_PRELOAD", "LD_PRELOAD"],
@@ -125,23 +157,23 @@ describe("package environment", () => {
 
   it("refuses values that are not plain, non-secret strings", () => {
     rejects(
-      withPackages(pkg({ environment: { PI_A_FLAG: 1 } })),
-      "resources.packages[0].environment.PI_A_FLAG",
+      withPackages(pkg({ environment: { APP_A_FLAG: 1 } })),
+      "resources.packages[0].environment.APP_A_FLAG",
       "quote",
     );
     rejects(
-      withPackages(pkg({ environment: { PI_A_FLAG: true } })),
-      "resources.packages[0].environment.PI_A_FLAG",
+      withPackages(pkg({ environment: { APP_A_FLAG: true } })),
+      "resources.packages[0].environment.APP_A_FLAG",
       "quote",
     );
     rejects(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the manifest's own variable syntax is what this rejects
-      withPackages(pkg({ environment: { PI_A_FLAG: "${HOME}" } })),
-      "resources.packages[0].environment.PI_A_FLAG",
+      withPackages(pkg({ environment: { APP_A_FLAG: "${HOME}" } })),
+      "resources.packages[0].environment.APP_A_FLAG",
     );
     rejects(
-      withPackages(pkg({ environment: { PI_A_FLAG: "sk-abcdef123456" } })),
-      "resources.packages[0].environment.PI_A_FLAG",
+      withPackages(pkg({ environment: { APP_A_FLAG: "sk-abcdef123456" } })),
+      "resources.packages[0].environment.APP_A_FLAG",
       "secret",
     );
     rejects(
@@ -154,24 +186,24 @@ describe("package environment", () => {
     "refuses the state path %s",
     (statePath) => {
       rejects(
-        withPackages(pkg({ environment: { PI_A_HOME: { statePath } } })),
-        "resources.packages[0].environment.PI_A_HOME.statePath",
+        withPackages(pkg({ environment: { APP_A_HOME: { statePath } } })),
+        "resources.packages[0].environment.APP_A_HOME.statePath",
       );
     },
   );
 
   it("lets two packages share a variable only at the same value", () => {
-    const first = pkg({ environment: { PI_SHARED_FLAG: "1" } });
+    const first = pkg({ environment: { APP_SHARED_FLAG: "1" } });
     const second = (value: string) =>
       pkg({
         id: "other",
         package: "pi-other",
-        environment: { PI_SHARED_FLAG: value },
+        environment: { APP_SHARED_FLAG: value },
       });
     expect(() => parsed(withPackages(first, second("1")))).not.toThrow();
     rejects(
       withPackages(first, second("2")),
-      "resources.packages[1].environment.PI_SHARED_FLAG",
+      "resources.packages[1].environment.APP_SHARED_FLAG",
       "already set",
     );
   });
@@ -179,7 +211,7 @@ describe("package environment", () => {
   it("is a v1alpha6 field only", () => {
     expect(() =>
       parseManifest({
-        ...withPackages(pkg({ environment: { PI_A_FLAG: "1" } })),
+        ...withPackages(pkg({ environment: { APP_A_FLAG: "1" } })),
         schema: PISHIP_SCHEMA_V1ALPHA5,
       }),
     ).toThrow(ManifestError);

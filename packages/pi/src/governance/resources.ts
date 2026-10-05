@@ -155,6 +155,7 @@ export async function loadPackageFiles(
   session: GovernanceSession,
   entry: NonNullable<GovernanceSession["options"]["lock"]["packages"]>[number],
   include: (file: { readonly kind: PackageResourceKind }) => boolean,
+  atomic = false,
 ): Promise<void> {
   const { distributionDir, piVersion } = session.options;
   const root = packageRoot(distributionDir, session.manifest, entry.id);
@@ -186,6 +187,12 @@ export async function loadPackageFiles(
     )
       incompatible = `certified for Pi ${evidence.pi.join(", ")}${evidence.platforms.length ? ` on ${evidence.platforms.join(", ")}` : ""}; running Pi ${piVersion} on ${process.platform}`;
   }
+  const pending: {
+    kind: PackageResourceKind;
+    absolute: string;
+    emit: () => void;
+  }[] = [];
+  const recordStart = session.resources.length;
   for (const file of entry.resources) {
     if (!include(file)) continue;
     const path = `packages/${entry.id}/${file.path}`;
@@ -235,14 +242,40 @@ export async function loadPackageFiles(
       record(false, `policy ${decision.ruleId}`);
       continue;
     }
-    session.emit("resource.load", {
-      resource,
-      policy: decision.policyId,
-      rule: decision.ruleId,
-      detail,
-    });
+    const emit = () =>
+      session.emit("resource.load", {
+        resource,
+        policy: decision.policyId,
+        rule: decision.ruleId,
+        detail,
+      });
     record(true, trust.reason);
-    session.loader[file.kind].push(absolute);
+    if (atomic) pending.push({ kind: file.kind, absolute, emit });
+    else {
+      emit();
+      session.loader[file.kind].push(absolute);
+    }
+  }
+  if (atomic) {
+    const records = session.resources.slice(recordStart);
+    const refusal = records.find((record) => !record.loaded);
+    if (refusal) {
+      for (let index = recordStart; index < session.resources.length; index++) {
+        const record = session.resources[index];
+        if (record)
+          session.resources[index] = {
+            ...record,
+            loaded: false,
+            reason: refusal.reason,
+            integrity: "not-applicable",
+          };
+      }
+    } else {
+      for (const file of pending) {
+        file.emit();
+        session.loader[file.kind].push(file.absolute);
+      }
+    }
   }
 }
 
