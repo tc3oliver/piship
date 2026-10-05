@@ -36,6 +36,13 @@ The six archives on the [v0.9.1 pre-release](https://github.com/tc3oliver/piship
 | `mypi-1.0.0-darwin-arm64.tar.gz` | `eb6a01dccea679da790021a8327dd6f6db4732b1999c5aadec6b9903d2c4faf0` |
 | `mypi-1.0.0-win32-x64.tar.gz` | `05a7c1c3d40540e146bbb060fb2b9ba8d56012e0b6d363a7402501736b1365cb` |
 
+## On `main` after v0.9.1
+
+`main` has moved past v0.9.1. These changes are not in v0.9.1, the production-validation baseline, and are not released; the [changelog](../CHANGELOG.md#unreleased) lists them.
+
+- Pi 1.0.3: `main` pins `@earendil-works/pi-coding-agent` exactly at 1.0.3, with its seven sibling packages pinned exactly. `compatibility/pi.json` and the copy in `@piship/core` list 1.0.3 beside 1.0.2, 1.0.0, and 0.87.1 with the same four surface statuses (`personal` `supported`; `managed`, `governance`, and `lifecycle` `candidate`), and the launcher runs only 1.0.3. v0.9.0 and v0.9.1 stay on 1.0.2. The upgrade notes, including Pi's renamed Azure provider id, are in [compatibility](compatibility.md#upgrade-to-pi-103).
+- Evidence for Pi 1.0.3: the Pi compatibility suite, the unit tier, and `npm run check` were run locally on the upgrade branch and passed. No CI tier is recorded for it yet: the fast merge gate, Portable E2E, Reference E2E, and a Release qualification on a commit with 1.0.3 are listed as not recorded until they run ([recorded evidence](#recorded-evidence)). The statuses of 1.0.3 are carried over from 1.0.2, not earned again, and the production-validation baseline stays v0.9.1 on Pi 1.0.2 until a release is qualified on 1.0.3.
+
 ## v0.9.0 previous production-validation baseline
 
 v0.9.0 was the one PiShip baseline a production consumer pinned for production validation until [v0.9.1](#v091-production-validation-baseline) replaced it. It stays published and qualified, and is documented here as the previous baseline. A production consumer pinned tag `v0.9.0` and installed its qualified release artifact directly; it did not track `main`. It adopts Pi 1.0.2 and brings Pi 1.x-native governance and the last alpha schemas, `piship/v1alpha6` and `piship-lock/v1alpha6`; v1.0 is planned as a freeze of these contracts. The [changelog](../CHANGELOG.md#v090) lists every change.
@@ -166,7 +173,7 @@ Not claimed anywhere: sign-in at a production identity provider, inference throu
 
 Each sandbox backend has its own maturity; a distribution's containment is only as strong as the backend it selects. What each backend enforces and reports is in [sandbox backends](sandbox.md). The statuses use the terms above, which are defined by `compatibility/pi.json`: a native backend is `candidate` because the `governance` surface it belongs to is, and no row is promoted beyond what that record says.
 
-Every run named below used Node 22.19.0 and Pi 0.87.1, the pin at the time, except the [v0.8.0](#v080) and [v0.8.1](#v081) Release qualifications, which ran on Pi 1.0.0, and the [v0.9.0](#v090) and [v0.9.1](#v091) Release qualifications, which ran on Pi 1.0.2. The per-test results were recorded for the [v0.7 candidate](#v07-candidate); the Release qualifications of [v0.7.0](#v070-release-candidate), [v0.7.1](#v071), [v0.8.0](#v080), [v0.8.1](#v081), [v0.9.0](#v090), and [v0.9.1](#v091) passed the same jobs on their own commits.
+Every run named below used Node 22.19.0 and Pi 0.87.1, the pin at the time, except the [v0.8.0](#v080) and [v0.8.1](#v081) Release qualifications, which ran on Pi 1.0.0, and the [v0.9.0](#v090) and [v0.9.1](#v091) Release qualifications, which ran on Pi 1.0.2. No Release qualification has run on Pi 1.0.3 yet. The per-test results were recorded for the [v0.7 candidate](#v07-candidate); the Release qualifications of [v0.7.0](#v070-release-candidate), [v0.7.1](#v071), [v0.8.0](#v080), [v0.8.1](#v081), [v0.9.0](#v090), and [v0.9.1](#v091) passed the same jobs on their own commits.
 
 | Backend | Status | Environment and versions | Evidence and results |
 | --- | --- | --- | --- |
@@ -234,7 +241,7 @@ Limits of v0.9.1 as shipped, with earlier releases named where a bullet says so,
 
 ## Pi compatibility
 
-[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 1.0.2 it lists four surfaces (1.0.0 and 0.87.1, kept so that releases built on them are recognized, have the same four with the same statuses):
+[`compatibility/pi.json`](../compatibility/pi.json) is the machine-readable record, and `@piship/core` carries a copy that the compatibility suite keeps equal. For the pinned Pi 1.0.3 it lists four surfaces (1.0.2, 1.0.0, and 0.87.1, kept so that releases built on them are recognized, have the same four with the same statuses):
 
 | Surface | Status | What it covers |
 | --- | --- | --- |
@@ -243,7 +250,7 @@ Limits of v0.9.1 as shipped, with earlier releases named where a bullet says so,
 | `governance` | candidate | Policy and trust, capabilities, governed MCP, the OS sandbox, and audit (`piship/v1alpha3` and later) |
 | `lifecycle` | candidate | Release, signed channels, update, and rollback |
 
-`release.json` records the weakest of the distribution's deployment surface, the `governance` surface when the distribution declares governance (every `piship/v1alpha3` or later manifest does), and the `lifecycle` surface, so every release built today records `candidate`. The statuses of 1.0.0 were set equal to those of 0.87.1 at that upgrade, and those of 1.0.2 equal to those of 1.0.0 at the upgrade after v0.8.1; the Release qualifications of [v0.8.0](#v080) and [v0.8.1](#v081) are the ones recorded on Pi 1.0.0, those of [v0.9.0](#v090) and [v0.9.1](#v091) are the ones recorded on 1.0.2, and the earlier evidence on this page was produced on 0.87.1. See [compatibility](compatibility.md) for the Pi public API PiShip uses and the upgrade policy.
+`release.json` records the weakest of the distribution's deployment surface, the `governance` surface when the distribution declares governance (every `piship/v1alpha3` or later manifest does), and the `lifecycle` surface, so every release built today records `candidate`. The statuses of 1.0.0 were set equal to those of 0.87.1 at that upgrade, those of 1.0.2 equal to those of 1.0.0 at the upgrade after v0.8.1, and those of 1.0.3 equal to those of 1.0.2 at the upgrade after v0.9.1; the Release qualifications of [v0.8.0](#v080) and [v0.8.1](#v081) are the ones recorded on Pi 1.0.0, those of [v0.9.0](#v090) and [v0.9.1](#v091) are the ones recorded on 1.0.2, none is recorded on 1.0.3 yet, and the earlier evidence on this page was produced on 0.87.1. See [compatibility](compatibility.md) for the Pi public API PiShip uses and the upgrade policy.
 
 ## CI evidence tiers
 

@@ -31,7 +31,7 @@ function personal(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA4,
     app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-    runtime: { pi: "1.0.2" },
+    runtime: { pi: "1.0.3" },
     deployment: { mode: "personal" },
     updates: {},
     ...extra,
@@ -206,7 +206,7 @@ describe("piship/v1alpha4 schema", () => {
     const source = [
       "schema: piship/v1alpha4",
       "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
-      'runtime: { pi: "1.0.2" }',
+      'runtime: { pi: "1.0.3" }',
       "deployment: { mode: personal }",
       "updates: {}",
       "release:",
@@ -240,7 +240,7 @@ describe("v1alpha4 section gating", () => {
       {
         schema,
         app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-        runtime: { pi: "1.0.2" },
+        runtime: { pi: "1.0.3" },
         deployment: { mode: "personal" },
         [key]: {},
       },
@@ -563,7 +563,7 @@ describe("migration to piship/v1alpha4", () => {
     "schema: piship/v1alpha3",
     "# keep comments",
     "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
-    'runtime: { pi: "1.0.2" }',
+    'runtime: { pi: "1.0.3" }',
     "deployment: { mode: personal }",
     "",
   ].join("\n");
@@ -601,7 +601,7 @@ describe("migration to piship/v1alpha4", () => {
   });
   it("migrates v1alpha1 to v1alpha4 in steps", () => {
     const v1 =
-      'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n';
+      'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.3"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n';
     const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA4);
     expect(plan.from).toBe("piship/v1alpha1");
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA4);

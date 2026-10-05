@@ -30,7 +30,7 @@ describe("RUNTIME_SEAMS", () => {
       expect(RUNTIME_SEAMS[action]).toMatch(/^(hook|observe|none)$/);
   });
 
-  it("matches the v0.9 table against Pi 1.0.2", () => {
+  it("matches the v0.9 table against Pi 1.0.3", () => {
     const enforced: PolicyAction[] = [
       "tool.execute",
       "mcp.tool.call",
@@ -170,14 +170,14 @@ describe("status derivation", () => {
 
 describe("seamEvidence", () => {
   it("records the Pi version, the table, and a stable digest", () => {
-    const evidence = seamEvidence("1.0.2");
-    expect(evidence.pi).toBe("1.0.2");
+    const evidence = seamEvidence("1.0.3");
+    expect(evidence.pi).toBe("1.0.3");
     expect(evidence.seams).toEqual(RUNTIME_SEAMS);
     expect(Object.keys(evidence.seams)).toEqual(
       Object.keys(RUNTIME_SEAMS).sort(),
     );
     expect(evidence.digest).toMatch(/^sha256-[0-9a-f]{64}$/);
-    expect(seamEvidence("1.0.2").digest).toBe(evidence.digest);
-    expect(seamEvidence("1.0.3").digest).not.toBe(evidence.digest);
+    expect(seamEvidence("1.0.3").digest).toBe(evidence.digest);
+    expect(seamEvidence("1.0.2").digest).not.toBe(evidence.digest);
   });
 });

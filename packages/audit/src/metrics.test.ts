@@ -232,25 +232,25 @@ describe("LocalMetrics", () => {
     metrics.recordVersions({
       distribution: "1.1.0",
       piship: "0.1.0",
-      pi: "1.0.2",
+      pi: "1.0.3",
       node: "22.19.0",
     });
     metrics.recordVersions({
       distribution: "1.2.0 built from /home/alice",
       piship: "0.1.0",
-      pi: "1.0.2",
+      pi: "1.0.3",
     });
     metrics.recordVersions({
       distribution: "1.2.0",
       piship: "0.1.0",
-      pi: "1.0.2",
+      pi: "1.0.3",
       node: "v22",
     });
     metrics.save();
     const expected = {
       distribution: "1.1.0",
       piship: "0.1.0",
-      pi: "1.0.2",
+      pi: "1.0.3",
       node: "22.19.0",
       updatedAt: "2026-09-28T10:00:00.000Z",
     };

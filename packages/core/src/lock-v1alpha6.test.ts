@@ -32,7 +32,7 @@ afterEach(() => {
 
 const V5 = `schema: piship/v1alpha5
 app: { id: acmepi, name: AcmePi, command: acmepi, version: 1.0.0 }
-runtime: { pi: "1.0.2" }
+runtime: { pi: "1.0.3" }
 deployment: { mode: personal }
 identity: { mode: none }
 credential: { provider: none }
@@ -119,8 +119,8 @@ describe("lock piship-lock/v1alpha6", () => {
     const lock = resolveLock(
       project(
         V6.replace(
-          'runtime: { pi: "1.0.2" }',
-          'runtime:\n  pi: "1.0.2"\n  tools:\n    codemode: on\n    exposure: { bash: deferred, "e*": hidden }',
+          'runtime: { pi: "1.0.3" }',
+          'runtime:\n  pi: "1.0.3"\n  tools:\n    codemode: on\n    exposure: { bash: deferred, "e*": hidden }',
         ),
       ),
     );
@@ -166,8 +166,8 @@ describe("lock piship-lock/v1alpha6", () => {
       resolveLock(
         project(
           V6.replace(
-            'runtime: { pi: "1.0.2" }',
-            'runtime:\n  pi: "1.0.2"\n  tools:\n    exposure: { "r*": hidden, "*d": direct }',
+            'runtime: { pi: "1.0.3" }',
+            'runtime:\n  pi: "1.0.3"\n  tools:\n    exposure: { "r*": hidden, "*d": direct }',
           ),
         ),
       ),
@@ -182,8 +182,8 @@ describe("lock piship-lock/v1alpha6", () => {
       return { ...manifest, deployment: { mode: "managed" } };
     };
     const codemode = V6.replace(
-      'runtime: { pi: "1.0.2" }',
-      'runtime:\n  pi: "1.0.2"\n  tools: { codemode: on, exposure: { bash: hidden, edit: hidden, write: hidden } }',
+      'runtime: { pi: "1.0.3" }',
+      'runtime:\n  pi: "1.0.3"\n  tools: { codemode: on, exposure: { bash: hidden, edit: hidden, write: hidden } }',
     );
     expect(() => checkToolExposure(managed(codemode))).toThrow(
       expect.objectContaining({

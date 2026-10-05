@@ -91,6 +91,12 @@ export interface GovernanceOptions {
   /** Receives sandbox credential lifecycle events (purpose sandbox). */
   readonly onSandboxCredentialEvent?: (event: AccessEvent) => void;
   readonly homeDir?: string;
+  /**
+   * `--yolo`: approve asks for this session only, without storing anything.
+   * A managed distribution must allow auto-approval (`policy.userAuto`);
+   * `GovernanceSession.open` refuses it otherwise.
+   */
+  readonly yolo?: boolean;
   /** Override the startup approval channel (tests). */
   readonly startupApproval?: ApprovalChannel;
   /**
@@ -122,7 +128,14 @@ export interface DecisionEvents {
 
 /** Evidence for one declared, builtin, or project resource. */
 export interface ResourceEvidence {
-  readonly kind: ResourceKind | "mcp" | "settings" | "agents" | "providers";
+  readonly kind:
+    | ResourceKind
+    | "mcp"
+    | "extension-config"
+    | "settings"
+    | "agents"
+    | "providers"
+    | "claude";
   readonly class: string;
   readonly path: string;
   readonly loaded: boolean;
@@ -130,6 +143,17 @@ export interface ResourceEvidence {
   readonly integrity?: "verified" | "not-applicable";
   readonly compatible?: boolean;
   readonly origin?: string;
+}
+
+/**
+ * PiShip's decision on the project configuration that extensions load by
+ * themselves (the Claude Code files pi-code reads). `trusted` is what Pi's
+ * `isProjectTrusted()` reports; `surfaces` is how many items were found.
+ */
+export interface ProjectTrustResult {
+  readonly trusted: boolean;
+  readonly surfaces: number;
+  readonly reason: string;
 }
 
 export interface LoaderInputs {

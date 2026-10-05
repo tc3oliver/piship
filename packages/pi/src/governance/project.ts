@@ -2,9 +2,14 @@
 // and policy.
 import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
-import { type ApprovalChannel, resolveDecision } from "@piship/contracts";
+import {
+  type ApprovalChannel,
+  redact,
+  resolveDecision,
+} from "@piship/contracts";
 import { type McpServerConfig, parseExternalMcpDefinitions } from "@piship/mcp";
 import {
+  assessExtensionProjectTrust,
   type ProjectResourceCandidate,
   resourceTrustDecision,
 } from "@piship/policy";
@@ -16,7 +21,11 @@ export async function resolveProject(
   projectServers: McpServerConfig[],
 ): Promise<void> {
   const channel = session.startupChannel();
+  await resolveExtensionConfig(session, channel);
   for (const candidate of session.projectCandidates) {
+    // Decided as a unit by resolveExtensionConfig.
+    if (candidate.kind === "claude" || candidate.kind === "extension-config")
+      continue;
     if (candidate.dimension === "restrictions") continue;
     const shown = projectPath(session, candidate.path);
     const resource = `project:${shown}`;
@@ -116,6 +125,113 @@ export async function resolveProject(
       origin: candidate.origin,
     });
   }
+}
+
+/**
+ * The project configuration that extensions load by themselves once Pi
+ * reports the project as trusted: the Claude Code files (`.claude/*`) and
+ * the project MCP and agent files. Pi gives an extension one boolean, so the
+ * items are admitted as a unit: each item's dimension, then one question for
+ * the person when any is `ask`, then a policy decision (`resource.load`) per
+ * Claude item. A denial of any item leaves all of them unloaded, and the
+ * result is what `isProjectTrusted()` reports. PiShip loads none of these
+ * files itself.
+ */
+async function resolveExtensionConfig(
+  session: GovernanceSession,
+  channel: ApprovalChannel | undefined,
+): Promise<void> {
+  const mode = session.options.lock.deployment.mode;
+  const assessment = assessExtensionProjectTrust(session.projectCandidates, {
+    policy: session.manifest.policy,
+    identity: session.project,
+    mode,
+  });
+  const surfaces = assessment.surfaces;
+  const shownPaths = surfaces.map((item) => projectPath(session, item.path));
+  let blocker: ProjectResourceCandidate | undefined =
+    assessment.effect === "deny" ? assessment.decidedBy : undefined;
+  let blocked: string | undefined =
+    assessment.effect === "deny"
+      ? `${blocker ? `${projectPath(session, blocker.path)}: ` : ""}${assessment.reason}`
+      : undefined;
+  if (!blocked && assessment.effect === "ask") {
+    const answer = await resolveDecision(
+      {
+        effect: "ask",
+        policyId: session.engine.id,
+        ruleId: "project-trust.claude",
+        enforcement: "control-plane",
+        action: "resource.load",
+        resource: "project:.claude",
+        layer: "distribution-enforced",
+      },
+      channel,
+      {
+        title: "Project Claude Code configuration",
+        message: `Load the Claude Code configuration of ${session.project.origin} project ${session.project.root}?\n${shownPaths.join("\n")}`,
+      },
+    );
+    if (answer.outcome !== "allow")
+      blocked = `project trust: ${answer.approval ?? "denied"}`;
+  }
+  if (!blocked)
+    for (const item of surfaces) {
+      if (item.kind !== "claude") continue;
+      const decision = await session.decide(
+        "resource.load",
+        `project:${projectPath(session, item.path)}`,
+        channel,
+      );
+      if (decision.outcome === "allow") continue;
+      blocked = `policy ${decision.ruleId}`;
+      blocker = item;
+      break;
+    }
+  const trusted = blocked === undefined;
+  const reason = trusted ? assessment.reason : redact(blocked ?? "");
+  session.projectTrust = { trusted, surfaces: surfaces.length, reason };
+  for (const item of surfaces) {
+    if (item.kind !== "claude" && item.kind !== "extension-config") continue;
+    const shown = projectPath(session, item.path);
+    const resource = `project:${shown}`;
+    session.emit(trusted ? "resource.load" : "resource.denied", {
+      resource,
+      detail: {
+        kind: item.kind,
+        class: "project",
+        origin: item.origin,
+        dimension: item.dimension,
+      },
+    });
+    session.resources.push({
+      kind: item.kind,
+      class: "project",
+      path: shown,
+      loaded: trusted,
+      reason: trusted
+        ? "admitted for extensions that read project configuration; PiShip loads none of it itself"
+        : item === blocker
+          ? redact(blocked ?? item.reason)
+          : `not loaded: the project configuration is admitted as a unit (${redact(reason)})`,
+      origin: item.origin,
+    });
+  }
+  if (surfaces.length === 0) return;
+  session.emit(trusted ? "resource.load" : "resource.denied", {
+    resource: "project:.claude",
+    detail: {
+      kind: "claude",
+      class: "project",
+      origin: session.project.origin,
+      seam: "project-trust",
+      items: surfaces.length,
+    },
+  });
+  if (!trusted)
+    session.notice(
+      `Project Claude Code configuration (${shownPaths.slice(0, 4).join(", ")}${surfaces.length > 4 ? ", ..." : ""}) is not loaded: ${redact(reason)}.`,
+    );
 }
 
 /** A project path as shown to people and audit: relative to the project root. */

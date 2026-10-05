@@ -351,6 +351,7 @@ function registryInventory(
 function governanceSummary(gov: GovernanceSession) {
   return {
     policy: gov.policyId,
+    ...(gov.yolo ? { yolo: true } : {}),
     project: { origin: gov.project.origin },
     sandbox: {
       level: gov.sandbox.report.level,

@@ -28,7 +28,7 @@ app:
   version: 1.0.0
   theme: mypi
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
 deployment:
   mode: personal
 resources:
@@ -107,7 +107,7 @@ describe("diffLocks", () => {
     expect(report.changes).toEqual([]);
     expect(report.requiredTests).toEqual([]);
     expect(formatDiff(report)).toBe(
-      `acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 1.0.2, PiShip ${PISHIP_VERSION}\nNo release-impact changes.\n`,
+      `acmecode 1.0.0 -> 1.0.0 (risk: none)\nPi 1.0.3, PiShip ${PISHIP_VERSION}\nNo release-impact changes.\n`,
     );
   });
 
@@ -120,7 +120,7 @@ describe("diffLocks", () => {
       expect.objectContaining({
         area: "pi",
         kind: "changed",
-        before: "1.0.2",
+        before: "1.0.3",
         after: "0.88.0",
         risk: "high",
       }),
@@ -249,6 +249,50 @@ describe("diffLocks", () => {
     expect(
       diffLocks(base, defaultLoosened).changes.map((change) => change.risk),
     ).toEqual(["high", "high"]);
+  });
+
+  it("reads an undeclared Claude Code dimension as its mode's default", () => {
+    // The managed default of claudeHooks is deny and of claudeRules
+    // company-approved: declaring either changes nothing.
+    const declared = clone(base);
+    Object.assign(
+      declared.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "deny",
+        claudeRules: "company-approved",
+      },
+    );
+    expect(diffLocks(base, declared).changes).toEqual([]);
+
+    // Admitting hooks relaxes policy, whether or not the manifest declared the
+    // dimension before.
+    const hooks = clone(base);
+    Object.assign(
+      hooks.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "allow",
+      },
+    );
+    expect(diffLocks(base, hooks).changes).toEqual([
+      expect.objectContaining({
+        area: "policy",
+        item: "policy projectTrust.company.claudeHooks",
+        before: "deny",
+        after: "allow",
+        risk: "high",
+      }),
+    ]);
+    expect(diffLocks(declared, hooks).changes).toHaveLength(1);
+
+    // Removing a declared approval tightens it.
+    const closed = clone(hooks);
+    Object.assign(
+      closed.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "deny",
+      },
+    );
+    expect(diffLocks(hooks, closed).risk).toBe("medium");
   });
 
   it("flags a new MCP server as high and a narrowed tool list as medium", () => {
@@ -546,7 +590,7 @@ describe("diffLocks", () => {
     expect(formatDiff(report)).toBe(
       [
         "acmecode 1.0.0 -> 1.1.0 (risk: medium)",
-        `Pi 1.0.2, PiShip ${PISHIP_VERSION} -> 0.2.0`,
+        `Pi 1.0.3, PiShip ${PISHIP_VERSION} -> 0.2.0`,
         "Changes:",
         "  [low] distribution: changed version (1.0.0 -> 1.1.0): Release version change.",
         `  [medium] piship: changed PiShip version (${PISHIP_VERSION} -> 0.2.0): PiShip runtime changed; launch and governance code differ.`,
@@ -682,7 +726,7 @@ describe("diffLocks", () => {
 
     it("flags any enforcement downgrade as high", () => {
       const after = v6();
-      after.enforcement.pi = "1.0.2";
+      after.enforcement.pi = "1.0.3";
       after.enforcement.seams["tool.execute"] = "none";
       after.sessionExportStatus.support = "unsupported";
       const report = diffLocks(v6(), after);

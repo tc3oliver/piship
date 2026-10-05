@@ -787,7 +787,7 @@ app:
   command: ${ID}
   version: 1.0.0
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
 deployment:
   mode: personal
 resources:

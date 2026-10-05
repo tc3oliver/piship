@@ -14,7 +14,7 @@ import {
 import type { PolicyContainment } from "./engine.js";
 import { matchGlob } from "./glob.js";
 
-/** The seam table against Pi 1.0.2. */
+/** The seam table against Pi 1.0.3. */
 export const RUNTIME_SEAMS: Readonly<Record<PolicyAction, RuntimeSeamKind>> = {
   "model.select": "hook",
   "model.dispatch": "hook",

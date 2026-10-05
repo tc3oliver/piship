@@ -8,7 +8,7 @@ export {
   governedLock,
   openAccess,
 } from "./context.js";
-export { runAuto, userAutoDenied } from "./auto.js";
+export { runAuto, userAutoDenied, yoloRefusal } from "./auto.js";
 export { runConfig } from "./config.js";
 export { releasesWithoutDataSweep, sweepDistributionData } from "./data.js";
 export { lifecycleDoctor, undeclaredGovernanceHosts } from "./doctor.js";

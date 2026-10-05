@@ -22,6 +22,7 @@ import {
   runtimeStateDirectory,
   sweepDistributionData,
   sweepStateTemporaries,
+  yoloRefusal,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
 import { runCapabilities, runPolicy } from "./commands/governance.js";
@@ -49,7 +50,7 @@ export {
 } from "./governance-session.js";
 export { NO_CREDENTIAL_PLACEHOLDER } from "./launch/model-runtime.js";
 
-export const PINNED_PI_VERSION = "1.0.2" as const;
+export const PINNED_PI_VERSION = "1.0.3" as const;
 export type PiVersion = typeof PINNED_PI_VERSION;
 /**
  * Pi's sibling packages at the exact versions reviewed with the pinned Pi.
@@ -58,13 +59,13 @@ export type PiVersion = typeof PINNED_PI_VERSION;
  * the compatibility suite asserts the overrides, the lock, and the install.
  */
 export const PI_SIBLING_PINS: Readonly<Record<string, string>> = {
-  "@earendil-works/chord": "1.0.2",
-  "@earendil-works/pi-agent-core": "1.0.2",
-  "@earendil-works/pi-ai": "1.0.2",
-  "@earendil-works/pi-codemode": "1.0.2",
-  "@earendil-works/pi-mcp": "1.0.2",
-  "@earendil-works/pi-telemetry": "1.0.2",
-  "@earendil-works/pi-tui": "1.0.2",
+  "@earendil-works/chord": "1.0.3",
+  "@earendil-works/pi-agent-core": "1.0.3",
+  "@earendil-works/pi-ai": "1.0.3",
+  "@earendil-works/pi-codemode": "1.0.3",
+  "@earendil-works/pi-mcp": "1.0.3",
+  "@earendil-works/pi-telemetry": "1.0.3",
+  "@earendil-works/pi-tui": "1.0.3",
 };
 export type PiSessionFactory = typeof createAgentSession;
 export interface LaunchOptions {
@@ -112,7 +113,8 @@ export async function launchPiDistribution(
   let args = [...options.args];
   let requestedModel: string | undefined;
   let newSession = false;
-  // The session options come first, in either order.
+  let yolo = false;
+  // The session options come first, in any order.
   for (;;) {
     if (args[0] === "--model" && requestedModel === undefined) {
       requestedModel = args[1];
@@ -122,9 +124,33 @@ export async function launchPiDistribution(
     } else if (args[0] === "--new-session" && !newSession) {
       newSession = true;
       args = args.slice(1);
+    } else if (args[0] === "--yolo" && !yolo) {
+      yolo = true;
+      args = args.slice(1);
     } else break;
   }
-  const sessionOption = !!requestedModel || newSession;
+  const sessionOption = !!requestedModel || newSession || yolo;
+  if (yolo) {
+    // It changes how a session decides asks: for a subcommand, --version, or
+    // --help it means nothing, and nothing is started or written before that
+    // is said. Where the distribution does not allow it, say so just as early.
+    const command = metadata.app.command;
+    if (
+      args.length > 1 ||
+      (args.length === 1 &&
+        args[0] !== "--smoke" &&
+        args[0] !== "--smoke-model")
+    )
+      throw new PiShipError(
+        "CONFIG_INVALID",
+        "--yolo applies only when a session starts: it cannot be combined with a subcommand, --help, or --version",
+        {
+          userAction: `Run ${command} --yolo on its own or with --model, --new-session, --smoke, or --smoke-model`,
+        },
+      );
+    const refusal = yoloRefusal(metadata);
+    if (refusal) throw refusal;
+  }
   // Pi's interactive TUI waits for keyboard input forever without a terminal,
   // and there is no non-interactive prompt mode. Refuse before any state,
   // identity session, credential or sandbox exists.
@@ -172,6 +198,7 @@ export async function launchPiDistribution(
     mode: metadata.deployment.mode,
     out: (message) => console.log(message),
     err: (message) => console.error(message),
+    ...(yolo ? { yolo: true } : {}),
   };
   const [command, ...rest] = args;
   if (
@@ -203,13 +230,22 @@ export async function launchPiDistribution(
     const accessCommands = piNative
       ? "doctor [--json] | models | version"
       : "login | logout | doctor [--json] | models | version";
+    // Only where it can work: a policy to relax, and in a managed
+    // distribution the administrator's allowance.
+    const yoloOffered = !!metadata.governance && !yoloRefusal(metadata);
+    const yoloOption = yoloOffered ? " [--yolo]" : "";
+    const yoloHelp = !yoloOffered
+      ? ""
+      : metadata.deployment.mode === "managed"
+        ? "\n\n--yolo approves asks from the distribution defaults without a prompt for this session only, audited; deny and enforced rules still apply, and nothing is stored."
+        : "\n\n--yolo approves every ask without a prompt for this session only, audited; deny still applies, and nothing is stored.";
     const piNativeHelp = piNative
       ? `\n\nSign-in happens inside Pi: start ${metadata.app.command}, then use /login and /logout, and /model to choose the provider and model.`
       : "";
     const managedHelp = metadata.access
-      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session] [--smoke | --smoke-model]${piNativeHelp}`
+      ? `\n\nCommands:\n  ${accessCommands}\n  update [--channel <name>] [--from <dir|url>] [--check] | rollback\n  config explain [--json] | config set <key> <value> | config unset <key>${governanceHelp}\n  [--model <id>] [--new-session]${yoloOption} [--smoke | --smoke-model]${yoloHelp}${piNativeHelp}`
       : metadata.governance
-        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session] [--smoke]`
+        ? `\n\nCommands:\n  doctor [--json] | version | update [--check] | rollback${governanceHelp}\n  [--new-session]${yoloOption} [--smoke]${yoloHelp}`
         : "\n\nCommands:\n  doctor [--json] | version";
     ctx.out(
       `${metadata.app.banner ?? metadata.app.name}\n\n${metadata.app.command} [--help|--version|--smoke] [--new-session]${managedHelp}\nPi ${VERSION} by Earendil Works`,
