@@ -1,0 +1,8 @@
+{
+  "name": "piship-package-pi-code",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "pi-code": "1.4.2"
+  }
+}

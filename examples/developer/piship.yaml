@@ -1,0 +1,862 @@
+schema: piship/v1alpha6
+
+app:
+  id: devcode
+  name: DevCode
+  command: devcode
+  version: 1.0.0
+  banner: DevCode developer distribution
+
+runtime:
+  pi: "1.0.3"
+  # Pi's Codemode (the model can script several tool calls in one step) and
+  # tool search (the model can discover deferred tools). Each call a script
+  # makes still goes through the permission provider and the policy below.
+  tools:
+    codemode: "on"
+    toolSearch: "on"
+    # pi-background-tasks never loads its delegate, Fusion, and attested
+    # features here (its environment below sets PI_BG_FEATURES=process); the
+    # rule keeps those tools out of the session even if one ever registers.
+    exposure:
+      bg_delegate: hidden
+      bg_result: hidden
+      bg_run_pi_attested: hidden
+      fusion_*: hidden
+
+deployment:
+  mode: personal
+
+# The only runtime variable: where `devcode update` reads the signed channel.
+# It is resolved when `update` runs, never at launch.
+variables:
+  - DEVCODE_UPDATE_SOURCE
+
+# No enterprise identity, broker, or gateway: Pi's own providers and sign-in,
+# kept in the distribution's isolated state instead of ~/.pi.
+identity:
+  mode: none
+credential:
+  provider: pi-native
+inference:
+  provider: pi-native
+
+resources:
+  instructions:
+    user: [./resources/AGENTS.md]
+  skills:
+    user: [./resources/skills]
+  packages:
+    # Claude Code compatibility, web search and fetch, plan mode, todo, ask-user,
+    # memory, checkpoints and rewind, subagents, goals. It reads ~/.claude and
+    # the project's .claude/ and .mcp.json, and asks once before it loads a
+    # project that ships any.
+    - id: pi-code
+      source: npm
+      package: pi-code
+      version: 1.4.2
+      class: user
+
+    # Diagnostics, LSP navigation, ast-grep, formatting and linting feedback after
+    # every edit. It installs its linters and language servers on first use into
+    # PI_LENS_HOME, which is kept inside this distribution's state.
+    - id: pi-lens
+      source: npm
+      package: pi-lens
+      version: 4.3.0
+      class: user
+      environment:
+        PI_LENS_HOME: { statePath: pi-lens }
+      # The two skills that teach pi-lens's own rule authoring stay out of the prompt.
+      skills: ["skills/**", "!skills/pi-lens-write-*/**"]
+
+    # bg_run, bg_status, bg_logs, bg_kill: long-running commands in the
+    # background. The package's Claude Code attribution extension (it makes
+    # requests look like Claude Code's and reads ~/.claude.json) is never
+    # loaded: it is left out of the extensions below and its feature is off.
+    - id: pi-background-tasks
+      source: npm
+      package: pi-background-tasks
+      version: 2.6.9
+      class: user
+      environment:
+        PI_BG_FEATURES: process
+        PI_BG_DISABLE_UPDATE_CHECK: "1"
+      extensions: ["dist/extensions/background-tasks.js"]
+
+    # /review and /review-back. Structured targets (a branch, a commit, a pull
+    # request, files) come from the code-review-targets skill, not from
+    # arguments of /review.
+    - id: pi-review
+      source: npm
+      package: pi-review
+      version: 1.2.1
+      class: user
+
+    # browser_* tools over a headless Chrome. Needs Chrome on the machine. Its
+    # profile and settings live under ~/.pi, outside this distribution's state.
+    # The two skills about signing in to Google accounts are not offered.
+    - id: pi-browser-use
+      source: npm
+      package: pi-browser-use
+      version: 0.12.11
+      class: user
+      skills: ["skills/**", "!skills/auth-bootstrap/**", "!skills/gmail-auth/**"]
+
+    # The permission provider. Allow, ask, and deny decisions for every tool
+    # call, bash command, path, and MCP call, from the configuration seeded
+    # below.
+    - id: pi-permission-system
+      source: npm
+      package: "@gotgenes/pi-permission-system"
+      version: 39.0.4
+      class: certified
+      certified:
+        version: 39.0.4
+        source: https://www.npmjs.com/package/@gotgenes/pi-permission-system
+        integrity: sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84
+        license: MIT
+        pi: ["1.0.3"]
+      agentFiles:
+        - path: extensions/pi-permission-system/config.json
+          # `seed` writes the file once and keeps a copy the user edited. A later
+          # DevCode release replaces it only while it still is what DevCode wrote.
+          mode: seed
+          # In a rule map the last matching rule wins, so a broad rule comes first
+          # and the exceptions after it. Key order here is part of the policy.
+          json:
+            permissionReviewLog: true
+            debugLog: false
+            # The session auto-approval that `--yolo` switches on. It is off here and
+            # stays off in the file: the launch option sets it for one session only.
+            yoloMode: false
+            shellTools:
+              bg_run: { commandArgument: command }
+            permission:
+              # Everything not named below (the pi-code, pi-lens, and browser tools,
+              # web search, subagents) runs without asking.
+              "*": allow
+              read: allow
+              write: allow
+              edit: allow
+              grep: allow
+              find: allow
+              ls: allow
+
+              # Files, from every tool and from the paths a bash command mentions.
+              # Deny is for clear secrets only. Names that are often public or a
+              # fixture (certificates, example env files) ask or are allowed.
+              path:
+                "*": allow
+                # Key material that is sometimes only a public certificate or a test
+                # fixture: ask instead of deny.
+                "*.pem": ask
+                "*.key": ask
+                "*.p12": ask
+                "*.pfx": ask
+                "*.jks": ask
+                "*.keystore": ask
+                # A key or certificate under a test directory is a test fixture.
+                "*/fixtures/*.pem": allow
+                "*/fixtures/*.key": allow
+                "*/fixture/*.pem": allow
+                "*/fixture/*.key": allow
+                "*/__fixtures__/*.pem": allow
+                "*/__fixtures__/*.key": allow
+                "*/testdata/*.pem": allow
+                "*/testdata/*.key": allow
+                "*/test/*.pem": allow
+                "*/test/*.key": allow
+                "*/tests/*.pem": allow
+                "*/tests/*.key": allow
+                "*/spec/*.pem": allow
+                "*/spec/*.key": allow
+                # Env files may hold real secrets. The examples are free to read.
+                "*.env": ask
+                "*.env.*": ask
+                "*.env.example": allow
+                "*.env.sample": allow
+                "*.env.template": allow
+                "*.env.dist": allow
+                # The denies come last: the last matching rule wins, so a key under
+                # ~/.ssh or ~/.gnupg stays denied whatever its extension.
+                # Private keys, credential stores, keychains.
+                "~/.ssh": deny
+                "~/.ssh/*": deny
+                "*/id_rsa": deny
+                "*/id_dsa": deny
+                "*/id_ecdsa": deny
+                "*/id_ecdsa_sk": deny
+                "*/id_ed25519": deny
+                "*/id_ed25519_sk": deny
+                "~/.gnupg": deny
+                "~/.gnupg/*": deny
+                "~/.aws/credentials": deny
+                "~/.aws/sso/*": deny
+                "~/.aws/cli/cache/*": deny
+                "~/.config/gcloud/*": deny
+                "~/.azure/*": deny
+                "~/.kube/config": deny
+                "~/.docker/config.json": deny
+                "~/.netrc": deny
+                "~/_netrc": deny
+                "~/.npmrc": deny
+                "~/.pypirc": deny
+                "~/.git-credentials": deny
+                "~/.config/gh/hosts.yml": deny
+                "~/.cargo/credentials": deny
+                "~/.cargo/credentials.toml": deny
+                "~/.gem/credentials": deny
+                "~/.vault-token": deny
+                "~/.terraform.d/credentials.tfrc.json": deny
+                "~/.config/op/*": deny
+                "~/.password-store/*": deny
+                "~/Library/Keychains/*": deny
+                "/Library/Keychains/*": deny
+                "~/.local/share/keyrings/*": deny
+                "*.kdbx": deny
+                "/etc/shadow*": deny
+                "/etc/gshadow*": deny
+                "/etc/master.passwd": deny
+                "/etc/ssh/ssh_host_*": deny
+                # Credentials and logged-in sessions of the tools in this distribution.
+                "~/.pi/agent/auth.json": deny
+                "~/.pi/browser-profile/*": deny
+                "*/.piship/*/agent/auth.json": deny
+                "*/.piship/*/secrets/*": deny
+              # Writes that change what code runs next: project hooks, MCP servers,
+              # and settings of the tools here. Reads of these stay free.
+              path_write:
+                "*/.claude/settings.json": ask
+                "*/.claude/settings.local.json": ask
+                "*/.claude/hooks/*": ask
+                "*/.mcp.json": ask
+                "*/.pi/settings.json": ask
+                "*/.pi/extensions/*": ask
+                "*/.pi/extensions/pi-permission-system/*": deny
+                "*/.git/hooks/*": ask
+                "*/.git/config": ask
+
+              # Outside the workspace. Reading is normal (toolchains, sibling
+              # repositories, caches); writing asks, except in temporary and cache
+              # directories.
+              external_directory:
+                "*": ask
+              external_directory_read:
+                "*": allow
+              external_directory_write:
+                "*": ask
+                "/tmp/*": allow
+                "/private/tmp/*": allow
+                "/var/folders/*": allow
+                "/private/var/folders/*": allow
+                "~/.cache/*": allow
+
+              # Commands. An unknown program asks; the ones a developer runs all day
+              # do not. The risky forms of an allowed program are set after it.
+              bash:
+                "*": ask
+
+                # Inspect and navigate.
+                "cd *": allow
+                "pwd": allow
+                "ls *": allow
+                "tree *": allow
+                "cat *": allow
+                "head *": allow
+                "tail *": allow
+                "wc *": allow
+                "stat *": allow
+                "file *": allow
+                "du *": allow
+                "df *": allow
+                "diff *": allow
+                "cmp *": allow
+                "sort *": allow
+                "uniq *": allow
+                "cut *": allow
+                "tr *": allow
+                "grep *": allow
+                "egrep *": allow
+                "fgrep *": allow
+                "rg *": allow
+                "fd *": allow
+                "find *": allow
+                "jq *": allow
+                "yq *": allow
+                "sed *": allow
+                "awk *": allow
+                "basename *": allow
+                "dirname *": allow
+                "realpath *": allow
+                "readlink *": allow
+                "which *": allow
+                "type *": allow
+                "command -v *": allow
+                "echo *": allow
+                "printf *": allow
+                "date *": allow
+                "sleep *": allow
+                "true": allow
+                "false": allow
+                "test *": allow
+                "[ *": allow
+                "[[ *": allow
+                "export *": allow
+                "unset *": allow
+                "source *": allow
+                ". *": allow
+                "uname *": allow
+                "whoami": allow
+                "id": allow
+                "hostname": allow
+                "ps *": allow
+                "lsof *": allow
+                "shasum *": allow
+                "sha256sum *": allow
+                "md5sum *": allow
+                "md5 *": allow
+
+                # Change files in the workspace.
+                "mkdir *": allow
+                "touch *": allow
+                "cp *": allow
+                "mv *": allow
+                "ln *": allow
+                "rm *": allow
+                "rmdir *": allow
+                "tee *": allow
+                "chmod *": allow
+                "tar *": allow
+                "zip *": allow
+                "unzip *": allow
+                "gzip *": allow
+                "gunzip *": allow
+                "patch *": allow
+
+                # Scripts that live in the project.
+                "./*": allow
+                "node_modules/.bin/*": allow
+                ".venv/bin/*": allow
+                "venv/bin/*": allow
+                "bash *.sh": allow
+                "sh *.sh": allow
+                "zsh *.sh": allow
+
+                # Version control.
+                "git *": allow
+                "gh pr view*": allow
+                "gh pr diff*": allow
+                "gh pr list*": allow
+                "gh pr checks*": allow
+                "gh pr status*": allow
+                "gh issue view*": allow
+                "gh issue list*": allow
+                "gh repo view*": allow
+                "gh run list*": allow
+                "gh run view*": allow
+                "gh search *": allow
+
+                # JavaScript and TypeScript.
+                "node *": allow
+                "npm *": allow
+                "npx *": allow
+                "pnpm *": allow
+                "pnpx *": allow
+                "yarn *": allow
+                "bun *": allow
+                "bunx *": allow
+                "deno *": allow
+                "corepack *": allow
+                "tsx *": allow
+                "ts-node *": allow
+                "tsc *": allow
+                "eslint *": allow
+                "prettier *": allow
+                "biome *": allow
+                "oxlint *": allow
+                "vitest *": allow
+                "jest *": allow
+                "mocha *": allow
+                "playwright *": allow
+                "cypress *": allow
+                "vite *": allow
+                "next *": allow
+                "turbo *": allow
+                "nx *": allow
+                "esbuild *": allow
+                "rollup *": allow
+                "webpack *": allow
+
+                # Python.
+                "python *": allow
+                "python3 *": allow
+                "pytest *": allow
+                "uv *": allow
+                "uvx *": allow
+                "pip *": allow
+                "pip3 *": allow
+                "pipx *": allow
+                "poetry *": allow
+                "pdm *": allow
+                "hatch *": allow
+                "tox *": allow
+                "nox *": allow
+                "ruff *": allow
+                "black *": allow
+                "isort *": allow
+                "flake8 *": allow
+                "mypy *": allow
+                "pyright *": allow
+                "pylint *": allow
+                "coverage *": allow
+
+                # Rust, Go, JVM, .NET, Ruby, PHP, Swift, Dart, C and C++.
+                "cargo *": allow
+                "rustc *": allow
+                "rustfmt *": allow
+                "go *": allow
+                "gofmt *": allow
+                "golangci-lint *": allow
+                "java *": allow
+                "javac *": allow
+                "mvn *": allow
+                "gradle *": allow
+                "kotlinc *": allow
+                "sbt *": allow
+                "dotnet *": allow
+                "ruby *": allow
+                "bundle *": allow
+                "rake *": allow
+                "rspec *": allow
+                "rubocop *": allow
+                "php *": allow
+                "composer *": allow
+                "swift *": allow
+                "swiftc *": allow
+                "xcodebuild *": allow
+                "flutter *": allow
+                "dart *": allow
+                "make *": allow
+                "cmake *": allow
+                "ninja *": allow
+                "meson *": allow
+                "bazel *": allow
+                "gcc *": allow
+                "g++ *": allow
+                "cc *": allow
+                "c++ *": allow
+                "clang *": allow
+                "clang++ *": allow
+                "clang-format *": allow
+                "clang-tidy *": allow
+                "pkg-config *": allow
+
+                # Containers for local development.
+                "docker ps*": allow
+                "docker images*": allow
+                "docker logs*": allow
+                "docker build*": allow
+                "docker buildx*": allow
+                "docker compose *": allow
+                "docker-compose *": allow
+                "docker exec*": allow
+                "docker run*": allow
+                "docker start*": allow
+                "docker stop*": allow
+                "docker restart*": allow
+                "docker inspect*": allow
+                "docker pull*": allow
+                "docker network *": allow
+                "docker volume ls*": allow
+                "docker volume inspect*": allow
+
+                # Local HTTP. Anything off this machine asks.
+                "curl *localhost*": allow
+                "curl *127.0.0.1*": allow
+                "curl *[::1]*": allow
+                "curl *0.0.0.0*": allow
+                "wget *localhost*": allow
+                "wget *127.0.0.1*": allow
+
+                # --- The risky forms, after the broad rules above. ---
+
+                # Privilege.
+                "sudo *": ask
+                "doas *": ask
+                "su *": ask
+                "pkexec *": ask
+
+                # Recursive and bulk deletes.
+                "rm -r*": ask
+                "rm -R*": ask
+                "rm -fr*": ask
+                "rm -fR*": ask
+                "rm -f -r*": ask
+                "rm -f -R*": ask
+                "rm --recursive*": ask
+                "rm * -r*": ask
+                "rm * -R*": ask
+                "rm * --recursive*": ask
+                "find* -delete*": ask
+                "chmod -R*": ask
+                "chmod * -R*": ask
+                "chmod --recursive*": ask
+
+                # Destructive git: history, work in progress, and remote state.
+                "git reset*--hard*": ask
+                "git clean*": ask
+                "git push*--force*": ask
+                "git push* -f": ask
+                "git push* -f *": ask
+                "git push*--delete*": ask
+                "git push* -d": ask
+                "git push* -d *": ask
+                "git push*--mirror*": ask
+                "git push*--prune*": ask
+                "git branch* -D*": ask
+                "git branch*--delete*--force*": ask
+                "git branch* -f *": ask
+                "git checkout* -f*": ask
+                "git checkout*--force*": ask
+                "git checkout -- .": ask
+                "git checkout .": ask
+                "git restore .": ask
+                "git stash drop*": ask
+                "git stash clear*": ask
+                "git reflog expire*": ask
+                "git gc*--prune*": ask
+                "git filter-branch*": ask
+                "git filter-repo*": ask
+                "git update-ref -d*": ask
+                "git remote add*": ask
+                "git remote set-url*": ask
+                "git config*": ask
+                "git clean -n*": allow
+                "git clean --dry-run*": allow
+                "git config --get*": allow
+                "git config --list*": allow
+                "git config -l*": allow
+                "git config --show-origin*": allow
+                "git config user.name": allow
+                "git config user.email": allow
+
+                # Publishing, signing in, and installing outside the workspace.
+                "npm publish*": ask
+                "npm unpublish*": ask
+                "npm login*": ask
+                "npm adduser*": ask
+                "npm logout*": ask
+                "npm token*": ask
+                "npm owner*": ask
+                "npm access*": ask
+                "npm deprecate*": ask
+                "npm dist-tag*": ask
+                "npm config set*": ask
+                "npm set *": ask
+                "npm* --global*": ask
+                "npm* -g": ask
+                "npm* -g *": ask
+                "pnpm publish*": ask
+                "pnpm login*": ask
+                "pnpm* --global*": ask
+                "pnpm* -g": ask
+                "pnpm* -g *": ask
+                "yarn npm publish*": ask
+                "yarn npm login*": ask
+                "yarn global*": ask
+                "bun publish*": ask
+                "bun* --global*": ask
+                "bun* -g": ask
+                "bun* -g *": ask
+                "twine *": ask
+                "poetry publish*": ask
+                "uv publish*": ask
+                "pip config set*": ask
+                "pip* --break-system-packages*": ask
+                "cargo publish*": ask
+                "cargo login*": ask
+                "cargo owner*": ask
+                "cargo yank*": ask
+                "mvn deploy*": ask
+                "gradle publish*": ask
+                "./gradlew publish*": ask
+                "dotnet nuget push*": ask
+                "gem push*": ask
+                "docker push*": ask
+                "docker login*": ask
+                "docker system *": ask
+                "docker* prune*": ask
+                "docker volume rm*": ask
+                "docker* rm -f*": ask
+                "docker* rmi -f*": ask
+                "docker* --privileged*": ask
+                "docker*docker.sock*": ask
+                "docker compose*down* -v*": ask
+                "docker compose*down*--volumes*": ask
+                "docker-compose*down* -v*": ask
+                "docker-compose*down*--volumes*": ask
+                "gh api *": ask
+
+                # Credentials, printed or exported. These are never run.
+                "gh auth token*": deny
+                "security find-*": deny
+                "security dump-keychain*": deny
+                "security export*": deny
+                "security unlock-keychain*": deny
+                "aws configure get*": deny
+
+              # MCP servers and their tools. Read, list, search, and query tools run;
+              # anything that writes, runs, or deletes asks, and so does a tool this
+              # list does not recognize.
+              mcp:
+                "*": ask
+                mcp_status: allow
+                mcp_list: allow
+                mcp_search: allow
+                mcp_describe: allow
+                "get_*": allow
+                "list_*": allow
+                "search_*": allow
+                "read_*": allow
+                "find_*": allow
+                "describe_*": allow
+                "fetch_*": allow
+                "view_*": allow
+                "show_*": allow
+                "lookup_*": allow
+                "query*": allow
+                "resolve-*": allow
+                "status": allow
+                "info": allow
+                "whoami": allow
+                "*create*": ask
+                "*update*": ask
+                "*delete*": ask
+                "*remove*": ask
+                "*write*": ask
+                "*replace*": ask
+                "*execute*": ask
+                "*merge*": ask
+                "*push*": ask
+                "*send*": ask
+                "*deploy*": ask
+                "*drop*": ask
+
+              # The browser tools that act with the logged-in profile or run script.
+              browser_evaluate_script: ask
+              browser_upload_file: ask
+              browser_switch_mode: ask
+              browser_setup: ask
+              browser_reauth: ask
+
+# The package declares the provider; the policy below is the part no project
+# file and no user rule can relax. Deny rules always win over every layer.
+capabilities:
+  permissions:
+    enabled: true
+    provider:
+      id: certified/pi-permission-system
+      version: 39.0.4
+      implements: [piship.capability/permissions/v1]
+      package: pi-permission-system
+    settings:
+      autoApproveFile: extensions/pi-permission-system/config.json
+      autoApproveKey: yoloMode
+
+packageTrust:
+  npm: { requireIntegrity: true }
+
+# Personal policy: allow by default, and deny clear secrets for every tool.
+# Asking is the permission provider's job (above), so there is no ask rule
+# here to prompt a second time for the same command.
+policy:
+  default: allow
+  # What a project can bring in, decided by where it came from. The origin is
+  # unknown until a company or external matcher claims it (see the README), so a
+  # repository you cloned today is the "unknown" column. A project's own
+  # instructions and skills are read; its .pi extensions ask. Its Claude Code
+  # configuration (pi-code reads it) is loaded for a company or external origin
+  # and asked about, once per launch, for an unknown one. Hooks are the part of
+  # that configuration that runs commands: the README says how to close them.
+  projectTrust:
+    company:
+      passiveContext: allow
+      instructions: allow
+      skills: allow
+      agents: allow
+      hooks: deny
+      extensions: ask
+      mcp: allow
+      providers: deny
+      claudeRules: allow
+      claudeCommands: allow
+      claudeSkills: allow
+      claudeAgents: allow
+      claudeHooks: allow
+    external:
+      passiveContext: allow
+      instructions: allow
+      skills: allow
+      agents: allow
+      hooks: deny
+      extensions: ask
+      mcp: allow
+      providers: deny
+      claudeRules: allow
+      claudeCommands: allow
+      claudeSkills: allow
+      claudeAgents: allow
+      claudeHooks: allow
+    unknown:
+      passiveContext: allow
+      instructions: allow
+      skills: allow
+      agents: ask
+      hooks: deny
+      extensions: ask
+      mcp: ask
+      providers: deny
+      claudeRules: ask
+      claudeCommands: ask
+      claudeSkills: ask
+      claudeAgents: ask
+      claudeHooks: ask
+  # Clear secrets, for every governed tool (read, write, edit) and in every
+  # layer: a project file or a user rule cannot relax an enforced rule. The
+  # permission provider denies the same paths for bash and the other tools.
+  enforced:
+    - id: dev.secret.ssh
+      action: filesystem.*
+      resource: "~/.ssh/**"
+      effect: deny
+      reason: SSH keys are never read or written by the agent
+    - id: dev.secret.key-rsa
+      action: filesystem.*
+      resource: "**/id_rsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-dsa
+      action: filesystem.*
+      resource: "**/id_dsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ecdsa
+      action: filesystem.*
+      resource: "**/id_ecdsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ed25519
+      action: filesystem.*
+      resource: "**/id_ed25519"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.gnupg
+      action: filesystem.*
+      resource: "~/.gnupg/**"
+      effect: deny
+      reason: GnuPG keys are never read or written by the agent
+    - id: dev.secret.aws
+      action: filesystem.*
+      resource: "~/.aws/credentials"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.gcloud
+      action: filesystem.*
+      resource: "~/.config/gcloud/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.azure
+      action: filesystem.*
+      resource: "~/.azure/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.kube
+      action: filesystem.*
+      resource: "~/.kube/config"
+      effect: deny
+      reason: Cluster credentials are never read or written by the agent
+    - id: dev.secret.docker
+      action: filesystem.*
+      resource: "~/.docker/config.json"
+      effect: deny
+      reason: Registry credentials are never read or written by the agent
+    - id: dev.secret.netrc
+      action: filesystem.*
+      resource: "~/.netrc"
+      effect: deny
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.npmrc
+      action: filesystem.*
+      resource: "~/.npmrc"
+      effect: deny
+      reason: Registry tokens are never read or written by the agent
+    - id: dev.secret.git-credentials
+      action: filesystem.*
+      resource: "~/.git-credentials"
+      effect: deny
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.gh
+      action: filesystem.*
+      resource: "~/.config/gh/hosts.yml"
+      effect: deny
+      reason: The GitHub CLI token is never read or written by the agent
+    - id: dev.secret.keychains
+      action: filesystem.*
+      resource: "~/Library/Keychains/**"
+      effect: deny
+      reason: Keychains are never read or written by the agent
+    - id: dev.secret.keyrings
+      action: filesystem.*
+      resource: "~/.local/share/keyrings/**"
+      effect: deny
+      reason: Keyrings are never read or written by the agent
+    - id: dev.secret.browser-profile
+      action: filesystem.*
+      resource: "~/.pi/browser-profile/**"
+      effect: deny
+      reason: The browser profile holds logged-in sessions
+
+mcp:
+  mode: explicit
+  # pi-code reads .mcp.json itself, after it has asked about the project.
+  project: deny
+
+# Optional for a personal distribution. On Linux or macOS, `required: true`
+# contains bash and `!` commands. It does not contain bg_run, the browser, or
+# the packages' own file access: see the README.
+sandbox:
+  required: false
+
+audit:
+  enabled: false
+
+# Signed release channels. The example pins no key: add your own
+# updates.trust.bootstrap (piship keygen) before `update` can verify anything.
+updates:
+  channel: stable
+  channels: [stable, candidate]
+  source: ${DEVCODE_UPDATE_SOURCE}
+  rollback: true
+
+release:
+  targets: [linux-x64, darwin-arm64, win32-x64]
+  sources: [https://registry.npmjs.org]
+  vulnerabilities:
+    failOn: high
+  # Install scripts in the packages' dependencies, read and reviewed for this
+  # lock. PiShip never runs either one: the build installs with
+  # --ignore-scripts.
+  #
+  # @ast-grep/cli postinstall: hard-links or copies the platform binary from its
+  # own optional package (@ast-grep/cli-<platform>) over the package's `ast-grep`
+  # shim. It reads files inside node_modules, runs nothing, and uses no network.
+  # Without it the shim still resolves the binary at run time.
+  #
+  # tree-sitter-bash install (`node-gyp-build`): loads a native binding from the
+  # package's prebuilds/ and compiles from source only when none matches.
+  # pi-permission-system loads the package's WebAssembly parser
+  # (tree-sitter-bash.wasm) through web-tree-sitter and never the native binding.
+  installScripts:
+    - pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3
+    - pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1

@@ -2790,6 +2790,7 @@ describe("committed example locks", () => {
   it.each([
     "demo-company",
     "personal",
+    "developer",
     "enterprise-reference",
     "enterprise-reference/sandbox",
   ])("keeps examples/%s/piship.lock current", (name) => {

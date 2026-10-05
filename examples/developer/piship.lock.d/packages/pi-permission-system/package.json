@@ -1,0 +1,8 @@
+{
+  "name": "piship-package-pi-permission-system",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@gotgenes/pi-permission-system": "39.0.4"
+  }
+}
