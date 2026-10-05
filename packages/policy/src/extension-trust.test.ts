@@ -27,8 +27,8 @@ import { makePolicy } from "./fixtures.test-helpers.js";
 import {
   discoverProjectResources,
   identifyProject,
-  projectDimensionEffect,
   type ProjectResourceCandidate,
+  projectDimensionEffect,
 } from "./project.js";
 import {
   claudeDimensionEffect,
@@ -175,16 +175,12 @@ describe("Claude Code trust dimensions", () => {
     ).toBe("allow");
   });
 
-  it("follow resourceTrust.project: deny denies all, allow admits rules, commands, and skills but not agents or hooks", () => {
+  it("resourceTrust.project: allow admits Claude rules while executable dimensions still require explicit trust", () => {
     const policy = makePolicy();
     const allowed = makePolicy({
       resourceTrust: { ...policy.resourceTrust, project: "allow" },
     });
-    for (const dimension of [
-      "claudeRules",
-      "claudeCommands",
-      "claudeSkills",
-    ] as const)
+    for (const dimension of ["claudeRules"] as const)
       expect(
         projectDimensionEffect(
           allowed,
@@ -193,7 +189,12 @@ describe("Claude Code trust dimensions", () => {
           "managed",
         ),
       ).toBe("allow");
-    for (const dimension of ["claudeAgents", "claudeHooks"] as const)
+    for (const dimension of [
+      "claudeCommands",
+      "claudeSkills",
+      "claudeAgents",
+      "claudeHooks",
+    ] as const)
       expect(
         projectDimensionEffect(
           allowed,

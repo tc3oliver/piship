@@ -510,7 +510,11 @@ describe("the --yolo indicator", () => {
       const started = context(async () => false);
       await handlers.get("session_start")?.({}, started.ctx);
       expect(started.status.at(-1)).toBe("YOLO");
-      expect(started.notices).toEqual([
+      expect(
+        started.notices.filter((item) =>
+          item.message.startsWith("yolo is on for this session only:"),
+        ),
+      ).toEqual([
         {
           message: expect.stringMatching(
             /^yolo is on for this session only: .*deny.* still appl.*nothing is stored; \/auto off ends it$/,

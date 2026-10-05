@@ -147,6 +147,7 @@ function builtinDenial(
   gov: GovernanceSession,
   action: "filesystem.read" | "filesystem.write",
   paths: readonly string[],
+  existingDirectory: boolean,
 ): string | undefined {
   const posix = paths.map((path) => toPosixPath(path));
   const state = normalizePathResource(gov.options.stateDir, {
@@ -166,7 +167,7 @@ function builtinDenial(
         protection.directories.some(
           (dir) =>
             isWithinPosix(toPosixPath(dir), path) ||
-            isWithinPosix(path, toPosixPath(dir)),
+            (!existingDirectory && isWithinPosix(path, toPosixPath(dir))),
         ),
       )
     )
@@ -210,6 +211,7 @@ export async function gatePath(
   action: Extract<PolicyAction, "filesystem.read" | "filesystem.write">,
   path: string,
   tool: string,
+  existingDirectory = false,
 ): Promise<string> {
   const lexical = resolve(path);
   const real = realpathNearest(lexical);
@@ -228,7 +230,12 @@ export async function gatePath(
       `Plan mode does not change files. Switch to Build mode (/build) to write ${path}.`,
     );
   }
-  const builtin = builtinDenial(gov, action, [lexical, real]);
+  const builtin = builtinDenial(
+    gov,
+    action,
+    [lexical, real],
+    existingDirectory,
+  );
   if (builtin) {
     gov.metrics.recordPolicyDenial(action);
     gov.emit("tool.denied", {
@@ -900,13 +907,20 @@ export function governedTools(
       operations: {
         writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
-          // Existing parents need no filesystem mutation; guarding a project
-          // root against replacement must not prevent ordinary file writes.
-          try {
-            if ((await stat(absolute(dir))).isDirectory()) return;
-          } catch {}
-          await gatePath(gov, "filesystem.write", absolute(dir), "write");
-          await mkdir(dir, { recursive: true });
+          // Keep the parent policy decision even when mkdir needs no change:
+          // it is an independent opportunity to notice a redirected path.
+          const existingDirectory = await stat(absolute(dir)).then(
+            (info) => info.isDirectory(),
+            () => false,
+          );
+          await gatePath(
+            gov,
+            "filesystem.write",
+            absolute(dir),
+            "write",
+            existingDirectory,
+          );
+          if (!existingDirectory) await mkdir(dir, { recursive: true });
         },
       },
     }) as ToolDefinition,

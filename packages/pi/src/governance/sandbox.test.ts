@@ -431,7 +431,10 @@ describe("file-tool denial labels", () => {
       engine: {
         context: { workspaceRoot: workspace, homeDir: root, tmpDir: root },
       },
-      options: { stateDir: join(root, "state") },
+      options: {
+        stateDir: join(root, "state"),
+        lock: { deployment: { mode: "personal" } },
+      },
       project: { root: workspace },
       sandbox: {
         report: { level: "enforced", planes },
@@ -580,7 +583,10 @@ describe("the user's git config outside the project", () => {
         engine: {
           context: { workspaceRoot: workspace, homeDir: home, tmpDir: root },
         },
-        options: { stateDir: join(root, "state") },
+        options: {
+          stateDir: join(root, "state"),
+          lock: { deployment: { mode: "personal" } },
+        },
         project: { root: workspace },
         sandbox: { report: { level: "unavailable" } },
         currentChannel: () => "interactive",

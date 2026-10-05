@@ -32,6 +32,11 @@ policy:
       extensions: deny
       mcp: deny
       providers: deny
+      claudeRules: deny
+      claudeCommands: deny
+      claudeSkills: deny
+      claudeAgents: deny
+      claudeHooks: deny
     external: *a1
     unknown: *a1
 sandbox:

@@ -5,13 +5,13 @@ import {
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
   ManifestError,
+  migrateManifestSource,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
-  SUPPORTED_SCHEMAS,
-  migrateManifestSource,
   parseGovernance,
   parseManifest,
   parseManifestHeader,
+  SUPPORTED_SCHEMAS,
 } from "./index.js";
 
 type Json = Record<string, unknown>;
@@ -2285,6 +2285,11 @@ describe("migration to piship/v1alpha3", () => {
         extensions: "deny",
         mcp: "deny",
         providers: "deny",
+        claudeRules: "deny",
+        claudeCommands: "deny",
+        claudeSkills: "deny",
+        claudeAgents: "deny",
+        claudeHooks: "deny",
       });
     expect(manifest.governance?.sandbox.required).toBe(false);
     expect(manifest.governance?.sandbox.network.mode).toBe("allow");
