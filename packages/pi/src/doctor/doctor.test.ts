@@ -781,13 +781,13 @@ describe("Network group", () => {
       credential: {
         provider: "http-broker",
         broker: {
-          endpoint: "http://10.99.236.70:8080/token",
+          endpoint: "http://10.20.30.40:8080/token",
           httpTransport: "http-allowed",
         },
       },
       inference: {
         provider: "openai-compatible",
-        baseUrl: "http://10.99.236.70:4000/v1",
+        baseUrl: "http://10.20.30.40:4000/v1",
         httpTransport: "http-allowed",
       },
     };
@@ -810,8 +810,8 @@ describe("Network group", () => {
     const lines = group(renderDoctor(data).render(), "Network");
     expect(lines.slice(0, 4)).toEqual([
       `  - ${"identity.oidc.httpTransport".padEnd(20)} http-allowed; the issuer resolves to https`,
-      `  ! ${"credential.broker.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:8080; the identity token and the issued gateway credential are unencrypted on the network path`,
-      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.99.236.70:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
+      `  ! ${"credential.broker.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.20.30.40:8080; the identity token and the issued gateway credential are unencrypted on the network path`,
+      `  ! ${"inference.httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.20.30.40:4000; the gateway credential and every prompt and response are unencrypted on the network path`,
       `  ! ${"audit sink collector httpTransport".padEnd(20)} http-allowed: plain HTTP to 10.0.0.6; audit events are unencrypted on the network path`,
     ]);
     expect(lines[4]).toContain("TLS verification");
@@ -824,7 +824,7 @@ describe("Network group", () => {
     process.env.NO_PROXY = "10.0.0.6";
     const proxied = group(renderDoctor(data).render(), "Network");
     expect(proxied).toContain(
-      `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.99.236.70 would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add 10.99.236.70 to NO_PROXY`,
+      `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.20.30.40 would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add 10.20.30.40 to NO_PROXY`,
     );
     // NO_PROXY names the audit collector, so it goes direct.
     expect(
@@ -1800,7 +1800,7 @@ describe("MCP group", () => {
                   transport: "streamable-http",
                   httpTransport: "http-allowed",
                   headers: {
-                    "X-MiTAC-User": { identityClaim: "preferred_username" },
+                    "X-Company-User": { identityClaim: "preferred_username" },
                   },
                 },
               ],
@@ -1821,7 +1821,7 @@ describe("MCP group", () => {
       }),
     ).render();
     expect(group(output, "MCP")).toEqual([
-      `  ! ${"mcp tickets".padEnd(20)} healthy (streamable-http; plain HTTP, unencrypted; identity headers X-MiTAC-User from preferred_username; 1 tool(s))`,
+      `  ! ${"mcp tickets".padEnd(20)} healthy (streamable-http; plain HTTP, unencrypted; identity headers X-Company-User from preferred_username; 1 tool(s))`,
     ]);
   });
 });

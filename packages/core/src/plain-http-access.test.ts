@@ -26,9 +26,9 @@ afterEach(() => {
 const ENV = {
   ACMECODE_OIDC_ISSUER: "http://keycloak.corp.internal/realms/acme",
   ACMECODE_OIDC_CLIENT_ID: "acmecode",
-  ACMECODE_CREDENTIAL_BROKER_URL: "http://10.99.236.70:8080/token",
-  ACMECODE_CREDENTIAL_REVOKE_URL: "http://10.99.236.70:8080/revoke",
-  ACMECODE_LLM_GATEWAY_URL: "http://10.99.236.70:4000/v1",
+  ACMECODE_CREDENTIAL_BROKER_URL: "http://10.20.30.40:8080/token",
+  ACMECODE_CREDENTIAL_REVOKE_URL: "http://10.20.30.40:8080/revoke",
+  ACMECODE_LLM_GATEWAY_URL: "http://10.20.30.40:4000/v1",
 };
 
 /** The demo's access section with every endpoint opted in to plain HTTP. */
@@ -81,7 +81,7 @@ describe("access endpoints with httpTransport: http-allowed", () => {
     expect(() =>
       resolveRuntimeReferences(optedIn(access), {
         ...ENV,
-        ACMECODE_LLM_GATEWAY_URL: "http://user:pw@10.99.236.70:4000/v1",
+        ACMECODE_LLM_GATEWAY_URL: "http://user:pw@10.20.30.40:4000/v1",
       }),
     ).toThrow(/must not embed credentials/);
   });
@@ -103,9 +103,9 @@ describe("access endpoints with httpTransport: http-allowed", () => {
       });
     const opened = open(optedIn(access));
     const admit = opened.inferencePlainHttp;
-    expect(admit?.(new URL("http://10.99.236.70:4000/v1/chat"))).toBe(true);
+    expect(admit?.(new URL("http://10.20.30.40:4000/v1/chat"))).toBe(true);
     // The broker shares the host but not the port; it is not the gateway.
-    expect(admit?.(new URL("http://10.99.236.70:8080/token"))).toBe(false);
+    expect(admit?.(new URL("http://10.20.30.40:8080/token"))).toBe(false);
     expect(admit?.(new URL("http://keycloak.corp.internal/"))).toBe(false);
     // Only the gateway's opt-in widens the process dispatcher.
     const brokerOnly = optedIn(access);
@@ -113,18 +113,18 @@ describe("access endpoints with httpTransport: http-allowed", () => {
     expect(
       open(
         { ...brokerOnly, inference },
-        { ...ENV, ACMECODE_LLM_GATEWAY_URL: "https://10.99.236.70:4000/v1" },
+        { ...ENV, ACMECODE_LLM_GATEWAY_URL: "https://10.20.30.40:4000/v1" },
       ).inferencePlainHttp,
     ).toBeUndefined();
     // Opted in, but the gateway resolves to https: nothing is widened.
     expect(
       open(optedIn(access), {
         ...ENV,
-        ACMECODE_LLM_GATEWAY_URL: "https://10.99.236.70:4000/v1",
+        ACMECODE_LLM_GATEWAY_URL: "https://10.20.30.40:4000/v1",
       }).inferencePlainHttp,
     ).toBeUndefined();
     expect(open(optedIn(access)).network.allowHosts).toEqual([
-      "10.99.236.70",
+      "10.20.30.40",
       "keycloak.corp.internal",
     ]);
   });

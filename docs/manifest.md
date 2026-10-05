@@ -392,12 +392,12 @@ mcp:
   servers:
     tickets:
       transport: streamable-http
-      url: http://10.99.236.70/mcp
+      url: http://10.20.30.40/mcp
       httpTransport: http-allowed
       headers:
-        X-MiTAC-User: { identityClaim: preferred_username }
+        X-Company-User: { identityClaim: preferred_username }
 network:
-  allowHosts: [10.99.236.70]
+  allowHosts: [10.20.30.40]
 ```
 
 `httpTransport: http-allowed` permits plain HTTP to a private or internal host, the same hosts as the [plain-HTTP update channel](#plain-http-update-channel-v1alpha5): loopback, an IP address in 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7, or fe80::/10, a single-label name that is not a public top-level domain, or a name ending in `.internal`, `.local`, `.lan`, `.corp`, `.home.arpa`, or `.intranet`. Only the name is judged, never DNS.
@@ -435,18 +435,18 @@ identity:
 credential:
   provider: http-broker
   broker:
-    endpoint: http://10.99.236.70:8080/v1/llm-credential
-    revokeEndpoint: http://10.99.236.70:8080/v1/revoke
+    endpoint: http://10.20.30.40:8080/v1/llm-credential
+    revokeEndpoint: http://10.20.30.40:8080/v1/revoke
     httpTransport: http-allowed
 inference:
   provider: openai-compatible
-  baseUrl: http://10.99.236.70:4000/v1
+  baseUrl: http://10.20.30.40:4000/v1
   httpTransport: http-allowed
 audit:
   sinks:
-    - { id: collector, type: http, url: http://10.99.236.71:9000/events, httpTransport: http-allowed }
+    - { id: collector, type: http, url: http://10.20.30.41:9000/events, httpTransport: http-allowed }
 network:
-  allowHosts: [10.99.236.71]
+  allowHosts: [10.20.30.41]
 ```
 
 | Field | What may be plain HTTP | What then travels unencrypted |

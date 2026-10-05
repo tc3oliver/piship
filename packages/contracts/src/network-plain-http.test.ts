@@ -64,30 +64,30 @@ async function proxy(): Promise<string[]> {
   return seen;
 }
 
-const GATEWAY = "http://10.99.236.70:4000/v1";
+const GATEWAY = "http://10.20.30.40:4000/v1";
 /** fetch through the process dispatcher: a TypeError caused by the refusal. */
 const DENIED = { cause: expect.objectContaining({ code: "NETWORK_DENIED" }) };
 const privateOnly: NetworkPolicy = {
   ...DEFAULT_NETWORK_POLICY,
   privateOnly: true,
-  allowHosts: ["10.99.236.70", "10.99.236.71", "broker.corp.internal"],
+  allowHosts: ["10.20.30.40", "10.20.30.41", "broker.corp.internal"],
 };
 
 describe("plainHttpOrigins", () => {
   it("admits plain HTTP to the exact origin of a private plain-HTTP URL only", () => {
     const admit = plainHttpOrigins([GATEWAY]);
-    expect(admit?.(new URL("http://10.99.236.70:4000/v1/models"))).toBe(true);
+    expect(admit?.(new URL("http://10.20.30.40:4000/v1/models"))).toBe(true);
     // Another port, another private host, or https is not this origin.
-    expect(admit?.(new URL("http://10.99.236.70:4001/v1"))).toBe(false);
-    expect(admit?.(new URL("http://10.99.236.70/v1"))).toBe(false);
-    expect(admit?.(new URL("http://10.99.236.71:4000/v1"))).toBe(false);
-    expect(admit?.(new URL("https://10.99.236.70:4000/v1"))).toBe(false);
+    expect(admit?.(new URL("http://10.20.30.40:4001/v1"))).toBe(false);
+    expect(admit?.(new URL("http://10.20.30.40/v1"))).toBe(false);
+    expect(admit?.(new URL("http://10.20.30.41:4000/v1"))).toBe(false);
+    expect(admit?.(new URL("https://10.20.30.40:4000/v1"))).toBe(false);
   });
 
   it("is undefined unless a URL is plain HTTP to a private or internal host", () => {
     expect(plainHttpOrigins([])).toBeUndefined();
     expect(plainHttpOrigins([undefined, "not a url"])).toBeUndefined();
-    expect(plainHttpOrigins(["https://10.99.236.70:4000/v1"])).toBeUndefined();
+    expect(plainHttpOrigins(["https://10.20.30.40:4000/v1"])).toBeUndefined();
     expect(
       plainHttpOrigins(["http://gateway.acme.example/v1"]),
     ).toBeUndefined();
@@ -105,8 +105,8 @@ describe("an opted-in endpoint's managed fetch", () => {
     expect(await response.text()).toBe("ok");
     expect(seen).toEqual([`${GATEWAY}/models`]);
     for (const other of [
-      "http://10.99.236.71:4000/v1/models",
-      "http://10.99.236.70:4001/v1/models",
+      "http://10.20.30.41:4000/v1/models",
+      "http://10.20.30.40:4001/v1/models",
       "http://broker.corp.internal/token",
     ])
       await expect(fetcher(other)).rejects.toMatchObject({
@@ -158,7 +158,7 @@ describe("plain HTTP through a proxy", () => {
         env,
       ),
     ).toBeUndefined();
-    for (const noProxy of ["10.99.236.70", "localhost, 10.99.236.70:4000", "*"])
+    for (const noProxy of ["10.20.30.40", "localhost, 10.20.30.40:4000", "*"])
       expect(
         plainHttpProxy(target, DEFAULT_NETWORK_POLICY, {
           ...env,
@@ -169,7 +169,7 @@ describe("plain HTTP through a proxy", () => {
     expect(
       plainHttpProxy(target, DEFAULT_NETWORK_POLICY, {
         ...env,
-        NO_PROXY: "10.99.236.70:8080",
+        NO_PROXY: "10.20.30.40:8080",
       }),
     ).toBeDefined();
     expect(
@@ -190,7 +190,7 @@ describe("plain HTTP through a proxy", () => {
       message: expect.stringContaining(
         "through the proxy http://proxy.acme.example:3128, which is not a private or internal host",
       ),
-      userAction: expect.stringContaining("Add 10.99.236.70 to NO_PROXY"),
+      userAction: expect.stringContaining("Add 10.20.30.40 to NO_PROXY"),
     };
     for (const policy of [privateOnly, DEFAULT_NETWORK_POLICY])
       await expect(
@@ -218,7 +218,7 @@ describe("applyProcessNetworkPolicy plainHttp", () => {
     expect(await response.text()).toBe("ok");
     expect(seen).toEqual([`${GATEWAY}/chat/completions`]);
     // Another private host the policy allows is still refused over plain HTTP.
-    await expect(fetch("http://10.99.236.71:4000/v1")).rejects.toMatchObject(
+    await expect(fetch("http://10.20.30.41:4000/v1")).rejects.toMatchObject(
       DENIED,
     );
     await expect(

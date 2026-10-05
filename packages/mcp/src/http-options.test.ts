@@ -102,7 +102,7 @@ describe("plain HTTP to a private or internal host", () => {
       expect(() => transport(url, { credential: true })).not.toThrow();
     }
     for (const url of [
-      "http://10.99.236.70/mcp",
+      "http://10.20.30.40/mcp",
       "http://mcp.corp.internal/mcp",
     ])
       expect(() => transport(url)).toThrow(/must use https/);
@@ -110,7 +110,7 @@ describe("plain HTTP to a private or internal host", () => {
 
   it("is accepted for a private or internal host with http-allowed", () => {
     for (const url of [
-      "http://10.99.236.70/mcp",
+      "http://10.20.30.40/mcp",
       "http://192.168.1.20:8080/mcp",
       "http://mcp/mcp",
       "http://mcp.corp.internal/mcp",
@@ -132,7 +132,7 @@ describe("plain HTTP to a private or internal host", () => {
 
   it("never sends the runtime credential over plain HTTP", () => {
     expect(() =>
-      transport("http://10.99.236.70/mcp", {
+      transport("http://10.20.30.40/mcp", {
         plainHttp: true,
         credential: true,
       }),
@@ -143,7 +143,7 @@ describe("plain HTTP to a private or internal host", () => {
     const fixture = await startFixtureHttpServer({ serverName: "tickets" });
     cleanup.push(() => fixture.close());
     const seen: string[] = [];
-    const url = "http://10.99.236.70/mcp";
+    const url = "http://10.20.30.40/mcp";
     const { governor: g } = governor({
       // The ordinary fetch keeps the loopback-only rule and is never used.
       fetch: notCalled,
@@ -152,7 +152,7 @@ describe("plain HTTP to a private or internal host", () => {
     });
     const [report] = await g.start();
     expect(report).toMatchObject({ state: "healthy", plainHttp: true });
-    expect(new Set(seen)).toEqual(new Set(["http://10.99.236.70"]));
+    expect(new Set(seen)).toEqual(new Set(["http://10.20.30.40"]));
   });
 
   it("fails a templated url that resolves to a public host closed", async () => {
@@ -183,12 +183,12 @@ describe("plain HTTP to a private or internal host", () => {
 
 describe("identity headers", () => {
   const user = "alice.chen";
-  const headers = { "X-MiTAC-User": { identityClaim: "preferred_username" } };
+  const headers = { "X-Company-User": { identityClaim: "preferred_username" } };
 
   it("sends the signed-in identity's claim on every request", async () => {
     const fixture = await startFixtureHttpServer({
       serverName: "tickets",
-      recordHeader: "X-MiTAC-User",
+      recordHeader: "X-Company-User",
     });
     cleanup.push(() => fixture.close());
     const { governor: g, audit } = governor({
@@ -209,7 +209,7 @@ describe("identity headers", () => {
   it("asks for the claims on every request, never caching a value", async () => {
     const fixture = await startFixtureHttpServer({
       serverName: "tickets",
-      recordHeader: "X-MiTAC-User",
+      recordHeader: "X-Company-User",
     });
     cleanup.push(() => fixture.close());
     let current = "alice.chen";
@@ -287,7 +287,7 @@ describe("identity headers", () => {
       const fixture = await startFixtureHttpServer({ serverName: "tickets" });
       cleanup.push(() => fixture.close());
       const declared = name.includes("email")
-        ? { "X-MiTAC-User": { identityClaim: "email" } }
+        ? { "X-Company-User": { identityClaim: "email" } }
         : headers;
       const optional = governor({
         identityClaims: claims,
@@ -312,7 +312,7 @@ describe("identity headers", () => {
   it("sends a verified email", async () => {
     const fixture = await startFixtureHttpServer({
       serverName: "tickets",
-      recordHeader: "X-MiTAC-Mail",
+      recordHeader: "X-Company-Mail",
     });
     cleanup.push(() => fixture.close());
     const { governor: g } = governor({
@@ -322,7 +322,7 @@ describe("identity headers", () => {
       }),
       servers: [
         server(fixture.url, {
-          headers: { "X-MiTAC-Mail": { identityClaim: "email" } },
+          headers: { "X-Company-Mail": { identityClaim: "email" } },
         }),
       ],
     });
@@ -355,7 +355,7 @@ describe("identity headers", () => {
   it("fails a running session's tool call after the principal changes", async () => {
     const fixture = await startFixtureHttpServer({
       serverName: "tickets",
-      recordHeader: "X-MiTAC-User",
+      recordHeader: "X-Company-User",
     });
     cleanup.push(() => fixture.close());
     let switched = false;

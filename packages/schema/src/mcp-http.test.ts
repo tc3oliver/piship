@@ -14,7 +14,7 @@ type Json = Record<string, unknown>;
 /** A `${MCP_URL}` runtime reference. */
 const MCP_URL_REF = ["$", "{MCP_URL}"].join("");
 
-const HEADERS = { "X-MiTAC-User": { identityClaim: "preferred_username" } };
+const HEADERS = { "X-Company-User": { identityClaim: "preferred_username" } };
 
 function managed(server: Json, extra: Json = {}): Json {
   return {
@@ -55,7 +55,7 @@ function managed(server: Json, extra: Json = {}): Json {
         },
       },
     },
-    network: { allowHosts: ["10.99.236.70", "mcp.corp.internal"] },
+    network: { allowHosts: ["10.20.30.40", "mcp.corp.internal"] },
     mcp: {
       servers: {
         tools: { transport: "streamable-http", ...server },
@@ -97,7 +97,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
 
   it("keeps plain HTTP to loopback only without the opt-in", () => {
     rejects(
-      managed({ url: "http://10.99.236.70/mcp" }),
+      managed({ url: "http://10.20.30.40/mcp" }),
       "mcp.servers.tools.url",
       "plain http is accepted only for loopback",
     );
@@ -105,7 +105,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
 
   it("accepts plain HTTP to a private or internal host with http-allowed", () => {
     for (const url of [
-      "http://10.99.236.70/mcp",
+      "http://10.20.30.40/mcp",
       "http://mcp.corp.internal/mcp",
     ])
       expect(
@@ -139,7 +139,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
     const warnings = launchWarnings(
       parseManifest(
         managed({
-          url: "http://10.99.236.70/mcp",
+          url: "http://10.20.30.40/mcp",
           httpTransport: "http-allowed",
         }),
       ),
@@ -152,7 +152,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
       launchWarnings(
         parseManifest(
           managed({
-            url: "https://10.99.236.70/mcp",
+            url: "https://10.20.30.40/mcp",
             httpTransport: "http-allowed",
           }),
         ),
@@ -198,7 +198,7 @@ describe("mcp.servers.<id>.httpTransport", () => {
 
   it("rejects an unknown value", () => {
     rejects(
-      managed({ url: "http://10.99.236.70/mcp", httpTransport: "http" }),
+      managed({ url: "http://10.20.30.40/mcp", httpTransport: "http" }),
       "mcp.servers.tools.httpTransport",
       "Expected https, http-allowed",
     );
@@ -218,7 +218,7 @@ describe("mcp.servers.<id>.headers", () => {
     expect(
       serverOf(
         managed({
-          url: "http://10.99.236.70/mcp",
+          url: "http://10.20.30.40/mcp",
           httpTransport: "http-allowed",
           headers: HEADERS,
         }),
@@ -237,7 +237,7 @@ describe("mcp.servers.<id>.headers", () => {
         parseManifest(
           managed({
             url: "https://mcp.acme.example/mcp",
-            headers: { "X-MiTAC-User": value },
+            headers: { "X-Company-User": value },
           }),
         ),
       ).toThrow(ManifestError);
@@ -248,9 +248,9 @@ describe("mcp.servers.<id>.headers", () => {
       rejects(
         managed({
           url: "https://mcp.acme.example/mcp",
-          headers: { "X-MiTAC-User": { identityClaim: claim } },
+          headers: { "X-Company-User": { identityClaim: claim } },
         }),
-        "mcp.servers.tools.headers.X-MiTAC-User.identityClaim",
+        "mcp.servers.tools.headers.X-Company-User.identityClaim",
         "Expected sub, preferred_username, email",
       );
   });
@@ -362,7 +362,7 @@ describe("plain HTTP to a name others can answer for", () => {
                 allowHosts: [
                   "mcp",
                   "mcp.local",
-                  "10.99.236.70",
+                  "10.20.30.40",
                   "mcp.corp.internal",
                 ],
               },
@@ -376,7 +376,7 @@ describe("plain HTTP to a name others can answer for", () => {
       );
     expect(warned("http://mcp/mcp")).toBe(true);
     expect(warned("http://mcp.local/mcp")).toBe(true);
-    expect(warned("http://10.99.236.70/mcp")).toBe(false);
+    expect(warned("http://10.20.30.40/mcp")).toBe(false);
     expect(warned("http://mcp.corp.internal/mcp")).toBe(false);
     expect(warned("https://mcp/mcp")).toBe(false);
   });

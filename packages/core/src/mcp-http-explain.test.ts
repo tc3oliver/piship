@@ -34,10 +34,10 @@ describe("config explain for MCP plain HTTP and identity headers", () => {
             ...docs,
             id: "tickets",
             transport: "streamable-http",
-            url: "http://10.99.236.70/mcp",
+            url: "http://10.20.30.40/mcp",
             httpTransport: "http-allowed",
             headers: {
-              "X-MiTAC-User": { identityClaim: "preferred_username" },
+              "X-Company-User": { identityClaim: "preferred_username" },
             },
           },
         ],
@@ -63,7 +63,7 @@ describe("config explain for MCP plain HTTP and identity headers", () => {
       }),
       expect.objectContaining({
         key: "mcp.servers.tickets.headers",
-        value: ["X-MiTAC-User: preferred_username"],
+        value: ["X-Company-User: preferred_username"],
       }),
     ]);
   });
