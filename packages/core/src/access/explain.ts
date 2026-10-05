@@ -26,6 +26,8 @@ export interface ExplainOptions extends AccessOptions {
   readonly governance?: GovernanceManifest;
   /** v1alpha4+ update policy; adds the update transport row. */
   readonly updates?: UpdatesManifest;
+  /** v1alpha6 bundled search tools, as tool -> upstream version. */
+  readonly searchTools?: Readonly<Record<string, string>>;
 }
 
 /** Governance settings as `config explain` rows; all distribution-enforced. */
@@ -152,6 +154,21 @@ export async function explainConfiguration(
       source: "distribution-enforced",
       overridable: false,
     },
+    ...(options.searchTools
+      ? [
+          {
+            key: "runtime.searchTools",
+            value: "bundled",
+            source: "distribution-enforced",
+            overridable: false,
+            note: `${Object.entries(options.searchTools)
+              .map(([tool, version]) => `${tool} ${version}`)
+              .join(
+                ", ",
+              )} pinned in piship.lock and shipped in the payload; Pi uses them before any fd or rg on PATH`,
+          },
+        ]
+      : []),
   ];
   const reference = (key: string, template: string | undefined) => {
     if (template === undefined) return;

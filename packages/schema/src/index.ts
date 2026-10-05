@@ -15,6 +15,7 @@ import type {
   CacheWarmingConfig,
   GovernanceManifest,
   RuntimeToolsConfig,
+  SearchToolsConfig,
 } from "./governance.js";
 import { assertLaunchable } from "./launch.js";
 import {
@@ -23,6 +24,7 @@ import {
   parseCacheWarming,
   parseGovernance,
   parseRuntimeTools,
+  parseSearchTools,
   V1ALPHA6_GOVERNANCE_KEYS,
 } from "./governance-parse.js";
 import {
@@ -89,6 +91,8 @@ export interface Manifest {
     readonly tools?: RuntimeToolsConfig;
     /** Present for piship/v1alpha6 and later; an omitted mode is `off`. */
     readonly cacheWarming?: CacheWarmingConfig;
+    /** piship/v1alpha6: bundled `fd` and `rg`; absent unless declared. */
+    readonly searchTools?: SearchToolsConfig;
   };
   readonly deployment: { readonly mode: DeploymentMode };
   readonly resources: {
@@ -357,7 +361,7 @@ export function parseManifest(value: unknown): Manifest {
   const runtime = record(
     root.runtime,
     "runtime",
-    v6 ? ["pi", "tools", "cacheWarming"] : ["pi"],
+    v6 ? ["pi", "tools", "cacheWarming", "searchTools"] : ["pi"],
   );
   const deployment = record(root.deployment, "deployment", ["mode"]);
   const resources = v3
@@ -385,7 +389,10 @@ export function parseManifest(value: unknown): Manifest {
   let access: AccessManifest | undefined;
   let governance: GovernanceManifest | undefined;
   let lifecycle: LifecycleManifest | undefined;
-  let v6Runtime: Pick<Manifest["runtime"], "tools" | "cacheWarming"> = {};
+  let v6Runtime: Pick<
+    Manifest["runtime"],
+    "tools" | "cacheWarming" | "searchTools"
+  > = {};
   let data: DataManifest | undefined;
   if (v2)
     try {
@@ -404,6 +411,9 @@ export function parseManifest(value: unknown): Manifest {
           v6Runtime = {
             tools: parseRuntimeTools(runtime.tools),
             cacheWarming: parseCacheWarming(runtime.cacheWarming),
+            ...(runtime.searchTools === undefined
+              ? {}
+              : { searchTools: parseSearchTools(runtime.searchTools) }),
           };
           data = parseData(root.data);
         }

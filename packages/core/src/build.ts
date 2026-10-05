@@ -20,6 +20,7 @@ import {
 } from "./payload.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
+import { stageSearchTools } from "./search-tools/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import {
   sweepOutputStaging,
@@ -128,6 +129,12 @@ export function buildDistribution(
       vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
         supplyChainGates: options.supplyChainGates !== false,
       });
+    }
+    if (lock.searchTools) {
+      // The executables come from the cached upstream archives, checked
+      // against the lock; `downloadLockedSearchTools` fills the cache first.
+      options.progress?.("Placing the bundled search tools");
+      stageSearchTools(lock, stage);
     }
     writeFileSync(
       join(stage, "metadata", "target.json"),

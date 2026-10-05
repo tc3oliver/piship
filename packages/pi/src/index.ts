@@ -1,6 +1,6 @@
 /** The only Pi package integration boundary. All imports use the public package entrypoint. */
 import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   VERSION,
   type createAgentSession,
@@ -26,7 +26,9 @@ import { runCapabilities, runPolicy } from "./commands/governance.js";
 import { runModels } from "./commands/models.js";
 import { runInteractive, runSmoke } from "./commands/session.js";
 import type { LaunchContext } from "./launch/context.js";
+import { piAgentDirectory } from "./environment.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
+import { installSearchTools } from "./launch/search-tools.js";
 import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
@@ -115,10 +117,13 @@ export async function launchPiDistribution(
   // could delete another's files.
   assertDisjointRoots();
   const stateDir = runtimeStateDirectory({ value: metadata.app.id });
-  const agentDir = join(stateDir, "agent");
+  const agentDir = piAgentDirectory(metadata.app.id);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   applyPiEnvironment(agentDir, metadata.deployment.mode);
+  // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
+  // Pi's agent directory here before Pi was imported (environment.ts).
+  installSearchTools(metadata, options.distributionDir, agentDir);
   // Temporaries of state writers killed before their rename.
   sweepStateTemporaries(stateDir);
   // Directories of PiShip operations killed before they cleaned up: session

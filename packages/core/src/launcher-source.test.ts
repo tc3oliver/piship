@@ -40,6 +40,7 @@ function stub(name: string, source: string): void {
       name: `@piship/${name}`,
       type: "module",
       main: "index.js",
+      exports: { ".": "./index.js", "./environment": "./environment.js" },
     }),
   );
   write(join(directory, "index.js"), source);
@@ -49,8 +50,19 @@ function stub(name: string, source: string): void {
 function run(launch: string) {
   write(join(temp, "package.json"), JSON.stringify({ type: "module" }));
   write(join(temp, "bin", "acmepi"), launcherSource());
-  stub("core", "export function verifyPayload() { return {}; }\n");
-  stub("pi", `export async function launchPiDistribution() {\n${launch}\n}\n`);
+  stub(
+    "core",
+    'export function verifyPayload() { return { app: { id: "acmepi" } }; }\n',
+  );
+  // What Pi would see when @piship/pi imports it.
+  stub(
+    "pi",
+    `const agentDirAtImport = process.env.PI_CODING_AGENT_DIR;\nexport async function launchPiDistribution() {\n${launch}\n}\n`,
+  );
+  write(
+    join(temp, "node_modules", "@piship", "pi", "environment.js"),
+    "export function preparePiEnvironment(id) { process.env.PI_CODING_AGENT_DIR = '/state/' + id + '/agent'; }\n",
+  );
   symlinkSync(
     CONTRACTS,
     join(temp, "node_modules", "@piship", "contracts"),
@@ -79,6 +91,13 @@ describe("the generated launcher", () => {
     expect(result.stderr).not.toContain(SECRET);
     // One redacted message, not Node's stack trace.
     expect(result.stderr).not.toContain("    at ");
+  });
+
+  it("points Pi's agent directory at the distribution's state before @piship/pi is imported", () => {
+    // Pi fixes the directory it runs fd and rg from when it is imported.
+    const result = run("console.log(agentDirAtImport);");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/state/acmepi/agent");
   });
 
   it("redacts an exception thrown from a callback", () => {

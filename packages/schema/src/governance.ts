@@ -234,6 +234,24 @@ export interface CacheWarmingConfig {
   readonly userOverride: boolean;
 }
 
+/** The search tools a distribution can bundle for Pi's find, grep, and `@` completion. */
+export const SEARCH_TOOLS = ["fd", "rg"] as const;
+export type SearchTool = (typeof SEARCH_TOOLS)[number];
+/** `runtime.searchTools.mode`: only `bundled`. */
+export const SEARCH_TOOL_MODES = ["bundled"] as const;
+export type SearchToolMode = (typeof SEARCH_TOOL_MODES)[number];
+
+/**
+ * `runtime.searchTools` (piship/v1alpha6): `fd` and `rg` pinned at lock time
+ * and shipped in the payload. A version is present only when the manifest
+ * pins one; otherwise `piship lock` uses PiShip's default.
+ */
+export interface SearchToolsConfig {
+  readonly mode: SearchToolMode;
+  readonly fd?: string;
+  readonly rg?: string;
+}
+
 // -------------------------------------------------- runtime mutability
 
 /**

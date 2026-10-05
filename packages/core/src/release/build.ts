@@ -27,6 +27,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { STATE_SCHEMAS } from "../migration.js";
+import { downloadLockedSearchTools } from "../search-tools/index.js";
 import { workspacePackages } from "../runtime-dependencies.js";
 import {
   formatChecksums,
@@ -230,6 +231,9 @@ export async function buildRelease(
   );
   const stage = temporary.path;
   try {
+    // The pinned search tool archives for this target, checked against the
+    // lock, before the payload is assembled from them.
+    await downloadLockedSearchTools(lock, target);
     const built = (options.assemble ?? buildDistribution)(manifestPath, stage);
     const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });

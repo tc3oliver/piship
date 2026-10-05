@@ -52,6 +52,9 @@ export {
   type LockedPiPackage,
   type LockedPiSiblings,
   type LockedResource,
+  type LockedSearchTool,
+  type LockedSearchTools,
+  type LockedSearchToolTarget,
   LOCKED_TOOL_ORIGINS,
   type LockedToolExposure,
   type LockedToolOrigin,
@@ -72,6 +75,20 @@ export {
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
+export {
+  checkSearchTools,
+  checkSearchToolSources,
+  downloadLockedSearchTools,
+  downloadSearchToolArchives,
+  readSearchToolArchive,
+  SEARCH_TOOL_PAYLOAD_DIRECTORY,
+  SEARCH_TOOL_SPECS,
+  type SearchToolDownloadOptions,
+  type SearchToolRequest,
+  searchToolAsset,
+  searchToolCacheDirectory,
+  searchToolFileName,
+} from "./search-tools/index.js";
 export * from "./signing.js";
 export {
   type PassphraseInput,

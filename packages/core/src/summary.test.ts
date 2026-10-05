@@ -41,6 +41,20 @@ describe("formatSmokeSummary", () => {
     expect(text).toMatch(/mcp\s+notes healthy/);
   });
 
+  it("names the bundled search tools Pi's find and grep used", () => {
+    expect(formatSmokeSummary(JSON.stringify(smoke))).not.toContain(
+      "  search ",
+    );
+    expect(
+      formatSmokeSummary(
+        JSON.stringify({
+          ...smoke,
+          searchTools: { fd: "10.5.0", rg: "15.2.0" },
+        }),
+      ),
+    ).toMatch(/search\s+fd 10\.5\.0, rg 15\.2\.0 bundled/);
+  });
+
   it("returns output that is not JSON unchanged", () => {
     expect(formatSmokeSummary("not json")).toBe("not json");
   });

@@ -16,6 +16,7 @@ import type {
   PishipSchemaVersion,
   ReleaseManifest,
   RuntimeToolsConfig,
+  SearchTool,
   ToolExposure,
   UpdatesManifest,
 } from "@piship/schema";
@@ -159,11 +160,41 @@ export interface LockedDataContract {
 /** v1alpha6: the exact Pi sibling package versions (`name` -> version). */
 export type LockedPiSiblings = Readonly<Record<string, string>>;
 
+/**
+ * v1alpha6: one release target's upstream archive of a bundled search tool
+ * and the executable PiShip takes from it.
+ */
+export interface LockedSearchToolTarget {
+  /** The official upstream release archive. */
+  readonly url: string;
+  /** `sha256-<hex>` of the archive as downloaded. */
+  readonly archive: string;
+  /** The executable's path inside the archive. */
+  readonly entry: string;
+  /** `sha256-<hex>` of the executable. */
+  readonly binary: string;
+  readonly size: number;
+}
+/** v1alpha6: a bundled search tool at one upstream version. */
+export interface LockedSearchTool {
+  readonly version: string;
+  /** The upstream repository URL. */
+  readonly source: string;
+  /** Every release target the distribution builds for. */
+  readonly targets: Readonly<Record<string, LockedSearchToolTarget>>;
+}
+/** v1alpha6 `runtime.searchTools`, as locked. */
+export type LockedSearchTools = Readonly<
+  Partial<Record<SearchTool, LockedSearchTool>>
+>;
+
 /** v1alpha4 static digests (`sha256-<hex>` of canonical JSON). */
 export interface LockDigests {
   readonly resources: string;
   /** v1alpha6: the locked Pi packages, when the manifest declares any. */
   readonly packages?: string;
+  /** v1alpha6: the locked search tools, when the manifest bundles them. */
+  readonly searchTools?: string;
   readonly policy: string;
   readonly capabilities: string;
   readonly mcp: string;
@@ -238,6 +269,8 @@ export interface DistributionLock {
   readonly sessionExportStatus?: Readonly<
     Record<SessionExportResource, EnforcementStatus>
   >;
+  /** v1alpha6: `fd` and `rg` bundled into the payload, when declared. */
+  readonly searchTools?: LockedSearchTools;
   /** v1alpha6: the pinned Pi sibling package tree. */
   readonly piSiblings?: LockedPiSiblings;
 }

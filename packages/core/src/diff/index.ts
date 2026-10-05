@@ -9,6 +9,7 @@ import { governance } from "./areas/governance.js";
 import { packages } from "./areas/packages.js";
 import { release } from "./areas/release.js";
 import { resources } from "./areas/resources.js";
+import { searchTools } from "./areas/search-tools.js";
 import {
   cacheWarming,
   dataLifecycle,
@@ -103,6 +104,7 @@ export function diffLocks(
   distribution(out, b, a);
   packages(out, b, a);
   piPackages(out, b, a);
+  searchTools(out, b, a);
   resources(out, b, a);
   governance(out, b, a);
   runtimeTools(out, b, a);

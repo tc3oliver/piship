@@ -239,6 +239,29 @@ packageTrust:
 
 Credentials for a private registry or repository come only from npm or git configuration in the build environment; a URL with credentials is refused and never recorded.
 
+### Bundled search tools (v1alpha6)
+
+Pi's find and grep tools and its `@` file completion run `fd` and `rg` (ripgrep). A managed launch runs Pi offline (`PI_OFFLINE=1`), so Pi never downloads them, and without them on `PATH` it prints `fd not found. Offline mode enabled, skipping download.` and falls back to slower behavior. `runtime.searchTools` makes both tools release content instead:
+
+```yaml
+runtime:
+  pi: "1.0.2"
+  searchTools:
+    mode: bundled     # the only mode
+    fd: "10.5.0"      # optional; PiShip's default when omitted
+    rg: "15.2.0"      # optional; PiShip's default when omitted
+release:
+  sources: [https://registry.npmjs.org, https://github.com]
+```
+
+- `mode: bundled` is required; `fd` and `rg` are optional exact upstream versions (`x.y.z`, quoted in YAML). Without a version PiShip uses its default, fd 10.5.0 and ripgrep 15.2.0 in this version. Both tools are always bundled. Without `runtime.searchTools` nothing changes: no lock entry, the same digests, and Pi uses `fd` and `rg` from `PATH` if there are any.
+- The source is the official upstream release archive at that exact version, https://github.com/sharkdp/fd and https://github.com/BurntSushi/ripgrep, for each target in `release.targets`: the `musl` builds on Linux, the Apple builds on macOS, and the `msvc` zip on Windows. Its origin, `https://github.com`, must be in `release.sources`, or `piship lock`, `piship build`, and `piship release` fail the `source` gate. A lock entry that is not the official archive URL for its tool, version, and target fails the same gate.
+- `piship lock` downloads each archive through PiShip's managed fetch (the `HTTP(S)_PROXY` and `NO_PROXY` of the lock environment when `network.proxy.inheritEnvironment` allows it, and the `network.tls.additionalCA` bundles that resolve there; never the private-only launch policy, since the owner's machine locks), following redirects only over https to GitHub's release asset hosts. Archives are kept in PiShip's download cache, `PISHIP_CACHE_HOME`, else `piship` under `XDG_CACHE_HOME`, `%LOCALAPPDATA%`, or `~/.cache`, under `search-tools/`, and a cached archive is reused, so a relock is reproducible and works offline. The lock records, per tool, the `version`, the upstream `source`, and per target the archive `url`, its `sha256-` digest (`archive`), the executable's path inside it (`entry`), the executable's `sha256-` digest (`binary`), and its `size`; `digests.searchTools` covers them. The stale-lock check reads only the lock, never the cache or the network.
+- The archive is read in memory with the release extractor's path rules: any link, device, or other non-regular entry, a path with `..`, an absolute or drive path, a backslash, or a duplicate fails the whole archive, and exactly one executable of the tool's name must sit at its root or in its single top-level directory.
+- `piship build` and `piship release` take the archive for the build target from the cache (downloading it again when it is missing or differs), require the archive, the executable path, and the executable to match the lock, and write the executable to `tools/fd` and `tools/rg` (`tools/fd.exe` and `tools/rg.exe` on Windows), mode 0755 on POSIX, with the upstream license files beside it in `tools/licenses/<tool>/`. These files are in the payload inventory, so a changed or missing executable fails the launch, `verify-release`, and `repair` checks with `INTEGRITY_FAILED` like any payload file, and each tool is a package of the release SBOM (`pkg:github/...`, the archive's SHA-256). A build for a target the lock has no entry for fails with `LOCK_INVALID`.
+- At launch, before Pi is imported, the branded command points Pi's agent directory at the distribution's state (`PI_CODING_AGENT_DIR=<state>/agent`; Pi fixes its tool directory when it is imported). It then checks each payload executable against the lock and copies it to `<state>/agent/bin`, the directory Pi's tools manager searches before `PATH`, unless an identical copy is already there; a different file, link, or directory there is replaced. A user's own `fd` or `rg` on `PATH` (or in `~/.pi/agent/bin`) is never used, and Pi still runs offline. `--smoke` runs Pi's own find and grep tools against the payload, so a tool Pi cannot locate fails the smoke, and its summary lists the tools.
+- `doctor` shows each bundled tool and its version in the Supply Chain group, and fails when Pi's tool directory does not hold the pinned executable; `config explain` shows `runtime.searchTools` with the versions; `piship diff` reports adding a tool, a different upstream source, or different archive or executable bytes at the same version as high risk, a version change or an added target as medium, and a removed tool or target as low.
+
 ## Lifecycle fields (v1alpha4)
 
 `piship/v1alpha4` and later (`piship/v1alpha5`, `piship/v1alpha6`) require `updates` and accept an optional `release`; both are rejected in earlier schemas. What they control is described in [release](release.md). The example uses the v1alpha5 and v1alpha6 form; v1alpha4 differs only in `updates.trust` ([below](#update-trust-bootstrap-v1alpha5)).
@@ -283,7 +306,7 @@ release:
 | `updates.trust.bootstrap` | none | v1alpha5: the update root a fresh installation starts from ([below](#update-trust-bootstrap-v1alpha5)). Without it the distribution is update-disabled |
 | `updates.trust.keys` | `[]` | v1alpha4 only: pinned release keys: `id` (lowercase letters, digits, dots, and hyphens, unique) and `publicKey` (base64 of the 44-byte Ed25519 SubjectPublicKeyInfo DER). Any one key signs channels. With no keys, no update can be verified, so `update` fails |
 | `release.targets` | `[linux-x64, darwin-arm64, win32-x64]` | Non-empty, unique subset of `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, `win32-x64`. Only the three defaults pass the release `target` gate in this version |
-| `release.sources` | `[https://registry.npmjs.org]` | Approved npm package origins: `https`, no path, query, fragment, or credentials; non-empty and unique |
+| `release.sources` | `[https://registry.npmjs.org]` | Approved package origins, for npm packages and (v1alpha6) [bundled search tools](#bundled-search-tools-v1alpha6), which need `https://github.com`: `https`, no path, query, fragment, or credentials; non-empty and unique |
 | `release.vulnerabilities.failOn` | `high` | `low`, `moderate`, `high`, or `critical`: the lowest severity that blocks a release |
 | `release.vulnerabilities.allow` | `[]` | Reviewed exceptions: `id` (advisory ID such as a GHSA ID, unique), `reason` (at most 240 characters), and `expires` (a real calendar date, `YYYY-MM-DD`; the exception applies through that day) |
 
@@ -332,6 +355,8 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `runtime.tools.exposure` | none (every tool `direct`) | A map of tool globs (`A-Z a-z 0-9 _ . - *`, at most 128 characters) to `direct`, `model-only`, `codemode`, `deferred`, or `hidden`. The most specific glob wins; two globs of equal specificity that can match the same tool fail `validate` and `lock` |
 | `runtime.cacheWarming.mode` | `off` | `off`, `streaming`, or `idle`: Pi's prompt cache warming. Pi's own default is `streaming` |
 | `runtime.cacheWarming.userOverride` | `false` | Whether a user preference may override the distribution's mode |
+| `runtime.searchTools.mode` | none (not bundled) | `bundled`: ship pinned `fd` and `rg` in the payload for Pi's find, grep, and `@` completion ([below](#bundled-search-tools-v1alpha6)) |
+| `runtime.searchTools.fd`, `runtime.searchTools.rg` | PiShip's default (fd 10.5.0, ripgrep 15.2.0) | An exact upstream release version, `x.y.z` |
 | `mcp.servers.<id>.class` | `company` (managed), `user` (personal) | The server's trust class, decided by `policy.resourceTrust` like a resource of that class |
 | `mcp.servers.<id>.exposure` | `direct` | The exposure of the server's tools |
 | `mcp.servers.<id>.tools` | none | An exposure map of tool globs, as `runtime.tools.exposure`, such as `get_*: deferred` or `delete_*: hidden`. It replaces v1alpha5's `tools.allow` / `tools.deny`, which v1alpha6 rejects |
@@ -356,7 +381,7 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 
 Policy gains the actions `model.select` (the v1alpha5 `model.use`, still accepted as an alias), `model.dispatch`, and `session.export` ([Policy](#policy)).
 
-Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
+Exposure, Codemode, tool search, cache warming, model dispatch and virtual routes, Pi packages ([below](#pi-packages-v1alpha6)), bundled search tools ([below](#bundled-search-tools-v1alpha6)), `data.sessions`, `data.audit` and `data.cache` retention, `data.purge.onLogout`, `data.export`, and `policy.acknowledgeUnenforced` are enforced in v0.9.0. `data.purge.onUninstall` and `data.temp.retention` are parsed, locked and shown by `doctor`, but nothing acts on them: `uninstall` always keeps state, and PiShip's temporaries are removed by the abandoned-temporaries sweep ([architecture](architecture.md#temporary-directories)).
 
 ### MCP plain HTTP and identity headers (v1alpha6)
 
@@ -529,6 +554,7 @@ Branded commands of installed distributions add `update [--channel <name>] [--fr
 | Secret Store | The store PiShip keeps secrets in; the plaintext file store is a warning. |
 | Network | TLS verification, the outbound policy, whether a proxy is active (as `scheme://host:port`, never with credentials) and whether `NO_PROXY` is set (never its value), how many enterprise CA bundles are declared, and the network environment the agent's commands (the `bash` tool) receive. In managed mode that is the approved variables, listed by name, and each proxy, CA, or TLS variable that is withheld, by name and reason; in personal mode it is not restricted. MCP stdio servers get only their own `env.allow`. |
 | Release | Whether the running payload is a verified release artifact, a payload directory, or a build directory. |
+| Supply Chain | The verified manifest, lock, and payload inventory, each bundled search tool with its version (`✗` when Pi's tool directory does not hold the pinned executable), and certified resources. |
 
 Every line is sanitized before it is printed: URL credentials, queries, and fragments are removed, and known secret values and token shapes are redacted, whatever an error message holds.
 
@@ -572,10 +598,11 @@ A v1alpha6 manifest produces `piship-lock/v1alpha6`, which keeps every v1alpha5 
 | `sessionExportStatus` | The status of `public`, `local`, and `support`, always recorded |
 | `cacheWarming` | `runtime.cacheWarming` as parsed (`mode`, `userOverride`); absent when the manifest has none, which a launch takes as `off`, enforced for a managed distribution only |
 | `packages` | Each Pi package's resolved identity, tree digest, file count, stored lockfile digest, and resource inventory ([below](#pi-packages-v1alpha6)) |
+| `searchTools` | Each bundled search tool's upstream version and source, and per release target the archive URL and digest, the executable's path in the archive, its digest, and its size; with `digests.searchTools`. Absent without `runtime.searchTools` ([bundled search tools](#bundled-search-tools-v1alpha6)) |
 
 A v1alpha6 manifest with Pi packages records each one in `packages` (source, class, canonical source URL without userinfo, npm version and integrity or git commit, `tree` digest and file count of the package's own files, the sha256 of its stored npm lockfile, the expanded resource inventory with each file's sha256, and the optional dependencies each release target installs) and adds `digests.packages`. The stale-lock check is offline: it re-reads the stored lockfiles and recomputes local package digests, and never reaches a registry or repository ([Pi packages](#pi-packages-v1alpha6)).
 
-Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)). Between v1alpha6 locks it also compares `runtimeTools`, each tool's exposure, the seam evidence, the data contract and declared `data`, `sessionExportStatus`, virtual models, Pi packages, and `cacheWarming`. A new package, a change of a package's source, URL, version, commit, integrity, or tree, a widened package class, widened exposure (such as `hidden`, `deferred`, or `codemode` to `direct`), an enforcement downgrade, and an export that becomes allowed are high risk; a cache warming change and an added `policy.acknowledgeUnenforced` entry are medium. The `model.use` to `model.select` rename is not reported as a change.
+Packages that the npm lock records without an integrity value (local workspace packages and a few nested packages) are not listed in `runtime.packages`. `piship diff <before> <after>` compares the locks of two manifests, lock files, payloads, releases, or installed IDs ([owner workflow](release/owner-workflow.md#reviewing-a-change)). Between v1alpha6 locks it also compares `runtimeTools`, each tool's exposure, the seam evidence, the data contract and declared `data`, `sessionExportStatus`, virtual models, Pi packages, bundled search tools, and `cacheWarming`. A new package or bundled search tool, a change of a package's source, URL, version, commit, integrity, or tree, a search tool's different source or different bytes at the same version, a widened package class, widened exposure (such as `hidden`, `deferred`, or `codemode` to `direct`), an enforcement downgrade, and an export that becomes allowed are high risk; a cache warming change, a search tool version change or added target, and an added `policy.acknowledgeUnenforced` entry are medium. The `model.use` to `model.select` rename is not reported as a change.
 
 The lock never contains tokens, credentials, private keys, or resolved endpoint values. It is deterministic and has no timestamp. Build rejects a stale lock. For a lock of `piship/v1alpha4` or later, `piship build` also runs the release `source` and `install-script` gates ([owner workflow](release/owner-workflow.md)); `dev` and `test` do not. The packaged file inventory detects changed manifest, lock, resource, adapter, or runtime files before Pi loads: a file that differs from the inventory fails the launch with `INTEGRITY_FAILED`, and a lock that no longer matches the packaged manifest or npm lock fails with `LOCK_INVALID`. The lock itself is not signed; releases are verified through signed channel metadata and build provenance ([release](release.md)).
 
