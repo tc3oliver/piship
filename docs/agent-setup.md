@@ -27,7 +27,11 @@ It needs Node.js 22.19.0 or newer (`node --version`), and npm 11 or later (`npm 
 
 ## 2. Ask the person
 
-Ask in one message and wait for the answers. Ask the shared questions and the questions of the person's branch; if they have not said which branch, ask question S1 first. Say that any question can be answered "not sure yet"; collect those as open items instead of guessing.
+Ask the shared questions and the questions of the person's branch; if they have not said which branch, ask question S1 first. Say that any question can be answered "not sure yet"; collect those as open items instead of guessing. Do not paste the whole list as one message:
+
+- If your harness has a structured question tool (Claude Code's `AskUserQuestion`, for example), ask the questions that have a fixed set of answers with it: a few per call, each with its options and the recommended one first. Examples are S1, S10, S12, S13, M8 user auto, M9 network, M11 required, and M12 now or later.
+- Ask for values the person must type (URLs, tenant and client IDs, group IDs, model IDs and limits) as text, at most three at a time.
+- Wait for each batch of answers before asking the next. At the end, show the open items.
 
 ### Shared questions
 
