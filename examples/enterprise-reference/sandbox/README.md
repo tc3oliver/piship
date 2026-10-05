@@ -13,12 +13,12 @@ It is example code for tests and local exploration, not a package and not a prod
 | [`service/src/auth.mjs`](service/src/auth.mjs), [`config.mjs`](service/src/config.mjs), [`log.mjs`](service/src/log.mjs) | The key registry, the settings, the allowlisting logger |
 | [`scripts/generate-key.mjs`](scripts/generate-key.mjs) | The administrator's script: issues a user's key, records only its hash and the host user whose projects it may mount |
 | [`acme-container-sandbox.mjs`](acme-container-sandbox.mjs) | The custom adapter: one file, imports only `@piship/adapter-sdk` |
-| [`piship.yaml`](piship.yaml), [`piship.lock`](piship.lock), [`resources/`](resources) | The reference distribution with this sandbox (below) |
+| [`piship.yaml`](piship.yaml), [`piship.lock`](piship.lock), [`piship.lock.d/`](piship.lock.d), [`resources/`](resources), [`packages/`](packages) | The reference distribution with this sandbox (below) |
 | [`test/`](test) | Contract tests for the service and the adapter, with a fake `docker`; no Docker needed |
 
 ## Security notices
 
-- [GHSA-w3j6-fv7v-wwr4](https://github.com/tc3oliver/piship/security/advisories/GHSA-w3j6-fv7v-wwr4): in the v0.7.0 source of this service, a protected path nested below a writable workspace directory could be bypassed. Fixed on `main` in #170 (commit `2427391`); not yet in a release. The v0.7.0 release archives, the PiShip packages, and the bubblewrap and Seatbelt sandboxes are not affected.
+- [GHSA-w3j6-fv7v-wwr4](https://github.com/tc3oliver/piship/security/advisories/GHSA-w3j6-fv7v-wwr4): in the v0.7.0 source of this service, a protected path nested below a writable workspace directory could be bypassed. Fixed in v0.7.1 (#170, commit `2427391`) and in every later release. The v0.7.0 release archives, the PiShip packages, and the bubblewrap and Seatbelt sandboxes are not affected.
 
 ## Run it
 

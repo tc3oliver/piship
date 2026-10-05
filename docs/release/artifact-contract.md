@@ -13,7 +13,7 @@ acmecode-1.1.0-linux-x64/
   sbom.spdx.json                    SPDX 2.3 JSON
   licenses/THIRD_PARTY_NOTICES.txt  license and notice files of every installed package
   licenses/index.json               piship-notices/v1 machine-readable index
-  vulnerabilities.json              piship-vulnerabilities/v1 scan result and verdict
+  vulnerabilities.json              piship-vulnerabilities/v1 scan result and verdict, with a packages entry per vendored Pi package
   checksums.txt                     sha256sum lines for every file above except payload/, plus payload/metadata/inventory.json
   install.sh, install.ps1           verify this release, then install it for the current user
 ```
@@ -43,7 +43,7 @@ In CI, the `release-candidate` workflow builds each target twice on separate run
 
 ## SBOM, notices, and vulnerabilities
 
-The SBOM is SPDX 2.3 JSON built by walking every `package.json` under the payload's `node_modules`, including nested and scoped packages. Each package records its name, version, payload path (`sourceInfo: payload:<path>`), declared license when it is a simple SPDX expression (otherwise `NOASSERTION`), a `pkg:npm` purl, and, when the lock has them, its npm source URL and SHA-512 checksum. The distribution itself is the described root package.
+The SBOM is SPDX 2.3 JSON built by walking every `package.json` under the payload's `node_modules` and under each vendored Pi package's `pi-packages/<id>/node_modules`, including nested and scoped packages. A git or local Pi package's own files (`pi-packages/<id>/package`) are covered by the payload inventory, not listed as an SBOM package. Each package records its name, version, payload path (`sourceInfo: payload:<path>`), declared license when it is a simple SPDX expression (otherwise `NOASSERTION`), a `pkg:npm` purl, and, when the lock has them, its npm source URL and SHA-512 checksum. The distribution itself is the described root package.
 
 `licenses/THIRD_PARTY_NOTICES.txt` reproduces each package's `LICENSE`, `LICENCE`, `COPYING`, and `NOTICE` files from its package root. A package that ships none gets an explicit "No license file is shipped" entry with its declared license.
 
@@ -53,8 +53,9 @@ The dependency scan runs `npm audit --omit=dev --json` over the payload's npm lo
 - An expired exception no longer applies, so the build fails again until the dependency is fixed or the exception is reviewed and renewed.
 - Findings below `failOn` are recorded as `below-threshold`.
 - A scan that cannot run, for example without registry access, fails the build: there is no release without a scan.
+- Each vendored Pi package lockfile is scanned the same way, against `release.vulnerabilities.registry` or the package's own registry. A managed release fails when no audit endpoint answers for a package; a personal release records a warning.
 
-`vulnerabilities.json` keeps every finding with its status, so the result travels with the artifact. The scan reflects the advisory database at build time only.
+`vulnerabilities.json` keeps every finding with its status, and a `packages` list with each Pi package's scan time and findings or warning, so the result travels with the artifact. The scan reflects the advisory database at build time only.
 
 ## Build provenance
 
@@ -88,4 +89,5 @@ The attestation proves which workflow run built the archive and for which ref. I
 - There is no macOS notarization or code signing, and no Windows Authenticode signing. Release archives and their scripts may be flagged or quarantined by the operating system.
 - The local PiShip workspace packages are linked, not downloaded, so they are left out of the lock's package list; the payload inventory and the archive digest cover them. Any other package without an integrity value fails the `source` gate. Pi 1.0.0's own shrinkwrap omitted integrity for its seven `@earendil-works` packages other than `pi-coding-agent`, so the root npm lock carried the registry's published sha512 for them; Pi 1.0.2 ships no shrinkwrap, and every Pi package is an ordinary npm lock entry with its integrity. A Pi upgrade must re-check this.
 - Packages that ship no license or notice file are listed with their declared license only.
+- `npm audit signatures` runs once, over the payload's own `node_modules`; the trees vendored under `pi-packages/<id>` are checked for integrity and advisories, not for registry signatures.
 - The vulnerability verdict reflects `npm audit` and its advisory database at build time; it is not rechecked at install or update.

@@ -110,7 +110,7 @@ agent 會照 [docs/agent-setup.md](docs/agent-setup.md) 的步驟做，你可以
 <summary><b>展開 piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha5
+schema: piship/v1alpha6
 
 app:
   id: acmecode
@@ -211,9 +211,9 @@ agent 本身歸 Pi：agent loop、工具、session、TUI、模型執行環境。
 PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還沒：
 
 - **v0.7.1** 是[更早的基準版本](docs/status.md#v071-previous-production-validation-baseline)，用 Pi 0.87.1，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.7.1) 上有六份附 attestation 的 archive。
-- **v0.8.0** 是[前一個基準版本](docs/status.md#v080-previous-production-validation-baseline)，用 Pi 1.0.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0) 上有六份附 attestation 的 archive：`piship/v1alpha5`、安裝層級的 update trust root 與 root refresh，以及多重簽章的 channel（[changelog](CHANGELOG.md)）。
-- **v0.8.1** 是[正式環境驗證的基準版本](docs/status.md#v081-production-validation-baseline)，用 Pi 1.0.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.1) 上有六份附 attestation 的 archive：管理者可開放的使用者 auto mode、管理者可開放的純 HTTP update channel，以及 secret store 連不上時能乾淨失敗的登入（[changelog](CHANGELOG.md)）。
-- **v0.9.0** 是下一個基準版本的[候選版](docs/status.md#v090-release-candidate)，用 Pi 1.0.2：Pi 1.x 原生的治理（tool exposure、Codemode、tool search、model dispatch、Pi packages、資料保留、session export），以及最後一版 alpha schema `piship/v1alpha6` 與 `piship-lock/v1alpha6`。每個 action 都會標明是 `enforced`、`audit-only` 還是 `unsupported`，缺口不會被當成控制。尚未打 tag；在 v0.9.0 通過 qualification 並發佈之前，基準版本仍是 v0.8.1。
+- **v0.8.0** 是[更早的基準版本](docs/status.md#v080-previous-production-validation-baseline)，用 Pi 1.0.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.0) 上有六份附 attestation 的 archive：`piship/v1alpha5`、安裝層級的 update trust root 與 root refresh，以及多重簽章的 channel（[changelog](CHANGELOG.md)）。
+- **v0.8.1** 是[前一個基準版本](docs/status.md#v081-previous-production-validation-baseline)，用 Pi 1.0.0，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.8.1) 上有六份附 attestation 的 archive：管理者可開放的使用者 auto mode、管理者可開放的純 HTTP update channel，以及 secret store 連不上時能乾淨失敗的登入（[changelog](CHANGELOG.md)）。
+- **v0.9.0** 是[正式環境驗證的基準版本](docs/status.md#v090-production-validation-baseline)，用 Pi 1.0.2，[GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.9.0) 上有六份附 attestation 的 archive：Pi 1.x 原生的治理（tool exposure、Codemode、tool search、model dispatch、Pi packages、資料保留、session export），以及最後一版 alpha schema `piship/v1alpha6` 與 `piship-lock/v1alpha6`。每個 action 都會標明是 `enforced`、`audit-only` 還是 `unsupported`，缺口不會被當成控制（[changelog](CHANGELOG.md)）。
 - personal 發行版是 supported；managed 存取、治理和發版流程是 candidate。
 - managed 流程在 Linux、macOS、Windows 上都用本機模擬服務測過；在 Ubuntu 上另外接 Keycloak、LiteLLM 和容器沙箱測過，也手動透過這組環境送出過一次真的模型請求。
 - 還沒驗證過：真實公司正式環境的 IdP 或 gateway；實際部署的 E2B、CubeSandbox 或 Kubernetes Agent Sandbox；Windows 的本機沙箱（Windows 請改用遠端沙箱）。

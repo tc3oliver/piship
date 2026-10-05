@@ -2,6 +2,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -504,12 +505,15 @@ export function buildSandboxDistribution(name: string): BuiltDistribution {
   for (const entry of [
     "piship.yaml",
     "piship.lock",
+    "piship.lock.d",
     "acme-container-sandbox.mjs",
     "resources",
+    "packages",
   ])
-    cpSync(join(sandboxDirectory, entry), join(directory, entry), {
-      recursive: true,
-    });
+    if (existsSync(join(sandboxDirectory, entry)))
+      cpSync(join(sandboxDirectory, entry), join(directory, entry), {
+        recursive: true,
+      });
   const env: NodeJS.ProcessEnv = { ...process.env };
   // Reference and E2E builds use packages/core/dist/build-input.
   for (const variable of ["PISHIP_BUILD_INPUT", "PISHIP_SANDBOX_ADAPTER"])

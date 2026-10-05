@@ -199,6 +199,8 @@ export function dataLifecycle(out: Collector, b: AnyLock, a: AnyLock): void {
     ["low", "Logout purges this class."],
     ["medium", "Logout no longer purges this class."],
   );
+  // `uninstall` does not read `data.purge.onUninstall` yet: it keeps the
+  // state whatever is declared, so a change here changes no behavior.
   out.scalar(
     "data",
     "purge on uninstall",
@@ -206,8 +208,14 @@ export function dataLifecycle(out: Collector, b: AnyLock, a: AnyLock): void {
     y?.purge.onUninstall,
     (_, ae) =>
       ae === "all"
-        ? ["low", "Uninstall purges all data."]
-        : ["medium", "Uninstall no longer purges all data."],
+        ? [
+            "low",
+            "Uninstall purge recorded: all (not applied: uninstall keeps state).",
+          ]
+        : [
+            "low",
+            "Uninstall purge recorded: none (uninstall keeps state, as before).",
+          ],
   );
   const be: Record<string, string> = x?.export ?? {};
   const ae: Record<string, string> = y?.export ?? {};

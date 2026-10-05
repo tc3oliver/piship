@@ -108,7 +108,7 @@ export function migrateToV1alpha6(
   renameModelUse(document, changes);
   migrateServers(document, context, changes, effective);
   const warming =
-    "runtime.cacheWarming: absent, which is off in piship/v1alpha6; v0.8 sessions warmed the prompt cache (Pi's default, streaming). Set runtime.cacheWarming.mode: streaming to keep warming";
+    "runtime.cacheWarming: absent, which is off in v0.9 (also for an unmigrated piship/v1alpha5 manifest); v0.8 sessions warmed the prompt cache (Pi's default, streaming). Set runtime.cacheWarming.mode: streaming to keep warming";
   changes.push(warming);
   effective.push(warming);
   changes.push("data: absent, so no retention sweep runs (as in v0.8)");

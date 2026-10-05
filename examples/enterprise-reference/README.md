@@ -213,7 +213,7 @@ These figures are from one developer machine. Running on GitHub's `ubuntu-latest
 
 ## AcmeCode reference distribution
 
-[`piship.yaml`](piship.yaml) is a managed AcmeCode distribution (`piship/v1alpha5`) wired to this stack, locked in [`piship.lock`](piship.lock). It has the shape of [`examples/demo-company`](../demo-company/README.md): the same sections in the same order, the same `acme-engineering` policy without its handbook rules, the required OS sandbox, a local audit sink, and the signed-channel and release sections. It points at the stack instead of the demo's loopback fixtures:
+[`piship.yaml`](piship.yaml) is a managed AcmeCode distribution (`piship/v1alpha6`) wired to this stack, locked in [`piship.lock`](piship.lock). It has the shape of [`examples/demo-company`](../demo-company/README.md): the same sections in the same order, the same `acme-engineering` policy without its handbook rules, the required OS sandbox, a local audit sink, and the signed-channel and release sections. It points at the stack instead of the demo's loopback fixtures:
 
 | Section | Value |
 | --- | --- |
@@ -243,7 +243,7 @@ To run a distribution with another `app.id` against this stack (your own copy, o
 
 The other broker settings, including `BROKER_AUDIENCE`, are in the [broker's configuration](broker/README.md#configuration).
 
-A manifest cannot reach outside its own directory (resource paths start with `./` and may not contain `..` or symlinks), so this distribution cannot reuse the demo's resources by path. [`resources/`](resources) is a copy of the two it needs, the company instructions and the `acme-review` skill. It leaves out the demo's handbook MCP server, certified skill, and enterprise-context extension: none of them touches the stack. The release targets are Linux x64 and macOS arm64: the stack runs in Linux containers and the required sandbox has an adapter on those two only. The manifest pins no release key, as the demo does; a release is built from a copy that pins one (`piship keygen`).
+A manifest cannot reach outside its own directory (resource paths start with `./` and may not contain `..` or symlinks), so this distribution cannot reuse the demo's resources by path. [`resources/`](resources) is a copy of the two it needs, the company instructions and the `acme-review` skill. [`packages/pi-platform`](packages/pi-platform) is a Pi package (one extension, one skill, one prompt, and the `ms` dependency) that PiShip locks into [`piship.lock.d/`](piship.lock.d) and vendors; Pi never installs it. It leaves out the demo's handbook MCP server, certified skill, and enterprise-context extension: none of them touches the stack. The release targets are Linux x64 and macOS arm64: the stack runs in Linux containers and the required sandbox has an adapter on those two only. The manifest pins no release key, as the demo does; a release is built from a copy that pins one (`piship keygen`).
 
 ### Users and entitlements
 
@@ -288,7 +288,7 @@ node dist/acmecode-reference/piship.mjs uninstall acmecode-reference
 
 The launcher is named `acmecode-reference` (`app.command`), so it installs beside the demo company example's `acmecode` without replacing it, and uninstalling one leaves the other. The two share nothing: the launcher, and the state and secret-store entries (kept apart by the distribution ID, `acmecode-reference`), differ. The reference tests read the command from the manifest.
 
-`login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy.
+`login` prints the sign-in URL and opens a browser; `PISHIP_NO_BROWSER=1` only prints it. The credential is stored with the platform secret store: the macOS Keychain, or the Linux Secret Service (it needs a running, unlocked keyring and `secret-tool`). Without one, `login` fails with `SECRET_STORE_UNAVAILABLE`. To use the restricted plaintext file store, edit a copy of the manifest to `storage: {provider: file, acknowledgePlaintext: true}`, run `piship lock` on it, and build the copy. `piship lock` needs npm 11 or later here, because the manifest declares a Pi package ([prerequisites](../../docs/troubleshooting.md#prerequisites)).
 
 ### Tests
 
@@ -309,7 +309,7 @@ Measured on macOS 27.0 arm64 (Apple M4 Max) under OrbStack with the images alrea
 
 [`sandbox/`](sandbox/README.md) is the custom sandbox of the reference distribution, written the way an organization that runs its own sandbox service would write it. The [service](sandbox/service/server.mjs) (Node built-ins and the `docker` command line, `127.0.0.1` only) starts a container per session for the user whose key asked, with the user's project bind-mounted at `/workspace`; the [adapter](sandbox/acme-container-sandbox.mjs) is one file on `@piship/adapter-sdk` that lets PiShip use it. Its workspace is `shared`, so the agent's file tools and its shell see the same files, and PiShip verifies that before the first command of a session.
 
-The reference manifest above is unchanged: it keeps the native OS sandbox. The variant is a second manifest and lock, [`sandbox/piship.yaml`](sandbox/piship.yaml), in a directory of its own (a lock is `piship.lock` next to its manifest, and a manifest cannot reach outside its directory). It is the reference manifest with `sandbox.provider: custom`, the adapter, `endpoint: ${ACMECODE_SANDBOX_URL}`, and `credential: stored`, and one more runtime variable; a unit test keeps everything else equal to the reference manifest, and the lock is kept current by the example-lock test. It is the same distribution, with the same ID, command, and state: install this build or the other.
+The reference manifest above is unchanged: it keeps the native OS sandbox. The variant is a second manifest and lock, [`sandbox/piship.yaml`](sandbox/piship.yaml), in a directory of its own (a lock is `piship.lock` next to its manifest, and a manifest cannot reach outside its directory), with its own copy of `packages/pi-platform` and `piship.lock.d/`. It is the reference manifest with `sandbox.provider: custom`, the adapter, `endpoint: ${ACMECODE_SANDBOX_URL}`, and `credential: stored`, and one more runtime variable; a unit test keeps everything else equal to the reference manifest, and the lock is kept current by the example-lock test. It is the same distribution, with the same ID, command, and state: install this build or the other.
 
 | Part | What it shows |
 | --- | --- |
