@@ -99,7 +99,7 @@ function distribution(): string {
       "---\nname: triage\ndescription: Triage an issue.\n---\nTriage.\n",
     "piship.yaml": `schema: piship/v1alpha6
 app: { id: reviewer, name: Reviewer, command: reviewer, version: 1.0.0 }
-runtime: { pi: "1.0.2" }
+runtime: { pi: "1.0.3" }
 deployment: { mode: personal }
 identity: { mode: none }
 credential: { provider: pi-native }
@@ -268,7 +268,7 @@ describe("Pi packages in the lock", () => {
           `        source: ${REPOSITORY}`,
           `        integrity: ${integrity}`,
           "        license: MIT",
-          '        pi: ["1.0.2"]',
+          '        pi: ["1.0.3"]',
           "        platforms: []",
           "",
         ].join("\n"),
@@ -288,7 +288,7 @@ describe("Pi packages in the lock", () => {
       source: "https://registry.example.test/x",
       integrity: `sha256-${"a".repeat(64)}`,
       license: "MIT",
-      pi: ["1.0.2"],
+      pi: ["1.0.3"],
       platforms: [],
     };
     const locked = {

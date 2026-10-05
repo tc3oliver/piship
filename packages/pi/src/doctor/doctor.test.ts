@@ -204,7 +204,7 @@ function doctorData(
 ): DoctorData {
   return {
     ctx: context(mode),
-    piVersion: "1.0.2",
+    piVersion: "1.0.3",
     metrics,
     ...parts,
   };
@@ -1838,7 +1838,7 @@ describe("Governance group", () => {
         ...data.ctx.metadata,
         schema: "piship-lock/v1alpha6",
         manifest: { schema: "piship/v1alpha6" },
-        enforcement: { pi: "1.0.2", seams: {}, digest: "sha256-x" },
+        enforcement: { pi: "1.0.3", seams: {}, digest: "sha256-x" },
         ...metadata,
       } as unknown as LaunchContext["metadata"],
     },
@@ -1879,7 +1879,7 @@ describe("Governance group", () => {
       enforcement: { pi: "0.87.1", seams: {}, digest: "sha256-x" },
     });
     expect(group(renderDoctor(data).render(), "Governance")).toEqual([
-      `  ! ${"seam table".padEnd(20)} proven against Pi 0.87.1, running Pi 1.0.2; relock the distribution`,
+      `  ! ${"seam table".padEnd(20)} proven against Pi 0.87.1, running Pi 1.0.3; relock the distribution`,
       // A v1alpha6 lock without runtime.cacheWarming is off.
       `  ✓ ${"cache warming".padEnd(20)} off`,
     ]);
@@ -1956,7 +1956,7 @@ describe("Governance group", () => {
     );
     expect(lines).toEqual(
       expect.arrayContaining([
-        `  ✓ ${"seam table".padEnd(20)} Pi 1.0.2`,
+        `  ✓ ${"seam table".padEnd(20)} Pi 1.0.3`,
         `  ✓ ${"Codemode".padEnd(20)} enforced (on)`,
         `  ✓ ${"deferred tools".padEnd(20)} off`,
         `  ✓ ${"tool exposure".padEnd(20)} codemode: bash; hidden: docs_delete; direct: edit, read`,
@@ -2042,7 +2042,7 @@ describe("Governance group", () => {
       },
     );
     expect(group(renderDoctor(data).render(), "Governance")).toEqual([
-      `  ✓ ${"seam table".padEnd(20)} Pi 1.0.2`,
+      `  ✓ ${"seam table".padEnd(20)} Pi 1.0.3`,
       `  ✓ ${"cache warming".padEnd(20)} off`,
       `  ✓ ${"data retention".padEnd(20)} sessions 30d max, audit 180d min, temp 1h max`,
       `  ✓ ${"data purge".padEnd(20)} logout: cache, temp; uninstall: none`,

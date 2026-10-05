@@ -3,7 +3,7 @@
 MyPi is the neutral personal reference distribution on `piship/v1alpha6`. It needs no enterprise infrastructure: no identity provider, credential broker, gateway, audit backend, or private network. It shows:
 
 - **Isolated Pi state.** State defaults to `~/.piship/mypi` (or `$PISHIP_STATE_HOME/mypi`), separate from your personal `~/.pi`, which MyPi does not read. Pi's crash log and the `fd` and `rg` binaries it downloads go to MyPi's state too ([interactive launch](#interactive-launch)). No project instructions, skills, extensions, themes, or MCP definitions are loaded from the workspace (`policy.projectTrust` denies every dimension).
-- **An exact pinned Pi**, 1.0.2.
+- **An exact pinned Pi**, 1.0.3.
 - **Personal resources**: instructions, a skill, a TypeScript extension, a prompt, and a branded theme, all in the `user` trust class.
 - **No identity and Pi-native access**: `identity.mode: none`, with `credential.provider: pi-native` and `inference.provider: pi-native`. Pi's own providers and sign-in are used, with their credentials kept in MyPi's state. The [local model variant](#local-model-variant) uses a local secret and a direct OpenAI-compatible endpoint instead.
 - **A user-managed MCP server.** `mcp.mode: explicit` declares `notes`, a tiny stdio server in `resources/mcp/notes-server.mjs`. It serves two in-memory notes as `mcp__notes__list_notes` and `mcp__notes__read_note`, uses no network and no credential, and must report `serverInfo.name` `mypi-notes`.
@@ -37,7 +37,7 @@ node dist/mypi/piship.mjs uninstall mypi
 
 ### Interactive launch
 
-The interactive `mypi` is Pi's own interactive mode. PiShip sets Pi's defaults on every launch: Pi does not ask pi.dev for a newer Pi version (so there is no "Update Available ... Run `pi update`" notice, and a newer Pi comes only with a new MyPi release; MyPi pins Pi 1.0.2), sends no install report or telemetry, keeps its crash log (`crashes.json`) in MyPi's state, starts without the Pi logo, key hints, or resource listing, and leaves the terminal's own scrollback in place instead of taking over the screen. A few things stay Pi's, and PiShip does not change them:
+The interactive `mypi` is Pi's own interactive mode. PiShip sets Pi's defaults on every launch: Pi does not ask pi.dev for a newer Pi version (so there is no "Update Available ... Run `pi update`" notice, and a newer Pi comes only with a new MyPi release; MyPi pins Pi 1.0.3), sends no install report or telemetry, keeps its crash log (`crashes.json`) in MyPi's state, starts without the Pi logo, key hints, or resource listing, and leaves the terminal's own scrollback in place instead of taking over the screen. A few things stay Pi's, and PiShip does not change them:
 
 - If `fd` or `rg` is neither on `PATH` nor in `~/.piship/mypi/agent/bin/` (or `$PISHIP_STATE_HOME/mypi/agent/bin/`), Pi downloads it from github.com into that directory. That is MyPi's state, not your `~/.pi`, so `purge` removes it and `uninstall` keeps it; each distribution downloads its own copies.
 - Pi may refresh model catalogs over the network.

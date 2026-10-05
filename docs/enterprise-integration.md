@@ -309,7 +309,7 @@ Pi sends requests with its OpenAI-compatible client to the URL formed from `infe
 
 - `Authorization: Bearer <runtime credential>`; requested per call, so renewals apply without a restart.
 - `model` is the catalog ID exactly as in `models.allowed` (for example `acme/coder`), not prefixed with the app ID.
-- Requests stream (`"stream": true`, server-sent events). With Pi 1.0.2, as with 1.0.0, chat completions also carry `stream_options.include_usage`, `tools` when tools are offered, and may carry `max_completion_tokens`, `store: false`, and a `developer` role message. The request body is owned by Pi and may change with the pinned Pi version.
+- Requests stream (`"stream": true`, server-sent events). With Pi 1.0.3, as with 1.0.2 and 1.0.0, chat completions also carry `stream_options.include_usage`, `tools` when tools are offered, and may carry `max_completion_tokens`, `store: false`, and a `developer` role message. The request body is owned by Pi and may change with the pinned Pi version.
 - Only allowed and available models are ever requested; PiShip never substitutes another model.
 
 ### Model list

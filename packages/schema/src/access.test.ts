@@ -29,7 +29,7 @@ const catalog = {
 const managed = {
   schema: PISHIP_SCHEMA_V1ALPHA2,
   app,
-  runtime: { pi: "1.0.2" },
+  runtime: { pi: "1.0.3" },
   deployment: { mode: "managed" },
   variables: [
     "ACME_ISSUER",
@@ -62,7 +62,7 @@ type Json = Record<string, unknown>;
 const personal = (extra: Json) => ({
   schema: PISHIP_SCHEMA_V1ALPHA2,
   app: { ...app, id: "mypi", command: "mypi" },
-  runtime: { pi: "1.0.2" },
+  runtime: { pi: "1.0.3" },
   deployment: { mode: "personal" },
   ...extra,
 });
@@ -228,7 +228,7 @@ describe("piship/v1alpha2 managed manifest", () => {
       parseManifest({
         schema: "piship/v1alpha1",
         app,
-        runtime: { pi: "1.0.2" },
+        runtime: { pi: "1.0.3" },
         deployment: { mode: "managed" },
       }),
     ).toThrow("requires schema piship/v1alpha2");
@@ -364,7 +364,7 @@ describe("piship/v1alpha2 personal modes", () => {
 describe("alpha migration", () => {
   it("migrates v1alpha1 to an equivalent v1alpha2 personal profile", () => {
     const source =
-      'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\n';
+      'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.3"\ndeployment:\n  mode: personal\n';
     const plan = migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA2);
     expect(plan.from).toBe("piship/v1alpha1");
     expect(plan.to).toBe("piship/v1alpha2");

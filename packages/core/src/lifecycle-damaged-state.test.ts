@@ -34,7 +34,7 @@ const FILES: readonly { path: string; valid: string }[] = [
       schema: "piship-state/v1",
       distribution: ID,
       version: "1.0.0",
-      pi: "1.0.2",
+      pi: "1.0.3",
       piship: "0.7.0",
     }),
   },

@@ -323,7 +323,7 @@ describe("the package lockfile closure", () => {
         }),
         "node_modules/@earendil-works/pi-ai": entry(
           "@earendil-works/pi-ai",
-          "1.0.2",
+          "1.0.3",
           {
             peer: true,
           },

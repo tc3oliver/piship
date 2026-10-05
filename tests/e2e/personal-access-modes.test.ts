@@ -30,7 +30,7 @@ const PERSONAL_V1ALPHA2 = [
   "  command: mypi",
   "  version: 1.0.0",
   "runtime:",
-  '  pi: "1.0.2"',
+  '  pi: "1.0.3"',
   "deployment:",
   "  mode: personal",
   "variables:",

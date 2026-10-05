@@ -27,6 +27,15 @@
         "governance": "candidate",
         "lifecycle": "candidate"
       }
+    },
+    "1.0.3": {
+      "status": "supported",
+      "surfaces": {
+        "personal": "supported",
+        "managed": "candidate",
+        "governance": "candidate",
+        "lifecycle": "candidate"
+      }
     }
   }
 }
