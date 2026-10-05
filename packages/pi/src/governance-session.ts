@@ -375,6 +375,9 @@ export class GovernanceSession {
       if (wasYolo)
         try {
           this.options.onYoloEnd?.();
+          if (this.options.onYoloEnd)
+            warning =
+              "Auto mode is off. Exit and restart without --yolo before changing provider settings, which may restore its old auto-approval value.";
         } catch (error) {
           warning = `Auto mode is off, but the provider override could not be restored: ${formatError(error)}`;
         }
