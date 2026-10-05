@@ -24,7 +24,10 @@ export function governance(out: Collector, b: AnyLock, a: AnyLock): void {
   }
   trustEvidence(out, x, y);
   capabilities(out, x.manifest, y.manifest);
-  policy(out, x.manifest, y.manifest);
+  policy(out, x.manifest, y.manifest, {
+    before: b.deployment?.mode,
+    after: a.deployment?.mode,
+  });
   mcp(out, x.manifest, y.manifest);
   sandbox(out, x.manifest, y.manifest);
   audit(out, x.manifest, y.manifest);

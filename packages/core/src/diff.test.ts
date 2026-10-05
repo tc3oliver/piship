@@ -251,6 +251,50 @@ describe("diffLocks", () => {
     ).toEqual(["high", "high"]);
   });
 
+  it("reads an undeclared Claude Code dimension as its mode's default", () => {
+    // The managed default of claudeHooks is deny and of claudeRules
+    // company-approved: declaring either changes nothing.
+    const declared = clone(base);
+    Object.assign(
+      declared.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "deny",
+        claudeRules: "company-approved",
+      },
+    );
+    expect(diffLocks(base, declared).changes).toEqual([]);
+
+    // Admitting hooks relaxes policy, whether or not the manifest declared the
+    // dimension before.
+    const hooks = clone(base);
+    Object.assign(
+      hooks.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "allow",
+      },
+    );
+    expect(diffLocks(base, hooks).changes).toEqual([
+      expect.objectContaining({
+        area: "policy",
+        item: "policy projectTrust.company.claudeHooks",
+        before: "deny",
+        after: "allow",
+        risk: "high",
+      }),
+    ]);
+    expect(diffLocks(declared, hooks).changes).toHaveLength(1);
+
+    // Removing a declared approval tightens it.
+    const closed = clone(hooks);
+    Object.assign(
+      closed.governance.manifest.policy.projectTrust.company.dimensions,
+      {
+        claudeHooks: "deny",
+      },
+    );
+    expect(diffLocks(hooks, closed).risk).toBe("medium");
+  });
+
   it("flags a new MCP server as high and a narrowed tool list as medium", () => {
     const added = clone(base);
     const docs = added.governance.manifest.mcp.servers[0];

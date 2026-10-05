@@ -1,5 +1,6 @@
 export * from "./capabilities.js";
 export * from "./engine.js";
+export * from "./extension-trust.js";
 export * from "./explain.js";
 export * from "./exposure.js";
 export * from "./glob.js";

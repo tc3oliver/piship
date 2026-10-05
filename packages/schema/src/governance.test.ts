@@ -1286,6 +1286,62 @@ describe("v1alpha3 policy", () => {
   ])("rejects invalid project trust %#", (value, field) => {
     rejects(trust(value), field);
   });
+
+  describe("Claude Code dimensions", () => {
+    const claude = (value: Json, mode: "personal" | "managed" = "personal") =>
+      governance(
+        mode === "managed"
+          ? managed({ policy: { projectTrust: value } })
+          : personal({ policy: { projectTrust: value } }),
+      ).policy.projectTrust;
+
+    it("are absent from the parsed policy unless declared, so no lock changes", () => {
+      for (const mode of ["personal", "managed"] as const) {
+        const projectTrust = claude({}, mode);
+        for (const origin of ["company", "external", "unknown"] as const)
+          for (const dimension of [
+            "claudeRules",
+            "claudeCommands",
+            "claudeSkills",
+            "claudeAgents",
+            "claudeHooks",
+          ])
+            expect(projectTrust[origin].dimensions).not.toHaveProperty(
+              dimension,
+            );
+      }
+    });
+
+    it("are kept when declared, and only those", () => {
+      const projectTrust = claude({
+        company: { claudeRules: "allow", claudeHooks: "ask" },
+        unknown: { claudeAgents: "company-approved" },
+      });
+      expect(projectTrust.company.dimensions).toMatchObject({
+        instructions: "allow",
+        claudeRules: "allow",
+        claudeHooks: "ask",
+      });
+      expect(projectTrust.company.dimensions).not.toHaveProperty(
+        "claudeCommands",
+      );
+      expect(projectTrust.unknown.dimensions).toMatchObject({
+        claudeAgents: "company-approved",
+      });
+      expect(projectTrust.external.dimensions).not.toHaveProperty(
+        "claudeAgents",
+      );
+    });
+
+    it.each([
+      [{ company: { claudeRules: "maybe" } }, "claudeRules"],
+      [{ external: { claudeHooks: true } }, "claudeHooks"],
+      [{ unknown: { claudeCommand: "allow" } }, "claudeCommand"],
+    ])("rejects an invalid declaration %#", (value, name) => {
+      const origin = Object.keys(value)[0];
+      rejects(trust(value), `policy.projectTrust.${origin}.${name}`);
+    });
+  });
 });
 
 describe("v1alpha3 MCP", () => {

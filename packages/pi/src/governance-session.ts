@@ -61,6 +61,7 @@ import { startMcp } from "./governance/mcp.js";
 import type {
   DecisionEvents,
   GovernanceOptions,
+  ProjectTrustResult,
   ResourceEvidence,
 } from "./governance/options.js";
 import { resolveProject } from "./governance/project.js";
@@ -77,6 +78,7 @@ export type {
   DecisionEvents,
   GovernanceOptions,
   LoaderInputs,
+  ProjectTrustResult,
   ResourceEvidence,
 } from "./governance/options.js";
 
@@ -114,6 +116,12 @@ export class GovernanceSession {
     prompts: [],
     themes: [],
     builtin: new Set(),
+  };
+  /** Set by `resolveProject`; what Pi's `isProjectTrusted()` reports. */
+  projectTrust: ProjectTrustResult = {
+    trusted: true,
+    surfaces: 0,
+    reason: "project trust was not resolved",
   };
   capabilities: CapabilityState[] = [];
   mcpReports: readonly McpServerReport[] = [];

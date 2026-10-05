@@ -1,5 +1,6 @@
 import { normalizePolicyAction } from "@piship/contracts";
-import type { GovernanceManifest } from "@piship/schema";
+import { defaultClaudeDimensions } from "@piship/policy";
+import type { DeploymentMode, GovernanceManifest } from "@piship/schema";
 import {
   type Collector,
   compare,
@@ -24,6 +25,10 @@ export function policy(
   out: Collector,
   b: GovernanceManifest,
   a: GovernanceManifest,
+  modes: {
+    readonly before?: DeploymentMode | undefined;
+    readonly after?: DeploymentMode | undefined;
+  } = {},
 ): void {
   const bp = b.policy;
   const ap = a.policy;
@@ -173,10 +178,23 @@ export function policy(
       );
   }
   for (const tier of ["company", "external", "unknown"] as const) {
-    const bd: Record<string, string> =
-      bp?.projectTrust?.[tier]?.dimensions ?? {};
-    const ad: Record<string, string> =
-      ap?.projectTrust?.[tier]?.dimensions ?? {};
+    // A Claude dimension the manifest leaves out takes its mode's default, so
+    // declaring that default changes nothing and a mode change shows.
+    const withDefaults = (
+      declared: Record<string, string>,
+      mode: DeploymentMode | undefined,
+    ): Record<string, string> => ({
+      ...(mode ? defaultClaudeDimensions(mode)[tier] : {}),
+      ...declared,
+    });
+    const bd: Record<string, string> = withDefaults(
+      bp?.projectTrust?.[tier]?.dimensions ?? {},
+      bp ? modes.before : undefined,
+    );
+    const ad: Record<string, string> = withDefaults(
+      ap?.projectTrust?.[tier]?.dimensions ?? {},
+      ap ? modes.after : undefined,
+    );
     for (const key of [
       ...new Set([...Object.keys(bd), ...Object.keys(ad)]),
     ].sort(compare))
