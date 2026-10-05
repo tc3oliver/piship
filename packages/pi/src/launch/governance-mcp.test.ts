@@ -85,14 +85,40 @@ describe("launch MCP options", () => {
     expect(built.identityClaims).toBeUndefined();
   });
 
-  it("adds the plain-HTTP fetch only for http-allowed", () => {
+  it("adds the plain-HTTP fetch only for http-allowed, scoped to the servers' origins", async () => {
     const built = options(
-      [{ id: "tickets", httpTransport: "http-allowed" }],
+      [
+        {
+          id: "tickets",
+          url: "http://10.99.236.70/mcp",
+          httpTransport: "http-allowed",
+        },
+      ],
       identity("u-1", "alice.chen"),
       { stored: metadata("u-1"), expensive: 0 },
     );
-    expect(built.mcpPlainHttpFetch).toBeTypeOf("function");
-    expect(built.fetch).not.toBe(built.mcpPlainHttpFetch);
+    const plain = built.mcpPlainHttpFetch;
+    if (!plain) throw new Error("expected the plain-HTTP fetch");
+    expect(built.fetch).not.toBe(plain);
+    // Another private host, or another port, is not a declared server.
+    for (const url of ["http://10.99.236.71/mcp", "http://10.99.236.70:8080/"])
+      await expect(plain(url)).rejects.toMatchObject({
+        code: "NETWORK_DENIED",
+      });
+    // An https url needs no plain-HTTP fetch.
+    expect(
+      options(
+        [
+          {
+            id: "tickets",
+            url: "https://mcp.corp.internal/mcp",
+            httpTransport: "http-allowed",
+          },
+        ],
+        identity("u-1", "alice.chen"),
+        { stored: metadata("u-1"), expensive: 0 },
+      ).mcpPlainHttpFetch,
+    ).toBeUndefined();
   });
 
   it("uses the activated claims without the secret store or the IdP", async () => {

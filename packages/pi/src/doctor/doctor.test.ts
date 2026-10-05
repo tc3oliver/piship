@@ -816,10 +816,12 @@ describe("Network group", () => {
     ]);
     expect(lines[4]).toContain("TLS verification");
     // Through a proxy that is not private, the request would be refused.
+    // Clear before setting: on Windows process.env ignores case, so
+    // deleting http_proxy after setting HTTP_PROXY would remove it again.
+    for (const name of ["http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"])
+      delete process.env[name];
     process.env.HTTP_PROXY = "http://proxy.acme.example:3128";
     process.env.NO_PROXY = "10.0.0.6";
-    delete process.env.http_proxy;
-    delete process.env.no_proxy;
     const proxied = group(renderDoctor(data).render(), "Network");
     expect(proxied).toContain(
       `  ✗ ${"credential.broker.httpTransport".padEnd(20)} plain HTTP to 10.99.236.70 would go through a proxy that is not a private host and is refused (NETWORK_DENIED); add 10.99.236.70 to NO_PROXY`,

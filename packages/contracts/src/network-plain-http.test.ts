@@ -65,6 +65,8 @@ async function proxy(): Promise<string[]> {
 }
 
 const GATEWAY = "http://10.99.236.70:4000/v1";
+/** fetch through the process dispatcher: a TypeError caused by the refusal. */
+const DENIED = { cause: expect.objectContaining({ code: "NETWORK_DENIED" }) };
 const privateOnly: NetworkPolicy = {
   ...DEFAULT_NETWORK_POLICY,
   privateOnly: true,
@@ -200,7 +202,7 @@ describe("plain HTTP through a proxy", () => {
     cleanup.push(() => setGlobalDispatcher(saved));
     for (const policy of [privateOnly, DEFAULT_NETWORK_POLICY]) {
       applyProcessNetworkPolicy(policy, { plainHttp });
-      await expect(fetch(`${GATEWAY}/models`)).rejects.toThrow();
+      await expect(fetch(`${GATEWAY}/models`)).rejects.toMatchObject(DENIED);
     }
   });
 });
@@ -216,8 +218,12 @@ describe("applyProcessNetworkPolicy plainHttp", () => {
     expect(await response.text()).toBe("ok");
     expect(seen).toEqual([`${GATEWAY}/chat/completions`]);
     // Another private host the policy allows is still refused over plain HTTP.
-    await expect(fetch("http://10.99.236.71:4000/v1")).rejects.toThrow();
-    await expect(fetch("http://broker.corp.internal/token")).rejects.toThrow();
+    await expect(fetch("http://10.99.236.71:4000/v1")).rejects.toMatchObject(
+      DENIED,
+    );
+    await expect(
+      fetch("http://broker.corp.internal/token"),
+    ).rejects.toMatchObject(DENIED);
     expect(seen).toHaveLength(1);
   });
 
@@ -226,7 +232,7 @@ describe("applyProcessNetworkPolicy plainHttp", () => {
     cleanup.push(() => setGlobalDispatcher(saved));
     const seen = await proxy();
     applyProcessNetworkPolicy(privateOnly);
-    await expect(fetch(`${GATEWAY}/models`)).rejects.toThrow();
+    await expect(fetch(`${GATEWAY}/models`)).rejects.toMatchObject(DENIED);
     expect(seen).toEqual([]);
   });
 });

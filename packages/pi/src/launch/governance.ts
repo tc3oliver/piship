@@ -6,8 +6,9 @@ import {
 import {
   createManagedFetch,
   DEFAULT_NETWORK_POLICY,
-  isPrivateNetworkHost,
+  type NetworkPolicy,
   PiShipError,
+  plainHttpOrigins,
   type PolicyAction,
   principalId,
   principalKey,
@@ -35,6 +36,41 @@ import {
 import type { ToolExposureTable } from "../governance/exposure.js";
 import { governedTools } from "../governed-tools.js";
 import type { LaunchContext, PreparedAccess } from "./context.js";
+
+/**
+ * The MCP plain-HTTP fetch: it admits plain HTTP only to the origins of the
+ * resolved urls of servers with `httpTransport: http-allowed` that are on a
+ * private or internal host. A url that does not resolve admits nothing; the
+ * server then fails to start on its own.
+ */
+function mcpPlainHttp(
+  ctx: LaunchContext,
+  servers: GovernedLock["governance"]["manifest"]["mcp"]["servers"],
+  network: NetworkPolicy,
+): Pick<GovernanceOptions, "mcpPlainHttpFetch"> {
+  const urls = servers
+    .filter((server) => server.httpTransport === "http-allowed")
+    .map((server) => {
+      try {
+        return resolveTemplate(
+          `mcp.servers.${server.id}.url`,
+          server.url ?? "",
+          ctx.metadata.access?.variables ?? [],
+          process.env,
+        );
+      } catch {
+        return undefined;
+      }
+    });
+  const plainHttp = plainHttpOrigins(urls);
+  return plainHttp
+    ? {
+        mcpPlainHttpFetch: createManagedFetch(network, "governance", {
+          plainHttp,
+        }),
+      }
+    : {};
+}
 
 export function governanceOptions(
   ctx: LaunchContext,
@@ -66,15 +102,11 @@ export function governanceOptions(
     plainHttpFetch: (plainHttp) =>
       createManagedFetch(network, "governance", { plainHttp }),
     // Plain HTTP beyond loopback only for MCP servers that declare
-    // httpTransport: http-allowed, to a private or internal host, and only
-    // on this fetch. Private-only network policy still applies.
-    ...(servers.some((server) => server.httpTransport === "http-allowed")
-      ? {
-          mcpPlainHttpFetch: createManagedFetch(network, "governance", {
-            plainHttp: (target) => isPrivateNetworkHost(target.hostname),
-          }),
-        }
-      : {}),
+    // httpTransport: http-allowed, to the origins of their resolved urls on
+    // a private or internal host, and only on this fetch. Each server's
+    // transport requests only its own url. Private-only network policy
+    // still applies.
+    ...mcpPlainHttp(ctx, servers, network),
     // MCP identity headers: the claims of the identity this launch
     // activated, held in memory. Each request only checks, without the
     // secret store or the identity provider, that the identity metadata
