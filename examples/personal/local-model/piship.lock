@@ -17,8 +17,8 @@
   "runtime": {
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.0.2",
-    "pishipVersion": "0.9.0",
-    "npmLockSha256": "7d3d378ccf64e7632be34f282183a32fafb4ee502cc11b47185ad8a5f7e11582",
+    "pishipVersion": "0.9.1",
+    "npmLockSha256": "a1aff561825db2360dc5df385bc6ca762051b0de6a73eb586084af94be2bd1f2",
     "packages": [
       {
         "path": "node_modules/@anthropic-ai/sdk",

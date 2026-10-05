@@ -1,6 +1,6 @@
 {
   "name": "@piship/mcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,8 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/contracts": "0.9.0",
-    "@piship/sandbox": "0.9.0"
+    "@piship/contracts": "0.9.1",
+    "@piship/sandbox": "0.9.1"
   },
   "description": "Governed Model Context Protocol client (stdio and Streamable HTTP) for PiShip.",
   "keywords": [
