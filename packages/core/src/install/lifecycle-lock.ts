@@ -1,8 +1,9 @@
 // The lifecycle lock: one update, rollback, or uninstall per distribution at
 // a time. A lock names its holder as a runtime lease does: its process ID,
-// its start identity (`processIdentity`) and start time, its host
-// (`processHostToken`), and a random instance ID. The holder refreshes the
-// lock's mtime while it runs (a lease).
+// its start identity (`recordedIdentity`, null off Linux, where reading it
+// starts a process) and start time, its host (`processHostToken`), and a
+// random instance ID. The holder refreshes the lock's mtime while it runs (a
+// lease).
 //
 // Who is judged how (`recordedProcessGone`): a lock of this host whose
 // process is gone, or whose process ID now belongs to a process that started
@@ -36,8 +37,9 @@ import {
 import { processHostToken } from "@piship/contracts";
 import {
   type ProcessRecord,
-  processIdentity,
+  recordedIdentity,
   recordedProcessGone,
+  recordedStart,
 } from "../process-identity.js";
 
 export const LIFECYCLE_LOCK_SCHEMA = "piship-lifecycle-lock/v1";
@@ -245,9 +247,9 @@ export function acquireLifecycleLock(
   const record = `${JSON.stringify({
     schema: LIFECYCLE_LOCK_SCHEMA,
     pid: process.pid,
-    identity: processIdentity(process.pid) ?? null,
+    identity: recordedIdentity(),
     host: processHostToken(),
-    started: Math.round(performance.timeOrigin),
+    started: recordedStart(),
     instance,
     acquiredAt: new Date().toISOString(),
   })}\n`;

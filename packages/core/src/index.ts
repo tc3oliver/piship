@@ -75,6 +75,9 @@ export {
 export {
   processIdentity,
   processIdentityMatches,
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";
