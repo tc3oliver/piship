@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -22,6 +22,7 @@ import {
   stopLiveProcesses,
 } from "../../../tests/helpers/processes.js";
 import { plantTemporary } from "../../../tests/helpers/temporaries.js";
+import { createArchive } from "./archive.js";
 import {
   buildDistribution,
   currentTarget,
@@ -33,9 +34,11 @@ import {
   payloadInventory,
   requireCurrentLock,
   resolveLock,
+  verifyPayload,
 } from "./index.js";
-import { createArchive } from "./archive.js";
 import { STATE_SCHEMAS } from "./migration.js";
+import { loadEsbuild, optimizePiPackages } from "./pi-packages/footprint.js";
+import { runtimeCacheDisabled } from "./release/build.js";
 import {
   buildRelease,
   CHANNEL_SCHEMA,
@@ -57,7 +60,6 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
-import { runtimeCacheDisabled } from "./release/build.js";
 import { runCommand } from "./release/shared.js";
 import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
@@ -3325,5 +3327,373 @@ describe("committed example locks", () => {
       new URL(`../../../examples/${name}/piship.yaml`, import.meta.url),
     );
     expect(() => requireCurrentLock(manifest)).not.toThrow();
+  });
+});
+
+describe("a release whose Pi packages share dependencies and bundle a closure", () => {
+  type Layout = "vendored" | "shared" | "bundled";
+  const esbuild = loadEsbuild(
+    fileURLToPath(new URL("../package.json", import.meta.url)),
+  );
+  const sha256 = (path: string) =>
+    createHash("sha256").update(readFileSync(path)).digest("hex");
+  const npmEntry = (name: string, version: string) => ({
+    version,
+    resolved: `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,
+    integrity: `sha512-${createHash("sha512")
+      .update(name + version)
+      .digest("base64")}`,
+  });
+
+  /** A dependency with an exports map and enough files nothing imports that sharing it pays. */
+  function writeLeaf(base: string): void {
+    write(
+      join(base, "package.json"),
+      JSON.stringify({
+        name: "leaf",
+        version: "1.0.0",
+        type: "module",
+        license: "MIT",
+        exports: { ".": "./index.js", "./package.json": "./package.json" },
+      }),
+    );
+    write(join(base, "LICENSE"), "MIT leaf\n");
+    write(join(base, "index.js"), 'export const leaf = "leaf";\n');
+    for (let index = 0; index < 12; index++)
+      write(
+        join(base, "lib", `internal-${index}.js`),
+        `export const x${index} = 1;\n`,
+      );
+  }
+
+  /** Two packages that locate their own files, so they stay vendored and share `leaf`; one that bundles. */
+  function vendorPiPackages(payload: string) {
+    const vendored = join(payload, "pi-packages");
+    const packages = [];
+    for (const id of ["alpha-tools", "beta-tools"]) {
+      const root = join(vendored, id);
+      write(
+        join(root, "package.json"),
+        JSON.stringify({ name: id, private: true }),
+      );
+      write(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: { "node_modules/leaf": npmEntry("leaf", "1.0.0") },
+        }),
+      );
+      writeLeaf(join(root, "node_modules", "leaf"));
+      const packageRoot = join(root, "node_modules", `declared-${id}`);
+      write(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: `declared-${id}`,
+          version: "1.0.0",
+          type: "module",
+        }),
+      );
+      write(
+        join(packageRoot, "dist", "extension.js"),
+        'import { leaf } from "leaf";\nexport const where = import.meta.url;\nexport default () => leaf;\n',
+      );
+      packages.push({
+        id,
+        directory: root,
+        packageRoot,
+        resources: [
+          {
+            kind: "extensions" as const,
+            path: "dist/extension.js",
+            sha256: sha256(join(packageRoot, "dist", "extension.js")),
+          },
+        ],
+      });
+    }
+    const root = join(vendored, "gamma-tools");
+    const packageRoot = join(root, "node_modules", "declared-gamma-tools");
+    write(
+      join(root, "package.json"),
+      JSON.stringify({ name: "gamma-tools", private: true }),
+    );
+    write(
+      join(root, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: { "node_modules/util-lib": npmEntry("util-lib", "2.0.0") },
+      }),
+    );
+    write(
+      join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "declared-gamma-tools",
+        version: "1.0.0",
+        type: "module",
+      }),
+    );
+    write(
+      join(packageRoot, "dist", "extension.js"),
+      'import { fmt } from "util-lib";\nexport default () => fmt("x");\n',
+    );
+    write(
+      join(root, "node_modules", "util-lib", "package.json"),
+      JSON.stringify({
+        name: "util-lib",
+        version: "2.0.0",
+        type: "module",
+        exports: "./index.js",
+        license: "MIT",
+      }),
+    );
+    write(join(root, "node_modules", "util-lib", "LICENSE"), "MIT util-lib\n");
+    write(
+      join(root, "node_modules", "util-lib", "index.js"),
+      'export { fmt } from "./fmt.js";\n',
+    );
+    write(
+      join(root, "node_modules", "util-lib", "fmt.js"),
+      'export const fmt = (text) => "[" + text + "]";\n',
+    );
+    packages.push({
+      id: "gamma-tools",
+      directory: root,
+      packageRoot,
+      resources: [
+        {
+          kind: "extensions" as const,
+          path: "dist/extension.js",
+          sha256: sha256(join(packageRoot, "dist", "extension.js")),
+        },
+      ],
+    });
+    return packages;
+  }
+
+  function assemble(layout: Layout) {
+    return (manifestPath: string, outputRoot: string): string => {
+      const out = fakeAssemble(manifestPath, outputRoot);
+      const packages = vendorPiPackages(out);
+      if (layout !== "vendored")
+        optimizePiPackages(out, {
+          packages,
+          esbuild,
+          bundle: layout === "bundled",
+        });
+      write(
+        join(out, "metadata", "inventory.json"),
+        `${JSON.stringify(payloadInventory(out), null, 2)}\n`,
+      );
+      return out;
+    };
+  }
+
+  const release = (layout: Layout) =>
+    build(project().path, { assemble: assemble(layout) });
+  const filesUnder = (directory: string, prefix = ""): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? filesUnder(join(directory, entry.name), `${prefix}${entry.name}/`)
+        : [`${prefix}${entry.name}`],
+    );
+
+  it("lays out what the footprint report says, so the tests below prove something", async () => {
+    const [vendored, shared, bundled] = await Promise.all([
+      release("vendored"),
+      release("shared"),
+      release("bundled"),
+    ]);
+    const count = (item: typeof vendored) =>
+      filesUnder(join(item.directory, "payload", "pi-packages")).length;
+    expect(count(shared)).toBeLessThan(count(vendored));
+    expect(count(bundled)).toBeLessThan(count(shared));
+    const sharedFiles = filesUnder(
+      join(shared.directory, "payload", "pi-packages"),
+    );
+    expect(
+      sharedFiles.some((file) => file.startsWith(".shared/leaf@1.0.0-")),
+    ).toBe(true);
+    const gamma = filesUnder(
+      join(bundled.directory, "payload", "pi-packages", "gamma-tools"),
+    );
+    expect(gamma).not.toContain("node_modules/util-lib/fmt.js");
+    expect(gamma).toContain("node_modules/util-lib/LICENSE");
+  });
+
+  it("verifies the release as built, from its directory and from its archive", async () => {
+    for (const layout of ["shared", "bundled"] as const) {
+      const item = await release(layout);
+      const fromDirectory = await verifyRelease(item.directory, {
+        requireTarget: true,
+      });
+      fromDirectory.cleanup();
+      // The hidden shared directory and the forwarding modules survive the archive.
+      const fromArchive = await verifyRelease(item.archive, {
+        expectedSha256: item.sha256,
+        requireTarget: true,
+      });
+      expect(fromArchive.lock.app.id).toBe("acmepi");
+      verifyPayload(fromArchive.payload);
+      fromArchive.cleanup();
+    }
+  });
+
+  describe("verify-release and doctor name a changed file", () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly layout: Layout;
+      readonly change: (payload: string) => { path: string; kind: string };
+    }[] = [
+      {
+        name: "a shared file",
+        layout: "shared",
+        change(payload) {
+          const shared = join(payload, "pi-packages", ".shared");
+          const directory = readdirSync(shared)[0] as string;
+          const path = `pi-packages/.shared/${directory}/lib/internal-3.js`;
+          writeFileSync(join(payload, path), "export const x3 = 'evil';\n");
+          return { path, kind: "modified" };
+        },
+      },
+      {
+        name: "the file a shared package's exports reach",
+        layout: "shared",
+        change(payload) {
+          const directory = readdirSync(
+            join(payload, "pi-packages", ".shared"),
+          )[0] as string;
+          const path = `pi-packages/.shared/${directory}/index.js`;
+          writeFileSync(join(payload, path), 'export const leaf = "evil";\n');
+          return { path, kind: "modified" };
+        },
+      },
+      {
+        name: "a forwarding module",
+        layout: "shared",
+        change(payload) {
+          const path = "pi-packages/beta-tools/node_modules/leaf/index.js";
+          writeFileSync(join(payload, path), 'export const leaf = "evil";\n');
+          return { path, kind: "modified" };
+        },
+      },
+      {
+        name: "a forwarding module's package.json",
+        layout: "shared",
+        change(payload) {
+          const path = "pi-packages/alpha-tools/node_modules/leaf/package.json";
+          writeFileSync(
+            join(payload, path),
+            readFileSync(join(payload, path), "utf8").replace("1.0.0", "9.9.9"),
+          );
+          return { path, kind: "modified" };
+        },
+      },
+      {
+        name: "a file added to the shared directory",
+        layout: "shared",
+        change(payload) {
+          const directory = readdirSync(
+            join(payload, "pi-packages", ".shared"),
+          )[0] as string;
+          const path = `pi-packages/.shared/${directory}/extra.js`;
+          writeFileSync(join(payload, path), "export {};\n");
+          return { path, kind: "unexpected" };
+        },
+      },
+      {
+        name: "a shared file removed",
+        layout: "shared",
+        change(payload) {
+          const directory = readdirSync(
+            join(payload, "pi-packages", ".shared"),
+          )[0] as string;
+          const path = `pi-packages/.shared/${directory}/lib/internal-5.js`;
+          rmSync(join(payload, path));
+          return { path, kind: "missing" };
+        },
+      },
+      {
+        name: "a bundled module",
+        layout: "bundled",
+        change(payload) {
+          const path = "pi-packages/gamma-tools/node_modules/util-lib/index.js";
+          writeFileSync(
+            join(payload, path),
+            "export const fmt = () => 'evil';\n",
+          );
+          return { path, kind: "modified" };
+        },
+      },
+    ];
+    it.each(cases)("$name", async ({ layout, change }) => {
+      // A fresh build per case: each changes the files it was built from.
+      const item = await build(project().path, { assemble: assemble(layout) });
+      const payload = join(item.directory, "payload");
+      const { path, kind } = change(payload);
+      const forRelease = await rejection(verifyRelease(item.directory));
+      expect(forRelease.code).toBe("INTEGRITY_FAILED");
+      expect(forRelease.message).toContain(`${kind}`);
+      expect(forRelease.message).toContain(path);
+      // `doctor` verifies the installed payload with this function.
+      const forDoctor = caught(() => verifyPayload(payload));
+      expect(forDoctor.code).toBe("INTEGRITY_FAILED");
+      expect(forDoctor.message).toContain(kind);
+      expect(forDoctor.message).toContain(path);
+    });
+  });
+
+  describe("the SBOM and notices do not depend on the file layout", () => {
+    const read = (item: { directory: string }, file: string) =>
+      readFileSync(join(item.directory, file), "utf8");
+    const packagesOf = (item: { directory: string }) =>
+      (
+        JSON.parse(read(item, "sbom.spdx.json")) as {
+          packages: { name: string; sourceInfo?: string }[];
+        }
+      ).packages;
+
+    it.each(["shared", "bundled"] as const)(
+      "is the SBOM, the license index, and the notices of the full payload when %s",
+      async (layout) => {
+        const full = await release("vendored");
+        const other = await release(layout);
+        const document = (item: { directory: string }) => {
+          const parsed = JSON.parse(read(item, "sbom.spdx.json"));
+          // The document's own identity names the build, not the dependency graph.
+          return {
+            packages: parsed.packages,
+            relationships: parsed.relationships,
+          };
+        };
+        expect(document(other)).toEqual(document(full));
+        expect(read(other, "licenses/index.json")).toBe(
+          read(full, "licenses/index.json"),
+        );
+        expect(read(other, "licenses/THIRD_PARTY_NOTICES.txt")).toBe(
+          read(full, "licenses/THIRD_PARTY_NOTICES.txt"),
+        );
+        // Not vacuous: every place that uses a package is its own entry, with
+        // the registry's source and integrity from that package's lockfile.
+        const leaves = packagesOf(other).filter((item) => item.name === "leaf");
+        expect(leaves.map((item) => item.sourceInfo)).toEqual([
+          "payload:pi-packages/alpha-tools/node_modules/leaf",
+          "payload:pi-packages/beta-tools/node_modules/leaf",
+        ]);
+        for (const item of leaves)
+          expect(item).toMatchObject({
+            downloadLocation:
+              "https://registry.npmjs.org/leaf/-/leaf-1.0.0.tgz",
+            checksums: [{ algorithm: "SHA512" }],
+          });
+        expect(packagesOf(other).some((item) => item.name === "util-lib")).toBe(
+          true,
+        );
+        expect(read(other, "licenses/THIRD_PARTY_NOTICES.txt")).toContain(
+          "MIT util-lib",
+        );
+        expect(
+          read(other, "licenses/THIRD_PARTY_NOTICES.txt").match(/MIT leaf/g),
+        ).toHaveLength(2);
+      },
+    );
   });
 });

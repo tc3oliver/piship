@@ -696,6 +696,42 @@ describe("the managed variant", () => {
 
 // ----------------------------------------------------- wiring and the files
 
+describe("the path length of shared Pi package dependencies", () => {
+  // `<install home>/apps/devcode/<version>/pi-packages/.shared/<name>@<version>-<12 hex>/<file>`
+  // has to stay below Windows' 260 characters. The shared directory's own
+  // name is the part this repository decides and the locks name: every
+  // package of every Pi package lock of the example, at its locked version.
+  // The budget leaves 180 characters for the install home, `apps/devcode/<version>`,
+  // and the file inside the package, and none of the locked names comes close.
+  const SHARED_DIRECTORY_BUDGET = 80;
+
+  it("keeps the longest shared directory of the locked packages under its budget", () => {
+    const longest: { path: string; name: string }[] = [];
+    for (const id of readdirSync(join(example, "piship.lock.d", "packages"))) {
+      const npmLock = JSON.parse(
+        readFileSync(
+          join(example, "piship.lock.d", "packages", id, "package-lock.json"),
+          "utf8",
+        ),
+      ) as { packages: Record<string, { version?: string; link?: boolean }> };
+      for (const [key, item] of Object.entries(npmLock.packages)) {
+        const name = key.split("node_modules/").pop() as string;
+        if (!key.startsWith("node_modules/") || !item.version || item.link)
+          continue;
+        longest.push({
+          name: `${name}@${item.version}`,
+          path: `pi-packages/.shared/${name.replace("/", "+")}@${item.version}-${"0".repeat(12)}`,
+        });
+      }
+    }
+    expect(longest.length).toBeGreaterThan(100);
+    longest.sort((a, b) => b.path.length - a.path.length);
+    expect(longest[0]?.path.length, longest[0]?.name).toBeLessThanOrEqual(
+      SHARED_DIRECTORY_BUDGET,
+    );
+  });
+});
+
 describe("the release wiring and the files that name the example", () => {
   const workflow = text(".github", "workflows", "release-candidate.yml");
 
