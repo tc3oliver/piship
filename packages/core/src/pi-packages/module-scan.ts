@@ -2,6 +2,7 @@
 // module makes, the names it exports, and the constructs that find code or
 // files at run time. Dependency sharing and bundling both rest on this: a
 // module that a scan cannot account for is never rewritten.
+import { spawnSync } from "node:child_process";
 import { builtinModules, createRequire } from "node:module";
 import { join, posix, resolve } from "node:path";
 
@@ -33,12 +34,73 @@ export interface EsbuildApi {
   };
 }
 
-/** esbuild as `from` (a package.json path or directory) resolves it. */
+/**
+ * Runs one esbuild build in a Node process of its own, through esbuild's
+ * asynchronous API. Its synchronous API waits on a worker thread with
+ * Atomics.wait and never returns when that thread dies (it does, on a failed
+ * build that asked for a metafile); a separate process with a time limit
+ * cannot hang the build, and the options and results are plain JSON.
+ */
+/** A build that is not done by now never will be. */
+const BUILD_LIMIT_MS = 120_000;
+
+const RUNNER = `
+const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+const { build } = require(input.tool);
+const finish = (output) =>
+  process.stdout.write(JSON.stringify(output), () => process.exit(0));
+const failed = (error) => ({ failure: { message: String(error && error.message), errors: (error && error.errors) ?? [] } });
+build(input.options).then(
+  (result) => finish({ build: {
+    errors: result.errors,
+    metafile: result.metafile,
+    outputFiles: (result.outputFiles ?? []).map((file) => ({ path: file.path, text: file.text })),
+  } }),
+  (error) => finish(failed(error)),
+);
+`;
+
+/** esbuild as `from` (a package.json path or directory) resolves it, run in a process per build. */
 export function loadEsbuild(from: string): EsbuildApi {
   const base = from.endsWith("package.json")
     ? from
     : join(from, "package.json");
-  return createRequire(base)("esbuild") as EsbuildApi;
+  const tool = createRequire(base).resolve("esbuild");
+  const attempt = (options: Record<string, unknown>) => {
+    const result = spawnSync(process.execPath, ["-e", RUNNER], {
+      input: JSON.stringify({ tool, options }),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024,
+      timeout: BUILD_LIMIT_MS,
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0)
+      return { crashed: result.error?.message ?? result.stderr.trim() };
+    return JSON.parse(result.stdout) as {
+      build?: ReturnType<EsbuildApi["buildSync"]>;
+      failure?: { message: string; errors: { text: string }[] };
+    };
+  };
+  return {
+    buildSync(options) {
+      let output = attempt(options);
+      // esbuild 0.28 crashes with a JSON error of its own, instead of
+      // reporting the failure, when it is asked for a metafile of a build that
+      // fails. Without the metafile it reports the failure itself.
+      if ("crashed" in output && options.metafile) {
+        const again = attempt({ ...options, metafile: false });
+        if ("failure" in again) output = again;
+      }
+      if ("build" in output && output.build) return output.build;
+      if ("failure" in output && output.failure)
+        throw Object.assign(new Error(output.failure.message), {
+          errors: output.failure.errors,
+        });
+      throw new Error(
+        `esbuild did not run: ${(output as { crashed: string }).crashed}`,
+      );
+    },
+  };
 }
 
 export interface ModuleImport {
@@ -91,7 +153,14 @@ export function scanModules(
   const run = (batch: readonly string[], bundle: boolean) => {
     try {
       return esbuild.buildSync({
-        entryPoints: batch.map((file) => join(root, ...file.split("/"))),
+        // Named entries: two files with the same name and different
+        // extensions (`index.js`, `index.cjs`) would share an output path.
+        entryPoints: Object.fromEntries(
+          batch.map((file, index) => [
+            String(index),
+            join(root, ...file.split("/")),
+          ]),
+        ),
         absWorkingDir: root,
         outdir: join(root, ".piship-scan"),
         outbase: root,

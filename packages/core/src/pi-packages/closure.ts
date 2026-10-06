@@ -182,7 +182,9 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
   try {
     graph = esbuild.buildSync({
       ...bundleOptions(root),
-      entryPoints: entryPaths.map((entry) => join(root, ...entry.split("/"))),
+      entryPoints: Object.fromEntries(
+        entryPaths.map((entry) => [entry, join(root, ...entry.split("/"))]),
+      ),
       outdir: join(root, CLOSURE_DIRECTORY, ".scan"),
     }).metafile as Graph;
   } catch (error) {
@@ -354,11 +356,12 @@ export function bundleClosure(
   const root = resolve(options.root);
   const built = esbuild.buildSync({
     ...bundleOptions(root),
-    entryPoints: plan.replaced.map((file) => join(root, ...file.split("/"))),
+    // Named by path, so entries that differ only in extension stay apart.
+    entryPoints: Object.fromEntries(
+      plan.replaced.map((file) => [file, join(root, ...file.split("/"))]),
+    ),
     outdir: join(root, ".piship-out"),
-    outbase: root,
     splitting: true,
-    entryNames: "[dir]/[name]",
     chunkNames: `${CLOSURE_DIRECTORY}/[name]-[hash]`,
     outExtension: { ".js": ".mjs" },
   }) as unknown as {

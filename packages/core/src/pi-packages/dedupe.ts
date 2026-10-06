@@ -526,10 +526,11 @@ export function dedupePiPackages(
         continue;
       }
       const listed = listFiles(place.directory);
-      const key =
-        "reason" in listed
-          ? `unlistable\0${place.path}`
-          : `${integrity}\0${digestOf(place.directory, listed.files)}`;
+      if ("reason" in listed) {
+        retain([place], listed.reason);
+        continue;
+      }
+      const key = `${integrity}\0${digestOf(place.directory, listed.files)}`;
       identical.set(key, [...(identical.get(key) ?? []), place]);
     }
     if (unlocked.length) retain(unlocked, "no-integrity");
