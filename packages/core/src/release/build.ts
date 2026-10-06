@@ -29,6 +29,7 @@ import {
 } from "../index.js";
 import { STATE_SCHEMAS } from "../migration.js";
 import { downloadLockedSearchTools } from "../search-tools/index.js";
+import { createStageTimer } from "../timing.js";
 import { workspacePackages } from "../runtime-dependencies.js";
 import {
   formatChecksums,
@@ -208,8 +209,11 @@ export async function buildRelease(
   manifestPath: string,
   options: ReleaseOptions = {},
 ): Promise<BuiltRelease> {
+  const timer = createStageTimer();
   const target = options.target ?? currentTarget();
+  const inputsChecked = timer.start("release inputs");
   const lock = checkReleaseInputs(manifestPath, target);
+  inputsChecked();
   const updates = lock.updates as UpdatesManifest;
   const channel = options.channel ?? updates.channel;
   if (!(RELEASE_CHANNELS as readonly string[]).includes(channel))
@@ -234,10 +238,14 @@ export async function buildRelease(
   try {
     // The pinned search tool archives for this target, checked against the
     // lock, before the payload is assembled from them.
-    await downloadLockedSearchTools(lock, target);
+    await timer.run("search tools", () =>
+      downloadLockedSearchTools(lock, target),
+    );
+    const assembled = timer.start("runtime assembly");
     const built = options.assemble
       ? options.assemble(manifestPath, stage)
       : buildDistribution(manifestPath, stage, { bundle: false, cache: false });
+    assembled();
     const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });
     renameSync(built, payload);
@@ -276,13 +284,16 @@ export async function buildRelease(
     }
     const release = lock.release as ReleaseManifest;
     const report = evaluateVulnerabilities(
-      await (options.scanner ?? npmAuditScanner)(lockDirectory),
+      await timer.run("npm audit", async () =>
+        (options.scanner ?? npmAuditScanner)(lockDirectory),
+      ),
       release.vulnerabilities,
       (options.now ?? (() => new Date()))(),
     );
     // Each vendored Pi package lockfile goes through the same policy, against
     // release.vulnerabilities.registry or the package's own registry.
     const packageAudits = [];
+    const packagesAudited = timer.start("pi package audits");
     for (const entry of lock.packages ?? []) {
       const vendored = join(payload, PI_PACKAGE_VENDOR_DIRECTORY, entry.id);
       const declaration = lock.governance?.manifest.resources.packages?.find(
@@ -314,6 +325,7 @@ export async function buildRelease(
         ...(audit.warning ? { warning: audit.warning } : {}),
       });
     }
+    packagesAudited();
     writeJson(
       join(root, "vulnerabilities.json"),
       packageAudits.length ? { ...report, packages: packageAudits } : report,
@@ -329,9 +341,12 @@ export async function buildRelease(
         "Update the dependency, or record a reviewed exception with an expiry in release.vulnerabilities.allow",
       );
     const signatures = evaluateSignatures(
-      await (options.signatureAuditor ?? npmSignatureAuditor)(payload),
+      await timer.run("signature audit", async () =>
+        (options.signatureAuditor ?? npmSignatureAuditor)(payload),
+      ),
     );
     const created = createdTime();
+    const sbomWritten = timer.start("sbom");
     const packages = listPayloadPackages(payload);
     const sbom = generateSbom({
       payloadDir: payload,
@@ -342,6 +357,8 @@ export async function buildRelease(
     });
     verifySbom(payload, sbom);
     writeJson(join(root, "sbom.spdx.json"), sbom);
+    sbomWritten();
+    const noticesWritten = timer.start("notices");
     const notices = generateNotices(payload, packages);
     mkdirSync(join(root, "licenses"), { recursive: true });
     writeFileSync(
@@ -349,12 +366,13 @@ export async function buildRelease(
       notices.text,
     );
     writeJson(join(root, "licenses", "index.json"), notices.index);
-    if (release.bundle === true) bundleDistribution(payload);
-    const tests = runReleaseTests(
-      payload,
-      lock,
-      options.runTest ?? runPayloadCommand,
+    noticesWritten();
+    if (release.bundle === true)
+      await timer.run("bundle", () => bundleDistribution(payload));
+    const tests = await timer.run("smoke tests", () =>
+      runReleaseTests(payload, lock, options.runTest ?? runPayloadCommand),
     );
+    const metadataStarted = timer.start("metadata");
     const scripts = installScripts(name);
     writeFileSync(join(root, "install.sh"), scripts.sh);
     if (process.platform !== "win32")
@@ -409,23 +427,33 @@ export async function buildRelease(
       attribution: `${lock.app.name} ${lock.app.version}, built with PiShip ${lock.runtime.pishipVersion} on Pi ${lock.runtime.version} by Earendil Works`,
     };
     writeJson(join(root, "release.json"), metadata);
+    metadataStarted();
+    const checksumsWritten = timer.start("checksums");
     writeFileSync(
       join(root, "checksums.txt"),
       formatChecksums(root, [...RELEASE_FILES]),
     );
+    checksumsWritten();
     const stagedArchive = join(stage, `${name}.tar.gz`);
-    const result = await createArchive(root, name, stagedArchive, {
-      executable: (path) =>
-        path === "install.sh" ||
-        (path.startsWith("payload/bin/") && !path.endsWith(".cmd")),
-    });
+    const result = await timer.run("archive", () =>
+      createArchive(root, name, stagedArchive, {
+        executable: (path) =>
+          path === "install.sh" ||
+          (path.startsWith("payload/bin/") && !path.endsWith(".cmd")),
+      }),
+    );
+    const published = timer.start("publish");
     rmSync(directory, { recursive: true, force: true });
     rmSync(archive, { force: true });
     renameSync(root, directory);
     renameSync(stagedArchive, archive);
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
+    published();
     return { name, directory, archive, sha256: result.sha256, metadata };
   } finally {
+    const cleaned = timer.start("staging cleanup");
     temporary.remove();
+    cleaned();
+    timer.report("release");
   }
 }
