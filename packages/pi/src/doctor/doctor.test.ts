@@ -1837,8 +1837,8 @@ describe("Governance group", () => {
       ...data.ctx,
       metadata: {
         ...data.ctx.metadata,
-        schema: "piship-lock/v1alpha6",
-        manifest: { schema: "piship/v1alpha6" },
+        schema: "piship-lock/v1",
+        manifest: { schema: "piship/v1" },
         enforcement: { pi: "1.0.3", seams: {}, digest: "sha256-x" },
         ...metadata,
       } as unknown as LaunchContext["metadata"],
@@ -1871,7 +1871,7 @@ describe("Governance group", () => {
   it("suggests migrate for an older manifest schema", () => {
     const output = renderDoctor(doctorData("personal", {})).render();
     expect(group(output, "Governance")).toEqual([
-      `  - ${"manifest schema".padEnd(20)} piship/v1alpha4; the maintainer runs piship migrate <manifest> --check, then --write, to adopt piship/v1alpha6`,
+      `  - ${"manifest schema".padEnd(20)} piship/v1alpha4; the maintainer runs piship migrate <manifest> --check, then --write, to adopt piship/v1`,
     ]);
   });
 

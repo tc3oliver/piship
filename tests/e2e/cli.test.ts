@@ -100,7 +100,7 @@ describe("CLI", () => {
         governance?: unknown;
         updates?: { trust: Record<string, unknown>; source?: string };
       };
-      expect(lock.schema).toBe("piship-lock/v1alpha6");
+      expect(lock.schema).toBe("piship-lock/v1");
       expect(lock.manifest.schema).toBe(LATEST_SCHEMA);
       expect(lock.governance).toBeDefined();
       expect(lock.updates?.trust).toEqual({});

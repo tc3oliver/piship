@@ -5,12 +5,15 @@ import {
   LATEST_SCHEMA,
   MANIFEST_MIGRATIONS,
   type Manifest,
+  checkManifestMigration,
   manifestMigration,
   migrateManifestSource,
   migrationPath,
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_V1ALPHA6,
   parseManifest,
+  releaseOptions,
   SUPPORTED_SCHEMAS,
 } from "../index.js";
 
@@ -37,22 +40,22 @@ describe("manifest migration registry", () => {
 
   it("chains the steps between two schemas in order", () => {
     expect(
-      migrationPath("piship/v1alpha3", PISHIP_SCHEMA_V1ALPHA6).map(
-        (step) => step.to,
-      ),
+      migrationPath("piship/v1alpha3", PISHIP_SCHEMA_V1).map((step) => step.to),
     ).toEqual([
       "piship/v1alpha4",
       PISHIP_SCHEMA_V1ALPHA5,
       PISHIP_SCHEMA_V1ALPHA6,
+      PISHIP_SCHEMA_V1,
     ]);
-    expect(
-      migrationPath(PISHIP_SCHEMA_V1ALPHA6, PISHIP_SCHEMA_V1ALPHA6),
-    ).toEqual([]);
+    expect(migrationPath(PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1)).toEqual([]);
     expect(
       manifestMigration(PISHIP_SCHEMA_V1ALPHA5, PISHIP_SCHEMA_V1ALPHA6)?.to,
     ).toBe(PISHIP_SCHEMA_V1ALPHA6);
     expect(
-      manifestMigration("piship/v1alpha1", PISHIP_SCHEMA_V1ALPHA6),
+      manifestMigration(PISHIP_SCHEMA_V1ALPHA6, PISHIP_SCHEMA_V1)?.to,
+    ).toBe(PISHIP_SCHEMA_V1);
+    expect(
+      manifestMigration("piship/v1alpha1", PISHIP_SCHEMA_V1),
     ).toBeUndefined();
   });
 
@@ -86,6 +89,7 @@ describe("manifest migration registry", () => {
           to: step.to,
           changes: [],
           effective: [],
+          review: [],
           source: plan.source,
         });
       });
@@ -98,7 +102,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
 
   it("keeps every decision except the cache warming default", () => {
     const before = parse(input);
-    const plan = migrateManifestSource(input);
+    const plan = migrateManifestSource(input, PISHIP_SCHEMA_V1ALPHA6);
     const after = parse(plan.source);
     expect(plan.to).toBe(PISHIP_SCHEMA_V1ALPHA6);
     // model.use is read as model.select in both schemas.
@@ -150,7 +154,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       "policy:\n",
       "policy:\n  resourceTrust: { company: deny }\n",
     );
-    const plan = migrateManifestSource(narrowed);
+    const plan = migrateManifestSource(narrowed, PISHIP_SCHEMA_V1ALPHA6);
     expect(plan.effective).toHaveLength(5);
     for (const id of ["docs", "issues", "notes"])
       expect(plan.effective).toContainEqual(
@@ -172,7 +176,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       "updates: { channel: stable, channels: [stable] }",
       "",
     ].join("\n");
-    const plan = migrateManifestSource(personal);
+    const plan = migrateManifestSource(personal, PISHIP_SCHEMA_V1ALPHA6);
     const server = parse(plan.source).governance?.mcp.servers[0];
     expect(server?.class).toBe("user");
     expect(server?.tools).toEqual({ allow: [], deny: [] });
@@ -198,6 +202,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
     it("migrates a plain allow/deny filter to exact names, with no effective change", () => {
       const plan = migrateManifestSource(
         manifest("{ allow: [search, get_issue], deny: [delete_issue] }"),
+        PISHIP_SCHEMA_V1ALPHA6,
       );
       expect(
         parse(plan.source).governance?.mcp.servers[0]?.toolExposure,
@@ -225,14 +230,135 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       ["equal-specificity tie", '{ allow: ["get_*"], deny: ["*_all"] }'],
     ] as const)
       it(`refuses a v1alpha5 filter with globs (${name})`, () => {
-        expect(() => migrateManifestSource(manifest(tools))).toThrow(
-          /Tool names use letters, digits, and _ \. -/,
-        );
+        expect(() =>
+          migrateManifestSource(manifest(tools), PISHIP_SCHEMA_V1ALPHA6),
+        ).toThrow(/Tool names use letters, digits, and _ \. -/);
       });
   });
 
   it("never rewrites a manifest that is already piship/v1alpha6", () => {
+    const migrated = migrateManifestSource(
+      input,
+      PISHIP_SCHEMA_V1ALPHA6,
+    ).source;
+    expect(
+      migrateManifestSource(migrated, PISHIP_SCHEMA_V1ALPHA6).changes,
+    ).toEqual([]);
+  });
+});
+
+describe("piship/v1alpha6 -> piship/v1", () => {
+  const input = read("v1alpha6-v1.input.yaml");
+
+  it("changes the schema id and nothing else", () => {
+    const plan = migrateManifestSource(input);
+    expect(plan.to).toBe(PISHIP_SCHEMA_V1);
+    expect(plan.effective).toEqual([]);
+    expect(plan.review).toEqual([]);
+    const before = parse(input);
+    const after = parse(plan.source);
+    expect({ ...after, schema: before.schema }).toEqual(before);
+    expect(plan.source).toBe(
+      input.replace("schema: piship/v1alpha6", "schema: piship/v1"),
+    );
+  });
+
+  it("keeps the v1alpha6 defaults: release.bundle and release.strip stay on", () => {
+    const bare = [
+      "schema: piship/v1alpha6",
+      "app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }",
+      'runtime: { pi: "1.0.3" }',
+      "deployment: { mode: personal }",
+      "updates: { channel: stable, channels: [stable] }",
+      "",
+    ].join("\n");
+    const before = parse(bare);
+    const after = parse(migrateManifestSource(bare).source);
+    for (const manifest of [before, after])
+      expect(
+        releaseOptions(manifest.schema, manifest.lifecycle?.release),
+      ).toEqual({ bundle: true, strip: true });
+  });
+
+  it("chains from v1alpha5 and flags the placeholder an earlier step wrote", () => {
+    const plan = migrateManifestSource(read("v1alpha4-v1alpha5.expected.yaml"));
+    expect(plan.to).toBe(PISHIP_SCHEMA_V1);
+    expect(plan.review).toEqual([
+      expect.stringContaining("updates.trust.bootstrap.expires"),
+    ]);
+    expect(plan.source).toContain("expires: 2027-10-01T00:00:00Z");
+  });
+
+  it("never rewrites a manifest that is already piship/v1", () => {
     const migrated = migrateManifestSource(input).source;
     expect(migrateManifestSource(migrated).changes).toEqual([]);
+  });
+});
+
+describe("migration verdicts", () => {
+  const verdict = (name: string) =>
+    checkManifestMigration(read(`verdicts/${name}.yaml`));
+
+  it("migratable: nothing changes a decision and nothing needs an owner", () => {
+    const check = verdict("migratable");
+    expect(check).toMatchObject({
+      verdict: "migratable",
+      from: "piship/v1alpha6",
+      to: PISHIP_SCHEMA_V1,
+      review: [],
+    });
+    expect(check.changes[0]).toBe("schema: piship/v1alpha6 -> piship/v1");
+  });
+
+  it("requires review: an earlier migration's placeholder is not silently accepted", () => {
+    const check = verdict("requires-review");
+    expect(check.verdict).toBe("requires review");
+    expect(check.review).toEqual([
+      expect.stringContaining("updates.trust.bootstrap.expires"),
+    ]);
+    // The placeholder is reported, never rewritten.
+    expect(
+      migrateManifestSource(read("verdicts/requires-review.yaml")).source,
+    ).toContain("expires: 2027-10-01T00:00:00Z");
+  });
+
+  it("requires review: a managed bootstrap whose roles share a key", () => {
+    const check = verdict("requires-review-shared-roles");
+    expect(check.verdict).toBe("requires review");
+    expect(check.review.join("\n")).toContain("share release-2026");
+  });
+
+  it("requires review: older schemas report their effective changes", () => {
+    const check = checkManifestMigration(read("v1alpha5-v1alpha6.input.yaml"));
+    expect(check.verdict).toBe("requires review");
+    expect(check.review).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("runtime.cacheWarming"),
+        expect.stringContaining("release.bundle and release.strip"),
+      ]),
+    );
+  });
+
+  for (const [name, reason] of [
+    ["cannot-migrate-invalid", /runtime\.pi/],
+    ["cannot-migrate-future-schema", /Expected piship\/v1alpha1 or/],
+    ["cannot-migrate-tool-glob", /Tool names use letters/],
+  ] as const)
+    it(`cannot migrate: ${name}`, () => {
+      const check = verdict(name);
+      expect(check.verdict).toBe("cannot migrate");
+      expect(check.reason).toMatch(reason);
+      expect(check.changes).toEqual([]);
+    });
+
+  it("cannot migrate: a document that is not YAML", () => {
+    expect(checkManifestMigration("schema: [").verdict).toBe("cannot migrate");
+  });
+
+  it("never touches the text it checks", () => {
+    const source = read("verdicts/requires-review.yaml");
+    const copy = `${source}`;
+    checkManifestMigration(source);
+    expect(source).toBe(copy);
   });
 });

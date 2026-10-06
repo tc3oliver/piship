@@ -4,7 +4,7 @@ import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
 import { AccessFieldError } from "./access.js";
 import { PRIVATE_HOSTS } from "./http-transport.js";
-import { PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
+import { PISHIP_SCHEMA_V1, PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 import {
   checkTemplate,
   hasRuntimeReference,
@@ -157,7 +157,7 @@ export interface ReleaseManifest {
 
 /**
  * What a release does about `release.bundle` and `release.strip`: both are on
- * from piship/v1alpha6 unless the manifest says `false`. The earlier schemas
+ * from piship/v1alpha6 (and so in piship/v1) unless the manifest says `false`. The earlier schemas
  * cannot set them and build as they always did.
  *
  * This is the one place the default is applied. The parsed manifest and the
@@ -171,7 +171,7 @@ export function releaseOptions(
   schema: string,
   release: Pick<ReleaseManifest, "bundle" | "strip"> | undefined,
 ): { readonly bundle: boolean; readonly strip: boolean } {
-  const on = schema === PISHIP_SCHEMA_V1ALPHA6;
+  const on = schema === PISHIP_SCHEMA_V1ALPHA6 || schema === PISHIP_SCHEMA_V1;
   return { bundle: release?.bundle ?? on, strip: release?.strip ?? on };
 }
 export interface LifecycleManifest {

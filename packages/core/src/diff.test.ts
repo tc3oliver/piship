@@ -45,13 +45,13 @@ resources:
 `;
 
 // The demo company's manifest as it was before its migration to
-// piship/v1alpha6, so these comparisons run on a piship-lock/v1alpha5 lock and
+// piship/v1alpha6 and piship/v1, so these comparisons run on a piship-lock/v1alpha5 lock and
 // the v1alpha6 fields are added to it below.
 const V1ALPHA5_DEMO = readFileSync(
   join(repo, "examples", "demo-company", "piship.yaml"),
   "utf8",
 )
-  .replace("schema: piship/v1alpha6", "schema: piship/v1alpha5")
+  .replace("schema: piship/v1", "schema: piship/v1alpha5")
   .replace("action: model.select", "action: model.use")
   .replace(
     `        search: direct

@@ -110,7 +110,7 @@ A minimal managed distribution. `piship validate` accepts it as is; the demo's o
 <summary><b>Show piship.yaml</b></summary>
 
 ```yaml
-schema: piship/v1alpha6
+schema: piship/v1
 
 app:
   id: acmecode
@@ -237,8 +237,8 @@ The [status page](docs/status.md) has the evidence behind every claim.
 | [Manifest](docs/manifest.md): every field | [Security](docs/security.md): policy and known limits |
 | [Enterprise integration](docs/enterprise-integration.md): what your IdP, broker, and gateway must do | [Identity](docs/identity.md), [Credentials](docs/credentials.md), [Inference](docs/inference.md) |
 | [Sandbox](docs/sandbox.md): backends and the workspace check | [Adapter SDK](docs/adapter-sdk.md) |
-| [Release](docs/release.md): build, sign, update, roll back | [Compatibility](docs/compatibility.md), [Roadmap](docs/roadmap.md) |
-| [Troubleshooting](docs/troubleshooting.md): error codes | [Agent setup](docs/agent-setup.md): steps for a coding agent |
+| [Release](docs/release.md): build, sign, update, roll back | [Compatibility](docs/compatibility.md), [Support policy](docs/support-policy.md), [Roadmap](docs/roadmap.md) |
+| [Troubleshooting](docs/troubleshooting.md): error codes | [Agent setup](docs/agent-setup.md): steps for a coding agent, [UX contract](docs/ux-contract.md) |
 
 ## Contributing
 

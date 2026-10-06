@@ -40,6 +40,7 @@ import {
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
   PISHIP_SCHEMA_V1ALPHA5,
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA6,
   PISHIP_SCHEMA_VERSION,
   type PishipSchemaVersion,
@@ -87,7 +88,7 @@ export interface Manifest {
   };
   readonly runtime: {
     readonly pi: string;
-    /** Present for piship/v1alpha6 and later (defaults applied). */
+    /** Present for piship/v1alpha6 and later, including piship/v1 (defaults applied). */
     readonly tools?: RuntimeToolsConfig;
     /** Present for piship/v1alpha6 and later; an omitted mode is `off`. */
     readonly cacheWarming?: CacheWarmingConfig;
@@ -342,7 +343,8 @@ export function parseManifest(value: unknown): Manifest {
       `Expected ${SUPPORTED_SCHEMAS.join(" or ")}`,
     );
   }
-  const v6 = schema === PISHIP_SCHEMA_V1ALPHA6;
+  // v1 carries the v1alpha6 semantics, so every v6 rule holds from v1alpha6 on.
+  const v6 = schema === PISHIP_SCHEMA_V1ALPHA6 || schema === PISHIP_SCHEMA_V1;
   const v5 = schema === PISHIP_SCHEMA_V1ALPHA5 || v6;
   const v4 = schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const v3 = schema === PISHIP_SCHEMA_V1ALPHA3 || v4;
@@ -388,7 +390,7 @@ export function parseManifest(value: unknown): Manifest {
     throw new ManifestError(
       "invalid field",
       "deployment.mode",
-      "managed requires schema piship/v1alpha2, piship/v1alpha3, piship/v1alpha4, piship/v1alpha5, or piship/v1alpha6 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
+      "managed requires schema piship/v1alpha2, piship/v1alpha3, piship/v1alpha4, piship/v1alpha5, piship/v1alpha6, or piship/v1 with identity, credential, inference, and models sections; piship/v1alpha1 is the personal alpha (see docs/manifest.md)",
     );
   if (mode !== "personal" && mode !== "managed")
     throw new ManifestError(
@@ -462,17 +464,20 @@ export function parseManifest(value: unknown): Manifest {
       "Expected an exact Pi version",
     );
   return {
-    schema: v6
-      ? PISHIP_SCHEMA_V1ALPHA6
-      : v5
-        ? PISHIP_SCHEMA_V1ALPHA5
-        : v4
-          ? PISHIP_SCHEMA_V1ALPHA4
-          : v3
-            ? PISHIP_SCHEMA_V1ALPHA3
-            : v2
-              ? PISHIP_SCHEMA_V1ALPHA2
-              : PISHIP_SCHEMA_VERSION,
+    schema:
+      schema === PISHIP_SCHEMA_V1
+        ? PISHIP_SCHEMA_V1
+        : v6
+          ? PISHIP_SCHEMA_V1ALPHA6
+          : v5
+            ? PISHIP_SCHEMA_V1ALPHA5
+            : v4
+              ? PISHIP_SCHEMA_V1ALPHA4
+              : v3
+                ? PISHIP_SCHEMA_V1ALPHA3
+                : v2
+                  ? PISHIP_SCHEMA_V1ALPHA2
+                  : PISHIP_SCHEMA_VERSION,
     app: {
       id: name(app.id, "app.id"),
       name: displayText(app.name, "app.name"),
@@ -577,6 +582,11 @@ export interface MigrationPlan {
    * fails when there is any.
    */
   readonly effective: readonly string[];
+  /**
+   * Configuration left as written because only the owner can decide it;
+   * `piship migrate --check` reports "requires review" when there is any.
+   */
+  readonly review: readonly string[];
   readonly source: string;
 }
 
@@ -605,9 +615,11 @@ export function migrateManifestSource(
       "schema",
       `Cannot migrate ${from} back to ${to}; downgrades are not supported`,
     );
-  if (from === to) return { from, to, changes: [], effective: [], source };
+  if (from === to)
+    return { from, to, changes: [], effective: [], review: [], source };
   const changes: string[] = [];
   const effective: string[] = [];
+  const review: string[] = [];
   const context = {
     mode: current.deployment.mode,
     parse: () => parseManifest(document.toJS() as unknown),
@@ -616,9 +628,62 @@ export function migrateManifestSource(
     const result = step.migrate(document, context);
     changes.push(...result.changes);
     effective.push(...result.effective);
+    review.push(...(result.review ?? []));
   }
   const migrated = document.toString();
   parseManifest(parseDocument(migrated).toJS() as unknown);
   changes.push("Regenerate piship.lock with piship lock, then rebuild");
-  return { from, to, changes, effective, source: migrated };
+  return { from, to, changes, effective, review, source: migrated };
+}
+
+/**
+ * The outcome of `piship migrate --check`. `migratable`: the migration
+ * changes no effective decision and leaves nothing for the owner to decide.
+ * `requires review`: it can run, but an effective decision changes or a value
+ * needs the owner's judgment, and it lists each. `cannot migrate`: a step
+ * refused the manifest, or it does not parse, and `reason` says why.
+ */
+export type MigrationVerdict =
+  | "migratable"
+  | "requires review"
+  | "cannot migrate";
+
+export interface MigrationCheck {
+  readonly verdict: MigrationVerdict;
+  readonly from?: PishipSchemaVersion;
+  readonly to: PishipSchemaVersion;
+  readonly changes: readonly string[];
+  /** Effective changes first, then the owner decisions. */
+  readonly review: readonly string[];
+  readonly reason?: string;
+}
+
+/**
+ * Classify a migration without producing or writing anything: it takes the
+ * manifest text and returns a verdict. A manifest that is already `to`
+ * is `migratable` with no changes.
+ */
+export function checkManifestMigration(
+  source: string,
+  to: PishipSchemaVersion = LATEST_SCHEMA,
+): MigrationCheck {
+  try {
+    const plan = migrateManifestSource(source, to);
+    const review = [...plan.effective, ...plan.review];
+    return {
+      verdict: review.length ? "requires review" : "migratable",
+      from: plan.from,
+      to,
+      changes: plan.changes,
+      review,
+    };
+  } catch (error) {
+    return {
+      verdict: "cannot migrate",
+      to,
+      changes: [],
+      review: [],
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

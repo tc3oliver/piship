@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha6",
+  "schema": "piship-lock/v1",
   "manifest": {
-    "schema": "piship/v1alpha6",
-    "sha256": "sha256-045e31ad915c8d814509551297795614618cd64ef3426f4396afb9fd3234d935"
+    "schema": "piship/v1",
+    "sha256": "sha256-a8ea618826205a88cc867e25393bb54643b5b912378e6204d1ffec7d6204088e"
   },
   "app": {
     "id": "devcode",

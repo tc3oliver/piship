@@ -8,7 +8,7 @@
 
 ## Personal surface
 
-`compatibility/pi.json` marks Pi 1.0.3 (and 1.0.2, 1.0.0, and 0.87.1) **supported for the portable personal surface** (carried over from 1.0.2 for Pi 1.0.3) on Ubuntu x64, macOS arm64, and Windows x64 with Node 22.19.0. The surface was first qualified by a [three-target run](https://github.com/tc3oliver/piship/actions/runs/36345041538) of build, installed E2E, and public-API compatibility for the v0.1 `piship/v1alpha1` personal example; a local macOS arm64 PTY run also opened the real interactive TUI. The personal example has since moved to `piship/v1alpha6`, and its installed E2E is now part of the nightly and manual Portable E2E rather than a pull request gate; the [status page](status.md#recorded-evidence) records the latest result for the current commit. This status does not claim a live authenticated model request or other CPU architectures.
+`compatibility/pi.json` marks Pi 1.0.3 (and 1.0.2, 1.0.0, and 0.87.1) **supported for the portable personal surface** (carried over from 1.0.2 for Pi 1.0.3) on Ubuntu x64, macOS arm64, and Windows x64 with Node 22.19.0. The surface was first qualified by a [three-target run](https://github.com/tc3oliver/piship/actions/runs/36345041538) of build, installed E2E, and public-API compatibility for the v0.1 `piship/v1alpha1` personal example; a local macOS arm64 PTY run also opened the real interactive TUI. The personal example has since moved to `piship/v1alpha6` and then to `piship/v1`, and its installed E2E is now part of the nightly and manual Portable E2E rather than a pull request gate; the [status page](status.md#recorded-evidence) records the latest result for the current commit. This status does not claim a live authenticated model request or other CPU architectures.
 
 ## Managed surface
 
@@ -66,6 +66,53 @@ Two compatibility shims are registered for Pi 1.0.3; both were re-verified at th
 | --- | --- | --- |
 | Dispose hook (`packages/pi/src/commands/dispose-hook.ts`) | Pi ends an interactive session in `InteractiveMode.shutdown()` by awaiting `runtimeHost.dispose()` and then calling `process.exit(0)`, so the governance session must end inside `dispose()`, and a failed teardown can change the exit code only by replacing `process.exit`. | `packages/pi/src/compatibility.test.ts` pins the await-then-exit order in Pi's shipped source |
 | Session file check (`packages/pi/src/launch/session-file.ts`) | Pi's on-disk session format: the header, entry `id` and `parentId`, and the fields of the entry types it knows (`firstKeptEntryId`, `targetId`, `fromId`). A damaged file is refused before Pi would load or rewrite it. An entry type the check does not know is accepted as long as it has an ID and a valid parent, so a newer Pi's entries do not make a valid session refused. | `packages/pi/src/launch/session-file.test.ts`, including an unknown entry type |
+
+## Compatibility contract
+
+This section is the stable contract from v0.11.0. The versions of PiShip's own schemas, the migration window, and the platform and Node.js support are in the [support policy](support-policy.md). The sections that follow it ("Upgrade to Pi 1.0.3" and earlier) are the dated record of each upgrade.
+
+### Exact pin policy
+
+- PiShip runs exactly one Pi version at a time. `@piship/pi` depends on `@earendil-works/pi-coding-agent` at that exact version, never a range and never `latest`, and imports only its public package entrypoint. The seven sibling packages (`chord`, `pi-agent-core`, `pi-ai`, `pi-codemode`, `pi-mcp`, `pi-telemetry`, and `pi-tui`) are held at the same exact version by the root `package.json` `overrides`, and `PI_SIBLING_PINS` in `@piship/pi` is the one list the compatibility suite checks them against. The committed `package-lock.json` fixes every transitive package.
+- A manifest names its Pi in `runtime.pi`, as an exact version. `validate`, `lock`, and `build` refuse one that is not the pinned version (`Pi <version> is not available in this PiShip build`). The lock and `release.json` record it, and `update` refuses a release that records its Pi as unsupported.
+- Only `packages/pi` may import or depend on `@earendil-works/pi-*`. No PiShip code imports a Pi internal or private path, and no part of PiShip patches, forks, or vendors Pi.
+- A release keeps running on the Pi it was built with. A newer PiShip does not move an installed release to another Pi: a new Pi version arrives with a new release, installed by `update`.
+
+### Supported matrix
+
+| PiShip | Pi | Manifest schema | Lock schema |
+| --- | --- | --- | --- |
+| 0.7.1 | 0.87.1 | `piship/v1alpha4` | `piship-lock/v1alpha4` |
+| 0.8.0, 0.8.1 | 1.0.0 | `piship/v1alpha5` | `piship-lock/v1alpha5` |
+| 0.9.0, 0.9.1 | 1.0.2 | `piship/v1alpha6` | `piship-lock/v1alpha6` |
+| 0.10.0 (a candidate when this page was written) | 1.0.3 | `piship/v1alpha6` | `piship-lock/v1alpha6` |
+| 0.11.0 | the pin in `@piship/pi` at that tag (1.0.3 while this page is written) | `piship/v1`; `piship/v1alpha6` accepted for the [migration window](support-policy.md#manifest-versions-and-the-migration-window) | `piship-lock/v1`; `piship-lock/v1alpha6` read |
+
+`compatibility/pi.json`, and its copy in `@piship/core` that the compatibility suite checks for equality, list every Pi version PiShip recognizes and the status of each surface: `personal` `supported`, and `managed`, `governance`, and `lifecycle` `candidate` for every listed version today (the terms are defined at the top of this page). A release is recognized while its Pi is in the matrix, so a version stays listed after it stops being the pin. The status of a surface is evidence, and it is never carried to a new Pi version without saying so: a surface "carried over" from an earlier Pi is recorded as carried over, with the evidence that is still pending.
+
+### Upgrading Pi
+
+A Pi upgrade is its own change, with its own section on this page, and follows these steps:
+
+1. Read upstream's changelog and compare the public `.d.ts` files of every package PiShip imports. List what changed for an export, event, or option PiShip uses, and what changed in behavior (defaults, files Pi writes, environment variables it reads, network requests it makes).
+2. Move the exact pin: `packages/pi/package.json`, the root `overrides`, and `PI_SIBLING_PINS`. Regenerate `package-lock.json` and review every changed package: its version, `resolved`, and `integrity` (the release gate refuses a package without one), whether it has a lifecycle script (`REVIEWED_INSTALL_SCRIPTS` names the reviewed ones), and `npm audit`.
+3. Add the version to `compatibility/pi.json` and to the copy in `@piship/core`, keeping every earlier entry so releases built on them are still recognized. Set each surface to what the evidence supports, and say where a status is carried over.
+4. Run `npm run test:compatibility` and the unit tier. The compatibility suite asserts each seam individually, so a renamed export or a changed behavior fails there first. A failure is fixed in `packages/pi` with a regression test, or upstream; the pin does not move past a failing seam.
+5. Write the "Upgrade to Pi X" section: matrix, packaging and sibling pin, lock and dependencies, install scripts, API diff, and each behavior change with what a distribution owner or user must do about it.
+6. Run Release qualification on the exact release commit. No release states a Pi version as qualified before that run has passed, and the [status page](status.md) records it.
+7. Distribution owners then set `runtime.pi` to the new pin, add the new version to the `pi` list of each `certified` resource they reviewed, run `piship validate`, `piship lock`, and `piship diff` against the previous lock, and rebuild ([agent setup](agent-setup.md#9-upgrade-an-existing-distribution)).
+
+### Upstream seams
+
+A seam is a public Pi API, event, or option that PiShip depends on to govern a session. The compatibility suite asserts each seam against the pinned Pi, and the runtime seam table (`RUNTIME_SEAMS` in `@piship/policy`) records, for each governed action, whether Pi exposes a seam that can prevent it. The table is static data because Pi has no capability discovery API, and the suite proves it.
+
+- An action without a seam is reported `unsupported` and never `enforced`; a managed rule that denies or asks for it is refused unless the owner acknowledges it ([enforcement status](manifest.md#enforcement-status)).
+- A missing or awkward seam is worked around only in `packages/pi`, through public exports, and every workaround has a regression test that fails when the seam changes. The workaround is listed in the table under "Public API used" above.
+- A generic runtime improvement is proposed upstream in Pi, not carried here. When upstream adds a seam, the table changes only after the compatibility suite proves it on the pinned Pi.
+
+### Unsupported semantics
+
+These are outside the contract, in any PiShip release: a Pi version outside the matrix; a Pi private or internal path; Pi's built-in extensions (`builtin:*`) in a PiShip session; Pi's own `models.json`, `auth.json`, extension discovery, and `~/.pi` in a managed distribution; running Pi's interactive `/bug`, `/share`, or `/export` as a governed action (their gaps are under [Limits](security.md#limits)); and every action without a runtime seam (`web.request`, `browser.execute`, `agent.invoke`, `memory.*`, and `network.connect` without an enforced deny sandbox). Pi packages are supported as vendored, locked closures; a package that loads code or files outside its locked closure at run time is not.
 
 ## Upgrade to Pi 1.0.3
 

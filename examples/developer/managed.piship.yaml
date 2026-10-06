@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 # How a company tightens the developer profile. It is validated, not locked or
 # built: a company copies it next to its own resources, points the identity,

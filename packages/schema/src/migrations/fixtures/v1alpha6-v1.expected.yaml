@@ -1,0 +1,89 @@
+schema: piship/v1
+# A managed distribution with model rules, MCP exposure, and a split update root.
+app:
+  id: acmecode
+  name: AcmeCode
+  command: acmecode
+  version: 1.0.0
+runtime:
+  pi: "1.0.0"
+deployment:
+  mode: managed
+identity:
+  mode: oidc
+  oidc:
+    issuer: https://login.acme.example
+    clientId: acmecode
+    redirectUri: http://127.0.0.1:8765/callback
+credential:
+  provider: http-broker
+  broker: { endpoint: https://broker.acme.example/token }
+inference:
+  provider: openai-compatible
+  baseUrl: https://gateway.acme.example/v1
+models:
+  default: acme/coder
+  allowed: [ acme/coder ]
+  catalog:
+    acme/coder: { name: Acme Coder, contextWindow: 128000, maxOutputTokens: 8192 }
+policy:
+  defaults:
+    # every gateway model
+    - id: distribution.models
+      action: model.select
+      resource: "acmecode/**"
+      effect: allow
+  enforced:
+    - id: no.web
+      action: web.request
+      effect: deny
+mcp:
+  mode: allowlist
+  servers:
+    docs:
+      transport: stdio
+      module: ./mcp/docs.mjs
+      tools:
+        search: direct
+        get_document: direct
+        delete_document: hidden
+        "*": hidden
+      class: company
+      exposure: direct
+    issues:
+      transport: stdio
+      module: ./mcp/issues.mjs
+      tools:
+        close_issue: hidden
+      class: company
+      exposure: direct
+    notes:
+      transport: stdio
+      module: ./mcp/notes.mjs
+      class: company
+      exposure: direct
+updates:
+  channel: stable
+  channels: [ stable ]
+  source: https://updates.acme.example/acmecode
+  trust:
+    bootstrap:
+      version: 1
+      expires: 2029-01-01T00:00:00Z
+      keys:
+        # offline root key
+        - id: root-2026
+          publicKey: MCowBQYDK2VwAyEAN+2VxZJJXtDgjfJJQTzdusAQQ2rg+mNLwX13wvMcdBo=
+        # channel release key
+        - id: release-2026
+          publicKey: MCowBQYDK2VwAyEA4YH+qJbA4S3W0m0e0rTiHqbDU6sX6OZy3YfGgPPhFqs=
+      roles:
+        root:
+          keyIds: [ root-2026 ]
+          threshold: 1
+        channel:
+          keyIds: [ release-2026 ]
+          threshold: 1
+release:
+  bundle: true
+  strip: false

@@ -113,7 +113,7 @@ export function migrateToV1alpha6(
   changes.push(warming);
   effective.push(warming);
   const bundling =
-    "release.bundle and release.strip: absent, which is true in piship/v1alpha6, so a build is a bundled, stripped payload (far fewer files; it cannot build or release another distribution); piship/v1alpha5 built an unbundled one. Set both to false to keep that";
+    "release.bundle and release.strip: absent, which is true in piship/v1alpha6, so a build is a bundled, stripped payload (far fewer files; it carries its authoring inputs as one compressed snapshot, so it can still build and release another distribution); piship/v1alpha5 built an unbundled one. Set both to false to keep that";
   changes.push(bundling);
   effective.push(bundling);
   changes.push("data: absent, so no retention sweep runs (as in v0.8)");

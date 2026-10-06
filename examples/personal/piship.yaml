@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 app:
   id: mypi
@@ -93,7 +93,7 @@ updates:
   rollback: true
 
 release:
-  # Both are on by default in piship/v1alpha6 and written out here so the
+  # Both are on by default in piship/v1 and written out here so the
   # example shows the choice. Fewer, smaller files to install and scan, and a
   # faster start; a bundled payload cannot build other distributions
   # (docs/performance.md). Set either to false for the unbundled layout.

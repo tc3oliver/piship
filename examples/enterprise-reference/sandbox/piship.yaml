@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 # The AcmeCode reference distribution (../piship.yaml) with its commands run in
 # the organization's container sandbox service (README.md) instead of the

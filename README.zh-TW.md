@@ -239,8 +239,8 @@ PiShip 還在 pre-release，沒有發佈到 npm。哪些已經驗證、哪些還
 | [Manifest](docs/manifest.md)：所有欄位 | [Security](docs/security.md)：政策與已知限制 |
 | [Enterprise integration](docs/enterprise-integration.md)：IdP、broker、gateway 要提供什麼 | [Identity](docs/identity.md)、[Credentials](docs/credentials.md)、[Inference](docs/inference.md) |
 | [Sandbox](docs/sandbox.md)：各種沙箱與工作目錄檢查 | [Adapter SDK](docs/adapter-sdk.md) |
-| [Release](docs/release.md)：建置、簽章、更新、rollback | [Compatibility](docs/compatibility.md)、[Roadmap](docs/roadmap.md) |
-| [Troubleshooting](docs/troubleshooting.md)：錯誤代碼 | [Agent setup](docs/agent-setup.md)：給 coding agent 的設定步驟 |
+| [Release](docs/release.md)：建置、簽章、更新、rollback | [Compatibility](docs/compatibility.md)、[Support policy](docs/support-policy.md)、[Roadmap](docs/roadmap.md) |
+| [Troubleshooting](docs/troubleshooting.md)：錯誤代碼 | [Agent setup](docs/agent-setup.md)：給 coding agent 的設定步驟、[UX contract](docs/ux-contract.md) |
 
 ## 參與貢獻
 

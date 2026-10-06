@@ -20,6 +20,12 @@ export interface MigrationStepResult {
    * or is sent). `piship migrate --check` fails when any step reports one.
    */
   readonly effective: readonly string[];
+  /**
+   * Configuration the step left as written because only the owner can say
+   * what it should be. `piship migrate --check` reports "requires review"
+   * for any of these, with no change to a decision.
+   */
+  readonly review?: readonly string[];
 }
 
 /**

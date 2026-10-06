@@ -213,7 +213,7 @@ These figures are from one developer machine. Running on GitHub's `ubuntu-latest
 
 ## AcmeCode reference distribution
 
-[`piship.yaml`](piship.yaml) is a managed AcmeCode distribution (`piship/v1alpha6`) wired to this stack, locked in [`piship.lock`](piship.lock). It has the shape of [`examples/demo-company`](../demo-company/README.md): the same sections in the same order, the same `acme-engineering` policy without its handbook rules, the required OS sandbox, a local audit sink, and the signed-channel and release sections. It points at the stack instead of the demo's loopback fixtures:
+[`piship.yaml`](piship.yaml) is a managed AcmeCode distribution (`piship/v1`) wired to this stack, locked in [`piship.lock`](piship.lock). It has the shape of [`examples/demo-company`](../demo-company/README.md): the same sections in the same order, the same `acme-engineering` policy without its handbook rules, the required OS sandbox, a local audit sink, and the signed-channel and release sections. It points at the stack instead of the demo's loopback fixtures:
 
 | Section | Value |
 | --- | --- |

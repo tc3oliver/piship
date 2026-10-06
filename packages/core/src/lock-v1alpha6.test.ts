@@ -12,6 +12,7 @@ import {
   DATA_CONTRACT_VERSION,
   type Manifest,
   migrateManifestSource,
+  PISHIP_SCHEMA_V1ALPHA6,
   readManifest,
 } from "@piship/schema";
 import { afterEach, describe, expect, it } from "vitest";
@@ -220,7 +221,9 @@ describe("lock piship-lock/v1alpha6", () => {
   });
 
   it("records no virtual models when none is declared", () => {
-    const lock = resolveLock(project(migrateManifestSource(V5).source));
+    const lock = resolveLock(
+      project(migrateManifestSource(V5, PISHIP_SCHEMA_V1ALPHA6).source),
+    );
     expect(lock.schema).toBe(LOCK_SCHEMA_V1ALPHA6);
     expect(lock).not.toHaveProperty("virtualModels");
     expect(lock.data).toEqual({ contract: DATA_CONTRACT_VERSION });

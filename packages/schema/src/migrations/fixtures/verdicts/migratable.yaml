@@ -1,0 +1,6 @@
+schema: piship/v1alpha6
+# Personal distribution with nothing to decide.
+app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }
+runtime: { pi: "1.0.3" }
+deployment: { mode: personal }
+updates: { channel: stable, channels: [stable] }

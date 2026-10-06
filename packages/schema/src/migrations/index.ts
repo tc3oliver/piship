@@ -1,7 +1,8 @@
 // The manifest migration registry, keyed by (from, to). Each step moves one
 // schema version forward; `migrateManifestSource` chains them. A later
-// version (piship/v1) adds its step here with a fixture.
+// schema adds its step here with a fixture.
 import {
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
@@ -18,6 +19,7 @@ import {
   migrateToV1alpha5,
 } from "./legacy.js";
 import type { ManifestMigration } from "./types.js";
+import { migrateToV1 } from "./v1.js";
 import { migrateToV1alpha6 } from "./v1alpha6.js";
 
 export type {
@@ -65,6 +67,11 @@ export const MANIFEST_MIGRATIONS: readonly ManifestMigration[] = [
     from: PISHIP_SCHEMA_V1ALPHA5,
     to: PISHIP_SCHEMA_V1ALPHA6,
     migrate: migrateToV1alpha6,
+  },
+  {
+    from: PISHIP_SCHEMA_V1ALPHA6,
+    to: PISHIP_SCHEMA_V1,
+    migrate: migrateToV1,
   },
 ];
 

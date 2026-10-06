@@ -57,13 +57,21 @@ export const LOCK_SCHEMA_V1ALPHA5 = "piship-lock/v1alpha5";
  * where every package came from.
  */
 export const LOCK_SCHEMA_V1ALPHA6 = "piship-lock/v1alpha6";
+/**
+ * Lock schema for piship/v1 manifests: the v1alpha6 lock, frozen. Every key
+ * keeps its v1alpha6 meaning; a backward-compatible addition is an optional
+ * key and keeps this version, a breaking change needs a new major
+ * (docs/manifest.md, "Lock stability").
+ */
+export const LOCK_SCHEMA_V1 = "piship-lock/v1";
 export type LockSchemaVersion =
   | typeof LOCK_SCHEMA_VERSION
   | typeof LOCK_SCHEMA_V1ALPHA2
   | typeof LOCK_SCHEMA_V1ALPHA3
   | typeof LOCK_SCHEMA_V1ALPHA4
   | typeof LOCK_SCHEMA_V1ALPHA5
-  | typeof LOCK_SCHEMA_V1ALPHA6;
+  | typeof LOCK_SCHEMA_V1ALPHA6
+  | typeof LOCK_SCHEMA_V1;
 
 export interface LockedResource {
   readonly kind:

@@ -168,12 +168,10 @@ describe("managed distribution (local fixtures)", () => {
     expect(cli(env, "init", fresh, "--managed").status).toBe(0);
     const freshValidate = cli(env, "validate", join(fresh, "piship.yaml"));
     expect(freshValidate.status, freshValidate.stderr).toBe(0);
-    expect(freshValidate.stdout).toContain(
-      "Schema piship/v1alpha6, mode managed.",
-    );
+    expect(freshValidate.stdout).toContain("Schema piship/v1, mode managed.");
     expect(cli(env, "lock", join(fresh, "piship.yaml")).status).toBe(0);
     const freshLock = readFileSync(join(fresh, "piship.lock"), "utf8");
-    expect(freshLock).toContain('"schema": "piship-lock/v1alpha6"');
+    expect(freshLock).toContain('"schema": "piship-lock/v1"');
     expect(freshLock).toContain(`\${FRESH_AGENT_LLM_GATEWAY_URL}`);
 
     // Demo company: lock records templates only, never resolved endpoints or secrets.

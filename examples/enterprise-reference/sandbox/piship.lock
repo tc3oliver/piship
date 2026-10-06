@@ -1,8 +1,8 @@
 {
-  "schema": "piship-lock/v1alpha6",
+  "schema": "piship-lock/v1",
   "manifest": {
-    "schema": "piship/v1alpha6",
-    "sha256": "sha256-fae61df5203ac008de34def30dea0a307f2d219f7ca37a79c4b300a75bd91812"
+    "schema": "piship/v1",
+    "sha256": "sha256-ee17c07fae4fcd6ba3d763855f04bfa4bd590edbda6c00237d40bbd9049230bd"
   },
   "app": {
     "id": "acmecode-reference",
