@@ -90,7 +90,11 @@ describe("copyTree", () => {
       "a/small": sha256("small"),
       "a/b/large": sha256(large),
     });
-    expect(readFileSync(join(dir, "copy", "a", "b", "large"))).toEqual(large);
+    // Buffer.equals: toEqual walks a 2 MiB buffer element by element, which
+    // took about 20 s on a loaded Windows runner.
+    expect(
+      readFileSync(join(dir, "copy", "a", "b", "large")).equals(large),
+    ).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
