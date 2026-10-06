@@ -4,9 +4,8 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
-- Update the development-only transitive dependency source-map-js to 1.2.2 to fix CVE-2026-93749 (indexed source-map denial of service).
-
 - Fix release notices to include bundled fd and ripgrep and their shipped licenses, matching the SBOM so `verify-release` accepts distributions with bundled search tools.
+- Update the development-only transitive dependency source-map-js to 1.2.2 to fix CVE-2026-93749 (indexed source-map denial of service).
 
 ## v0.10.0 (candidate)
 
