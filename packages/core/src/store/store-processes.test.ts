@@ -100,10 +100,18 @@ describe("several installs filling and reading one store", () => {
       const root = join(home, "store");
       const files = 240;
       const distinct = 40;
-      const results = await Promise.all(
+      // Every child is awaited even when one fails, so cleanup never runs
+      // under a child that is still writing, and the failure names its stderr.
+      const outcomes = await Promise.allSettled(
         [0, 1, 2, 3].map((index) =>
           child(root, primitive, join(home, `tree${index}`), files, distinct),
         ),
+      );
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failure) throw (failure as PromiseRejectedResult).reason;
+      const results = outcomes.map(
+        (outcome) =>
+          (outcome as PromiseFulfilledResult<{ placed: number }>).value,
       );
       expect(results.map((result) => result.placed)).toEqual([
         files,
