@@ -507,7 +507,28 @@ export function generateNotices(
     readonly packages: readonly NoticeEntry[];
   };
 } {
-  const sorted = [...packages].sort(
+  // Bundled search tools are release content outside node_modules. Include
+  // them here to match the SBOM; their licenses ship under tools/licenses.
+  const toolPackages: PayloadPackage[] = payloadSearchTools(payloadDir).map(
+    (tool) => {
+      const dir = join(payloadDir, "tools", "licenses", tool.name);
+      return {
+        name: tool.name,
+        version: tool.version,
+        path: tool.path,
+        license: null,
+        licenseFiles: existsSync(dir)
+          ? readdirSync(dir, { withFileTypes: true })
+              .filter(
+                (entry) => entry.isFile() && LICENSE_FILE.test(entry.name),
+              )
+              .map((entry) => `tools/licenses/${tool.name}/${entry.name}`)
+              .sort()
+          : [],
+      };
+    },
+  );
+  const sorted = [...packages, ...toolPackages].sort(
     (a, b) =>
       compare(a.path, b.path) ||
       compare(a.name, b.name) ||
@@ -534,7 +555,7 @@ export function generateNotices(
   const text = [
     "Third-party notices for this PiShip distribution payload",
     "",
-    `This file reproduces the license and notice files of the ${sorted.length} packages installed under node_modules.`,
+    `This file reproduces the license and notice files of the ${sorted.length} packages and bundled tools installed in this payload.`,
     "",
     ...sections.map((section) => `${section}\n`),
   ].join("\n");

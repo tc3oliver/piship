@@ -266,6 +266,63 @@ describe("SBOM", () => {
 });
 
 describe("notices", () => {
+  it.each(["linux", "win32"])(
+    "covers bundled tools and their shipped licenses on %s",
+    (platform) => {
+      const root = payload();
+      const target = `${platform}-x64`;
+      write(
+        root,
+        "metadata/target.json",
+        JSON.stringify({ platform, arch: "x64" }),
+      );
+      const searchTools = Object.fromEntries(
+        [
+          ["fd", "10.5.0", "https://github.com/sharkdp/fd"],
+          ["rg", "14.1.1", "https://github.com/BurntSushi/ripgrep"],
+        ].map(([name, version, source]) => [
+          name,
+          {
+            version,
+            source,
+            targets: {
+              [target]: {
+                url: `${source}/releases/download/v${version}/tool.zip`,
+                archive: `sha256-${"a".repeat(64)}`,
+              },
+            },
+          },
+        ]),
+      );
+      write(root, "piship.lock", JSON.stringify({ searchTools }));
+      write(root, "tools/licenses/fd/LICENSE-MIT", "fd MIT license");
+      write(root, "tools/licenses/rg/COPYING", "rg license");
+      write(root, "tools/licenses/rg/readme.md", "not a license");
+      const { text, index } = generateNotices(root, listPayloadPackages(root));
+      expect(index.packages).toHaveLength(6);
+      expect(index.packages).toEqual(
+        expect.arrayContaining([
+          {
+            name: "fd",
+            version: "10.5.0",
+            license: null,
+            files: ["tools/licenses/fd/LICENSE-MIT"],
+          },
+          {
+            name: "rg",
+            version: "14.1.1",
+            license: null,
+            files: ["tools/licenses/rg/COPYING"],
+          },
+        ]),
+      );
+      expect(text).toContain("fd MIT license");
+      expect(text).toContain("rg license");
+      expect(text).not.toContain("not a license");
+      verifyNotices(sbomFor(root), index);
+    },
+  );
+
   it("reproduces license files and indexes every package", () => {
     const root = payload();
     const { text, index } = generateNotices(root, listPayloadPackages(root));
