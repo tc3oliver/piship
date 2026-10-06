@@ -5,6 +5,7 @@ import { parseDocument } from "yaml";
 import { describe, expect, it } from "vitest";
 import {
   ManifestError,
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA6,
   PISHIP_SCHEMA_VERSION,
   parseManifest,
@@ -205,9 +206,7 @@ describe("secret-looking values", () => {
   );
   it("accepts both shipped examples", () => {
     expect(readManifest(example("personal")).app.id).toBe("mypi");
-    expect(readManifest(example("demo-company")).schema).toBe(
-      PISHIP_SCHEMA_V1ALPHA6,
-    );
+    expect(readManifest(example("demo-company")).schema).toBe(PISHIP_SCHEMA_V1);
   });
 });
 describe("secret-named unknown fields", () => {
