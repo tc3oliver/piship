@@ -13,11 +13,11 @@ const CHUNK = 1 << 20;
 const WINDOWS = process.platform === "win32";
 
 /** SHA-256 of a file's content: read whole when small, streamed otherwise. */
-async function hashFile(path: string): Promise<string> {
+async function hashFile(path: string, limit: number): Promise<string> {
   const hash = createHash("sha256");
   const input = await open(path, "r");
   try {
-    if ((await input.stat()).size <= CHUNK) {
+    if ((await input.stat()).size <= limit) {
       hash.update(await input.readFile());
       return hash.digest("hex");
     }
@@ -28,7 +28,11 @@ async function hashFile(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function copyHashed(from: string, to: string): Promise<string> {
+async function copyHashed(
+  from: string,
+  to: string,
+  chunk: number,
+): Promise<string> {
   const hash = createHash("sha256");
   const input = await open(from, "r");
   let size: number;
@@ -36,7 +40,7 @@ async function copyHashed(from: string, to: string): Promise<string> {
   let data: Buffer | undefined;
   try {
     ({ size, mode } = await input.stat());
-    if (size <= CHUNK) data = await input.readFile();
+    if (size <= chunk) data = await input.readFile();
   } finally {
     await input.close();
   }
@@ -81,6 +85,10 @@ export interface CopyOptions {
   readonly link?: boolean;
   /** Test seam. */
   readonly linkFile?: (from: string, to: string) => Promise<void>;
+  /** How many files are copied at once (default 8). Measurement only. */
+  readonly concurrency?: number;
+  /** Largest file read whole (default 1 MiB). Measurement only. */
+  readonly chunk?: number;
 }
 
 /**
@@ -97,6 +105,7 @@ export async function copyTree(
 ): Promise<ReadonlyMap<string, string>> {
   const linkFile = options.linkFile ?? link;
   let linking = options.link === true;
+  const chunk = options.chunk ?? CHUNK;
   await mkdir(destination, { recursive: true });
   const files: string[] = [];
   let level = [""];
@@ -124,7 +133,9 @@ export async function copyTree(
     level = next;
   }
   const digests = new Map<string, string>();
-  const writers = new JobPool(COPY_CONCURRENCY);
+  const writers = new JobPool(
+    Math.max(1, options.concurrency ?? COPY_CONCURRENCY),
+  );
   try {
     for (const file of files)
       await writers.run(async () => {
@@ -132,7 +143,7 @@ export async function copyTree(
         const to = join(destination, file);
         let digest: string | undefined;
         if (linking) {
-          const hashed = await hashFile(from);
+          const hashed = await hashFile(from, chunk);
           try {
             await linkFile(from, to);
             digest = hashed;
@@ -145,7 +156,7 @@ export async function copyTree(
         }
         digests.set(
           file.split(sep).join("/"),
-          digest ?? (await copyHashed(from, to)),
+          digest ?? (await copyHashed(from, to, chunk)),
         );
       });
   } catch (error) {
