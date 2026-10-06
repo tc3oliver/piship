@@ -23,6 +23,7 @@ import {
   type RetiredKey,
 } from "../install/receipt.js";
 import { renameWithRetry } from "../install/files.js";
+import { runtimeLeases } from "../install/runtime-lease.js";
 import { stopwatch } from "../install/timing.js";
 import {
   advanceTrustState,
@@ -437,6 +438,25 @@ export async function updateDistribution(
         throw new PiShipError(
           "INTEGRITY_FAILED",
           `The signed ${entry.version} archive differs from the retained release; publish a new version instead of replacing installed bytes`,
+        );
+      // An unreferenced directory at the destination is a candidate an earlier
+      // update left partly extracted; a running session means it is not.
+      if (
+        !reuseRetained &&
+        existsSync(destination) &&
+        runtimeLeases(id).some(
+          (lease) =>
+            lease.live &&
+            (lease.version === entry.version || lease.version === "*"),
+        )
+      )
+        throw new PiShipError(
+          "UPDATE_FAILED",
+          `${destination} is not part of this installation but a running session still uses it`,
+          {
+            retryable: true,
+            userAction: `Close the running ${id} sessions and run the update again`,
+          },
         );
       options.progress?.(`Switching to ${entry.version}`);
       const snapshot = snapshotState(

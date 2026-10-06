@@ -41,6 +41,7 @@ import {
   verifyPayload,
   withTestState,
 } from "./index.js";
+import * as filesModule from "./install/files.js";
 import {
   holdRuntimeLease,
   installDistribution,
@@ -347,6 +348,51 @@ async function fixture(
   await sign(channelDir, [b.archive]);
   const opts: UpdateOptions = { source: channelDir, runCheck: fakeRun };
   return { a, b, channelDir, old, opts };
+}
+
+const PARTIAL_FILE = join("node_modules", "alpha", "package.json");
+
+/**
+ * Make the payload extraction (the second extractArchive call of an install or
+ * update, after the metadata read) leave a partly written tree and throw, as a
+ * process killed during it would.
+ */
+function killPayloadExtraction() {
+  const real = archiveModule.extractArchive;
+  let calls = 0;
+  return vi
+    .spyOn(archiveModule, "extractArchive")
+    .mockImplementation(async (archive, destination, options) => {
+      if (++calls !== 2) return real(archive, destination, options);
+      write(join(destination, PARTIAL_FILE), '{"name":"al');
+      throw new Error("killed");
+    });
+}
+
+/** Make every directory rename fail as it does on Windows while a scanner holds a file in it. */
+function busyRenames() {
+  const real = filesModule.renameWithRetry;
+  return vi
+    .spyOn(filesModule, "renameWithRetry")
+    .mockImplementation((from, to) =>
+      real(from, to, {
+        platform: "win32",
+        sleep: () => {},
+        rename: () => {
+          throw Object.assign(new Error("EBUSY: resource busy or locked"), {
+            code: "EBUSY",
+          });
+        },
+      }),
+    );
+}
+
+function receiptFile(): string {
+  return join(
+    process.env.PISHIP_INSTALL_HOME as string,
+    "receipts",
+    `${ID}.json`,
+  );
 }
 
 function stateDir(): string {
@@ -788,6 +834,49 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const receipt = await installDistribution(a.archive);
     expect(receipt.active).toBe("1.0.0");
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("reinstalls after an extraction was killed partway, with no manual cleanup", async () => {
+    const a = await release("1.0.0");
+    const killed = killPayloadExtraction();
+    try {
+      await expect(installDistribution(a.archive)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    // The killed install leaves its marked, partly extracted directory and no receipt.
+    expect(existsSync(join(appsDir(), ".initial-install.json"))).toBe(true);
+    expect(existsSync(join(appsDir(), "1.0.0", PARTIAL_FILE))).toBe(true);
+    expect(existsSync(receiptFile())).toBe(false);
+    const receipt = await installDistribution(a.archive);
+    expect(receipt.active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(() => verifyPayload(receipt.payload)).not.toThrow();
+  });
+
+  it("reports a retryable error, changing nothing, when a scanner holds the abandoned install", async () => {
+    const a = await release("1.0.0");
+    const killed = killPayloadExtraction();
+    try {
+      await expect(installDistribution(a.archive)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    const busy = busyRenames();
+    let error: Awaited<ReturnType<typeof rejection>>;
+    try {
+      error = await rejection(installDistribution(a.archive));
+    } finally {
+      busy.mockRestore();
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain("EBUSY");
+    expect((error as PiShipError).userAction).toContain("nothing was changed");
+    expect(existsSync(join(appsDir(), "1.0.0", PARTIAL_FILE))).toBe(true);
+    expect(existsSync(receiptFile())).toBe(false);
+    expect((await installDistribution(a.archive)).active).toBe("1.0.0");
   });
 
   it("repairs a committed first install whose shim was not written", async () => {
@@ -1337,6 +1426,94 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(await updateDistribution(ID, opts)).toMatchObject({
       status: "up-to-date",
     });
+  });
+
+  it("replaces an unreferenced candidate a killed update left partly extracted", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    const killed = killPayloadExtraction();
+    try {
+      await expect(updateDistribution(ID, opts)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(existsSync(join(appsDir(), "1.1.0", PARTIAL_FILE))).toBe(true);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    expect(() => verifyPayload(join(appsDir(), "1.1.0"))).not.toThrow();
+    // The partial tree was moved aside in one rename; recovery removes it.
+    const aside = apps().filter((name) => name.startsWith(".retained-1.1.0-"));
+    expect(aside).toHaveLength(1);
+    expect(recoverInstallation(ID)).toEqual(aside);
+  });
+
+  it("does not move aside an unreferenced candidate a running session holds", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    const killed = killPayloadExtraction();
+    try {
+      await expect(updateDistribution(ID, opts)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(updateDistribution(ID, opts));
+      expect(error.code).toBe("UPDATE_FAILED");
+      expect(error.retryable).toBe(true);
+      expect(error.message).toContain("running session");
+      expect(existsSync(join(appsDir(), "1.1.0", PARTIAL_FILE))).toBe(true);
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    } finally {
+      releaseLease();
+    }
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+  });
+
+  it("reports a retryable error and keeps the active release when a scanner holds the stale candidate", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    const killed = killPayloadExtraction();
+    try {
+      await expect(updateDistribution(ID, opts)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    const busy = busyRenames();
+    let error: Awaited<ReturnType<typeof rejection>>;
+    try {
+      error = await rejection(updateDistribution(ID, opts));
+    } finally {
+      busy.mockRestore();
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain("EBUSY");
+    expect(error.message).toContain(join(appsDir(), "1.1.0"));
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(existsSync(join(appsDir(), "1.1.0", PARTIAL_FILE))).toBe(true);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+  });
+
+  it("refuses to replace a retained release with different archive bytes", async () => {
+    const { a, b, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    const retained = join(appsDir(), "1.1.0");
+    const before = treeHash(retained);
+    // The same version built again with another timestamp: other archive bytes.
+    process.env.SOURCE_DATE_EPOCH = "1767312000";
+    const other = await release("1.1.0");
+    expect(other.sha256).not.toBe(b.sha256);
+    await sign(channelDir, [other.archive]);
+    const error = await rejection(updateDistribution(ID, opts));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain("differs from the retained release");
+    expect(treeHash(retained)).toEqual(before);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
   });
 
   it("keeps receipt-retained bytes intact when reactivation is interrupted", async () => {
