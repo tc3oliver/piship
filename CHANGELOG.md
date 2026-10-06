@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+- **Behavior change:** exclude live Chrome startup from Release qualification while retaining it in nightly and standalone manual Portable E2E. Qualification continues to run all other developer and release checks and does not certify browser availability.
+
 - Fix release notices to include bundled fd and ripgrep and their shipped licenses, matching the SBOM so `verify-release` accepts distributions with bundled search tools.
 
 ## v0.10.0 (candidate)
