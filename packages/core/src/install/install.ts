@@ -26,6 +26,7 @@ import { verifyWrittenPayload } from "../payload.js";
 import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { raiseThreadpool } from "../threadpool.js";
 import {
   initialTrustState,
   removeTrustState,
@@ -175,6 +176,7 @@ export async function installDistribution(
   useExistingState = false,
   checks: InstallChecks = {},
 ): Promise<InstallReceipt> {
+  raiseThreadpool();
   const expectedSha256 = checks.expectedSha256?.toLowerCase();
   if (expectedSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedSha256))
     throw invalidCheck(
@@ -392,7 +394,17 @@ export async function installDistribution(
           // not match its inventory.
           if (isArchive) renameWithRetry(payload, target);
           else {
-            const copied = await copyTree(payload, target);
+            // An extracted release is not rewritten in place, so on Windows
+            // (where creating a file costs a scanner's pass over it) its files
+            // are hashed and linked instead of written again. A payload
+            // directory from a build is rewritten by the next build: copied.
+            // PISHIP_INSTALL_LINK=0 copies anyway.
+            const copied = await copyTree(payload, target, {
+              link:
+                isRelease &&
+                process.platform === "win32" &&
+                process.env.PISHIP_INSTALL_LINK !== "0",
+            });
             try {
               verifyCopiedPayload(target, copied, boundInventory);
             } catch (error) {

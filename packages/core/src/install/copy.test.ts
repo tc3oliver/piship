@@ -93,6 +93,78 @@ describe("copyTree", () => {
     expect(readFileSync(join(dir, "copy", "a", "b", "large"))).toEqual(large);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "links each file after hashing it when asked, creating no second copy",
+    async () => {
+      const dir = temp();
+      const source = join(dir, "source");
+      mkdirSync(join(source, "a"), { recursive: true });
+      writeFileSync(join(source, "one"), "one");
+      writeFileSync(join(source, "a", "two"), "two");
+      const digests = await copyTree(source, join(dir, "linked"), {
+        link: true,
+      });
+      expect(Object.fromEntries(digests)).toEqual({
+        one: sha256("one"),
+        "a/two": sha256("two"),
+      });
+      for (const file of ["one", join("a", "two")]) {
+        const from = statSync(join(source, file));
+        const to = statSync(join(dir, "linked", file));
+        expect(to.ino).toBe(from.ino);
+        expect(from.nlink).toBe(2);
+      }
+      // Without the option a file is written again.
+      await copyTree(source, join(dir, "copied"));
+      expect(statSync(join(dir, "copied", "one")).ino).not.toBe(
+        statSync(join(source, "one")).ino,
+      );
+    },
+  );
+
+  it("copies when a file cannot be linked, and stops trying after the first refusal", async () => {
+    const dir = temp();
+    const source = join(dir, "source");
+    mkdirSync(source);
+    for (let file = 0; file < 20; file++)
+      writeFileSync(join(source, `f${file}`), `content ${file}`);
+    let attempts = 0;
+    const digests = await copyTree(source, join(dir, "copy"), {
+      link: true,
+      linkFile: async () => {
+        attempts++;
+        throw Object.assign(
+          new Error("EXDEV: cross-device link not permitted"),
+          {
+            code: "EXDEV",
+          },
+        );
+      },
+    });
+    expect(digests.size).toBe(20);
+    for (let file = 0; file < 20; file++)
+      expect(readFileSync(join(dir, "copy", `f${file}`), "utf8")).toBe(
+        `content ${file}`,
+      );
+    // Concurrent writers may already be past the check; it is not 20 attempts.
+    expect(attempts).toBeLessThanOrEqual(8);
+    expect(digests.get("f3")).toBe(sha256("content 3"));
+  });
+
+  it("does not hide a file already at the destination behind the copy fallback", async () => {
+    const dir = temp();
+    const source = join(dir, "source");
+    mkdirSync(source);
+    writeFileSync(join(source, "file"), "new");
+    const destination = join(dir, "destination");
+    mkdirSync(destination);
+    writeFileSync(join(destination, "file"), "old");
+    await expect(
+      copyTree(source, destination, { link: true }),
+    ).rejects.toThrow();
+    expect(readFileSync(join(destination, "file"), "utf8")).toBe("old");
+  });
+
   it("refuses to overwrite a file already at the destination", async () => {
     const dir = temp();
     const source = join(dir, "source");

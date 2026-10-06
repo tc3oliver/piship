@@ -40,6 +40,7 @@ import {
 import { storageOf } from "../storage-transition.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { raiseThreadpool } from "../threadpool.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -186,6 +187,7 @@ export async function updateDistribution(
   id: string,
   options: UpdateOptions = {},
 ): Promise<UpdateResult> {
+  raiseThreadpool();
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
