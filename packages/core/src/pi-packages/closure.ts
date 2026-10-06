@@ -271,6 +271,9 @@ function readGraph(state: State, outcome: BuildOutcome): void {
         TYPESCRIPT.test(file) ? "typescript-closure" : "non-javascript-module",
         file,
       );
+  // A refusal the graph already holds needs no scan of the closure: reading
+  // every module for more reasons costs a parse of all of them.
+  if (state.findings.length) state.result = refused(state);
 }
 
 /** Every module the closure runs, the extensions included, is read for what locates files or code at run time. */
