@@ -120,12 +120,23 @@ describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
         const launching = join(appsDir(), ".runtime-leases", ".launching");
         while (!existsSync(launching) || readdirSync(launching).length === 0)
           await new Promise((done) => setTimeout(done, 5));
-        const records = [
+        // The launcher writes each record in place, so a file can be seen empty
+        // before its content lands; read until every record parses.
+        const readRecords = () => [
           JSON.parse(readFileSync(gatePath(), "utf8")),
           ...readdirSync(launching).map((name) =>
             JSON.parse(readFileSync(join(launching, name), "utf8")),
           ),
         ];
+        let records: ReturnType<typeof readRecords> | undefined;
+        for (let attempt = 0; !records && attempt < 200; attempt += 1) {
+          try {
+            records = readRecords();
+          } catch {
+            await new Promise((done) => setTimeout(done, 5));
+          }
+        }
+        if (!records) records = readRecords();
         expect(records).toHaveLength(2);
         for (const record of records) {
           expect(record).toMatchObject({
