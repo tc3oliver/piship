@@ -12,13 +12,12 @@ permissions:
 jobs:
   benchmark:
     name: benchmark (${{ matrix.suite }})
-    if: inputs.suite == '' || inputs.suite == matrix.suite
     runs-on: windows-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        suite: [install-authoring, sweep-bundled, sweep-unbundled, cmd-launch, store]
+        suite: ${{ fromJSON(inputs.suite == '' && '["install-authoring","sweep-bundled","sweep-unbundled","cmd-launch","store"]' || format('["{0}"]', inputs.suite)) }}
     env:
       npm_config_prefer_offline: "true"
     steps:
