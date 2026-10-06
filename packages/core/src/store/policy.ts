@@ -21,14 +21,19 @@ export type StoreMode = Primitive | "off";
 /**
  * What an install and an update do when `PISHIP_STORE` is unset.
  *
- * `clone` is the safe choice until Windows is measured: a copy-on-write clone
- * never aliases the store's bytes, and where the volume has no clones (NTFS,
- * ext4) the store is not used at all, because a store that placed by copying
- * would write every file twice. The Windows benchmark
- * (`scripts/benchmark-store.mjs`, `docs/performance.md`) decides whether this
- * becomes `hardlink`; that is the only line to change.
+ * `off` until a measurement says otherwise. A store writes every object once
+ * and then places from it, so the first install writes each file twice, and
+ * any primitive that is safe costs more than writing the files where file
+ * creation is cheap (macOS: 2x to 4x, `docs/performance.md`). It can pay only
+ * where a created file is expensive, and that is Windows with Defender, where
+ * no number exists yet. `scripts/benchmark-store.mjs` produces it (the manual
+ * Windows benchmark workflow runs it). If it shows a primitive within the
+ * budgets of `scripts/store-budgets.json`, this is the one line to change:
+ * `clone` where the volume has copy-on-write clones (it is not used at all
+ * where it does not), `hardlink` when the Windows result and the removal of a
+ * linked tree support it, `copy` never (it only adds writes).
  */
-export const DEFAULT_STORE_MODE: StoreMode = "clone";
+export const DEFAULT_STORE_MODE: StoreMode = "off";
 
 const MODES: readonly StoreMode[] = ["off", "copy", "clone", "hardlink"];
 
