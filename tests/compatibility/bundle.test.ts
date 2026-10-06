@@ -14,6 +14,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+const esmImport = (path: string) => JSON.stringify(pathToFileURL(path).href);
+
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const root = mkdtempSync(join(tmpdir(), "pb-"));
 let payload: string;
@@ -66,7 +68,7 @@ beforeAll(() => {
   });
   const buildEnv: NodeJS.ProcessEnv = { ...env };
   delete buildEnv.PISHIP_BUILD_INPUT;
-  const script = `import {buildDistribution, lockManifest} from ${JSON.stringify(pathToFileURL(join(repository, "packages/core/dist/index.js")).href)}; lockManifest(${JSON.stringify(manifest)}); console.log(buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(join(root, "output"))}, {supplyChainGates:false}));`;
+  const script = `import {buildDistribution, lockManifest} from ${esmImport(join(repository, "packages/core/dist/index.js"))}; lockManifest(${JSON.stringify(manifest)}); console.log(buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(join(root, "output"))}, {supplyChainGates:false}));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
@@ -84,7 +86,7 @@ function cachedBuild(cache: string, output: string) {
   delete buildEnv.PISHIP_BUILD_INPUT;
   const manifest = join(root, "source", "piship.yaml");
   const core = join(repository, "packages/core/dist");
-  const script = `import {buildDistribution, requireCurrentLock} from ${JSON.stringify(pathToFileURL(join(core, "index.js")).href)}; import {runtimeCacheFor} from ${JSON.stringify(pathToFileURL(join(core, "runtime-cache.js")).href)}; const steps = []; const built = buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(output)}, {supplyChainGates: false, cache: false, runtimeCache: runtimeCacheFor(requireCurrentLock(${JSON.stringify(manifest)})), progress: (step) => steps.push(step)}); console.log(JSON.stringify({built, steps}));`;
+  const script = `import {buildDistribution, requireCurrentLock} from ${esmImport(join(core, "index.js"))}; import {runtimeCacheFor} from ${esmImport(join(core, "runtime-cache.js"))}; const steps = []; const built = buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(output)}, {supplyChainGates: false, cache: false, runtimeCache: runtimeCacheFor(requireCurrentLock(${JSON.stringify(manifest)})), progress: (step) => steps.push(step)}); console.log(JSON.stringify({built, steps}));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
@@ -104,7 +106,7 @@ function releaseBuild(cache: string | undefined, outputRoot: string) {
   const manifest = join(root, "source", "piship.yaml");
   const core = join(repository, "packages/core/dist/index.js");
   // The registry scans need the network; their results are not under test.
-  const script = `import {buildRelease} from ${JSON.stringify(pathToFileURL(core).href)}; const built = await buildRelease(${JSON.stringify(manifest)}, {outputRoot: ${JSON.stringify(outputRoot)}, ${cache ? "" : "cache: false, "}scanner: () => ({auditReportVersion: 2, vulnerabilities: {}}), signatureAuditor: () => ({status: 0, stdout: JSON.stringify({invalid: [], missing: []}), stderr: ""})}); console.log(JSON.stringify({directory: built.directory, archive: built.archive, runtimeCache: built.runtimeCache}));`;
+  const script = `import {buildRelease} from ${esmImport(core)}; const built = await buildRelease(${JSON.stringify(manifest)}, {outputRoot: ${JSON.stringify(outputRoot)}, ${cache ? "" : "cache: false, "}scanner: () => ({auditReportVersion: 2, vulnerabilities: {}}), signatureAuditor: () => ({status: 0, stdout: JSON.stringify({invalid: [], missing: []}), stderr: ""})}); console.log(JSON.stringify({directory: built.directory, archive: built.archive, runtimeCache: built.runtimeCache}));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
