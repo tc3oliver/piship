@@ -54,6 +54,7 @@ import type { DistributionLock } from "./lock-schema.js";
 import {
   hashFilesInParallel,
   placeFilesInParallel,
+  WorkerFailure,
   workerCount,
 } from "./parallel-files.js";
 import { isRuntimeIrrelevant } from "./payload.js";
@@ -688,30 +689,45 @@ export function materializeInstallTree(
     made.add(parent);
   };
   const threads = workerCount(entries.length);
+  const sequential = (skipExisting: boolean) => {
+    const placed = { linked: 0, copied: 0 };
+    let linking = link;
+    for (const [name, size] of entries) {
+      const to = inside(target, name);
+      parents(name);
+      // After threads that met a refusal, what they placed already is kept.
+      if (skipExisting && existsSync(to) && lstatSync(to).size === size)
+        continue;
+      const how = place(inside(tree.tree, name), to, linking);
+      placed[how]++;
+      linking = linking && how === "linked";
+      if (lstatSync(to).size !== size)
+        throw new Error(`The runtime cache entry is damaged: ${name}`);
+    }
+    return placed;
+  };
   if (threads > 1) {
     // Directories first, then the files by several threads at once.
     for (const [name] of entries) parents(name);
-    return placeFilesInParallel(
-      threads,
-      tree.tree,
-      target,
-      entries.map(([name]) => name),
-      entries.map(([, size]) => size),
-      link,
-    );
+    try {
+      return placeFilesInParallel(
+        threads,
+        tree.tree,
+        target,
+        entries.map(([name]) => name),
+        entries.map(([, size]) => size),
+        link,
+      );
+    } catch (error) {
+      // Threads that never ran changed nothing; threads that met a refusal
+      // Windows gives while a scanner holds a file left some files placed.
+      // Either way one thread finishes the job; any other failure stands.
+      if (!(error instanceof WorkerFailure) || error.kind === "failed")
+        throw error;
+      return sequential(error.kind === "transient");
+    }
   }
-  const placed = { linked: 0, copied: 0 };
-  let linking = link;
-  for (const [name, size] of entries) {
-    const to = inside(target, name);
-    parents(name);
-    const how = place(inside(tree.tree, name), to, linking);
-    placed[how]++;
-    linking = linking && how === "linked";
-    if (lstatSync(to).size !== size)
-      throw new Error(`The runtime cache entry is damaged: ${name}`);
-  }
-  return placed;
+  return sequential(false);
 }
 
 /**

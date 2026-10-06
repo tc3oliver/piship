@@ -114,15 +114,30 @@ function installRuntime(
       ? ["cmd.exe", ["/d", "/s", "/c", `npm ${NPM_CI_ARGUMENTS.join(" ")}`]]
       : ["npm", [...NPM_CI_ARGUMENTS]];
   let install: { status: number | null; output: string };
-  if (meanwhile.overlap) {
+  let running: ReturnType<typeof startBackgroundProcess> | undefined;
+  if (meanwhile.overlap)
+    try {
+      running = startBackgroundProcess(file, args, stage);
+    } catch {
+      // No thread to run it: npm runs here, as it does without overlap.
+    }
+  if (running) {
     // npm runs in a thread while this one assembles the files that do not
     // need it. A failure there still waits for npm: the stage is not removed
     // from under a running install.
-    const running = startBackgroundProcess(file, args, stage);
     try {
       meanwhile.run();
     } finally {
-      install = running.wait();
+      try {
+        install = running.wait();
+      } catch {
+        // The thread never ran npm: nothing was installed, so run it here.
+        const done = spawnSync(file, args, { cwd: stage, encoding: "utf8" });
+        install = {
+          status: done.status,
+          output: done.stderr || done.error?.message || done.stdout,
+        };
+      }
     }
   } else {
     const done = spawnSync(file, args, { cwd: stage, encoding: "utf8" });

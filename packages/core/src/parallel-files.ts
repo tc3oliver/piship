@@ -4,7 +4,8 @@
 // calls. A build is a synchronous function, so the work goes to worker threads
 // that this thread waits for with `Atomics.wait`: no event loop is needed, and
 // the caller still gets its result as a return value.
-import { readdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -24,6 +25,8 @@ const FAILED = 3;
 const MESSAGE_LENGTH = 4;
 /** Set by each worker as its first act, so a worker that cannot run is noticed. */
 const STARTED = 5;
+/** The shared state's slots, for a test that stands in for a worker. */
+export const SLOTS = { DONE, FAILED, MESSAGE_LENGTH, STARTED };
 /** How long workers may take to start before the work is given up. */
 const START_LIMIT_MS = 60_000;
 
@@ -108,6 +111,22 @@ interface Shared {
 }
 
 /**
+ * Why threads could not do the work. `startup`: none ran, so nothing was
+ * done. `transient`: a thread met a refusal Windows gives while a scanner holds
+ * a file (EPERM, EBUSY, EACCES) after some of the work was done. `failed`:
+ * anything else. Callers fall back to one thread for the first two.
+ */
+export class WorkerFailure extends Error {
+  constructor(
+    message: string,
+    readonly kind: "startup" | "transient" | "failed",
+  ) {
+    super(message);
+  }
+}
+const TRANSIENT = /\b(?:EPERM|EBUSY|EACCES)\b/;
+
+/**
  * Start a worker running `code` (not a file) with `workerData`. A worker
  * inherits the flags of this process, and `--input-type=module` (how a script
  * given with `node -e` is often run) would make its code a module without
@@ -132,16 +151,23 @@ function runWorkers(
   const size = Math.ceil(names.length / count);
   const workers: Worker[] = [];
   let started = 0;
-  for (let from = 0; from < names.length; from += size, started++) {
+  let refused: unknown;
+  for (let from = 0; from < names.length; from += size) {
     const to = Math.min(names.length, from + size);
-    workers.push(
-      startWorker(code, {
-        ...buffers,
-        names: names.slice(from, to),
-        from,
-        ...data({ from, to }),
-      }),
-    );
+    try {
+      workers.push(
+        startWorker(code, {
+          ...buffers,
+          names: names.slice(from, to),
+          from,
+          ...data({ from, to }),
+        }),
+      );
+      started++;
+    } catch (error) {
+      refused = error;
+      break;
+    }
   }
   const startedBy = Date.now() + START_LIMIT_MS;
   const deadline = Date.now() + WAIT_LIMIT_MS;
@@ -150,22 +176,28 @@ function runWorkers(
       const done = Atomics.load(shared.state, DONE);
       if (done >= started) break;
       if (Atomics.load(shared.state, STARTED) === 0 && Date.now() > startedBy)
-        throw new Error(
-          "Worker threads did not start (set PISHIP_FILE_WORKERS=1 to work without them)",
-        );
+        throw new WorkerFailure("Worker threads did not start", "startup");
       if (Date.now() > deadline)
-        throw new Error("Worker threads did not finish their files");
+        throw new WorkerFailure("Worker threads did not finish", "failed");
       Atomics.wait(shared.state, DONE, done, 1000);
     }
   } finally {
     for (const worker of workers) void worker.terminate();
   }
-  if (Atomics.load(shared.state, FAILED) !== 0)
-    throw new Error(
-      new TextDecoder().decode(
-        shared.message.slice(0, Atomics.load(shared.state, MESSAGE_LENGTH)),
-      ),
+  if (refused !== undefined)
+    throw new WorkerFailure(
+      `Worker threads could not be started: ${(refused as Error)?.message ?? refused}`,
+      started === 0 ? "startup" : "transient",
     );
+  if (Atomics.load(shared.state, FAILED) !== 0) {
+    const text = new TextDecoder().decode(
+      shared.message.slice(0, Atomics.load(shared.state, MESSAGE_LENGTH)),
+    );
+    throw new WorkerFailure(
+      text,
+      TRANSIENT.test(text) ? "transient" : "failed",
+    );
+  }
 }
 
 function shared(): {
@@ -223,14 +255,25 @@ export function hashFilesInParallel(
 ): string[] {
   const { view, buffers } = shared();
   const digests = new SharedArrayBuffer(names.length * 32);
-  runWorkers(
-    WORKER,
-    count,
-    names,
-    () => ({ job: "hash", source, digests }),
-    view,
-    buffers,
-  );
+  try {
+    runWorkers(
+      WORKER,
+      count,
+      names,
+      () => ({ job: "hash", source, digests }),
+      view,
+      buffers,
+    );
+  } catch (error) {
+    // Reading is safe to repeat: do it here, one file at a time.
+    if (!(error instanceof WorkerFailure) || error.kind === "failed")
+      throw error;
+    return names.map((name) =>
+      createHash("sha256")
+        .update(readFileSync(join(source, ...name.split("/"))))
+        .digest("hex"),
+    );
+  }
   const bytes = Buffer.from(digests);
   return names.map((_, index) =>
     bytes.subarray(index * 32, index * 32 + 32).toString("hex"),
@@ -305,14 +348,27 @@ export function removeTree(
     return;
   }
   const { view, buffers } = shared();
-  runWorkers(
-    REMOVER,
-    count,
-    files,
-    () => ({ source: root, attempts, delay }),
-    view,
-    buffers,
-  );
+  try {
+    runWorkers(
+      REMOVER,
+      count,
+      files,
+      () => ({ source: root, attempts, delay }),
+      view,
+      buffers,
+    );
+  } catch (error) {
+    // Removing is safe to repeat: what is left goes the single-thread way.
+    if (!(error instanceof WorkerFailure) || error.kind === "failed")
+      throw error;
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: attempts,
+      retryDelay: delay,
+    });
+    return;
+  }
   for (const directory of directories.reverse())
     rmSync(join(root, ...directory.split("/")), {
       recursive: true,
