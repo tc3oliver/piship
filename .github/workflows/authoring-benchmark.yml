@@ -1,4 +1,4 @@
-name: Windows authoring benchmark
+name: Windows benchmark
 # Manual measurement only. These throwaway archives are never release artifacts.
 on:
   workflow_dispatch:
@@ -52,6 +52,20 @@ jobs:
           node scripts/benchmark-install.mjs --root . --out "$env:RUNNER_TEMP/piship-authoring-benchmark" --bundle --authoring 2>&1 | Tee-Object -FilePath benchmark-evidence/benchmark.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$env:RUNNER_TEMP/piship-authoring-benchmark/report.json" benchmark-evidence/report.json
+      - name: Sweep extraction and copy concurrency and buffer thresholds
+        shell: pwsh
+        run: |
+          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-concurrency" --reps 5 2>&1 | Tee-Object -FilePath benchmark-evidence/concurrency.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.json" benchmark-evidence/concurrency-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.md" benchmark-evidence/concurrency-report.md
+      - name: Measure the .cmd shim against a direct launcher start
+        shell: pwsh
+        run: |
+          node scripts/benchmark-cmd-launch.mjs --root . --out "$env:RUNNER_TEMP/piship-cmd-launch" --reps 15 2>&1 | Tee-Object -FilePath benchmark-evidence/cmd-launch.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/report.json" benchmark-evidence/cmd-launch-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/summary.md" benchmark-evidence/cmd-launch-summary.md
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:

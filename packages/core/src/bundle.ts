@@ -16,6 +16,7 @@ import {
   authoringBuildInput,
   writeAuthoringSnapshot,
 } from "./authoring-input.js";
+import { IMPORT_META_URL } from "./launcher-source.js";
 import { removeTree } from "./parallel-files.js";
 import { inventory, isRuntimeIrrelevant } from "./payload.js";
 import {
@@ -197,7 +198,7 @@ export function bundleDistribution(
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-const require = createRequire(import.meta.url);
+const require = createRequire(${IMPORT_META_URL});
 const { build } = require(${JSON.stringify(tool)});
 const root = ${JSON.stringify(payload)};
 const options = {
@@ -205,13 +206,13 @@ const options = {
  bundle: true, splitting: true, metafile: true, write: false, format: 'esm', platform: 'node', target: 'node22',
  minify: true, sourcemap: false, chunkNames: 'chunk-[hash]',
  external: ['esbuild', 'jiti', '@silvia-odwyer/photon-node'],
- banner: {js: 'import {createRequire as __pishipRequire} from "node:module"; const require=__pishipRequire(import.meta.url);'},
+ banner: {js: 'import {createRequire as __pishipRequire} from "node:module"; const require=__pishipRequire(${IMPORT_META_URL});'},
  plugins: [{ name: 'preserve-module-asset-urls', setup(build) {
   build.onLoad({filter: /\\.[cm]?js$/}, ({path}) => {
    const text = readFileSync(path, 'utf8');
-   if (!text.includes('import.meta.url')) return;
+   if (!text.includes('${IMPORT_META_URL}')) return;
    const source = relative(root,path).split(sep).join('/');
-   return {contents: text.replaceAll('import.meta.url', 'new URL('+JSON.stringify('../'+source)+', import.meta.url).href'), loader:'js'};
+   return {contents: text.replaceAll('${IMPORT_META_URL}', 'new URL('+JSON.stringify('../'+source)+', ${IMPORT_META_URL}).href'), loader:'js'};
   });
  }}]
 };
@@ -370,7 +371,7 @@ rmSync(mainSource); rmSync(bootSource);`;
           .replaceAll('"@piship/pi/environment"', '"../runtime/boot.js"')
           .replace(
             "preparePiEnvironment(metadata.app.id);",
-            `preparePiEnvironment(metadata.app.id);\n  process.env.PI_PACKAGE_DIR = fileURLToPath(new URL("../node_modules/@earendil-works/pi-coding-agent/", import.meta.url));\n  formatError = (await import("@piship/contracts")).formatError;`,
+            `preparePiEnvironment(metadata.app.id);\n  process.env.PI_PACKAGE_DIR = fileURLToPath(new URL("../node_modules/@earendil-works/pi-coding-agent/", ${IMPORT_META_URL}));\n  formatError = (await import("@piship/contracts")).formatError;`,
           ),
       );
     }
