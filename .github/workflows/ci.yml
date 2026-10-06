@@ -76,6 +76,9 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         run: npm run check:boundaries
       - run: npm run build
+      # The deterministic footprint of the personal and managed examples (file
+      # counts and archive bytes; no timing) against scripts/performance-budgets.json.
+      - run: npm run check:budgets
       # Linux and macOS must enforce the sandbox: a missing adapter fails
       # the sandbox tests instead of skipping them.
       - run: npm test

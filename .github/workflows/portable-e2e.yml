@@ -209,6 +209,32 @@ jobs:
           if ($left.Count) { Write-Error "Test credentials remain: $($left -join ', ')"; exit 1 }
           exit 0
 
+  # The developer example's footprint (six vendored Pi packages) against its
+  # recorded budget: file counts and archive bytes only, never a timing. It
+  # needs the registry, so it is a nightly and qualification check; a pull
+  # request checks the personal and managed examples in CI.
+  footprint:
+    name: footprint (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      npm_config_prefer_offline: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.21.x
+          cache: npm
+      - name: Use npm 11
+        run: |
+          npm install -g npm@11.21.0
+          node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check:budgets -- --developer
+
   # A scheduled failure opens (or comments on) one tracking issue, so a
   # nightly regression becomes a visible follow-up without blocking pull
   # requests. Manual and Release qualification runs report in the Actions UI

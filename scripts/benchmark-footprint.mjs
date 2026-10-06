@@ -9,6 +9,9 @@
 //     [--label before] [--only personal,managed,developer] [--runs 1]
 //     [--reverse] [--startup] [--release] [--windows]
 //
+// --deterministic measures only what does not depend on timing (file counts,
+// bytes, archive bytes): one cold build and one install per distribution, no
+// warm or unchanged rebuild, no start. It is what scripts/check-budgets.mjs runs.
 // --reverse runs the distributions in reverse order, so an order or cache bias
 // shows when a baseline and a candidate are each measured both ways.
 // --startup installs each payload into an isolated home and starts it with
@@ -46,6 +49,7 @@ const startup = args.includes("--startup") || windowsMode;
 const withRelease = args.includes("--release");
 const runs = Number(option("--runs", windowsMode ? "3" : "1"));
 const reverse = args.includes("--reverse");
+const deterministic = args.includes("--deterministic");
 
 export const DISTRIBUTIONS = {
   personal: { example: "personal" },
@@ -175,20 +179,22 @@ async function measure(name, iteration) {
   const archive = await createArchive(output, "payload", archiveFile);
   result.archiveBytes = archive.bytes;
   result.archiveEntries = archive.entries;
-  rmSync(output, { recursive: true, force: true });
-  rmSync(join(distribution, "dist", `${id}.piship-build.json`), {
-    force: true,
-  });
-  const warm = await run([cli, "build", manifest], distribution, env);
-  result.warmBuildMs = warm.elapsedMs;
-  result.warmBuildStagesMs = stages(warm.stderr);
-  const unchanged = await run([cli, "build", manifest], distribution, env);
-  result.unchangedRebuildMs = unchanged.elapsedMs;
-  const rebuilt = tree(output);
-  if (rebuilt.files !== payload.files)
-    throw new Error(
-      `${name}: a warm build has ${rebuilt.files} files, the cold one ${payload.files}`,
-    );
+  if (!deterministic) {
+    rmSync(output, { recursive: true, force: true });
+    rmSync(join(distribution, "dist", `${id}.piship-build.json`), {
+      force: true,
+    });
+    const warm = await run([cli, "build", manifest], distribution, env);
+    result.warmBuildMs = warm.elapsedMs;
+    result.warmBuildStagesMs = stages(warm.stderr);
+    const unchanged = await run([cli, "build", manifest], distribution, env);
+    result.unchangedRebuildMs = unchanged.elapsedMs;
+    const rebuilt = tree(output);
+    if (rebuilt.files !== payload.files)
+      throw new Error(
+        `${name}: a warm build has ${rebuilt.files} files, the cold one ${payload.files}`,
+      );
+  }
 
   const installed = await run(
     [join(output, "piship.mjs"), "install", output],

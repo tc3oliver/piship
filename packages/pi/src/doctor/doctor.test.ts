@@ -1983,6 +1983,66 @@ describe("Governance group", () => {
     );
   });
 
+  it("reports what the build did with the Pi package closures and dependencies", () => {
+    mkdirSync(join(temp, "metadata"), { recursive: true });
+    writeFileSync(
+      join(temp, "metadata", "pi-package-footprint.json"),
+      JSON.stringify({
+        schema: "piship-pi-package-footprint/v1",
+        closures: [
+          {
+            id: "pi-platform",
+            closure: "bundled",
+            replaced: 2,
+            bundledFiles: 9,
+          },
+          {
+            id: "pi-native",
+            closure: "vendored",
+            findings: [{ reason: "native-addon", detail: "build/x.node" }],
+          },
+        ],
+        shared: [
+          {
+            name: "zod",
+            version: "4.6.5",
+            integrity: "sha512-x",
+            directory: "pi-packages/.shared/zod@4.6.5-abc",
+            locations: ["pi-packages/a/node_modules/zod"],
+            files: 10,
+            kept: 3,
+            saved: 40,
+          },
+        ],
+        retained: { "has-dependencies": 4 },
+        files: { before: 100, after: 60 },
+      }),
+    );
+    const data = v6(
+      doctorData("managed", {
+        access: accessData(),
+        governance: governanceData({}),
+      }),
+      {
+        packages: [
+          {
+            id: "pi-platform",
+            source: "npm",
+            class: "company",
+            version: "1.0.0",
+            files: 4,
+          },
+        ],
+      },
+    );
+    expect(group(renderDoctor(data).render(), "Governance")).toEqual(
+      expect.arrayContaining([
+        `  - ${"Pi package closures".padEnd(20)} 1 of 2 bundled; vendored: pi-native (native-addon)`,
+        `  - ${"Pi package dependencies".padEnd(20)} 1 shared (40 fewer files); copies kept: has-dependencies 4`,
+      ]),
+    );
+  });
+
   it("reports the data lifecycle, and a retained release that stops sweeping", () => {
     const home = join(temp, "install");
     const bin = join(temp, "bin");
