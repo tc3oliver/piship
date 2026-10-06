@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+### Fixed
+
+- Sandbox conformance kit: the wait for a command that has printed nothing before the timeout and dispose checks abort it now counts only time the event loop was responsive. A stall at start (a busy host, a backend that works synchronously in the kit's process) no longer aborts a command the backend was not yet given a turn to start, which misreported a backend that ignores cancellation before start as failing the timeout check too. The timing constants are unchanged.
+
 ## v0.11.0 (candidate)
 
 Unpublished minor milestone on Pi 1.0.3 with the stable `piship/v1` and `piship-lock/v1` contracts (`piship/v1alpha6` and `piship-lock/v1alpha6` stay accepted for the migration window). Qualification and publication are pending; v0.9.1 remains the production-validation baseline.
