@@ -30,6 +30,7 @@ import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import {
+  deferredDownloadNotice,
   deferredToolDownloads,
   installSearchTools,
 } from "./launch/search-tools.js";
@@ -204,6 +205,7 @@ export async function launchPiDistribution(
   const deferred = deferredToolDownloads(metadata, agentDir);
   if (deferred.length) {
     process.env.PI_OFFLINE = "1";
+    console.error(deferredDownloadNotice(deferred));
     startupNote("tool_downloads_deferred", deferred.join(","));
   }
   startupMark("search_tools_done");

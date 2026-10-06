@@ -22,6 +22,7 @@ import type { DoctorData } from "../doctor/data.js";
 import { supplyChainGroup } from "../doctor/supply-chain.js";
 import { piAgentDirectory, preparePiEnvironment } from "../environment.js";
 import {
+  deferredDownloadNotice,
   deferredToolDownloads,
   installSearchTools,
   piToolDirectory,
@@ -361,6 +362,19 @@ describe("tools Pi would download at startup", () => {
         process.platform,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("the notice that a launch skips the tool download", () => {
+  it("is one line that names the tools, the side effects, and each way back", () => {
+    const notice = deferredDownloadNotice(["fd", "rg"]);
+    expect(notice).not.toContain("\n");
+    expect(notice).toContain("fd and rg not found");
+    expect(notice).toContain("PI_OFFLINE=1");
+    expect(notice).toContain("model catalog refresh");
+    expect(notice).toContain("PISHIP_ALLOW_TOOL_DOWNLOAD=1");
+    expect(notice).toContain("runtime.searchTools");
+    expect(deferredDownloadNotice(["rg"])).toContain("rg not found");
   });
 });
 
