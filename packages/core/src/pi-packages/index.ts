@@ -2,7 +2,31 @@
 // them; Pi never installs one. Exported as `@piship/core/pi-packages`, not
 // from the core root, so the root keeps no import edge into the release gates.
 export { type CommandRunner, runCommand } from "./command.js";
+export {
+  analyzeClosure,
+  bundleClosure,
+  CLOSURE_DIRECTORY,
+  type ClosureAnalysis,
+  type FallbackFinding,
+  type FallbackReason,
+} from "./closure.js";
+export {
+  type DedupeReport,
+  dedupePiPackages,
+  type RetainedReason,
+  SHARED_DIRECTORY,
+  type SharedPackage,
+} from "./dedupe.js";
 export { expandPackageResources } from "./expand.js";
+export {
+  describeFootprint,
+  FOOTPRINT_FILE,
+  type PackageClosureDecision,
+  type PackageFootprint,
+  optimizePiPackages,
+  readFootprint,
+} from "./footprint.js";
+export { type EsbuildApi, loadEsbuild } from "./module-scan.js";
 export {
   auditPiPackage,
   checkCertifiedPackage,
