@@ -43,7 +43,10 @@ describe("startBackgroundProcess", () => {
     const cwd = temp();
     const job = startBackgroundProcess(
       process.execPath,
-      ["-e", `console.error("a".repeat(100000) + "THE END"); process.exitCode = 3;`],
+      [
+        "-e",
+        `console.error("a".repeat(100000) + "THE END"); process.exitCode = 3;`,
+      ],
       cwd,
     );
     const outcome = job.wait();
