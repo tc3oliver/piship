@@ -86,11 +86,14 @@ for (const version of ["1.0.0", "1.1.0"]) {
     .replace(/^( {2}version:) .+$/m, `$1 ${version}`)
     .replace("  rollback: true\n", `  rollback: true\n${trust}`)
     .replace(/^( {2}targets:) .+$/m, `$1 [${target}]`);
-  source = source.replace(/\n {2}(strip|bundle): (true|false)\n/g, "\n");
-  source = source.replace(
-    "\nrelease:\n",
-    `\nrelease:\n  strip: true\n${bundled ? "  bundle: true\n" : ""}`,
-  );
+  source = source.replace(/^ {2}(strip|bundle): .*\n/gm, "");
+  // A revision from before release.strip existed rejects the key: the baseline
+  // is built as that revision builds, with neither option.
+  if (!baseline)
+    source = source.replace(
+      "\nrelease:\n",
+      `\nrelease:\n  strip: true\n${bundled ? "  bundle: true\n" : ""}`,
+    );
   writeFileSync(manifest, source);
   console.log(
     `Preparing ${version}; build time excluded from consumer timings`,

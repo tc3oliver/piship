@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -42,13 +43,11 @@ beforeAll(() => {
   const source = join(root, "source");
   cpSync(join(repository, "examples", "personal"), source, { recursive: true });
   const manifest = join(source, "piship.yaml");
-  writeFileSync(
-    manifest,
-    readFileSync(manifest, "utf8").replace(
-      "release:\n",
-      "release:\n  bundle: true\n  strip: true\n",
-    ),
-  );
+  // The personal example ships bundled and stripped: build it as it is.
+  expect(readManifest(manifest).lifecycle?.release).toMatchObject({
+    bundle: true,
+    strip: true,
+  });
   const buildEnv: NodeJS.ProcessEnv = { ...env };
   delete buildEnv.PISHIP_BUILD_INPUT;
   const script = `import {buildDistribution, lockManifest} from ${JSON.stringify(pathToFileURL(join(repository, "packages/core/dist/index.js")).href)}; lockManifest(${JSON.stringify(manifest)}); console.log(buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(join(root, "output"))}, {supplyChainGates:false}));`;

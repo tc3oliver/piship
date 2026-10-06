@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha6",
   "manifest": {
     "schema": "piship/v1alpha6",
-    "sha256": "sha256-cc6710d81a6d7aa4c52b4911e93db0dfc1e1f216deec1e82b3d561d1ab141212"
+    "sha256": "sha256-65f8e3e70590ea09d368dcd3e70852773ac6d7f294dacc07edae98646c874410"
   },
   "app": {
     "id": "mypi",
@@ -1337,7 +1337,9 @@
     "vulnerabilities": {
       "failOn": "high",
       "allow": []
-    }
+    },
+    "strip": true,
+    "bundle": true
   },
   "tools": [
     {

@@ -213,7 +213,7 @@ describe("immutable runtime cache", () => {
     runtimeCacheFor(requireCurrentLock(manifest), {
       PISHIP_CACHE_HOME: directory,
     });
-  /** The personal example, which is a piship/v1alpha6 manifest, with release settings. */
+  /** The personal example, a piship/v1alpha6 manifest, with the release settings the caller gives. */
   function example(release: string) {
     const root = mkdtempSync(join(tmpdir(), "piship-runtime-cache-example-"));
     roots.push(root);
@@ -221,10 +221,10 @@ describe("immutable runtime cache", () => {
     const manifest = join(root, "piship.yaml");
     writeFileSync(
       manifest,
-      readFileSync(manifest, "utf8").replace(
-        "release:\n",
-        `release:\n${release}`,
-      ),
+      readFileSync(manifest, "utf8")
+        // The example ships bundled and stripped; the caller picks its own.
+        .replace(/^ {2}(strip|bundle): .*\n/gm, "")
+        .replace("release:\n", `release:\n${release}`),
     );
     lockManifest(manifest);
     return { root, manifest };
