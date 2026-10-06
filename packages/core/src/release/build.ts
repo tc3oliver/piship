@@ -20,6 +20,7 @@ import {
   type ReleaseManifest,
   type UpdatesManifest,
 } from "@piship/schema";
+import { bundleDistribution } from "../bundle.js";
 import { createArchive } from "../archive.js";
 import {
   buildDistribution,
@@ -234,16 +235,13 @@ export async function buildRelease(
     // The pinned search tool archives for this target, checked against the
     // lock, before the payload is assembled from them.
     await downloadLockedSearchTools(lock, target);
-    const built = (options.assemble ?? buildDistribution)(manifestPath, stage);
+    const built = options.assemble
+      ? options.assemble(manifestPath, stage)
+      : buildDistribution(manifestPath, stage, { bundle: false, cache: false });
     const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });
     renameSync(built, payload);
     const root = dirname(payload);
-    const tests = runReleaseTests(
-      payload,
-      lock,
-      options.runTest ?? runPayloadCommand,
-    );
     const lockDirectory = join(stage, AUDIT_DIRECTORY);
     mkdirSync(lockDirectory);
     copyFileSync(
@@ -351,6 +349,12 @@ export async function buildRelease(
       notices.text,
     );
     writeJson(join(root, "licenses", "index.json"), notices.index);
+    if (release.bundle === true) bundleDistribution(payload);
+    const tests = runReleaseTests(
+      payload,
+      lock,
+      options.runTest ?? runPayloadCommand,
+    );
     const scripts = installScripts(name);
     writeFileSync(join(root, "install.sh"), scripts.sh);
     if (process.platform !== "win32")

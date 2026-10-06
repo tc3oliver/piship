@@ -11,7 +11,6 @@ import {
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
-  reclaimLaunchTemporaries,
   runAuto,
   runConfig,
   runLogin,
@@ -21,8 +20,6 @@ import {
   runtimeStateDirectory,
   runUpdate,
   sessionAutoApproveTarget,
-  sweepDistributionData,
-  sweepStateTemporaries,
   yoloRefusal,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
@@ -33,7 +30,6 @@ import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
 import { installSearchTools } from "./launch/search-tools.js";
-import { liveOwner, SessionOwnership } from "./launch/session-file.js";
 
 export {
   type GovernedRuntime,
@@ -196,14 +192,6 @@ export async function launchPiDistribution(
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
   // Pi's agent directory here before Pi was imported (environment.ts).
   installSearchTools(metadata, options.distributionDir, agentDir);
-  // Temporaries of state writers killed before their rename.
-  sweepStateTemporaries(stateDir);
-  // Directories of PiShip operations killed before they cleaned up: session
-  // sandbox temp, verification and launch-check scratch, install and update
-  // staging. Only those whose owner is gone are removed, within a bounded
-  // time: what is left waits for a later start, and the user is told.
-  const reclaimNotice = reclaimLaunchTemporaries(metadata.app.id);
-  if (reclaimNotice) console.error(reclaimNotice);
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),
@@ -291,17 +279,7 @@ export async function launchPiDistribution(
     throw new Error(
       `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
     );
-  // The data retention sweep runs when a session launches, before it claims
-  // a session file; a session another launch holds is kept, and one is
-  // deleted only under the sweep's own claim, so a launch resuming it at the
-  // same time keeps it.
-  await sweepDistributionData(ctx, "launch", {
-    sessionHeld: (file) => liveOwner(file) !== undefined,
-    claimSession: (file) => {
-      const ownership = new SessionOwnership();
-      return ownership.claim(file) ? () => ownership.release() : undefined;
-    },
-  });
+  // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(
       ctx,

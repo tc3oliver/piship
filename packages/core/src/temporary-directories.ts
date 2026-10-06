@@ -140,7 +140,8 @@ export function reclaimLaunchTemporaries(
  * both make.
  */
 export function createStagingDirectory(parent: string): TemporaryDirectory {
-  reclaimInstallTemporaries();
+  // Creation must not wait for recursive deletion of earlier payloads.
+  // Explicit diagnostics and maintenance reclaim abandoned directories.
   return createTemporaryDirectory(parent, "staging");
 }
 

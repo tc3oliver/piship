@@ -3,7 +3,9 @@ import {
   chmodSync,
   copyFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -11,6 +13,14 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
+import { bundleDistribution } from "./bundle.js";
+import {
+  buildCacheKeys,
+  buildCachePath,
+  readBuildCache,
+  refreshCachedDistribution,
+  writeBuildCache,
+} from "./build-cache.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { debugTiming, requireCurrentLock } from "./lock.js";
 import {
@@ -42,13 +52,51 @@ export function buildDistribution(
   outputRoot = resolve("dist"),
   options: {
     readonly supplyChainGates?: boolean;
+    /** Release builds defer bundling until dependency evidence is collected. */
+    readonly bundle?: boolean;
+    /** Local builds reuse runtime bytes; release qualification passes false. */
+    readonly cache?: boolean;
     /** Receives a short line as each long step starts. */
     readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},
 ): string {
   const lock = requireCurrentLock(manifestPath);
   if (options.supplyChainGates !== false) checkPackageSources(lock, "Build");
+  if (!existsSync(join(buildInput, "packages", "core", "dist")))
+    throw new Error(
+      "This bundled payload contains runtime management commands only. Build distributions from the PiShip source checkout.",
+    );
   const output = join(outputRoot, lock.app.id);
+  const manifest = readManifest(manifestPath);
+  const cacheStarted = process.hrtime.bigint();
+  const keys =
+    options.cache === false
+      ? undefined
+      : buildCacheKeys(buildInput, manifestPath, lock, {
+          bundle:
+            options.bundle !== false &&
+            manifest.lifecycle?.release.bundle === true,
+          strip: manifest.lifecycle?.release.strip === true,
+          supplyChainGates: options.supplyChainGates !== false,
+        });
+  const cached = keys ? readBuildCache(output) : undefined;
+  if (cached && keys && cached.runtimeKey === keys.runtimeKey) {
+    if (cached.key !== keys.key) {
+      options.progress?.(
+        "Updating distribution files using the cached runtime",
+      );
+      refreshCachedDistribution(
+        output,
+        resolve(manifestPath),
+        lock,
+        cached,
+        keys,
+      );
+    } else options.progress?.("Reusing the unchanged payload");
+    debugTiming("build cache reuse", cacheStarted);
+    return output;
+  }
+  debugTiming("build cache lookup", cacheStarted);
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });
   sweepOutputStaging(outputRoot, "build", options);
@@ -160,8 +208,30 @@ export function buildDistribution(
       `${JSON.stringify(inventory(stage), null, 2)}\n`,
     );
     debugTiming("inventory hashing", phase);
+    phase = process.hrtime.bigint();
+    if (
+      options.bundle !== false &&
+      readManifest(manifestPath).lifecycle?.release.bundle === true
+    ) {
+      options.progress?.("Bundling the portable runtime");
+      bundleDistribution(stage);
+    }
+    debugTiming("runtime bundling", phase);
+    phase = process.hrtime.bigint();
+    rmSync(buildCachePath(output), { force: true });
     rmSync(output, { recursive: true, force: true });
     renameSync(stage, output);
+    if (keys)
+      writeBuildCache(
+        output,
+        keys.key,
+        keys.runtimeKey,
+        lock.app.command,
+        JSON.parse(
+          readFileSync(join(output, "metadata", "inventory.json"), "utf8"),
+        ) as Record<string, string>,
+      );
+    debugTiming("output replacement", phase);
     return output;
   } finally {
     temporary.remove();

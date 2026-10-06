@@ -30,7 +30,7 @@ function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
   const { metadata } = ctx;
   ok("manifest", `verified (${metadata.manifest.schema})`);
   ok("lockfile", `verified (${metadata.schema})`);
-  ok("integrity", "payload inventory verified at launch");
+  ok("integrity", "payload inventory verified by doctor");
 }
 
 function releaseDoctor(
@@ -56,8 +56,8 @@ function updateDoctor(
   warn: DoctorLine,
 ): void {
   const { metadata } = ctx;
-  // The launch removed every abandoned temporary directory it could, so any
-  // that remain resisted removal. Only a count: the paths are not reported.
+  // Doctor attempts temporary maintenance before collecting this report.
+  // Only a count: the paths are not reported.
   const abandoned = abandonedTemporaryCount(metadata.app.id);
   if (abandoned > 0)
     warn(

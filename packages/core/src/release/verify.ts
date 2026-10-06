@@ -31,7 +31,8 @@ export interface VerifiedRelease {
   readonly payload: string;
   readonly metadata: ReleaseMetadata;
   readonly lock: DistributionLock;
-  readonly sbom: SpdxDocument;
+  readonly sbom?: SpdxDocument;
+  readonly archiveSha256?: string;
   /** Removes the extraction directory when the input was an archive. */
   readonly cleanup: () => void;
 }
@@ -61,13 +62,18 @@ export async function verifyRelease(
     readonly requireTarget?: boolean;
     readonly expectedSha256?: string;
     readonly extractTo?: string;
+    /** Client install uses archive trust and small metadata, leaving qualification to CI. */
+    readonly fastClient?: boolean;
+    readonly metadataOnly?: boolean;
   } = {},
 ): Promise<VerifiedRelease> {
   const path = resolve(input);
   let directory = path;
+  let archiveSha256: string | undefined;
   let cleanup = () => {};
   if (statSync(path).isFile()) {
     const actual = await sha256File(path);
+    archiveSha256 = actual;
     if (options.expectedSha256 && actual !== options.expectedSha256)
       throw fail(
         `archive SHA-256 ${actual} does not match the expected ${options.expectedSha256}`,
@@ -91,6 +97,26 @@ export async function verifyRelease(
     const expectedRoot = basename(path).replace(/\.tar\.gz$/, "");
     const extracted = await extractArchive(path, join(parent, "x"), {
       expectedRoot,
+      ...(options.metadataOnly
+        ? {
+            mapEntry: (name: string, directory: boolean) => {
+              const relative = name.slice(expectedRoot.length + 1);
+              return directory ||
+                [
+                  "release.json",
+                  "payload/piship.lock",
+                  "payload/piship.yaml",
+                  "payload/package-lock.json",
+                  "payload/metadata/target.json",
+                  "payload/metadata/inventory.json",
+                ].includes(relative)
+                ? directory
+                  ? undefined
+                  : name
+                : undefined;
+            },
+          }
+        : {}),
     }).catch((error: Error) => {
       own?.remove();
       throw fail(error.message);
@@ -100,8 +126,16 @@ export async function verifyRelease(
       own ? own.remove() : rmSync(parent, { recursive: true, force: true });
   }
   try {
-    const verified = verifyReleaseDirectory(directory, options.requireTarget);
-    return { ...verified, cleanup };
+    const verified = verifyReleaseDirectory(
+      directory,
+      options.requireTarget,
+      options.fastClient,
+    );
+    return {
+      ...verified,
+      ...(archiveSha256 ? { archiveSha256 } : {}),
+      cleanup,
+    };
   } catch (error) {
     cleanup();
     throw error;
@@ -111,9 +145,10 @@ export async function verifyRelease(
 function verifyReleaseDirectory(
   directory: string,
   requireTarget = false,
+  fastClient = false,
 ): Omit<VerifiedRelease, "cleanup"> {
   try {
-    return checkReleaseDirectory(directory, requireTarget);
+    return checkReleaseDirectory(directory, requireTarget, fastClient);
   } catch (error) {
     // Malformed metadata is an integrity failure, not a crash.
     if (error instanceof PiShipError) throw error;
@@ -124,15 +159,18 @@ function verifyReleaseDirectory(
 function checkReleaseDirectory(
   directory: string,
   requireTarget: boolean,
+  fastClient: boolean,
 ): Omit<VerifiedRelease, "cleanup"> {
-  const checksums = join(directory, "checksums.txt");
-  if (!existsSync(checksums)) throw fail("checksums.txt is missing");
-  try {
-    verifyChecksums(directory, readFileSync(checksums, "utf8"), {
-      required: RELEASE_FILES,
-    });
-  } catch (error) {
-    throw fail((error as Error).message);
+  if (!fastClient) {
+    const checksums = join(directory, "checksums.txt");
+    if (!existsSync(checksums)) throw fail("checksums.txt is missing");
+    try {
+      verifyChecksums(directory, readFileSync(checksums, "utf8"), {
+        required: RELEASE_FILES,
+      });
+    } catch (error) {
+      throw fail((error as Error).message);
+    }
   }
   const metadata = JSON.parse(
     readFileSync(join(directory, "release.json"), "utf8"),
@@ -142,7 +180,10 @@ function checkReleaseDirectory(
   const payload = join(directory, "payload");
   let lock: DistributionLock;
   try {
-    lock = verifyPayloadContents(payload, { requireTarget });
+    lock = verifyPayloadContents(payload, {
+      requireTarget,
+      verifyContents: !fastClient,
+    });
   } catch (error) {
     throw fail((error as Error).message);
   }
@@ -169,6 +210,7 @@ function checkReleaseDirectory(
     throw fail(
       `release.json does not match the payload: ${mismatches.map((item) => item[2]).join(", ")}`,
     );
+  if (fastClient) return { directory, payload, metadata, lock };
   const sbom = JSON.parse(
     readFileSync(join(directory, "sbom.spdx.json"), "utf8"),
   ) as SpdxDocument;

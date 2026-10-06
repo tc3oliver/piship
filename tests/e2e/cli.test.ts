@@ -377,7 +377,7 @@ describe("CLI", () => {
           });
     const first = launch();
     expect(first.status, first.stderr).toBe(0);
-    expect(first.stderr).toContain("verifyPayload:");
+    expect(first.stderr).not.toContain("verifyPayload:");
     console.info(first.stderr.trim());
     const brandedVersion =
       process.platform === "win32"
@@ -590,7 +590,7 @@ describe("CLI", () => {
       );
       expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
       if (path === join(payload, "piship.lock"))
-        expect(launch().stderr).toContain("integrity mismatch");
+        expect(launch().status).toBe(1);
       writeFileSync(path, content);
     }
     const targetPath = join(payload, "metadata", "target.json");

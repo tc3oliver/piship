@@ -528,6 +528,24 @@ describe("piship/v1alpha6 schema", () => {
     ).toThrow(/release\.strip/);
   });
 
+  it("accepts release.bundle only as an optional v1alpha6 boolean", () => {
+    for (const bundle of [true, false])
+      expect(
+        parseManifest(personal({ release: { bundle } })).lifecycle?.release
+          .bundle,
+      ).toBe(bundle);
+    expect(parseManifest(personal()).lifecycle?.release.bundle).toBeUndefined();
+    expect(() =>
+      parseManifest(personal({ release: { bundle: "yes" } })),
+    ).toThrow(/release\.bundle/);
+    expect(() =>
+      parseManifest({
+        ...personal({ release: { bundle: true } }),
+        schema: PISHIP_SCHEMA_V1ALPHA5,
+      }),
+    ).toThrow(/bundle/);
+  });
+
   it("accepts the new policy actions and reads model.use as model.select", () => {
     const manifest = parseManifest(
       personal({

@@ -2981,3 +2981,21 @@ it("reserves every Pi-owned environment variable from package configuration", ()
     }
   }
 });
+
+it("resolves the public upstream exports used by portable bundles", async () => {
+  for (const specifier of [
+    "@earendil-works/pi-ai/bun-oauth",
+    "@earendil-works/pi-ai/bedrock-provider",
+    "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy",
+    "@earendil-works/pi-codemode/worker",
+  ])
+    expect(import.meta.resolve(specifier)).toMatch(/\.js$/);
+  const oauth = await import("@earendil-works/pi-ai/bun-oauth");
+  const bedrock = await import("@earendil-works/pi-ai/bedrock-provider");
+  const loader = await import(
+    "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy"
+  );
+  expect(typeof oauth.registerBunOAuthFlows).toBe("function");
+  expect(typeof loader.setBedrockProviderModule).toBe("function");
+  expect(typeof bedrock.bedrockProviderModule).toBe("object");
+});

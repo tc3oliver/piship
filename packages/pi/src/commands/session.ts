@@ -15,6 +15,7 @@ import {
   principalKey,
   redact,
 } from "@piship/contracts";
+import { sweepDistributionData } from "@piship/core";
 import { acceptanceFailure } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -25,7 +26,7 @@ import {
 } from "../launch/context.js";
 import { openGovernance } from "../launch/governance.js";
 import { publishContext, startGoverned } from "../launch/runtime.js";
-import type { SessionOwnership } from "../launch/session-file.js";
+import { liveOwner, SessionOwnership } from "../launch/session-file.js";
 import { endInsideDispose } from "./dispose-hook.js";
 
 /**
@@ -82,6 +83,15 @@ async function endSession(
   // Credential refreshes during the session land in the same metrics.
   saveMetrics(prepared.metrics);
   publishContext(null);
+  // Pi has finished booting and running. Keep retention off the cold-start
+  // path, while retaining the same audited decisions and session claims.
+  await sweepDistributionData(ctx, "launch", {
+    sessionHeld: (file) => liveOwner(file) !== undefined,
+    claimSession: (file) => {
+      const claim = new SessionOwnership();
+      return claim.claim(file) ? () => claim.release() : undefined;
+    },
+  });
   if (failures.length === 0) return;
   if (sessionFailed) {
     for (const error of failures) ctx.err(`Error: ${formatError(error)}`);

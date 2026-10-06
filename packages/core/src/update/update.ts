@@ -1,12 +1,13 @@
 // Verified update of an installed distribution from its signed channel.
-import { existsSync, renameSync, rmSync } from "node:fs";
+import { existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { extractArchive } from "../archive.js";
 import { PiShipError } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
 import {
   currentTarget,
   runtimeStateDirectory,
-  verifyPayload,
   type DistributionLock,
 } from "../index.js";
 import {
@@ -14,11 +15,9 @@ import {
   activeLock,
   appDirectory,
   readInstallReceipt,
-  recoverInstallation,
   releaseInfo,
   requireManaged,
   syncDirectory,
-  syncTree,
   type InstallReceipt,
   type LifecycleOptions,
   type RetiredKey,
@@ -36,7 +35,6 @@ import {
   compareVersions,
   type MigrationReport,
 } from "../migration.js";
-import { runtimeLeases } from "../install/runtime-lease.js";
 import { storageOf } from "../storage-transition.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
@@ -44,12 +42,10 @@ import {
   checkUpdateSource,
   downloadArchive,
   readChannel,
-  runPayloadCommand,
   verifyRelease,
   type ChannelRelease,
 } from "../release/index.js";
 import {
-  checkPayload,
   clearCredentials,
   markActivated,
   repairStateMarker,
@@ -197,7 +193,6 @@ export async function updateDistribution(
   try {
     // Read under the lock, so a concurrent commit cannot leave it stale.
     const receipt = readInstallReceipt(id);
-    recoverInstallation(id);
     const lock = activeLock(receipt);
     if (!options.check) repairStateMarker(id, lock);
     const updates = lock.updates;
@@ -340,6 +335,8 @@ export async function updateDistribution(
         requireTarget: true,
         expectedSha256: entry.sha256,
         extractTo: join(staging, "release"),
+        fastClient: true,
+        metadataOnly: true,
       });
       const target = verified.metadata;
       const problems = [
@@ -359,13 +356,6 @@ export async function updateDistribution(
           "UPDATE_FAILED",
           `The ${entry.version} release runs Pi ${target.pi.version}, which it records as unsupported`,
         );
-      checkPayload(
-        verified.payload,
-        verified.lock,
-        options.runCheck ?? runPayloadCommand,
-        env,
-        "UPDATE_FAILED",
-      );
       options.faults?.("verified");
       const stateDir = runtimeStateDirectory({ value: id });
       const migration = checkStateMigration(
@@ -424,20 +414,15 @@ export async function updateDistribution(
         };
       }
       const destination = join(apps, entry.version);
-      // A retained release (after a rollback) is replaced below; a session
-      // started on it may still be running from that directory.
-      if (existsSync(destination)) {
-        const live = runtimeLeases(id, true).filter(
-          (lease) =>
-            lease.live &&
-            (lease.version === entry.version || lease.version === "*"),
+      const retained = receipt.releases.find(
+        (release) => release.version === entry.version,
+      );
+      const reuseRetained = retained !== undefined && existsSync(destination);
+      if (reuseRetained && retained.release?.archiveSha256 !== entry.sha256)
+        throw new PiShipError(
+          "INTEGRITY_FAILED",
+          `The signed ${entry.version} archive differs from the retained release; publish a new version instead of replacing installed bytes`,
         );
-        if (live.length)
-          throw new PiShipError(
-            "UPDATE_FAILED",
-            `Cannot update ${id} to ${entry.version} while ${live.length} runtime session(s) still use its retained payload; close them and retry`,
-          );
-      }
       options.progress?.(`Switching to ${entry.version}`);
       const snapshot = snapshotState(
         stateDir,
@@ -446,10 +431,23 @@ export async function updateDistribution(
         now(),
         options.faults,
       );
-      rmSync(destination, { recursive: true, force: true });
-      renameSync(verified.payload, destination);
-      verifyPayload(destination);
-      syncTree(destination);
+      if (!reuseRetained) {
+        // Only an unreferenced interrupted candidate can be moved aside.
+        // Receipt-retained payloads remain untouched, including during failures.
+        if (existsSync(destination))
+          renameSync(
+            destination,
+            join(apps, `.retained-${entry.version}-${randomUUID()}`),
+          );
+        const expectedRoot = entry.archive.replace(/\.tar\.gz$/, "");
+        await extractArchive(archive, destination, {
+          expectedRoot,
+          mapEntry: (name) =>
+            name.startsWith(`${expectedRoot}/payload/`)
+              ? name.slice(`${expectedRoot}/payload/`.length)
+              : undefined,
+        });
+      }
       syncDirectory(apps);
       options.faults?.("installed");
       notices.push(
@@ -514,11 +512,9 @@ export async function updateDistribution(
     } finally {
       try {
         temporary.remove();
-        // An operation that took the lock over owns what is on disk now.
-        if (lifecycle.stillHeld()) recoverInstallation(id);
         options.faults?.("cleaned");
       } catch {
-        // Recovery runs again before the next operation.
+        // Explicit diagnostics can remove abandoned staging later.
       }
     }
   } finally {

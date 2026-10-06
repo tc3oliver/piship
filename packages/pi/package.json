@@ -30,7 +30,10 @@
     "@piship/mcp": "0.10.0",
     "@piship/policy": "0.10.0",
     "@piship/sandbox": "0.10.0",
-    "@piship/schema": "0.10.0"
+    "@piship/schema": "0.10.0",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-codemode": "1.0.3",
+    "@earendil-works/chord": "1.0.3"
   },
   "description": "Public Pi integration and compatibility boundary for PiShip.",
   "keywords": [

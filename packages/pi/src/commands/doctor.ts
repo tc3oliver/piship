@@ -1,4 +1,9 @@
 import { PiShipError } from "@piship/contracts";
+import {
+  verifyPayload,
+  reclaimLaunchTemporaries,
+  sweepStateTemporaries,
+} from "@piship/core";
 import { auditGroup } from "../doctor/audit.js";
 import { capabilitiesGroup } from "../doctor/capabilities.js";
 import { credentialGroup } from "../doctor/credential.js";
@@ -63,6 +68,12 @@ export async function runDoctor(
       "CONFIG_INVALID",
       `Usage: ${command} doctor [--json]`,
     );
+  // Full payload verification and abandoned temporary maintenance are
+  // requested diagnostics, never a prerequisite for entering Pi.
+  verifyPayload(ctx.distributionDir);
+  sweepStateTemporaries(ctx.stateDir);
+  const notice = reclaimLaunchTemporaries(ctx.metadata.app.id);
+  if (notice) ctx.err(notice);
   const report = renderDoctor(await collectDoctorData(ctx));
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),

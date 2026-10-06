@@ -109,7 +109,7 @@ const simpleUsage: Record<string, string> = {
   dev: "dev <manifest> [--smoke]",
   validate: "validate <manifest>",
   lock: "lock <manifest>",
-  build: "build <manifest> [--reclaim-staging]",
+  build: "build <manifest> [--rebuild] [--reclaim-staging]",
   test: "test <manifest> [--model-request] [--json]",
   inspect: "inspect <manifest|artifact|id> [--json]",
   doctor: "doctor <artifact|id> [--json]",
@@ -365,7 +365,12 @@ async function lockFor(target: string): Promise<DistributionLock> {
   return verifyPayload(readInstallReceipt(target).payload);
 }
 const allowedOptions: Record<string, readonly string[]> = {
-  build: ["--reclaim-staging"],
+  build: [
+    "--reclaim-staging",
+    "--rebuild",
+    "--rebuild --reclaim-staging",
+    "--reclaim-staging --rebuild",
+  ],
   purge: ["--yes", "--yes --without-logout"],
   init: ["--personal", "--managed"],
   migrate: ["--write", "--check"],
@@ -705,7 +710,8 @@ export async function runCli(
         progress ? { progress } : {},
       );
       const built = buildDistribution(target, undefined, {
-        reclaimStaging: rest[0] === "--reclaim-staging",
+        reclaimStaging: rest.includes("--reclaim-staging"),
+        cache: !rest.includes("--rebuild"),
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
         ...(progress ? { progress } : {}),
       });

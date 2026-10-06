@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
+- Opt-in `release.bundle: true` assembles a compact Node runtime through upstream public exports, retaining WASM/native assets and extension loading. Windows test instructions and filesystem-operation estimates are in [performance](docs/performance.md).
+- **Behavior change:** routine launch always skips full payload inventory and hash verification, including manifests with the legacy `runtime.verifyAtLaunch: true`. Install/update check the archive digest and small metadata without re-hashing extracted files or checking SBOM/notices/scan results; release/CI and explicit `verify-release`/`doctor` retain full qualification. Versioned installs use atomic receipt activation, extract directly into the destination, avoid per-file fsync and repeated Pi launch checks, and retain obsolete versions outside the critical path. Startup no longer reclaims abandoned temporary directories; audited data retention runs after sessions end and at logout. Local payload edits are detected by explicit diagnostics, and a power loss during installation may require `repair`.
+
 - **Behavior change:** exclude live Chrome startup from Release qualification while retaining it in nightly and standalone manual Portable E2E. Qualification continues to run all other developer and release checks and does not certify browser availability.
 
 - Fix release notices to include bundled fd and ripgrep and their shipped licenses, matching the SBOM so `verify-release` accepts distributions with bundled search tools.

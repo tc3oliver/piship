@@ -4,6 +4,7 @@
   "files": {
     "includes": [
       "**",
+      "!**/.cache",
       "!**/dist",
       "!**/node_modules",
       "!**/.omc",

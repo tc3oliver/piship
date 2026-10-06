@@ -12,16 +12,16 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError, systemError } from "@piship/contracts";
-import { sha256File } from "../archive.js";
+import { extractArchive } from "../archive.js";
 import {
   assertDisjointRoots,
   installHome,
   isTestCreatedState,
   runtimeStateDirectory,
   testStateMarker,
-  verifyPayload,
+  verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
@@ -115,9 +115,9 @@ function launcherSource(id: string): string {
   return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
 import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { hostname } from "node:os";
+import { hostname, homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // Node resolves this module to its real path, while the receipt records the
 // install path as configured (on macOS /var is a symlink to /private/var).
@@ -283,6 +283,10 @@ if (!payload) {
   console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
   process.exit(1);
 }
+// A bundled core shares its module with Pi. Set Pi's public environment
+// before importing it, just as the payload launcher does before boot.
+process.env.PI_CODING_AGENT_DIR = join(resolve(process.env.PISHIP_STATE_HOME ?? join(homedir(), ".piship")), ${JSON.stringify(id)}, "agent");
+process.env.PI_PACKAGE_DIR = join(payload, "node_modules", "@earendil-works", "pi-coding-agent");
 const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
 // A release older than runtime leases (after a rollback, or an older archive
 // installed by a newer CLI) has no holdRuntimeLease: it launches without one.
@@ -402,15 +406,18 @@ export async function installDistribution(
       const verified = await verifyRelease(source, {
         requireTarget: true,
         extractTo: staging,
+        fastClient: true,
+        metadataOnly: isArchive,
         ...(expectedSha256 ? { expectedSha256 } : {}),
       });
       payload = verified.payload;
       lock = verified.lock;
-      info = releaseInfo(
-        verified.metadata,
-        isArchive ? await sha256File(source) : undefined,
-      );
-    } else lock = verifyPayload(source);
+      info = releaseInfo(verified.metadata, verified.archiveSha256);
+    } else
+      lock = verifyPayloadContents(source, {
+        requireTarget: true,
+        verifyContents: false,
+      });
     const pinned = new Set(
       channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
     );
@@ -428,6 +435,8 @@ export async function installDistribution(
     const { id, command, version } = lock.app;
     if (!VERSION_NAME.test(version))
       throw new Error(`Unsupported distribution version ${version}`);
+    // Reject a malformed bootstrap before creating or extracting app files.
+    const trust = initialTrustState(lock, id, new Date());
     const apps = appDirectory(id);
     const target = join(apps, version);
     const commandPath = commandPathFor(command);
@@ -474,7 +483,10 @@ export async function installDistribution(
               throw new Error(
                 `Install collision for ${id}/${command}; uninstall the existing distribution first`,
               );
-            verifyPayload(committed.payload);
+            verifyPayloadContents(committed.payload, {
+              requireTarget: true,
+              verifyContents: false,
+            });
             writeShim(commandPath, launcher);
             syncDirectory(dirname(commandPath));
           }
@@ -494,8 +506,13 @@ export async function installDistribution(
           existsSync(apps) &&
           !existsSync(receiptPath(id)) &&
           ownedIncompleteInstall(id, command, apps)
-        )
-          rmSync(apps, { recursive: true, force: true });
+        ) {
+          // Preserve a failed install for explicit maintenance. Moving it
+          // under an owned staging directory avoids thousands of deletes
+          // before this retry can begin extracting the new payload.
+          const abandoned = createStagingDirectory(installHome());
+          renameSync(apps, join(abandoned.path, "initial-app"));
+        }
         if (existsSync(receiptPath(id))) {
           // The branded command has no uninstall, so name the installed
           // release's own CLI. A damaged receipt names no release.
@@ -505,7 +522,7 @@ export async function installDistribution(
           } catch {}
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}; ${active} is already installed. Run node ${join(apps, active, "piship.mjs")} uninstall ${id} (state is kept), then install again with --use-existing-state`
+              ? `Install collision for ${id}/${command}; ${active} is already installed. Run ${command} update --from <signed update source> to upgrade without removing installed versions`
               : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
         }
@@ -542,16 +559,23 @@ export async function installDistribution(
         syncDirectory(dirname(apps));
         mkdirSync(dirname(commandPath), { recursive: true });
         try {
-          if (payload.startsWith(`${staging}`)) renameSync(payload, target);
+          if (isArchive) {
+            const expectedRoot = basename(source).replace(/\.tar\.gz$/, "");
+            await extractArchive(source, target, {
+              expectedRoot,
+              mapEntry: (name) =>
+                name.startsWith(`${expectedRoot}/payload/`)
+                  ? name.slice(`${expectedRoot}/payload/`.length)
+                  : undefined,
+            });
+          } else if (payload.startsWith(`${staging}`))
+            renameSync(payload, target);
           else cpSync(payload, target, { recursive: true });
-          verifyPayload(target);
           writeFileSync(launcher, launcherSource(id));
-          syncTree(apps);
           syncDirectory(dirname(apps));
           // A fresh install is the one point where a release lock sets the
           // installation's update trust; a leftover state of an earlier
           // install is replaced, never merged.
-          const trust = initialTrustState(lock, id, new Date());
           if (trust) writeTrustState(trust);
           else removeTrustState(id);
           const receipt: InstallReceipt = {
@@ -588,7 +612,8 @@ export async function installDistribution(
           if (!existsSync(receiptPath(id))) {
             if (ownsCommandShim(commandPath, launcher))
               rmSync(commandPath, { force: true });
-            rmSync(apps, { recursive: true, force: true });
+            // The ownership marker lets a retry move this aside in O(1).
+            // Explicit maintenance reclaims abandoned payloads.
             removeTrustState(id);
           }
           throw error;

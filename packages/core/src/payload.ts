@@ -176,30 +176,27 @@ export function verifyPayloadContents(
   return lock;
 }
 /**
- * The integrity gate the launcher runs before importing Pi. Full verification
- * is the default; when the distribution declares `runtime.verifyAtLaunch:
- * false`, launch skips only the per-file content hash — the expensive part on
- * managed Windows, where Defender scans every file a re-hash opens — and still
- * checks the target and the manifest/lock/npm-lock bindings, so a
- * mis-installed, wrong-target, or inconsistent payload still fails to launch.
- * Install, update, rollback, and doctor always verify contents.
+ * Load the metadata required to boot. Launch never walks the payload or reads
+ * its inventory, manifest, or npm lock, including for older manifests that
+ * declare verifyAtLaunch. Full verification is an explicit diagnostic/release
+ * operation. The target check is constant-cost and prevents a wrong-platform
+ * installation from trying to load its native runtime.
  */
 export function verifyLaunchPayload(directory: string): DistributionLock {
-  let verifyContents = true;
-  try {
-    verifyContents =
-      readManifest(join(resolve(directory), "piship.yaml")).runtime
-        .verifyAtLaunch !== false;
-  } catch {
-    verifyContents = true;
-  }
-  return verifyPayloadContents(directory, {
-    requireTarget: true,
-    verifyContents,
-  });
+  const root = resolve(directory);
+  const target = JSON.parse(
+    readFileSync(join(root, "metadata", "target.json"), "utf8"),
+  ) as { platform: string; arch: string };
+  if (target.platform !== process.platform || target.arch !== process.arch)
+    throw new Error(
+      `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
+    );
+  return JSON.parse(
+    readFileSync(join(root, "piship.lock"), "utf8"),
+  ) as DistributionLock;
 }
-// Doctor only needs the command name here. The launcher performs the complete
-// integrity verification before importing Pi, including this lockfile.
+// Doctor only needs the command name here. Full integrity verification belongs
+// to explicit diagnostics and release qualification.
 export function payloadApp(directory: string): DistributionLock["app"] {
   try {
     const lock = JSON.parse(
@@ -209,7 +206,7 @@ export function payloadApp(directory: string): DistributionLock["app"] {
     if (command && /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(command))
       return lock.app;
   } catch {
-    // The launcher will verify the complete payload for a well-formed lock.
+    // Malformed metadata cannot identify this distribution.
   }
   throw payloadIntegrityError();
 }

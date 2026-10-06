@@ -145,6 +145,8 @@ export interface ReleaseManifest {
    * file count a managed Windows machine extracts and scans on first install.
    */
   readonly strip?: boolean;
+  /** piship/v1alpha6: bundle the runtime JavaScript to reduce installation files. */
+  readonly bundle?: boolean;
 }
 export interface LifecycleManifest {
   readonly updates: UpdatesManifest;
@@ -646,7 +648,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
     "targets",
     "sources",
     "vulnerabilities",
-    ...(v6 ? ["installScripts", "strip"] : []),
+    ...(v6 ? ["installScripts", "strip", "bundle"] : []),
   ]);
   const targets =
     release.targets === undefined
@@ -734,6 +736,12 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
       fail("release.strip", "Expected a boolean");
     strip = release.strip === true;
   }
+  let bundle: boolean | undefined;
+  if (release.bundle !== undefined) {
+    if (typeof release.bundle !== "boolean")
+      fail("release.bundle", "Expected a boolean");
+    bundle = release.bundle === true;
+  }
   return {
     targets,
     sources,
@@ -744,6 +752,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
     },
     ...(installScripts === undefined ? {} : { installScripts }),
     ...(strip === undefined ? {} : { strip }),
+    ...(bundle === undefined ? {} : { bundle }),
   };
 }
 

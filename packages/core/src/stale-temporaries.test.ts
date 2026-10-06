@@ -321,12 +321,13 @@ describe("a launch check killed in the middle", () => {
 });
 
 describe.runIf(HOST_EVIDENCED)("lifecycle operations", () => {
-  it("an install starts by removing install staging a killed install left", async () => {
+  it("an install leaves abandoned staging for explicit maintenance", async () => {
     const stale = plant(installHome(), ".staging-aaaaaa", "staging", deadPid());
     const live = plant(installHome(), ".staging-bbbbbb", "staging", livePid());
     await installed();
-    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(stale)).toBe(true);
     expect(existsSync(live)).toBe(true);
+    expect(reclaimInstallTemporaries(ID).removed).toEqual([stale]);
     // Installing left no staging directory of its own.
     expect(readdirSync(installHome()).filter((n) => n.startsWith("."))).toEqual(
       [".staging-bbbbbb"],
@@ -347,7 +348,7 @@ describe.runIf(HOST_EVIDENCED)("lifecycle operations", () => {
     expect(existsSync(live)).toBe(true);
   });
 
-  it("an update removes what killed operations left and its own staging", async () => {
+  it("an update removes only its small staging and defers abandoned payload cleanup", async () => {
     const { opts } = await installed();
     const dead = deadPid();
     const stale = [
@@ -364,17 +365,29 @@ describe.runIf(HOST_EVIDENCED)("lifecycle operations", () => {
     );
     const result = await updateDistribution(ID, opts);
     expect(result.status).toBe("updated");
-    for (const path of stale) expect(existsSync(path)).toBe(false);
+    for (const path of stale) expect(existsSync(path)).toBe(true);
     expect(existsSync(live)).toBe(true);
     expect(readdirSync(appsDir()).sort()).toEqual([
+      ".staging-dddddd",
       "1.0.0",
       "1.1.0",
       "launch.mjs",
     ]);
+    expect(leftovers().sort()).toEqual([
+      "piship-launch-check-aaaaaa",
+      "piship-launch-check-eeeeee",
+      "piship-verify-bbbbbb",
+    ]);
+    expect([...reclaimOsTemporaries().removed].sort()).toEqual(
+      stale.slice(0, 2).sort(),
+    );
+    expect([...reclaimInstallTemporaries(ID).removed].sort()).toEqual(
+      stale.slice(2).sort(),
+    );
     expect(leftovers()).toEqual(["piship-launch-check-eeeeee"]);
   });
 
-  it("a rollback removes what killed launch checks left", async () => {
+  it("a rollback switches the receipt without scanning abandoned launch checks", async () => {
     const { opts } = await installed();
     await updateDistribution(ID, opts);
     const stale = plant(
@@ -385,7 +398,8 @@ describe.runIf(HOST_EVIDENCED)("lifecycle operations", () => {
     );
     await rollbackDistribution(ID, opts);
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(stale)).toBe(true);
+    expect(reclaimOsTemporaries().removed).toEqual([stale]);
   });
 
   it.runIf(notRoot)(

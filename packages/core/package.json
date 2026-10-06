@@ -29,7 +29,8 @@
     "@piship/identity": "0.10.0",
     "@piship/inference": "0.10.0",
     "@piship/policy": "0.10.0",
-    "@piship/schema": "0.10.0"
+    "@piship/schema": "0.10.0",
+    "esbuild": "0.28.2"
   },
   "description": "Distribution domain types and state paths for PiShip.",
   "keywords": [

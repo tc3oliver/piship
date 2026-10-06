@@ -651,15 +651,8 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await installDistribution(a.archive);
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
     const collision = await rejection(installDistribution(a.archive));
-    const cli = join(
-      process.env.PISHIP_INSTALL_HOME as string,
-      "apps",
-      ID,
-      "1.0.0",
-      "piship.mjs",
-    );
     expect(collision.message).toBe(
-      `Install collision for acmepi/acmepi; 1.0.0 is already installed. Run node ${cli} uninstall ${ID} (state is kept), then install again with --use-existing-state`,
+      "Install collision for acmepi/acmepi; 1.0.0 is already installed. Run acmepi update --from <signed update source> to upgrade without removing installed versions",
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -798,10 +791,22 @@ await installDistribution(artifact);
       expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
       expect(readInstallReceipt(ID)).toEqual(receipt);
       expect(existsSync(receipt.commandPath)).toBe(true);
-      // Nothing of the killed install is left behind, and uninstall works.
+      // Install ignores abandoned staging rather than recursively deleting it.
+      const homeEntries = readdirSync(
+        process.env.PISHIP_INSTALL_HOME as string,
+      ).sort();
       expect(
-        readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
+        homeEntries.filter((name) => !name.startsWith(".staging-")),
       ).toEqual(["apps", "receipts", "trust"]);
+      const stagingCount = homeEntries.filter((name) =>
+        name.startsWith(".staging-"),
+      ).length;
+      expect(stagingCount).toBe(
+        phase === "the payload is installed" ||
+          phase === "the launcher is written"
+          ? 2
+          : 1,
+      );
       uninstallDistribution(ID);
       expect(existsSync(appsDir())).toBe(false);
       expect(existsSync(receipt.commandPath)).toBe(false);
@@ -926,6 +931,32 @@ await installDistribution(artifact);
     recoverInstallation(ID);
     expect(existsSync(old)).toBe(false);
     expect(() => uninstallDistribution(ID)).not.toThrow();
+  });
+
+  it("installs trusted local release directories without per-file qualification or release scans", async () => {
+    const a = await release("1.0.0");
+    rmSync(join(a.directory, "sbom.spdx.json"));
+    rmSync(join(a.directory, "vulnerabilities.json"));
+    rmSync(join(a.directory, "checksums.txt"));
+    const changed = join(
+      a.directory,
+      "payload",
+      "resources",
+      "resources",
+      "AGENTS.md",
+    );
+    write(changed, "# local resource change\n");
+    expect(() => verifyPayload(join(a.directory, "payload"))).toThrow(
+      /integrity mismatch/,
+    );
+    const receipt = await installDistribution(a.directory);
+    expect(receipt.active).toBe("1.0.0");
+    expect(
+      readFileSync(
+        join(receipt.payload, "resources", "resources", "AGENTS.md"),
+        "utf8",
+      ),
+    ).toBe("# local resource change\n");
   });
 
   it("refuses a tampered release before installing", async () => {
@@ -1125,9 +1156,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       notices: [],
     });
     expect(result.migration?.verdict).toBe("safe");
-    // The candidate was launch-checked before activation, from staging.
-    expect(checked).toHaveLength(1);
-    expect(checked[0]).toContain(".staging-");
+    // Installation never boots the candidate; the first user launch does.
+    expect(checked).toEqual([]);
     const receipt = readInstallReceipt(ID);
     expect(receipt).toMatchObject({
       active: "1.1.0",
@@ -1214,7 +1244,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     ]);
   });
 
-  it("does not replace a retained release that a running session still uses", async () => {
+  it("reactivates unchanged retained bytes even while a runtime session uses them", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive, true);
     await updateDistribution(ID, opts);
@@ -1225,18 +1255,40 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     writeFileSync(marker, "running");
     const releaseLease = holdRuntimeLease(ID, "1.1.0");
     try {
-      const error = await rejection(updateDistribution(ID, opts));
-      expect(error).toMatchObject({ code: "UPDATE_FAILED" });
-      expect(error.message).toMatch(/runtime session/);
+      expect(await updateDistribution(ID, opts)).toMatchObject({
+        status: "updated",
+        to: "1.1.0",
+      });
       expect(readFileSync(marker, "utf8")).toBe("running");
-      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+      expect(readInstallReceipt(ID).active).toBe("1.1.0");
     } finally {
       releaseLease();
     }
     expect(await updateDistribution(ID, opts)).toMatchObject({
-      status: "updated",
-      to: "1.1.0",
+      status: "up-to-date",
     });
+  });
+
+  it("keeps receipt-retained bytes intact when reactivation is interrupted", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID);
+    const retained = join(appsDir(), "1.1.0");
+    const before = treeHash(retained);
+    await expect(
+      updateDistribution(ID, {
+        ...opts,
+        faults: (phase) => {
+          if (phase === "installed")
+            throw new Error("interrupted reactivation");
+        },
+      }),
+    ).rejects.toThrow("interrupted reactivation");
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(treeHash(retained)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
   });
 
   it("reports up-to-date on the next run", async () => {
@@ -1770,21 +1822,18 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(readTrustState(ID)?.root.version).toBe(3);
   });
 
-  it("refuses a release whose launch check fails", async () => {
+  it("activates without spawning a redundant launch check", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive);
-    const error = await rejection(
-      updateDistribution(ID, {
-        ...opts,
-        runCheck: () => ({ status: 1, stdout: "", stderr: "cannot start" }),
-      }),
-    );
-    expect(error.code).toBe("UPDATE_FAILED");
-    expect(error.message).toMatch(
-      /The 1.1.0 release failed its launch check: cannot start/,
-    );
-    expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    const runCheck = vi.fn(() => ({
+      status: 1,
+      stdout: "",
+      stderr: "cannot start",
+    }));
+    const result = await updateDistribution(ID, { ...opts, runCheck });
+    expect(result.status).toBe("updated");
+    expect(runCheck).not.toHaveBeenCalled();
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
   });
 
   it("refuses local data the target would reinterpret", async () => {
@@ -1902,9 +1951,9 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(error.message).toMatch(
       /piship:acmepi:inference#1: SECRET_STORE_UNAVAILABLE: The keychain is locked.*so the switch stopped before activation/,
     );
-    // The staged 1.1.0 is gone and the metadata still names the secret.
+    // The inactive candidate is kept for explicit maintenance; the receipt and credentials remain unchanged.
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
     expect(treeHash(join(stateDir(), "credentials-metadata"))).toEqual(
       credentials,
     );
@@ -2029,7 +2078,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const receipt = readInstallReceipt(ID);
     expect(receipt).not.toHaveProperty("previous");
     expect(receipt.releases.map((item) => item.version)).toEqual(["1.1.0"]);
-    expect(apps()).toEqual(["1.1.0", "launch.mjs"]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(recoverInstallation(ID)).toEqual(["1.0.0"]);
     const error = await rejection(
       rollbackDistribution(ID, { runCheck: fakeRun }),
     );
@@ -2061,7 +2111,12 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
       expect(receipt.active).toBe(expected);
       expect(verifyPayload(receipt.payload).app.version).toBe(expected);
       expect(apps()).toEqual(
-        [...receipt.releases.map((item) => item.version), "launch.mjs"].sort(),
+        phase === "installed"
+          ? ["1.0.0", "1.1.0", "launch.mjs"]
+          : [
+              ...receipt.releases.map((item) => item.version),
+              "launch.mjs",
+            ].sort(),
       );
       const retry = await updateDistribution(ID, opts);
       expect(retry.status).toBe(
@@ -2074,6 +2129,13 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
         "1.1.0",
         "1.0.0",
       ]);
+      if (phase === "installed") {
+        const leftovers = apps().filter((name) =>
+          name.startsWith(".retained-"),
+        );
+        expect(leftovers).toHaveLength(1);
+        expect(recoverInstallation(ID)).toEqual(leftovers);
+      }
       expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
       for (const item of final.releases) verifyPayload(item.payload);
       expect(recoverInstallation(ID)).toEqual([]);
@@ -2084,7 +2146,7 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
     },
   );
 
-  it("removes leftovers of a killed process before the next operation", async () => {
+  it("leaves cleanup of killed operations to explicit maintenance", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive);
     write(join(appsDir(), ".staging-killed", "partial.tar.gz"), "partial");
@@ -2105,7 +2167,8 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
     write(join(appsDir(), ".staging-killed", "partial.tar.gz"), "partial");
     const result = await updateDistribution(ID, opts);
     expect(result.status).toBe("updated");
-    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(apps()).toEqual([".staging-killed", "1.0.0", "1.1.0", "launch.mjs"]);
+    expect(recoverInstallation(ID)).toEqual([".staging-killed"]);
   });
   // up-to-date path never rewrites it, so an interruption between the two
   // leaves the marker naming the old release forever.
@@ -2194,7 +2257,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       notices: [],
     });
     expect(result.migration.verdict).toBe("safe");
-    expect(checked).toEqual([join(appsDir(), "1.0.0")]);
+    expect(checked).toEqual([]);
     expect(treeHash(join(stateDir(), "sessions"))).toEqual(sessions);
     expect(treeHash(join(stateDir(), "config"))).toEqual(config);
     expect(treeHash(join(stateDir(), "credentials-metadata"))).toEqual(
@@ -2257,34 +2320,22 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(error.message).toMatch(/has no retained release/);
   });
 
-  it("refuses a tampered retained release and switches nothing", async () => {
+  it("leaves retained-file auditing to explicit verification", async () => {
     await updated();
+    const payload = join(appsDir(), "1.0.0");
     write(
-      join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
-      "# tampered\n",
+      join(payload, "resources", "resources", "AGENTS.md"),
+      "# changed locally\n",
     );
-    const receipt = readInstallReceipt(ID);
-    const marker = readStateMarker(stateDir());
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
-    expect(error.code).toBe("ROLLBACK_FAILED");
-    expect(error.message).toMatch(
-      /The retained release 1.0.0 failed verification: .*integrity mismatch/,
-    );
-    expect(readInstallReceipt(ID)).toEqual(receipt);
-    expect(readStateMarker(stateDir())).toEqual(marker);
+    expect(() => verifyPayload(payload)).toThrow(/integrity mismatch/);
+    expect((await rollbackDistribution(ID)).to).toBe("1.0.0");
   });
 
-  it("refuses when the retained release fails its launch check", async () => {
+  it("rolls back without a redundant launch check", async () => {
     await updated();
-    const error = await rejection(
-      rollbackDistribution(ID, {
-        runCheck: () => ({ status: 1, stdout: "", stderr: "broken" }),
-      }),
-    );
-    expect(error.code).toBe("ROLLBACK_FAILED");
-    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    const runCheck = vi.fn(() => ({ status: 1, stdout: "", stderr: "broken" }));
+    expect((await rollbackDistribution(ID, { runCheck })).to).toBe("1.0.0");
+    expect(runCheck).not.toHaveBeenCalled();
   });
 
   it("clears credentials the target cannot read and never restores the secret", async () => {
@@ -2683,13 +2734,6 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(refused.userAction).toContain(
       `piship repair ${ID} <release archive>`,
     );
-    expect(
-      (await rejection(rollbackDistribution(ID, { runCheck: fakeRun }))).code,
-    ).toBe("INTEGRITY_FAILED");
-    expect(
-      (await rejection(updateDistribution(ID, { ...f.opts, check: true })))
-        .code,
-    ).toBe("INTEGRITY_FAILED");
     const receipt = readInstallReceipt(ID);
 
     const result = await repairDistribution(ID, f.b.archive);
@@ -2718,15 +2762,8 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
       join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
       "# tampered\n",
     );
-    const blocked = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
-    expect(blocked.code).toBe("ROLLBACK_FAILED");
-    expect(blocked.message).toContain(
-      "modified: resources/resources/AGENTS.md",
-    );
-    expect((blocked as PiShipError).userAction).toContain(
-      `piship repair ${ID} <release archive of 1.0.0>`,
+    expect(() => verifyPayload(join(appsDir(), "1.0.0"))).toThrow(
+      /modified: resources\/resources\/AGENTS.md/,
     );
     const result = await repairDistribution(ID, f.a.archive);
     expect(result).toMatchObject({ status: "repaired", version: "1.0.0" });
@@ -3397,7 +3434,7 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     expect(readInstallReceipt(ID).channel).toBe("stable");
   });
 
-  it("runs the candidate's launch check against throwaway state", async () => {
+  it("does not boot the candidate or create throwaway runtime state", async () => {
     const { a, opts } = await fixture();
     seedState();
     await installDistribution(a.archive, true);
@@ -3410,9 +3447,7 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
       },
     });
     expect(result.status).toBe("updated");
-    expect(homes).toHaveLength(1);
-    expect(homes[0]).not.toBe(process.env.PISHIP_STATE_HOME);
-    expect(existsSync(homes[0] as string)).toBe(false);
+    expect(homes).toEqual([]);
   });
 
   it("stops a download that grows past the signed size", async () => {

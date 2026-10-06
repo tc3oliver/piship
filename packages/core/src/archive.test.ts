@@ -405,3 +405,46 @@ describe("createArchive / extractArchive", () => {
     expect(readdirSync(dest)).toEqual([]);
   });
 });
+
+describe("direct payload extraction", () => {
+  it("writes payload files into the final directory and skips release evidence", async () => {
+    const root = tempDir();
+    const archive = rawArchive(root, [
+      { name: "release/", type: "5" },
+      { name: "release/payload/", type: "5" },
+      { name: "release/payload/bin/run", data: "boot" },
+      { name: "release/sbom.spdx.json", data: "release evidence" },
+    ]);
+    const destination = join(root, "1.0.0");
+    await extractArchive(archive, destination, {
+      expectedRoot: "release",
+      mapEntry: (name) =>
+        name.startsWith("release/payload/")
+          ? name.slice("release/payload/".length)
+          : undefined,
+    });
+    expect(readFileSync(join(destination, "bin", "run"), "utf8")).toBe("boot");
+    expect(readdirSync(destination)).toEqual(["bin"]);
+  });
+
+  it("still validates paths and limits of skipped entries", async () => {
+    const root = tempDir();
+    const archive = rawArchive(root, [
+      { name: "release/../outside", data: "bad" },
+    ]);
+    await expect(
+      extractArchive(archive, join(root, "out"), {
+        mapEntry: () => undefined,
+      }),
+    ).rejects.toThrow(/Unsafe archive entry/);
+    const oversized = rawArchive(root, [
+      { name: "release/large", data: "large" },
+    ]);
+    await expect(
+      extractArchive(oversized, join(root, "out"), {
+        maxBytes: 1,
+        mapEntry: () => undefined,
+      }),
+    ).rejects.toThrow(/exceeds 1 bytes/);
+  });
+});

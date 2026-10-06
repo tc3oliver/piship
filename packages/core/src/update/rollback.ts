@@ -2,14 +2,13 @@
 import { PiShipError } from "@piship/contracts";
 import {
   runtimeStateDirectory,
-  verifyPayload,
+  verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
 import {
   acquireLock,
   activeLock,
   readInstallReceipt,
-  recoverInstallation,
   requireManaged,
   type LifecycleOptions,
 } from "../install/receipt.js";
@@ -18,14 +17,9 @@ import {
   compareVersions,
   type MigrationReport,
 } from "../migration.js";
-import { payloadStateSchemas, runPayloadCommand } from "../release/index.js";
+import { payloadStateSchemas } from "../release/index.js";
 import { storageOf } from "../storage-transition.js";
-import {
-  checkPayload,
-  clearCredentials,
-  markActivated,
-  repairStateMarker,
-} from "./state.js";
+import { clearCredentials, markActivated, repairStateMarker } from "./state.js";
 
 export interface RollbackResult {
   readonly id: string;
@@ -45,11 +39,9 @@ export async function rollbackDistribution(
   options: LifecycleOptions = {},
 ): Promise<RollbackResult> {
   requireManaged(readInstallReceipt(id));
-  const env = options.env ?? process.env;
   const lifecycle = acquireLock(id, "ROLLBACK_FAILED");
   try {
     const receipt = readInstallReceipt(id);
-    recoverInstallation(id, "ROLLBACK_FAILED");
     const current = activeLock(receipt);
     repairStateMarker(id, current);
     const previous = receipt.releases.find(
@@ -68,7 +60,10 @@ export async function rollbackDistribution(
     options.progress?.(`Verifying the retained ${receipt.previous} release`);
     let target: DistributionLock;
     try {
-      target = verifyPayload(previous.payload);
+      target = verifyPayloadContents(previous.payload, {
+        requireTarget: true,
+        verifyContents: false,
+      });
     } catch (error) {
       throw new PiShipError(
         "ROLLBACK_FAILED",
@@ -83,13 +78,6 @@ export async function rollbackDistribution(
         "ROLLBACK_FAILED",
         `The retained release uses command ${target.app.command}; reinstall instead`,
       );
-    checkPayload(
-      previous.payload,
-      target,
-      options.runCheck ?? runPayloadCommand,
-      env,
-      "ROLLBACK_FAILED",
-    );
     options.faults?.("verified");
     const stateDir = runtimeStateDirectory({ value: id });
     const migration = checkStateMigration(

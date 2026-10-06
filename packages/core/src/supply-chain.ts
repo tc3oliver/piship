@@ -79,6 +79,13 @@ function readPackage(
  * sorted by path. Only real directories are walked; symlinks are not followed.
  */
 export function listPayloadPackages(payloadDir: string): PayloadPackage[] {
+  const bundle = join(payloadDir, "metadata", "bundle.json");
+  if (existsSync(bundle)) {
+    const metadata = JSON.parse(readFileSync(bundle, "utf8")) as {
+      components?: PayloadPackage[];
+    };
+    if (Array.isArray(metadata.components)) return metadata.components;
+  }
   const found: PayloadPackage[] = [];
   const visitPackage = (directory: string) => {
     const item = readPackage(payloadDir, directory);

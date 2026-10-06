@@ -138,9 +138,20 @@ function checkSpecifier(specifier, file, owner) {
   if (owner !== "pi") {
     failures.push(`${file}: only packages/pi may import ${specifier}`);
   }
-  if (!/^@earendil-works\/pi-[^/]+$/.test(specifier)) {
+  // Reviewed public exports used by Pi's own bundled loader registration.
+  // Keep this narrow: arbitrary dist/src paths remain forbidden.
+  const bundleExports = new Set([
+    "@earendil-works/pi-ai/bun-oauth",
+    "@earendil-works/pi-ai/bedrock-provider",
+    "@earendil-works/pi-ai/api/bedrock-converse-stream.lazy",
+    "@earendil-works/pi-codemode/worker",
+  ]);
+  if (
+    !/^@earendil-works\/pi-[^/]+$/.test(specifier) &&
+    !bundleExports.has(specifier)
+  ) {
     failures.push(
-      `${file}: Pi imports must use a public package root: ${specifier}`,
+      `${file}: Pi imports must use a public package root or reviewed public bundle export: ${specifier}`,
     );
   }
 }

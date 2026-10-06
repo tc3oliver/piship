@@ -446,6 +446,11 @@ export async function extractArchive(
     readonly expectedRoot?: string;
     readonly maxBytes?: number;
     readonly maxEntries?: number;
+    /** Map validated archive paths to relative output paths; undefined skips writing. */
+    readonly mapEntry?: (
+      path: string,
+      directory: boolean,
+    ) => string | undefined;
   } = {},
 ): Promise<ExtractResult> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -557,7 +562,20 @@ export async function extractArchive(
     const key = segments.join("/");
     if (seen.has(key)) throw new Error(`Duplicate archive entry: ${path}`);
     seen.add(key);
-    const output = resolve(target, ...segments);
+    bytes += directory ? 0 : size;
+    if (bytes > maxBytes)
+      throw new Error(`Archive content exceeds ${maxBytes} bytes`);
+    const mapped = options.mapEntry ? options.mapEntry(key, directory) : key;
+    if (mapped === undefined) {
+      if (directory && size !== 0)
+        throw new Error(`Corrupt archive: directory with data: ${path}`);
+      state =
+        size + padding(size) > 0
+          ? { kind: "skip", remaining: size + padding(size) }
+          : { kind: "header" };
+      return;
+    }
+    const output = resolve(target, ...entrySegments(mapped, directory));
     const inside = relative(target, output);
     if (inside === "" || inside.startsWith("..") || isAbsolute(inside))
       throw new Error(`Unsafe archive entry path: ${JSON.stringify(path)}`);
@@ -568,9 +586,6 @@ export async function extractArchive(
       await ensureDirectory(output);
       return;
     }
-    bytes += size;
-    if (bytes > maxBytes)
-      throw new Error(`Archive content exceeds ${maxBytes} bytes`);
     const mode = (octalField(block, 100, 8) & 0o111) !== 0 ? 0o755 : 0o644;
     await ensureDirectory(dirname(output));
     handle = await open(output, "wx", mode);

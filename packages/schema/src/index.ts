@@ -94,10 +94,9 @@ export interface Manifest {
     /** piship/v1alpha6: bundled `fd` and `rg`; absent unless declared. */
     readonly searchTools?: SearchToolsConfig;
     /**
-     * piship/v1alpha6: when false, the launcher skips the per-file content
-     * hash of the payload at launch and only checks the manifest/lock/npm-lock
-     * bindings and the target. Full per-file verification still runs at
-     * install, update, rollback and doctor. Defaults to true.
+     * Legacy piship/v1alpha6 compatibility field, parsed and locked unchanged.
+     * Startup never scans payload contents, regardless of this value.
+     * Use explicit verify-release or doctor for full integrity diagnostics.
      */
     readonly verifyAtLaunch?: boolean;
   };

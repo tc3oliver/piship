@@ -259,14 +259,36 @@ describe("launch integrity verification", () => {
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
     expect(() => verifyLaunchPayload(dir)).not.toThrow();
   });
-  it("verifyLaunchPayload verifies contents when verifyAtLaunch is true", () => {
+  it("verifyLaunchPayload never hashes contents even when verifyAtLaunch is true", () => {
     const dir = buildPayload(true);
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
-    expect(() => verifyLaunchPayload(dir)).toThrow();
+    expect(() => verifyLaunchPayload(dir)).not.toThrow();
   });
-  it("verifyLaunchPayload verifies contents when the flag is absent", () => {
+  it("verifyLaunchPayload never hashes contents when the legacy flag is absent", () => {
     const dir = buildPayload();
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
-    expect(() => verifyLaunchPayload(dir)).toThrow();
+    expect(() => verifyLaunchPayload(dir)).not.toThrow();
+  });
+  it("boots without inventory, manifest or npm lock, leaving full verification to diagnostics", () => {
+    const dir = buildPayload();
+    for (const name of [
+      "metadata/inventory.json",
+      "piship.yaml",
+      "package-lock.json",
+    ])
+      rmSync(join(dir, name));
+    expect(verifyLaunchPayload(dir).app.command).toBe("mypi");
+    expect(() => verifyPayloadContents(dir)).toThrow();
+  });
+  it("still refuses a payload for another OS before loading its native runtime", () => {
+    const dir = buildPayload();
+    write(
+      dir,
+      "metadata/target.json",
+      JSON.stringify({ platform: "plan9", arch: "mips" }),
+    );
+    expect(() => verifyLaunchPayload(dir)).toThrow(
+      /does not match this machine/,
+    );
   });
 });
