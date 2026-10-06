@@ -92,7 +92,7 @@ export function buildCachePath(output: string): string {
   return `${output}.piship-build.json`;
 }
 
-function safePath(path: string): boolean {
+export function safePath(path: string): boolean {
   return (
     path.length > 0 &&
     path

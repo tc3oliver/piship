@@ -1,5 +1,5 @@
-import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
@@ -10,30 +10,42 @@ import type { DistributionLock } from "./lock-schema.js";
 export function payloadInventory(root: string): Record<string, string> {
   return inventory(root);
 }
-export function inventory(root: string): Record<string, string> {
+const byName = (a: { name: string }, b: { name: string }) =>
+  a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+/**
+ * The inventory of `root`. `known` carries digests a verified source (a cache
+ * entry that was hashed when it was created) already holds; a file listed
+ * there is not read again. Every other file is hashed from its bytes.
+ */
+export function inventory(
+  root: string,
+  known: Readonly<Record<string, string>> = {},
+): Record<string, string> {
   const output: Record<string, string> = {};
-  const visit = (directory: string): void => {
-    for (const name of readdirSync(directory).sort()) {
-      const path = join(directory, name);
-      const stat = lstatSync(path);
-      const key = relative(root, path).split(sep).join("/");
-      if (stat.isSymbolicLink())
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+      byName,
+    )) {
+      const key = `${prefix}${entry.name}`;
+      if (entry.isSymbolicLink())
         throw new Error(`Payload symlink is not allowed: ${key}`);
-      if (stat.isDirectory()) visit(path);
-      else if (stat.isFile() && key !== "metadata/inventory.json")
-        output[key] = hash(readFileSync(path));
-      else if (!stat.isFile())
+      if (entry.isDirectory()) visit(join(directory, entry.name), `${key}/`);
+      else if (entry.isFile() && key !== "metadata/inventory.json")
+        output[key] = Object.hasOwn(known, key)
+          ? (known[key] as string)
+          : hash(readFileSync(join(directory, entry.name)));
+      else if (!entry.isFile())
         throw new Error(`Unsupported payload entry: ${key}`);
     }
   };
-  visit(root);
+  visit(root, "");
   return output;
 }
 export function removeNpmBins(directory: string): void {
-  for (const name of readdirSync(directory)) {
-    const path = join(directory, name);
-    if (name === ".bin") rmSync(path, { recursive: true, force: true });
-    else if (lstatSync(path).isDirectory()) removeNpmBins(path);
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.name === ".bin") rmSync(path, { recursive: true, force: true });
+    else if (entry.isDirectory()) removeNpmBins(path);
   }
 }
 /**
@@ -73,6 +85,8 @@ function supports(values: readonly string[] | undefined, value: string) {
 }
 /** JS source maps and TypeScript declaration files, by file name. */
 const RUNTIME_IRRELEVANT = /\.(?:map|d\.ts|d\.mts|d\.cts)$/;
+export const isRuntimeIrrelevant = (name: string): boolean =>
+  RUNTIME_IRRELEVANT.test(name);
 /**
  * Remove files a running Node process never reads — JS source maps and
  * TypeScript declaration files — before the payload inventory is computed.
@@ -84,18 +98,26 @@ const RUNTIME_IRRELEVANT = /\.(?:map|d\.ts|d\.mts|d\.cts)$/;
  */
 export function stripRuntimeIrrelevant(root: string): string[] {
   const removed: string[] = [];
-  const visit = (directory: string): void => {
-    for (const name of readdirSync(directory)) {
-      const path = join(directory, name);
-      const stat = lstatSync(path);
-      if (stat.isDirectory()) visit(path);
-      else if (stat.isFile() && RUNTIME_IRRELEVANT.test(name)) {
+  /** Returns whether `directory` itself was removed, having been emptied. */
+  const visit = (directory: string, prefix: string): boolean => {
+    let changed = false;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (visit(path, `${prefix}${entry.name}/`)) changed = true;
+      } else if (entry.isFile() && isRuntimeIrrelevant(entry.name)) {
         rmSync(path);
-        removed.push(relative(root, path).split(sep).join("/"));
+        removed.push(`${prefix}${entry.name}`);
+        changed = true;
       }
     }
+    // A directory only declarations lived in is left out, as a build from a
+    // runtime cache never creates it.
+    if (!changed || !prefix || readdirSync(directory).length > 0) return false;
+    rmdirSync(directory);
+    return true;
   };
-  visit(root);
+  visit(root, "");
   return removed;
 }
 export function verifyPayload(directory: string): DistributionLock {

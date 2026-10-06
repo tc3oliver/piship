@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import { readManifest } from "@piship/schema";
 import { digest, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
 import {
+  inventory,
   payloadInventory,
   removeForeignPlatformPackages,
   stripRuntimeIrrelevant,
@@ -158,6 +160,75 @@ describe("stripRuntimeIrrelevant", () => {
       "node_modules/pkg/README.md",
     ])
       expect(existsSync(join(root, kept))).toBe(true);
+  });
+
+  it("removes a directory that only held declarations, and the ones above it that this empties", () => {
+    mkdirSync(join(root, "node_modules/pkg/types/deep"), { recursive: true });
+    writeFileSync(join(root, "node_modules/pkg/types/deep/a.d.ts"), "");
+    writeFileSync(join(root, "node_modules/pkg/types/b.d.mts"), "");
+    mkdirSync(join(root, "node_modules/pkg/lib"), { recursive: true });
+    writeFileSync(join(root, "node_modules/pkg/lib/c.js"), "");
+    writeFileSync(join(root, "node_modules/pkg/lib/c.js.map"), "");
+    mkdirSync(join(root, "node_modules/pkg/untouched"), { recursive: true });
+    stripRuntimeIrrelevant(root);
+    expect(existsSync(join(root, "node_modules/pkg/types"))).toBe(false);
+    expect(existsSync(join(root, "node_modules/pkg/lib/c.js"))).toBe(true);
+    // Only directories stripping emptied go; the root and others stay.
+    expect(existsSync(join(root, "node_modules/pkg/untouched"))).toBe(true);
+    expect(existsSync(root)).toBe(true);
+  });
+});
+
+describe("inventory", () => {
+  const write = (path: string, body: string): void => {
+    mkdirSync(join(root, dirname(path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+
+  it("hashes every file but its own listing, depth first in name order", () => {
+    write("b/z.txt", "z");
+    write("b/a/deep.txt", "deep");
+    write("a.txt", "a");
+    write("metadata/inventory.json", "{}");
+    write("metadata/target.json", "{}");
+    const found = inventory(root);
+    expect(Object.keys(found)).toEqual([
+      "a.txt",
+      "b/a/deep.txt",
+      "b/z.txt",
+      "metadata/target.json",
+    ]);
+    expect(found["b/a/deep.txt"]).toBe(hash("deep"));
+    expect(payloadInventory(root)).toEqual(found);
+  });
+
+  it("takes digests it is given instead of reading those files, and hashes the rest", () => {
+    write("kept.js", "kept");
+    write("other.js", "other");
+    const given = "1".repeat(64);
+    const found = inventory(root, {
+      "kept.js": given,
+      "missing.js": "2".repeat(64),
+      constructor: "3".repeat(64),
+    });
+    // A digest is only ever used for a file that is there.
+    expect(found).toEqual({ "kept.js": given, "other.js": hash("other") });
+  });
+
+  it("does not mistake a file named like an object property for a known digest", () => {
+    write("constructor", "body");
+    write("toString", "body");
+    expect(inventory(root)).toEqual({
+      constructor: hash("body"),
+      toString: hash("body"),
+    });
+  });
+
+  it("refuses a link, which a payload may never contain", () => {
+    if (process.platform === "win32") return;
+    write("real.txt", "real");
+    symlinkSync("real.txt", join(root, "link.txt"));
+    expect(() => inventory(root)).toThrow(/symlink is not allowed: link\.txt/);
   });
 });
 

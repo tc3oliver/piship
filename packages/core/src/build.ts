@@ -31,12 +31,155 @@ import {
 } from "./payload.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
+import {
+  adoptInstallTree,
+  discardInstallTree,
+  type InstallTree,
+  lookupInstallTree,
+  materializeInstallTree,
+  plainInventory,
+  type RuntimeCache,
+  renameWithRetry,
+} from "./runtime-cache.js";
 import { stageSearchTools } from "./search-tools/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import {
   sweepOutputStaging,
   type OutputStagingOptions,
 } from "./temporary-directories.js";
+
+/**
+ * npm-install the runtime dependencies into the empty `stage`: PiShip's own
+ * packages as real copies of the build input (npm only links them, and keeps
+ * any dependency it could not hoist beside their manifests), then the locked
+ * third-party tree, minus npm's `.bin` links and the optional packages built
+ * for other platforms. Nothing is stripped here.
+ */
+function installRuntime(
+  stage: string,
+  progress: ((step: string) => void) | undefined,
+): void {
+  let phase = process.hrtime.bigint();
+  copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
+  copyFileSync(
+    join(buildInput, "package-lock.json"),
+    join(stage, "package-lock.json"),
+  );
+  // npm resolves its workspace links from the manifests alone, so the
+  // compiled output is copied once, into its final place below.
+  for (const name of workspacePackages) {
+    const folder = join(stage, "packages", name);
+    mkdirSync(folder, { recursive: true });
+    copyFileSync(
+      join(buildInput, "packages", name, "package.json"),
+      join(folder, "package.json"),
+    );
+  }
+  debugTiming("build input copy", phase);
+  phase = process.hrtime.bigint();
+  progress?.("Installing the runtime packages (npm ci)");
+  const install =
+    process.platform === "win32"
+      ? spawnSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", "npm ci --omit=dev --no-audit --no-fund"],
+          { cwd: stage, encoding: "utf8" },
+        )
+      : spawnSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
+          cwd: stage,
+          encoding: "utf8",
+        });
+  if (install.status !== 0)
+    throw new Error(
+      `Portable runtime assembly failed: ${install.stderr || install.error?.message || install.stdout}`,
+    );
+  debugTiming("npm ci --omit=dev", phase);
+  phase = process.hrtime.bigint();
+  for (const name of workspacePackages) {
+    const target = join(stage, "node_modules", "@piship", name);
+    rmSync(target, { recursive: true, force: true });
+    mkdirSync(target, { recursive: true });
+    copyFileSync(
+      join(buildInput, "packages", name, "package.json"),
+      join(target, "package.json"),
+    );
+    cpSync(join(buildInput, "packages", name, "dist"), join(target, "dist"), {
+      recursive: true,
+    });
+    // Dependencies npm could not hoist were installed beside the manifest.
+    const nested = join(stage, "packages", name, "node_modules");
+    if (existsSync(nested))
+      renameWithRetry(nested, join(target, "node_modules"));
+  }
+  cpSync(
+    buildInput,
+    join(stage, "node_modules", "@piship", "core", "dist", "build-input"),
+    { recursive: true },
+  );
+  rmSync(join(stage, "packages"), { recursive: true, force: true });
+  debugTiming("PiShip/build-input copying", phase);
+  phase = process.hrtime.bigint();
+  removeNpmBins(join(stage, "node_modules"));
+  removeForeignPlatformPackages(stage);
+  debugTiming("removeNpmBins/foreign platform packages", phase);
+}
+
+/**
+ * Put the runtime dependency tree into the empty `stage`: placed from the
+ * runtime cache when it holds one, otherwise installed (and, with a cache,
+ * moved into it and placed from there). Returns the cache entry the tree came
+ * from, whose digests a payload inventory can take.
+ */
+function placeRuntime(
+  stage: string,
+  options: {
+    readonly cache: RuntimeCache | undefined;
+    readonly strip: boolean;
+    readonly leaveWhole: boolean;
+    readonly progress: ((step: string) => void) | undefined;
+  },
+): InstallTree | undefined {
+  const { cache, strip, progress } = options;
+  let phase = process.hrtime.bigint();
+  if (cache) {
+    const hit = lookupInstallTree(cache);
+    if (hit) {
+      progress?.("Reusing the cached runtime packages");
+      try {
+        materializeInstallTree(hit, stage, { strip });
+        debugTiming("runtime cache placement", phase);
+        return hit;
+      } catch {
+        // Damaged or evicted underneath this build: install again, and publish
+        // that tree in its place.
+        discardInstallTree(cache);
+        rmSync(stage, { recursive: true, force: true });
+        mkdirSync(stage);
+      }
+    }
+  }
+  installRuntime(stage, progress);
+  phase = process.hrtime.bigint();
+  const adopted = cache && adoptInstallTree(cache, stage);
+  if (cache && adopted) {
+    try {
+      materializeInstallTree(adopted, stage, { strip });
+    } catch (error) {
+      // This tree is what is left of the install: never reuse it.
+      discardInstallTree(cache);
+      throw error;
+    }
+    debugTiming("runtime cache publish and placement", phase);
+    return adopted;
+  }
+  if (cache)
+    progress?.(
+      "The runtime cache is not usable here (another volume, or the directory is locked); building without it",
+    );
+  if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
+  debugTiming("strip runtime-irrelevant files", phase);
+  return undefined;
+}
 
 /**
  * Assemble the portable payload from a current lock. By default the release
@@ -54,8 +197,21 @@ export function buildDistribution(
     readonly supplyChainGates?: boolean;
     /** Release builds defer bundling until dependency evidence is collected. */
     readonly bundle?: boolean;
+    /**
+     * The caller runs `bundleDistribution` on the result once it has collected
+     * evidence from the full dependency tree. For a manifest that asks for a
+     * bundle, strip and the inventory are then left to the bundler, which
+     * writes both for the bundled payload.
+     */
+    readonly deferBundle?: boolean;
     /** Local builds reuse runtime bytes; release qualification passes false. */
     readonly cache?: boolean;
+    /**
+     * The immutable runtime cache (`runtimeCacheFor`). A hit replaces the npm
+     * install, strip, and hashing of the dependency tree; a miss fills it.
+     * Independent of `cache`, which reuses a whole earlier output.
+     */
+    readonly runtimeCache?: RuntimeCache;
     /** Receives a short line as each long step starts. */
     readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},
@@ -68,15 +224,20 @@ export function buildDistribution(
     );
   const output = join(outputRoot, lock.app.id);
   const manifest = readManifest(manifestPath);
+  const strip = manifest.lifecycle?.release.strip === true;
+  const wantsBundle = manifest.lifecycle?.release.bundle === true;
+  const deferred = wantsBundle && options.deferBundle === true;
+  const bundling = wantsBundle && options.bundle !== false && !deferred;
+  // A cache built for another strip setting would place the wrong files.
+  const runtimeCache =
+    options.runtimeCache?.strip === strip ? options.runtimeCache : undefined;
   const cacheStarted = process.hrtime.bigint();
   const keys =
-    options.cache === false
+    options.cache === false || deferred
       ? undefined
       : buildCacheKeys(buildInput, manifestPath, lock, {
-          bundle:
-            options.bundle !== false &&
-            manifest.lifecycle?.release.bundle === true,
-          strip: manifest.lifecycle?.release.strip === true,
+          bundle: bundling,
+          strip,
           supplyChainGates: options.supplyChainGates !== false,
         });
   const cached = keys ? readBuildCache(output) : undefined;
@@ -108,64 +269,15 @@ export function buildDistribution(
   mkdirSync(stage);
   try {
     let phase = process.hrtime.bigint();
-    copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
-    copyFileSync(
-      join(buildInput, "package-lock.json"),
-      join(stage, "package-lock.json"),
-    );
-    for (const name of workspacePackages) {
-      const folder = join(stage, "packages", name);
-      mkdirSync(folder, { recursive: true });
-      copyFileSync(
-        join(buildInput, "packages", name, "package.json"),
-        join(folder, "package.json"),
-      );
-      cpSync(join(buildInput, "packages", name, "dist"), join(folder, "dist"), {
-        recursive: true,
-      });
-    }
-    debugTiming("build input copy", phase);
-    phase = process.hrtime.bigint();
-    options.progress?.("Installing the runtime packages (npm ci)");
-    const install =
-      process.platform === "win32"
-        ? spawnSync(
-            "cmd.exe",
-            ["/d", "/s", "/c", "npm ci --omit=dev --no-audit --no-fund"],
-            { cwd: stage, encoding: "utf8" },
-          )
-        : spawnSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
-            cwd: stage,
-            encoding: "utf8",
-          });
-    if (install.status !== 0)
-      throw new Error(
-        `Portable runtime assembly failed: ${install.stderr || install.error?.message || install.stdout}`,
-      );
-    debugTiming("npm ci --omit=dev", phase);
-    phase = process.hrtime.bigint();
-    for (const name of workspacePackages) {
-      const target = join(stage, "node_modules", "@piship", name);
-      rmSync(target, { recursive: true, force: true });
-      cpSync(join(stage, "packages", name), target, { recursive: true });
-    }
-    cpSync(
-      buildInput,
-      join(stage, "node_modules", "@piship", "core", "dist", "build-input"),
-      { recursive: true },
-    );
-    rmSync(join(stage, "packages"), { recursive: true, force: true });
-    debugTiming("PiShip/build-input copying", phase);
+    const tree = placeRuntime(stage, {
+      cache: runtimeCache,
+      strip,
+      // The bundler drops the whole tree, so deleting from it is wasted work.
+      leaveWhole: bundling || deferred,
+      progress: options.progress,
+    });
     phase = process.hrtime.bigint();
     options.progress?.("Assembling and verifying the payload");
-    removeNpmBins(join(stage, "node_modules"));
-    removeForeignPlatformPackages(stage);
-    debugTiming("removeNpmBins/foreign platform packages", phase);
-    phase = process.hrtime.bigint();
-    if (readManifest(manifestPath).lifecycle?.release.strip === true)
-      stripRuntimeIrrelevant(stage);
-    debugTiming("strip runtime-irrelevant files", phase);
-    phase = process.hrtime.bigint();
     mkdirSync(join(stage, "bin"), { recursive: true });
     mkdirSync(join(stage, "metadata"), { recursive: true });
     copyFileSync(manifestPath, join(stage, "piship.yaml"));
@@ -203,20 +315,29 @@ export function buildDistribution(
     writeFileSync(join(stage, "piship.mjs"), portableCliSource());
     debugTiming("resource/payload assembly", phase);
     phase = process.hrtime.bigint();
-    writeFileSync(
-      join(stage, "metadata", "inventory.json"),
-      `${JSON.stringify(inventory(stage), null, 2)}\n`,
-    );
-    debugTiming("inventory hashing", phase);
-    phase = process.hrtime.bigint();
-    if (
-      options.bundle !== false &&
-      readManifest(manifestPath).lifecycle?.release.bundle === true
-    ) {
+    if (bundling) {
       options.progress?.("Bundling the portable runtime");
-      bundleDistribution(stage);
+      bundleDistribution(stage, {
+        ...(runtimeCache ? { cache: runtimeCache } : {}),
+        strip,
+      });
+      debugTiming("runtime bundling and inventory", phase);
+    } else if (!deferred) {
+      // Files placed from a cache entry keep the digests taken when it was
+      // created; everything else is hashed from its bytes.
+      writeFileSync(
+        join(stage, "metadata", "inventory.json"),
+        `${JSON.stringify(
+          inventory(
+            stage,
+            tree && runtimeCache ? plainInventory(tree, runtimeCache) : {},
+          ),
+          null,
+          2,
+        )}\n`,
+      );
+      debugTiming("inventory hashing", phase);
     }
-    debugTiming("runtime bundling", phase);
     phase = process.hrtime.bigint();
     rmSync(buildCachePath(output), { force: true });
     rmSync(output, { recursive: true, force: true });

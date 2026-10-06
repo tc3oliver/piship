@@ -6,24 +6,48 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, sep } from "node:path";
-import { inventory } from "./payload.js";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { inventory, isRuntimeIrrelevant } from "./payload.js";
+import {
+  bundleEntryKey,
+  lookupBundle,
+  placeBundle,
+  type RuntimeCache,
+  renameWithRetry,
+  storeBundle,
+} from "./runtime-cache.js";
 import { listPayloadPackages } from "./supply-chain.js";
 import { workspacePackages } from "./runtime-dependencies.js";
 
 const posix = (path: string) => path.split(sep).join("/");
 
+export interface BundleOptions {
+  /**
+   * The runtime cache: when it holds the bundled runtime of these exact
+   * dependencies the bundler does not run, and a bundler run is stored in it.
+   */
+  readonly cache?: RuntimeCache;
+  /**
+   * The payload still holds source maps and declarations: leave them out of
+   * the files kept from it.
+   */
+  readonly strip?: boolean;
+}
+
 /** Build-time only: combine JS while retaining upstream assets and public exports. */
-export function bundleDistribution(payload: string): void {
+export function bundleDistribution(
+  payload: string,
+  options: BundleOptions = {},
+): void {
   payload = realpathSync(payload);
+  const strip = options.strip ?? options.cache?.strip === true;
   const components = listPayloadPackages(payload);
   const runtime = join(payload, "runtime");
-  mkdirSync(runtime, { recursive: true });
+  const original = join(payload, ".bundle-input");
   const entries: Record<string, string> = {};
   const shims: { file: string; entry: string }[] = [];
   const add = (name: string, file: string, source = file) => {
@@ -122,8 +146,29 @@ export function bundleDistribution(payload: string): void {
       "image-resize-worker.js",
     ),
   );
-  const tool = createRequire(import.meta.url).resolve("esbuild");
-  const script = `
+  const load = createRequire(import.meta.url);
+  const key = options.cache
+    ? bundleEntryKey(options.cache, load("esbuild/package.json").version)
+    : undefined;
+  const cached =
+    options.cache && key ? lookupBundle(options.cache, key) : undefined;
+  let placed = false;
+  if (cached) {
+    renameWithRetry(join(payload, "node_modules"), original);
+    try {
+      placeBundle(cached, payload);
+      placed = true;
+    } catch {
+      // An entry that cannot be placed is bundled again from the tree.
+      rmSync(runtime, { recursive: true, force: true });
+      rmSync(join(payload, "node_modules"), { recursive: true, force: true });
+      renameWithRetry(original, join(payload, "node_modules"));
+    }
+  }
+  if (!placed) {
+    mkdirSync(runtime, { recursive: true });
+    const tool = load.resolve("esbuild");
+    const script = `
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { relative, sep } from 'node:path';
@@ -165,108 +210,119 @@ writeFileSync(bootSource, 'export {formatError} from '+JSON.stringify(root+'/nod
 await build({...options, entryPoints: { main: mainSource, boot: bootSource, 'codemode-worker': options.entryPoints['codemode-worker'], 'image-resize-worker': options.entryPoints['image-resize-worker'] }, splitting: false, write:true});
 writeFileSync(${JSON.stringify(join(runtime, "exports.json"))}, JSON.stringify(mapping));
 rmSync(mainSource); rmSync(bootSource);`;
-  const result = spawnSync(
-    process.execPath,
-    ["--input-type=module", "-e", script],
-    { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
-  );
-  if (result.status !== 0)
-    throw new Error(
-      `Runtime bundling failed: ${result.stderr || result.error?.message}`,
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
     );
-  const original = join(payload, ".bundle-input");
-  renameSync(join(payload, "node_modules"), original);
+    if (result.status !== 0)
+      throw new Error(
+        `Runtime bundling failed: ${result.stderr || result.error?.message}`,
+      );
+    renameWithRetry(join(payload, "node_modules"), original);
+  }
+  const copyOptions = strip
+    ? {
+        recursive: true,
+        filter: (path: string) => !isRuntimeIrrelevant(basename(path)),
+      }
+    : { recursive: true };
   const keep = (path: string) => {
     const source = join(original, path);
     if (!existsSync(source)) return;
     const target = join(payload, "node_modules", path);
     mkdirSync(dirname(target), { recursive: true });
-    cpSync(source, target, { recursive: true });
+    cpSync(source, target, copyOptions);
   };
   try {
-    // Package metadata and the small number of paths opened at runtime.
-    for (const name of workspacePackages) keep(`@piship/${name}/package.json`);
-    for (const name of [
-      "pi-coding-agent",
-      "pi-ai",
-      "pi-agent-core",
-      "pi-codemode",
-      "pi-tui",
-      "chord",
-    ])
-      keep(`@earendil-works/${name}/package.json`);
-    for (const asset of [
-      "package.json",
-      "README.md",
-      "CHANGELOG.md",
-      "dist/modes/interactive/theme/dark.json",
-      "dist/modes/interactive/theme/light.json",
-      "dist/modes/interactive/assets",
-      "dist/core/export-html/template.html",
-      "dist/core/export-html/template.css",
-      "dist/core/export-html/template.js",
-      "dist/core/export-html/vendor",
-    ])
-      keep(`@earendil-works/pi-coding-agent/${asset}`);
-    keep(
-      `@earendil-works/pi-tui/native/${process.platform}/prebuilds/${process.platform}-${process.arch}`,
-    );
-    keep("typebox/package.json");
-    keep("quickjs-wasi/package.json");
-    keep("quickjs-wasi/quickjs.wasm");
-    const jiti = "@earendil-works/pi-coding-agent/node_modules/jiti";
-    if (existsSync(join(original, jiti))) {
-      for (const file of [
+    if (!placed) {
+      // Package metadata and the small number of paths opened at runtime.
+      for (const name of workspacePackages)
+        keep(`@piship/${name}/package.json`);
+      for (const name of [
+        "pi-coding-agent",
+        "pi-ai",
+        "pi-agent-core",
+        "pi-codemode",
+        "pi-tui",
+        "chord",
+      ])
+        keep(`@earendil-works/${name}/package.json`);
+      for (const asset of [
         "package.json",
-        "lib/jiti.mjs",
-        "lib/jiti-static.mjs",
-        "dist/jiti.cjs",
-        "dist/babel.cjs",
-      ]) {
-        const target = join(payload, "node_modules", "jiti", file);
-        mkdirSync(dirname(target), { recursive: true });
-        cpSync(join(original, jiti, file), target);
+        "README.md",
+        "CHANGELOG.md",
+        "dist/modes/interactive/theme/dark.json",
+        "dist/modes/interactive/theme/light.json",
+        "dist/modes/interactive/assets",
+        "dist/core/export-html/template.html",
+        "dist/core/export-html/template.css",
+        "dist/core/export-html/template.js",
+        "dist/core/export-html/vendor",
+      ])
+        keep(`@earendil-works/pi-coding-agent/${asset}`);
+      keep(
+        `@earendil-works/pi-tui/native/${process.platform}/prebuilds/${process.platform}-${process.arch}`,
+      );
+      keep("typebox/package.json");
+      keep("quickjs-wasi/package.json");
+      keep("quickjs-wasi/quickjs.wasm");
+      const jiti = "@earendil-works/pi-coding-agent/node_modules/jiti";
+      if (existsSync(join(original, jiti))) {
+        for (const file of [
+          "package.json",
+          "lib/jiti.mjs",
+          "lib/jiti-static.mjs",
+          "dist/jiti.cjs",
+          "dist/babel.cjs",
+        ]) {
+          const target = join(payload, "node_modules", "jiti", file);
+          mkdirSync(dirname(target), { recursive: true });
+          cpSync(join(original, jiti, file), target);
+        }
       }
-    }
-    const photon =
-      "@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node";
-    if (existsSync(join(original, photon))) {
-      mkdirSync(join(payload, "node_modules", "@silvia-odwyer"), {
-        recursive: true,
-      });
-      cpSync(
-        join(original, photon),
-        join(payload, "node_modules", "@silvia-odwyer", "photon-node"),
-        { recursive: true },
-      );
-    }
-    // Installed management commands still need the exact dependency metadata,
-    // but do not ship a second copy of every JS source in build-input.
-    const input = "@piship/core/dist/build-input";
-    keep(`${input}/package.json`);
-    keep(`${input}/package-lock.json`);
-    for (const name of workspacePackages)
-      keep(`${input}/packages/${name}/package.json`);
-    for (const shim of shims) {
-      mkdirSync(dirname(shim.file), { recursive: true });
-      const mapping = JSON.parse(
-        readFileSync(join(runtime, "exports.json"), "utf8"),
-      ) as Record<string, [string, string][]>;
-      const output = shim.entry.endsWith("worker")
-        ? `${shim.entry}.js`
-        : shim.entry === "piship-pi-environment"
-          ? "boot.js"
-          : "main.js";
-      const target = posix(relative(dirname(shim.file), join(runtime, output)));
-      const exports = mapping[shim.entry]
-        ?.map(([key, renamed]) => `${renamed} as ${key}`)
-        .join(", ");
-      writeFileSync(
-        shim.file,
-        exports
-          ? `export {${exports}} from ${JSON.stringify(target)};\n`
-          : `export * from ${JSON.stringify(target)};\n`,
-      );
+      const photon =
+        "@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node";
+      if (existsSync(join(original, photon))) {
+        mkdirSync(join(payload, "node_modules", "@silvia-odwyer"), {
+          recursive: true,
+        });
+        cpSync(
+          join(original, photon),
+          join(payload, "node_modules", "@silvia-odwyer", "photon-node"),
+          copyOptions,
+        );
+      }
+      // Installed management commands still need the exact dependency metadata,
+      // but do not ship a second copy of every JS source in build-input.
+      const input = "@piship/core/dist/build-input";
+      keep(`${input}/package.json`);
+      keep(`${input}/package-lock.json`);
+      for (const name of workspacePackages)
+        keep(`${input}/packages/${name}/package.json`);
+      for (const shim of shims) {
+        mkdirSync(dirname(shim.file), { recursive: true });
+        const mapping = JSON.parse(
+          readFileSync(join(runtime, "exports.json"), "utf8"),
+        ) as Record<string, [string, string][]>;
+        const output = shim.entry.endsWith("worker")
+          ? `${shim.entry}.js`
+          : shim.entry === "piship-pi-environment"
+            ? "boot.js"
+            : "main.js";
+        const target = posix(
+          relative(dirname(shim.file), join(runtime, output)),
+        );
+        const exports = mapping[shim.entry]
+          ?.map(([key, renamed]) => `${renamed} as ${key}`)
+          .join(", ");
+        writeFileSync(
+          shim.file,
+          exports
+            ? `export {${exports}} from ${JSON.stringify(target)};\n`
+            : `export * from ${JSON.stringify(target)};\n`,
+        );
+      }
     }
     const commandDirectory = join(payload, "bin");
     for (const command of readdirSync(commandDirectory)) {
@@ -288,7 +344,7 @@ rmSync(mainSource); rmSync(bootSource);`;
           ),
       );
     }
-    rmSync(join(runtime, "exports.json"));
+    rmSync(join(runtime, "exports.json"), { force: true });
     writeFileSync(
       join(payload, "metadata", "bundle.json"),
       `${JSON.stringify(
@@ -305,8 +361,21 @@ rmSync(mainSource); rmSync(bootSource);`;
   } finally {
     rmSync(original, { recursive: true, force: true });
   }
+  // Bundled files taken from the cache were hashed when it stored them.
+  const digests = inventory(payload, cached && placed ? cached.inventory : {});
+  if (!placed && options.cache && key)
+    storeBundle(
+      options.cache,
+      key,
+      payload,
+      digests,
+      Object.keys(digests).filter(
+        (name) =>
+          name.startsWith("runtime/") || name.startsWith("node_modules/"),
+      ),
+    );
   writeFileSync(
     join(payload, "metadata", "inventory.json"),
-    `${JSON.stringify(inventory(payload), null, 2)}\n`,
+    `${JSON.stringify(digests, null, 2)}\n`,
   );
 }

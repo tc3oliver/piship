@@ -139,10 +139,10 @@ const lifecycleCommands: Record<
   },
   release: {
     usage:
-      "release <manifest> [--out <dir>] [--channel <name>] [--reclaim-staging]",
+      "release <manifest> [--out <dir>] [--channel <name>] [--rebuild] [--reclaim-staging]",
     positional: [1, 1],
     values: ["--out", "--channel"],
-    flags: ["--reclaim-staging"],
+    flags: ["--rebuild", "--reclaim-staging"],
   },
   "verify-release": {
     usage: "verify-release <archive|release-dir> [--sha256 <hex>] [--json]",
@@ -878,6 +878,7 @@ async function runLifecycle(
     const built = await buildRelease(first, {
       ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
       ...(options["--channel"] ? { channel: options["--channel"] } : {}),
+      cache: !flags.has("--rebuild"),
       reclaimStaging: flags.has("--reclaim-staging"),
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
     });

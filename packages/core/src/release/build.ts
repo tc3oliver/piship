@@ -28,6 +28,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { STATE_SCHEMAS } from "../migration.js";
+import { runtimeCacheFor } from "../runtime-cache.js";
 import { downloadLockedSearchTools } from "../search-tools/index.js";
 import { workspacePackages } from "../runtime-dependencies.js";
 import {
@@ -235,9 +236,18 @@ export async function buildRelease(
     // The pinned search tool archives for this target, checked against the
     // lock, before the payload is assembled from them.
     await downloadLockedSearchTools(lock, target);
+    // Only runtime bytes come from the cache; every check below runs afresh.
+    const runtimeCache =
+      options.cache === false || options.assemble
+        ? undefined
+        : runtimeCacheFor(lock);
     const built = options.assemble
       ? options.assemble(manifestPath, stage)
-      : buildDistribution(manifestPath, stage, { bundle: false, cache: false });
+      : buildDistribution(manifestPath, stage, {
+          cache: false,
+          deferBundle: true,
+          ...(runtimeCache ? { runtimeCache } : {}),
+        });
     const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });
     renameSync(built, payload);
@@ -349,7 +359,11 @@ export async function buildRelease(
       notices.text,
     );
     writeJson(join(root, "licenses", "index.json"), notices.index);
-    if (release.bundle === true) bundleDistribution(payload);
+    if (release.bundle === true)
+      bundleDistribution(payload, {
+        ...(runtimeCache ? { cache: runtimeCache } : {}),
+        strip: release.strip === true,
+      });
     const tests = runReleaseTests(
       payload,
       lock,

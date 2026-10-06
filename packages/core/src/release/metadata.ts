@@ -168,6 +168,11 @@ export interface ReleaseOptions extends OutputStagingOptions {
   readonly runTest?: ReleaseTestRunner;
   /** Injectable clock for vulnerability exception expiry. */
   readonly now?: () => Date;
+  /**
+   * Reuse the runtime cache (the default). False installs, strips, and bundles
+   * the runtime from scratch, as `piship release --rebuild` does.
+   */
+  readonly cache?: boolean;
   /** Test seam: assembles the canonical payload (defaults to buildDistribution). */
   readonly assemble?: (manifestPath: string, outputRoot: string) => string;
 }
