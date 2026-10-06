@@ -218,10 +218,16 @@ mark("receipt_resolved");
 // in the distribution's state directory and read back at the next start. Only
 // once that directory exists: a launch creates it after checking the install,
 // state and bin roots do not overlap, and a first launch writes nothing there
-// before that check. Node ignores the call when NODE_DISABLE_COMPILE_CACHE is set.
+// before that check. Never for a distribution whose lock asks for launch
+// verification (runtime.verifyAtLaunch: true): a cache in state is not
+// verified, and a lock that cannot be read counts as asking. Node ignores the
+// call when NODE_DISABLE_COMPILE_CACHE is set.
+const verifiesAtLaunch = (directory) => {
+  try { return /"verifyAtLaunch":\\s*true/.test(readFileSync(join(directory, "piship.lock"), "utf8")); } catch { return true; }
+};
 const stateRoot = join(resolve(process.env.PISHIP_STATE_HOME ?? join(homedir(), ".piship")), ${JSON.stringify(id)});
 try {
-  if (existsSync(join(payload, "metadata", "bundle.json")) && existsSync(stateRoot)) {
+  if (existsSync(join(payload, "metadata", "bundle.json")) && existsSync(stateRoot) && !verifiesAtLaunch(payload)) {
     const cacheDir = join(stateRoot, "cache", "compile");
     mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
     enableCompileCache(cacheDir);

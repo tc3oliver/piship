@@ -3,6 +3,7 @@
 // PiShip left a different one on disk.
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -19,6 +20,7 @@ import {
   fakeRun,
   ID,
   installed,
+  stateDir,
   useLifecycleHomes,
 } from "../../../../tests/helpers/lifecycle-faults.js";
 import { launcherBuildOf } from "../launcher-source.js";
@@ -200,6 +202,70 @@ describe("replacing a launcher an earlier PiShip installed", () => {
     });
     expect(inspectInstalledLauncher(ID)).toMatchObject({ current: false });
   }, 60_000);
+});
+
+describe("the V8 compile cache of a bundled payload", () => {
+  // The cache is a directory the launcher creates before it asks Node to use
+  // it, so the directory shows whether it was asked.
+  async function launchWith(options: {
+    bundled: boolean;
+    lock?: "missing" | Record<string, unknown>;
+  }): Promise<boolean> {
+    await installed();
+    const receipt = readInstallReceipt(ID);
+    const lockPath = join(receipt.payload, "piship.lock");
+    if (options.bundled)
+      writeFileSync(join(receipt.payload, "metadata", "bundle.json"), "{}\n");
+    if (options.lock === "missing") rmSync(lockPath);
+    else if (options.lock)
+      writeFileSync(
+        lockPath,
+        `${JSON.stringify({ ...JSON.parse(readFileSync(lockPath, "utf8")), ...options.lock }, null, 2)}\n`,
+      );
+    expect(existsSync(stateDir())).toBe(true);
+    const result = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+      env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: "" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return existsSync(join(stateDir(), "cache", "compile"));
+  }
+
+  it("is kept for a bundled payload whose lock does not ask for launch verification", async () => {
+    expect(await launchWith({ bundled: true })).toBe(true);
+  });
+
+  it("is kept when the lock declares verifyAtLaunch false", async () => {
+    expect(
+      await launchWith({ bundled: true, lock: { verifyAtLaunch: false } }),
+    ).toBe(true);
+  });
+
+  it("is off when the lock asks for launch verification, since a cache in state is not verified", async () => {
+    expect(
+      await launchWith({ bundled: true, lock: { verifyAtLaunch: true } }),
+    ).toBe(false);
+  });
+
+  it("is off when the lock cannot be read (the payload is damaged)", async () => {
+    expect(await launchWith({ bundled: true, lock: "missing" })).toBe(false);
+  });
+
+  it("is off for a payload that is not bundled", async () => {
+    expect(await launchWith({ bundled: false })).toBe(false);
+  });
+
+  it("is not created before the state directory exists", async () => {
+    await installed();
+    const receipt = readInstallReceipt(ID);
+    writeFileSync(join(receipt.payload, "metadata", "bundle.json"), "{}\n");
+    rmSync(stateDir(), { recursive: true, force: true });
+    const result = spawnSync(process.execPath, [receipt.launcher as string], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(stateDir())).toBe(false);
+  });
 });
 
 describe("the command shim", () => {
