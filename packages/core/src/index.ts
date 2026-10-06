@@ -68,6 +68,7 @@ export * from "./migration.js";
 export {
   payloadApp,
   payloadInventory,
+  verifyLaunchPayload,
   verifyPayload,
   verifyPayloadContents,
 } from "./payload.js";

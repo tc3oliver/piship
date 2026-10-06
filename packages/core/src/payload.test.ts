@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -10,9 +11,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readManifest } from "@piship/schema";
+import { digest, hash } from "./digest.js";
+import type { DistributionLock } from "./lock-schema.js";
 import {
+  payloadInventory,
   removeForeignPlatformPackages,
   stripRuntimeIrrelevant,
+  verifyLaunchPayload,
+  verifyPayloadContents,
 } from "./payload.js";
 
 let root: string;
@@ -151,5 +158,115 @@ describe("stripRuntimeIrrelevant", () => {
       "node_modules/pkg/README.md",
     ])
       expect(existsSync(join(root, kept))).toBe(true);
+  });
+});
+
+describe("launch integrity verification", () => {
+  const dirOf = new Set<string>();
+  const write = (dir: string, path: string, body: string): void => {
+    mkdirSync(join(dir, dirname(path)), { recursive: true });
+    writeFileSync(join(dir, path), body);
+  };
+  /** A minimal, internally consistent piship/v1alpha6 payload. */
+  function buildPayload(verifyAtLaunch?: boolean): string {
+    const dir = mkdtempSync(join(tmpdir(), "piship-launch-"));
+    dirOf.add(dir);
+    const manifest = {
+      schema: "piship/v1alpha6",
+      app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
+      runtime: {
+        pi: "1.0.0",
+        ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
+      },
+      deployment: { mode: "personal" },
+      updates: { channel: "stable", channels: ["stable"] },
+    };
+    write(dir, "piship.yaml", JSON.stringify(manifest));
+    write(dir, "package-lock.json", "{}\n");
+    const lock = {
+      manifest: {
+        schema: "piship/v1alpha6",
+        sha256: digest(readManifest(join(dir, "piship.yaml"))),
+      },
+      app: readManifest(join(dir, "piship.yaml")).app,
+      runtime: { npmLockSha256: hash("{}\n") },
+    } as unknown as DistributionLock;
+    write(dir, "piship.lock", JSON.stringify(lock));
+    write(
+      dir,
+      "metadata/target.json",
+      JSON.stringify({ platform: process.platform, arch: process.arch }),
+    );
+    write(dir, "bin/mypi", "#!/usr/bin/env node\n");
+    write(
+      dir,
+      "metadata/inventory.json",
+      JSON.stringify(payloadInventory(dir)),
+    );
+    return dir;
+  }
+  afterEach(() => {
+    for (const dir of dirOf) rmSync(dir, { recursive: true, force: true });
+    dirOf.clear();
+  });
+
+  it("full verification fails when a payload file is tampered with", () => {
+    const dir = buildPayload();
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    expect(() =>
+      verifyPayloadContents(dir, { requireTarget: true, verifyContents: true }),
+    ).toThrow();
+  });
+  it("verifyContents:false skips the content hash but keeps the bindings", () => {
+    const dir = buildPayload();
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    expect(() =>
+      verifyPayloadContents(dir, {
+        requireTarget: true,
+        verifyContents: false,
+      }),
+    ).not.toThrow();
+  });
+  it("verifyContents:false still rejects a broken manifest/lock binding", () => {
+    const dir = buildPayload();
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    const lock = JSON.parse(readFileSync(join(dir, "piship.lock"), "utf8"));
+    lock.app = { ...lock.app, version: "9.9.9" };
+    writeFileSync(join(dir, "piship.lock"), JSON.stringify(lock));
+    expect(() =>
+      verifyPayloadContents(dir, {
+        requireTarget: true,
+        verifyContents: false,
+      }),
+    ).toThrow(/manifest and lock mismatch/);
+  });
+  it("verifyContents:false still rejects the wrong target", () => {
+    const dir = buildPayload();
+    write(
+      dir,
+      "metadata/target.json",
+      JSON.stringify({ platform: "plan9", arch: "mips" }),
+    );
+    expect(() =>
+      verifyPayloadContents(dir, {
+        requireTarget: true,
+        verifyContents: false,
+      }),
+    ).toThrow(/does not match this machine/);
+  });
+  it("verifyLaunchPayload skips the hash when verifyAtLaunch is false", () => {
+    const dir = buildPayload(false);
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    expect(() => verifyLaunchPayload(dir)).not.toThrow();
+  });
+  it("verifyLaunchPayload verifies contents when verifyAtLaunch is true", () => {
+    const dir = buildPayload(true);
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    expect(() => verifyLaunchPayload(dir)).toThrow();
+  });
+  it("verifyLaunchPayload verifies contents when the flag is absent", () => {
+    const dir = buildPayload();
+    writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
+    expect(() => verifyLaunchPayload(dir)).toThrow();
   });
 });

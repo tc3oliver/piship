@@ -17,6 +17,11 @@ const valid = {
   runtime: { pi: "1.0.3" },
   deployment: { mode: "personal" },
 };
+const validV6 = {
+  ...valid,
+  schema: PISHIP_SCHEMA_V1ALPHA6,
+  updates: { channel: "stable", channels: ["stable"] },
+};
 describe("alpha manifest", () => {
   it("accepts the minimal distribution", () => {
     expect(parseManifest(valid).resources.skills).toEqual([]);
@@ -73,8 +78,45 @@ describe("alpha manifest", () => {
       "app.name",
     ],
     [{ ...valid, deployment: { mode: "managed" } }, "deployment.mode"],
+    [
+      {
+        ...validV6,
+        runtime: { pi: "1.0.3", verifyAtLaunch: "yes" },
+      },
+      "runtime.verifyAtLaunch",
+    ],
   ])("rejects invalid fields with location", (input, expected) => {
     expect(() => parseManifest(input)).toThrow(expected);
+  });
+});
+
+describe("runtime.verifyAtLaunch", () => {
+  it.each([
+    [true, true],
+    [false, false],
+  ] as const)(
+    "accepts verifyAtLaunch %s and preserves it",
+    (input, expected) => {
+      expect(
+        parseManifest({
+          ...validV6,
+          runtime: { pi: "1.0.3", verifyAtLaunch: input },
+        }).runtime.verifyAtLaunch,
+      ).toBe(expected);
+    },
+  );
+  it("leaves verifyAtLaunch undefined when the field is absent", () => {
+    expect(parseManifest(validV6).runtime.verifyAtLaunch).toBeUndefined();
+  });
+  it("reports Expected true or false on a non-boolean value", () => {
+    const message = messageOf(() =>
+      parseManifest({
+        ...validV6,
+        runtime: { pi: "1.0.3", verifyAtLaunch: "yes" },
+      }),
+    );
+    expect(message).toContain("runtime.verifyAtLaunch");
+    expect(message).toContain("Expected true or false");
   });
 });
 

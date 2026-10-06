@@ -99,31 +99,44 @@ export function stripRuntimeIrrelevant(root: string): string[] {
   return removed;
 }
 export function verifyPayload(directory: string): DistributionLock {
-  return verifyPayloadContents(directory, { requireTarget: true });
+  return verifyPayloadContents(directory, {
+    requireTarget: true,
+    verifyContents: true,
+  });
 }
 /**
  * Inventory, manifest, lock, and npm lock verification of a payload. Without
- * `requireTarget`, a consumer on another OS/CPU can still verify it.
+ * `requireTarget`, a consumer on another OS/CPU can still verify it. Set
+ * `verifyContents: false` to skip the per-file content hash and keep only the
+ * manifest/lock/npm-lock bindings and the target check; install, update,
+ * rollback, and doctor never do.
  */
 export function verifyPayloadContents(
   directory: string,
-  options: { readonly requireTarget?: boolean } = {},
+  options: {
+    readonly requireTarget?: boolean;
+    readonly verifyContents?: boolean;
+  } = {},
 ): DistributionLock {
   const started = process.hrtime.bigint();
   const root = resolve(directory);
   const inventoryPath = join(root, "metadata", "inventory.json");
-  const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
-    string,
-    string
-  >;
-  const actual = inventory(root);
-  const added = Object.keys(actual).filter((key) => !(key in expected));
-  const missing = Object.keys(expected).filter((key) => !(key in actual));
-  const modified = Object.keys(actual).filter(
-    (key) => key in expected && expected[key] !== actual[key],
-  );
-  if (added.length || missing.length || modified.length)
-    throw payloadIntegrityError(root, { added, modified, missing });
+  let fileCount = 0;
+  if (options.verifyContents !== false) {
+    const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
+      string,
+      string
+    >;
+    const actual = inventory(root);
+    fileCount = Object.keys(actual).length;
+    const added = Object.keys(actual).filter((key) => !(key in expected));
+    const missing = Object.keys(expected).filter((key) => !(key in actual));
+    const modified = Object.keys(actual).filter(
+      (key) => key in expected && expected[key] !== actual[key],
+    );
+    if (added.length || missing.length || modified.length)
+      throw payloadIntegrityError(root, { added, modified, missing });
+  }
   const target = JSON.parse(
     readFileSync(join(root, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
@@ -158,9 +171,32 @@ export function verifyPayloadContents(
     );
   if (process.env.PISHIP_DEBUG_TIMING === "1")
     process.stderr.write(
-      `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${Object.keys(actual).length} files)\n`,
+      `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${fileCount} files${options.verifyContents === false ? ", content hash skipped" : ""})\n`,
     );
   return lock;
+}
+/**
+ * The integrity gate the launcher runs before importing Pi. Full verification
+ * is the default; when the distribution declares `runtime.verifyAtLaunch:
+ * false`, launch skips only the per-file content hash — the expensive part on
+ * managed Windows, where Defender scans every file a re-hash opens — and still
+ * checks the target and the manifest/lock/npm-lock bindings, so a
+ * mis-installed, wrong-target, or inconsistent payload still fails to launch.
+ * Install, update, rollback, and doctor always verify contents.
+ */
+export function verifyLaunchPayload(directory: string): DistributionLock {
+  let verifyContents = true;
+  try {
+    verifyContents =
+      readManifest(join(resolve(directory), "piship.yaml")).runtime
+        .verifyAtLaunch !== false;
+  } catch {
+    verifyContents = true;
+  }
+  return verifyPayloadContents(directory, {
+    requireTarget: true,
+    verifyContents,
+  });
 }
 // Doctor only needs the command name here. The launcher performs the complete
 // integrity verification before importing Pi, including this lockfile.
