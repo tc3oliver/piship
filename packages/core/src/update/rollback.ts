@@ -5,6 +5,7 @@ import {
   verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
+import { refreshInstalledLauncher } from "../install/launcher.js";
 import {
   acquireLock,
   activeLock,
@@ -121,6 +122,8 @@ export async function rollbackDistribution(
     });
     // Committed: from here on nothing reports the rollback as failed.
     options.faults?.("committed");
+    // A stale launcher is replaced now, as after an update.
+    refreshInstalledLauncher(id, previous.payload);
     notices.push(...markActivated(stateDir, target));
     return {
       id,

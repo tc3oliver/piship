@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { resolve, join, basename } from "node:path";
+import { pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 import { platform, arch, release, cpus } from "node:os";
 const args = process.argv.slice(2);
@@ -140,7 +141,7 @@ env.MYPI_UPDATE_SOURCE = `http://127.0.0.1:${server.address().port}`;
 const receiptPath = join(env.PISHIP_INSTALL_HOME, "receipts/mypi.json");
 // The command shim only runs `node <launcher> <args>`. Run that directly: Node
 // refuses to spawn a .cmd without a shell, and a shell would take the path and
-// arguments as command text. The shim's own cost (cmd.exe and `where node`) is
+// arguments as command text. The shim's own cost (cmd.exe starting) is
 // therefore not measured.
 const branded = (...argv) =>
   run(process.execPath, [
@@ -182,6 +183,45 @@ try {
   const upgraded = JSON.parse(readFileSync(receiptPath));
   if (upgraded.app.version !== "1.1.0")
     throw new Error("Update did not activate 1.1.0");
+  // One more start of the upgraded release, with its phases reported
+  // (PISHIP_DEBUG_TIMING) and its loaded modules and process spawns counted by
+  // a preload. An older PiShip reports no phases; the counts still work.
+  const probe = join(out, "startup-probe.mjs");
+  writeFileSync(
+    probe,
+    `import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module";
+const require = createRequire(import.meta.url);
+let modules = 0;
+registerHooks({ load(url, context, next) { if (url.startsWith("file:")) modules += 1; return next(url, context); } });
+const spawns = [];
+const cp = require("node:child_process");
+for (const name of ["execFileSync", "execFile", "spawnSync", "spawn", "execSync", "exec"]) {
+  const original = cp[name];
+  cp[name] = function (...args) { spawns.push(name + ":" + String(args[0]).split(/[\\\\/]/).pop()); return original.apply(this, args); };
+}
+syncBuiltinESMExports();
+process.on("exit", () => process.stderr.write("PISHIP_PROBE " + JSON.stringify({ modules, spawns }) + "\\n"));
+`,
+  );
+  const measured = await run(
+    process.execPath,
+    [JSON.parse(readFileSync(receiptPath)).launcher, "--smoke"],
+    {
+      env: {
+        ...env,
+        PISHIP_DEBUG_TIMING: "1",
+        NODE_OPTIONS: `--import ${pathToFileURL(probe).href}`,
+      },
+    },
+  );
+  const stderrLines = measured.stderr.split("\n");
+  const probed = stderrLines.find((line) => line.startsWith("PISHIP_PROBE "));
+  const phases = stderrLines.find(
+    (line) =>
+      line.startsWith('{"schema":"piship-timing/v1"') &&
+      line.includes('"command":"launch"'),
+  );
+  const launch = phases ? JSON.parse(phases) : undefined;
   const report = {
     setup: {
       platform: target,
@@ -219,6 +259,20 @@ try {
         : 0,
       successfulActivationPayloadDeletes: 0,
       note: "Structural estimates, not ETW/ProcMon counters. Extraction creates one file per archive entry. Both measured archive paths extract straight into the version directory, without copying or renaming it. Baseline verifies each payload twice and flushes each file; update additionally verifies the active payload. Additional version launch and cleanup passes are excluded from these lower bounds. See docs/performance.md; Node/Defender and directory operations excluded.",
+    },
+    startup: {
+      ...(probed ? JSON.parse(probed.slice("PISHIP_PROBE ".length)) : {}),
+      ...(launch
+        ? {
+            totalMs: launch.totalMs,
+            notes: launch.notes,
+            counters: launch.counters,
+            phases: launch.stages.map((stage) => ({
+              name: stage.name,
+              ms: stage.ms,
+            })),
+          }
+        : {}),
     },
     smoke: {
       piVersion: smoke.piVersion,

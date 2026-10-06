@@ -30,7 +30,7 @@ import {
   LIFECYCLE_LOCK_SCHEMA,
   acquireLifecycleLock,
 } from "./lifecycle-lock.js";
-import { processIdentity } from "../process-identity.js";
+import { processIdentity, recordedIdentity } from "../process-identity.js";
 
 // Stops the live processes `livePid` starts.
 useLifecycleHomes();
@@ -177,10 +177,13 @@ describe("lifecycle lock holder identity", () => {
     const held = JSON.parse(readFileSync(lock, "utf8"));
     expect(held).toMatchObject({
       pid: process.pid,
-      identity: processIdentity(process.pid) ?? null,
+      identity: recordedIdentity(),
       host: processHostToken(),
       started: Math.round(performance.timeOrigin),
     });
+    // Reading it elsewhere starts a process (PowerShell on Windows), which a
+    // lock nobody contends for does not pay; the start time stands in.
+    if (process.platform !== "linux") expect(held.identity).toBeNull();
     hold.release();
   });
 

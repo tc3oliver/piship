@@ -14,15 +14,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, processHostToken } from "@piship/contracts";
 import { installHome } from "../index.js";
 import {
   type ProcessRecord,
   processIdentity,
+  recordedIdentity,
   recordedProcessGone,
+  recordedStart,
 } from "../process-identity.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
-import { appDirectory, syncDirectory, VERSION_NAME } from "./receipt.js";
+import { appDirectory, VERSION_NAME } from "./receipt.js";
 
 const SCHEMA = "piship-runtime-lease/v1";
 const UNKNOWN_IDENTITY_STALE_MS = 24 * 60 * 60_000;
@@ -30,7 +32,11 @@ const UNKNOWN_IDENTITY_STALE_MS = 24 * 60 * 60_000;
 interface Lease {
   readonly schema: typeof SCHEMA;
   readonly pid: number;
+  /** Null off Linux: reading it starts a process (`recordedIdentity`). */
   readonly identity: string | null;
+  /** Absent in a lease of an earlier PiShip. */
+  readonly host?: string | null;
+  readonly started?: number | null;
   readonly instance: string;
   readonly version: string;
 }
@@ -84,7 +90,16 @@ function parseLease(path: string, version: string): Lease | undefined {
       (value.identity !== null && typeof value.identity !== "string")
     )
       return undefined;
-    return value;
+    return {
+      ...value,
+      host:
+        typeof value.host === "string" && /^[0-9a-f]{12}$/.test(value.host)
+          ? value.host
+          : null,
+      started: Number.isSafeInteger(value.started)
+        ? (value.started as number)
+        : null,
+    };
   } catch {
     return undefined;
   }
@@ -129,13 +144,19 @@ export interface RuntimeLeaseStatus {
 /** Whether a lease record names this very process. */
 function ownLease(
   record:
-    | { readonly pid: number; readonly identity: string | null }
+    | {
+        readonly pid: number;
+        readonly identity: string | null;
+        readonly started?: number | null;
+      }
     | undefined,
 ): boolean {
   if (record?.pid !== process.pid) return false;
-  return (
-    record.identity === null || record.identity === processIdentity(process.pid)
-  );
+  if (record.identity !== null)
+    return record.identity === processIdentity(process.pid);
+  // A start time is exact for this process; a record with neither names
+  // only a process ID (an earlier PiShip), which is all there is to compare.
+  return record.started == null || record.started === recordedStart();
 }
 
 /** Inspect known leases; optionally remove only stale records. */
@@ -186,8 +207,13 @@ export function runtimeLeases(id: string, sweep = false): RuntimeLeaseStatus[] {
         } catch {
           /* stale */
         }
-        const live = record ? alive(record, path) : recentUnverified(path);
-        result.push({ version: "*", live, path, self: ownLease(record) });
+        const self = ownLease(record);
+        const live = self
+          ? true
+          : record
+            ? alive(record, path)
+            : recentUnverified(path);
+        result.push({ version: "*", live, path, self });
         if (sweep && !live) rmSync(path, { force: true });
       }
       // Keep the launching directory: a new launcher can create a marker
@@ -205,8 +231,14 @@ export function runtimeLeases(id: string, sweep = false): RuntimeLeaseStatus[] {
       if (!/^[0-9a-f-]{36}\.json$/.test(name)) continue;
       const path = join(directory, name);
       const record = parseLease(path, version);
-      const live = record ? alive(record, path) : recentUnverified(path);
-      result.push({ version, live, path, self: ownLease(record) });
+      // This process's own lease needs no judging, and so no system query.
+      const self = ownLease(record);
+      const live = self
+        ? true
+        : record
+          ? alive(record, path)
+          : recentUnverified(path);
+      result.push({ version, live, path, self });
       if (sweep && !live) rmSync(path, { force: true });
     }
     // Keep the directory: removing it could race a launcher between mkdir
@@ -224,16 +256,23 @@ export function holdRuntimeLease(id: string, version: string): () => void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const instance = randomUUID();
   const path = join(directory, `${instance}.json`);
+  // The record names this process by pid, host, start time and a random
+  // instance, without asking the system for its start identity, which on
+  // Windows is a PowerShell start. A process that finds the lease and must
+  // judge it asks then (`recordedProcessGone`). A lease is only meaningful
+  // while its process runs, so it is not flushed to disk: after a crash or a
+  // reset there is no process left for it to name.
   const record: Lease = {
     schema: SCHEMA,
     pid: process.pid,
-    identity: processIdentity(process.pid) ?? null,
+    identity: recordedIdentity(),
+    host: processHostToken(),
+    started: recordedStart(),
     instance,
     version,
   };
   const bytes = `${JSON.stringify(record)}\n`;
   writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
-  syncDirectory(directory);
   const beat = setInterval(() => {
     try {
       const now = new Date();

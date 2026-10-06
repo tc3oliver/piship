@@ -14,8 +14,10 @@ import {
   principalDigest,
   principalKey,
   redact,
+  startupMark,
+  startupTimingEnabled,
 } from "@piship/contracts";
-import { sweepDistributionData } from "@piship/core";
+import { refreshInstalledLauncher, sweepDistributionData } from "@piship/core";
 import { acceptanceFailure } from "../governance.js";
 import type { GovernanceSession } from "../governance-session.js";
 import { saveMetrics } from "../launch-metrics.js";
@@ -92,6 +94,9 @@ async function endSession(
       return claim.claim(file) ? () => claim.release() : undefined;
     },
   });
+  // A launcher an earlier PiShip installed is replaced here, after the
+  // session, not on the way in.
+  refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
   if (failures.length === 0) return;
   if (sessionFailed) {
     for (const error of failures) ctx.err(`Error: ${formatError(error)}`);
@@ -154,14 +159,17 @@ export async function runSmoke(
   for (const path of [cacheDir, logsDir, dataDir])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  startupMark("access_prepared");
   const sessionDir = sessionDirectory(ctx, prepared, "acceptance");
   const gov = await openGovernance(ctx, prepared, false);
+  startupMark("governance_open");
   const { runtime, ownership } = await startGoverned(
     ctx,
     prepared,
     { sessionDir, newSession, disposable: true },
     gov,
   );
+  startupMark("pi_initialized");
   let sessionFailed = false;
   try {
     const { resourceLoader } = runtime.services;
@@ -403,6 +411,7 @@ export async function runInteractive(
   for (const name of ["cache", "logs", "data"])
     mkdirSync(join(ctx.stateDir, name), { recursive: true, mode: 0o700 });
   const prepared = await prepareAccess(ctx, requestedModel);
+  startupMark("access_prepared");
   const sessionDir = sessionDirectory(ctx, prepared, "user");
   for (const notice of prepared.activated?.notices ?? [])
     ctx.err(`Notice: ${notice}`);
@@ -411,12 +420,14 @@ export async function runInteractive(
     prepared,
     !!process.stdin.isTTY && !!process.stderr.isTTY,
   );
+  startupMark("governance_open");
   const { runtime, theme, ownership } = await startGoverned(
     ctx,
     prepared,
     { sessionDir, newSession },
     gov,
   );
+  startupMark("pi_initialized");
   let sessionFailed = false;
   // Pi's shutdown awaits runtime.dispose() and then calls process.exit(), so
   // the governance session ends inside that dispose (see dispose-hook.ts).
@@ -428,10 +439,17 @@ export async function runInteractive(
     (error) => ctx.err(`Error: ${formatError(error)}`),
   );
   try {
-    await new InteractiveMode(
+    const mode = new InteractiveMode(
       runtime,
       theme ? { initialThemeSetting: theme } : {},
-    ).run();
+    );
+    // `run` starts with `init`, which does nothing a second time; with
+    // timing on, calling it first marks when the terminal UI is up.
+    if (startupTimingEnabled) {
+      await mode.init();
+      startupMark("ui_ready");
+    }
+    await mode.run();
   } catch (error) {
     sessionFailed = true;
     throw error;

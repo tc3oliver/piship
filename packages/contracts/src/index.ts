@@ -10,3 +10,4 @@ export * from "./policy.js";
 export * from "./sandbox-credential.js";
 export * from "./secret.js";
 export * from "./temporary.js";
+export * from "./timing.js";

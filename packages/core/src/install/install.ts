@@ -1,7 +1,6 @@
 // Install a payload or a verified release for the current user: the owned
 // release directory, the launcher, the command shim, and the first receipt.
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   rmSync,
@@ -11,7 +10,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError, systemError } from "@piship/contracts";
+import { PiShipError, stopwatch, systemError } from "@piship/contracts";
 import { extractArchive } from "../archive.js";
 import {
   assertDisjointRoots,
@@ -47,7 +46,7 @@ import {
 } from "./receipt.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree, renameWithRetry } from "./files.js";
-import { stopwatch } from "./timing.js";
+import { launcherSource, ownsCommandShim, writeShim } from "./launcher.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -109,225 +108,6 @@ function ownedIncompleteInstall(
   } catch {
     return false;
   }
-}
-
-function launcherSource(id: string): string {
-  return `// PiShip launcher for ${id}: runs the active release named by the install receipt.
-import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
-import { hostname, homedir } from "node:os";
-import { fileURLToPath, pathToFileURL } from "node:url";
-// Node resolves this module to its real path, while the receipt records the
-// install path as configured (on macOS /var is a symlink to /private/var).
-// Both sides are canonicalized before comparing; a missing payload or one
-// outside this directory still fails closed.
-const home = dirname(fileURLToPath(import.meta.url));
-const gatePath = join(home, "..", "..", "receipts", ${JSON.stringify(`.${id}.launch.lock`)});
-// The gate and launching records name this process as a runtime lease and the
-// lifecycle lock do. These helpers mirror @piship/core (process-identity.ts
-// and processHostToken), which the launcher cannot load before it holds the
-// gate: the start identity (the boot ID and start ticks on Linux, UTC start
-// ticks on Windows, UTC start seconds elsewhere), the host token, and the
-// start time. A launcher reads its own start identity only on Linux, where
-// that costs no process start; elsewhere its start time stands in for it.
-const identityOf = (pid) => {
-  try {
-    if (process.platform === "linux") {
-      const stat = readFileSync("/proc/" + pid + "/stat", "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      return fields[19] ? readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() + ":" + fields[19] : null;
-    }
-    if (process.platform === "win32") {
-      const value = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "(Get-Process -Id " + pid + " -ErrorAction Stop).StartTime.ToUniversalTime().Ticks"], { encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
-      return /^\\d+$/.test(value) ? value : null;
-    }
-    const value = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", timeout: 5000, env: { ...process.env, TZ: "UTC0", LC_ALL: "C" }, stdio: ["ignore", "pipe", "ignore"] }).trim();
-    const match = /^\\w{3} (\\w{3}) +(\\d{1,2}) (\\d{2}):(\\d{2}):(\\d{2}) (\\d{4})$/.exec(value);
-    const month = match ? "JanFebMarAprMayJunJulAugSepOctNovDec".indexOf(match[1]) : -1;
-    if (!match || month < 0 || month % 3) return null;
-    return String(Date.UTC(Number(match[6]), month / 3, Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5])) / 1000);
-  } catch { return null; }
-};
-const startMs = (identity) =>
-  !/^\\d+$/.test(identity) || process.platform === "linux" ? null
-  : process.platform === "win32" ? Number(BigInt(identity) / 10000n) - 62135596800000
-  : Number(identity) * 1000;
-let namespace = "";
-try { namespace = readlinkSync("/proc/self/ns/pid"); } catch {}
-const host = createHash("sha256").update(hostname() + "\\0" + namespace).digest("hex").slice(0, 12);
-const self = { pid: process.pid, identity: process.platform === "linux" ? identityOf(process.pid) : null, host, started: Math.round(performance.timeOrigin) };
-const gateRecord = JSON.stringify({ schema: "piship-lifecycle-lock/v1", ...self, instance: randomUUID() }) + "\\n";
-const alive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-};
-// Whether the process a record names is gone: true when proven, false when it
-// is the same running process, null when that cannot be told (another host's
-// record, or a record of an earlier PiShip that names only a process ID).
-const gone = (record) => {
-  if (record.host !== null && record.host !== host) return null;
-  if (!alive(record.pid)) return true;
-  if (record.identity === null && record.started === null) return null;
-  const current = identityOf(record.pid);
-  if (current === null) return null;
-  if (record.identity !== null) {
-    if (record.identity === current) return false;
-    if (process.platform === "linux" || process.platform === "win32" || /^\\d+$/.test(record.identity)) return true;
-  }
-  if (record.started === null) return null;
-  const start = startMs(current);
-  return start === null ? null : Math.abs(start - record.started) > 5000;
-};
-// The gate is judged as the lifecycle lock is: a holder that is gone (killed
-// before its exit handler ran, or whose process ID an unrelated process took
-// after a crash or a reboot) is stale at once, the same running holder never,
-// and one that cannot be judged (another host's) only after 24 hours without
-// a refresh. A live holder is waited for briefly.
-const gateHolder = () => {
-  let stat;
-  try { stat = lstatSync(gatePath); } catch { return undefined; }
-  let raw = null;
-  try { raw = readFileSync(gatePath, "utf8"); } catch (error) { if (error.code === "ENOENT") return undefined; }
-  let record = {};
-  if (raw !== null && /^\\d+$/.test(raw.trim())) record = { pid: Number(raw.trim()) };
-  else try {
-    const value = JSON.parse(raw ?? "");
-    if (value.schema === "piship-lifecycle-lock/v1" && typeof value.instance === "string") record = value;
-  } catch {}
-  return {
-    raw,
-    pid: Number.isSafeInteger(record.pid) && record.pid > 0 ? record.pid : null,
-    identity: typeof record.identity === "string" && record.identity.length <= 128 ? record.identity : null,
-    host: typeof record.host === "string" && /^[0-9a-f]{12}$/.test(record.host) ? record.host : null,
-    started: Number.isSafeInteger(record.started) ? record.started : null,
-    mtimeMs: stat.mtimeMs,
-    regular: stat.isFile(),
-  };
-};
-// A holder's verdict is read once per record: on Windows each read of a
-// process start is a PowerShell start.
-const verdicts = new Map();
-const gateStale = (holder) => {
-  const age = Date.now() - holder.mtimeMs;
-  if (!holder.regular) return false;
-  if (holder.raw === null) return age > 86400000;
-  if (holder.raw === "") return age > 5000;
-  if (holder.pid === null) return true;
-  if (!verdicts.has(holder.raw)) verdicts.set(holder.raw, gone(holder));
-  return verdicts.get(holder.raw) ?? age > 86400000;
-};
-// Moved aside under a unique name first, so only one launcher removes it; a
-// gate that turned out to be another one is put back.
-const breakGate = (observed) => {
-  const aside = gatePath + ".p" + process.pid + "-" + randomUUID() + ".stale";
-  try { renameSync(gatePath, aside); } catch { return; }
-  try {
-    const raw = readFileSync(aside, "utf8");
-    if (raw !== observed.raw) linkSync(aside, gatePath);
-  } catch {}
-  try { rmSync(aside, { force: true }); } catch {}
-};
-const describeHolder = (holder) =>
-  holder.raw === null ? "a holder whose record cannot be read"
-  : holder.raw === "" ? "a holder still writing its record"
-  : holder.pid === null ? "an unknown holder"
-  : "process " + holder.pid + (holder.host !== null && holder.host !== host ? " on another host" : "");
-const gateDeadline = Date.now() + 500;
-for (;;) {
-  try {
-    writeFileSync(gatePath, gateRecord, { flag: "wx", mode: 0o600 });
-    break;
-  } catch (error) {
-    // Only an existing gate is contention; anything else (EACCES, ENOSPC,
-    // EROFS) is reported as it is, since retrying cannot help.
-    if (error.code !== "EEXIST") {
-      console.error(${JSON.stringify(`Could not register a launch of ${id}: `)} + error.message);
-      process.exit(1);
-    }
-    const holder = gateHolder();
-    if (Date.now() > gateDeadline) {
-      console.error(${JSON.stringify(`A launcher or lifecycle operation for ${id} is registering: `)} + gatePath + " is held by " + (holder ? describeHolder(holder) : "another launcher") + ". Retry when it finishes; if no launcher or PiShip command is running, remove that file.");
-      process.exit(1);
-    }
-    if (holder && gateStale(holder)) breakGate(holder);
-    else if (holder) await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-const clearGate = () => {
-  try { if (readFileSync(gatePath, "utf8") === gateRecord) rmSync(gatePath, { force: true }); } catch {}
-};
-process.on("exit", clearGate);
-const launchingDir = join(home, ".runtime-leases", ".launching");
-mkdirSync(launchingDir, { recursive: true, mode: 0o700 });
-const launching = join(launchingDir, randomUUID() + ".json");
-writeFileSync(launching, JSON.stringify({ schema: "piship-launching-lease/v1", ...self }) + "\\n", { flag: "wx", mode: 0o600 });
-const clearLaunching = () => { try { rmSync(launching, { force: true }); } catch {} };
-process.on("exit", clearLaunching);
-let payload;
-let command;
-let version;
-try {
-  const receipt = JSON.parse(readFileSync(join(home, "..", "..", "receipts", ${JSON.stringify(`${id}.json`)}), "utf8"));
-  const release = receipt.releases.find((item) => item.version === receipt.active);
-  command = receipt.app.command;
-  if (
-    release &&
-    ${VERSION_NAME.toString()}.test(release.version) &&
-    /^[a-z][a-z0-9-]*$/.test(command) &&
-    realpathSync(release.payload) === realpathSync(join(home, release.version))
-  )
-    { payload = realpathSync(release.payload); version = release.version; }
-} catch {}
-if (!payload) {
-  console.error(${JSON.stringify(`The ${id} install receipt is missing or damaged; reinstall ${id}.`)});
-  process.exit(1);
-}
-// A bundled core shares its module with Pi. Set Pi's public environment
-// before importing it, just as the payload launcher does before boot.
-process.env.PI_CODING_AGENT_DIR = join(resolve(process.env.PISHIP_STATE_HOME ?? join(homedir(), ".piship")), ${JSON.stringify(id)}, "agent");
-process.env.PI_PACKAGE_DIR = join(payload, "node_modules", "@earendil-works", "pi-coding-agent");
-const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
-// A release older than runtime leases (after a rollback, or an older archive
-// installed by a newer CLI) has no holdRuntimeLease: it launches without one.
-if (typeof core.holdRuntimeLease === "function") core.holdRuntimeLease(${JSON.stringify(id)}, version);
-if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
-clearLaunching();
-process.removeListener("exit", clearLaunching);
-clearGate();
-process.removeListener("exit", clearGate);
-await import(pathToFileURL(join(payload, "bin", command)).href);
-`;
-}
-
-function writeShim(commandPath: string, launcher: string): void {
-  if (process.platform === "win32")
-    writeFileSync(
-      commandPath,
-      `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`,
-      { flag: "wx" },
-    );
-  else {
-    writeFileSync(
-      commandPath,
-      `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`,
-      { flag: "wx" },
-    );
-    chmodSync(commandPath, 0o755);
-  }
-}
-
-/** Require exact shim content before deleting or repairing an owned command. */
-export function ownsCommandShim(
-  commandPath: string,
-  launcher: string,
-): boolean {
-  if (!existsSync(commandPath)) return false;
-  const expected =
-    process.platform === "win32"
-      ? `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`
-      : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
-  return readFileSync(commandPath, "utf8") === expected;
 }
 
 /** Checks an installer asks for before anything is installed. */

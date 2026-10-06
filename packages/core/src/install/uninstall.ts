@@ -16,7 +16,7 @@ import {
 } from "../index.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { removeTrustState } from "./trust-state.js";
-import { ownsCommandShim } from "./install.js";
+import { ownsCommandShim } from "./launcher.js";
 import {
   assertSignedOut,
   deleteReferencedSecrets,

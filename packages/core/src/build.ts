@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { createTemporaryDirectory } from "@piship/contracts";
+import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { bundleDistribution } from "./bundle.js";
 import {
@@ -21,7 +21,7 @@ import {
   writeBuildCache,
 } from "./build-cache.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
-import { debugTiming, requireCurrentLock } from "./lock.js";
+import { requireCurrentLock } from "./lock.js";
 import {
   inventory,
   removeForeignPlatformPackages,

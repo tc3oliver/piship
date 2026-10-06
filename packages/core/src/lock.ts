@@ -34,7 +34,6 @@ import { currentSearchTools, lockSearchTools } from "./search-tools/index.js";
 import { runtimeDependencies } from "./runtime-dependencies.js";
 import { checkToolExposure, lockedTools } from "./tool-exposure.js";
 
-export { debugTiming } from "./timing.js";
 /**
  * The lock's manifest digest. From piship/v1alpha5 it is the canonical
  * `sha256-<hex>` of the parsed manifest, so YAML comments, key order, and
@@ -175,6 +174,9 @@ export function resolveLock(
           ...(manifest.runtime.cacheWarming
             ? { cacheWarming: manifest.runtime.cacheWarming }
             : {}),
+          ...(manifest.runtime.verifyAtLaunch === undefined
+            ? {}
+            : { verifyAtLaunch: manifest.runtime.verifyAtLaunch }),
           enforcement: seamEvidence(runtime.version),
           data: {
             contract: DATA_CONTRACT_VERSION,

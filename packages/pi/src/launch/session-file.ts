@@ -28,7 +28,11 @@ import { basename, dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiShipError, processAlive } from "@piship/contracts";
-import { processIdentity, processIdentityMatches } from "@piship/core";
+import {
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
+} from "@piship/core";
 
 /**
  * The largest session file a launch resumes on its own: 64 MiB. Pi holds
@@ -340,7 +344,10 @@ interface OwnerRecord {
   readonly schema: typeof OWNER_SCHEMA;
   readonly session: string;
   readonly pid: number;
+  /** Null off Linux: the record carries `started` instead (`recordedIdentity`). */
   readonly identity: string | null;
+  /** The process start time, ms since the epoch; absent before v0.10. */
+  readonly started?: number | null;
   readonly host: string;
   readonly instance: string;
   /**
@@ -349,10 +356,6 @@ interface OwnerRecord {
    */
   readonly boot?: string | null;
   readonly pidNamespace?: string | null;
-}
-
-function selfIdentity(): string | null {
-  return processIdentity(process.pid) ?? null;
 }
 
 interface ProcessScope {
@@ -407,6 +410,7 @@ function parseOwner(path: string, session: string): OwnerRecord | undefined {
       typeof value.instance !== "string" ||
       !INSTANCE.test(value.instance) ||
       (value.identity !== null && typeof value.identity !== "string") ||
+      (value.started != null && !Number.isSafeInteger(value.started)) ||
       (value.boot != null && typeof value.boot !== "string") ||
       (value.pidNamespace != null && typeof value.pidNamespace !== "string")
     )
@@ -423,7 +427,7 @@ type OwnerState =
 
 /**
  * Whether the owner a record names still runs. A record this process cannot
- * check (another host, another PID namespace, or no start identity) is
+ * check (another host, another PID namespace, or no start identity or time) is
  * neither live nor gone: it is never taken over, and the user is told how to
  * release it. Wrongly live only starts a new session; wrongly gone would let
  * two processes write one file.
@@ -447,10 +451,17 @@ function ownerState(record: OwnerRecord): OwnerState {
         "it was written in another PID namespace (a container sharing this home directory, or an earlier PiShip that did not record one), whose processes this one cannot see",
     };
   if (!processAlive(record.pid)) return { state: "gone" };
-  // A process with the ID exists; the start identity tells whether it is
-  // the owner or a later process that was given the same ID.
-  const same = processIdentityMatches(record.identity, record.pid);
-  if (same !== undefined) return { state: same ? "live" : "gone" };
+  // A process with the ID exists; the start identity, or the start time the
+  // record carries where reading an identity costs a process start, tells
+  // whether it is the owner or a later process that was given the same ID.
+  // Only here, for a record whose ID is in use, does the system get asked.
+  const gone = recordedProcessGone({
+    pid: record.pid,
+    identity: record.identity,
+    host: null,
+    started: record.started ?? null,
+  });
+  if (gone !== undefined) return { state: gone ? "gone" : "live" };
   return {
     state: "unverifiable",
     reason: `a process ${record.pid} runs, but this system cannot tell whether it is the owner`,
@@ -563,7 +574,8 @@ export class SessionOwnership {
       schema: OWNER_SCHEMA,
       session,
       pid: process.pid,
-      identity: selfIdentity(),
+      identity: recordedIdentity(),
+      started: recordedStart(),
       host: hostname(),
       instance: this.instance,
       ...processScope(),

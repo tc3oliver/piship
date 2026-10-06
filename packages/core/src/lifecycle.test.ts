@@ -3965,31 +3965,33 @@ wait();
     expect(releaseDirs()).toEqual(["1.1.0"]);
   }, 60_000);
 
-  it("holds launcher registration against uninstall through core import", async () => {
+  it("holds the release against uninstall while the runtime loads, and holds the gate only while the launch registers", async () => {
     const { a } = await fixture();
     const receipt = await installDistribution(a.archive);
     const ready = join(temp("piship-launch-race-"), "ready");
     const release = join(dirname(ready), "release");
-    const core = join(
-      receipt.payload,
-      "node_modules",
-      "@piship",
-      "core",
-      "dist",
-      "index.js",
+    const gate = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `.${ID}.launch.lock`,
     );
+    // A release whose launcher takes as long as a cold load of the runtime:
+    // the first launch writes `ready` and waits; a launch that finds `ready`
+    // is the second, and returns at once.
     writeFileSync(
-      core,
+      join(receipt.payload, "bin", receipt.app.command),
       `import { writeFileSync, watch, existsSync } from "node:fs";
 import { dirname } from "node:path";
-writeFileSync(${JSON.stringify(ready)}, "ready");
-await new Promise((resolve) => {
-  const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+if (existsSync(${JSON.stringify(ready)})) console.log("second launch ran");
+else {
+  writeFileSync(${JSON.stringify(ready)}, "ready");
+  await new Promise((resolve) => {
+    const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+      if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+    });
     if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
   });
-  if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
-});
-export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};
+}
 `,
     );
     const child = spawn(process.execPath, [receipt.launcher as string], {
@@ -3997,7 +3999,17 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     });
     try {
       await waitForFile(ready);
-      expect(() => uninstallDistribution(ID)).toThrow(/registering/);
+      // The gate is free: a second launch is not held up by the load.
+      expect(existsSync(gate)).toBe(false);
+      const second = spawnSync(process.execPath, [receipt.launcher as string], {
+        encoding: "utf8",
+      });
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stdout).toContain("second launch ran");
+      // What keeps the release is the lease, not the gate.
+      expect(() => uninstallDistribution(ID)).toThrow(
+        /while 1 runtime session\(s\) still use its payload/,
+      );
       expect(existsSync(receipt.payload)).toBe(true);
       writeFileSync(release, "continue");
       const code = await new Promise<number | null>((resolvePromise) =>
