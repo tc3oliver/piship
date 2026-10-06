@@ -74,7 +74,7 @@ describe("where the file store is used", () => {
         !file.startsWith(join("packages", "core", "src", "store")) &&
         !file.endsWith(join("install", "store.ts")),
     );
-    expect(users.sort()).toEqual(
+    expect(users.map((file) => file.replaceAll("\\", "/")).sort()).toEqual(
       [
         "packages/core/src/index.ts",
         "packages/core/src/install/install.ts",
