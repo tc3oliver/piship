@@ -98,7 +98,7 @@ function decide(map: Rules, value: string, fallback = "ask"): string {
 describe("the developer example manifests", () => {
   it("are DevCode on the current schema, with Pi pinned to the compatible version", () => {
     for (const manifest of [personal, managed]) {
-      expect(manifest.schema).toBe("piship/v1alpha6");
+      expect(manifest.schema).toBe("piship/v1");
       expect(manifest.runtime.pi).toBe(PI_VERSION);
     }
     expect(personal.app).toMatchObject({ id: "devcode", name: "DevCode" });

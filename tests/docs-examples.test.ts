@@ -153,7 +153,7 @@ describe("documented examples", () => {
     const packages = block("docs/manifest.md", "yaml", "package: pi-code");
     const directory = temporary();
     const personal = [
-      "schema: piship/v1alpha6",
+      "schema: piship/v1",
       "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
       `runtime: { pi: "${PI_VERSION}" }`,
       "deployment: { mode: personal }",
@@ -188,7 +188,7 @@ describe("documented examples", () => {
   });
 
   it("the README manifest is a complete manifest PiShip accepts on its own", () => {
-    const snippet = block("README.md", "yaml", "schema: piship/v1alpha6");
+    const snippet = block("README.md", "yaml", "schema: piship/v1");
     const directory = temporary();
     writeFileSync(join(directory, "piship.yaml"), snippet);
     const manifest = readManifest(join(directory, "piship.yaml"));
