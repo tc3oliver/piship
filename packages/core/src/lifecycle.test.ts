@@ -4457,17 +4457,18 @@ else {
   it("launches a release whose PiShip predates runtime leases", async () => {
     const { a } = await fixture();
     const receipt = await installDistribution(a.archive);
-    writeFileSync(
-      join(
-        receipt.payload,
-        "node_modules",
-        "@piship",
-        "core",
-        "dist",
-        "index.js",
-      ),
-      "export {};\n",
+    // Replace the file, never write through it: it may be a second name for a
+    // read-only object of the shared store.
+    const core = join(
+      receipt.payload,
+      "node_modules",
+      "@piship",
+      "core",
+      "dist",
+      "index.js",
     );
+    rmSync(core);
+    writeFileSync(core, "export {};\n");
     const launched = spawnSync(process.execPath, [receipt.launcher as string], {
       encoding: "utf8",
     });

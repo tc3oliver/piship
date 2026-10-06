@@ -280,5 +280,52 @@ describe.runIf(HOST_EVIDENCED)(
       verifyPayload(tree);
       expect(parseObjectName("x")).toBeUndefined();
     });
+
+    it("never writes through a hard link: install, update, rollback, and uninstall leave every object intact and read-only", async () => {
+      process.env.PISHIP_STORE = "hardlink";
+      const { opts } = await installed();
+      const intact = () => {
+        expect(verifyStore({ root: storeHome }).damaged).toEqual([]);
+        // The attributes of a file are shared by all its names, so an
+        // installed name that lost the object's read-only mode would show
+        // here, whatever removed or replaced the other names.
+        for (const path of objects())
+          expect(lstatSync(path).mode & 0o222, path).toBe(0);
+      };
+      intact();
+      const linked = join(
+        appsDir(),
+        "1.0.0",
+        "node_modules",
+        "alpha",
+        "package.json",
+      );
+      // A file system without links installs by copy; there is then nothing
+      // shared to damage, and the rest still holds.
+      const shared = lstatSync(linked).nlink > 1;
+      expect(await updateDistribution(ID, opts)).toMatchObject({
+        status: "updated",
+        to: "1.1.0",
+      });
+      intact();
+      // The replaced release's tree is removed or retained; either way the
+      // names of the new release still lead to intact objects.
+      expect(launch()).toBe("payload 1.1.0");
+      await rollbackDistribution(ID);
+      intact();
+      expect(launch()).toBe("payload 1.0.0");
+      verifyPayload(join(appsDir(), "1.0.0"));
+      uninstallDistribution(ID);
+      // Removing read-only, hard-linked files (Windows needs the attribute
+      // cleared or ignored for this) removed the trees and nothing else.
+      expect(existsSync(appsDir())).toBe(false);
+      intact();
+      expect(objects().length).toBeGreaterThan(0);
+      if (shared)
+        expect(
+          objects().some((path) => lstatSync(path).nlink === 1),
+          "every object lost its installed names",
+        ).toBe(true);
+    });
   },
 );

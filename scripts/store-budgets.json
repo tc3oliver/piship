@@ -7,7 +7,7 @@
     "explain": "A median regression above explainAbovePercent needs a stated reason in the pull request; a stable regression above blockAbovePercent blocks the change unless the pull request justifies it explicitly."
   },
   "store": {
-    "note": "Budgets for the shared file store, checked on one report of scripts/benchmark-store.mjs. They apply to the placement mode in force (DEFAULT_STORE_MODE, or the one named with --mode). While the default is off they bound the mode under evaluation, and a Windows run that exceeds them is the evidence that the default stays off.",
+    "note": "Budgets for the shared file store, checked on one report of scripts/benchmark-store.mjs. They apply to the placement mode in force (defaultStoreMode of the platform that ran the report, or the one named with --mode). Where the default is off they bound the mode under evaluation, and a run that exceeds them is the evidence that the default stays off; where it is a mode (hardlink on Windows), a run that exceeds them is the evidence to turn it off.",
     "budgets": [
       {
         "metric": "<mode>.fresh",

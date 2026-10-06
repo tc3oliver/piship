@@ -30,7 +30,9 @@
 //   object shares one file. Objects are read-only (0444, 0555) to make a write
 //   through any of the names fail, and a placement hashes the object first,
 //   so a mutated object is repaired, never spread; but a program that can
-//   change a file's mode can still write through it, so it is not the default.
+//   change a file's mode can still write through it, which `doctor` reports
+//   and `repair` undoes. It is the default on Windows only, where the
+//   measurement pays for it (`docs/performance.md`); elsewhere it is opt-in.
 //
 // Layout (`<root>`):
 //   store.json                       layout schema
@@ -386,8 +388,18 @@ export class ContentStore {
       throw error;
     }
     if (!info.isFile() || info.size !== size) return "damaged";
-    if (this.verify === "size") return "ok";
-    return sha256(await readFile(path)) === digest ? "ok" : "damaged";
+    if (this.verify !== "size" && sha256(await readFile(path)) !== digest)
+      return "damaged";
+    // A file's attributes are shared by all its names. A removal of one
+    // installed name that cleared the read-only attribute first (some
+    // Windows delete paths do) or a program that changed the mode would
+    // leave the object writable for every other name; the bytes are right,
+    // so restore the mode rather than replace the object.
+    if (info.mode & 0o222)
+      await chmod(path, !WINDOWS && info.mode & 0o111 ? 0o555 : 0o444).catch(
+        () => undefined,
+      );
+    return "ok";
   }
 
   /** Create `output` from `object` by the primitive, copying where it cannot. */
