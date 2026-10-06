@@ -7,7 +7,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -47,6 +46,7 @@ import {
 import type { ReleaseTestRunner } from "../release/index.js";
 import { storageTransitionNotice } from "../storage-transition.js";
 import { reclaimOsTemporaries } from "../temporary-directories.js";
+import { renameWithRetry } from "../rename-retry.js";
 
 export const SNAPSHOT_SCHEMA = "piship-snapshot/v1";
 const SNAPSHOT_RETENTION = 3;
@@ -214,7 +214,7 @@ export function snapshotState(
       root,
       `${String(sequence).padStart(8, "0")}-${from}-to-${to}`,
     );
-    renameSync(staging, target);
+    renameWithRetry(staging, target);
     published = true;
     syncDirectory(root);
     const { completed } = listSnapshots(root);

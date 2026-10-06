@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "./index.js";
+import { runCli, runtimeCacheLine } from "./index.js";
 
 const ID = "mypi";
 let temp: string;
@@ -1213,6 +1213,32 @@ describe("config explain from a manifest", () => {
     expect(validated.status).toBe(0);
     expect(validated.text).toContain(
       "Update transport http-allowed: the update channel may use plain HTTP to a private or internal host; integrity by signature only.",
+    );
+  });
+});
+
+describe("the runtime cache line of piship release", () => {
+  const entry = "ab".repeat(32);
+  it("says where the runtime came from, with the entry and how files were placed", () => {
+    expect(
+      runtimeCacheLine({ status: "hit", entry, linked: 7440, copied: 3 }),
+    ).toBe(`runtime cache: hit (entry ${entry}, linked 7440, copied 3)`);
+    expect(
+      runtimeCacheLine({
+        status: "miss",
+        entry,
+        linked: 0,
+        copied: 7443,
+        bundle: "miss",
+        crossVolume: true,
+      }),
+    ).toBe(
+      `runtime cache: miss (entry ${entry}, linked 0, copied 7443, bundle miss, cache on another volume, entry copied in)`,
+    );
+  });
+  it("is one short line when the runtime was built cold", () => {
+    expect(runtimeCacheLine({ status: "disabled" })).toBe(
+      "runtime cache: disabled",
     );
   });
 });

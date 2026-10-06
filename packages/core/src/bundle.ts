@@ -17,11 +17,13 @@ import {
   lookupBundle,
   placeBundle,
   type RuntimeCache,
-  renameWithRetry,
   storeBundle,
+} from "./runtime-cache.js";
+import {
+  renameWithRetry,
   TRANSIENT_ATTEMPTS,
   TRANSIENT_RETRY_MS,
-} from "./runtime-cache.js";
+} from "./rename-retry.js";
 import { listPayloadPackages } from "./supply-chain.js";
 import { workspacePackages } from "./runtime-dependencies.js";
 

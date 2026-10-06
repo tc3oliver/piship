@@ -1,11 +1,5 @@
 // Restore a damaged installed release from a trusted copy of the same release.
-import {
-  cpSync,
-  existsSync,
-  readFileSync,
-  renameSync,
-  statSync,
-} from "node:fs";
+import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { hash } from "../digest.js";
@@ -22,6 +16,7 @@ import {
 import { acquireLaunchGate, runtimeLeases } from "../install/runtime-lease.js";
 import { verifyRelease } from "../release/index.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { renameWithRetry } from "../rename-retry.js";
 
 export interface RepairResult {
   readonly status: "repaired" | "intact";
@@ -120,8 +115,8 @@ export async function repairDistribution(
         // the release missing, which fails closed and the next repair
         // restores.
         if (existsSync(entry.payload))
-          renameSync(entry.payload, join(temporary.path, "damaged"));
-        renameSync(payload, entry.payload);
+          renameWithRetry(entry.payload, join(temporary.path, "damaged"));
+        renameWithRetry(payload, entry.payload);
         syncDirectory(apps);
       } finally {
         gate.release();

@@ -31,6 +31,7 @@ export {
   virtualRouteProblems,
 } from "./gates.js";
 export {
+  BUILD_INFO_SCHEMA,
   CHANNEL_SCHEMA,
   RELEASE_FILES,
   RELEASE_SCHEMA,
@@ -43,6 +44,7 @@ export {
   type ReleaseOptions,
   type ReleaseTestResult,
   type ReleaseTestRunner,
+  type RuntimeCacheProvenance,
   type SignatureAuditor,
   type SignatureReport,
   type VulnerabilityFinding,
