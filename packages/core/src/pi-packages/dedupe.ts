@@ -42,7 +42,8 @@ import {
   type ModuleInfo,
   relativeTarget,
   runtimeDiscovery,
-  scanModules,
+  type ScanResult,
+  scanModulesMany,
 } from "./module-scan.js";
 
 /** Where the shared copies live, beside the per-package roots. */
@@ -296,15 +297,20 @@ interface Plan {
   readonly files: readonly string[];
 }
 
+type Refusal = { readonly reason: RetainedReason; readonly detail?: string };
+
 /**
- * Whether the copy at `place` can be shared, and what each location would keep.
- * `reason` says why not.
+ * What the copy at `place` needs before it can be shared: a refusal from what
+ * is already known (its files, its package.json, its lockfile entry), or the
+ * JavaScript to scan and what to conclude from the scan. The scans of every
+ * candidate run together.
  */
-function plan(
-  place: Place,
-  lock: LockEntry | undefined,
-  esbuild: EsbuildApi,
-): Plan | { readonly reason: RetainedReason; readonly detail?: string } {
+interface Pending {
+  readonly scan: readonly string[];
+  readonly finish: (scan: ScanResult) => Plan | Refusal;
+}
+
+function inspect(place: Place, lock: LockEntry | undefined): Pending | Refusal {
   const manifest = readJson(join(place.directory, "package.json")) ?? {};
   const listed = listFiles(place.directory);
   if ("reason" in listed) return { reason: listed.reason };
@@ -390,62 +396,67 @@ function plan(
   // The package's own scripts: every JavaScript file is scanned, reachable or
   // not, because anything in it is loaded from the shared directory.
   const scripted = files.filter((file) => CODE.test(file));
-  const scan = scanModules(esbuild, place.directory, scripted);
-  const failed = [...scan.failed][0];
-  if (failed) return { reason: "unparsable", detail: failed[0] };
-  for (const [file, info] of scan.modules) {
-    const found = runtimeDiscovery(info.source);
-    if (found)
-      return { reason: "runtime-discovery", detail: `${file}: ${found}` };
-    for (const item of info.imports) {
-      const spec = item.specifier;
-      if (spec.startsWith(".")) {
-        if (!relativeTarget(file, spec))
+  const finish = (scan: ScanResult): Plan | Refusal => {
+    const failed = [...scan.failed][0];
+    if (failed) return { reason: "unparsable", detail: failed[0] };
+    for (const [file, info] of scan.modules) {
+      const found = runtimeDiscovery(info.source);
+      if (found)
+        return { reason: "runtime-discovery", detail: `${file}: ${found}` };
+      for (const item of info.imports) {
+        const spec = item.specifier;
+        if (spec.startsWith(".")) {
+          if (!relativeTarget(file, spec))
+            return {
+              reason: "imports-other-packages",
+              detail: `${file}: ${spec}`,
+            };
+        } else if (
+          !isBuiltin(spec) &&
+          !spec.startsWith("#") &&
+          spec !== place.name &&
+          !spec.startsWith(`${place.name}/`)
+        )
           return {
             reason: "imports-other-packages",
             detail: `${file}: ${spec}`,
           };
-      } else if (
-        !isBuiltin(spec) &&
-        !spec.startsWith("#") &&
-        spec !== place.name &&
-        !spec.startsWith(`${place.name}/`)
-      )
-        return { reason: "imports-other-packages", detail: `${file}: ${spec}` };
-    }
-  }
-  for (const file of code) {
-    const info = scan.modules.get(file) as ModuleInfo;
-    const nearest = (() => {
-      for (
-        let directory = posix.dirname(file);
-        ;
-        directory = posix.dirname(directory)
-      ) {
-        const candidate =
-          directory === "." ? "package.json" : `${directory}/package.json`;
-        if (files.includes(candidate)) {
-          const type = readJson(
-            join(place.directory, ...candidate.split("/")),
-          )?.type;
-          return type;
-        }
-        if (directory === ".") return undefined;
       }
-    })();
-    const esm =
-      file.endsWith(".mjs") ||
-      (file.endsWith(".js") &&
-        (nearest === "module" ||
-          (nearest !== "commonjs" && info.format === "esm")));
-    entries.set(
-      file,
-      esm
-        ? { kind: "esm", hasDefault: info.exports.includes("default") }
-        : { kind: "cjs" },
-    );
-  }
-  return { entries, files };
+    }
+    for (const file of code) {
+      const info = scan.modules.get(file) as ModuleInfo;
+      const nearest = (() => {
+        for (
+          let directory = posix.dirname(file);
+          ;
+          directory = posix.dirname(directory)
+        ) {
+          const candidate =
+            directory === "." ? "package.json" : `${directory}/package.json`;
+          if (files.includes(candidate)) {
+            const type = readJson(
+              join(place.directory, ...candidate.split("/")),
+            )?.type;
+            return type;
+          }
+          if (directory === ".") return undefined;
+        }
+      })();
+      const esm =
+        file.endsWith(".mjs") ||
+        (file.endsWith(".js") &&
+          (nearest === "module" ||
+            (nearest !== "commonjs" && info.format === "esm")));
+      entries.set(
+        file,
+        esm
+          ? { kind: "esm", hasDefault: info.exports.includes("default") }
+          : { kind: "cjs" },
+      );
+    }
+    return { entries, files };
+  };
+  return { scan: scripted, finish };
 }
 
 const specifier = (from: string, to: string): string => {
@@ -497,6 +508,7 @@ export function dedupePiPackages(
   const filesBefore = countFiles(vendorRoot);
   const shared: SharedPackage[] = [];
   const retained: RetainedPackage[] = [];
+  const candidates: { same: Place[]; pending: Pending }[] = [];
   const retain = (
     group: readonly Place[],
     reason: RetainedReason,
@@ -541,62 +553,72 @@ export function dedupePiPackages(
         continue;
       }
       const representative = same[0] as Place;
-      const verdict = plan(
-        representative,
-        lockEntry(representative),
-        options.esbuild,
-      );
-      if ("reason" in verdict) {
-        retain(same, verdict.reason, verdict.detail);
-        continue;
-      }
-      const kept = verdict.entries.size;
-      const saved =
-        (same.length - 1) * verdict.files.length - same.length * kept;
-      if (saved <= 0) {
-        retain(same, "no-saving");
-        continue;
-      }
-      const integrity = lockEntry(representative)?.integrity as string;
-      const digest = digestOf(representative.directory, verdict.files).slice(
-        0,
-        12,
-      );
-      const directory = `${SHARED_DIRECTORY}/${representative.name.replace("/", "+")}@${representative.version}-${digest}`;
-      const target = join(vendorRoot, ...directory.split("/"));
-      mkdirSync(dirname(target), { recursive: true });
-      renameWithRetry(representative.directory, target);
-      for (const place of same) {
-        if (place !== representative)
-          rmSync(place.directory, { recursive: true, force: true });
-        mkdirSync(place.directory, { recursive: true });
-        for (const [file, entry] of verdict.entries) {
-          const destination = join(place.directory, ...file.split("/"));
-          mkdirSync(dirname(destination), { recursive: true });
-          if (entry.kind === "copy")
-            copyFileSync(join(target, ...file.split("/")), destination);
-          else
-            writeFileSync(
-              destination,
-              stubSource(
-                entry,
-                specifier(`${place.path}/${file}`, `${directory}/${file}`),
-              ),
-            );
-        }
-      }
-      shared.push({
-        name: representative.name,
-        version: representative.version,
-        integrity,
-        directory: `pi-packages/${directory}`,
-        locations: same.map((place) => `pi-packages/${place.path}`),
-        files: verdict.files.length,
-        kept,
-        saved,
-      });
+      const inspected = inspect(representative, lockEntry(representative));
+      if ("reason" in inspected)
+        retain(same, inspected.reason, inspected.detail);
+      else candidates.push({ same, pending: inspected });
     }
   }
+  // Every candidate's JavaScript is read in one pass, before any file moves.
+  const scans = scanModulesMany(
+    options.esbuild,
+    candidates.map(({ same, pending }) => ({
+      root: (same[0] as Place).directory,
+      files: pending.scan,
+    })),
+  );
+  candidates.forEach(({ same, pending }, index) => {
+    const representative = same[0] as Place;
+    const verdict = pending.finish(scans[index] as ScanResult);
+    if ("reason" in verdict) {
+      retain(same, verdict.reason, verdict.detail);
+      return;
+    }
+    const kept = verdict.entries.size;
+    const saved = (same.length - 1) * verdict.files.length - same.length * kept;
+    if (saved <= 0) {
+      retain(same, "no-saving");
+      return;
+    }
+    const integrity = lockEntry(representative)?.integrity as string;
+    const digest = digestOf(representative.directory, verdict.files).slice(
+      0,
+      12,
+    );
+    const directory = `${SHARED_DIRECTORY}/${representative.name.replace("/", "+")}@${representative.version}-${digest}`;
+    const target = join(vendorRoot, ...directory.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    renameWithRetry(representative.directory, target);
+    for (const place of same) {
+      if (place !== representative)
+        rmSync(place.directory, { recursive: true, force: true });
+      mkdirSync(place.directory, { recursive: true });
+      for (const [file, entry] of verdict.entries) {
+        const destination = join(place.directory, ...file.split("/"));
+        mkdirSync(dirname(destination), { recursive: true });
+        if (entry.kind === "copy")
+          copyFileSync(join(target, ...file.split("/")), destination);
+        else
+          writeFileSync(
+            destination,
+            stubSource(
+              entry,
+              specifier(`${place.path}/${file}`, `${directory}/${file}`),
+            ),
+          );
+      }
+    }
+    shared.push({
+      name: representative.name,
+      version: representative.version,
+      integrity,
+      directory: `pi-packages/${directory}`,
+      locations: same.map((place) => `pi-packages/${place.path}`),
+      files: verdict.files.length,
+      kept,
+      saved,
+    });
+  });
   const sortedRetained = retained
     .map((item) => ({
       ...item,

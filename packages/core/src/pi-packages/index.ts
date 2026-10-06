@@ -4,6 +4,7 @@
 export { type CommandRunner, runCommand } from "./command.js";
 export {
   analyzeClosure,
+  analyzeClosures,
   bundleClosure,
   CLOSURE_DIRECTORY,
   type ClosureAnalysis,

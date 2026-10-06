@@ -25,9 +25,11 @@ import {
 } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import {
+  type BuildOutcome,
   type EsbuildApi,
   runtimeDiscovery,
-  scanModules,
+  type ScanResult,
+  scanModulesMany,
 } from "./module-scan.js";
 import type { LockedPackageResource } from "./types.js";
 
@@ -131,17 +133,46 @@ function bundleOptions(root: string): Record<string, unknown> {
   };
 }
 
-/**
- * Whether the closure of the package at `options.root` can be bundled, and
- * what bundling would do. Reads the tree; writes nothing.
- */
-export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
-  const { esbuild } = options;
+interface State {
+  readonly options: ClosureOptions;
+  readonly root: string;
+  readonly findings: FallbackFinding[];
+  readonly tree: readonly string[];
+  readonly entryPaths: readonly string[];
+  /** Set once the answer is known. */
+  result?: ClosureAnalysis;
+  reachable: string[];
+  replaced: Set<string>;
+  inlined: string[];
+  /** The files left behind that nothing reaches, to be read for what they import. */
+  importers: string[];
+}
+
+const refused = (state: State): ClosureAnalysis => ({
+  safe: false,
+  findings: dedupeFindings(state.findings),
+});
+
+/** The findings that need nothing but the tree: native code, WebAssembly, install scripts, no entries. */
+function prepare(options: ClosureOptions): State {
   const root = resolve(options.root);
-  const findings: FallbackFinding[] = [];
-  const deny = (reason: FallbackReason, detail?: string) =>
-    findings.push({ reason, ...(detail ? { detail } : {}) });
   const tree = listTree(root);
+  const entryPaths = options.resources
+    .filter((resource) => resource.kind === "extensions")
+    .map((resource) => `${options.packagePath}/${resource.path}`);
+  const state: State = {
+    options,
+    root,
+    findings: [],
+    tree,
+    entryPaths,
+    reachable: [],
+    replaced: new Set(),
+    inlined: [],
+    importers: [],
+  };
+  const deny = (reason: FallbackReason, detail?: string) =>
+    state.findings.push({ reason, ...(detail ? { detail } : {}) });
   for (const file of tree) {
     if (/\.node$/i.test(file) || file.endsWith("binding.gyp"))
       deny("native-addon", file);
@@ -165,43 +196,49 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
       }
     }
   }
-  if (findings.length) return { safe: false, findings };
-  const entryPaths = options.resources
-    .filter((resource) => resource.kind === "extensions")
-    .map((resource) => `${options.packagePath}/${resource.path}`);
-  if (!entryPaths.length || entryPaths.some((entry) => !tree.includes(entry))) {
-    deny("nothing-to-bundle", "no extension files");
-    return { safe: false, findings };
+  if (!state.findings.length) {
+    if (!entryPaths.length || entryPaths.some((entry) => !tree.includes(entry)))
+      deny("nothing-to-bundle", "no extension files");
+    for (const entry of entryPaths)
+      if (!JAVASCRIPT.test(entry) && !TYPESCRIPT.test(entry))
+        deny("non-javascript-module", entry);
   }
-  for (const entry of entryPaths)
-    if (!JAVASCRIPT.test(entry) && !TYPESCRIPT.test(entry))
-      deny("non-javascript-module", entry);
-  if (findings.length) return { safe: false, findings };
+  if (state.findings.length) state.result = refused(state);
+  return state;
+}
 
-  let graph: Graph;
-  try {
-    graph = esbuild.buildSync({
-      ...bundleOptions(root),
-      entryPoints: Object.fromEntries(
-        entryPaths.map((entry) => [entry, join(root, ...entry.split("/"))]),
-      ),
-      outdir: join(root, CLOSURE_DIRECTORY, ".scan"),
-    }).metafile as Graph;
-  } catch (error) {
-    const first = (error as { errors?: { text: string }[] }).errors?.[0];
+const graphBuild = (state: State): Record<string, unknown> => ({
+  ...bundleOptions(state.root),
+  entryPoints: Object.fromEntries(
+    state.entryPaths.map((entry) => [
+      entry,
+      join(state.root, ...entry.split("/")),
+    ]),
+  ),
+  outdir: join(state.root, CLOSURE_DIRECTORY, ".scan"),
+});
+
+/** What the import graph says: what is replaced, what is bundled away, what is refused. */
+function readGraph(state: State, outcome: BuildOutcome): void {
+  const deny = (reason: FallbackReason, detail?: string) =>
+    state.findings.push({ reason, ...(detail ? { detail } : {}) });
+  if ("failure" in outcome) {
     const message =
-      first?.text ?? String((error as Error).message).split("\n")[0] ?? "";
+      outcome.failure.errors[0]?.text ??
+      outcome.failure.message.split("\n")[0] ??
+      "";
     deny(
       /resolve/i.test(message) ? "unresolved-import" : "unparsable",
       message,
     );
-    return { safe: false, findings };
+    state.result = refused(state);
+    return;
   }
+  const graph = outcome.build.metafile as Graph;
   const key = (path: string) => posixPath(path);
-  const entrySet = new Set(entryPaths);
-  const reachable = Object.keys(graph.inputs).map(key);
-  const replaced = new Set<string>();
-  for (const entry of entryPaths) {
+  const entrySet = new Set(state.entryPaths);
+  state.reachable = Object.keys(graph.inputs).map(key);
+  for (const entry of state.entryPaths) {
     const input = graph.inputs[entry];
     if (!input) continue;
     for (const item of input.imports) {
@@ -213,13 +250,13 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
         deny("entry-imports-entry", `${entry}: ${target}`);
       else if (item.kind === "dynamic-import")
         deny("dynamic-import", `${entry}: ${target}`);
-      else replaced.add(target);
+      else state.replaced.add(target);
     }
   }
-  const inlinedAll = reachable.filter(
-    (file) => !entrySet.has(file) && !replaced.has(file),
+  state.inlined = state.reachable.filter(
+    (file) => !entrySet.has(file) && !state.replaced.has(file),
   );
-  for (const file of [...replaced]) {
+  for (const file of state.replaced) {
     if (!JAVASCRIPT.test(file))
       deny(
         TYPESCRIPT.test(file) ? "typescript-closure" : "non-javascript-module",
@@ -228,21 +265,21 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
     else if (graph.inputs[file]?.format === "cjs")
       deny("commonjs-import", file);
   }
-  for (const file of inlinedAll)
+  for (const file of state.inlined)
     if (!JAVASCRIPT.test(file))
       deny(
         TYPESCRIPT.test(file) ? "typescript-closure" : "non-javascript-module",
         file,
       );
-  // Every module the closure runs, the extensions included, is read for what
-  // locates files or code at run time.
-  const code = reachable.filter(
-    (file) => JAVASCRIPT.test(file) || TYPESCRIPT.test(file),
-  );
-  const scanned = scanModules(esbuild, root, code);
-  for (const [file, message] of scanned.failed)
+}
+
+/** Every module the closure runs, the extensions included, is read for what locates files or code at run time. */
+function readScan(state: State, scan: ScanResult): void {
+  const deny = (reason: FallbackReason, detail?: string) =>
+    state.findings.push({ reason, ...(detail ? { detail } : {}) });
+  for (const [file, message] of scan.failed)
     deny("unparsable", `${file}: ${message}`);
-  for (const [file, info] of scanned.modules) {
+  for (const [file, info] of scan.modules) {
     if (SELF_LOCATION.test(info.source)) deny("self-location", file);
     const found = runtimeDiscovery(info.source);
     if (found === "computed require or import" || found === "indirect require")
@@ -252,16 +289,37 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
       if (item.kind === "dynamic" && !item.specifier.startsWith("node:"))
         deny("dynamic-import", `${file}: ${item.specifier}`);
   }
-  if (!replaced.size && !inlinedAll.length)
+  if (!state.replaced.size && !state.inlined.length)
     deny("nothing-to-bundle", "the extensions import nothing from the package");
-  if (findings.length)
-    return { safe: false, findings: dedupeFindings(findings) };
+  if (state.findings.length) {
+    state.result = refused(state);
+    return;
+  }
   // Code left behind must not import what is bundled away: a script a skill
-  // runs, a bin file, a module only a computed path reaches. Package names are
-  // looked up as Node does; a package that lost any file counts as lost.
-  const gone = new Set(inlinedAll);
+  // runs, a bin file, a module only a computed path reaches.
+  const gone = new Set(state.inlined);
+  const entrySet = new Set(state.entryPaths);
+  const reached = new Set(state.reachable);
+  state.importers = state.tree.filter(
+    (file) =>
+      JAVASCRIPT.test(file) &&
+      !gone.has(file) &&
+      !state.replaced.has(file) &&
+      !entrySet.has(file) &&
+      !reached.has(file),
+  );
+}
+
+/**
+ * Package names are looked up as Node does; a package that lost any file
+ * counts as lost.
+ */
+function readLeftBehind(state: State, left: ScanResult): void {
+  const deny = (reason: FallbackReason, detail?: string) =>
+    state.findings.push({ reason, ...(detail ? { detail } : {}) });
+  const gone = new Set(state.inlined);
   const lostPackages = new Set(
-    inlinedAll.flatMap((file) => {
+    state.inlined.flatMap((file) => {
       const at = file.lastIndexOf("node_modules/");
       if (at === -1) return [];
       const rest = file.slice(at + "node_modules/".length).split("/");
@@ -271,16 +329,7 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
       return [`${file.slice(0, at)}node_modules/${name.join("/")}`];
     }),
   );
-  const present = new Set(tree);
-  const importers = tree.filter(
-    (file) =>
-      JAVASCRIPT.test(file) &&
-      !gone.has(file) &&
-      !replaced.has(file) &&
-      !entrySet.has(file) &&
-      !reachable.includes(file),
-  );
-  const left = scanModules(esbuild, root, importers);
+  const present = new Set(state.tree);
   for (const [file, info] of left.modules)
     for (const item of info.imports) {
       if (item.specifier.startsWith(".")) {
@@ -313,16 +362,64 @@ export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
         if (directory === ".") break;
       }
     }
-  if (findings.length)
-    return { safe: false, findings: dedupeFindings(findings) };
-  return {
-    safe: true,
-    plan: {
-      entries: entryPaths,
-      replaced: [...replaced].sort(),
-      inlined: [...gone].sort(),
-    },
-  };
+}
+
+/**
+ * Whether the closure of each package can be bundled, and what bundling would
+ * do. Reads the trees; writes nothing. Every package's builds of one kind run
+ * together in one esbuild process.
+ */
+export function analyzeClosures(
+  list: readonly ClosureOptions[],
+  esbuild: EsbuildApi,
+): ClosureAnalysis[] {
+  const states = list.map(prepare);
+  const live = () => states.filter((state) => !state.result);
+  const graphing = live();
+  const graphs = esbuild.buildAll(graphing.map(graphBuild));
+  graphing.forEach((state, index) =>
+    readGraph(state, graphs[index] as BuildOutcome),
+  );
+  const scanning = live();
+  const scans = scanModulesMany(
+    esbuild,
+    scanning.map((state) => ({
+      root: state.root,
+      files: state.reachable.filter(
+        (file) => JAVASCRIPT.test(file) || TYPESCRIPT.test(file),
+      ),
+    })),
+  );
+  scanning.forEach((state, index) =>
+    readScan(state, scans[index] as ScanResult),
+  );
+  const leftBehind = live();
+  const lefts = scanModulesMany(
+    esbuild,
+    leftBehind.map((state) => ({
+      root: state.root,
+      files: state.importers,
+    })),
+  );
+  leftBehind.forEach((state, index) => {
+    readLeftBehind(state, lefts[index] as ScanResult);
+    state.result = state.findings.length
+      ? refused(state)
+      : {
+          safe: true,
+          plan: {
+            entries: [...state.entryPaths],
+            replaced: [...state.replaced].sort(),
+            inlined: [...state.inlined].sort(),
+          },
+        };
+  });
+  return states.map((state) => state.result as ClosureAnalysis);
+}
+
+/** `analyzeClosures` for one package. */
+export function analyzeClosure(options: ClosureOptions): ClosureAnalysis {
+  return analyzeClosures([options], options.esbuild)[0] as ClosureAnalysis;
 }
 
 function dedupeFindings(

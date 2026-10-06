@@ -6,8 +6,10 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import {
-  analyzeClosure,
+  analyzeClosures,
   bundleClosure,
+  type ClosureAnalysis,
+  type ClosureOptions,
   type FallbackFinding,
 } from "./closure.js";
 import {
@@ -73,33 +75,40 @@ export function optimizePiPackages(
 ): PackageFootprint {
   const closures: PackageClosureDecision[] = [];
   const before = filesUnder(join(payload, VENDOR));
-  for (const item of [...input.packages].sort((a, b) =>
-    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-  )) {
-    if (!input.bundle) break;
-    const options = {
-      root: item.directory,
-      packagePath: posix(relative(item.directory, item.packageRoot)),
-      resources: item.resources,
-      esbuild: input.esbuild,
-    };
-    const analysis = analyzeClosure(options);
+  const ordered = input.bundle
+    ? [...input.packages].sort((a, b) =>
+        a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+      )
+    : [];
+  const options = ordered.map((item) => ({
+    root: item.directory,
+    packagePath: posix(relative(item.directory, item.packageRoot)),
+    resources: item.resources,
+    esbuild: input.esbuild,
+  }));
+  // Every closure is read first, together, then the safe ones are bundled.
+  const analyses = analyzeClosures(options, input.esbuild);
+  ordered.forEach((item, index) => {
+    const analysis = analyses[index] as ClosureAnalysis;
     if (!analysis.safe) {
       closures.push({
         id: item.id,
         closure: "vendored",
         findings: analysis.findings.slice(0, 8),
       });
-      continue;
+      return;
     }
-    const result = bundleClosure(options, analysis.plan);
+    const result = bundleClosure(
+      options[index] as ClosureOptions,
+      analysis.plan,
+    );
     closures.push({
       id: item.id,
       closure: "bundled",
       replaced: result.replaced,
       bundledFiles: result.inlined,
     });
-  }
+  });
   const deduped = dedupePiPackages(join(payload, VENDOR), {
     keep: input.packages.map((item) => item.packageRoot),
     esbuild: input.esbuild,

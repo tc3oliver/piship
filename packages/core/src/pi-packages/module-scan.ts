@@ -6,40 +6,60 @@ import { spawnSync } from "node:child_process";
 import { builtinModules, createRequire } from "node:module";
 import { join, posix, resolve } from "node:path";
 
-/** The part of esbuild's API a scan uses (`esbuild` resolves it from the payload). */
-export interface EsbuildApi {
-  buildSync(options: Record<string, unknown>): {
-    readonly errors: readonly { readonly text: string }[];
-    readonly outputFiles?: readonly {
-      readonly path: string;
-      readonly text: string;
-    }[];
-    readonly metafile: {
-      readonly inputs: Record<
-        string,
-        {
-          readonly format?: string;
-          readonly imports: readonly {
-            readonly path: string;
-            readonly kind: string;
-            readonly external?: boolean;
-          }[];
-        }
-      >;
-      readonly outputs: Record<
-        string,
-        { readonly entryPoint?: string; readonly exports: readonly string[] }
-      >;
-    };
+/** What one esbuild build returns, as far as a scan reads it. */
+export interface BuildResult {
+  readonly errors: readonly { readonly text: string }[];
+  readonly outputFiles?: readonly {
+    readonly path: string;
+    readonly text: string;
+  }[];
+  readonly metafile: {
+    readonly inputs: Record<
+      string,
+      {
+        readonly format?: string;
+        readonly imports: readonly {
+          readonly path: string;
+          readonly kind: string;
+          readonly external?: boolean;
+        }[];
+      }
+    >;
+    readonly outputs: Record<
+      string,
+      { readonly entryPoint?: string; readonly exports: readonly string[] }
+    >;
   };
 }
 
+/** A build that failed: esbuild's message and the errors it reported. */
+export interface BuildFailure {
+  readonly message: string;
+  readonly errors: readonly {
+    readonly text: string;
+    readonly location?: { readonly file?: string } | null;
+  }[];
+}
+
+export type BuildOutcome =
+  | { readonly build: BuildResult }
+  | { readonly failure: BuildFailure };
+
+/** The part of esbuild's API a scan uses (`esbuild` resolves it from the payload). */
+export interface EsbuildApi {
+  /** Builds run together in one process; each has its own outcome. */
+  buildAll(builds: readonly Record<string, unknown>[]): readonly BuildOutcome[];
+  /** One build; throws an error carrying `errors` when it fails. */
+  buildSync(options: Record<string, unknown>): BuildResult;
+}
+
 /**
- * Runs one esbuild build in a Node process of its own, through esbuild's
+ * Runs esbuild builds in a Node process of their own, through esbuild's
  * asynchronous API. Its synchronous API waits on a worker thread with
  * Atomics.wait and never returns when that thread dies (it does, on a failed
  * build that asked for a metafile); a separate process with a time limit
- * cannot hang the build, and the options and results are plain JSON.
+ * cannot hang the build, and the options and results are plain JSON. Builds
+ * handed over together share one process, which is most of what one costs.
  */
 /** A build that is not done by now never will be. */
 const BUILD_LIMIT_MS = 120_000;
@@ -47,28 +67,30 @@ const BUILD_LIMIT_MS = 120_000;
 const RUNNER = `
 const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
 const { build } = require(input.tool);
-const finish = (output) =>
-  process.stdout.write(JSON.stringify(output), () => process.exit(0));
 const failed = (error) => ({ failure: { message: String(error && error.message), errors: (error && error.errors) ?? [] } });
-build(input.options).then(
-  (result) => finish({ build: {
+Promise.all(input.builds.map((options) => build(options).then(
+  (result) => ({ build: {
     errors: result.errors,
     metafile: result.metafile,
     outputFiles: (result.outputFiles ?? []).map((file) => ({ path: file.path, text: file.text })),
   } }),
-  (error) => finish(failed(error)),
+  failed,
+))).then((outcomes) =>
+  process.stdout.write(JSON.stringify(outcomes), () => process.exit(0)),
 );
 `;
 
-/** esbuild as `from` (a package.json path or directory) resolves it, run in a process per build. */
+/** esbuild as `from` (a package.json path or directory) resolves it. */
 export function loadEsbuild(from: string): EsbuildApi {
   const base = from.endsWith("package.json")
     ? from
     : join(from, "package.json");
   const tool = createRequire(base).resolve("esbuild");
-  const attempt = (options: Record<string, unknown>) => {
+  const attempt = (
+    builds: readonly Record<string, unknown>[],
+  ): readonly BuildOutcome[] | { readonly crashed: string } => {
     const result = spawnSync(process.execPath, ["-e", RUNNER], {
-      input: JSON.stringify({ tool, options }),
+      input: JSON.stringify({ tool, builds }),
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024,
       timeout: BUILD_LIMIT_MS,
@@ -76,31 +98,42 @@ export function loadEsbuild(from: string): EsbuildApi {
     });
     if (result.error || result.status !== 0)
       return { crashed: result.error?.message ?? result.stderr.trim() };
-    return JSON.parse(result.stdout) as {
-      build?: ReturnType<EsbuildApi["buildSync"]>;
-      failure?: { message: string; errors: { text: string }[] };
-    };
+    return JSON.parse(result.stdout) as BuildOutcome[];
   };
-  return {
+  const alone = (options: Record<string, unknown>): BuildOutcome => {
+    let output = attempt([options]);
+    // esbuild 0.28 crashes with a JSON error of its own, instead of reporting
+    // the failure, when it is asked for a metafile of a build that fails.
+    // Without the metafile it reports the failure itself.
+    if ("crashed" in output && options.metafile)
+      output = attempt([{ ...options, metafile: false }]);
+    if ("crashed" in output)
+      return {
+        failure: {
+          message: `esbuild did not run: ${output.crashed}`,
+          errors: [],
+        },
+      };
+    return output[0] as BuildOutcome;
+  };
+  const api: EsbuildApi = {
+    buildAll(builds) {
+      if (!builds.length) return [];
+      const together = attempt(builds);
+      // One build that crashed esbuild took the process with it: run each on
+      // its own to find which, and to give the others their results.
+      return "crashed" in together ? builds.map(alone) : together;
+    },
     buildSync(options) {
-      let output = attempt(options);
-      // esbuild 0.28 crashes with a JSON error of its own, instead of
-      // reporting the failure, when it is asked for a metafile of a build that
-      // fails. Without the metafile it reports the failure itself.
-      if ("crashed" in output && options.metafile) {
-        const again = attempt({ ...options, metafile: false });
-        if ("failure" in again) output = again;
-      }
-      if ("build" in output && output.build) return output.build;
-      if ("failure" in output && output.failure)
-        throw Object.assign(new Error(output.failure.message), {
-          errors: output.failure.errors,
-        });
-      throw new Error(
-        `esbuild did not run: ${(output as { crashed: string }).crashed}`,
-      );
+      const [outcome] = api.buildAll([options]);
+      if (outcome && "build" in outcome) return outcome.build;
+      const failure = (outcome as { failure: BuildFailure }).failure;
+      throw Object.assign(new Error(failure.message), {
+        errors: failure.errors,
+      });
     },
   };
+  return api;
 }
 
 export interface ModuleImport {
@@ -133,115 +166,159 @@ const KINDS: Record<string, ModuleImport["kind"] | undefined> = {
   "import-rule": "import",
 };
 
+export interface ScanJob {
+  readonly root: string;
+  /** `/`-separated, relative to `root`. */
+  readonly files: readonly string[];
+}
+
+export interface ScanResult {
+  readonly modules: ReadonlyMap<string, ModuleInfo>;
+  readonly failed: ReadonlyMap<string, string>;
+}
+
+function scanBuild(
+  root: string,
+  files: readonly string[],
+  bundle: boolean,
+): Record<string, unknown> {
+  return {
+    // Named entries: two files with the same name and different extensions
+    // (`index.js`, `index.cjs`) would share an output path.
+    entryPoints: Object.fromEntries(
+      files.map((file, index) => [
+        String(index),
+        join(root, ...file.split("/")),
+      ]),
+    ),
+    absWorkingDir: root,
+    outdir: join(root, ".piship-scan"),
+    outbase: root,
+    bundle,
+    write: false,
+    metafile: true,
+    platform: "node",
+    legalComments: "none",
+    minifyWhitespace: !bundle,
+    logLevel: "silent",
+    ...(bundle ? { format: "esm", external: ["*"] } : {}),
+  };
+}
+
 /**
- * Parse `files` (`/`-separated, relative to `root`) with esbuild, one entry
- * each, nothing bundled: every import is left as written. A file esbuild
- * cannot parse is in `failed`, with its first error.
+ * Parse each job's files with esbuild, one entry each, nothing bundled: every
+ * import is left as written. A file esbuild cannot parse is in `failed`, with
+ * its first error. All the jobs' builds run in one process.
  */
+export function scanModulesMany(
+  esbuild: EsbuildApi,
+  jobs: readonly ScanJob[],
+): ScanResult[] {
+  const results = jobs.map(() => ({
+    modules: new Map<string, ModuleInfo>(),
+    failed: new Map<string, string>(),
+  }));
+  let pending = jobs
+    .map((job, index) => ({
+      index,
+      root: resolve(job.root),
+      files: [...job.files],
+    }))
+    .filter((item) => item.files.length);
+  while (pending.length) {
+    // Imports come from a bundling build that leaves every import external;
+    // the text without comments from one that changes nothing else.
+    const outcomes = esbuild.buildAll(
+      pending.flatMap((item) => [
+        scanBuild(item.root, item.files, true),
+        scanBuild(item.root, item.files, false),
+      ]),
+    );
+    const next: typeof pending = [];
+    pending.forEach((item, position) => {
+      const result = results[item.index] as (typeof results)[number];
+      const linked = outcomes[position * 2] as BuildOutcome;
+      const plain = outcomes[position * 2 + 1] as BuildOutcome;
+      const failure =
+        "failure" in linked
+          ? linked.failure
+          : "failure" in plain
+            ? plain.failure
+            : undefined;
+      if (failure) {
+        // One unparsable file fails the whole batch. esbuild names the files
+        // that failed: scan again without them.
+        const listed = new Set(item.files);
+        const named = new Map<string, string>();
+        for (const error of failure.errors) {
+          const file = error.location?.file?.replaceAll("\\", "/");
+          if (file && listed.has(file) && !named.has(file))
+            named.set(file, error.text);
+        }
+        if (named.size) {
+          for (const [file, text] of named) result.failed.set(file, text);
+          const rest = item.files.filter((file) => !named.has(file));
+          if (rest.length) next.push({ ...item, files: rest });
+        } else {
+          // Not attributable to a file (esbuild itself failed): the whole
+          // batch is unscanned, which callers treat as not safe.
+          const first = failure.message.split("\n")[0] ?? "";
+          for (const file of item.files) result.failed.set(file, first);
+        }
+        return;
+      }
+      if (!("build" in linked) || !("build" in plain)) return;
+      const exportsOf = new Map<string, readonly string[]>();
+      for (const output of Object.values(linked.build.metafile.outputs))
+        if (output.entryPoint)
+          exportsOf.set(
+            output.entryPoint.replaceAll("\\", "/"),
+            output.exports,
+          );
+      const written = new Map(
+        (plain.build.outputFiles ?? []).map((file) => [
+          resolve(file.path),
+          file.text,
+        ]),
+      );
+      const sourceOf = new Map<string, string>();
+      for (const [path, output] of Object.entries(plain.build.metafile.outputs))
+        if (output.entryPoint)
+          sourceOf.set(
+            output.entryPoint.replaceAll("\\", "/"),
+            written.get(resolve(item.root, path)) ?? "",
+          );
+      const listed = new Set(item.files);
+      for (const [path, input] of Object.entries(
+        linked.build.metafile.inputs,
+      )) {
+        const key = path.replaceAll("\\", "/");
+        if (!listed.has(key)) continue;
+        result.modules.set(key, {
+          format: input.format === "esm" ? "esm" : "cjs",
+          imports: input.imports.flatMap((entry) => {
+            const kind = KINDS[entry.kind];
+            return kind && entry.path !== "<runtime>"
+              ? [{ specifier: entry.path, kind }]
+              : [];
+          }),
+          exports: exportsOf.get(key) ?? [],
+          source: sourceOf.get(key) ?? "",
+        });
+      }
+    });
+    pending = next;
+  }
+  return results;
+}
+
+/** `scanModulesMany` for one job. */
 export function scanModules(
   esbuild: EsbuildApi,
   root: string,
   files: readonly string[],
-): {
-  readonly modules: ReadonlyMap<string, ModuleInfo>;
-  readonly failed: ReadonlyMap<string, string>;
-} {
-  root = resolve(root);
-  const modules = new Map<string, ModuleInfo>();
-  const failed = new Map<string, string>();
-  if (!files.length) return { modules, failed };
-  const run = (batch: readonly string[], bundle: boolean) => {
-    try {
-      return esbuild.buildSync({
-        // Named entries: two files with the same name and different
-        // extensions (`index.js`, `index.cjs`) would share an output path.
-        entryPoints: Object.fromEntries(
-          batch.map((file, index) => [
-            String(index),
-            join(root, ...file.split("/")),
-          ]),
-        ),
-        absWorkingDir: root,
-        outdir: join(root, ".piship-scan"),
-        outbase: root,
-        bundle,
-        write: false,
-        metafile: true,
-        platform: "node",
-        legalComments: "none",
-        minifyWhitespace: !bundle,
-        logLevel: "silent",
-        ...(bundle ? { format: "esm", external: ["*"] } : {}),
-      });
-    } catch (error) {
-      return error as Error;
-    }
-  };
-  // Imports come from a bundling pass that leaves every import external; the
-  // text without comments from a pass that changes nothing else.
-  const linked = run(files, true);
-  const plain = linked instanceof Error ? linked : run(files, false);
-  if (linked instanceof Error || plain instanceof Error) {
-    const error = (linked instanceof Error ? linked : plain) as Error;
-    // One unparsable file fails the whole batch. esbuild names the files that
-    // failed: scan again without them.
-    const first = error.message.split("\n")[0] ?? "";
-    const named = new Map<string, string>();
-    for (const item of (
-      error as {
-        errors?: { text: string; location?: { file?: string } | null }[];
-      }
-    ).errors ?? []) {
-      const file = item.location?.file?.replaceAll("\\", "/");
-      if (file && files.includes(file) && !named.has(file))
-        named.set(file, item.text);
-    }
-    if (named.size) {
-      for (const [file, text] of named) failed.set(file, text);
-      const rest = scanModules(
-        esbuild,
-        root,
-        files.filter((file) => !named.has(file)),
-      );
-      for (const [key, value] of rest.modules) modules.set(key, value);
-      for (const [key, value] of rest.failed) failed.set(key, value);
-      return { modules, failed };
-    }
-    // Not attributable to a file (esbuild itself failed): the whole batch is
-    // unscanned, which callers treat as not safe.
-    for (const file of files) failed.set(file, first);
-    return { modules, failed };
-  }
-  const exportsOf = new Map<string, readonly string[]>();
-  for (const output of Object.values(linked.metafile.outputs))
-    if (output.entryPoint)
-      exportsOf.set(output.entryPoint.replaceAll("\\", "/"), output.exports);
-  const sourceOf = new Map<string, string>();
-  const written = new Map(
-    (plain.outputFiles ?? []).map((file) => [resolve(file.path), file.text]),
-  );
-  for (const [path, output] of Object.entries(plain.metafile.outputs))
-    if (output.entryPoint)
-      sourceOf.set(
-        output.entryPoint.replaceAll("\\", "/"),
-        written.get(resolve(root, path)) ?? "",
-      );
-  for (const [path, input] of Object.entries(linked.metafile.inputs)) {
-    const key = path.replaceAll("\\", "/");
-    if (!files.includes(key)) continue;
-    modules.set(key, {
-      format: input.format === "esm" ? "esm" : "cjs",
-      imports: input.imports.flatMap((item) => {
-        const kind = KINDS[item.kind];
-        return kind && item.path !== "<runtime>"
-          ? [{ specifier: item.path, kind }]
-          : [];
-      }),
-      exports: exportsOf.get(key) ?? [],
-      source: sourceOf.get(key) ?? "",
-    });
-  }
-  return { modules, failed };
+): ScanResult {
+  return scanModulesMany(esbuild, [{ root, files }])[0] as ScanResult;
 }
 
 /**
