@@ -56,6 +56,7 @@ function context(mode: "managed" | "personal"): LaunchContext {
         command: "acmecode",
       },
       runtime: { pishipVersion: "0.7.0" },
+      deployment: { mode },
       manifest: { schema: "piship/v1alpha4" },
     },
     mode,
