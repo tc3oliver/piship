@@ -14,9 +14,12 @@
 // reports that and passes: the counts include platform packages, so each
 // platform records its own.
 //
-// The personal and managed examples build offline. The developer example
-// vendors six Pi packages and needs the npm registry or a warm npm cache, so
-// it is checked only when asked for (--developer, or --only).
+// The managed example builds offline and in seconds, so it is the pull
+// request check. The personal example downloads its pinned fd and rg archives
+// from GitHub (runtime.searchTools) and the developer example vendors six Pi
+// packages and needs the npm registry or a warm npm cache, so both are checked
+// only when asked for (--developer, or --only): the nightly and qualification
+// run does.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -74,7 +77,7 @@ function main() {
     "--only",
     args.includes("--developer")
       ? "personal,managed,developer"
-      : "personal,managed",
+      : "managed",
   )
     .split(",")
     .filter(Boolean);

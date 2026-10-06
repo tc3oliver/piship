@@ -209,10 +209,11 @@ jobs:
           if ($left.Count) { Write-Error "Test credentials remain: $($left -join ', ')"; exit 1 }
           exit 0
 
-  # The developer example's footprint (six vendored Pi packages) against its
-  # recorded budget: file counts and archive bytes only, never a timing. It
-  # needs the registry, so it is a nightly and qualification check; a pull
-  # request checks the personal and managed examples in CI.
+  # The personal, managed, and developer examples' footprint against their
+  # recorded budgets: file counts and archive bytes only, never a timing. The
+  # personal example downloads fd and rg from GitHub and the developer example
+  # needs the registry (six vendored Pi packages), so these are nightly and
+  # qualification checks; a pull request checks the managed example in CI.
   footprint:
     name: footprint (macos-latest)
     runs-on: macos-latest
