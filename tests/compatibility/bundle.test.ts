@@ -253,9 +253,9 @@ describe("real bundled Pi runtime", () => {
     );
     expect(
       readdirSync(join(cache, "runtime")).filter((name) =>
-        /^[ib]-[0-9a-f]{20}$/.test(name),
+        /^[ifb]-[0-9a-f]{20}$/.test(name),
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     const inventory = (directory: string) =>
       readFileSync(join(directory, "metadata", "inventory.json"), "utf8");
     // Neither the cache nor skipping the strip first changes a shipped byte.
@@ -274,8 +274,16 @@ describe("real bundled Pi runtime", () => {
     const miss = releaseBuild(cache, join(root, "release-miss"));
     const hit = releaseBuild(cache, join(root, "release-hit"));
     const cold = releaseBuild(undefined, join(root, "release-cold"));
-    expect(miss.runtimeCache).toMatchObject({ status: "miss", bundle: "miss" });
-    expect(hit.runtimeCache).toMatchObject({ status: "hit", bundle: "hit" });
+    expect(miss.runtimeCache).toMatchObject({
+      status: "miss",
+      framework: "miss",
+      bundle: "miss",
+    });
+    expect(hit.runtimeCache).toMatchObject({
+      status: "hit",
+      framework: "hit",
+      bundle: "hit",
+    });
     expect(hit.runtimeCache.entry).toBe(miss.runtimeCache.entry);
     expect(cold.runtimeCache).toEqual({ status: "disabled" });
     // Where the runtime came from is reported beside the release: nothing

@@ -33,12 +33,19 @@ import { checkPackageSources } from "./release/index.js";
 import {
   adoptInstallTree,
   discardInstallTree,
+  discardTree,
   type InstallTree,
   lookupInstallTree,
+  lookupTree,
   materializeInstallTree,
   plainInventory,
+  publishFrameworkTree,
   type RuntimeCache,
+  runtimeCacheFor,
+  writeFrameworkFiles,
 } from "./runtime-cache.js";
+import { startBackgroundProcess } from "./background-process.js";
+import { removeTree } from "./parallel-files.js";
 import { renameWithRetry } from "./rename-retry.js";
 import { stageSearchTools } from "./search-tools/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
@@ -48,15 +55,39 @@ import {
 } from "./temporary-directories.js";
 
 /**
- * npm-install the runtime dependencies into the empty `stage`: PiShip's own
- * packages as real copies of the build input (npm only links them, and keeps
- * any dependency it could not hoist beside their manifests), then the locked
+ * What `npm ci` is asked for: the locked runtime tree only, from the npm cache
+ * where it already holds the pinned tarballs (an integrity mismatch still
+ * fetches), without the audit and funding requests, progress drawing, or
+ * warnings, which cost time on a console and are not read. Lifecycle scripts
+ * run: three runtime packages declare one, reviewed in
+ * REVIEWED_INSTALL_SCRIPTS, and esbuild's postinstall validates (and where
+ * needed fetches) its platform binary.
+ */
+const NPM_CI_ARGUMENTS = [
+  "ci",
+  "--omit=dev",
+  "--no-audit",
+  "--no-fund",
+  "--prefer-offline",
+  "--loglevel=error",
+  "--progress=false",
+] as const;
+
+/**
+ * npm-install the runtime dependencies into the empty `stage`: the locked
  * third-party tree, minus npm's `.bin` links and the optional packages built
- * for other platforms. Nothing is stripped here.
+ * for other platforms, with any dependency npm could not hoist (it installs
+ * them beside PiShip's workspace manifests) moved under `node_modules/@piship`.
+ * Nothing is stripped here. PiShip's own packages are npm links until they are
+ * replaced: with `framework` they become real copies of the build input and
+ * the stage keeps its root manifest and lock; without it the stage is left
+ * for the cache, which places PiShip's layer from its own entry.
  */
 function installRuntime(
   stage: string,
   progress: ((step: string) => void) | undefined,
+  framework: boolean,
+  meanwhile: { readonly run: () => void; readonly overlap: boolean },
 ): void {
   let phase = process.hrtime.bigint();
   copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
@@ -77,49 +108,65 @@ function installRuntime(
   debugTiming("build input copy", phase);
   phase = process.hrtime.bigint();
   progress?.("Installing the runtime packages (npm ci)");
-  const install =
+  const [file, args] =
     process.platform === "win32"
-      ? spawnSync(
-          "cmd.exe",
-          ["/d", "/s", "/c", "npm ci --omit=dev --no-audit --no-fund"],
-          { cwd: stage, encoding: "utf8" },
-        )
-      : spawnSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
-          cwd: stage,
-          encoding: "utf8",
-        });
+      ? ["cmd.exe", ["/d", "/s", "/c", `npm ${NPM_CI_ARGUMENTS.join(" ")}`]]
+      : ["npm", [...NPM_CI_ARGUMENTS]];
+  let install: { status: number | null; output: string };
+  if (meanwhile.overlap) {
+    // npm runs in a thread while this one assembles the files that do not
+    // need it. A failure there still waits for npm: the stage is not removed
+    // from under a running install.
+    const running = startBackgroundProcess(file, args, stage);
+    try {
+      meanwhile.run();
+    } finally {
+      install = running.wait();
+    }
+  } else {
+    const done = spawnSync(file, args, { cwd: stage, encoding: "utf8" });
+    install = {
+      status: done.status,
+      output: done.stderr || done.error?.message || done.stdout,
+    };
+    meanwhile.run();
+  }
   if (install.status !== 0)
-    throw new Error(
-      `Portable runtime assembly failed: ${install.stderr || install.error?.message || install.stdout}`,
-    );
+    throw new Error(`Portable runtime assembly failed: ${install.output}`);
   debugTiming("npm ci --omit=dev", phase);
   phase = process.hrtime.bigint();
   for (const name of workspacePackages) {
     const target = join(stage, "node_modules", "@piship", name);
     rmSync(target, { recursive: true, force: true });
-    mkdirSync(target, { recursive: true });
-    copyFileSync(
-      join(buildInput, "packages", name, "package.json"),
-      join(target, "package.json"),
-    );
-    cpSync(join(buildInput, "packages", name, "dist"), join(target, "dist"), {
-      recursive: true,
-    });
     // Dependencies npm could not hoist were installed beside the manifest.
     const nested = join(stage, "packages", name, "node_modules");
+    if (existsSync(nested) || framework) mkdirSync(target, { recursive: true });
+    if (framework) {
+      copyFileSync(
+        join(buildInput, "packages", name, "package.json"),
+        join(target, "package.json"),
+      );
+      cpSync(join(buildInput, "packages", name, "dist"), join(target, "dist"), {
+        recursive: true,
+      });
+    }
     if (existsSync(nested))
       renameWithRetry(nested, join(target, "node_modules"));
   }
-  cpSync(
-    buildInput,
-    join(stage, "node_modules", "@piship", "core", "dist", "build-input"),
-    { recursive: true },
-  );
+  if (framework)
+    cpSync(
+      buildInput,
+      join(stage, "node_modules", "@piship", "core", "dist", "build-input"),
+      { recursive: true },
+    );
   rmSync(join(stage, "packages"), { recursive: true, force: true });
   debugTiming("PiShip/build-input copying", phase);
   phase = process.hrtime.bigint();
   removeNpmBins(join(stage, "node_modules"));
   removeForeignPlatformPackages(stage);
+  if (!framework)
+    for (const name of ["package.json", "package-lock.json"])
+      rmSync(join(stage, name));
   debugTiming("removeNpmBins/foreign platform packages", phase);
 }
 
@@ -127,20 +174,59 @@ function installRuntime(
 export interface RuntimeCacheReport {
   /** A hit placed an entry, a miss installed and published one, unusable built without the cache. */
   readonly status: "hit" | "miss" | "unusable";
-  /** The entry's identity (the digest of its file list), when there was one. */
+  /** The third-party tree's identity (the digest of its file list), when there was one. */
   readonly entry?: string;
-  /** How the files reached the payload: hardlinked from the entry, or copied. */
+  /**
+   * PiShip's own layer: placed from its entry (`hit`), published first from
+   * the build input (`miss`), or copied straight from the build input because
+   * the cache could not take it (`direct`).
+   */
+  readonly framework?: "hit" | "miss" | "direct";
+  /** How the files reached the payload: hardlinked from the entries, or copied. */
   readonly linked: number;
   readonly copied: number;
   /** The cache is on another volume than the build, so the entry was copied in. */
   readonly crossVolume?: true;
 }
 
+/** Files placed so far, and the cache layers they came from. */
+interface Placed {
+  linked: number;
+  copied: number;
+  trees: InstallTree[];
+}
+
 /**
- * Put the runtime dependency tree into the empty `stage`: placed from the
- * runtime cache when it holds one, otherwise installed (and, with a cache,
- * moved into it and placed from there). Returns the cache entry the tree came
- * from, whose digests a payload inventory can take.
+ * Put PiShip's own layer into `stage`: placed from its cache entry, which is
+ * first published from the build input when the cache has none, or, where the
+ * cache cannot take it, copied from the build input directly.
+ */
+function placeFramework(
+  stage: string,
+  cache: RuntimeCache,
+  strip: boolean,
+  into: Placed,
+): "hit" | "miss" | "direct" {
+  const hit = lookupTree(cache, "framework");
+  const tree = hit ?? publishFrameworkTree(cache);
+  if (!tree) {
+    writeFrameworkFiles(stage);
+    return "direct";
+  }
+  const placed = materializeInstallTree(tree, stage, { strip });
+  into.linked += placed.linked;
+  into.copied += placed.copied;
+  into.trees.push(tree);
+  return hit ? "hit" : "miss";
+}
+
+/**
+ * Put the runtime dependency tree into the empty `stage`. With a cache both
+ * layers are placed from their entries (the third-party tree, then PiShip's);
+ * the third-party tree is installed and moved into the cache first when it has
+ * no entry. Without one the tree is installed in the stage and stripped in
+ * place. Returns the cache entries the files came from, whose digests a
+ * payload inventory can take.
  */
 function placeRuntime(
   stage: string,
@@ -150,62 +236,107 @@ function placeRuntime(
     readonly leaveWhole: boolean;
     readonly progress: ((step: string) => void) | undefined;
     readonly found: ((report: RuntimeCacheReport) => void) | undefined;
+    /**
+     * The files of the payload that do not need the tree, assembled once: with
+     * `overlap` while npm installs it, otherwise when the tree is in place.
+     */
+    readonly meanwhile: () => void;
+    readonly overlap: boolean;
   },
-): InstallTree | undefined {
+): InstallTree[] {
   const { cache, strip, progress, found } = options;
+  let assembled = false;
+  const meanwhile = {
+    overlap: options.overlap,
+    run: () => {
+      if (assembled) return;
+      assembled = true;
+      options.meanwhile();
+    },
+  };
   let phase = process.hrtime.bigint();
   if (cache) {
     const hit = lookupInstallTree(cache);
     if (hit) {
       progress?.("Reusing the cached runtime packages");
+      let placed: Placed | undefined;
       try {
-        const placed = materializeInstallTree(hit, stage, { strip });
+        placed = { linked: 0, copied: 0, trees: [hit] };
+        const own = materializeInstallTree(hit, stage, { strip });
+        placed.linked += own.linked;
+        placed.copied += own.copied;
+        const framework = placeFramework(stage, cache, strip, placed);
         debugTiming("runtime cache placement", phase);
-        found?.({ status: "hit", entry: hit.digest, ...placed });
-        return hit;
+        found?.({
+          status: "hit",
+          entry: hit.digest,
+          framework,
+          linked: placed.linked,
+          copied: placed.copied,
+        });
       } catch {
         // Damaged or evicted underneath this build: install again, and publish
         // that tree in its place.
+        placed = undefined;
         discardInstallTree(cache);
+        discardTree(cache, "framework");
         rmSync(stage, { recursive: true, force: true });
         mkdirSync(stage);
       }
+      if (placed) {
+        // An error of the assembly is not the entry's.
+        meanwhile.run();
+        return placed.trees;
+      }
     }
   }
-  installRuntime(stage, progress);
+  installRuntime(stage, progress, cache === undefined, meanwhile);
   phase = process.hrtime.bigint();
   const adopted = cache && adoptInstallTree(cache, stage);
   if (cache && adopted) {
-    let placed = { linked: 0, copied: 0 };
-    if (adopted.moved)
-      try {
-        placed = materializeInstallTree(adopted.tree, stage, { strip });
-      } catch (error) {
-        // This tree is what is left of the install: never reuse it.
-        discardInstallTree(cache);
-        throw error;
+    const placed: Placed = { linked: 0, copied: 0, trees: [adopted.tree] };
+    let framework: "hit" | "miss" | "direct";
+    try {
+      if (adopted.moved) {
+        const own = materializeInstallTree(adopted.tree, stage, { strip });
+        placed.linked += own.linked;
+        placed.copied += own.copied;
       }
+      framework = placeFramework(stage, cache, strip, placed);
+    } catch (error) {
+      // What is left of the install is in the entries: never reuse them.
+      discardInstallTree(cache);
+      discardTree(cache, "framework");
+      throw error;
+    }
     debugTiming("runtime cache publish and placement", phase);
     found?.({
       status: "miss",
       entry: adopted.tree.digest,
-      ...placed,
+      framework,
+      linked: placed.linked,
+      copied: placed.copied,
       ...(adopted.moved ? {} : { crossVolume: true as const }),
     });
-    // Copied across volumes, the stage kept its whole tree: strip it in place.
-    if (adopted.moved) return adopted.tree;
-    if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
-    return adopted.tree;
+    // Copied across volumes, the stage kept its whole third-party tree: strip
+    // it in place.
+    if (!adopted.moved && strip && !options.leaveWhole)
+      stripRuntimeIrrelevant(join(stage, "node_modules"));
+    return placed.trees;
   }
   if (cache) {
+    // The stage holds the third-party tree only: add PiShip's layer from the
+    // build input.
+    writeFrameworkFiles(stage);
     found?.({ status: "unusable", linked: 0, copied: 0 });
     progress?.(
       "The runtime cache is not usable here (the directory is locked or cannot be written); building without it",
     );
   }
-  if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
+  if (strip && !options.leaveWhole)
+    stripRuntimeIrrelevant(join(stage, "node_modules"));
   debugTiming("strip runtime-irrelevant files", phase);
-  return undefined;
+  return [];
 }
 
 /**
@@ -234,11 +365,13 @@ export function buildDistribution(
     /** Local builds reuse runtime bytes; release qualification passes false. */
     readonly cache?: boolean;
     /**
-     * The immutable runtime cache (`runtimeCacheFor`). A hit replaces the npm
+     * The immutable runtime cache (`runtimeCacheFor`), or `true` for the
+     * default one of this lock, which is only looked up when the build has to
+     * assemble a payload (it runs `npm --version`). A hit replaces the npm
      * install, strip, and hashing of the dependency tree; a miss fills it.
      * Independent of `cache`, which reuses a whole earlier output.
      */
-    readonly runtimeCache?: RuntimeCache;
+    readonly runtimeCache?: RuntimeCache | true;
     /** Told whether the runtime came from the cache, was installed into it, or could not use it. */
     readonly onRuntimeCache?: (report: RuntimeCacheReport) => void;
     /** Receives a short line as each long step starts. */
@@ -257,9 +390,6 @@ export function buildDistribution(
   const wantsBundle = manifest.lifecycle?.release.bundle === true;
   const deferred = wantsBundle && options.deferBundle === true;
   const bundling = wantsBundle && options.bundle !== false && !deferred;
-  // A cache built for another strip setting would place the wrong files.
-  const runtimeCache =
-    options.runtimeCache?.strip === strip ? options.runtimeCache : undefined;
   const cacheStarted = process.hrtime.bigint();
   const keys =
     options.cache === false || deferred
@@ -287,6 +417,12 @@ export function buildDistribution(
     return output;
   }
   debugTiming("build cache lookup", cacheStarted);
+  const wanted =
+    options.runtimeCache === true
+      ? runtimeCacheFor(lock)
+      : options.runtimeCache;
+  // A cache built for another strip setting would place the wrong files.
+  const runtimeCache = wanted?.strip === strip ? wanted : undefined;
   const base = dirname(resolve(manifestPath));
   mkdirSync(outputRoot, { recursive: true });
   sweepOutputStaging(outputRoot, "build", options);
@@ -298,52 +434,59 @@ export function buildDistribution(
   mkdirSync(stage);
   try {
     let phase = process.hrtime.bigint();
-    const tree = placeRuntime(stage, {
+    const assemble = (): void => {
+      const started = process.hrtime.bigint();
+      options.progress?.("Assembling and verifying the payload");
+      mkdirSync(join(stage, "bin"), { recursive: true });
+      mkdirSync(join(stage, "metadata"), { recursive: true });
+      copyFileSync(manifestPath, join(stage, "piship.yaml"));
+      for (const resource of lock.resources) {
+        const target = join(stage, "resources", resource.path);
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(join(base, resource.path), target);
+      }
+      copyFileSync(join(base, "piship.lock"), join(stage, "piship.lock"));
+      if (lock.packages?.length) {
+        // Pi packages are vendored by PiShip from exactly what the lock pins,
+        // without lifecycle scripts; Pi never installs one.
+        options.progress?.(
+          "Vendoring the Pi packages (npm ci --ignore-scripts)",
+        );
+        vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
+          supplyChainGates: options.supplyChainGates !== false,
+        });
+      }
+      if (lock.searchTools) {
+        // The executables come from the cached upstream archives, checked
+        // against the lock; `downloadLockedSearchTools` fills the cache first.
+        options.progress?.("Placing the bundled search tools");
+        stageSearchTools(lock, stage);
+      }
+      writeFileSync(
+        join(stage, "metadata", "target.json"),
+        `${JSON.stringify({ platform: process.platform, arch: process.arch }, null, 2)}\n`,
+      );
+      const command = join(stage, "bin", lock.app.command);
+      writeFileSync(command, launcherSource());
+      if (process.platform !== "win32") chmodSync(command, 0o755);
+      writeFileSync(
+        `${command}.cmd`,
+        `@echo off\r\nnode "%~dp0\\${lock.app.command}" %*\r\n`,
+      );
+      writeFileSync(join(stage, "piship.mjs"), portableCliSource());
+      debugTiming("resource/payload assembly", started);
+    };
+    const trees = placeRuntime(stage, {
       cache: runtimeCache,
       strip,
       // The bundler drops the whole tree, so deleting from it is wasted work.
       leaveWhole: bundling || deferred,
       progress: options.progress,
       found: options.onRuntimeCache,
+      meanwhile: assemble,
+      // Only a distribution with Pi packages to vendor has work worth a thread.
+      overlap: (lock.packages?.length ?? 0) > 0,
     });
-    phase = process.hrtime.bigint();
-    options.progress?.("Assembling and verifying the payload");
-    mkdirSync(join(stage, "bin"), { recursive: true });
-    mkdirSync(join(stage, "metadata"), { recursive: true });
-    copyFileSync(manifestPath, join(stage, "piship.yaml"));
-    for (const resource of lock.resources) {
-      const target = join(stage, "resources", resource.path);
-      mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(join(base, resource.path), target);
-    }
-    copyFileSync(join(base, "piship.lock"), join(stage, "piship.lock"));
-    if (lock.packages?.length) {
-      // Pi packages are vendored by PiShip from exactly what the lock pins,
-      // without lifecycle scripts; Pi never installs one.
-      options.progress?.("Vendoring the Pi packages (npm ci --ignore-scripts)");
-      vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
-        supplyChainGates: options.supplyChainGates !== false,
-      });
-    }
-    if (lock.searchTools) {
-      // The executables come from the cached upstream archives, checked
-      // against the lock; `downloadLockedSearchTools` fills the cache first.
-      options.progress?.("Placing the bundled search tools");
-      stageSearchTools(lock, stage);
-    }
-    writeFileSync(
-      join(stage, "metadata", "target.json"),
-      `${JSON.stringify({ platform: process.platform, arch: process.arch }, null, 2)}\n`,
-    );
-    const command = join(stage, "bin", lock.app.command);
-    writeFileSync(command, launcherSource());
-    if (process.platform !== "win32") chmodSync(command, 0o755);
-    writeFileSync(
-      `${command}.cmd`,
-      `@echo off\r\nnode "%~dp0\\${lock.app.command}" %*\r\n`,
-    );
-    writeFileSync(join(stage, "piship.mjs"), portableCliSource());
-    debugTiming("resource/payload assembly", phase);
     phase = process.hrtime.bigint();
     if (bundling) {
       options.progress?.("Bundling the portable runtime");
@@ -360,7 +503,12 @@ export function buildDistribution(
         `${JSON.stringify(
           inventory(
             stage,
-            tree && runtimeCache ? plainInventory(tree, runtimeCache) : {},
+            runtimeCache
+              ? Object.assign(
+                  {},
+                  ...trees.map((tree) => plainInventory(tree, runtimeCache)),
+                )
+              : {},
           ),
           null,
           2,
@@ -370,7 +518,7 @@ export function buildDistribution(
     }
     phase = process.hrtime.bigint();
     rmSync(buildCachePath(output), { force: true });
-    rmSync(output, { recursive: true, force: true });
+    removeTree(output, { attempts: 3 });
     renameWithRetry(stage, output);
     if (keys)
       writeBuildCache(

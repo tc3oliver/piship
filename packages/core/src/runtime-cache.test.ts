@@ -21,9 +21,11 @@ import {
   type InstallTree,
   lookupBundle,
   lookupInstallTree,
+  lookupTree,
   materializeInstallTree,
   placeBundle,
   plainInventory,
+  publishFrameworkTree,
   type RuntimeCache,
   runtimeCacheFor,
   storeBundle,
@@ -39,6 +41,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./runtime-dependencies.js", async (original) => ({
   ...(await original<typeof import("./runtime-dependencies.js")>()),
   buildInput: fixture.input,
+  workspacePackages: ["schema", "core"],
 }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
@@ -97,13 +100,16 @@ const lock = (npmLockSha256 = "b".repeat(64), strip = false) =>
     release: { strip },
   }) as unknown as DistributionLock;
 const cacheOf = (root: string, key = "c".repeat(64), strip = false) =>
-  ({ root: join(root, "cache"), key, strip }) satisfies RuntimeCache;
+  ({
+    root: join(root, "cache"),
+    key,
+    framework: "d".repeat(64),
+    strip,
+  }) satisfies RuntimeCache;
 
-/** A staged runtime tree as `installRuntime` leaves it. */
+/** A staged third-party tree as `installRuntime` leaves it for the cache. */
 function stageTree(stage: string): Record<string, string> {
   const files: Record<string, string> = {
-    "package.json": '{"name":"stage"}\n',
-    "package-lock.json": "{}\n",
     "node_modules/dep/package.json": '{"name":"dep"}\n',
     "node_modules/dep/index.js": "module.exports = 1;\n",
     "node_modules/dep/index.d.ts": "export {};\n",
@@ -132,18 +138,18 @@ function walk(root: string, prefix = ""): string[] {
 describe("runtimeCacheFor", () => {
   const env = (home: string) => ({ PISHIP_CACHE_HOME: home });
 
-  it("keys the cache by build input, runtime lock, and platform, and keeps it under the cache home", () => {
+  it("keys the third-party tree by the dependency set, not by PiShip's own output, and keeps it under the cache home", () => {
     const home = temp();
     const first = runtimeCacheFor(lock(), env(home));
     expect(first.root).toBe(join(home, "runtime"));
     expect(runtimeCacheFor(lock(), env(home)).key).toBe(first.key);
     // Where it lives does not decide what is in it.
     expect(runtimeCacheFor(lock(), env(temp())).key).toBe(first.key);
-    // The distribution lock's runtime section: Pi version and the npm lock.
+    // The distribution lock's dependency set: Pi version and the npm lock.
     expect(runtimeCacheFor(lock("d".repeat(64)), env(home)).key).not.toBe(
       first.key,
     );
-    // The compiled PiShip output.
+    // PiShip's compiled output and version decide only its own layer.
     writeFileSync(
       join(fixture.input, ".piship-build-input.json"),
       JSON.stringify({
@@ -151,7 +157,12 @@ describe("runtimeCacheFor", () => {
         sha256: "e".repeat(64),
       }),
     );
-    expect(runtimeCacheFor(lock(), env(home)).key).not.toBe(first.key);
+    const changed = runtimeCacheFor(lock(), env(home));
+    expect(changed.key).toBe(first.key);
+    expect(changed.framework).not.toBe(first.framework);
+    const upgraded = lock();
+    (upgraded.runtime as { pishipVersion?: string }).pishipVersion = "9.9.9";
+    expect(runtimeCacheFor(upgraded, env(home)).key).toBe(first.key);
   });
 
   it("keys the tree by the major and minor of npm, and by the libc family on Linux", async () => {
@@ -233,8 +244,6 @@ describe("install tree entries", () => {
       "node_modules/dep/",
       "node_modules/dep/index.js",
       "node_modules/dep/package.json",
-      "package-lock.json",
-      "package.json",
     ]);
     // The entry itself keeps everything.
     expect(
@@ -298,7 +307,7 @@ describe("install tree entries", () => {
     expect(original.filesSha256).toBe(tree.digest);
     // A file's size edited in the record, or the digest dropped or replaced.
     for (const change of [
-      { files: { ...original.files, "package.json": 1 } },
+      { files: { ...original.files, "node_modules/dep/package.json": 1 } },
       { filesSha256: undefined },
       { filesSha256: "0".repeat(64) },
     ]) {
@@ -359,8 +368,9 @@ describe("install tree entries", () => {
     expect(lookupInstallTree(cache)?.digest).toBe(adopted?.tree.digest);
     // The entry holds its own copies, not the stage's files.
     expect(
-      statSync(join(adopted?.tree.tree as string, "package.json")).ino,
-    ).not.toBe(statSync(join(stage, "package.json")).ino);
+      statSync(join(adopted?.tree.tree as string, "node_modules/dep/index.js"))
+        .ino,
+    ).not.toBe(statSync(join(stage, "node_modules/dep/index.js")).ino);
     // A later build can place it, copying where links cannot cross volumes.
     const target = join(root, "placed");
     fixture.linkError = "EXDEV";
@@ -424,7 +434,7 @@ describe("install tree entries", () => {
     mkdirSync(stage);
     stageTree(stage);
     const tree = adopt(cache, stage);
-    rmSync(join(tree?.tree as string, "package.json"));
+    rmSync(join(tree?.tree as string, "node_modules/dep/package.json"));
     expect(lookupInstallTree(cache)).toBeUndefined();
     const again = join(root, "again");
     mkdirSync(again);
@@ -477,6 +487,239 @@ describe("install tree entries", () => {
     adopt(cacheOf(root, keys[3]), stage);
     expect(lookupInstallTree(cacheOf(root, keys[1]))).toBeUndefined();
     expect(lookupInstallTree(cacheOf(root, keys[0]))).toBeDefined();
+  });
+});
+
+/** The PiShip build input the fixture stands in for: a root manifest and lock, and two packages. */
+function stageBuildInput(): Record<string, string> {
+  const files: Record<string, string> = {
+    "package.json": '{"name":"piship-workspace"}\n',
+    "package-lock.json": "{}\n",
+  };
+  for (const name of ["schema", "core"]) {
+    files[`packages/${name}/package.json`] = `{"name":"@piship/${name}"}\n`;
+    files[`packages/${name}/dist/index.js`] = `export const ${name} = 1;\n`;
+    files[`packages/${name}/dist/index.d.ts`] = "export {};\n";
+  }
+  for (const [path, body] of Object.entries(files)) {
+    mkdirSync(join(fixture.input, path, ".."), { recursive: true });
+    writeFileSync(join(fixture.input, path), body);
+  }
+  return files;
+}
+
+describe("PiShip's own layer", () => {
+  it("is published from the build input as a payload's own files, beside the third-party tree", () => {
+    const root = temp();
+    stageBuildInput();
+    const cache = cacheOf(root);
+    expect(lookupTree(cache, "framework")).toBeUndefined();
+    const tree = publishFrameworkTree(cache) as InstallTree;
+    expect(Object.keys(tree.files).sort()).toEqual(
+      [
+        "package.json",
+        "package-lock.json",
+        "node_modules/@piship/schema/package.json",
+        "node_modules/@piship/schema/dist/index.js",
+        "node_modules/@piship/schema/dist/index.d.ts",
+        "node_modules/@piship/core/package.json",
+        "node_modules/@piship/core/dist/index.js",
+        "node_modules/@piship/core/dist/index.d.ts",
+        // The snapshot management commands read, the build input itself.
+        ...Object.keys(stageBuildInputFiles()).map(
+          (name) => `node_modules/@piship/core/dist/build-input/${name}`,
+        ),
+        "node_modules/@piship/core/dist/build-input/.piship-build-input.json",
+      ].sort(),
+    );
+    expect(tree.layer).toBe("framework");
+    expect(lookupTree(cache, "framework")?.digest).toBe(tree.digest);
+    // Another layer, another directory: neither replaces the other.
+    expect(
+      readdirSync(cache.root).filter((name) => /^[if]-/.test(name)),
+    ).toEqual([`f-${cache.framework.slice(0, 20)}`]);
+    expect(lookupInstallTree(cache)).toBeUndefined();
+  });
+
+  it("is placed with the third-party tree into one payload, without maps and declarations", () => {
+    const root = temp();
+    stageBuildInput();
+    const cache = cacheOf(root, undefined, true);
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    stageTree(stage);
+    const third = adopt(cache, stage) as InstallTree;
+    const own = publishFrameworkTree(cache) as InstallTree;
+    const target = join(root, "payload");
+    materializeInstallTree(third, target, { strip: true });
+    materializeInstallTree(own, target, { strip: true });
+    const placed = walk(target).filter((name) => !name.endsWith("/"));
+    expect(placed).toContain("package.json");
+    expect(placed).toContain("node_modules/@piship/core/dist/index.js");
+    expect(placed).toContain("node_modules/dep/index.js");
+    expect(placed.filter((name) => /\.d\.ts$|\.map$/.test(name))).toEqual([]);
+    // The two layers' digests together describe every file of the payload.
+    const digests = {
+      ...plainInventory(third, cache),
+      ...plainInventory(own, cache),
+    };
+    expect(Object.keys(digests).sort()).toEqual(placed.sort());
+    for (const [path, digest] of Object.entries(digests))
+      expect(hash(readFileSync(join(target, path)))).toBe(digest);
+  });
+
+  it("is replaced, and the third-party tree kept, when the build input changes", () => {
+    const home = temp();
+    stageBuildInput();
+    const before = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home });
+    const stage = join(home, "stage");
+    mkdirSync(stage);
+    stageTree(stage);
+    const third = adopt(before, stage) as InstallTree;
+    const first = publishFrameworkTree(before) as InstallTree;
+    writeFileSync(
+      join(fixture.input, ".piship-build-input.json"),
+      JSON.stringify({
+        schema: "piship-build-input/v1",
+        sha256: "9".repeat(64),
+      }),
+    );
+    writeFileSync(
+      join(fixture.input, "packages/core/dist/index.js"),
+      "changed\n",
+    );
+    const after = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home });
+    expect(after.key).toBe(before.key);
+    expect(lookupInstallTree(after)?.digest).toBe(third.digest);
+    expect(lookupTree(after, "framework")).toBeUndefined();
+    const second = publishFrameworkTree(after) as InstallTree;
+    expect(second.key).not.toBe(first.key);
+    expect(
+      readFileSync(
+        join(second.tree, "node_modules/@piship/core/dist/index.js"),
+        "utf8",
+      ),
+    ).toBe("changed\n");
+    // The first build's layer is still there for a build of that input.
+    expect(lookupTree(before, "framework")?.digest).toBe(first.digest);
+  });
+});
+
+function stageBuildInputFiles(): Record<string, string> {
+  return Object.fromEntries(
+    readdirSyncRecursive(fixture.input).map((name) => [name, ""]),
+  );
+}
+
+/** Relative paths of the regular files under `root`, without the generation marker. */
+function readdirSyncRecursive(root: string, prefix = ""): string[] {
+  return readdirSync(join(root, prefix), { withFileTypes: true }).flatMap(
+    (entry) =>
+      entry.isDirectory()
+        ? readdirSyncRecursive(root, `${prefix}${entry.name}/`)
+        : entry.name === ".piship-build-input.json"
+          ? []
+          : [`${prefix}${entry.name}`],
+  );
+}
+
+describe("placing and hashing by several threads", () => {
+  const adoptedMany = (count: number) => {
+    const root = temp();
+    const stage = join(root, "stage");
+    for (let index = 0; index < count; index++) {
+      const path = join(
+        stage,
+        "node_modules",
+        `pkg-${index % 7}`,
+        `dir-${index % 3}`,
+        `file-${index}.js`,
+      );
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, `export const value = ${index};\n`);
+    }
+    // And files placement leaves out.
+    writeFileSync(join(stage, "node_modules", "pkg-0", "x.d.ts"), "");
+    const cache = cacheOf(root, undefined, true);
+    return { root, cache, tree: adopt(cache, stage) as InstallTree };
+  };
+
+  it("places the same files, checks their sizes, and counts them, as one thread does", () => {
+    vi.stubEnv("PISHIP_FILE_WORKERS", "4");
+    try {
+      const { root, tree } = adoptedMany(97);
+      const threaded = join(root, "threaded");
+      const placed = materializeInstallTree(tree, threaded, {
+        strip: true,
+        link: false,
+      });
+      expect(placed).toEqual({ linked: 0, copied: 97 });
+      vi.stubEnv("PISHIP_FILE_WORKERS", "1");
+      const single = join(root, "single");
+      materializeInstallTree(tree, single, { strip: true, link: false });
+      expect(walk(threaded)).toEqual(walk(single));
+      for (const name of walk(threaded).filter((n) => n.endsWith(".js")))
+        expect(readFileSync(join(threaded, name), "utf8")).toBe(
+          readFileSync(join(single, name), "utf8"),
+        );
+      // Links, where they work, and one copy fallback that stays a fallback.
+      const linked = join(root, "linked");
+      if (process.platform !== "win32") {
+        vi.stubEnv("PISHIP_FILE_WORKERS", "3");
+        expect(
+          materializeInstallTree(tree, linked, { strip: true, link: true }),
+        ).toEqual({ linked: 97, copied: 0 });
+        const any = walk(linked).find((n) => n.endsWith(".js")) as string;
+        expect(statSync(join(linked, any)).ino).toBe(
+          statSync(join(tree.tree, any)).ino,
+        );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reports the first failure of any thread, and never overwrites a file", () => {
+    vi.stubEnv("PISHIP_FILE_WORKERS", "4");
+    try {
+      const { root, tree } = adoptedMany(40);
+      const target = join(root, "occupied");
+      const victim = Object.keys(tree.files).sort()[17] as string;
+      mkdirSync(join(target, victim, ".."), { recursive: true });
+      writeFileSync(join(target, victim), "mine");
+      expect(() =>
+        materializeInstallTree(tree, target, { strip: true, link: false }),
+      ).toThrow(/EEXIST/);
+      expect(readFileSync(join(target, victim), "utf8")).toBe("mine");
+      // A size that is not the recorded one is the damaged-entry error.
+      const other = join(root, "damaged");
+      const file = Object.keys(tree.files).sort()[3] as string;
+      writeFileSync(join(tree.tree, file), "truncated");
+      expect(() =>
+        materializeInstallTree(tree, other, { strip: true, link: false }),
+      ).toThrow(/damaged/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("hashes files by several threads to the digests one thread gives", () => {
+    vi.stubEnv("PISHIP_FILE_WORKERS", "4");
+    try {
+      const { cache, tree } = adoptedMany(61);
+      const threaded = plainInventory(tree, cache);
+      rmSync(join(tree.path, "plain-stripped.json"));
+      vi.stubEnv("PISHIP_FILE_WORKERS", "1");
+      const single = plainInventory(tree, cache);
+      expect(threaded).toEqual(single);
+      expect(Object.keys(threaded)).toHaveLength(61);
+      const [name] = Object.keys(threaded);
+      expect(threaded[name as string]).toBe(
+        hash(readFileSync(join(tree.tree, name as string))),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -575,13 +818,17 @@ describe("plain inventory", () => {
     const stored = JSON.parse(readFileSync(sidecar, "utf8")) as {
       inventory: Record<string, string>;
     };
-    stored.inventory["package.json"] = "0".repeat(64);
+    stored.inventory["node_modules/dep/package.json"] = "0".repeat(64);
     writeFileSync(sidecar, JSON.stringify(stored));
-    expect(plainInventory(tree, cache)["package.json"]).toBe("0".repeat(64));
+    expect(plainInventory(tree, cache)["node_modules/dep/package.json"]).toBe(
+      "0".repeat(64),
+    );
     // A record for another file set is not trusted.
-    delete stored.inventory["package-lock.json"];
+    delete stored.inventory["node_modules/@scope/pkg/lib.js"];
     writeFileSync(sidecar, JSON.stringify(stored));
-    expect(plainInventory(tree, cache)["package-lock.json"]).toBe(hash("{}\n"));
+    expect(plainInventory(tree, cache)["node_modules/@scope/pkg/lib.js"]).toBe(
+      hash("exports.lib = 1;\n"),
+    );
     // The unstripped inventory is a separate record.
     expect(
       Object.keys(plainInventory(tree, { ...cache, strip: false })),

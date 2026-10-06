@@ -50,16 +50,22 @@ import { basename, dirname, join } from "node:path";
 import { buildInputDigest, safePath } from "./build-cache.js";
 import { canonicalJson, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
+import {
+  hashFilesInParallel,
+  placeFilesInParallel,
+  workerCount,
+} from "./parallel-files.js";
 import { isRuntimeIrrelevant } from "./payload.js";
 import { renameWithRetry } from "./rename-retry.js";
-import { buildInput } from "./runtime-dependencies.js";
+import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import { searchToolCacheDirectory } from "./search-tools/index.js";
 import { windowsNpmInvocation } from "./windows-npm.js";
 
-const SCHEMA = "piship-runtime-cache/v2";
+const SCHEMA = "piship-runtime-cache/v3";
+const ROOT_FILES = ["package.json", "package-lock.json"];
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
-const KEEP = { install: 3, bundle: 6 } as const;
+const KEEP = { install: 3, framework: 3, bundle: 6 } as const;
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -68,11 +74,15 @@ export interface RuntimeCache {
   /** Directory holding every entry. */
   readonly root: string;
   /**
-   * What decides the installed tree's bytes: the PiShip build input digest,
-   * the distribution lock's runtime section (Pi version and the npm lock),
-   * the platform, CPU, and libc family, and the major.minor of Node and npm.
+   * What decides the third-party tree's bytes: the distribution lock's
+   * dependency set (Pi version, the npm lock and the packages it pins), the
+   * platform, CPU, and libc family, and the major.minor of Node and npm. It
+   * does not depend on PiShip's own compiled output, so a change to PiShip
+   * does not install again.
    */
   readonly key: string;
+  /** What decides PiShip's own layer: the build input digest. */
+  readonly framework: string;
   /** `release.strip`: the payload leaves out maps and declarations. */
   readonly strip: boolean;
 }
@@ -126,13 +136,13 @@ export function runtimeCacheFor(
   env: NodeJS.ProcessEnv = process.env,
 ): RuntimeCache {
   const [major, minor] = process.versions.node.split(".");
+  const { package: pi, version, npmLockSha256, packages } = lock.runtime;
   return {
     root: join(dirname(searchToolCacheDirectory(env)), "runtime"),
     key: hash(
       canonicalJson({
         schema: SCHEMA,
-        input: buildInputDigest(buildInput),
-        runtime: hash(canonicalJson(lock.runtime)),
+        runtime: { package: pi, version, npmLockSha256, packages },
         platform: process.platform,
         arch: process.arch,
         libc: libcFamily(),
@@ -140,12 +150,15 @@ export function runtimeCacheFor(
         npm: npmVersion(),
       }),
     ),
+    framework: hash(
+      canonicalJson({ schema: SCHEMA, input: buildInputDigest(buildInput) }),
+    ),
     strip: lock.release?.strip === true,
   };
 }
 
 /** A name short enough for Windows paths: the key's first 20 hex digits. */
-const entryPath = (cache: RuntimeCache, kind: "i" | "b", key: string) =>
+const entryPath = (cache: RuntimeCache, kind: "i" | "f" | "b", key: string) =>
   join(cache.root, `${kind}-${key.slice(0, 20)}`);
 
 /** Regular files under `root`, as `/`-separated relative paths. */
@@ -266,6 +279,7 @@ function prune(cache: RuntimeCache, budget: number): void {
       .map((entry) => entry.name);
     for (const [prefix, keep] of [
       ["i-", KEEP.install],
+      ["f-", KEEP.framework],
       ["b-", KEEP.bundle],
     ] as const)
       for (const entry of names
@@ -327,17 +341,26 @@ function publish(
   return "published";
 }
 
-// --- The installed dependency tree ----------------------------------------
+// --- The installed dependency tree and PiShip's own layer ------------------
 
-interface InstallRecord {
+/**
+ * A tree entry is one of two layers: `install`, everything npm installs (the
+ * third-party packages, keyed by the lock), and `framework`, PiShip's own
+ * compiled output and build input snapshot (keyed by the build input digest).
+ * Their paths never overlap, so a payload takes both.
+ */
+type Layer = "install" | "framework";
+const LAYER_DIRECTORY = { install: "i", framework: "f" } as const;
+
+interface TreeRecord {
   readonly schema: string;
-  readonly kind: "install";
+  readonly kind: Layer;
   readonly key: string;
   readonly platform: string;
   readonly arch: string;
   /** Every file of `tree`, with its size. */
   readonly files: Readonly<Record<string, number>>;
-  /** SHA-256 over the sorted (path, size) list, made when the entry was adopted. */
+  /** SHA-256 over the sorted (path, size) list, made when the entry was created. */
   readonly filesSha256: string;
 }
 
@@ -347,6 +370,9 @@ export interface InstallTree {
   readonly files: Readonly<Record<string, number>>;
   /** The entry's identity: the digest over its sorted (path, size) list. */
   readonly digest: string;
+  readonly layer: Layer;
+  /** The key the entry is stored under. */
+  readonly key: string;
 }
 
 /** A digest of a file set as `path NUL size LF` lines in path order. */
@@ -359,21 +385,28 @@ function filesDigest(files: Readonly<Record<string, number>>): string {
   );
 }
 
+const layerKey = (cache: RuntimeCache, layer: Layer): string =>
+  layer === "install" ? cache.key : cache.framework;
+const layerPath = (cache: RuntimeCache, layer: Layer): string =>
+  entryPath(cache, LAYER_DIRECTORY[layer], layerKey(cache, layer));
+
 /**
- * The cached tree for `cache.key`, or undefined when there is none or it does
- * not match its record: wrong key, schema, or target, a record whose digest
- * is not that of its own file list, or a file set that differs from the one
- * recorded when it was created.
+ * The cached tree of `layer`, or undefined when there is none or it does not
+ * match its record: wrong key, schema, or target, a record whose digest is not
+ * that of its own file list, or a file set that differs from the one recorded
+ * when it was created.
  */
-export function lookupInstallTree(
+export function lookupTree(
   cache: RuntimeCache,
+  layer: Layer,
 ): InstallTree | undefined {
-  const path = entryPath(cache, "i", cache.key);
-  const record = readRecord<InstallRecord>(path);
+  const key = layerKey(cache, layer);
+  const path = layerPath(cache, layer);
+  const record = readRecord<TreeRecord>(path);
   if (
     record?.schema !== SCHEMA ||
-    record.kind !== "install" ||
-    record.key !== cache.key ||
+    record.kind !== layer ||
+    record.key !== key ||
     record.platform !== process.platform ||
     record.arch !== process.arch ||
     !record.files ||
@@ -393,19 +426,31 @@ export function lookupInstallTree(
   }
   touch(path);
   prune(cache, DISCARD_BUDGET_MS.hit);
-  return { path, tree, files: record.files, digest: record.filesSha256 };
+  return {
+    path,
+    tree,
+    files: record.files,
+    digest: record.filesSha256,
+    layer,
+    key,
+  };
 }
+
+/** The third-party tree: see `lookupTree`. */
+export const lookupInstallTree = (cache: RuntimeCache) =>
+  lookupTree(cache, "install");
 
 /**
- * Take the entry for `cache.key` out of use. A build calls this for an entry
- * that matches its record but cannot be placed, so the tree it installs
- * instead is published in its place.
+ * Take a layer's entry out of use. A build calls this for an entry that
+ * matches its record but cannot be placed, so the tree it makes instead is
+ * published in its place.
  */
-export function discardInstallTree(cache: RuntimeCache): void {
-  hide(entryPath(cache, "i", cache.key));
+export function discardTree(cache: RuntimeCache, layer: Layer): void {
+  hide(layerPath(cache, layer));
 }
+export const discardInstallTree = (cache: RuntimeCache) =>
+  discardTree(cache, "install");
 
-const ROOT_FILES = ["package.json", "package-lock.json"];
 const code = (error: unknown) => (error as NodeJS.ErrnoException).code;
 
 export interface AdoptedTree {
@@ -419,17 +464,21 @@ export interface AdoptedTree {
   readonly moved: boolean;
 }
 
+/** Create the files of a new entry in `tree`, a directory that does not exist yet. */
+type Fill = (tree: string) => { readonly moved: boolean } | undefined;
+
 /**
- * Publish the installed dependency tree of `stage` as a new entry: moved in
- * with one rename, or, when the cache is on another volume (EXDEV), copied in
- * once and left in the stage as well. A moved tree leaves the stage without
- * `node_modules`, `package.json`, and `package-lock.json`. Where the tree
- * cannot be adopted (the rename is refused, or the tree holds a link) the
- * stage is left as it was and the result is undefined.
+ * Publish a new entry of `layer`: `fill` writes its files into a holding
+ * directory (and says whether it moved them out of somewhere), the file list
+ * and its digest are recorded, and the directory is renamed into place. A lost
+ * race adopts the winner's entry. Returns undefined when the cache cannot take
+ * it; `undo` then puts back whatever `fill` moved.
  */
-export function adoptInstallTree(
+function publishTree(
   cache: RuntimeCache,
-  stage: string,
+  layer: Layer,
+  fill: Fill,
+  undo: (location: string) => void,
 ): AdoptedTree | undefined {
   let holding: string;
   try {
@@ -438,38 +487,21 @@ export function adoptInstallTree(
   } catch {
     return undefined;
   }
-  const destination = entryPath(cache, "i", cache.key);
-  const names = ["node_modules", ...ROOT_FILES];
+  const destination = layerPath(cache, layer);
   // Where the tree is now, so a failure can put it back.
   let location = join(holding, "tree");
-  const moved: string[] = [];
   let given = false;
-  let copied = false;
+  let moved = true;
   try {
     mkdirSync(location);
-    for (const name of names)
-      try {
-        renameWithRetry(join(stage, name), join(location, name));
-        moved.push(name);
-      } catch (error) {
-        if (code(error) !== "EXDEV" || moved.length > 0) throw error;
-        copied = true;
-        break;
-      }
-    if (copied) {
-      cpSync(join(stage, "node_modules"), join(location, "node_modules"), {
-        recursive: true,
-      });
-      for (const name of ROOT_FILES)
-        copyFileSync(join(stage, name), join(location, name));
-    }
+    moved = fill(location)?.moved ?? true;
     const files: Record<string, number> = {};
     for (const name of listFiles(location).sort())
       files[name] = lstatSync(inside(location, name)).size;
-    const record: InstallRecord = {
+    const record: TreeRecord = {
       schema: SCHEMA,
-      kind: "install",
-      key: cache.key,
+      kind: layer,
+      key: layerKey(cache, layer),
       platform: process.platform,
       arch: process.arch,
       files,
@@ -479,25 +511,112 @@ export function adoptInstallTree(
     const outcome = publish(
       holding,
       destination,
-      () => lookupInstallTree(cache) !== undefined,
+      () => lookupTree(cache, layer) !== undefined,
     );
     // Another build's entry stands in for ours, which is gone.
     if (outcome === "published") location = join(destination, "tree");
-    else given = !copied;
-    const tree = lookupInstallTree(cache);
+    else given = moved;
+    const tree = lookupTree(cache, layer);
     if (!tree) throw new Error("The runtime cache entry is not readable");
     prune(cache, DISCARD_BUDGET_MS.published);
-    return { tree, moved: !copied };
+    return { tree, moved };
   } catch (error) {
     // The tree was handed over and cannot be put back.
     if (given) throw error;
-    for (const name of moved.reverse())
-      try {
-        renameWithRetry(join(location, name), join(stage, name));
-      } catch {}
+    undo(location);
     discard(location === join(holding, "tree") ? holding : destination);
     return undefined;
   }
+}
+
+/**
+ * Publish the installed third-party tree of `stage` (its `node_modules`) as a
+ * new entry: moved in with one rename, or, when the cache is on another volume
+ * (EXDEV), copied in once and left in the stage as well. A moved tree leaves
+ * the stage without `node_modules`. Where the tree cannot be adopted (the
+ * rename is refused, or the tree holds a link) the stage is left as it was and
+ * the result is undefined.
+ */
+export function adoptInstallTree(
+  cache: RuntimeCache,
+  stage: string,
+): AdoptedTree | undefined {
+  let movedIn = false;
+  return publishTree(
+    cache,
+    "install",
+    (location) => {
+      try {
+        renameWithRetry(
+          join(stage, "node_modules"),
+          join(location, "node_modules"),
+        );
+        movedIn = true;
+        return { moved: true };
+      } catch (error) {
+        if (code(error) !== "EXDEV") throw error;
+        cpSync(join(stage, "node_modules"), join(location, "node_modules"), {
+          recursive: true,
+        });
+        return { moved: false };
+      }
+    },
+    (location) => {
+      if (!movedIn) return;
+      try {
+        renameWithRetry(
+          join(location, "node_modules"),
+          join(stage, "node_modules"),
+        );
+      } catch {}
+    },
+  );
+}
+
+/**
+ * Publish PiShip's own layer from the build input, which is a plain copy of
+ * files that are already on this machine: no install. Undefined where the
+ * cache cannot take it.
+ */
+export function publishFrameworkTree(
+  cache: RuntimeCache,
+): InstallTree | undefined {
+  return publishTree(
+    cache,
+    "framework",
+    (location) => {
+      writeFrameworkFiles(location);
+      return { moved: false };
+    },
+    () => {},
+  )?.tree;
+}
+
+/**
+ * PiShip's own files of a payload, at their payload paths under `root`: the
+ * root manifest and npm lock, each workspace package's manifest and compiled
+ * output as a real copy under `node_modules/@piship`, and the build input
+ * snapshot that management commands read.
+ */
+export function writeFrameworkFiles(root: string): void {
+  for (const name of ROOT_FILES)
+    copyFileSync(join(buildInput, name), inside(root, name));
+  for (const name of workspacePackages) {
+    const target = join(root, "node_modules", "@piship", name);
+    mkdirSync(target, { recursive: true });
+    copyFileSync(
+      join(buildInput, "packages", name, "package.json"),
+      join(target, "package.json"),
+    );
+    cpSync(join(buildInput, "packages", name, "dist"), join(target, "dist"), {
+      recursive: true,
+    });
+  }
+  cpSync(
+    buildInput,
+    join(root, "node_modules", "@piship", "core", "dist", "build-input"),
+    { recursive: true },
+  );
 }
 
 /**
@@ -539,20 +658,38 @@ export function materializeInstallTree(
   target: string,
   options: { readonly strip: boolean; readonly link?: boolean },
 ): { readonly linked: number; readonly copied: number } {
+  const entries = Object.entries(tree.files).filter(
+    ([name]) => !options.strip || !isRuntimeIrrelevant(basename(name)),
+  );
+  const link = options.link ?? process.platform === "win32";
   const made = new Set<string>();
+  const parents = (name: string) => {
+    const parent = dirname(inside(target, name));
+    if (made.has(parent)) return;
+    mkdirSync(parent, { recursive: true });
+    made.add(parent);
+  };
+  const threads = workerCount(entries.length);
+  if (threads > 1) {
+    // Directories first, then the files by several threads at once.
+    for (const [name] of entries) parents(name);
+    return placeFilesInParallel(
+      threads,
+      tree.tree,
+      target,
+      entries.map(([name]) => name),
+      entries.map(([, size]) => size),
+      link,
+    );
+  }
   const placed = { linked: 0, copied: 0 };
-  let link = options.link ?? process.platform === "win32";
-  for (const [name, size] of Object.entries(tree.files)) {
-    if (options.strip && isRuntimeIrrelevant(basename(name))) continue;
+  let linking = link;
+  for (const [name, size] of entries) {
     const to = inside(target, name);
-    const parent = dirname(to);
-    if (!made.has(parent)) {
-      mkdirSync(parent, { recursive: true });
-      made.add(parent);
-    }
-    const how = place(inside(tree.tree, name), to, link);
+    parents(name);
+    const how = place(inside(tree.tree, name), to, linking);
     placed[how]++;
-    link = link && how === "linked";
+    linking = linking && how === "linked";
     if (lstatSync(to).size !== size)
       throw new Error(`The runtime cache entry is damaged: ${name}`);
   }
@@ -584,7 +721,7 @@ export function plainInventory(
     };
     if (
       record.schema === SCHEMA &&
-      record.key === cache.key &&
+      record.key === tree.key &&
       record.strip === cache.strip &&
       record.inventory &&
       sameNames(names, record.inventory) &&
@@ -595,13 +732,18 @@ export function plainInventory(
       return record.inventory;
   } catch {}
   const inventory: Record<string, string> = {};
-  for (const name of names)
-    inventory[name] = hash(readFileSync(inside(tree.tree, name)));
+  const threads = workerCount(names.length);
+  const digests =
+    threads > 1 ? hashFilesInParallel(threads, tree.tree, names) : undefined;
+  names.forEach((name, index) => {
+    inventory[name] =
+      digests?.[index] ?? hash(readFileSync(inside(tree.tree, name)));
+  });
   writeOnce(
     sidecar,
     JSON.stringify({
       schema: SCHEMA,
-      key: cache.key,
+      key: tree.key,
       strip: cache.strip,
       inventory,
     }),
@@ -725,6 +867,7 @@ export const bundleEntryKey = (cache: RuntimeCache, esbuild: string): string =>
     canonicalJson({
       schema: SCHEMA,
       install: cache.key,
+      framework: cache.framework,
       strip: cache.strip,
       esbuild,
     }),

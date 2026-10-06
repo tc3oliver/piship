@@ -40,6 +40,8 @@ export interface RuntimeCacheProvenance {
   readonly status: "hit" | "miss" | "disabled";
   /** The cached tree's identity: the digest of its sorted path and size list. */
   readonly entry?: string;
+  /** PiShip's own layer: placed from its entry, published first, or copied directly. */
+  readonly framework?: "hit" | "miss" | "direct";
   /** Whether a bundled runtime came from the cache. */
   readonly bundle?: "hit" | "miss";
   /** How the tree's files reached the payload. */
