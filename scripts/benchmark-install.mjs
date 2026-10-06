@@ -140,7 +140,7 @@ env.MYPI_UPDATE_SOURCE = `http://127.0.0.1:${server.address().port}`;
 const receiptPath = join(env.PISHIP_INSTALL_HOME, "receipts/mypi.json");
 // The command shim only runs `node <launcher> <args>`. Run that directly: Node
 // refuses to spawn a .cmd without a shell, and a shell would take the path and
-// arguments as command text. The shim's own cost (cmd.exe and `where node`) is
+// arguments as command text. The shim's own cost (cmd.exe starting) is
 // therefore not measured.
 const branded = (...argv) =>
   run(process.execPath, [
