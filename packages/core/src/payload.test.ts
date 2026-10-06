@@ -7,10 +7,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { removeForeignPlatformPackages } from "./payload.js";
+import {
+  removeForeignPlatformPackages,
+  stripRuntimeIrrelevant,
+} from "./payload.js";
 
 let root: string;
 beforeEach(() => {
@@ -100,5 +103,53 @@ describe("removeForeignPlatformPackages", () => {
       "node_modules/not-windows",
     ]);
     expect(existsSync(join(root, nested, "@esbuild", "win32-x64"))).toBe(true);
+  });
+});
+
+describe("stripRuntimeIrrelevant", () => {
+  const files: Record<string, string> = {
+    "piship.yaml": "app: {}\n",
+    "package.json": "{}",
+    "bin/app": "#!/usr/bin/env node",
+    "node_modules/pi/index.js": "module.exports=1",
+    "node_modules/pi/index.d.ts": "export=1",
+    "node_modules/pi/index.js.map": "{}",
+    "node_modules/pi/types/index.d.mts": "export=1",
+    "node_modules/pi/types/index.d.cts": "export=1",
+    "node_modules/pi/types/index.d.mts.map": "{}",
+    "node_modules/pi/prompts/system.md": "you are pi",
+    "node_modules/quickjs/quickjs.wasm": "wasm",
+    "node_modules/native/hook.node": "bin",
+    "node_modules/pkg/README.md": "docs",
+  };
+  function stageFiles(): void {
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(join(root, dirname(path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    }
+  }
+  it("removes source maps and declaration files, keeps everything runnable", () => {
+    stageFiles();
+    const removed = stripRuntimeIrrelevant(root).sort();
+    expect(removed).toEqual(
+      [
+        "node_modules/pi/index.d.ts",
+        "node_modules/pi/index.js.map",
+        "node_modules/pi/types/index.d.cts",
+        "node_modules/pi/types/index.d.mts",
+        "node_modules/pi/types/index.d.mts.map",
+      ].sort(),
+    );
+    for (const kept of [
+      "piship.yaml",
+      "package.json",
+      "bin/app",
+      "node_modules/pi/index.js",
+      "node_modules/pi/prompts/system.md",
+      "node_modules/quickjs/quickjs.wasm",
+      "node_modules/native/hook.node",
+      "node_modules/pkg/README.md",
+    ])
+      expect(existsSync(join(root, kept))).toBe(true);
   });
 });

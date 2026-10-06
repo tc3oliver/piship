@@ -139,6 +139,12 @@ export interface ReleaseManifest {
    * exact dependency through the install-script gate; PiShip never runs it.
    */
   readonly installScripts?: readonly string[];
+  /**
+   * piship/v1alpha6: strip JS source maps and TypeScript declaration files
+   * from the payload before its inventory is computed. Roughly halves the
+   * file count a managed Windows machine extracts and scans on first install.
+   */
+  readonly strip?: boolean;
 }
 export interface LifecycleManifest {
   readonly updates: UpdatesManifest;
@@ -640,7 +646,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
     "targets",
     "sources",
     "vulnerabilities",
-    ...(v6 ? ["installScripts"] : []),
+    ...(v6 ? ["installScripts", "strip"] : []),
   ]);
   const targets =
     release.targets === undefined
@@ -722,6 +728,12 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
           },
         );
   if (installScripts) unique(installScripts, "release.installScripts");
+  let strip: boolean | undefined;
+  if (release.strip !== undefined) {
+    if (typeof release.strip !== "boolean")
+      fail("release.strip", "Expected a boolean");
+    strip = release.strip === true;
+  }
   return {
     targets,
     sources,
@@ -731,6 +743,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
       ...(registry === undefined ? {} : { registry }),
     },
     ...(installScripts === undefined ? {} : { installScripts }),
+    ...(strip === undefined ? {} : { strip }),
   };
 }
 

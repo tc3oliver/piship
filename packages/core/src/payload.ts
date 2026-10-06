@@ -71,6 +71,33 @@ function supports(values: readonly string[] | undefined, value: string) {
   const allowed = values.filter((item) => !item.startsWith("!"));
   return allowed.length === 0 || allowed.includes(value);
 }
+/** JS source maps and TypeScript declaration files, by file name. */
+const RUNTIME_IRRELEVANT = /\.(?:map|d\.ts|d\.mts|d\.cts)$/;
+/**
+ * Remove files a running Node process never reads — JS source maps and
+ * TypeScript declaration files — before the payload inventory is computed.
+ * A PiShip payload ships ~17k files and over half are exactly these; on
+ * Windows Defender real-time-scans every extracted file, so stripping them
+ * roughly halves first-install extraction time and shrinks the download.
+ * Markdown is deliberately kept: Pi embeds `.md` prompt templates at run time.
+ * Returns the removed paths, `/`-separated and relative to `root`.
+ */
+export function stripRuntimeIrrelevant(root: string): string[] {
+  const removed: string[] = [];
+  const visit = (directory: string): void => {
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const stat = lstatSync(path);
+      if (stat.isDirectory()) visit(path);
+      else if (stat.isFile() && RUNTIME_IRRELEVANT.test(name)) {
+        rmSync(path);
+        removed.push(relative(root, path).split(sep).join("/"));
+      }
+    }
+  };
+  visit(root);
+  return removed;
+}
 export function verifyPayload(directory: string): DistributionLock {
   return verifyPayloadContents(directory, { requireTarget: true });
 }

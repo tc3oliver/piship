@@ -511,6 +511,23 @@ describe("piship/v1alpha6 schema", () => {
       ).toThrow(/release\.installScripts\[0\]/);
   });
 
+  it("parses an optional boolean release.strip flag", () => {
+    expect(
+      parseManifest(personal({ release: { strip: true } })).lifecycle?.release
+        .strip,
+    ).toBe(true);
+    expect(
+      parseManifest(personal({ release: { strip: false } })).lifecycle?.release
+        .strip,
+    ).toBe(false);
+    expect(
+      parseManifest(personal({})).lifecycle?.release.strip,
+    ).toBeUndefined();
+    expect(() =>
+      parseManifest(personal({ release: { strip: "yes" } })),
+    ).toThrow(/release\.strip/);
+  });
+
   it("accepts the new policy actions and reads model.use as model.select", () => {
     const manifest = parseManifest(
       personal({

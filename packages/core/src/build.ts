@@ -17,6 +17,7 @@ import {
   inventory,
   removeForeignPlatformPackages,
   removeNpmBins,
+  stripRuntimeIrrelevant,
 } from "./payload.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
@@ -112,6 +113,10 @@ export function buildDistribution(
     removeNpmBins(join(stage, "node_modules"));
     removeForeignPlatformPackages(stage);
     debugTiming("removeNpmBins/foreign platform packages", phase);
+    phase = process.hrtime.bigint();
+    if (readManifest(manifestPath).lifecycle?.release.strip === true)
+      stripRuntimeIrrelevant(stage);
+    debugTiming("strip runtime-irrelevant files", phase);
     phase = process.hrtime.bigint();
     mkdirSync(join(stage, "bin"), { recursive: true });
     mkdirSync(join(stage, "metadata"), { recursive: true });
