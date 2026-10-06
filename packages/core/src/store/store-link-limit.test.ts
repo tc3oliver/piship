@@ -77,8 +77,10 @@ describe.each(["EMLINK", "UNKNOWN"])(
       expect(store.counts.declined).toBe(0);
       const object = store.objectPath(digest, false);
       expect(lstatSync(object).nlink).toBe(3);
-      expect(lstatSync(outputs[0] as string).ino).not.toBe(
-        lstatSync(object).ino,
+      // Compare file ids as bigints: an NTFS file id exceeds 2^53, and two
+      // nearby ids round to the same number.
+      expect(lstatSync(outputs[0] as string, { bigint: true }).ino).not.toBe(
+        lstatSync(object, { bigint: true }).ino,
       );
     });
   },
