@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appsDir,
@@ -74,7 +75,7 @@ describe("an installed launcher", () => {
         "--input-type=module",
         "-e",
         `process.on("exit", () => { const s = globalThis[Symbol.for("piship.startup-timing")]; process.stdout.write(JSON.stringify(s)); });
-await import(${JSON.stringify(receipt.launcher)});`,
+await import(${JSON.stringify(pathToFileURL(receipt.launcher as string).href)});`,
       ],
       { encoding: "utf8", env: { ...process.env, PISHIP_DEBUG_TIMING: "1" } },
     );
@@ -106,7 +107,7 @@ await import(${JSON.stringify(receipt.launcher)});`,
         "--input-type=module",
         "-e",
         `process.on("exit", () => process.stdout.write(String(globalThis[Symbol.for("piship.startup-timing")])));
-await import(${JSON.stringify(receipt.launcher)});`,
+await import(${JSON.stringify(pathToFileURL(receipt.launcher as string).href)});`,
       ],
       {
         encoding: "utf8",
@@ -343,7 +344,9 @@ describe("the command shim", () => {
     expect(readFileSync(path, "utf8")).toBe(
       commandShimSource(posixLauncher, "linux"),
     );
-    expect(statSync(path).mode & 0o111).toBe(0o111);
+    // A file has no execute bits on Windows.
+    if (process.platform !== "win32")
+      expect(statSync(path).mode & 0o111).toBe(0o111);
     expect(() => writeShim(path, posixLauncher, "linux")).toThrow(/EEXIST/);
   });
 });

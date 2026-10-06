@@ -322,7 +322,9 @@ describe("resolveProfile", () => {
 
 describe("realpathNearest while a session is being set up", () => {
   it("asks the system once for a path resolved again and again, and afresh outside", async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "piship-nearest-")));
+    const dir = realpathSync.native(
+      mkdtempSync(join(tmpdir(), "piship-nearest-")),
+    );
     try {
       const path = join(dir, "missing", "leaf");
       const calls = async (work: () => void | Promise<void>) => {
