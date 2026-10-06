@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 # AcmeCode wired to the enterprise reference stack in this directory: the
 # Keycloak realm `piship-reference`, the reference credential broker, and the

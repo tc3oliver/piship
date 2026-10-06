@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 # A variant of MyPi for a local, OpenAI-compatible model server (such as
 # llama.cpp, Ollama, or vLLM on this machine) with a key the user keeps in

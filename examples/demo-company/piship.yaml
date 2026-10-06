@@ -1,4 +1,4 @@
-schema: piship/v1alpha6
+schema: piship/v1
 
 app:
   id: acmecode
