@@ -1,10 +1,18 @@
-import { readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
+import { readInstallReceipt } from "./install/receipt.js";
 import { manifestDigest } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
+import { installHome } from "./state-paths.js";
 
 /** SHA-256 of every payload file except the inventory itself, by `/` path. */
 export function payloadInventory(root: string): Record<string, string> {
@@ -198,11 +206,16 @@ export function verifyPayloadContents(
   return lock;
 }
 /**
- * Load the metadata required to boot. Launch never walks the payload or reads
- * its inventory, manifest, or npm lock, including for older manifests that
- * declare verifyAtLaunch. Full verification is an explicit diagnostic/release
- * operation. The target check is constant-cost and prevents a wrong-platform
- * installation from trying to load its native runtime.
+ * Load the metadata required to boot. By default a launch never walks the
+ * payload or reads its inventory, manifest, or npm lock, but it does hash the
+ * one small file that carries the distribution's policy, `piship.lock`,
+ * against the digest recorded when the release was installed: an edited lock
+ * (a relaxed `policy.enforced`, a changed capability) is refused, and costs
+ * one hash of a file of tens of kilobytes however large the payload is. A
+ * distribution that declares `runtime.verifyAtLaunch: true` (recorded in its
+ * lock) opts into the full verification of the payload, inventory included,
+ * at every launch. The target check is constant-cost and prevents a
+ * wrong-platform installation from trying to load its native runtime.
  */
 export function verifyLaunchPayload(directory: string): DistributionLock {
   const root = resolve(directory);
@@ -213,9 +226,57 @@ export function verifyLaunchPayload(directory: string): DistributionLock {
     throw new Error(
       `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
     );
-  return JSON.parse(
-    readFileSync(join(root, "piship.lock"), "utf8"),
-  ) as DistributionLock;
+  const bytes = readFileSync(join(root, "piship.lock"));
+  checkInstalledLock(root, bytes);
+  const lock = JSON.parse(bytes.toString("utf8")) as DistributionLock;
+  return lock.verifyAtLaunch === true ? verifyPayload(root) : lock;
+}
+
+function sameDirectory(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An installed release's lock must be the file that was installed: its
+ * digest is recorded in the install receipt, from the signed release
+ * metadata (`release.lockSha256`) or, for a payload directory, from the
+ * install itself. Only a payload at `apps/<id>/<version>` of this install
+ * home is bound; a build directory, a release the receipt does not list, a
+ * receipt that cannot be read (the installed launcher would not have started
+ * it), and an installation from before the digest was recorded have nothing
+ * to compare with and are not refused here.
+ */
+function checkInstalledLock(root: string, bytes: Buffer): void {
+  const id = basename(dirname(root));
+  if (!sameDirectory(dirname(dirname(root)), join(installHome(), "apps")))
+    return;
+  let expected: string | undefined;
+  let version: string | undefined;
+  try {
+    const entry = readInstallReceipt(id).releases.find((item) =>
+      sameDirectory(item.payload, root),
+    );
+    expected = entry?.release?.lockSha256 ?? entry?.lockSha256;
+    version = entry?.version;
+  } catch {
+    return;
+  }
+  if (!expected) return;
+  const actual = hash(bytes);
+  if (actual !== expected)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `The installed piship.lock of ${id} ${version} is not the one that was installed (SHA-256 ${actual.slice(0, 12)}, recorded ${expected.slice(0, 12)}); its policy cannot be trusted`,
+      {
+        component: "payload",
+        userAction: repairAction(root),
+        sanitizedDetail: { payload: root, expected, actual },
+      },
+    );
 }
 // Doctor only needs the command name here. Full integrity verification belongs
 // to explicit diagnostics and release qualification.

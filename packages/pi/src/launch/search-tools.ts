@@ -16,7 +16,11 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
+  openSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -67,12 +71,10 @@ function matches(path: string, digest: string): boolean {
   return sha256(readFileSync(path)) === digest;
 }
 
-/** The fingerprint of a regular, runnable file, or undefined. */
-function fingerprint(path: string, digest: string): Fingerprint | undefined {
-  const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-  if (!stat?.isFile()) return undefined;
-  if (process.platform !== "win32" && (Number(stat.mode) & 0o111) === 0)
-    return undefined;
+function fingerprintOf(
+  stat: { size: bigint; mtimeNs: bigint; ctimeNs: bigint; ino: bigint },
+  digest: string,
+): Fingerprint {
   return {
     digest,
     size: String(stat.size),
@@ -80,6 +82,51 @@ function fingerprint(path: string, digest: string): Fingerprint | undefined {
     ctimeNs: String(stat.ctimeNs),
     ino: String(stat.ino),
   };
+}
+
+/** The fingerprint of a regular, runnable file, or undefined. */
+function fingerprint(path: string, digest: string): Fingerprint | undefined {
+  const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (!stat?.isFile()) return undefined;
+  if (process.platform !== "win32" && (Number(stat.mode) & 0o111) === 0)
+    return undefined;
+  return fingerprintOf(stat, digest);
+}
+
+/**
+ * The fingerprint of the file at `path` if its content is the pinned digest,
+ * read through one descriptor that is looked at before and after the read:
+ * what is recorded is the file that was hashed, and a file that changed while
+ * it was read is not recorded at all. Asking by path after hashing would let
+ * a file swapped in between be recorded as the one that was verified; a path
+ * that is swapped after this returns names another file than the recorded
+ * one, and fails the comparison at the next start.
+ */
+function verifiedFingerprint(
+  path: string,
+  digest: string,
+): Fingerprint | undefined {
+  let fd: number | undefined;
+  try {
+    // Not through a link, where the system can refuse one.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const before = fstatSync(fd, { bigint: true });
+    if (!before.isFile()) return undefined;
+    if (process.platform !== "win32" && (Number(before.mode) & 0o111) === 0)
+      return undefined;
+    if (sha256(readFileSync(fd)) !== digest) return undefined;
+    const after = fstatSync(fd, { bigint: true });
+    return sameFingerprint(
+      fingerprintOf(before, digest),
+      fingerprintOf(after, digest),
+    )
+      ? fingerprintOf(after, digest)
+      : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 function readReceipt(directory: string): Record<string, Fingerprint> {
@@ -213,7 +260,8 @@ export function installSearchTools(
       installed.push({ tool, version: locked.version, path });
       continue;
     }
-    if (!matches(path, entry.binary)) {
+    let verified = verifiedFingerprint(path, entry.binary);
+    if (!verified) {
       const content = readFileSync(
         join(distributionDir, SEARCH_TOOL_PAYLOAD_DIRECTORY, name),
       );
@@ -228,8 +276,8 @@ export function installSearchTools(
         );
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       replace(path, content);
+      verified = verifiedFingerprint(path, entry.binary);
     }
-    const verified = fingerprint(path, entry.binary);
     if (verified) {
       receipt[name] = verified;
       receiptChanged = true;

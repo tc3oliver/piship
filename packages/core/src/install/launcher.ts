@@ -96,6 +96,9 @@ const alive = (pid) => {
 // record, or a record of an earlier PiShip that names only a process ID).
 const gone = (record) => {
   if (record.host !== null && record.host !== host) return null;
+  // A launcher takes the gate by creating it, so a record that names this
+  // process's own ID is a dead process's, whose ID this one was given.
+  if (record.pid === process.pid) return true;
   if (!alive(record.pid)) return true;
   if (record.identity === null && record.started === null) return null;
   const current = identityOf(record.pid);

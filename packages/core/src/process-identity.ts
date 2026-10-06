@@ -135,6 +135,13 @@ export function recordedProcessGone(
 ): boolean | undefined {
   if (record.host !== null && record.host !== processHostToken())
     return undefined;
+  // A record that names this process's own ID. What this process wrote has
+  // this process's start time, exactly, and needs no question to the system;
+  // a record with another start time is a dead process's, whose ID this one
+  // was given (Windows hands an ID out again at once: a command killed by
+  // Ctrl-C and run again within the start tolerance can get the same one).
+  if (record.pid === process.pid && record.started !== null)
+    return record.started !== recordedStart();
   if (!processAlive(record.pid)) return true;
   const same = processIdentityMatches(record.identity, record.pid);
   if (same !== undefined) return !same;
