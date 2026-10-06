@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { listPayloadPackages } from "../supply-chain.js";
+import {
+  generateNotices,
+  generateSbom,
+  listPayloadPackages,
+} from "../supply-chain.js";
 import {
   dedupePiPackages,
   type RetainedReason,
@@ -230,6 +234,18 @@ describe("dependency sharing across vendored Pi packages", () => {
       { a: { dependencies: [leaf()] }, b: { dependencies: [leaf()] } },
       join(payload, "pi-packages"),
     );
+    const documents = () => {
+      const sbom = generateSbom({
+        payloadDir: payload,
+        distribution: { id: "devcode", name: "DevCode", version: "1.0.0" },
+        target: "linux-x64",
+        created: "2026-01-01T00:00:00Z",
+        lockPackages: [],
+      });
+      const notices = generateNotices(payload, listPayloadPackages(payload));
+      return { sbom, notices };
+    };
+    const documentsBefore = documents();
     const before = listPayloadPackages(payload);
     expect(before.map((item) => item.path)).toContain(
       "pi-packages/a/node_modules/leaf",
@@ -238,6 +254,14 @@ describe("dependency sharing across vendored Pi packages", () => {
     expect(report.shared).toHaveLength(1);
     // The same packages at the same paths, with the same license files.
     expect(listPayloadPackages(payload)).toEqual(before);
+    // And the SBOM and the notices (each license text) say the same.
+    const documentsAfter = documents();
+    expect(documentsAfter.sbom).toEqual(documentsBefore.sbom);
+    expect(documentsAfter.notices).toEqual(documentsBefore.notices);
+    expect(
+      documentsAfter.sbom.packages.filter((item) => item.name === "leaf"),
+    ).toHaveLength(2);
+    expect(documentsAfter.notices.text.match(/MIT leaf/g)).toHaveLength(2);
     expect(
       before.find((item) => item.path === "pi-packages/b/node_modules/leaf")
         ?.licenseFiles,
@@ -608,6 +632,89 @@ console.log(JSON.stringify({ def, kind, cjs: require("dual").kind }));\n`,
     expect(existsSync(join(root, "a/node_modules/y/lib/unused.js"))).toBe(true);
     expect(existsSync(join(root, "b/node_modules/y/lib/unused.js"))).toBe(true);
     expect(consume(root, "a", "x")).toBe(consume(root, "b", "x"));
+  });
+
+  it("keeps copies of one content apart when their registry integrity differs", () => {
+    const other = { ...leaf(), lock: { integrity: "sha512-mirror" } };
+    const root = vendor({
+      a: { dependencies: [leaf()] },
+      b: { dependencies: [leaf()] },
+      c: { dependencies: [other] },
+      d: { dependencies: [other] },
+    });
+    const report = run(root, ["a", "b", "c", "d"]);
+    // Two sets of two: each is shared on its own, under its own directory, and
+    // no place is served from the other set's files.
+    expect(report.shared.map((item) => item.locations)).toEqual(
+      expect.arrayContaining([
+        ["pi-packages/a/node_modules/leaf", "pi-packages/b/node_modules/leaf"],
+        ["pi-packages/c/node_modules/leaf", "pi-packages/d/node_modules/leaf"],
+      ]),
+    );
+    expect(report.shared).toHaveLength(2);
+    expect(new Set(report.shared.map((item) => item.directory)).size).toBe(2);
+    expect(readdirSync(join(root, SHARED_DIRECTORY))).toHaveLength(2);
+    expect(
+      new Set(["a", "b", "c", "d"].map((id) => consume(root, id))).size,
+    ).toBe(1);
+  });
+
+  it("keeps a set package-local when its shared directory name is already taken", () => {
+    const layout = {
+      a: { dependencies: [leaf()] },
+      b: { dependencies: [leaf()] },
+    };
+    // The name a set gets is a function of its bytes and integrity; learn it.
+    const [taken] = run(vendor(layout), ["a", "b"]).shared;
+    const root = vendor(layout);
+    const stranger = join(
+      root,
+      taken?.directory.replace("pi-packages/", "") as string,
+    );
+    mkdirSync(stranger, { recursive: true });
+    writeFileSync(join(stranger, "other.js"), "export const other = 1;\n");
+    const before = files(root);
+    const report = run(root, ["a", "b"]);
+    expect(report.shared).toEqual([]);
+    expect(report.retained).toEqual([
+      expect.objectContaining({
+        name: "leaf",
+        reason: "copies-differ",
+        detail: expect.stringContaining("another set's"),
+      }),
+    ]);
+    // Nothing moved, nothing mixed into the other directory.
+    expect(files(root)).toEqual(before);
+    expect(files(stranger)).toEqual(["other.js"]);
+    expect(consume(root, "a")).toBe(consume(root, "b"));
+  });
+
+  it("never makes a file's path longer than its package-local path by more than the shared directory's own name", () => {
+    // Windows stops at 260 characters. A shared file lives at
+    // `.shared/<name>@<version>-<12 hex>/<file>`: one directory level up from
+    // `<id>/node_modules/<name>/<file>`, with the version and a short digest in
+    // its name. That costs at most `.shared/` and the version over any place
+    // (an id is at least one character, and `node_modules/` stays out of it).
+    // A longer digest in the name, or a deeper directory, breaks the budget.
+    const scoped = leaf("@acme/long-package-name-for-the-budget", "12.34.56");
+    const root = vendor({
+      "a-package": { dependencies: [scoped] },
+      "another-package": { dependencies: [scoped] },
+    });
+    const report = run(root, ["a-package", "another-package"]);
+    expect(report.shared).toHaveLength(1);
+    const [shared] = report.shared;
+    const place = shared?.locations[0] as string;
+    expect(shared?.directory).toMatch(
+      /^pi-packages\/\.shared\/@acme\+long-package-name-for-the-budget@12\.34\.56-[0-9a-f]{12}$/,
+    );
+    const real = join(root, ...(shared?.directory ?? "").split("/").slice(1));
+    const paths = files(real);
+    expect(paths.length).toBeGreaterThan(10);
+    for (const file of paths)
+      expect(`${shared?.directory}/${file}`.length).toBeLessThanOrEqual(
+        `${place}/${file}`.length + ".shared/".length + "12.34.56".length,
+      );
   });
 
   it("produces the same tree for the same input", () => {

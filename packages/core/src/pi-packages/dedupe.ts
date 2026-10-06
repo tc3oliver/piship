@@ -581,12 +581,19 @@ export function dedupePiPackages(
       return;
     }
     const integrity = lockEntry(representative)?.integrity as string;
-    const digest = digestOf(representative.directory, verdict.files).slice(
-      0,
-      12,
-    );
+    // The name carries the registry integrity as well as the bytes: the same
+    // bytes under two integrities are two sets and need two directories.
+    const digest = sha256(
+      `${integrity}\0${digestOf(representative.directory, verdict.files)}`,
+    ).slice(0, 12);
     const directory = `${SHARED_DIRECTORY}/${representative.name.replace("/", "+")}@${representative.version}-${digest}`;
     const target = join(vendorRoot, ...directory.split("/"));
+    // A name another set already took (a prefix collision) is never mixed
+    // into: this set keeps its package-local copies.
+    if (existsSync(target)) {
+      retain(same, "copies-differ", `${directory} is another set's`);
+      return;
+    }
     mkdirSync(dirname(target), { recursive: true });
     renameWithRetry(representative.directory, target);
     for (const place of same) {
