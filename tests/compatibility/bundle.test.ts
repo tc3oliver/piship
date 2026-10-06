@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { searchToolCacheDirectory } from "@piship/core";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -70,6 +71,11 @@ afterAll(() => rmSync(root, { recursive: true, force: true }), 120_000);
 
 /** Build the same bundled example through the runtime cache in `cache`. */
 function cachedBuild(cache: string, output: string) {
+  // The example bundles fd and rg, which a build reads from the download
+  // cache: this cache is a fresh one, so it gets the archives `lock` fetched.
+  cpSync(searchToolCacheDirectory(env), join(cache, "search-tools"), {
+    recursive: true,
+  });
   const buildEnv: NodeJS.ProcessEnv = { ...env, PISHIP_CACHE_HOME: cache };
   delete buildEnv.PISHIP_BUILD_INPUT;
   const manifest = join(root, "source", "piship.yaml");

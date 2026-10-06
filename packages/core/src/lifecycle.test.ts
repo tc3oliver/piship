@@ -3208,7 +3208,7 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     const { aside } = await strewn();
     const before = readInstallReceipt(ID);
     const result = reclaimObsoleteVersions(ID);
-    expect(result.removed.sort()).toEqual([aside, "0.9.0"].sort());
+    expect([...result.removed].sort()).toEqual([aside, "0.9.0"].sort());
     expect(result.freedBytes).toBe(3500);
     expect(result.skipped).toEqual([]);
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
