@@ -68,14 +68,14 @@ A policy `ask` prompts each time the action happens; headless (`--smoke`, no ter
 
 ## Repairing an installed release
 
-An installed release is verified against its inventory every time it starts, so any change to its payload directory stops the branded command, its `update`, `rollback`, and `doctor`, and `piship doctor`, with `INTEGRITY_FAILED`. Nothing is exempt from that check, including operating-system metadata such as `.DS_Store`, `._*`, `Thumbs.db`, and `desktop.ini`: an exemption would let any file of those names ride along unchecked. The message names the payload and the offending paths, up to five per kind and a count of the rest (the error detail carries up to 50):
+`doctor` (the branded `<command> doctor` and `piship doctor <id>`) verifies an installed release against its inventory, so any change to its payload directory makes it fail with `INTEGRITY_FAILED`. A routine start, `update`, and `rollback` do not re-hash the payload, to keep them fast on machines that scan every file, so a changed file is found by `doctor` rather than at launch (a missing or damaged file can still break the launch itself). Nothing is exempt from the check, including operating-system metadata such as `.DS_Store`, `._*`, `Thumbs.db`, and `desktop.ini`: an exemption would let any file of those names ride along unchecked. The message names the payload and the offending paths, up to five per kind and a count of the rest (the error detail carries up to 50):
 
 ```text
 INTEGRITY_FAILED: Installed payload integrity mismatch in <install-home>/apps/acmecode/1.1.0; unexpected (not in the inventory): .DS_Store
 Action: Do not run it. Remove the unexpected files it names, or restore it from a trusted release of the same version with: piship repair acmecode <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair acmecode <extracted release> (repair does not run this payload; never run its piship.mjs). …
 ```
 
-`update` and `rollback` run through the active release, so they cannot fix it themselves. `piship repair` runs in PiShip instead and never runs or trusts the damaged payload:
+`update` and `rollback` run through the active release, so a damaged one can fail them and they cannot fix it themselves. `piship repair` runs in PiShip instead and never runs or trusts the damaged payload:
 
 ```bash
 piship repair acmecode ./acmecode-1.1.0-darwin-arm64.tar.gz   # or a release directory or payload
