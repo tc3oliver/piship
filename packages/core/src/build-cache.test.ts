@@ -33,6 +33,14 @@ const fixture = vi.hoisted(() => ({
   installs: 0,
   /** Also install maps and declarations, as real packages ship them. */
   declarations: false,
+  /** File operations that create files, and the `npm --version` the cache key asks for. */
+  copies: 0,
+  links: 0,
+  cps: 0,
+  removals: 0,
+  versions: 0,
+  /** The command and arguments of each npm run. */
+  runs: [] as [string, readonly string[]][],
 }));
 
 vi.mock("./runtime-dependencies.js", async (original) => ({
@@ -40,10 +48,37 @@ vi.mock("./runtime-dependencies.js", async (original) => ({
   buildInput: fixture.input,
   workspacePackages: ["core"],
 }));
+vi.mock("node:fs", async (original) => {
+  const fs = await original<typeof import("node:fs")>();
+  return {
+    ...fs,
+    copyFileSync: vi.fn((...args: Parameters<typeof fs.copyFileSync>) => {
+      fixture.copies++;
+      return fs.copyFileSync(...args);
+    }),
+    linkSync: vi.fn((...args: Parameters<typeof fs.linkSync>) => {
+      fixture.links++;
+      return fs.linkSync(...args);
+    }),
+    cpSync: vi.fn((...args: Parameters<typeof fs.cpSync>) => {
+      fixture.cps++;
+      return fs.cpSync(...args);
+    }),
+    rmSync: vi.fn((...args: Parameters<typeof fs.rmSync>) => {
+      fixture.removals++;
+      return fs.rmSync(...args);
+    }),
+  };
+});
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
-  spawnSync: vi.fn((_command, _args, options) => {
+  execFileSync: vi.fn((...args: unknown[]) => {
+    fixture.versions++;
+    return `${(args[1] as string[])[0] === "--version" ? "11.19.0" : ""}\n`;
+  }),
+  spawnSync: vi.fn((command, args, options) => {
     fixture.installs++;
+    fixture.runs.push([command, args]);
     const dependency = join(options.cwd, "node_modules", "dependency");
     mkdirSync(dependency, { recursive: true });
     writeFileSync(
@@ -81,6 +116,9 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   fixture.installs = 0;
   fixture.declarations = false;
+  fixture.copies = fixture.links = fixture.cps = fixture.removals = 0;
+  fixture.versions = 0;
+  fixture.runs.length = 0;
 });
 afterAll(() => rmSync(fixture.input, { recursive: true, force: true }));
 
@@ -210,9 +248,11 @@ describe("immutable runtime cache", () => {
     return root;
   };
   const cacheOf = (manifest: string, directory: string) =>
-    runtimeCacheFor(requireCurrentLock(manifest), {
-      PISHIP_CACHE_HOME: directory,
-    });
+    runtimeCacheFor(
+      requireCurrentLock(manifest),
+      { PISHIP_CACHE_HOME: directory },
+      { npm: "11.19", libc: undefined },
+    );
   /** The personal example, a piship/v1alpha6 manifest, with the release settings the caller gives. */
   function example(release: string) {
     const root = mkdtempSync(join(tmpdir(), "piship-runtime-cache-example-"));
@@ -359,7 +399,7 @@ describe("immutable runtime cache", () => {
     expect(fixture.installs).toBe(2);
   });
 
-  it("uses a new entry when the PiShip build input changes", () => {
+  it("installs once, and only places PiShip's layer again, when PiShip's own output changes", () => {
     const p = project();
     const where = home();
     const framework = join(
@@ -370,30 +410,178 @@ describe("immutable runtime cache", () => {
       "index.js",
     );
     const prior = readFileSync(framework);
+    const reports: RuntimeCacheReport[] = [];
     const build = (name: string) => {
       const runtimeCache = cacheOf(p.manifest, where);
       return buildDistribution(p.manifest, join(p.root, name), {
         ...options,
         cache: false,
         runtimeCache,
+        onRuntimeCache: (report) => reports.push(report),
       });
     };
     try {
       build("a");
       build("b");
       expect(fixture.installs).toBe(1);
+      expect(reports.map((r) => [r.status, r.framework])).toEqual([
+        ["miss", "miss"],
+        ["hit", "hit"],
+      ]);
       writeFileSync(framework, "export const framework = 3;\n");
+      // The build input marker is what a real change to PiShip moves.
+      const marker = join(fixture.input, ".piship-build-input.json");
+      writeFileSync(
+        marker,
+        JSON.stringify({
+          schema: "piship-build-input/v1",
+          sha256: "7".repeat(64),
+        }),
+      );
       const changed = build("c");
-      expect(fixture.installs).toBe(2);
+      // No npm: the third-party tree is the same entry. PiShip's layer is new.
+      expect(fixture.installs).toBe(1);
+      expect(reports.at(-1)).toMatchObject({
+        status: "hit",
+        framework: "miss",
+      });
+      expect(reports.at(-1)?.entry).toBe(reports[0]?.entry);
       expect(
         readFileSync(
           join(changed, "node_modules", "@piship", "core", "dist", "index.js"),
           "utf8",
         ),
       ).toContain("framework = 3");
+      expect(verifyPayload(changed).app.id).toBe("cachepi");
+      build("d");
+      expect(reports.at(-1)).toMatchObject({ status: "hit", framework: "hit" });
     } finally {
       writeFileSync(framework, prior);
+      rmSync(join(fixture.input, ".piship-build-input.json"), { force: true });
     }
+  });
+
+  it("only places the changed resource when one resource changes and the dependencies do not", () => {
+    const p = project();
+    const runtimeCache = cacheOf(p.manifest, home());
+    const build = () =>
+      buildDistribution(p.manifest, p.output, {
+        ...options,
+        runtimeCache,
+      });
+    const first = build();
+    const dependency = join(first, "node_modules", "dependency", "index.js");
+    const before = statSync(dependency).mtimeMs;
+    fixture.copies = fixture.links = fixture.cps = 0;
+    writeFileSync(p.resource, "# one resource changed\n");
+    lockManifest(p.manifest);
+    expect(build()).toBe(first);
+    // No npm, no strip, no bundle, no placement of the tree: the resource,
+    // the manifest, and the lock are the only files copied.
+    expect(fixture.installs).toBe(1);
+    expect(fixture.copies).toBeLessThanOrEqual(3);
+    expect(fixture.links + fixture.cps).toBe(0);
+    expect(statSync(dependency).mtimeMs).toBe(before);
+    expect(readFileSync(join(first, "resources", "AGENTS.md"), "utf8")).toBe(
+      "# one resource changed\n",
+    );
+    expect(verifyPayload(first).app.id).toBe("cachepi");
+  });
+
+  it("places the cached tree, with no npm and no strip, when a manifest change alters the whole payload but not the dependencies", () => {
+    fixture.declarations = true;
+    const { manifest, root } = example("  strip: true\n  bundle: false\n");
+    const runtimeCache = cacheOf(manifest, home());
+    const output = join(root, "dist");
+    const build = () =>
+      buildDistribution(manifest, output, { ...options, runtimeCache });
+    const first = build();
+    expect(fixture.installs).toBe(1);
+    const placed = walk(first).filter((name) => !name.endsWith("/")).length;
+    // The release policy is part of what the local output cache keys, so it
+    // misses; the runtime cache still holds the tree.
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace(
+        "failOn: high",
+        "failOn: critical",
+      ),
+    );
+    lockManifest(manifest);
+    fixture.copies = fixture.links = fixture.cps = fixture.removals = 0;
+    const second = build();
+    expect(second).toBe(first);
+    expect(fixture.installs).toBe(1);
+    expect(
+      existsSync(join(second, "node_modules", "dependency", "index.d.ts")),
+    ).toBe(false);
+    // Every file of the payload was copied once, the maps and declarations
+    // never were, and nothing was deleted to strip them.
+    expect(fixture.copies + fixture.cps).toBeGreaterThan(0);
+    expect(fixture.copies).toBeLessThanOrEqual(placed + 10);
+    expect(fixture.removals).toBeLessThan(10);
+    expect(verifyPayload(second).app.id).toBe("mypi");
+  });
+
+  it("does not look for npm's version to key the cache when an unchanged payload is reused", async () => {
+    const p = project();
+    const where = home();
+    const build = async () => {
+      vi.resetModules();
+      const fresh = await import("./build.js");
+      const cache = await import("./runtime-cache.js");
+      const lockModule = await import("./lock.js");
+      return fresh.buildDistribution(p.manifest, p.output, {
+        ...options,
+        runtimeCache: cache.runtimeCacheFor(
+          lockModule.requireCurrentLock(p.manifest),
+          { PISHIP_CACHE_HOME: where },
+          { npm: "11.19", libc: undefined },
+        ),
+      });
+    };
+    await build();
+    // Asking for the cache is the caller's; a payload that is unchanged
+    // returns before any entry is read.
+    fixture.versions = 0;
+    const lazy = async () => {
+      vi.resetModules();
+      const fresh = await import("./build.js");
+      return fresh.buildDistribution(p.manifest, p.output, {
+        ...options,
+        runtimeCache: true,
+      });
+    };
+    await lazy();
+    expect(fixture.versions).toBe(0);
+    expect(fixture.installs).toBe(1);
+  });
+
+  it("asks npm only for the locked runtime tree, from the npm cache, with no audit, funding, progress, or warning output", () => {
+    const p = project();
+    buildDistribution(p.manifest, p.output, {
+      ...options,
+      cache: false,
+      runtimeCache: cacheOf(p.manifest, home()),
+    });
+    expect(fixture.runs).toHaveLength(1);
+    const [command, args] = fixture.runs[0] ?? ["", []];
+    // Windows reaches npm through cmd.exe, with the same words.
+    const words =
+      process.platform === "win32" ? (args.at(-1) ?? "").split(" ") : args;
+    expect(command).toBe(process.platform === "win32" ? "cmd.exe" : "npm");
+    for (const word of [
+      "ci",
+      "--omit=dev",
+      "--no-audit",
+      "--no-fund",
+      "--prefer-offline",
+      "--loglevel=error",
+      "--progress=false",
+    ])
+      expect(words, word).toContain(word);
+    // Lifecycle scripts stay on: esbuild's postinstall validates its binary.
+    expect(words).not.toContain("--ignore-scripts");
   });
 
   it("builds without the cache, and says so, when the cache directory cannot be created", () => {

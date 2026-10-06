@@ -10,7 +10,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createStageTimer, createTemporaryDirectory } from "@piship/contracts";
@@ -29,6 +28,7 @@ import {
 } from "../index.js";
 import type { RuntimeCacheReport } from "../build.js";
 import { STATE_SCHEMAS } from "../migration.js";
+import { removeTree } from "../parallel-files.js";
 import { renameWithRetry } from "../rename-retry.js";
 import { runtimeCacheFor } from "../runtime-cache.js";
 import { downloadLockedSearchTools } from "../search-tools/index.js";
@@ -316,6 +316,7 @@ export async function buildRelease(
                     provenance.linked = found.linked;
                     provenance.copied = found.copied;
                   }
+                  if (found.framework) provenance.framework = found.framework;
                   if (found.crossVolume) provenance.crossVolume = true;
                 },
               }
@@ -437,9 +438,10 @@ export async function buildRelease(
       distribution: lock.app,
       target,
       created,
+      packages,
       lockPackages: lock.runtime.packages,
     });
-    verifySbom(payload, sbom);
+    verifySbom(payload, sbom, packages);
     writeJson(join(root, "sbom.spdx.json"), sbom);
     sbomWritten();
     const noticesWritten = timer.start("notices");
@@ -469,6 +471,8 @@ export async function buildRelease(
     if (bundle)
       await timer.run("bundle", () =>
         bundleDistribution(payload, {
+          // The packages the SBOM and notices were made from.
+          components: packages,
           ...(runtimeCache
             ? {
                 cache: runtimeCache,
@@ -574,9 +578,9 @@ export async function buildRelease(
       }),
     );
     const published = timer.start("publish");
-    // The async removal overlaps its per-file work, and retries a file that
-    // Windows still holds open (a scanner, an indexer) for a moment.
-    await rm(directory, { recursive: true, force: true, maxRetries: 3 });
+    // The previous release's files are removed by several threads, each
+    // retried where Windows still holds one open (a scanner, an indexer).
+    removeTree(directory, { attempts: 3 });
     rmSync(archive, { force: true });
     rmSync(buildInfo, { force: true });
     renameWithRetry(root, directory);

@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { removeTree } from "./parallel-files.js";
 import { inventory, isRuntimeIrrelevant } from "./payload.js";
 import {
   bundleEntryKey,
@@ -24,7 +25,7 @@ import {
   TRANSIENT_ATTEMPTS,
   TRANSIENT_RETRY_MS,
 } from "./rename-retry.js";
-import { listPayloadPackages } from "./supply-chain.js";
+import { listPayloadPackages, type PayloadPackage } from "./supply-chain.js";
 import { workspacePackages } from "./runtime-dependencies.js";
 
 const posix = (path: string) => path.split(sep).join("/");
@@ -45,6 +46,11 @@ export interface BundleOptions {
    * the files kept from it.
    */
   readonly strip?: boolean;
+  /**
+   * The payload's packages, when the caller has already listed them (the same
+   * list of the same tree: it is recorded in bundle.json as it is).
+   */
+  readonly components?: readonly PayloadPackage[];
   /** Told whether the bundled runtime came from the cache or the bundler ran. */
   readonly onCache?: (found: "hit" | "miss") => void;
 }
@@ -58,7 +64,7 @@ export function bundleDistribution(
   // paths esbuild reports and the root they are made relative to agree.
   payload = realpathSync.native(payload);
   const strip = options.strip ?? options.cache?.strip === true;
-  const components = listPayloadPackages(payload);
+  const components = options.components ?? listPayloadPackages(payload);
   const runtime = join(payload, "runtime");
   const original = join(payload, ".bundle-input");
   const entries: Record<string, string> = {};
@@ -374,11 +380,9 @@ rmSync(mainSource); rmSync(bootSource);`;
       )}\n`,
     );
   } finally {
-    rmSync(original, {
-      recursive: true,
-      force: true,
-      maxRetries: TRANSIENT_ATTEMPTS,
-      retryDelay: TRANSIENT_RETRY_MS,
+    removeTree(original, {
+      attempts: TRANSIENT_ATTEMPTS,
+      delay: TRANSIENT_RETRY_MS,
     });
   }
   // Bundled files taken from the cache were hashed when it stored them.

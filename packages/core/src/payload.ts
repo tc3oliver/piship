@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
+import { hashFilesInParallel, workerCount } from "./parallel-files.js";
 import { readInstallReceipt } from "./install/receipt.js";
 import { manifestDigest } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
@@ -23,13 +24,14 @@ const byName = (a: { name: string }, b: { name: string }) =>
 /**
  * The inventory of `root`. `known` carries digests a verified source (a cache
  * entry that was hashed when it was created) already holds; a file listed
- * there is not read again. Every other file is hashed from its bytes.
+ * there is not read again. Every other file is hashed from its bytes, by
+ * several threads when there are many.
  */
 export function inventory(
   root: string,
   known: Readonly<Record<string, string>> = {},
 ): Record<string, string> {
-  const output: Record<string, string> = {};
+  const files: string[] = [];
   const visit = (directory: string, prefix: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
       byName,
@@ -39,14 +41,24 @@ export function inventory(
         throw new Error(`Payload symlink is not allowed: ${key}`);
       if (entry.isDirectory()) visit(join(directory, entry.name), `${key}/`);
       else if (entry.isFile() && key !== "metadata/inventory.json")
-        output[key] = Object.hasOwn(known, key)
-          ? (known[key] as string)
-          : hash(readFileSync(join(directory, entry.name)));
+        files.push(key);
       else if (!entry.isFile())
         throw new Error(`Unsupported payload entry: ${key}`);
     }
   };
   visit(root, "");
+  const unknown = files.filter((key) => !Object.hasOwn(known, key));
+  const threads = workerCount(unknown.length);
+  const hashed = new Map<string, string>();
+  if (threads > 1)
+    hashFilesInParallel(threads, root, unknown).forEach((digest, index) => {
+      hashed.set(unknown[index] as string, digest);
+    });
+  const output: Record<string, string> = {};
+  for (const key of files)
+    output[key] = Object.hasOwn(known, key)
+      ? (known[key] as string)
+      : (hashed.get(key) ?? hash(readFileSync(join(root, ...key.split("/")))));
   return output;
 }
 export function removeNpmBins(directory: string): void {

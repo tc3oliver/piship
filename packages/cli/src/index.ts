@@ -406,6 +406,7 @@ export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
     `entry ${cache.entry}`,
     `linked ${cache.linked ?? 0}`,
     `copied ${cache.copied ?? 0}`,
+    ...(cache.framework ? [`PiShip ${cache.framework}`] : []),
     ...(cache.bundle ? [`bundle ${cache.bundle}`] : []),
     ...(cache.crossVolume ? ["cache on another volume, entry copied in"] : []),
   ];
@@ -734,6 +735,7 @@ export async function runCli(
       const built = buildDistribution(target, undefined, {
         reclaimStaging: rest.includes("--reclaim-staging"),
         cache: !rest.includes("--rebuild"),
+        ...(rest.includes("--rebuild") ? {} : { runtimeCache: true as const }),
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
         ...(progress ? { progress } : {}),
       });
@@ -785,6 +787,7 @@ export async function runCli(
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,
+        runtimeCache: true,
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
       });
       markLocalBuild(artifact);

@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readManifest } from "@piship/schema";
 import { digest, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
@@ -222,6 +222,25 @@ describe("inventory", () => {
       constructor: hash("body"),
       toString: hash("body"),
     });
+  });
+
+  it("hashes many files by several threads to the same inventory, bytes and order, as one", () => {
+    for (let index = 0; index < 70; index++)
+      write(`d${index % 5}/e${index % 3}/f${index}.txt`, `file ${index}`);
+    write("known.js", "known");
+    const given = {
+      "known.js": "1".repeat(64),
+      "d0/e0/f0.txt": "2".repeat(64),
+    };
+    vi.stubEnv("PISHIP_FILE_WORKERS", "4");
+    const threaded = inventory(root, given);
+    vi.stubEnv("PISHIP_FILE_WORKERS", "1");
+    const single = inventory(root, given);
+    vi.unstubAllEnvs();
+    expect(JSON.stringify(threaded)).toBe(JSON.stringify(single));
+    expect(Object.keys(threaded)).toHaveLength(71);
+    expect(threaded["d0/e0/f0.txt"]).toBe("2".repeat(64));
+    expect(threaded["d1/e1/f1.txt"]).toBe(hash("file 1"));
   });
 
   it("refuses a link, which a payload may never contain", () => {
