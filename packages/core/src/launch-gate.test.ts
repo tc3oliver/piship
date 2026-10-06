@@ -13,8 +13,7 @@ import {
   writeFileSync,
   watch,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
 import { processHostToken } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {

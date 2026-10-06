@@ -1,7 +1,6 @@
 // Install a payload or a verified release for the current user: the owned
 // release directory, the launcher, the command shim, and the first receipt.
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   rmSync,
