@@ -74,6 +74,15 @@ describe("the store and install budgets", () => {
     ).toBe(true);
     // With the store off there is no mode to hold to a budget.
     expect(evaluateStoreBudgets(slow, budgets)).toEqual([]);
+    // The product's own object check is the one held to the budget.
+    const checked = report({
+      direct: 100,
+      "hardlink+content.fresh": 150,
+      "hardlink+size.fresh": 105,
+    });
+    expect(
+      evaluateStoreBudgets(checked, budgets, { mode: "hardlink" }),
+    ).toEqual([expect.objectContaining({ name: "hardlink+content.fresh" })]);
     // An unmeasured mode is not guessed at.
     expect(evaluateStoreBudgets(slow, budgets, { mode: "clone" })).toEqual([]);
   });

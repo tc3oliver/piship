@@ -58,7 +58,12 @@ export function evaluateStoreBudgets(report, budgets, { baseline, mode } = {}) {
   const scenario = (source, name) => source?.scenarios?.[name]?.median;
   if (effective)
     for (const budget of budgets.store.budgets) {
-      const name = budget.metric.replace("<mode>", effective);
+      // A report that measured several object checks names the product's own.
+      const plain = budget.metric.replace("<mode>", effective);
+      const name =
+        scenario(report, plain) === undefined
+          ? budget.metric.replace("<mode>", `${effective}+content`)
+          : plain;
       const reference = scenario(report, budget.relativeTo);
       const value = scenario(report, name);
       if (value === undefined || reference === undefined) continue;

@@ -66,6 +66,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/report.json" benchmark-evidence/cmd-launch-report.json
           Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/summary.md" benchmark-evidence/cmd-launch-summary.md
+      - name: Measure shared store placement (copy, clone, hardlink; fresh, warm, update, remove)
+        shell: pwsh
+        run: |
+          node scripts/benchmark-store.mjs --out "$env:RUNNER_TEMP/piship-store" --files 3000 --reps 7 --verify-modes content,size 2>&1 | Tee-Object -FilePath benchmark-evidence/store.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-store/report.json" benchmark-evidence/store-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-store/summary.md" benchmark-evidence/store-summary.md
+      - name: Measure shared store placement with the store on another volume
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'D:\')) { "No second volume on this runner; skipped." | Tee-Object -FilePath benchmark-evidence/store-volume.log; exit 0 }
+          node scripts/benchmark-store.mjs --out "$env:RUNNER_TEMP/piship-store-volume" --store-dir 'D:\piship-store-bench' --files 3000 --reps 3 2>&1 | Tee-Object -FilePath benchmark-evidence/store-volume.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-store-volume/report.json" benchmark-evidence/store-volume-report.json
+      - name: Check the store against its budgets (a result, not a gate)
+        # A store that exceeds a budget is the evidence that DEFAULT_STORE_MODE stays off.
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($mode in 'copy', 'clone', 'hardlink') {
+            "== $mode ==" | Tee-Object -FilePath benchmark-evidence/store-budgets.log -Append
+            node scripts/store-budgets.mjs --store-report benchmark-evidence/store-report.json --mode $mode 2>&1 | Tee-Object -FilePath benchmark-evidence/store-budgets.log -Append
+          }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
