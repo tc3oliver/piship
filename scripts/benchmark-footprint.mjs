@@ -133,9 +133,35 @@ const median = (values) => {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 };
 
-const { createArchive } = await import(
+const core = await import(
   pathToFileURL(join(root, "packages", "core", "dist", "index.js")).href
 );
+const { createArchive } = core;
+
+// The bundled search tools (fd, rg) are downloaded from GitHub on a build's
+// first use of a PiShip cache. That is a network cost, not a build cost, and
+// it would land in whichever distribution is measured first, so it is paid
+// once here and each run's cache starts with the archives already in it.
+const seed = join(out, label, "seed-cache");
+mkdirSync(seed, { recursive: true });
+{
+  const saved = process.env.PISHIP_CACHE_HOME;
+  process.env.PISHIP_CACHE_HOME = seed;
+  try {
+    for (const name of selected) {
+      const manifest = join(
+        root,
+        "examples",
+        DISTRIBUTIONS[name].example,
+        "piship.yaml",
+      );
+      await core.downloadLockedSearchTools(core.requireCurrentLock(manifest));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.PISHIP_CACHE_HOME;
+    else process.env.PISHIP_CACHE_HOME = saved;
+  }
+}
 
 async function measure(name, iteration) {
   const base = join(out, label, name, `run-${iteration}`);
@@ -157,13 +183,18 @@ async function measure(name, iteration) {
     PISHIP_DEBUG_TIMING: "1",
   };
   delete env.PISHIP_BUILD_INPUT;
+  if (existsSync(join(seed, "search-tools")))
+    cpSync(join(seed, "search-tools"), join(base, "cache", "search-tools"), {
+      recursive: true,
+    });
   const lock = JSON.parse(readFileSync(join(distribution, "piship.lock")));
   const id = lock.app.id;
   const output = join(distribution, "dist", id);
   const result = { distribution: name, example: DISTRIBUTIONS[name].example };
 
-  // Cold: an empty PiShip cache and no build stamp. Warm: the runtime cache is
-  // populated, the output is new. Unchanged: the stamp reuses the output.
+  // Cold: no build stamp and no runtime cache (`--rebuild`; the search-tool
+  // archives are cached, see above). Warm: the runtime cache holds the
+  // runtime, the output is new. Unchanged: the stamp reuses the output.
   const cold = await run(
     [cli, "build", manifest, "--rebuild"],
     distribution,
@@ -180,6 +211,14 @@ async function measure(name, iteration) {
   result.archiveBytes = archive.bytes;
   result.archiveEntries = archive.entries;
   if (!deterministic) {
+    // The first build that may use the runtime cache fills it; the next, into
+    // a new output, is the warm build; the one after finds the output as it is.
+    rmSync(output, { recursive: true, force: true });
+    rmSync(join(distribution, "dist", `${id}.piship-build.json`), {
+      force: true,
+    });
+    const filling = await run([cli, "build", manifest], distribution, env);
+    result.cacheFillingBuildMs = filling.elapsedMs;
     rmSync(output, { recursive: true, force: true });
     rmSync(join(distribution, "dist", `${id}.piship-build.json`), {
       force: true,
@@ -267,6 +306,7 @@ for (const name of selected) {
     "installedPayloadFiles",
     "installedFiles",
     "coldBuildMs",
+    "cacheFillingBuildMs",
     "warmBuildMs",
     "unchangedRebuildMs",
     "installMs",

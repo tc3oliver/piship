@@ -1,0 +1,23 @@
+{
+  "schema": "piship-performance-budgets/v1",
+  "tolerance": 0.1,
+  "platforms": {
+    "darwin-arm64": {
+      "personal": {
+        "payloadFiles": 125,
+        "installedFiles": 127,
+        "archiveBytes": 10324976
+      },
+      "managed": {
+        "payloadFiles": 116,
+        "installedFiles": 118,
+        "archiveBytes": 7250826
+      },
+      "developer": {
+        "payloadFiles": 8292,
+        "installedFiles": 8294,
+        "archiveBytes": 41853783
+      }
+    }
+  }
+}

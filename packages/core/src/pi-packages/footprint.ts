@@ -16,6 +16,8 @@ import {
   type RetainedReason,
 } from "./dedupe.js";
 import type { EsbuildApi } from "./module-scan.js";
+
+export { type EsbuildApi, loadEsbuild } from "./module-scan.js";
 import type { LockedPackageResource } from "./types.js";
 
 export const FOOTPRINT_FILE = "metadata/pi-package-footprint.json";

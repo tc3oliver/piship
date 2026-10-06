@@ -244,6 +244,86 @@ describe("dependency sharing across vendored Pi packages", () => {
     ).toEqual(["pi-packages/b/node_modules/leaf/LICENSE"]);
   });
 
+  it("keeps the named exports of a CommonJS dependency an ES module imports", () => {
+    const common = (name: string): Dependency =>
+      leaf(
+        name,
+        "1.0.0",
+        {
+          type: undefined,
+          exports: { ".": "./index.cjs", "./package.json": "./package.json" },
+        },
+        {
+          "index.cjs": `exports.named = "n"; exports.other = function other() { return 1; }; module.exports.third = 3;\n`,
+        },
+      );
+    const root = vendor({
+      a: { dependencies: [common("cjsleaf")] },
+      b: { dependencies: [common("cjsleaf")] },
+      c: { dependencies: [common("cjsleaf")] },
+    });
+    const consumer = (id: string) => {
+      const file = join(root, id, "named.mjs");
+      writeFileSync(
+        file,
+        `import def, { named, other, third } from "cjsleaf";
+import * as ns from "cjsleaf";
+console.log(JSON.stringify({ named, other: other(), third, def: Object.keys(def).sort(), ns: Object.keys(ns).sort() }));\n`,
+      );
+      const result = spawnSync(process.execPath, [file], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      return result.stdout.trim();
+    };
+    const before = consumer("a");
+    expect(run(root, ["a", "b", "c"]).shared).toHaveLength(1);
+    expect(consumer("a")).toBe(before);
+    expect(consumer("c")).toBe(before);
+  });
+
+  it("follows a nested package.json that changes a directory's module type", () => {
+    const dual = (): Dependency =>
+      leaf(
+        "dual",
+        "1.0.0",
+        {
+          exports: {
+            ".": {
+              import: "./dist/esm/index.js",
+              require: "./dist/cjs/index.js",
+            },
+            "./package.json": "./package.json",
+          },
+        },
+        {
+          "dist/esm/index.js": `export const kind = "esm"; export default "esm-default";\n`,
+          "dist/cjs/package.json": JSON.stringify({ type: "commonjs" }),
+          "dist/cjs/index.js": `exports.kind = "cjs"; exports.default = "cjs-default";\n`,
+        },
+      );
+    const root = vendor({
+      a: { dependencies: [dual()] },
+      b: { dependencies: [dual()] },
+      c: { dependencies: [dual()] },
+    });
+    const consumer = (id: string) => {
+      const file = join(root, id, "dual.mjs");
+      writeFileSync(
+        file,
+        `import { createRequire } from "node:module";
+import def, { kind } from "dual";
+const require = createRequire(import.meta.url);
+console.log(JSON.stringify({ def, kind, cjs: require("dual").kind }));\n`,
+      );
+      const result = spawnSync(process.execPath, [file], { encoding: "utf8" });
+      expect(result.stderr).toBe("");
+      return result.stdout.trim();
+    };
+    const before = consumer("b");
+    expect(before).toBe('{"def":"esm-default","kind":"esm","cjs":"cjs"}');
+    expect(run(root, ["a", "b", "c"]).shared).toHaveLength(1);
+    expect(consumer("b")).toBe(before);
+  });
+
   it("shares a copy nested inside several places of one package", () => {
     const root = vendor({ a: { dependencies: [leaf()] } });
     const nested = leaf();
