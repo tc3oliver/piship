@@ -2,6 +2,8 @@ import { PiShipError } from "@piship/contracts";
 import {
   verifyPayload,
   describeReclaimed,
+  describeStoreMaintenance,
+  maintainRuntimeStore,
   reclaimLaunchTemporaries,
   reclaimObsoleteVersions,
   refreshInstalledLauncher,
@@ -83,6 +85,16 @@ export async function runDoctor(
     reclaimObsoleteVersions(ctx.metadata.app.id),
   );
   if (reclaimed) ctx.err(reclaimed);
+  // The shared file store is a cache of file bytes, never what an installed
+  // release runs from. This is the only place it is collected or verified.
+  try {
+    const stored = describeStoreMaintenance(maintainRuntimeStore());
+    if (stored) ctx.err(stored);
+  } catch (error) {
+    ctx.err(
+      `Could not maintain the file store: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   // An installed launcher an earlier PiShip wrote is replaced, as at the end
   // of a session, so the report below names the one that runs next.
   refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);

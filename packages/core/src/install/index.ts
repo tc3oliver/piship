@@ -35,6 +35,12 @@ export {
   type ReclaimOptions,
 } from "./reclaim.js";
 export {
+  describeStoreMaintenance,
+  maintainRuntimeStore,
+  storeLiveness,
+  type MaintainedStore,
+} from "./store.js";
+export {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
   type UninstallOptions,

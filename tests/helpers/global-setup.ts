@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestProject } from "vitest/node";
+import { testStoreHome } from "./test-store.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -17,5 +18,8 @@ declare module "vitest" {
 export default function setup(project: TestProject) {
   const directory = mkdtempSync(join(tmpdir(), "piship-e2e-"));
   project.provide("lifecycleFixtures", directory);
-  return () => rmSync(directory, { recursive: true, force: true });
+  return () => {
+    rmSync(testStoreHome, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  };
 }

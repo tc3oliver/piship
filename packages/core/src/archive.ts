@@ -30,6 +30,26 @@ export interface ArchiveResult {
   readonly entries: number;
 }
 
+/** A small file an extraction holds in memory, offered to a `FilePlacer` before it is written. */
+export interface FilePlacement {
+  /** The `/`-separated output path, as the extraction names the file. */
+  readonly path: string;
+  readonly data: Buffer;
+  /** SHA-256 of `data`, as computed from the archive's own bytes. */
+  readonly digest: string;
+  /** Where the file belongs; its directory exists and nothing is there. */
+  readonly output: string;
+  readonly exec: boolean;
+}
+
+/**
+ * Creates the file at `output` from somewhere other than a write of `data`,
+ * and returns true, or returns false and leaves nothing at `output` for the
+ * extraction to write. The bytes it creates must be `data`'s: the file's
+ * digest is taken from `data`, not read back.
+ */
+export type FilePlacer = (file: FilePlacement) => Promise<boolean>;
+
 export interface ExtractResult {
   readonly root: string;
   readonly entries: number;
@@ -574,6 +594,8 @@ export async function extractArchive(
     readonly concurrency?: number;
     /** Largest file that is buffered and written by a pooled writer (default 1 MiB); measurement only. */
     readonly bufferedFileMax?: number;
+    /** Offered each file of up to `bufferedFileMax` bytes before it is written. */
+    readonly place?: FilePlacer;
     /** Map validated archive paths to relative output paths; undefined skips writing. */
     readonly mapEntry?: (
       path: string,
@@ -644,8 +666,23 @@ export async function extractArchive(
     data: Buffer,
     mode: number,
   ): Promise<void> => {
-    fileDigests?.set(key, createHash("sha256").update(data).digest("hex"));
+    const digest =
+      fileDigests || options.place
+        ? createHash("sha256").update(data).digest("hex")
+        : undefined;
+    if (digest) fileDigests?.set(key, digest);
     await ensureDirectory(dirname(output));
+    if (
+      options.place &&
+      (await options.place({
+        path: key,
+        data,
+        digest: digest as string,
+        output,
+        exec: (mode & 0o111) !== 0,
+      }))
+    )
+      return;
     const file = await open(output, "wx", mode);
     try {
       if (data.length > 0) await file.writeFile(data);

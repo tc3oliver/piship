@@ -154,6 +154,39 @@ describe("createArchive / extractArchive", () => {
     }
   });
 
+  it("offers each buffered file to a placer, which may create it instead of the extraction", async () => {
+    const work = tempDir();
+    const source = join(work, "src");
+    populate(source);
+    const archive = join(work, "out.tar.gz");
+    await createArchive(source, "mypi-1.0.0", archive);
+    const offered = new Map<string, { digest: string; exec: boolean }>();
+    const extracted = await extractArchive(archive, join(work, "dest"), {
+      digests: true,
+      mapEntry: (name) => name,
+      place: async ({ path, data, digest, output, exec }) => {
+        offered.set(path, { digest, exec });
+        if (!path.includes("/lib/")) return false;
+        writeFileSync(output, data, { flag: "wx" });
+        return true;
+      },
+    });
+    const root = join(work, "dest", "mypi-1.0.0");
+    // Placed and written files are alike on disk and in the digests.
+    expect(listTree(root)).toEqual(listTree(source));
+    for (const [path, { digest }] of offered)
+      expect(extracted.files?.get(path)).toBe(digest);
+    expect(offered.get("mypi-1.0.0/lib/nested/deep/a.js")?.digest).toBe(
+      createHash("sha256").update("a".repeat(1000)).digest("hex"),
+    );
+    if (POSIX) expect(offered.get("mypi-1.0.0/bin/run")?.exec).toBe(true);
+    // A file above the buffer limit is never offered.
+    expect(offered.has("mypi-1.0.0/big.bin")).toBe(false);
+    expect(readFileSync(join(root, "big.bin")).length).toBe(
+      3 * 1024 * 1024 + 7,
+    );
+  });
+
   it("marks files executable through the option", async () => {
     const work = tempDir();
     const source = join(work, "src");

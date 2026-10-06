@@ -5,6 +5,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, link, mkdir, open, readdir } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
+import type { FilePlacer } from "../archive.js";
 import { JobPool } from "../job-pool.js";
 
 const COPY_CONCURRENCY = 8;
@@ -32,6 +33,7 @@ async function copyHashed(
   from: string,
   to: string,
   chunk: number,
+  place?: { readonly key: string; readonly place: FilePlacer },
 ): Promise<string> {
   const hash = createHash("sha256");
   const input = await open(from, "r");
@@ -47,6 +49,19 @@ async function copyHashed(
   const bits = WINDOWS ? 0o666 : mode & 0o777;
   if (data) {
     hash.update(data);
+    if (place) {
+      const digest = hash.copy().digest("hex");
+      if (
+        await place.place({
+          path: place.key,
+          data,
+          digest,
+          output: to,
+          exec: (bits & 0o111) !== 0,
+        })
+      )
+        return digest;
+    }
     const output = await open(to, "wx", bits);
     try {
       if (data.length > 0) await output.writeFile(data);
@@ -83,6 +98,8 @@ export interface CopyOptions {
    * failure.
    */
   readonly link?: boolean;
+  /** Offered each file read whole before it is written; see `FilePlacer`. */
+  readonly place?: FilePlacer;
   /** Test seam. */
   readonly linkFile?: (from: string, to: string) => Promise<void>;
   /** How many files are copied at once (default 8). Measurement only. */
@@ -156,7 +173,16 @@ export async function copyTree(
         }
         digests.set(
           file.split(sep).join("/"),
-          digest ?? (await copyHashed(from, to, chunk)),
+          digest ??
+            (await copyHashed(
+              from,
+              to,
+              chunk,
+              options.place && {
+                key: file.split(sep).join("/"),
+                place: options.place,
+              },
+            )),
         );
       });
   } catch (error) {

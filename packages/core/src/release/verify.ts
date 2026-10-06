@@ -11,6 +11,7 @@ import { extractArchive, sha256File } from "../archive.js";
 import { verifyPayloadContents, type DistributionLock } from "../index.js";
 import { LEGACY_STATE_SCHEMAS, type StateSchemaSupport } from "../migration.js";
 import { verifyWrittenPayload } from "../payload.js";
+import type { ContentStore } from "../store/store.js";
 import {
   verifyChecksums,
   verifyNotices,
@@ -88,6 +89,12 @@ export async function verifyRelease(
       readonly concurrency?: number;
       readonly bufferedFileMax?: number;
     };
+    /**
+     * A shared file store that places the runtime, Pi package, and dependency
+     * files it holds instead of the extraction writing them. The bytes are the
+     * archive's own, and are checked against the inventory as ever.
+     */
+    readonly store?: ContentStore;
   } = {},
 ): Promise<VerifiedRelease> {
   const path = resolve(input);
@@ -124,6 +131,9 @@ export async function verifyRelease(
       expectedRoot,
       hash: archiveSha256 === undefined,
       digests: streamed,
+      ...(streamed && options.store
+        ? { place: options.store.placer(`${expectedRoot}/payload/`) }
+        : {}),
       ...(options.metadataOnly
         ? {
             mapEntry: (name: string, directory: boolean) => {
@@ -249,6 +259,7 @@ async function extractVerifiedPayload(
       readonly concurrency?: number;
       readonly bufferedFileMax?: number;
     };
+    readonly store?: ContentStore;
   },
 ): Promise<VerifiedRelease> {
   const root = basename(path).replace(/\.tar\.gz$/, "");
@@ -258,6 +269,7 @@ async function extractVerifiedPayload(
     expectedRoot: root,
     digests: true,
     ...options.tuning,
+    ...(options.store ? { place: options.store.placer() } : {}),
     capture: (key) => key === releaseKey,
     mapEntry: (name) =>
       name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
