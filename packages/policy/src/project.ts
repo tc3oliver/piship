@@ -62,11 +62,16 @@ function isFile(path: string): boolean {
 }
 
 function isSymbolicLink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
+  return startupMemo("symlink", path, () => {
+    try {
+      // A missing path is the common answer: reported, not raised.
+      return (
+        lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** The directories of a git directory that git runs or trusts, protected as whole trees. */
