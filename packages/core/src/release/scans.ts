@@ -1,6 +1,5 @@
 // Release dependency scans: the npm audit vulnerability policy and the
 // registry signature check.
-import { spawnSync } from "node:child_process";
 import type { ReleaseManifest } from "@piship/schema";
 import {
   VULNERABILITY_REPORT_SCHEMA,
@@ -10,7 +9,7 @@ import {
   type VulnerabilityReport,
 } from "./metadata.js";
 import { windowsNpmInvocation } from "../windows-npm.js";
-import { gate } from "./shared.js";
+import { gate, runCommand } from "./shared.js";
 
 const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
 
@@ -18,10 +17,10 @@ const SEVERITY_ORDER = ["info", "low", "moderate", "high", "critical"];
  * `npm audit` over the npm lock in `lockDirectory` (registry access
  * required): the payload's, or a Pi package's against its `registry`.
  */
-export function npmAuditScanner(
+export async function npmAuditScanner(
   lockDirectory: string,
   registry?: string,
-): unknown {
+): Promise<unknown> {
   const args = [
     "audit",
     "--omit=dev",
@@ -32,9 +31,8 @@ export function npmAuditScanner(
     process.platform === "win32"
       ? windowsNpmInvocation(args, process.env, lockDirectory)
       : { file: "npm", args };
-  const result = spawnSync(invocation.file, [...invocation.args], {
+  const result = await runCommand(invocation.file, invocation.args, {
     cwd: lockDirectory,
-    encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
   try {
@@ -43,7 +41,7 @@ export function npmAuditScanner(
     throw gate(
       "UPDATE_FAILED",
       "vulnerability",
-      `the dependency scan did not run: ${(result.stderr || result.error?.message || "no output").trim().slice(0, 300)}`,
+      `the dependency scan did not run: ${(result.stderr || "no output").trim().slice(0, 300)}`,
       "Restore registry access for the build; releases are not produced without a scan",
     );
   }
@@ -55,27 +53,22 @@ const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
  * `npm audit signatures` over the installed payload. It reads the payload's
  * `node_modules` and needs the registry and the Sigstore trust root.
  */
-export function npmSignatureAuditor(payloadDirectory: string): CommandResult {
+export function npmSignatureAuditor(
+  payloadDirectory: string,
+): Promise<CommandResult> {
   const args = ["audit", "signatures", "--omit=dev", "--json"];
   const options = {
     cwd: payloadDirectory,
-    encoding: "utf8" as const,
     maxBuffer: 64 * 1024 * 1024,
     timeout: 300_000,
   };
-  const result =
-    process.platform === "win32"
-      ? spawnSync(
-          "cmd.exe",
-          ["/d", "/s", "/c", `npm ${args.join(" ")}`],
-          options,
-        )
-      : spawnSync("npm", args, options);
-  return {
-    status: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr || result.error?.message || "",
-  };
+  return process.platform === "win32"
+    ? runCommand(
+        "cmd.exe",
+        ["/d", "/s", "/c", `npm ${args.join(" ")}`],
+        options,
+      )
+    : runCommand("npm", args, options);
 }
 
 interface SignatureEntry {

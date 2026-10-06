@@ -1,6 +1,6 @@
 // Deterministic ustar + gzip release archives, and a strict extractor for
 // them. Dependency-free and streaming so large payloads never sit in memory.
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
@@ -18,7 +18,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 import { JobPool } from "./job-pool.js";
@@ -247,10 +247,59 @@ function entryHeaders(
   ];
 }
 
+/** Files read ahead of the archive writer: how many at once, and the largest. */
+const READ_AHEAD_FILES = 16;
+const READ_AHEAD_BYTES = CHUNK;
+
+/** One file of at most `READ_AHEAD_BYTES`, read whole. */
+async function readSmallFile(entry: SourceEntry): Promise<Buffer> {
+  const handle = await open(entry.absolute as string, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(entry.size);
+    let filled = 0;
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        filled,
+        buffer.length - filled,
+        null,
+      );
+      if (bytesRead === 0)
+        throw new Error(`File changed while archiving: ${entry.absolute}`);
+      filled += bytesRead;
+    }
+    if ((await handle.stat()).size !== entry.size)
+      throw new Error(`File changed while archiving: ${entry.absolute}`);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function* tarStream(
   entries: readonly SourceEntry[],
   mtime: number,
 ): AsyncGenerator<Buffer> {
+  // A payload is thousands of small files, and opening, reading, and closing
+  // each in turn waits on the file system once per file (worst where every
+  // open is scanned, as on Windows). The next few are read while the current
+  // one is compressed; the archive's bytes and order do not change.
+  const ahead = new Map<number, Promise<Buffer>>();
+  let scheduled = 0;
+  const readAhead = (from: number): void => {
+    scheduled = Math.max(scheduled, from);
+    while (scheduled < entries.length && ahead.size < READ_AHEAD_FILES) {
+      const entry = entries[scheduled] as SourceEntry;
+      if (entry.absolute !== undefined && entry.size < READ_AHEAD_BYTES) {
+        const read = readSmallFile(entry);
+        // Awaited in order below; a failure of one not reached yet is not
+        // unhandled.
+        read.catch(() => {});
+        ahead.set(scheduled, read);
+      }
+      scheduled++;
+    }
+  };
   let parts: Buffer[] = [];
   let pending = 0;
   const take = (): Buffer => {
@@ -263,43 +312,59 @@ async function* tarStream(
     parts.push(buffer);
     pending += buffer.length;
   };
-  for (const [index, entry] of entries.entries()) {
-    for (const part of entryHeaders(entry, index, mtime)) add(part);
-    if (pending >= CHUNK) yield take();
-    if (entry.absolute === undefined) continue;
-    const handle = await open(entry.absolute, "r");
-    try {
-      let remaining = entry.size;
-      while (remaining > 0) {
-        const buffer = Buffer.allocUnsafe(Math.min(remaining, CHUNK));
-        let filled = 0;
-        while (filled < buffer.length) {
-          const { bytesRead } = await handle.read(
-            buffer,
-            filled,
-            buffer.length - filled,
-            null,
-          );
-          if (bytesRead === 0)
-            throw new Error(`File changed while archiving: ${entry.absolute}`);
-          filled += bytesRead;
-        }
-        remaining -= buffer.length;
-        if (buffer.length >= CHUNK) {
-          if (pending > 0) yield take();
-          yield buffer;
-        } else {
-          add(buffer);
-          if (pending >= CHUNK) yield take();
-        }
+  try {
+    for (const [index, entry] of entries.entries()) {
+      readAhead(index);
+      for (const part of entryHeaders(entry, index, mtime)) add(part);
+      if (pending >= CHUNK) yield take();
+      if (entry.absolute === undefined) continue;
+      const read = ahead.get(index);
+      if (read !== undefined) {
+        ahead.delete(index);
+        add(await read);
+        add(Buffer.alloc(padding(entry.size)));
+        if (pending >= CHUNK) yield take();
+        continue;
       }
-      if ((await handle.stat()).size !== entry.size)
-        throw new Error(`File changed while archiving: ${entry.absolute}`);
-    } finally {
-      await handle.close();
+      const handle = await open(entry.absolute, "r");
+      try {
+        let remaining = entry.size;
+        while (remaining > 0) {
+          const buffer = Buffer.allocUnsafe(Math.min(remaining, CHUNK));
+          let filled = 0;
+          while (filled < buffer.length) {
+            const { bytesRead } = await handle.read(
+              buffer,
+              filled,
+              buffer.length - filled,
+              null,
+            );
+            if (bytesRead === 0)
+              throw new Error(
+                `File changed while archiving: ${entry.absolute}`,
+              );
+            filled += bytesRead;
+          }
+          remaining -= buffer.length;
+          if (buffer.length >= CHUNK) {
+            if (pending > 0) yield take();
+            yield buffer;
+          } else {
+            add(buffer);
+            if (pending >= CHUNK) yield take();
+          }
+        }
+        if ((await handle.stat()).size !== entry.size)
+          throw new Error(`File changed while archiving: ${entry.absolute}`);
+      } finally {
+        await handle.close();
+      }
+      add(Buffer.alloc(padding(entry.size)));
+      if (pending >= CHUNK) yield take();
     }
-    add(Buffer.alloc(padding(entry.size)));
-    if (pending >= CHUNK) yield take();
+  } finally {
+    // No file stays open once the archive has finished or failed.
+    await Promise.allSettled(ahead.values());
   }
   add(Buffer.alloc(BLOCK * 2));
   yield take();
@@ -310,6 +375,30 @@ export async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+/**
+ * Normalizes the gzip header (zlib records the build platform in the OS byte
+ * and a modification time) and hashes the stream as it will be written, so
+ * the archive is neither reopened to patch nor read again for its digest.
+ */
+function normalizedGzip(digest: Hash): Transform & { size: () => number } {
+  let offset = 0;
+  const stream = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      for (let i = 0; i < chunk.length && offset + i < 10; i++) {
+        const at = offset + i;
+        if ((at === 0 && chunk[i] !== 0x1f) || (at === 1 && chunk[i] !== 0x8b))
+          return callback(new Error("Unexpected gzip header"));
+        if (at >= 4 && at < 8) chunk[i] = 0;
+        else if (at === 9) chunk[i] = 0xff;
+      }
+      offset += chunk.length;
+      digest.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  return Object.assign(stream, { size: () => offset });
 }
 
 /**
@@ -337,30 +426,23 @@ export async function createArchive(
   const entries = await collect(source, rootName, options.executable);
   const partial = `${out}.partial`;
   try {
+    const digest = createHash("sha256");
+    const gzip = normalizedGzip(digest);
     await pipeline(
       Readable.from(tarStream(entries, mtime)),
       // Level 9 compressed about 2.7x slower than 6 for an archive under
       // 0.5% smaller.
       createGzip({ level: 6 }),
+      gzip,
       createWriteStream(partial),
     );
-    // zlib records the build platform in the OS byte; normalize it.
-    const handle = await open(partial, "r+");
-    try {
-      const head = Buffer.alloc(10);
-      await handle.read(head, 0, 10, 0);
-      if (head[0] !== 0x1f || head[1] !== 0x8b)
-        throw new Error(`Unexpected gzip header in ${partial}`);
-      head.fill(0, 4, 8);
-      head[9] = 0xff;
-      await handle.write(head, 0, 10, 0);
-    } finally {
-      await handle.close();
-    }
-    const sha256 = await sha256File(partial);
-    const { size } = await stat(partial);
     await rename(partial, out);
-    return { path: out, sha256, bytes: size, entries: entries.length };
+    return {
+      path: out,
+      sha256: digest.digest("hex"),
+      bytes: gzip.size(),
+      entries: entries.length,
+    };
   } catch (error) {
     await rm(partial, { force: true });
     throw error;

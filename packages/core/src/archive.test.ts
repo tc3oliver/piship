@@ -189,6 +189,38 @@ describe("createArchive / extractArchive", () => {
     expect(third.sha256).not.toBe(first.sha256);
   });
 
+  it("archives files around the read-ahead limit and in large numbers unchanged", async () => {
+    const work = tempDir();
+    const source = join(work, "src");
+    mkdirSync(join(source, "many"), { recursive: true });
+    const MIB = 1024 * 1024;
+    const sizes = [0, 1, 511, 512, 513, MIB - 1, MIB, MIB + 1, 2 * MIB + 7];
+    const expected = new Map<string, Buffer>();
+    const add = (path: string, size: number, seed: number) => {
+      const bytes = Buffer.alloc(size);
+      for (let i = 0; i < size; i++) bytes[i] = (i * 31 + seed) & 0xff;
+      writeFileSync(join(source, path), bytes);
+      expected.set(path, bytes);
+    };
+    for (const [index, size] of sizes.entries())
+      add(`s${index}.bin`, size, index);
+    // More small files than are read ahead at once, interleaved with a
+    // directory, so the window refills several times.
+    for (let i = 0; i < 70; i++)
+      add(`many/f${String(i).padStart(3, "0")}.txt`, (i * 97) % 3000, i);
+    const first = await createArchive(source, "r", join(work, "a.tar.gz"));
+    const second = await createArchive(source, "r", join(work, "b.tar.gz"));
+    expect(second.sha256).toBe(first.sha256);
+    expect(first.sha256).toBe(await sha256File(first.path));
+    expect(first.bytes).toBe(statSync(first.path).size);
+    const dest = join(work, "dest");
+    await extractArchive(first.path, dest, { expectedRoot: "r" });
+    for (const [path, bytes] of expected)
+      expect(readFileSync(join(dest, "r", path)).equals(bytes), path).toBe(
+        true,
+      );
+  });
+
   it("normalizes the gzip header", async () => {
     const work = tempDir();
     const source = join(work, "src");
