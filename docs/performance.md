@@ -201,9 +201,9 @@ Measured one change at a time while this was built, also on macOS:
 - Release (`scripts/benchmark-build.mjs --release`), warm: unbundled 6.2 s to 4.7 s, bundled 5.6 s to 3.1 s, and a bundled release with a warm runtime cache about 2.1 s. Hash reads per release fell from about 8,300 to 854 for a warm bundled release.
 - Start: process spawns 2 to 1, and `--smoke` of a bundled payload 663 ms to 610 ms.
 
-### Windows: a GitHub-hosted runner
+### Windows: a GitHub-hosted runner, earlier measurement
 
-Measured on a GitHub-hosted `windows-latest` runner with Defender real-time protection enabled and its exclusions removed for the run, seconds, each figure as forward / reversed run order, with the baseline `0752f02` against the candidate `600dea7`. This is an earlier commit than the final code, and runner noise is large: it is not a claim about any maintainer's or user's machine.
+This table is the earlier measurement of the file-operation reduction (before the authoring snapshot, the shared store, and the dedupe); the v0.11.0 figures are in the next section. Measured on a GitHub-hosted `windows-latest` runner with Defender real-time protection enabled and its exclusions removed for the run, seconds, each figure as forward / reversed run order, with the baseline `0752f02` against the candidate `600dea7`. This is an earlier commit than the final code, and runner noise is large: it is not a claim about any maintainer's or user's machine.
 
 | | Baseline | Candidate, bundled | Candidate, stripped unbundled |
 | --- | --- | --- | --- |
@@ -219,6 +219,32 @@ Measured on a GitHub-hosted `windows-latest` runner with Defender real-time prot
 | Archive | 31.8 MB | 4.7 MB | 26.4 MB |
 
 On this runner the file count dominated install and upgrade, as expected, and bundling removed nearly all of it. The first launch gained little, because Node and Pi initialization, not file operations, dominate it, and the unbundled launch was slower than the baseline in this run.
+
+### Windows: v0.11.0 measurements
+
+Measured on GitHub-hosted `windows-latest` runners (win32-x64, 4 vCPU, Windows 10.0.26100, Node 24.21.0, npm 11.21.0) with Defender real-time protection enabled and its path, process, and extension exclusions removed (`defender.json` in each artifact records the state). The manual `Windows benchmark` workflow ran each suite on its own runner. GitHub assigned different CPUs to the two runs (AMD EPYC 9V45 in run 37507963017 on the code of #226; EPYC 7763 in run 37513059620 on commit `308792f`, which adds the store benchmark), so the two columns differ by 25 to 40 % for the same work: compare the ratios inside a run, not the absolute values across runs. Neither is a claim about any other machine. The bundled personal example (`mypi`, with the bundled `fd` and `rg` and the authoring snapshot):
+
+| Measurement | Run 37507963017 | Run 37513059620 |
+| --- | ---: | ---: |
+| Payload files | 125 | 125 |
+| Installed files after an upgrade (two versions) | 253 | 253 |
+| Archive | 10,629,030 bytes | 10,652,718 bytes |
+| Authoring snapshot (`authoring.json.gz`) | 2,307,899 bytes | 2,335,736 bytes |
+| Archive install | 1.01 s | 1.24 s |
+| Upgrade | 0.73 s | 0.98 s |
+| First process start (`--smoke`, after install) | 2.52 s | 3.56 s |
+| Warm process start | 1.13 s | 1.46 s |
+| First process start after an upgrade | 2.67 s | 3.54 s |
+| First portable build (authoring cache cold; includes npm and bundling) | 9.3 s | 13.4 s |
+| Warm portable build (authoring cache reused) | 0.63 s | 0.82 s |
+
+The archive is 10.6 MB where the bundled personal example was 4.7 MB: the bundled `fd` and `rg` add 3.1 MB and the compressed snapshot 2.3 MB. The snapshot expands once into 879 files in the user's cache; the second build reused that entry (`cacheReused: true`) and its mtime did not change. A launch, an install, an update, and a rollback never read it: the launch phases (`launcher_start`, `gate_acquired`, `receipt_resolved`, and the rest) carry no authoring work, and the report's structural estimates count 0 verification content opens for a start and 0 beyond the extraction pass for an install or an upgrade. The report does not time the snapshot expansion alone (the first build's 9.3 s contains it together with npm and bundling), so no separate figure is claimed for it.
+
+**Extraction and copy concurrency.** `scripts/benchmark-concurrency.mjs` ran archive install, update, and directory copy at 4, 8, 16, and 32 writers against buffer thresholds of 256 KiB, 1 MiB, and 4 MiB, five repetitions in forward and reversed order per cell (n = 10), on the bundled 125-file payload. Medians moved 136 to 185 ms for an archive install and 75 to 125 ms for a directory copy with no trend in either dimension, and the forward and reversed medians of one cell differed by as much as the cells differ from each other; the update cells were noisier (218 to 752 ms) and 16 writers were the slowest. No cell beat the default of 8 writers and a 1 MiB threshold by more than that spread, so **the defaults stay**. A 125-file payload cannot show a file-count effect; the same sweep on the unbundled layout (about 7,500 files) did not finish within its time budget, so nothing is claimed for that layout and the default there is unchanged.
+
+**The `.cmd` shim.** The same installation started as `node launch.mjs --smoke` and as `<command>.cmd --smoke`, 15 repetitions each in ABBA order: the shim added a median of **+6.1 ms** (1.01x; warm medians 1095.9 and 1102.0 ms, P95 1138.2 and 1355.5 ms) in the first run and **+23.5 ms** (1.02x; 1543.9 and 1567.4 ms, P95 1561.5 and 1586.0 ms) in the second. See the launcher decision below.
+
+**Shared store.** The store primitives are measured in [Results: Windows with Defender](#results-windows-with-defender-which-makes-hardlink-the-default).
 
 ### Iterative local builds
 
@@ -335,7 +361,7 @@ The Windows command is `<command>.cmd`, which starts `cmd.exe`, which starts `no
 
 **Threshold.** Implement a native launcher only if, on a Windows machine with Defender on and at least 15 repetitions, the script's verdict says the overhead is stable (the minimums differ by at least 50 ms) and its median is at least 100 ms or 1.25x of the direct start, and a second run reproduces it. Anything smaller, a noisy difference, or a result that does not repeat is rejected, and the `.cmd` shim stays. Either outcome is recorded here; neither opens a separate pull request.
 
-**Verdict.** Pending: no Windows measurement of the `.cmd` shim exists yet (the macOS run measures the POSIX shim and says so). When the manual workflow has produced one, write here its host, revision, repetitions, the median, P95, and minimum of both starts, the overhead, and the decision (implement, or reject because it stayed under the threshold), with the report's file name. The macOS run of the script is not evidence for a Windows decision.
+**Verdict: rejected; the `.cmd` shim stays.** Two Windows runs with Defender on and 15 repetitions each (artifacts `cmd-launch-report.json` and `cmd-launch-summary.md` of runs 37507963017 and 37513059620) measured a median overhead of 6.1 ms and 23.5 ms, 1.01x and 1.02x of a 1.1 to 1.6 s start, with the minimum difference of 20 and 7 ms: far below the 50 ms stability bar and the 100 ms or 1.25x implementation bar. A bare `cmd.exe /c exit` took 16 ms and a bare `node -e 0` 42 ms on the first runner, so the shim's own cost is the cost of `cmd.exe`, which does not justify a native launcher, its signing, and its attack surface. Revisit only if a later measurement on a real user machine shows a stable cost of 100 ms or more.
 
 ## Regression budgets
 
