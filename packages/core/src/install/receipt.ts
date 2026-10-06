@@ -40,6 +40,12 @@ export interface InstalledRelease {
   readonly version: string;
   readonly payload: string;
   readonly installedAt: string;
+  /**
+   * The SHA-256 of the installed `piship.lock`, recorded when a payload
+   * directory was installed; a release records it in `release.lockSha256`,
+   * from its signed metadata. A launch refuses a lock that differs.
+   */
+  readonly lockSha256?: string;
   /** Present when installed from a verified release artifact. */
   readonly release?: {
     readonly target: string;
