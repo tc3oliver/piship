@@ -707,18 +707,26 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     ).toEqual([]);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "copies a release directory's files rather than linking them off Windows",
-    async () => {
-      const a = await release("1.0.0");
-      const receipt = await installDistribution(a.directory);
-      const installed = statSync(join(receipt.payload, "piship.lock"));
-      expect(installed.nlink).toBe(1);
-      expect(installed.ino).not.toBe(
-        statSync(join(a.directory, "payload", "piship.lock")).ino,
+  it("copies a release directory's files by default, and links them only when asked", async () => {
+    const a = await release("1.0.0");
+    const source = statSync(join(a.directory, "payload", "piship.lock"));
+    delete process.env.PISHIP_INSTALL_LINK;
+    const copied = await installDistribution(a.directory);
+    const installed = statSync(join(copied.payload, "piship.lock"));
+    expect(installed.nlink).toBe(1);
+    expect(installed.ino).not.toBe(source.ino);
+    if (process.platform === "win32") return;
+    uninstallDistribution(ID);
+    process.env.PISHIP_INSTALL_LINK = "1";
+    try {
+      const linked = await installDistribution(a.directory, true);
+      expect(statSync(join(linked.payload, "piship.lock")).ino).toBe(
+        source.ino,
       );
-    },
-  );
+    } finally {
+      delete process.env.PISHIP_INSTALL_LINK;
+    }
+  });
 
   it("refuses a truncated file in a release directory, removing the partial copy", async () => {
     const a = await release("1.0.0");
