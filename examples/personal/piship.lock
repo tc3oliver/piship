@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha6",
   "manifest": {
     "schema": "piship/v1alpha6",
-    "sha256": "sha256-65f8e3e70590ea09d368dcd3e70852773ac6d7f294dacc07edae98646c874410"
+    "sha256": "sha256-dd104464dfe7c28c38e6e977e74eb4a95f023659c51833bacf548bbd7e953592"
   },
   "app": {
     "id": "mypi",
@@ -1313,7 +1313,8 @@
     "mcp": "sha256-65af22410e85b8f0d829d26eda36536a2dd54c1bc83e0babda98acd352d888b2",
     "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
     "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
-    "access": "sha256-dab39e80fc5a9fca7a2985ea03f745fc679d222628686464b08def0564c1993c"
+    "access": "sha256-dab39e80fc5a9fca7a2985ea03f745fc679d222628686464b08def0564c1993c",
+    "searchTools": "sha256-803683b927b1896d1b4259520930c401825f97740b3ea9e2bc6e1dcce49e4f34"
   },
   "updates": {
     "channel": "stable",
@@ -1332,7 +1333,8 @@
       "win32-x64"
     ],
     "sources": [
-      "https://registry.npmjs.org"
+      "https://registry.npmjs.org",
+      "https://github.com"
     ],
     "vulnerabilities": {
       "failOn": "high",
@@ -1340,6 +1342,62 @@
     },
     "strip": true,
     "bundle": true
+  },
+  "searchTools": {
+    "fd": {
+      "version": "10.5.0",
+      "source": "https://github.com/sharkdp/fd",
+      "targets": {
+        "linux-x64": {
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-x86_64-unknown-linux-musl.tar.gz",
+          "archive": "sha256-761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7",
+          "entry": "fd-v10.5.0-x86_64-unknown-linux-musl/fd",
+          "binary": "sha256-e79642a479d2816c887047476bbe6ad229465f30de031033574dee2a095e0037",
+          "size": 3708016
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-aarch64-apple-darwin.tar.gz",
+          "archive": "sha256-b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12",
+          "entry": "fd-v10.5.0-aarch64-apple-darwin/fd",
+          "binary": "sha256-cf3bde435da174f41cf9589a2efeaf03804df7c250fc15e8b8a1e9bfc66ebc9a",
+          "size": 2970480
+        },
+        "win32-x64": {
+          "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-x86_64-pc-windows-msvc.zip",
+          "archive": "sha256-a227701b8551c35a9931d9f6da75503cf86d88e182d71fb849a70864c5d57cd7",
+          "entry": "fd-v10.5.0-x86_64-pc-windows-msvc/fd.exe",
+          "binary": "sha256-d67d27a8e375ed7e9bca2b506a9dd5082bc24547aeba908b863f6f8b8ab0c3b9",
+          "size": 4104192
+        }
+      }
+    },
+    "rg": {
+      "version": "15.2.0",
+      "source": "https://github.com/BurntSushi/ripgrep",
+      "targets": {
+        "linux-x64": {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz",
+          "archive": "sha256-33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+          "entry": "ripgrep-15.2.0-x86_64-unknown-linux-musl/rg",
+          "binary": "sha256-e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
+          "size": 5408904
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+          "archive": "sha256-3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+          "entry": "ripgrep-15.2.0-aarch64-apple-darwin/rg",
+          "binary": "sha256-a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e",
+          "size": 4014576
+        },
+        "win32-x64": {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+          "archive": "sha256-71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+          "entry": "ripgrep-15.2.0-x86_64-pc-windows-msvc/rg.exe",
+          "binary": "sha256-14231169855ec5205cf5a1b6f1db358ff4aed4247c86b69ce8aae647c77f6680",
+          "size": 4218880
+        }
+      }
+    }
   },
   "tools": [
     {
