@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -26,13 +25,13 @@ import {
   placeBundle,
   plainInventory,
   type RuntimeCache,
-  renameWithRetry,
   runtimeCacheFor,
   storeBundle,
 } from "./runtime-cache.js";
 
 const fixture = vi.hoisted(() => ({
   input: `${process.env.TEMP ?? process.env.TMPDIR ?? "/tmp"}/piship-runtime-cache-input-${process.pid}-${Math.random().toString(16).slice(2)}`,
+  npm: "11.19.0",
   linkError: undefined as string | undefined,
   renameFailures: [] as string[],
 }));
@@ -40,6 +39,10 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./runtime-dependencies.js", async (original) => ({
   ...(await original<typeof import("./runtime-dependencies.js")>()),
   buildInput: fixture.input,
+}));
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  execFileSync: vi.fn(() => `${fixture.npm}\n`),
 }));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -59,6 +62,10 @@ vi.mock("node:fs", async (original) => {
     }),
   };
 });
+
+/** The adopted tree, whether the stage's tree was moved or copied in. */
+const adopt = (cache: RuntimeCache, stage: string) =>
+  adoptInstallTree(cache, stage)?.tree;
 
 const roots: string[] = [];
 const temp = () => {
@@ -147,6 +154,44 @@ describe("runtimeCacheFor", () => {
     expect(runtimeCacheFor(lock(), env(home)).key).not.toBe(first.key);
   });
 
+  it("keys the tree by the major and minor of npm, and by the libc family on Linux", async () => {
+    const home = temp();
+    const keyWith = async (npm: string) => {
+      fixture.npm = npm;
+      vi.resetModules();
+      const fresh = await import("./runtime-cache.js");
+      return fresh.runtimeCacheFor(lock(), env(home)).key;
+    };
+    const base = await keyWith("11.19.0");
+    // A patch release of npm installs the same tree; a minor or major may not.
+    expect(await keyWith("11.19.7")).toBe(base);
+    expect(await keyWith("11.20.0")).not.toBe(base);
+    expect(await keyWith("10.9.2")).not.toBe(base);
+    // An npm that cannot say is its own line, never one that matches.
+    const unknown = await keyWith("not a version");
+    expect(unknown).not.toBe(base);
+    expect(await keyWith("")).toBe(unknown);
+
+    const report = vi.spyOn(
+      process.report as NodeJS.ProcessReport,
+      "getReport",
+    );
+    const libc = async (header: object) => {
+      report.mockReturnValue({ header } as never);
+      return keyWith("11.19.0");
+    };
+    try {
+      // Off Linux the libc is not part of the key.
+      expect(await libc({ glibcVersionRuntime: "2.39" })).toBe(await libc({}));
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const glibc = await libc({ glibcVersionRuntime: "2.39" });
+      expect(glibc).not.toBe(await libc({}));
+      expect(await libc({ glibcVersionRuntime: "2.31" })).toBe(glibc);
+    } finally {
+      report.mockRestore();
+    }
+  });
+
   it("does not let release.strip decide the installed tree, only how it is placed", () => {
     const home = temp();
     const stripped = runtimeCacheFor(lock("b".repeat(64), true), env(home));
@@ -165,7 +210,7 @@ describe("install tree entries", () => {
     const files = stageTree(stage);
     const cache = cacheOf(root, undefined, true);
     expect(lookupInstallTree(cache)).toBeUndefined();
-    const tree = adoptInstallTree(cache, stage);
+    const tree = adopt(cache, stage);
     expect(tree).toBeDefined();
     // The tree moved: nothing of it is left in the stage.
     expect(readdirSync(stage)).toEqual([]);
@@ -208,7 +253,7 @@ describe("install tree entries", () => {
     const stage = join(root, "stage");
     mkdirSync(stage);
     stageTree(stage);
-    const tree = adoptInstallTree(cache, stage);
+    const tree = adopt(cache, stage);
     const record = join((tree as InstallTree).path, "entry.json");
     const original = readFileSync(record, "utf8");
     const damage = (patch: Record<string, unknown>) => {
@@ -237,13 +282,40 @@ describe("install tree entries", () => {
     expect(lookupInstallTree(cache)).toBeUndefined();
   });
 
+  it("refuses a record whose file list no longer matches its digest, and names the entry by that digest", () => {
+    const root = temp();
+    const cache = cacheOf(root);
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    stageTree(stage);
+    const tree = adopt(cache, stage) as InstallTree;
+    expect(tree.digest).toMatch(/^[0-9a-f]{64}$/);
+    const record = join(tree.path, "entry.json");
+    const original = JSON.parse(readFileSync(record, "utf8")) as {
+      files: Record<string, number>;
+      filesSha256: string;
+    };
+    expect(original.filesSha256).toBe(tree.digest);
+    // A file's size edited in the record, or the digest dropped or replaced.
+    for (const change of [
+      { files: { ...original.files, "package.json": 1 } },
+      { filesSha256: undefined },
+      { filesSha256: "0".repeat(64) },
+    ]) {
+      writeFileSync(record, JSON.stringify({ ...original, ...change }));
+      expect(lookupInstallTree(cache)).toBeUndefined();
+    }
+    writeFileSync(record, JSON.stringify(original));
+    expect(lookupInstallTree(cache)?.digest).toBe(tree.digest);
+  });
+
   it("refuses to place a file whose size is not the recorded one", () => {
     const root = temp();
     const cache = cacheOf(root);
     const stage = join(root, "stage");
     mkdirSync(stage);
     stageTree(stage);
-    const tree = adoptInstallTree(cache, stage);
+    const tree = adopt(cache, stage);
     writeFileSync(
       join(tree?.tree as string, "node_modules/dep/index.js"),
       "truncated",
@@ -262,11 +334,42 @@ describe("install tree entries", () => {
     mkdirSync(stage);
     const files = stageTree(stage);
     symlinkSync("dep", join(stage, "node_modules", "linked"));
-    expect(adoptInstallTree(cacheOf(root), stage)).toBeUndefined();
+    expect(adopt(cacheOf(root), stage)).toBeUndefined();
     for (const [path, body] of Object.entries(files))
       expect(readFileSync(join(stage, path), "utf8")).toBe(body);
     // No half-published entry and no holding directory is left behind.
     expect(readdirSync(join(root, "cache"))).toEqual([]);
+  });
+
+  it("copies the tree in, and leaves the stage whole, when the cache is on another volume", () => {
+    const root = temp();
+    const cache = cacheOf(root);
+    const stage = join(root, "stage");
+    mkdirSync(stage);
+    const files = stageTree(stage);
+    // The first rename, the move of node_modules into the entry, crosses volumes.
+    fixture.renameFailures.push("EXDEV");
+    const adopted = adoptInstallTree(cache, stage);
+    expect(adopted?.moved).toBe(false);
+    for (const [path, body] of Object.entries(files))
+      expect(readFileSync(join(stage, path), "utf8")).toBe(body);
+    expect(Object.keys(adopted?.tree.files ?? {}).sort()).toEqual(
+      Object.keys(files).sort(),
+    );
+    expect(lookupInstallTree(cache)?.digest).toBe(adopted?.tree.digest);
+    // The entry holds its own copies, not the stage's files.
+    expect(
+      statSync(join(adopted?.tree.tree as string, "package.json")).ino,
+    ).not.toBe(statSync(join(stage, "package.json")).ino);
+    // A later build can place it, copying where links cannot cross volumes.
+    const target = join(root, "placed");
+    fixture.linkError = "EXDEV";
+    expect(
+      materializeInstallTree(adopted?.tree as InstallTree, target, {
+        strip: false,
+        link: true,
+      }),
+    ).toEqual({ linked: 0, copied: Object.keys(files).length });
   });
 
   it("puts the tree back, and takes the entry out of use, when it cannot read what it published", () => {
@@ -278,7 +381,7 @@ describe("install tree entries", () => {
     const files = stageTree(stage);
     writeFileSync(join(stage, "node_modules", "dep", "a:b.js"), "colon");
     const cache = cacheOf(root);
-    expect(adoptInstallTree(cache, stage)).toBeUndefined();
+    expect(adopt(cache, stage)).toBeUndefined();
     for (const [path, body] of Object.entries(files))
       expect(readFileSync(join(stage, path), "utf8")).toBe(body);
     expect(
@@ -301,9 +404,9 @@ describe("install tree entries", () => {
       mkdirSync(stage);
       stageTree(stage);
     }
-    const winner = adoptInstallTree(cache, first);
+    const winner = adopt(cache, first);
     // The loser's own moved tree is discarded; its stage is emptied the same way.
-    const loser = adoptInstallTree(cache, second);
+    const loser = adopt(cache, second);
     expect(loser?.path).toBe(winner?.path);
     expect(readdirSync(second)).toEqual([]);
     expect(
@@ -320,13 +423,13 @@ describe("install tree entries", () => {
     const stage = join(root, "stage");
     mkdirSync(stage);
     stageTree(stage);
-    const tree = adoptInstallTree(cache, stage);
+    const tree = adopt(cache, stage);
     rmSync(join(tree?.tree as string, "package.json"));
     expect(lookupInstallTree(cache)).toBeUndefined();
     const again = join(root, "again");
     mkdirSync(again);
     stageTree(again);
-    expect(adoptInstallTree(cache, again)).toBeDefined();
+    expect(adopt(cache, again)).toBeDefined();
     expect(lookupInstallTree(cache)).toBeDefined();
   });
 
@@ -337,7 +440,7 @@ describe("install tree entries", () => {
       const stage = join(root, `stage-${index}`);
       mkdirSync(stage);
       stageTree(stage);
-      adoptInstallTree(cacheOf(root, key), stage);
+      adopt(cacheOf(root, key), stage);
       // Strictly increasing use times, whatever the file system's resolution.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
@@ -358,7 +461,7 @@ describe("install tree entries", () => {
       const stage = join(root, `stage-${key.slice(0, 1)}`);
       mkdirSync(stage);
       stageTree(stage);
-      adoptInstallTree(cacheOf(root, key), stage);
+      adopt(cacheOf(root, key), stage);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
     // The oldest entry is used again, so the next oldest goes instead.
@@ -371,7 +474,7 @@ describe("install tree entries", () => {
     const stage = join(root, "stage-4");
     mkdirSync(stage);
     stageTree(stage);
-    adoptInstallTree(cacheOf(root, keys[3]), stage);
+    adopt(cacheOf(root, keys[3]), stage);
     expect(lookupInstallTree(cacheOf(root, keys[1]))).toBeUndefined();
     expect(lookupInstallTree(cacheOf(root, keys[0]))).toBeDefined();
   });
@@ -383,7 +486,7 @@ describe("placing files", () => {
     const stage = join(root, "stage");
     mkdirSync(stage);
     stageTree(stage);
-    const tree = adoptInstallTree(cacheOf(root), stage);
+    const tree = adopt(cacheOf(root), stage);
     return { root, tree: tree as NonNullable<typeof tree> };
   };
 
@@ -391,7 +494,9 @@ describe("placing files", () => {
     if (process.platform === "win32") return;
     const { root, tree } = adopted();
     const target = join(root, "linked");
-    materializeInstallTree(tree, target, { strip: false, link: true });
+    expect(
+      materializeInstallTree(tree, target, { strip: false, link: true }),
+    ).toEqual({ linked: Object.keys(tree.files).length, copied: 0 });
     const entryFile = join(tree.tree, "node_modules/dep/index.js");
     const placed = join(target, "node_modules/dep/index.js");
     expect(statSync(placed).ino).toBe(statSync(entryFile).ino);
@@ -455,9 +560,7 @@ describe("plain inventory", () => {
     mkdirSync(stage);
     const files = stageTree(stage);
     const cache = cacheOf(root, undefined, true);
-    const tree = adoptInstallTree(cache, stage) as NonNullable<
-      ReturnType<typeof adoptInstallTree>
-    >;
+    const tree = adopt(cache, stage) as InstallTree;
     const inventory = plainInventory(tree, cache);
     expect(Object.keys(inventory).sort()).toEqual(
       Object.keys(files)
@@ -555,49 +658,5 @@ describe("bundle entries", () => {
     expect(
       readdirSync(cache.root).filter((name) => name.startsWith(".t")),
     ).toEqual([]);
-  });
-});
-
-describe("renameWithRetry", () => {
-  const onWindows = () =>
-    Object.defineProperty(process, "platform", { value: "win32" });
-
-  it("retries the refusals Windows gives while a scanner holds a handle", () => {
-    onWindows();
-    const root = temp();
-    mkdirSync(join(root, "from"));
-    fixture.renameFailures.push("EPERM", "EBUSY");
-    renameWithRetry(join(root, "from"), join(root, "to"), 1);
-    expect(existsSync(join(root, "to"))).toBe(true);
-    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(3);
-  });
-
-  it("gives up after the last attempt, and never retries other errors", () => {
-    onWindows();
-    const root = temp();
-    mkdirSync(join(root, "from"));
-    fixture.renameFailures.push(...Array<string>(10).fill("EPERM"));
-    expect(() =>
-      renameWithRetry(join(root, "from"), join(root, "to"), 1),
-    ).toThrow(/rename refused/);
-    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(10);
-    vi.mocked(renameSync).mockClear();
-    fixture.renameFailures.length = 0;
-    fixture.renameFailures.push("EXDEV");
-    expect(() => renameWithRetry(join(root, "from"), join(root, "to"))).toThrow(
-      /rename refused/,
-    );
-    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry on other platforms", () => {
-    if (process.platform === "win32") return;
-    const root = temp();
-    mkdirSync(join(root, "from"));
-    fixture.renameFailures.push("EPERM");
-    expect(() => renameWithRetry(join(root, "from"), join(root, "to"))).toThrow(
-      /rename refused/,
-    );
-    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(1);
   });
 });

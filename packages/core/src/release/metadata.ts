@@ -25,6 +25,33 @@ export interface ReleaseTestResult {
   readonly result: "passed";
 }
 
+/**
+ * Where a release's runtime came from. It is reported beside the release, in
+ * the timing output, and never inside it: nothing in the archive, checksums,
+ * or release.json depends on the cache, so a release built from the same
+ * inputs has the same bytes with it, without it, and on a cold cache.
+ */
+export interface RuntimeCacheProvenance {
+  /**
+   * `hit` placed a cached tree, `miss` installed and cached one, `disabled`
+   * built cold (`--rebuild`, PISHIP_RELEASE_NO_CACHE=1, or a cache that could
+   * not be used).
+   */
+  readonly status: "hit" | "miss" | "disabled";
+  /** The cached tree's identity: the digest of its sorted path and size list. */
+  readonly entry?: string;
+  /** Whether a bundled runtime came from the cache. */
+  readonly bundle?: "hit" | "miss";
+  /** How the tree's files reached the payload. */
+  readonly linked?: number;
+  readonly copied?: number;
+  /** The cache is on another volume than the build. */
+  readonly crossVolume?: true;
+}
+
+/** The unsigned record `<out>/releases/<name>.build-info.json` beside a release. */
+export const BUILD_INFO_SCHEMA = "piship-build-info/v1";
+
 export interface ReleaseMetadata {
   readonly schema: typeof RELEASE_SCHEMA;
   readonly distribution: {
@@ -200,4 +227,5 @@ export interface BuiltRelease {
   readonly archive: string;
   readonly sha256: string;
   readonly metadata: ReleaseMetadata;
+  readonly runtimeCache: RuntimeCacheProvenance;
 }

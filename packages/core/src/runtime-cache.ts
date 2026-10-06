@@ -2,16 +2,36 @@
 // dependency tree and, for a bundled release, its bundled form. Entries are
 // content-addressed by everything that decides their bytes, published whole
 // by one directory rename, and never modified afterwards, so concurrent
-// builds cannot corrupt one another. The store lives under PiShip's user
-// cache directory, outside any project or output tree a sandboxed command may
-// write.
+// builds cannot corrupt one another.
+//
+// Trust boundary. The store lives under PiShip's user cache directory, outside
+// any project or output tree a sandboxed command may write, and has the same
+// trust as the owner's home directory: whoever can write there can already
+// replace the PiShip install and every key. Within that boundary:
+//
+// - a bundled runtime, which is what ships, is size- and content-hashed on
+//   every lookup against the record made when it was stored;
+// - the installed dependency tree is too large to hash on every hit (that is
+//   the cost the cache removes), so a hit checks its key, schema, target, a
+//   digest over its recorded (path, size) list, the complete file set, and the
+//   size of every file it places; the digests a payload inventory takes for
+//   it were computed from its bytes when the entry was first used;
+// - a release reports whether it came from the cache, and which entry, in the
+//   timing output, on one stderr line of `piship release`, and in
+//   `<out>/releases/<name>.build-info.json` beside the archive; never in the
+//   archive, checksums.txt, or release.json, so a release's bytes are the same
+//   with the cache, without it, and from a cold one;
+// - `piship release --rebuild` or PISHIP_RELEASE_NO_CACHE=1 builds cold;
+// - release qualification runs on a fresh machine, so it always starts cold.
 //
 // Only runtime bytes are cached. A release always regenerates its audit,
 // SBOM, notices, signature check, smoke tests, and archive from the payload it
 // assembles.
+import { execFileSync } from "node:child_process";
 import {
   constants,
   copyFileSync,
+  cpSync,
   type Dirent,
   existsSync,
   linkSync,
@@ -20,7 +40,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   rmdirSync,
   statSync,
@@ -32,16 +51,15 @@ import { buildInputDigest, safePath } from "./build-cache.js";
 import { canonicalJson, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
 import { isRuntimeIrrelevant } from "./payload.js";
+import { renameWithRetry } from "./rename-retry.js";
 import { buildInput } from "./runtime-dependencies.js";
 import { searchToolCacheDirectory } from "./search-tools/index.js";
+import { windowsNpmInvocation } from "./windows-npm.js";
 
-const SCHEMA = "piship-runtime-cache/v1";
+const SCHEMA = "piship-runtime-cache/v2";
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
 const KEEP = { install: 3, bundle: 6 } as const;
-/** Windows scanners and indexers briefly hold a freshly written tree open. */
-export const TRANSIENT_ATTEMPTS = 10;
-export const TRANSIENT_RETRY_MS = 100;
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -52,11 +70,54 @@ export interface RuntimeCache {
   /**
    * What decides the installed tree's bytes: the PiShip build input digest,
    * the distribution lock's runtime section (Pi version and the npm lock),
-   * the platform and CPU, and Node's major.minor.
+   * the platform, CPU, and libc family, and the major.minor of Node and npm.
    */
   readonly key: string;
   /** `release.strip`: the payload leaves out maps and declarations. */
   readonly strip: boolean;
+}
+
+let npmLine: string | undefined;
+/** The npm that installs the tree, as major.minor; its resolution rules shape the tree. */
+function npmVersion(): string {
+  if (npmLine === undefined)
+    try {
+      const invocation =
+        process.platform === "win32"
+          ? windowsNpmInvocation(["--version"])
+          : { file: "npm", args: ["--version"] };
+      const [major, minor] = execFileSync(
+        invocation.file,
+        [...invocation.args],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      )
+        .trim()
+        .split(".");
+      npmLine =
+        /^\d+$/.test(major ?? "") && /^\d+$/.test(minor ?? "")
+          ? `${major}.${minor}`
+          : "unknown";
+    } catch {
+      npmLine = "unknown";
+    }
+  return npmLine;
+}
+
+/** glibc or musl on Linux, where native packages differ by it; nothing elsewhere. */
+function libcFamily(): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  try {
+    const report = process.report?.getReport() as
+      | { header?: { glibcVersionRuntime?: string } }
+      | undefined;
+    return report?.header?.glibcVersionRuntime ? "glibc" : "musl";
+  } catch {
+    return "unknown";
+  }
 }
 
 /** The runtime cache a build of `lock` on this machine reads and fills. */
@@ -74,7 +135,9 @@ export function runtimeCacheFor(
         runtime: hash(canonicalJson(lock.runtime)),
         platform: process.platform,
         arch: process.arch,
+        libc: libcFamily(),
         node: `${major}.${minor}`,
+        npm: npmVersion(),
       }),
     ),
     strip: lock.release?.strip === true,
@@ -84,40 +147,6 @@ export function runtimeCacheFor(
 /** A name short enough for Windows paths: the key's first 20 hex digits. */
 const entryPath = (cache: RuntimeCache, kind: "i" | "b", key: string) =>
   join(cache.root, `${kind}-${key.slice(0, 20)}`);
-
-const code = (error: unknown) => (error as NodeJS.ErrnoException).code;
-function sleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Rename, retrying where Windows briefly refuses it: Defender or the search
- * indexer holds a handle on a file just written, and the rename of its
- * directory fails with EPERM, EBUSY, or EACCES until the handle closes. Ten
- * attempts with a pause of `delayMs` times the attempt number wait about four
- * and a half seconds in all. Every other error, EXDEV included, is immediate,
- * and so is any error off Windows.
- */
-export function renameWithRetry(
-  from: string,
-  to: string,
-  delayMs = TRANSIENT_RETRY_MS,
-): void {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      renameSync(from, to);
-      return;
-    } catch (error) {
-      if (
-        process.platform !== "win32" ||
-        attempt === TRANSIENT_ATTEMPTS ||
-        !["EPERM", "EBUSY", "EACCES"].includes(code(error) ?? "")
-      )
-        throw error;
-      sleep(delayMs * attempt);
-    }
-  }
-}
 
 /** Regular files under `root`, as `/`-separated relative paths. */
 function listFiles(root: string): string[] {
@@ -308,18 +337,33 @@ interface InstallRecord {
   readonly arch: string;
   /** Every file of `tree`, with its size. */
   readonly files: Readonly<Record<string, number>>;
+  /** SHA-256 over the sorted (path, size) list, made when the entry was adopted. */
+  readonly filesSha256: string;
 }
 
 export interface InstallTree {
   readonly path: string;
   readonly tree: string;
   readonly files: Readonly<Record<string, number>>;
+  /** The entry's identity: the digest over its sorted (path, size) list. */
+  readonly digest: string;
+}
+
+/** A digest of a file set as `path NUL size LF` lines in path order. */
+function filesDigest(files: Readonly<Record<string, number>>): string {
+  return hash(
+    Object.keys(files)
+      .sort()
+      .map((name) => `${name}\0${files[name]}\n`)
+      .join(""),
+  );
 }
 
 /**
  * The cached tree for `cache.key`, or undefined when there is none or it does
- * not match its record: wrong key, schema, or target, or a file set that
- * differs from the one recorded when it was created.
+ * not match its record: wrong key, schema, or target, a record whose digest
+ * is not that of its own file list, or a file set that differs from the one
+ * recorded when it was created.
  */
 export function lookupInstallTree(
   cache: RuntimeCache,
@@ -337,7 +381,8 @@ export function lookupInstallTree(
     Array.isArray(record.files) ||
     Object.entries(record.files).some(
       ([name, size]) => !safePath(name) || !Number.isSafeInteger(size),
-    )
+    ) ||
+    record.filesSha256 !== filesDigest(record.files)
   )
     return undefined;
   const tree = join(path, "tree");
@@ -348,7 +393,7 @@ export function lookupInstallTree(
   }
   touch(path);
   prune(cache, DISCARD_BUDGET_MS.hit);
-  return { path, tree, files: record.files };
+  return { path, tree, files: record.files, digest: record.filesSha256 };
 }
 
 /**
@@ -361,19 +406,31 @@ export function discardInstallTree(cache: RuntimeCache): void {
 }
 
 const ROOT_FILES = ["package.json", "package-lock.json"];
+const code = (error: unknown) => (error as NodeJS.ErrnoException).code;
+
+export interface AdoptedTree {
+  readonly tree: InstallTree;
+  /**
+   * True when the stage's tree was moved into the entry, so the stage holds
+   * none of it and `materializeInstallTree` places it again. False when the
+   * entry is on another volume and the tree was copied in: the stage still
+   * holds the whole tree.
+   */
+  readonly moved: boolean;
+}
 
 /**
- * Move the installed dependency tree out of `stage` into a new entry, in one
- * rename, and publish it. `stage` then holds none of `node_modules`,
- * `package.json`, or `package-lock.json`: place them again with
- * `materializeInstallTree`. Where the tree cannot be adopted (the cache is on
- * another volume, the rename is refused, or the tree holds a link) `stage` is
- * left as it was and the result is undefined.
+ * Publish the installed dependency tree of `stage` as a new entry: moved in
+ * with one rename, or, when the cache is on another volume (EXDEV), copied in
+ * once and left in the stage as well. A moved tree leaves the stage without
+ * `node_modules`, `package.json`, and `package-lock.json`. Where the tree
+ * cannot be adopted (the rename is refused, or the tree holds a link) the
+ * stage is left as it was and the result is undefined.
  */
 export function adoptInstallTree(
   cache: RuntimeCache,
   stage: string,
-): InstallTree | undefined {
+): AdoptedTree | undefined {
   let holding: string;
   try {
     mkdirSync(cache.root, { recursive: true });
@@ -383,15 +440,28 @@ export function adoptInstallTree(
   }
   const destination = entryPath(cache, "i", cache.key);
   const names = ["node_modules", ...ROOT_FILES];
-  // Where the moved tree is now, so a failure can put it back.
+  // Where the tree is now, so a failure can put it back.
   let location = join(holding, "tree");
   const moved: string[] = [];
   let given = false;
+  let copied = false;
   try {
     mkdirSync(location);
-    for (const name of names) {
-      renameWithRetry(join(stage, name), join(location, name));
-      moved.push(name);
+    for (const name of names)
+      try {
+        renameWithRetry(join(stage, name), join(location, name));
+        moved.push(name);
+      } catch (error) {
+        if (code(error) !== "EXDEV" || moved.length > 0) throw error;
+        copied = true;
+        break;
+      }
+    if (copied) {
+      cpSync(join(stage, "node_modules"), join(location, "node_modules"), {
+        recursive: true,
+      });
+      for (const name of ROOT_FILES)
+        copyFileSync(join(stage, name), join(location, name));
     }
     const files: Record<string, number> = {};
     for (const name of listFiles(location).sort())
@@ -403,6 +473,7 @@ export function adoptInstallTree(
       platform: process.platform,
       arch: process.arch,
       files,
+      filesSha256: filesDigest(files),
     };
     writeFileSync(join(holding, RECORD), JSON.stringify(record));
     const outcome = publish(
@@ -412,11 +483,11 @@ export function adoptInstallTree(
     );
     // Another build's entry stands in for ours, which is gone.
     if (outcome === "published") location = join(destination, "tree");
-    else given = true;
-    const adopted = lookupInstallTree(cache);
-    if (!adopted) throw new Error("The runtime cache entry is not readable");
+    else given = !copied;
+    const tree = lookupInstallTree(cache);
+    if (!tree) throw new Error("The runtime cache entry is not readable");
     prune(cache, DISCARD_BUDGET_MS.published);
-    return adopted;
+    return { tree, moved: !copied };
   } catch (error) {
     // The tree was handed over and cannot be put back.
     if (given) throw error;
@@ -436,37 +507,40 @@ export function adoptInstallTree(
  * volume, a file system without links, a link limit) the file is copied
  * instead, as a copy-on-write clone where the volume has them. A copy never
  * replaces an existing file, which could be a link into the cache. Returns
- * whether links are still worth trying.
+ * how the file was placed.
  */
-function place(from: string, to: string, link: boolean): boolean {
+function place(from: string, to: string, link: boolean): "linked" | "copied" {
   if (link)
     try {
       linkSync(from, to);
-      return true;
+      return "linked";
     } catch {}
   copyFileSync(from, to, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
-  return false;
+  return "copied";
 }
 
 /**
  * Place the cached tree under `target`. With `strip` the maps and
  * declarations are left behind, which is the strip itself: no file is
  * created and then deleted. Every file placed must have the size recorded when
- * the entry was created.
+ * the entry was created. Returns how many files were linked and how many
+ * copied.
  *
  * With `link` (by default on Windows only) the files are hardlinked from the
  * entry. There every created file is read and scanned by Defender, which makes
  * a link an order of magnitude cheaper than a copy, while macOS and Linux
  * clone or copy a file about as fast as they link it. A linked file shares its
  * bytes with the entry: nothing may write through it, and deleting it only
- * removes the name.
+ * removes the name. When a link is refused (another volume, no link support)
+ * the rest are copied, and the count says so.
  */
 export function materializeInstallTree(
   tree: InstallTree,
   target: string,
   options: { readonly strip: boolean; readonly link?: boolean },
-): void {
+): { readonly linked: number; readonly copied: number } {
   const made = new Set<string>();
+  const placed = { linked: 0, copied: 0 };
   let link = options.link ?? process.platform === "win32";
   for (const [name, size] of Object.entries(tree.files)) {
     if (options.strip && isRuntimeIrrelevant(basename(name))) continue;
@@ -476,10 +550,13 @@ export function materializeInstallTree(
       mkdirSync(parent, { recursive: true });
       made.add(parent);
     }
-    link = place(inside(tree.tree, name), to, link);
+    const how = place(inside(tree.tree, name), to, link);
+    placed[how]++;
+    link = link && how === "linked";
     if (lstatSync(to).size !== size)
       throw new Error(`The runtime cache entry is damaged: ${name}`);
   }
+  return placed;
 }
 
 /**

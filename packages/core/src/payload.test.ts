@@ -261,6 +261,7 @@ describe("launch integrity verification", () => {
       },
       app: readManifest(join(dir, "piship.yaml")).app,
       runtime: { npmLockSha256: hash("{}\n") },
+      ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
     } as unknown as DistributionLock;
     write(dir, "piship.lock", JSON.stringify(lock));
     write(
@@ -330,10 +331,13 @@ describe("launch integrity verification", () => {
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
     expect(() => verifyLaunchPayload(dir)).not.toThrow();
   });
-  it("verifyLaunchPayload never hashes contents even when verifyAtLaunch is true", () => {
+  it("verifyLaunchPayload verifies the whole payload when verifyAtLaunch is true", () => {
     const dir = buildPayload(true);
+    expect(verifyLaunchPayload(dir).app.command).toBe("mypi");
     writeFileSync(join(dir, "bin", "mypi"), "tampered\n");
-    expect(() => verifyLaunchPayload(dir)).not.toThrow();
+    expect(() => verifyLaunchPayload(dir)).toThrow(
+      /integrity mismatch.*modified: bin\/mypi/,
+    );
   });
   it("verifyLaunchPayload never hashes contents when the legacy flag is absent", () => {
     const dir = buildPayload();

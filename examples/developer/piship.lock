@@ -2,7 +2,7 @@
   "schema": "piship-lock/v1alpha6",
   "manifest": {
     "schema": "piship/v1alpha6",
-    "sha256": "sha256-7984dede059e590e2a83352b82f3481332f3a7282903a502c6402185d5223102"
+    "sha256": "sha256-b95a0f26d6a99b46fadc9632957e3006f1a4d2e76254eb9971d2246cb7a6dce3"
   },
   "app": {
     "id": "devcode",
@@ -1989,7 +1989,9 @@
     "installScripts": [
       "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3",
       "pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1"
-    ]
+    ],
+    "strip": true,
+    "bundle": true
   },
   "packages": [
     {

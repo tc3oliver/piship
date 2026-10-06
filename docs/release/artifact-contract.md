@@ -24,7 +24,7 @@ The archive is plain ustar in gzip at zlib level 6: entries are sorted by byte o
 
 ## Verifying a release
 
-`piship verify-release <archive|release-dir>` is the full consumer check, and also runs inside `sign-channel`. `install.sh`, `install.ps1`, `piship install`, and every update do not run it: they check the archive digest, the signed or expected bindings, and the small release and payload metadata, without hashing every payload file, so it stays an explicit step for CI, `doctor`, and diagnosis. It fails with `INTEGRITY_FAILED` unless:
+`piship verify-release <archive|release-dir>` is the full consumer check, and also runs inside `sign-channel`. `install.sh`, `install.ps1`, `piship install`, and every update do not run it: they hash the archive and each file in the same pass that extracts it and compare them with the signed or expected bindings and the payload inventory, without the separate full verification (the checksums file, SBOM, notices, and scan results), which stays an explicit step for CI, `doctor`, and diagnosis. It fails with `INTEGRITY_FAILED` unless:
 
 - For an archive: its SHA-256 matches `--sha256` when given and the `.sha256` sidecar when present, and it extracts cleanly under the rules above.
 - `checksums.txt` lists every required release file, each file matches, and no listed path escapes the release root.
@@ -37,7 +37,7 @@ These checks prove the release is complete and internally consistent. They do no
 
 ## Reproducibility
 
-`piship reproducibility <release-a> <release-b> [--out report.json]` verifies both releases, refuses to compare different distributions, versions, or targets, and writes a `piship-reproducibility/v1` report. Payload equality is the claim: every declared payload path and SHA-256 must match, and the command exits 1 otherwise, listing the differing paths. Wrapper files (`release.json`, SBOM, notices, scan result, install scripts) and whole-archive equality are reported separately. A new vulnerability advisory published between two builds changes `vulnerabilities.json` without changing the payload. Equality is claimed only per target: `metadata/target.json` and native package files differ between targets by design.
+`piship reproducibility <release-a> <release-b> [--out report.json]` verifies both releases, refuses to compare different distributions, versions, or targets, and writes a `piship-reproducibility/v1` report. Payload equality is the claim: every declared payload path and SHA-256 must match, and the command exits 1 otherwise, listing the differing paths. Wrapper files (`release.json`, SBOM, notices, scan result, install scripts) and whole-archive equality are reported separately. Whether the build reused the runtime cache is not recorded in any of them: a cache hit, a miss, and a cold build give a byte-identical archive, `release.json`, and `checksums.txt`, and the cache result goes to stderr, the timing output, and an unsigned `<name>.build-info.json` beside the archive. A new vulnerability advisory published between two builds changes `vulnerabilities.json` without changing the payload. Equality is claimed only per target: `metadata/target.json` and native package files differ between targets by design.
 
 In CI, the `release-candidate` workflow builds each target twice on separate runners, each from a fresh checkout and `npm ci`, with the same `SOURCE_DATE_EPOCH`, and fails unless `piship reproducibility` passes on the two archives ([Build provenance](#build-provenance)).
 

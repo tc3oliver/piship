@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { PiShipError, stopwatch, systemError } from "@piship/contracts";
+import { hash } from "../digest.js";
 import {
   assertDisjointRoots,
   installHome,
@@ -420,7 +421,15 @@ export async function installDistribution(
                 version,
                 payload: target,
                 installedAt: new Date().toISOString(),
-                ...(info ? { release: info } : {}),
+                // A release carries the lock's digest in its signed metadata;
+                // a payload directory has only what was installed.
+                ...(info
+                  ? { release: info }
+                  : {
+                      lockSha256: hash(
+                        readFileSync(join(target, "piship.lock")),
+                      ),
+                    }),
               },
             ],
             // Users start on the distribution's default channel, whatever

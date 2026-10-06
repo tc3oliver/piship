@@ -62,6 +62,7 @@ import {
   withTestState,
   writePrivateKey,
   type AbandonedStaging,
+  type RuntimeCacheProvenance,
   type DistributionLock,
   type KeyedSigner,
   type PassphraseInput,
@@ -396,6 +397,20 @@ export interface CliOutput {
  * in its output directory. They are removed only on request: the output
  * directory is usually inside a project that sandboxed commands can write.
  */
+/** One line saying whether a release's runtime came from the runtime cache. */
+export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
+  if (cache.status === "disabled" || cache.entry === undefined)
+    return `runtime cache: ${cache.status}`;
+  const placed = [
+    `entry ${cache.entry}`,
+    `linked ${cache.linked ?? 0}`,
+    `copied ${cache.copied ?? 0}`,
+    ...(cache.bundle ? [`bundle ${cache.bundle}`] : []),
+    ...(cache.crossVolume ? ["cache on another volume, entry copied in"] : []),
+  ];
+  return `runtime cache: ${cache.status} (${placed.join(", ")})`;
+}
+
 function stagingNotice(found: AbandonedStaging): string {
   const what = `${found.count} abandoned staging ${found.count === 1 ? "directory" : "directories"} of killed runs in ${found.directory}`;
   return found.attempted
@@ -895,6 +910,9 @@ async function runLifecycle(
     output.stdout(
       `Built qualified release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
     );
+    // Where the runtime came from is no part of the release, so it goes to
+    // stderr and to the build-info file beside the archive.
+    output.stderr(runtimeCacheLine(built.runtimeCache));
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
       ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),

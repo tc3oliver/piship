@@ -38,8 +38,8 @@ import {
   materializeInstallTree,
   plainInventory,
   type RuntimeCache,
-  renameWithRetry,
 } from "./runtime-cache.js";
+import { renameWithRetry } from "./rename-retry.js";
 import { stageSearchTools } from "./search-tools/index.js";
 import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import {
@@ -123,6 +123,19 @@ function installRuntime(
   debugTiming("removeNpmBins/foreign platform packages", phase);
 }
 
+/** What a build says about where its runtime tree came from. */
+export interface RuntimeCacheReport {
+  /** A hit placed an entry, a miss installed and published one, unusable built without the cache. */
+  readonly status: "hit" | "miss" | "unusable";
+  /** The entry's identity (the digest of its file list), when there was one. */
+  readonly entry?: string;
+  /** How the files reached the payload: hardlinked from the entry, or copied. */
+  readonly linked: number;
+  readonly copied: number;
+  /** The cache is on another volume than the build, so the entry was copied in. */
+  readonly crossVolume?: true;
+}
+
 /**
  * Put the runtime dependency tree into the empty `stage`: placed from the
  * runtime cache when it holds one, otherwise installed (and, with a cache,
@@ -136,7 +149,7 @@ function placeRuntime(
     readonly strip: boolean;
     readonly leaveWhole: boolean;
     readonly progress: ((step: string) => void) | undefined;
-    readonly found: ((found: "hit" | "miss" | "unusable") => void) | undefined;
+    readonly found: ((report: RuntimeCacheReport) => void) | undefined;
   },
 ): InstallTree | undefined {
   const { cache, strip, progress, found } = options;
@@ -146,9 +159,9 @@ function placeRuntime(
     if (hit) {
       progress?.("Reusing the cached runtime packages");
       try {
-        materializeInstallTree(hit, stage, { strip });
+        const placed = materializeInstallTree(hit, stage, { strip });
         debugTiming("runtime cache placement", phase);
-        found?.("hit");
+        found?.({ status: "hit", entry: hit.digest, ...placed });
         return hit;
       } catch {
         // Damaged or evicted underneath this build: install again, and publish
@@ -163,21 +176,31 @@ function placeRuntime(
   phase = process.hrtime.bigint();
   const adopted = cache && adoptInstallTree(cache, stage);
   if (cache && adopted) {
-    try {
-      materializeInstallTree(adopted, stage, { strip });
-    } catch (error) {
-      // This tree is what is left of the install: never reuse it.
-      discardInstallTree(cache);
-      throw error;
-    }
+    let placed = { linked: 0, copied: 0 };
+    if (adopted.moved)
+      try {
+        placed = materializeInstallTree(adopted.tree, stage, { strip });
+      } catch (error) {
+        // This tree is what is left of the install: never reuse it.
+        discardInstallTree(cache);
+        throw error;
+      }
     debugTiming("runtime cache publish and placement", phase);
-    found?.("miss");
-    return adopted;
+    found?.({
+      status: "miss",
+      entry: adopted.tree.digest,
+      ...placed,
+      ...(adopted.moved ? {} : { crossVolume: true as const }),
+    });
+    // Copied across volumes, the stage kept its whole tree: strip it in place.
+    if (adopted.moved) return adopted.tree;
+    if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
+    return adopted.tree;
   }
   if (cache) {
-    found?.("unusable");
+    found?.({ status: "unusable", linked: 0, copied: 0 });
     progress?.(
-      "The runtime cache is not usable here (another volume, or the directory is locked); building without it",
+      "The runtime cache is not usable here (the directory is locked or cannot be written); building without it",
     );
   }
   if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
@@ -217,7 +240,7 @@ export function buildDistribution(
      */
     readonly runtimeCache?: RuntimeCache;
     /** Told whether the runtime came from the cache, was installed into it, or could not use it. */
-    readonly onRuntimeCache?: (found: "hit" | "miss" | "unusable") => void;
+    readonly onRuntimeCache?: (report: RuntimeCacheReport) => void;
     /** Receives a short line as each long step starts. */
     readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},

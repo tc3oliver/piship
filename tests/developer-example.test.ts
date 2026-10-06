@@ -39,7 +39,7 @@ interface Lock {
   governance: {
     providers: { capability: string; certified?: { integrity: string } }[];
   };
-  release: { installScripts: string[] };
+  release: { installScripts: string[]; bundle?: boolean; strip?: boolean };
 }
 
 const lock = JSON.parse(text("examples", "developer", "piship.lock")) as Lock;
@@ -111,6 +111,14 @@ describe("the developer example manifests", () => {
     const current = requireCurrentLock(personalPath) as unknown as Lock;
     expect(current.runtime.version).toBe(PI_VERSION);
     expect(lock.runtime.version).toBe(PI_VERSION);
+  });
+
+  it("opt in to the bundled, stripped payload that users install", () => {
+    expect(personal.lifecycle?.release).toMatchObject({
+      bundle: true,
+      strip: true,
+    });
+    expect(lock.release).toMatchObject({ bundle: true, strip: true });
   });
 
   it("pins every package to an exact version that the lock resolved", () => {

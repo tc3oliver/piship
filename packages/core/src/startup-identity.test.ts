@@ -168,6 +168,23 @@ describe.runIf(process.platform !== "linux")(
       expect(START_TOLERANCE_MS).toBeGreaterThan(10_000);
     });
 
+    it("tells this process's own record from a dead process's that had its ID, without asking the system", () => {
+      const own = {
+        pid: process.pid,
+        identity: null,
+        host: processHostToken(),
+      };
+      spawned().mockClear();
+      expect(recordedProcessGone({ ...own, started: recordedStart() })).toBe(
+        false,
+      );
+      // Within the start tolerance of this process, but not its start.
+      expect(
+        recordedProcessGone({ ...own, started: recordedStart() - 1_000 }),
+      ).toBe(true);
+      expect(spawned()).not.toHaveBeenCalled();
+    });
+
     it("judges the same way a record read by any other launcher is judged", () => {
       const pid = livePid();
       const record = (started: number) => ({

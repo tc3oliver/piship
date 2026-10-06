@@ -22,7 +22,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { buildDistribution } from "./build.js";
+import { buildDistribution, type RuntimeCacheReport } from "./build.js";
 import { buildCachePath, buildInputDigest } from "./build-cache.js";
 import { lockManifest, requireCurrentLock } from "./lock.js";
 import { verifyPayload } from "./payload.js";
@@ -213,7 +213,7 @@ describe("immutable runtime cache", () => {
     runtimeCacheFor(requireCurrentLock(manifest), {
       PISHIP_CACHE_HOME: directory,
     });
-  /** The personal example, which is a piship/v1alpha6 manifest, with release settings. */
+  /** The personal example, a piship/v1alpha6 manifest, with the release settings the caller gives. */
   function example(release: string) {
     const root = mkdtempSync(join(tmpdir(), "piship-runtime-cache-example-"));
     roots.push(root);
@@ -221,10 +221,10 @@ describe("immutable runtime cache", () => {
     const manifest = join(root, "piship.yaml");
     writeFileSync(
       manifest,
-      readFileSync(manifest, "utf8").replace(
-        "release:\n",
-        `release:\n${release}`,
-      ),
+      readFileSync(manifest, "utf8")
+        // The example ships bundled and stripped; the caller picks its own.
+        .replace(/^ {2}(strip|bundle): .*\n/gm, "")
+        .replace("release:\n", `release:\n${release}`),
     );
     lockManifest(manifest);
     return { root, manifest };
@@ -244,16 +244,28 @@ describe("immutable runtime cache", () => {
   it("installs once for any number of outputs, and every payload verifies", () => {
     const p = project();
     const runtimeCache = cacheOf(p.manifest, home());
+    const reports: RuntimeCacheReport[] = [];
     const build = (name: string) =>
       buildDistribution(p.manifest, join(p.root, name), {
         ...options,
         cache: false,
         runtimeCache,
+        onRuntimeCache: (report) => reports.push(report),
       });
     const first = build("first");
     const second = build("second");
     const third = build("third");
     expect(fixture.installs).toBe(1);
+    // Each build says where its tree came from, and the entry is the same one.
+    expect(reports.map((report) => report.status)).toEqual([
+      "miss",
+      "hit",
+      "hit",
+    ]);
+    expect(new Set(reports.map((report) => report.entry)).size).toBe(1);
+    expect(reports[0]?.entry).toMatch(/^[0-9a-f]{64}$/);
+    for (const report of reports.slice(1))
+      expect(report.linked + report.copied).toBeGreaterThan(0);
     for (const output of [first, second, third]) {
       expect(verifyPayload(output).app.id).toBe("cachepi");
       expect(
@@ -390,12 +402,14 @@ describe("immutable runtime cache", () => {
     writeFileSync(blocker, "a file where the cache directory would go");
     const runtimeCache = cacheOf(p.manifest, blocker);
     const steps: string[] = [];
+    const reports: RuntimeCacheReport[] = [];
     const build = (name: string) =>
       buildDistribution(p.manifest, join(p.root, name), {
         ...options,
         cache: false,
         runtimeCache,
         progress: (step) => steps.push(step),
+        onRuntimeCache: (report) => reports.push(report),
       });
     expect(verifyPayload(build("a")).app.id).toBe("cachepi");
     expect(verifyPayload(build("b")).app.id).toBe("cachepi");
@@ -403,6 +417,10 @@ describe("immutable runtime cache", () => {
     expect(
       steps.filter((step) => /runtime cache is not usable/.test(step)),
     ).toHaveLength(2);
+    expect(reports.map((report) => report.status)).toEqual([
+      "unusable",
+      "unusable",
+    ]);
   });
 
   it("leaves the maps and declarations out by omission, the same files an in-place strip leaves", () => {

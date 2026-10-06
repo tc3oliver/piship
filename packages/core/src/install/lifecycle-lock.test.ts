@@ -195,6 +195,30 @@ describe("lifecycle lock holder identity", () => {
     expect(existsSync(lock)).toBe(false);
   });
 
+  it("recovers at once a lock that names this process's ID with another start time", () => {
+    // A command killed by Ctrl-C leaves its lock behind, and the next run can
+    // be given the same process ID within the start tolerance: the lock is a
+    // dead process's, not this one's, however fresh.
+    writeFileSync(
+      lock,
+      identified({
+        pid: process.pid,
+        started: Math.round(performance.timeOrigin) - 1_000,
+      }),
+    );
+    acquire().release();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("still waits for a lock this very process holds", () => {
+    const hold = acquire();
+    try {
+      expect(busy().pid).toBe(process.pid);
+    } finally {
+      hold.release();
+    }
+  });
+
   it("waits for a live holder whose start identity matches", () => {
     const holder = livePid();
     writeFileSync(
