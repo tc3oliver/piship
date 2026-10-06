@@ -46,6 +46,7 @@ import {
   pathHint,
   progressReporter,
   purgeDistributionState,
+  raiseThreadpool,
   readInstallReceipt,
   readSigningPassphrase,
   repairDistribution,
@@ -518,6 +519,9 @@ export async function runCli(
     output.stderr(`Unknown command: ${command}. Run piship --help.`);
     return 2;
   }
+  // Before anything touches the file system asynchronously: the pool size is
+  // read when it first runs.
+  if (command === "install" || command === "update") raiseThreadpool();
   const lifecycle = lifecycleCommands[command];
   // --help anywhere after the command asks for help; it is never a target.
   if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {

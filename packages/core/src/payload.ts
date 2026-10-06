@@ -349,3 +349,41 @@ function repairAction(root?: string, onlyUnexpected = false): string {
   const name = installed ? id : "<id>";
   return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version with: piship repair ${name} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${name} <extracted release> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
 }
+/**
+ * Compare the SHA-256 of every payload file, computed from the bytes as they
+ * were written (an archive extraction or a directory copy), with the payload's
+ * own inventory: no file modified, none missing, none the inventory does not
+ * name. The inventory file itself is bound separately, by the digest the
+ * release records for it. Names the first offending paths with the expected
+ * and the actual digest.
+ */
+export function verifyWrittenPayload(
+  digests: ReadonlyMap<string, string>,
+  expected: Readonly<Record<string, string>>,
+  where: string,
+): void {
+  const written = new Map(
+    [...digests].filter(([path]) => path !== "metadata/inventory.json"),
+  );
+  const problems: string[] = [];
+  for (const [path, actual] of written) {
+    const wanted = expected[path];
+    if (wanted === undefined) problems.push(`unexpected: ${path}`);
+    else if (wanted !== actual)
+      problems.push(
+        `modified: ${path} (expected ${wanted.slice(0, 16)}, actual ${actual.slice(0, 16)})`,
+      );
+  }
+  for (const path of Object.keys(expected))
+    if (!written.has(path)) problems.push(`missing: ${path}`);
+  if (problems.length > 0)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `Payload integrity mismatch in ${where}; ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? `; and ${problems.length - 5} more` : ""}`,
+      {
+        component: "payload",
+        userAction:
+          "Do not install this artifact; obtain it again from the trusted source",
+      },
+    );
+}

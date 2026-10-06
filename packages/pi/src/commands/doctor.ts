@@ -1,7 +1,9 @@
 import { PiShipError } from "@piship/contracts";
 import {
   verifyPayload,
+  describeReclaimed,
   reclaimLaunchTemporaries,
+  reclaimObsoleteVersions,
   refreshInstalledLauncher,
   sweepStateTemporaries,
 } from "@piship/core";
@@ -75,6 +77,12 @@ export async function runDoctor(
   sweepStateTemporaries(ctx.stateDir);
   const notice = reclaimLaunchTemporaries(ctx.metadata.app.id);
   if (notice) ctx.err(notice);
+  // Release directories nothing records any more, removed within a time
+  // budget: install and update never delete them.
+  const reclaimed = describeReclaimed(
+    reclaimObsoleteVersions(ctx.metadata.app.id),
+  );
+  if (reclaimed) ctx.err(reclaimed);
   // An installed launcher an earlier PiShip wrote is replaced, as at the end
   // of a session, so the report below names the one that runs next.
   refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
