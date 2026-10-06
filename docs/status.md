@@ -36,13 +36,11 @@ The six archives on the [v0.9.1 pre-release](https://github.com/tc3oliver/piship
 | `mypi-1.0.0-darwin-arm64.tar.gz` | `eb6a01dccea679da790021a8327dd6f6db4732b1999c5aadec6b9903d2c4faf0` |
 | `mypi-1.0.0-win32-x64.tar.gz` | `05a7c1c3d40540e146bbb060fb2b9ba8d56012e0b6d363a7402501736b1365cb` |
 
-## v0.10.0 candidate
-
-Every package and `PISHIP_VERSION` is `0.10.0`, on Pi 1.0.3 with the unchanged `piship/v1alpha6` and `piship-lock/v1alpha6` schema ids. The candidate adds `devcode`, session `--yolo`, package environment and agent-file declarations, package capability providers, and managed Claude project trust controls. Qualification and publication are pending. v0.9.1 remains the production-validation baseline until the exact merged candidate and its archives are qualified and published.
-
 ## v0.11.0 candidate
 
-v0.11.0 is the last major engineering milestone before 1.0.0 ([roadmap](roadmap.md#v011--runtime-footprint-windows-performance-stable-v1-contracts-and-production-readiness)). It is assembled from four pull requests: the Pi package footprint (dependency sharing and bundle-safe closures, and the budgets that guard them), the shared runtime store and the Windows launcher decision, the `piship/v1` and `piship-lock/v1` contracts with the `v1alpha6` migration, and production readiness (this page's evidence, the [security review](security.md#v011-security-review), and the supply-chain qualification). Qualification and publication are pending: no Release qualification run has covered the milestone, and v0.9.1 remains the production-validation baseline until the exact merged candidate and its archives are qualified and published.
+Every package and `PISHIP_VERSION` is `0.11.0`, on Pi 1.0.3 with the stable `piship/v1` and `piship-lock/v1` schemas (`v1alpha6` accepted for the migration window). **v0.10.0 was never published:** its changes (`devcode`, session `--yolo`, package environment and agent-file declarations, package capability providers, and managed Claude project trust controls) ship inside v0.11.0, as one GitHub pre-release.
+
+v0.11.0 is the last major engineering milestone before 1.0.0 ([roadmap](roadmap.md#v011--runtime-footprint-windows-performance-stable-v1-contracts-and-production-readiness)). Beyond the v0.10.0 changes it is assembled from four pull requests: the Pi package footprint (dependency sharing and bundle-safe closures, and the budgets that guard them), the shared runtime store and the Windows launcher decision, the `piship/v1` and `piship-lock/v1` contracts with the `v1alpha6` migration, and production readiness (this page's evidence, the [security review](security.md#v011-security-review), and the supply-chain qualification). Qualification and publication are pending: no Release qualification run has covered the milestone, and v0.9.1 remains the production-validation baseline until the exact merged candidate and its archives are qualified and published.
 
 What the production-readiness pull request establishes, and what it does not:
 
@@ -53,7 +51,7 @@ What the production-readiness pull request establishes, and what it does not:
 
 ## On `main` after v0.9.1
 
-`main` has moved past v0.9.1. These changes are not in v0.9.1, the production-validation baseline, and are not released; the [candidate changelog](../CHANGELOG.md#v0100-candidate) lists them.
+`main` has moved past v0.9.1. These changes are not in v0.9.1, the production-validation baseline, and are not released; the [candidate changelog](../CHANGELOG.md#v0110-candidate) lists them.
 
 - Pi 1.0.3: `main` pins `@earendil-works/pi-coding-agent` exactly at 1.0.3, with its seven sibling packages pinned exactly. `compatibility/pi.json` and the copy in `@piship/core` list 1.0.3 beside 1.0.2, 1.0.0, and 0.87.1 with the same four surface statuses (`personal` `supported`; `managed`, `governance`, and `lifecycle` `candidate`), and the launcher runs only 1.0.3. v0.9.0 and v0.9.1 stay on 1.0.2. The upgrade notes, including Pi's renamed Azure provider id, are in [compatibility](compatibility.md#upgrade-to-pi-103).
 - Evidence for Pi 1.0.3: the Pi compatibility suite, the unit tier, and `npm run check` were run locally on the upgrade branch and passed. No CI tier is recorded for it yet: the fast merge gate, Portable E2E, Reference E2E, and a Release qualification on a commit with 1.0.3 are listed as not recorded until they run ([recorded evidence](#recorded-evidence)). The statuses of 1.0.3 are carried over from 1.0.2, not earned again, and the production-validation baseline stays v0.9.1 on Pi 1.0.2 until a release is qualified on 1.0.3.
@@ -407,7 +405,7 @@ Product milestones and schema versions are separate. A milestone is a unit of pr
 | v0.7 (v0.7.0 at `4994eee`, the squash of #165; v0.7.1 at `bd4bc09`, the squash of #174) | Enterprise integration and qualification | `piship/v1alpha4` (unchanged) | `piship-lock/v1alpha4` (unchanged) |
 | v0.8 (v0.8.0 at `8550282`, the squash of #193; v0.8.1 at `d069104`, the squash of #203) | Pre-production trust and validation hardening | `piship/v1alpha5` | `piship-lock/v1alpha5` |
 | v0.9 (v0.9.0 at `ff3c382`, the squash of #209; v0.9.1 at `a97ba43`, the squash of #215) | Pi 1.x-native governance | `piship/v1alpha6` | `piship-lock/v1alpha6` |
-| v0.10 (candidate) | Portability and Windows hot-path performance | `piship/v1alpha6` (unchanged) | `piship-lock/v1alpha6` (unchanged) |
-| v0.11 (in progress) | Runtime footprint, Windows performance, stable v1 contracts, production readiness | `piship/v1` (stable; v1alpha6 accepted for the migration window) | `piship-lock/v1` (stable; v1alpha6 read) |
+| v0.10 (never published; shipped inside v0.11.0) | Portability and Windows hot-path performance | `piship/v1alpha6` (unchanged) | `piship-lock/v1alpha6` (unchanged) |
+| v0.11 (candidate) | Runtime footprint, Windows performance, stable v1 contracts, production readiness | `piship/v1` (stable; v1alpha6 accepted for the migration window) | `piship-lock/v1` (stable; v1alpha6 read) |
 
 All seven manifest schemas are accepted. `piship/v1` is stable and freezes the semantics of `piship/v1alpha6`; the six alpha schemas are experimental, kept for the [migration window](support-policy.md#manifest-versions-and-the-migration-window). Only `piship/v1alpha5`, `piship/v1alpha6`, and `piship/v1` can build a release, and `piship migrate` takes an older manifest step by step to v1 ([migration](manifest.md#migration)). Every example uses `piship/v1`. The schema details live in [manifest](manifest.md); the history lives in the [changelog](../CHANGELOG.md); what comes next is in the [roadmap](roadmap.md).

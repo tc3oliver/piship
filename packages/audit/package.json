@@ -1,6 +1,6 @@
 {
   "name": "@piship/audit",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/contracts": "0.10.0"
+    "@piship/contracts": "0.11.0"
   },
   "description": "Metadata-first audit events, sinks, and local operational signals for PiShip.",
   "keywords": [
