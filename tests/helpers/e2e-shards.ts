@@ -40,7 +40,7 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   cli: { seconds: { linux: 171, darwin: 110, win32: 241 } },
   // Estimated, not yet measured: a build of the developer example from its
   // committed lock, one more with a locked copy, and about a dozen launches.
-  "developer-profile": { seconds: { linux: 240, darwin: 300, win32: 420 } },
+  "developer-profile": { seconds: { linux: 260, darwin: 330, win32: 480 } },
   governance: { seconds: { linux: 54, darwin: 79, win32: 197 } },
   headless: { seconds: { linux: 59, darwin: 77, win32: 160 } },
   "lifecycle-credentials": {
@@ -106,6 +106,12 @@ export const E2E_FILES: Readonly<Record<string, E2EFile>> = {
   },
   "security-sandbox": { seconds: { linux: 38, darwin: 48, win32: 95 } },
   "security-sweep": { seconds: { linux: 110, darwin: 128, win32: 297 } },
+  // Estimated, not yet measured: the personal fixtures, one install, update,
+  // rollback, and three doctors with a store, and an install without one.
+  "shared-store": {
+    seconds: { linux: 60, darwin: 90, win32: 150 },
+    fixtures: ["personal"],
+  },
   "stale-temporaries": { seconds: { linux: 18, darwin: 24, win32: 40 } },
   "user-switching-file": {
     seconds: { linux: 80, darwin: 158, win32: 190 },

@@ -10,11 +10,13 @@
 // files, because the packages register their tools and read their
 // configuration at session start, which `--smoke` does not run.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -23,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -697,6 +699,109 @@ describe("doctor", () => {
       /permissions\s+effective via certified\/pi-permission-system/,
     );
   }, 600_000);
+});
+
+// The shared file store (docs/security.md, "Shared file store") with the
+// developer distribution's own files: the six vendored Pi packages and their
+// dependencies are what a store is for, and what a Windows install writes
+// thousands of files for. The release archive is never the store: this installs
+// the built distribution once into an empty store and once with no store at all.
+describe("the shared file store", () => {
+  /** Every file of `directory` by `/`-separated relative path, with its SHA-256. */
+  function tree(directory: string): Map<string, string> {
+    const found = new Map<string, string>();
+    const visit = (current: string) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const path = join(current, entry.name);
+        if (entry.isDirectory()) visit(path);
+        else if (entry.isFile())
+          found.set(
+            relative(directory, path).split(sep).join("/"),
+            createHash("sha256").update(readFileSync(path)).digest("hex"),
+          );
+      }
+    };
+    visit(directory);
+    return found;
+  }
+
+  function installed(name: string, store?: string) {
+    const where = area(name);
+    const home = join(where.base, "install");
+    const bin = join(where.base, "bin");
+    const environment = {
+      ...where.env,
+      PISHIP_INSTALL_HOME: home,
+      PISHIP_BIN_HOME: bin,
+      ...(store ? { PISHIP_STORE: "copy", PISHIP_STORE_HOME: store } : {}),
+    } as NodeJS.ProcessEnv;
+    const result = run(
+      process.execPath,
+      [join(artifact, "piship.mjs"), "install", artifact],
+      where.base,
+      environment,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return {
+      where,
+      environment,
+      command: join(bin, windows ? "devcode.cmd" : "devcode"),
+      payload: join(home, "apps", "devcode"),
+    };
+  }
+
+  it("places the packages' files from an empty store, installs the same files as without one, and launches with the store gone", async () => {
+    const store = join(temp, "store-developer");
+    const withStore = installed("store-install", store);
+    const [version] = readdirSync(withStore.payload);
+    const placed = tree(join(withStore.payload, version as string));
+    const built = tree(artifact);
+    // Every file of the built distribution is installed, byte for byte.
+    for (const [path, digest] of built)
+      expect(placed.get(path), path).toBe(digest);
+    // The Pi packages' files and their dependencies came from the store: each
+    // file the store takes (not empty, no more than 1 MiB) is one of its objects.
+    const expected = new Set<string>();
+    for (const [path] of built) {
+      if (!path.startsWith("pi-packages/") && !path.startsWith("node_modules/"))
+        continue;
+      const size = statSync(join(artifact, ...path.split("/"))).size;
+      if (size > 0 && size <= 1024 * 1024)
+        expected.add(built.get(path) as string);
+    }
+    expect(expected.size).toBeGreaterThan(1000);
+    const stored = (digest: string) =>
+      [digest, `${digest}.x`].some((name) =>
+        existsSync(join(store, "objects", digest.slice(0, 2), name)),
+      );
+    const missing = [...expected].filter((digest) => !stored(digest));
+    expect(missing).toEqual([]);
+
+    // With no store at all, the same distribution installs the same files.
+    const without = installed("store-none");
+    const [other] = readdirSync(without.payload);
+    const plain = tree(join(without.payload, other as string));
+    expect([...plain.keys()].sort()).toEqual([...placed.keys()].sort());
+    for (const [path, digest] of plain)
+      expect(placed.get(path), path).toBe(digest);
+
+    // The launch and the diagnostics never open the store: with it removed,
+    // the installed command starts and verifies, and the store is not made again.
+    rmSync(store, { recursive: true, force: true });
+    const smoke = await branded(withStore.command, ["--smoke"], {
+      cwd: withStore.where.workspace,
+      env: withStore.environment,
+      timeoutMs: 300_000,
+    });
+    expect(smoke.status, smoke.stderr).toBe(0);
+    const doctor = await branded(withStore.command, ["doctor"], {
+      cwd: withStore.where.workspace,
+      env: withStore.environment,
+      timeoutMs: 300_000,
+    });
+    expect(doctor.status, doctor.stdout + doctor.stderr).toBe(0);
+    expect(existsSync(store)).toBe(false);
+  }, 900_000);
 });
 
 describe("pi-browser-use", () => {

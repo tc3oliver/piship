@@ -81,3 +81,66 @@ describe("browser evidence tiers", () => {
     );
   });
 });
+
+// The supply-chain evidence the v0.11 release gate rests on
+// (docs/maintainers/v0.11-qualification-matrix.md): each item is a step of
+// Release candidate that runs for every distribution on every target, and
+// Release qualification runs Release candidate only after the other tiers.
+describe("release candidate supply-chain evidence", () => {
+  const candidate = readFileSync(
+    join(ROOT, ".github/workflows/release-candidate.yml"),
+    "utf8",
+  );
+  const qualification = readFileSync(
+    join(ROOT, ".github/workflows/release-qualification.yml"),
+    "utf8",
+  );
+
+  /** The body of one job: from its key to the next job. */
+  function job(name: string): string {
+    const start = candidate.indexOf(`\n  ${name}:\n`);
+    const next = candidate.slice(start + 1).search(/\n {2}[a-z][\w-]*:\n/);
+    return candidate.slice(start, next < 0 ? undefined : start + 1 + next);
+  }
+
+  it("builds every distribution twice on every target and compares the payloads", () => {
+    expect(job("build")).toContain("build: [first, second]");
+    expect(job("build")).toContain(
+      "target: [linux-x64, darwin-arm64, win32-x64]",
+    );
+    expect(job("reproducibility")).toContain(
+      "distribution: [acmecode, mypi, devcode]",
+    );
+    expect(job("reproducibility")).toContain("reproducibility");
+  });
+
+  it("verifies, attests, and rejects tampering for every distribution on every target", () => {
+    const verify = job("verify");
+    for (const step of [
+      "verify-release",
+      "gh attestation verify",
+      "Reject a tampered archive",
+      "Reject tampered release files",
+      "Check the recorded release evidence",
+      "scripts/check-release-evidence.mjs",
+    ])
+      expect(verify, step).toContain(step);
+    expect(verify).toContain("distribution: [acmecode, mypi, devcode]");
+    expect(verify).toContain("target: [linux-x64, darwin-arm64, win32-x64]");
+    expect(job("attest")).toContain("actions/attest-build-provenance");
+  });
+
+  it("installs every distribution on every target and reports what it costs the machine", () => {
+    const install = job("install");
+    expect(install).toContain("distribution: [acmecode, mypi, devcode]");
+    expect(install).toContain("target: [linux-x64, darwin-arm64, win32-x64]");
+    expect(install).toContain("Report the installed file count");
+    expect(install).toContain("--smoke");
+  });
+
+  it("runs only after the fast gate, CodeQL, and both E2E tiers", () => {
+    expect(qualification).toContain(
+      "needs: [ci, codeql, portable-e2e, reference-e2e]",
+    );
+  });
+});
