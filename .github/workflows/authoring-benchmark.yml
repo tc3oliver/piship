@@ -2,11 +2,17 @@ name: Windows benchmark
 # Manual measurement only. These throwaway archives are never release artifacts.
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: "Run one suite (install-authoring, sweep-bundled, sweep-unbundled, cmd-launch, store); empty runs all"
+        required: false
+        default: ""
 permissions:
   contents: read
 jobs:
   benchmark:
     name: benchmark (${{ matrix.suite }})
+    if: inputs.suite == '' || inputs.suite == matrix.suite
     runs-on: windows-latest
     timeout-minutes: 120
     strategy:
@@ -77,10 +83,15 @@ jobs:
         if: matrix.suite == 'sweep-unbundled'
         shell: pwsh
         run: |
-          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-concurrency-unbundled" --reps 2 --bundle false 2>&1 | Tee-Object -FilePath benchmark-evidence/concurrency-unbundled.log
+          # Thousands of files make every cell slow: sweep concurrency at 1 MiB, then the buffer at 8 writers.
+          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-concurrency-unbundled" --reps 2 --bundle false --concurrency 4,8,16,32 --buffer-kib 1024 2>&1 | Tee-Object -FilePath benchmark-evidence/concurrency-unbundled.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$env:RUNNER_TEMP/piship-concurrency-unbundled/report.json" benchmark-evidence/concurrency-unbundled-report.json
           Copy-Item "$env:RUNNER_TEMP/piship-concurrency-unbundled/report.md" benchmark-evidence/concurrency-unbundled-report.md
+          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-buffer-unbundled" --reps 2 --bundle false --concurrency 8 --buffer-kib 256,1024,4096 2>&1 | Tee-Object -FilePath benchmark-evidence/buffer-unbundled.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-buffer-unbundled/report.json" benchmark-evidence/buffer-unbundled-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-buffer-unbundled/report.md" benchmark-evidence/buffer-unbundled-report.md
       - name: Measure the .cmd shim against a direct launcher start
         if: matrix.suite == 'cmd-launch'
         shell: pwsh
