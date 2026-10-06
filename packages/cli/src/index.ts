@@ -34,8 +34,10 @@ import {
   inspection,
   installDistribution,
   isEncryptedPrivateKey,
+  isUnqualifiedPayload,
   keyFingerprint,
   lockManifest,
+  markLocalBuild,
   nextTrustRoot,
   payloadApp,
   payloadStateSchemas,
@@ -52,6 +54,7 @@ import {
   runtimeStateDirectory,
   SEARCH_TOOL_SPECS,
   signChannel,
+  UNQUALIFIED_BUILD_NOTICE,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
   verifyPayload,
@@ -715,6 +718,8 @@ export async function runCli(
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
         ...(progress ? { progress } : {}),
       });
+      markLocalBuild(built);
+      output.stderr(UNQUALIFIED_BUILD_NOTICE);
       output.stdout(
         `Built ${built}\nNext: piship test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
       );
@@ -763,6 +768,7 @@ export async function runCli(
         supplyChainGates: false,
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
       });
+      markLocalBuild(artifact);
       const lock = requireCurrentLock(target);
       // `dev --smoke` runs the same isolated launch headlessly, for scripts.
       const interactive = command === "dev" && rest[0] !== "--smoke";
@@ -853,6 +859,10 @@ async function runLifecycle(
 ): Promise<number> {
   const [first = "", second = ""] = positional;
   if (command === "install") {
+    if (isUnqualifiedPayload(resolve(first)))
+      output.stderr(
+        `Warning: ${first} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, or recorded tests. Install it for local testing only; use the release piship release builds, or your publisher's, for anything else.`,
+      );
     const receipt = await installDistribution(
       first,
       flags.has("--use-existing-state"),
@@ -882,7 +892,7 @@ async function runLifecycle(
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
     });
     output.stdout(
-      `Built release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
+      `Built qualified release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
     );
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
@@ -893,7 +903,7 @@ async function runLifecycle(
       output.stdout(
         flags.has("--json")
           ? JSON.stringify(metadata, null, 2)
-          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
+          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification ?? "not recorded (built before PiShip recorded it)"}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
       );
     } finally {
       verified.cleanup();
