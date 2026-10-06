@@ -45,6 +45,9 @@ import {
   downloadArchive,
   evaluateSignatures,
   evaluateVulnerabilities,
+  isUnqualifiedPayload,
+  localBuildMarkerPath,
+  markLocalBuild,
   npmAuditScanner,
   piCompatibility,
   piCompatibilitySurfaces,
@@ -53,6 +56,7 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
+import { runCommand } from "./release/shared.js";
 import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
@@ -1977,6 +1981,7 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       target,
       channel: "stable",
       created: "2026-01-01T00:00:00Z",
+      qualification: "qualified",
       stateSchemas: STATE_SCHEMAS,
       tests: [
         { name: "launch-version", result: "passed" },
@@ -2781,6 +2786,278 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         join(out, "c.tar.gz"),
       ),
     ).rejects.toThrow(/does not match the signed channel metadata/);
+  });
+});
+
+describe("release stages", () => {
+  const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+  /** Waits for `condition`, failing the stage that waits when it never holds. */
+  async function until(condition: () => boolean, what: string): Promise<void> {
+    for (let waited = 0; !condition(); waited += 5) {
+      if (waited > 3000) throw new Error(`never ${what}`);
+      await sleep(5);
+    }
+  }
+
+  it("runs the dependency audit and the signature check at the same time", async () => {
+    const { path } = project();
+    let auditing = false;
+    let checking = false;
+    const built = await build(path, {
+      // Each waits for the other to have started: they only finish if neither
+      // is awaited before the other begins.
+      scanner: async () => {
+        auditing = true;
+        await until(() => checking, "started the signature check");
+        return cleanScanner();
+      },
+      signatureAuditor: async () => {
+        checking = true;
+        await until(() => auditing, "started the dependency audit");
+        return signatureOutput();
+      },
+    });
+    expect(built.metadata.vulnerabilities.verdict).toBe("passed");
+  });
+
+  it("runs the required tests side by side, each in its own state directory", async () => {
+    const { path } = project();
+    const states = new Map<string, string>();
+    let active = 0;
+    let most = 0;
+    const built = await build(path, {
+      runTest: async (payload, command, args, env) => {
+        const state = env.PISHIP_STATE_HOME as string;
+        states.set(args.join(" "), state);
+        expect(existsSync(state)).toBe(true);
+        active++;
+        most = Math.max(most, active);
+        await sleep(40);
+        active--;
+        return fakeRun(payload, command, args);
+      },
+    });
+    expect(built.metadata.tests.map((test) => test.name)).toEqual([
+      "launch-version",
+      "offline-smoke",
+      "governance-inspection",
+    ]);
+    expect(most).toBe(3);
+    expect(new Set(states.values()).size).toBe(3);
+    for (const state of states.values()) expect(existsSync(state)).toBe(false);
+  });
+
+  it("reports the first failing test in test order after every test has finished", async () => {
+    const { dir, path } = project();
+    let finished = 0;
+    const error = await rejection(
+      build(path, {
+        runTest: async (payload, command, args) => {
+          // The later test fails first; the earlier one is the one reported.
+          await sleep(args[0] === "version" ? 60 : 5);
+          finished++;
+          return args[0] === "--smoke" || args[0] === "version"
+            ? { status: 1, stdout: "", stderr: `${args[0]} failed` }
+            : fakeRun(payload, command, args);
+        },
+      }),
+    );
+    expect(error.message).toMatch(/required test launch-version failed/);
+    expect(finished).toBe(3);
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("waits for a scan still running when another stage fails", async () => {
+    const { dir, path } = project();
+    let scanEnded = false;
+    const error = await rejection(
+      build(path, {
+        scanner: async () => {
+          await sleep(60);
+          scanEnded = true;
+          throw new Error("registry unreachable");
+        },
+        signatureAuditor: () =>
+          signatureOutput([{ name: "alpha", version: "1.0.0", code: "x" }]),
+      }),
+    );
+    // The signature failure is reported, and the scan it did not wait for
+    // has ended (its own failure handled) before the staging is removed.
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(scanEnded).toBe(true);
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("records the release as qualified and verifies only a qualified release", async () => {
+    const { path } = project();
+    const built = await build(path);
+    expect(built.metadata.qualification).toBe("qualified");
+    for (const qualification of ["unqualified-local", ""]) {
+      const release = join(built.directory, "release.json");
+      const original = readFileSync(release, "utf8");
+      writeFileSync(
+        release,
+        original.replace(
+          '"qualification": "qualified"',
+          `"qualification": ${JSON.stringify(qualification)}`,
+        ),
+      );
+      writeFileSync(
+        join(built.directory, "checksums.txt"),
+        formatChecksums(built.directory, [...RELEASE_FILES]),
+      );
+      await expect(verifyRelease(built.directory)).rejects.toThrow(
+        /records its qualification as .*, not qualified/,
+      );
+      writeFileSync(release, original);
+    }
+    // Releases built before the field existed omit it and still verify.
+    const release = join(built.directory, "release.json");
+    const legacy = JSON.parse(readFileSync(release, "utf8"));
+    delete legacy.qualification;
+    writeFileSync(release, `${JSON.stringify(legacy, null, 2)}\n`);
+    writeFileSync(
+      join(built.directory, "checksums.txt"),
+      formatChecksums(built.directory, [...RELEASE_FILES]),
+    );
+    (await verifyRelease(built.directory)).cleanup();
+  });
+
+  it("refuses to verify a local build as a release and says what it is", async () => {
+    const { dir, path } = project();
+    const out = join(dir, "dist");
+    const output = fakeAssemble(path, out);
+    expect(isUnqualifiedPayload(output)).toBe(true);
+    markLocalBuild(output);
+    expect(localBuildMarkerPath(output)).toBe(
+      `${output}.piship-qualification.json`,
+    );
+    expect(
+      JSON.parse(readFileSync(localBuildMarkerPath(output), "utf8")),
+    ).toMatchObject({
+      schema: "piship-qualification/v1",
+      qualification: "unqualified-local",
+    });
+    const error = await rejection(verifyRelease(output));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(/unqualified local build, not a release/);
+    expect(error.userAction).toMatch(/piship release/);
+    // A release directory is not an unqualified payload.
+    const built = await build(path);
+    expect(isUnqualifiedPayload(built.directory)).toBe(false);
+    expect(isUnqualifiedPayload(join(built.directory, "payload"))).toBe(true);
+  });
+
+  it("runs a command without blocking and reports every way it can end", async () => {
+    const cwd = temp();
+    const node = process.execPath;
+    expect(
+      await runCommand(
+        node,
+        ["-e", "console.log('out'); console.error('err')"],
+        {
+          cwd,
+        },
+      ),
+    ).toEqual({ status: 0, stdout: "out\n", stderr: "err\n" });
+    const failed = await runCommand(node, ["-e", "process.exit(3)"], { cwd });
+    expect(failed.status).toBe(3);
+    // Standard input is closed, so a command that reads it ends.
+    expect(
+      (
+        await runCommand(
+          node,
+          [
+            "-e",
+            "process.stdin.on('data',()=>{}).on('end',()=>console.log('eof'))",
+          ],
+          { cwd },
+        )
+      ).stdout,
+    ).toBe("eof\n");
+    const missing = await runCommand(join(cwd, "no-such-command"), [], { cwd });
+    expect(missing.status).toBeNull();
+    expect(missing.stderr).toMatch(/ENOENT/);
+    const slow = await runCommand(node, ["-e", "setTimeout(()=>{}, 5000)"], {
+      cwd,
+      timeout: 100,
+    });
+    expect(slow.status).toBeNull();
+    // Two commands overlap: each waits for the other's marker to exist, so
+    // they only finish if both are running at once.
+    const rendezvous =
+      "const fs=require('fs');fs.writeFileSync(process.argv[1],'');const t=Date.now();while(!fs.existsSync(process.argv[2])){if(Date.now()-t>5000)process.exit(9)}";
+    const [a, b] = [join(cwd, "a"), join(cwd, "b")];
+    const both = await Promise.all([
+      runCommand(node, ["-e", rendezvous, "--", a, b], { cwd }),
+      runCommand(node, ["-e", rendezvous, "--", b, a], { cwd }),
+    ]);
+    expect(both.map((result) => result.status)).toEqual([0, 0]);
+  });
+
+  it("prints the release stages longest first, then one JSON summary", async () => {
+    const { path } = project();
+    const lines: string[] = [];
+    const saved = process.env.PISHIP_DEBUG_TIMING;
+    process.env.PISHIP_DEBUG_TIMING = "1";
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        lines.push(String(chunk));
+        return true;
+      });
+    try {
+      await build(path, {
+        runTest: async (payload, command, args) => {
+          await sleep(args[0] === "--smoke" ? 300 : 0);
+          return fakeRun(payload, command, args);
+        },
+      });
+    } finally {
+      write.mockRestore();
+      if (saved === undefined) delete process.env.PISHIP_DEBUG_TIMING;
+      else process.env.PISHIP_DEBUG_TIMING = saved;
+    }
+    const text = lines.join("");
+    const summary = JSON.parse(
+      text
+        .split("\n")
+        .filter((line) => line.startsWith("{"))
+        .at(-1) as string,
+    ) as {
+      schema: string;
+      command: string;
+      totalMs: number;
+      stages: { name: string; startMs: number; ms: number }[];
+    };
+    expect(summary.schema).toBe("piship-timing/v1");
+    expect(summary.command).toBe("release");
+    expect(summary.stages.map((stage) => stage.name)).toEqual(
+      expect.arrayContaining([
+        "runtime assembly",
+        "npm audit",
+        "pi package audits",
+        "signature audit",
+        "sbom",
+        "notices",
+        "smoke tests",
+        "metadata",
+        "checksums",
+        "archive",
+        "publish",
+        "staging cleanup",
+      ]),
+    );
+    const durations = summary.stages.map((stage) => stage.ms);
+    expect(durations).toEqual([...durations].sort((a, b) => b - a));
+    expect(summary.stages[0]?.name).toBe("smoke tests");
+    // The same stages, in the same order, as `release <stage>: N ms` lines.
+    expect(
+      text
+        .split("\n")
+        .filter((line) => /^release .+: [\d.]+ ms$/.test(line))
+        .map((line) => line.slice(8, line.lastIndexOf(":"))),
+    ).toEqual(summary.stages.map((stage) => stage.name));
   });
 });
 

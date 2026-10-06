@@ -24,6 +24,7 @@ import {
   type ReleaseMetadata,
   type VulnerabilityReport,
 } from "./metadata.js";
+import { isUnqualifiedPayload, RELEASE_QUALIFIED } from "./qualification.js";
 import { hash } from "./shared.js";
 
 export interface VerifiedRelease {
@@ -37,13 +38,14 @@ export interface VerifiedRelease {
   readonly cleanup: () => void;
 }
 
-function fail(message: string): PiShipError {
+function fail(message: string, userAction?: string): PiShipError {
   return new PiShipError(
     "INTEGRITY_FAILED",
     `Release verification: ${message}`,
     {
       component: "release",
       userAction:
+        userAction ??
         "Do not install this artifact; obtain it again from the trusted source",
     },
   );
@@ -71,6 +73,11 @@ export async function verifyRelease(
   let directory = path;
   let archiveSha256: string | undefined;
   let cleanup = () => {};
+  if (!statSync(path).isFile() && isUnqualifiedPayload(path))
+    throw fail(
+      `${path} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, recorded tests, or checksums`,
+      "Run piship release <manifest> to build the qualified release",
+    );
   if (statSync(path).isFile()) {
     const actual = await sha256File(path);
     archiveSha256 = actual;
@@ -177,6 +184,15 @@ function checkReleaseDirectory(
   ) as ReleaseMetadata;
   if (metadata.schema !== RELEASE_SCHEMA)
     throw fail(`unsupported release metadata ${String(metadata.schema)}`);
+  // Releases built before the field existed omit it; anything else must say
+  // it was qualified.
+  if (
+    metadata.qualification !== undefined &&
+    metadata.qualification !== RELEASE_QUALIFIED
+  )
+    throw fail(
+      `the release records its qualification as ${JSON.stringify(metadata.qualification)}, not ${RELEASE_QUALIFIED}`,
+    );
   const payload = join(directory, "payload");
   let lock: DistributionLock;
   try {
