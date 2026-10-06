@@ -3,8 +3,18 @@
 // never delete them (removing thousands of files is the slowest step on
 // Windows); this is the one place that does, and only `doctor` calls it, with
 // a time budget, so it is never on the install, update, or launch path.
-import { lstatSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  unlinkSync,
+} from "node:fs";
 import { join } from "node:path";
+import { hash } from "../digest.js";
+import { renameWithRetry } from "./files.js";
 import {
   acquireLock,
   appDirectory,
@@ -29,6 +39,8 @@ export interface ReclaimOptions {
 export interface ReclaimedVersions {
   /** Directories removed completely. */
   readonly removed: readonly string[];
+  /** Retained releases an interrupted update had set aside, moved back because the receipt names them. */
+  readonly restored: readonly string[];
   readonly freedBytes: number;
   /** Directories left in place, and why. */
   readonly skipped: readonly {
@@ -103,6 +115,7 @@ export function reclaimObsoleteVersions(
   const budgetMs = options.budgetMs ?? budgetFromEnvironment();
   const empty: ReclaimedVersions = {
     removed: [],
+    restored: [],
     freedBytes: 0,
     skipped: [],
     remaining: [],
@@ -142,6 +155,53 @@ export function reclaimObsoleteVersions(
     } catch {
       return empty;
     }
+    // An update that was killed after it set a retained release aside and
+    // before it committed leaves the only copy of a release the receipt still
+    // names (the active release or the rollback target) under a `.retained-*`
+    // name: it is moved back, never deleted. A directory standing at the
+    // version that is not the one the receipt recorded (a half-extracted
+    // replacement) is set aside in its place.
+    const restored: string[] = [];
+    const named = new Set([
+      receipt.active,
+      ...(receipt.previous ? [receipt.previous] : []),
+    ]);
+    const lockDigests = new Map(
+      receipt.releases.map((release) => [
+        release.version,
+        release.release?.lockSha256,
+      ]),
+    );
+    const standsAsRecorded = (version: string): boolean => {
+      const expected = lockDigests.get(version);
+      if (!existsSync(join(apps, version))) return false;
+      if (expected === undefined) return true;
+      try {
+        return (
+          hash(readFileSync(join(apps, version, "piship.lock"))) === expected
+        );
+      } catch {
+        return false;
+      }
+    };
+    for (const name of names.filter((item) => ASIDE.test(item)).sort()) {
+      const version = ASIDE.exec(name)?.[1] as string;
+      if (!named.has(version) || held(name) || standsAsRecorded(version))
+        continue;
+      try {
+        if (existsSync(join(apps, version)))
+          renameWithRetry(
+            join(apps, version),
+            join(apps, `.retained-${version}-${randomUUID()}`),
+          );
+        renameWithRetry(join(apps, name), join(apps, version));
+        restored.push(version);
+      } catch {
+        // Left where it is; the receipt still names the version, so a
+        // later run tries again and nothing is deleted.
+      }
+    }
+    if (restored.length > 0) names = readdirSync(apps);
     const candidates = names
       .filter(
         (name) =>
@@ -190,6 +250,7 @@ export function reclaimObsoleteVersions(
     }
     return {
       removed,
+      restored,
       freedBytes: run.freedBytes,
       skipped,
       remaining,
@@ -206,6 +267,10 @@ export function describeReclaimed(
   result: ReclaimedVersions,
 ): string | undefined {
   const parts: string[] = [];
+  if (result.restored.length > 0)
+    parts.push(
+      `Restored ${result.restored.join(", ")}, which an interrupted update had set aside and the installation still records.`,
+    );
   if (result.removed.length > 0)
     parts.push(
       `Removed ${result.removed.length} obsolete release director${result.removed.length === 1 ? "y" : "ies"} (${result.removed.join(", ")}) and freed ${(result.freedBytes / 1_048_576).toFixed(1)} MiB.`,
