@@ -12,6 +12,7 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTHORING_SNAPSHOT,
+  forgetAuthoringInputs,
   authoringBuildInput,
   writeAuthoringSnapshot,
 } from "./authoring-input.js";
@@ -64,17 +65,22 @@ describe("portable authoring inputs", () => {
     expect(buildInputDigest(restored)).toBe(buildInputDigest(original));
     expect(authoringBuildInput(payload, env)).toBe(restored);
     expect(readFileSync(archive)).toEqual(bytes);
+    // Header byte 9 is the zlib OS id; it is fixed so every platform writes the same bytes.
+    expect(bytes[9]).toBe(0xff);
+    forgetAuthoringInputs();
     // A corrupted warm cache must never become the next distribution's source.
     writeFileSync(
       join(restored, "packages", "core", "dist", "index.js"),
       "corrupt",
     );
+    forgetAuthoringInputs();
     expect(buildInputDigest(authoringBuildInput(payload, env))).toBe(
       buildInputDigest(original),
     );
     const { mtimeMs } = statSync(
       join(restored, "packages", "core", "dist", "index.js"),
     );
+    forgetAuthoringInputs();
     expect(authoringBuildInput(payload, env)).toBe(restored);
     expect(
       statSync(join(restored, "packages", "core", "dist", "index.js")).mtimeMs,

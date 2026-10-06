@@ -76,6 +76,11 @@ export function writeAuthoringSnapshot(
 
 const resolved = new Map<string, string>();
 
+/** Forgets verified trees, so a test can corrupt one and watch the next call repair it. */
+export function forgetAuthoringInputs(): void {
+  resolved.clear();
+}
+
 /** Runtime commands never expand this; builds use a private, digest-keyed cache copy. */
 export function authoringBuildInput(
   input = buildInput,
