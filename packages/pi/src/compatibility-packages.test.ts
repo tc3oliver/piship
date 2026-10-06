@@ -209,27 +209,27 @@ describe("Pi's extension loader and the shared and bundled Pi package footprint"
     const id = "bundled";
     write(join(payload, "pi-packages", id), {
       "package.json": JSON.stringify({ name: "piship-package-bundled" }),
-      [`node_modules/ext/package.json`]: JSON.stringify({
+      "node_modules/ext/package.json": JSON.stringify({
         name: "ext",
         version: "1.0.0",
         type: "module",
       }),
-      [`node_modules/ext/extension.js`]: `import { greet } from "./lib/greet.js";
+      "node_modules/ext/extension.js": `import { greet } from "./lib/greet.js";
 import { fmt } from "util-lib";
 export default function register(pi) {
   pi.registerCommand("bundled-" + greet(fmt("x")), { handler: async () => {} });
 }
 `,
-      [`node_modules/ext/lib/greet.js`]: `import { deep } from "./deep.js";\nexport const greet = (text) => "greet-" + deep(text);\n`,
-      [`node_modules/ext/lib/deep.js`]: `export const deep = (text) => "deep-" + text;\n`,
-      [`node_modules/util-lib/package.json`]: JSON.stringify({
+      "node_modules/ext/lib/greet.js": `import { deep } from "./deep.js";\nexport const greet = (text) => "greet-" + deep(text);\n`,
+      "node_modules/ext/lib/deep.js": `export const deep = (text) => "deep-" + text;\n`,
+      "node_modules/util-lib/package.json": JSON.stringify({
         name: "util-lib",
         version: "1.0.0",
         type: "module",
         exports: "./index.js",
       }),
-      [`node_modules/util-lib/index.js`]: `export { fmt } from "./fmt.js";\n`,
-      [`node_modules/util-lib/fmt.js`]: `export const fmt = (text) => "[" + text + "]";\n`,
+      "node_modules/util-lib/index.js": `export { fmt } from "./fmt.js";\n`,
+      "node_modules/util-lib/fmt.js": `export const fmt = (text) => "[" + text + "]";\n`,
     });
     const cwd = join(payload, "project");
     const agentDir = join(payload, "agent");

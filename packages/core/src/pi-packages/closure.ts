@@ -377,9 +377,9 @@ export function analyzeClosures(
   const live = () => states.filter((state) => !state.result);
   const graphing = live();
   const graphs = esbuild.buildAll(graphing.map(graphBuild));
-  graphing.forEach((state, index) =>
-    readGraph(state, graphs[index] as BuildOutcome),
-  );
+  graphing.forEach((state, index) => {
+    readGraph(state, graphs[index] as BuildOutcome);
+  });
   const scanning = live();
   const scans = scanModulesMany(
     esbuild,
@@ -390,9 +390,9 @@ export function analyzeClosures(
       ),
     })),
   );
-  scanning.forEach((state, index) =>
-    readScan(state, scans[index] as ScanResult),
-  );
+  scanning.forEach((state, index) => {
+    readScan(state, scans[index] as ScanResult);
+  });
   const leftBehind = live();
   const lefts = scanModulesMany(
     esbuild,
