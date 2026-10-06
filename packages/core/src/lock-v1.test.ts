@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrateManifestSource, PISHIP_SCHEMA_V1 } from "@piship/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DIFF_TESTS, diffLocks } from "./diff/index.js";
 import {
   LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA6,
@@ -136,5 +137,27 @@ updates: { channel: stable, channels: [stable] }
       expect(key).not.toMatch(
         /^(token|accessToken|refreshToken|apiKey|password|secret|entitlement|entitlements|principal|session|gatewayState|mcpState)$/i,
       );
+  });
+
+  it("diffs a v1alpha6 lock against its v1 lock as the two schema ids and nothing else", () => {
+    const before = resolveLock(project(V1ALPHA6));
+    const after = resolveLock(project(migrateManifestSource(V1ALPHA6).source));
+    const report = diffLocks(before, after);
+    expect(report.risk).toBe("medium");
+    expect(report.changes.map((change) => change.area)).toEqual([
+      "schema",
+      "schema",
+    ]);
+    expect(report.changes.map((change) => change.risk)).toEqual([
+      "medium",
+      "medium",
+    ]);
+    expect(report.changes.map((change) => change.item).sort()).toEqual([
+      "lock schema",
+      "manifest schema",
+    ]);
+    expect(report.requiredTests).toContain(DIFF_TESTS.migration);
+    // The digest moves with the schema id; it is not reported on its own.
+    expect(diffLocks(after, after).changes).toEqual([]);
   });
 });
