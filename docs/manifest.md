@@ -422,14 +422,14 @@ release:
 | `updates.rollback` | `true` | Retain the previous release on update so `rollback` can return to it |
 | `updates.trust.bootstrap` | none | v1alpha5: the update root a fresh installation starts from ([below](#update-trust-bootstrap-v1alpha5)). Without it the distribution is update-disabled |
 | `updates.trust.keys` | `[]` | v1alpha4 only: pinned release keys: `id` (lowercase letters, digits, dots, and hyphens, unique) and `publicKey` (base64 of the 44-byte Ed25519 SubjectPublicKeyInfo DER). Any one key signs channels. With no keys, no update can be verified, so `update` fails |
-| `release.strip` | `false` | v1alpha6: remove source maps and TypeScript declarations from the payload, which a running Node process never reads. Relock before building ([performance](performance.md)) |
-| `release.bundle` | `false` | v1alpha6: bundle runtime JavaScript while preserving public module shims, native/WASM assets and declared resources; relock before building ([performance](performance.md)). The `personal` and `developer` examples turn it and `release.strip` on. A bundled payload carries the runtime commands but not the build input, so it cannot `build`, `release`, `dev`, or `test` another distribution: build from the PiShip source checkout, or from an unbundled payload |
+| `release.strip` | `true` (v1alpha6) | v1alpha6: remove source maps and TypeScript declarations from the payload, which a running Node process never reads. `false` keeps them. Earlier schemas cannot set it and never strip ([performance](performance.md)) |
+| `release.bundle` | `true` (v1alpha6) | v1alpha6: bundle the runtime JavaScript into a few files while preserving public module shims, native/WASM assets and declared resources. `false` builds the unbundled layout (about 7,000 files for the personal example, from 117 bundled) and is the opt-out for a distribution that needs it. Earlier schemas cannot set it and never bundle. A bundled payload carries the runtime commands but not the build input, so it cannot `build`, `release`, `dev`, or `test` another distribution: author from the PiShip source checkout, or from an unbundled payload ([performance](performance.md)) |
 | `release.targets` | `[linux-x64, darwin-arm64, win32-x64]` | Non-empty, unique subset of `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, `win32-x64`. Only the three defaults pass the release `target` gate in this version |
 | `release.sources` | `[https://registry.npmjs.org]` | Approved package origins, for npm packages and (v1alpha6) [bundled search tools](#bundled-search-tools-v1alpha6), which need `https://github.com`: `https`, no path, query, fragment, or credentials; non-empty and unique |
 | `release.vulnerabilities.failOn` | `high` | `low`, `moderate`, `high`, or `critical`: the lowest severity that blocks a release |
 | `release.vulnerabilities.allow` | `[]` | Reviewed exceptions: `id` (advisory ID such as a GHSA ID, unique), `reason` (at most 240 characters), and `expires` (a real calendar date, `YYYY-MM-DD`; the exception applies through that day) |
 
-Only public keys go in the manifest; secret-looking field names are rejected. When `release` is omitted, its defaults are applied and locked.
+Only public keys go in the manifest; secret-looking field names are rejected. When `release` is omitted, its defaults are applied and locked, except `release.bundle` and `release.strip`. A v1alpha6 manifest that leaves them out builds a bundled, stripped payload, but the parsed manifest and the lock leave the keys out as written, so the digest of a manifest or lock written before this default is unchanged and a newer PiShip still verifies the payload of an older one. Write `release.bundle: false` and `release.strip: false` to build the unbundled layout; the lock then records them. A bundled payload cannot author another distribution: `build`, `release`, `dev`, and `test` need the PiShip source checkout or an unbundled payload.
 
 ### Update trust bootstrap (v1alpha5)
 
@@ -755,10 +755,11 @@ The step writes:
 - `tools.allow` / `tools.deny` become an exposure map that keeps the same tools visible: an allowed tool is `direct`, a denied tool `hidden`, and with an allowlist `"*": hidden`. An empty filter is removed. v1alpha5 filters list exact names; a filter entry with `*` is refused rather than migrated, because a glob could outrank a deny.
 - No `data` section is written, so no retention sweep runs, as in v0.8.
 
-Two effective changes are reported by `--check`:
+Three effective changes are reported by `--check`:
 
 - An omitted `runtime.cacheWarming` is `off`, while v0.8 sessions warmed the prompt cache through Pi's default (`streaming`). v0.9 applies this to every governed lock, including a v1alpha5 manifest that is not migrated (it cannot declare the field), so migrate and set `runtime.cacheWarming.mode: streaming` to keep warming.
 - A server whose new class `policy.resourceTrust` does not allow would no longer start. Allow the class or remove the server before migrating.
+- An omitted `release.bundle` and `release.strip` are `true` in v1alpha6, so a build is a bundled, stripped payload that cannot build or release another distribution, while v1alpha5 built an unbundled one. Set both to `false` to keep that.
 
 The migration never broadens: every value it writes keeps the v0.8 decision. Independently of the schema, `validate` on v0.9 reports a managed `deny` or `ask` rule on an action without a runtime seam (such as `web.request`) as `POLICY_UNENFORCEABLE`. Only v1alpha6 accepts `policy.acknowledgeUnenforced`, so such a rule is either acknowledged after migrating or removed ([enforcement status](#enforcement-status)).
 

@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { PiShipError, redact } from "@piship/contracts";
+import { inStartup, PiShipError, redact, startupMemo } from "@piship/contracts";
 import {
   CLAUDE_TRUST_DIMENSIONS,
   type ClaudeTrustDimension,
@@ -62,11 +62,16 @@ function isFile(path: string): boolean {
 }
 
 function isSymbolicLink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
+  return startupMemo("symlink", path, () => {
+    try {
+      // A missing path is the common answer: reported, not raised.
+      return (
+        lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ?? false
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** The directories of a git directory that git runs or trusts, protected as whole trees. */
@@ -721,12 +726,21 @@ function gitConfigScan(
   const known = knownConfigs();
   const key = JSON.stringify([roots, known, homedir()]);
   const cached = scanCache.get(key);
+  // While a session is being set up nothing can have run a command that
+  // changes a git config: the files are looked at once, not once per caller.
+  const checked = inStartup()
+    ? startupMemo("git-config-checked", key, () => ({ done: false }))
+    : undefined;
   if (
     cached &&
     Date.now() - cached.at < SCAN_CACHE_MAX_AGE_MS &&
-    [...cached.stamps].every(([path, stamp]) => stampOf(path) === stamp)
-  )
+    (checked?.done ||
+      [...cached.stamps].every(([path, stamp]) => stampOf(path) === stamp))
+  ) {
+    if (checked) checked.done = true;
     return cached.scan;
+  }
+  if (checked) checked.done = true;
   const { scan, stamps } = scanGitConfigs(roots, known);
   scanCache.delete(key);
   scanCache.set(key, { at: Date.now(), stamps, scan });

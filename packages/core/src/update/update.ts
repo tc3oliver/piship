@@ -1,8 +1,7 @@
 // Verified update of an installed distribution from its signed channel.
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { extractArchive } from "../archive.js";
 import { PiShipError, stopwatch } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
 import {
@@ -41,6 +40,7 @@ import {
 import { storageOf } from "../storage-transition.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { raiseThreadpool } from "../threadpool.js";
 import {
   checkUpdateSource,
   downloadArchive,
@@ -187,6 +187,7 @@ export async function updateDistribution(
   id: string,
   options: UpdateOptions = {},
 ): Promise<UpdateResult> {
+  raiseThreadpool();
   requireManaged(readInstallReceipt(id));
   const env = options.env ?? process.env;
   const now = options.now ?? (() => new Date());
@@ -325,6 +326,25 @@ export async function updateDistribution(
       );
     const apps = appDirectory(id);
     const lap = stopwatch();
+    const destination = join(apps, entry.version);
+    const retained = receipt.releases.find(
+      (release) => release.version === entry.version,
+    );
+    const present = existsSync(destination);
+    // Bytes the receipt already retains for this exact archive are reused, so
+    // the payload need not be extracted again.
+    const reuseRetained =
+      retained !== undefined &&
+      present &&
+      retained.release?.archiveSha256 === entry.sha256;
+    // A payload this update writes is extracted straight into the destination,
+    // which nothing references yet; a failure before the commit leaves it as
+    // an unreferenced candidate, which the next update sets aside and `doctor`
+    // reclaims. Only a replaced retained release, which the receipt still
+    // names, is put back.
+    const extracting = options.check !== true && !reuseRetained;
+    let replaced: string | undefined;
+    let written = false;
     const temporary = createStagingDirectory(apps);
     const staging = temporary.path;
     try {
@@ -332,27 +352,55 @@ export async function updateDistribution(
       options.progress?.(
         `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
       );
-      // The download hashes as it streams and checks the digest and size
-      // against the signed entry; that digest is passed on, not recomputed.
-      const archiveSha256 = await downloadArchive(
-        source,
-        entry,
-        archive,
-        options.fetcher,
-        transport,
-      );
+      // The download is hashed as it streams and checked against the signed
+      // entry's digest and size, so a wrong archive is refused before it is
+      // opened.
+      await downloadArchive(source, entry, archive, options.fetcher, transport);
       lap("update download and digest");
       options.faults?.("staged");
+      if (extracting && present) {
+        // What is at the destination is not the signed archive's bytes: a
+        // candidate an earlier update left unfinished, or a retained release
+        // the channel has since re-signed with other bytes. It is set aside,
+        // never while a running session holds it.
+        if (
+          runtimeLeases(id).some(
+            (lease) =>
+              lease.live &&
+              (lease.version === entry.version || lease.version === "*"),
+          )
+        )
+          throw new PiShipError(
+            "UPDATE_FAILED",
+            `${destination} is not the ${entry.version} release the channel now offers, and a running session still uses it`,
+            {
+              retryable: true,
+              userAction: `Close the running ${id} sessions and run the update again`,
+            },
+          );
+        if (retained !== undefined)
+          notices.push(
+            `The retained ${entry.version} was built from other archive bytes than the channel now offers, so it was replaced`,
+          );
+        replaced = join(apps, `.retained-${entry.version}-${randomUUID()}`);
+        renameWithRetry(destination, replaced);
+      }
       options.progress?.(`Verifying the ${entry.version} release`);
+      // The archive is read once more, and only once: that read extracts the
+      // payload into the destination, hashing the archive and every file as
+      // they are written. The archive digest must be the signed entry's, and
+      // every file the inventory release.json binds, before this returns. A
+      // check, or a release already retained, needs only the metadata.
+      written = extracting;
       const verified = await verifyRelease(archive, {
         requireTarget: true,
         expectedSha256: entry.sha256,
-        archiveSha256,
-        extractTo: join(staging, "release"),
         fastClient: true,
-        metadataOnly: true,
+        ...(extracting
+          ? { payloadTo: destination }
+          : { extractTo: join(staging, "release"), metadataOnly: true }),
       });
-      lap("update release metadata");
+      lap("update extract and verify release");
       const target = verified.metadata;
       const problems = [
         [target.distribution.id, id, "distribution"],
@@ -429,35 +477,6 @@ export async function updateDistribution(
           notices,
         };
       }
-      const destination = join(apps, entry.version);
-      const retained = receipt.releases.find(
-        (release) => release.version === entry.version,
-      );
-      const reuseRetained = retained !== undefined && existsSync(destination);
-      if (reuseRetained && retained.release?.archiveSha256 !== entry.sha256)
-        throw new PiShipError(
-          "INTEGRITY_FAILED",
-          `The signed ${entry.version} archive differs from the retained release; publish a new version instead of replacing installed bytes`,
-        );
-      // An unreferenced directory at the destination is a candidate an earlier
-      // update left partly extracted; a running session means it is not.
-      if (
-        !reuseRetained &&
-        existsSync(destination) &&
-        runtimeLeases(id).some(
-          (lease) =>
-            lease.live &&
-            (lease.version === entry.version || lease.version === "*"),
-        )
-      )
-        throw new PiShipError(
-          "UPDATE_FAILED",
-          `${destination} is not part of this installation but a running session still uses it`,
-          {
-            retryable: true,
-            userAction: `Close the running ${id} sessions and run the update again`,
-          },
-        );
       options.progress?.(`Switching to ${entry.version}`);
       const snapshot = snapshotState(
         stateDir,
@@ -466,26 +485,7 @@ export async function updateDistribution(
         now(),
         options.faults,
       );
-      if (!reuseRetained) {
-        // Only an unreferenced interrupted candidate can be moved aside.
-        // Receipt-retained payloads remain untouched, including during failures.
-        if (existsSync(destination))
-          renameWithRetry(
-            destination,
-            join(apps, `.retained-${entry.version}-${randomUUID()}`),
-          );
-        lap("update snapshot and preflight");
-        const expectedRoot = entry.archive.replace(/\.tar\.gz$/, "");
-        await extractArchive(archive, destination, {
-          expectedRoot,
-          hash: false,
-          mapEntry: (name) =>
-            name.startsWith(`${expectedRoot}/payload/`)
-              ? name.slice(`${expectedRoot}/payload/`.length)
-              : undefined,
-        });
-        lap("update extract payload");
-      }
+      lap("update snapshot and preflight");
       syncDirectory(apps);
       options.faults?.("installed");
       notices.push(
@@ -529,6 +529,7 @@ export async function updateDistribution(
       if (!keepPrevious) delete (next as { previous?: string }).previous;
       lap("update credentials and receipt record");
       lifecycle.commit(next);
+      written = false;
       lap("update receipt commit");
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
@@ -553,6 +554,27 @@ export async function updateDistribution(
         notices,
       };
     } finally {
+      // Not committed: put back the retained release this update replaced,
+      // unless another operation holds the installation now and owns it.
+      if (
+        written &&
+        replaced &&
+        retained !== undefined &&
+        lifecycle.stillHeld()
+      )
+        try {
+          try {
+            renameWithRetry(
+              destination,
+              join(apps, `.retained-${entry.version}-${randomUUID()}`),
+            );
+          } catch {
+            rmSync(destination, { recursive: true, force: true });
+          }
+          renameWithRetry(replaced, destination);
+        } catch {
+          // Left for recovery, which keeps what the receipt names.
+        }
       try {
         temporary.remove();
         lap("update staging cleanup");

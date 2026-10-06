@@ -18,10 +18,13 @@ import { hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
 import {
   adoptInstallTree,
+  type HostFacts,
   type InstallTree,
+  libcFamily,
   lookupBundle,
   lookupInstallTree,
   lookupTree,
+  majorMinor,
   materializeInstallTree,
   placeBundle,
   plainInventory,
@@ -33,7 +36,6 @@ import {
 
 const fixture = vi.hoisted(() => ({
   input: `${process.env.TEMP ?? process.env.TMPDIR ?? "/tmp"}/piship-runtime-cache-input-${process.pid}-${Math.random().toString(16).slice(2)}`,
-  npm: "11.19.0",
   linkError: undefined as string | undefined,
   renameFailures: [] as string[],
 }));
@@ -42,10 +44,6 @@ vi.mock("./runtime-dependencies.js", async (original) => ({
   ...(await original<typeof import("./runtime-dependencies.js")>()),
   buildInput: fixture.input,
   workspacePackages: ["schema", "core"],
-}));
-vi.mock("node:child_process", async (original) => ({
-  ...(await original<typeof import("node:child_process")>()),
-  execFileSync: vi.fn(() => `${fixture.npm}\n`),
 }));
 vi.mock("node:fs", async (original) => {
   const fs = await original<typeof import("node:fs")>();
@@ -69,6 +67,9 @@ vi.mock("node:fs", async (original) => {
 /** The adopted tree, whether the stage's tree was moved or copied in. */
 const adopt = (cache: RuntimeCache, stage: string) =>
   adoptInstallTree(cache, stage)?.tree;
+
+/** What the key reads from the machine, stated so no test depends on the host. */
+const host = { npm: "11.19.0", libc: undefined } as const;
 
 const roots: string[] = [];
 const temp = () => {
@@ -96,6 +97,7 @@ afterEach(() => {
 
 const lock = (npmLockSha256 = "b".repeat(64), strip = false) =>
   ({
+    manifest: { schema: "piship/v1alpha6" },
     runtime: { package: "pi", version: "1.0.3", npmLockSha256 },
     release: { strip },
   }) as unknown as DistributionLock;
@@ -140,13 +142,13 @@ describe("runtimeCacheFor", () => {
 
   it("keys the third-party tree by the dependency set, not by PiShip's own output, and keeps it under the cache home", () => {
     const home = temp();
-    const first = runtimeCacheFor(lock(), env(home));
+    const first = runtimeCacheFor(lock(), env(home), host);
     expect(first.root).toBe(join(home, "runtime"));
-    expect(runtimeCacheFor(lock(), env(home)).key).toBe(first.key);
+    expect(runtimeCacheFor(lock(), env(home), host).key).toBe(first.key);
     // Where it lives does not decide what is in it.
-    expect(runtimeCacheFor(lock(), env(temp())).key).toBe(first.key);
+    expect(runtimeCacheFor(lock(), env(temp()), host).key).toBe(first.key);
     // The distribution lock's dependency set: Pi version and the npm lock.
-    expect(runtimeCacheFor(lock("d".repeat(64)), env(home)).key).not.toBe(
+    expect(runtimeCacheFor(lock("d".repeat(64)), env(home), host).key).not.toBe(
       first.key,
     );
     // PiShip's compiled output and version decide only its own layer.
@@ -157,56 +159,62 @@ describe("runtimeCacheFor", () => {
         sha256: "e".repeat(64),
       }),
     );
-    const changed = runtimeCacheFor(lock(), env(home));
+    const changed = runtimeCacheFor(lock(), env(home), host);
     expect(changed.key).toBe(first.key);
     expect(changed.framework).not.toBe(first.framework);
     const upgraded = lock();
     (upgraded.runtime as { pishipVersion?: string }).pishipVersion = "9.9.9";
-    expect(runtimeCacheFor(upgraded, env(home)).key).toBe(first.key);
+    expect(runtimeCacheFor(upgraded, env(home), host).key).toBe(first.key);
   });
 
-  it("keys the tree by the major and minor of npm, and by the libc family on Linux", async () => {
+  it("keys the tree by the major and minor of npm, and by the libc family when it is stated", () => {
     const home = temp();
-    const keyWith = async (npm: string) => {
-      fixture.npm = npm;
-      vi.resetModules();
-      const fresh = await import("./runtime-cache.js");
-      return fresh.runtimeCacheFor(lock(), env(home)).key;
-    };
-    const base = await keyWith("11.19.0");
-    // A patch release of npm installs the same tree; a minor or major may not.
-    expect(await keyWith("11.19.7")).toBe(base);
-    expect(await keyWith("11.20.0")).not.toBe(base);
-    expect(await keyWith("10.9.2")).not.toBe(base);
-    // An npm that cannot say is its own line, never one that matches.
-    const unknown = await keyWith("not a version");
-    expect(unknown).not.toBe(base);
-    expect(await keyWith("")).toBe(unknown);
-
-    const report = vi.spyOn(
-      process.report as NodeJS.ProcessReport,
-      "getReport",
+    const keyWith = (facts: HostFacts) =>
+      runtimeCacheFor(lock(), env(home), facts).key;
+    const base = keyWith({ npm: "11.19", libc: undefined });
+    // The key holds major.minor only; a patch release is read down to it first.
+    expect(keyWith({ npm: majorMinor("11.19.7"), libc: undefined })).toBe(base);
+    expect(keyWith({ npm: majorMinor("11.20.0"), libc: undefined })).not.toBe(
+      base,
     );
-    const libc = async (header: object) => {
-      report.mockReturnValue({ header } as never);
-      return keyWith("11.19.0");
-    };
-    try {
-      // Off Linux the libc is not part of the key.
-      expect(await libc({ glibcVersionRuntime: "2.39" })).toBe(await libc({}));
-      Object.defineProperty(process, "platform", { value: "linux" });
-      const glibc = await libc({ glibcVersionRuntime: "2.39" });
-      expect(glibc).not.toBe(await libc({}));
-      expect(await libc({ glibcVersionRuntime: "2.31" })).toBe(glibc);
-    } finally {
-      report.mockRestore();
-    }
+    expect(keyWith({ npm: majorMinor("10.9.2"), libc: undefined })).not.toBe(
+      base,
+    );
+    // An npm that cannot say is its own line, never one that matches.
+    expect(
+      keyWith({ npm: majorMinor("not a version"), libc: undefined }),
+    ).not.toBe(base);
+    expect(majorMinor("")).toBe("unknown");
+    expect(majorMinor("11.19.0\n")).toBe("11.19");
+    expect(keyWith({ npm: "11.19", libc: "glibc" })).not.toBe(base);
+    expect(keyWith({ npm: "11.19", libc: "glibc" })).not.toBe(
+      keyWith({ npm: "11.19", libc: "musl" }),
+    );
+  });
+
+  it("names the libc family only on Linux, glibc when Node's report says so and musl when it does not", () => {
+    const glibc = () => ({ header: { glibcVersionRuntime: "2.39" } });
+    const musl = () => ({ header: {} });
+    expect(libcFamily("linux", glibc)).toBe("glibc");
+    expect(libcFamily("linux", musl)).toBe("musl");
+    expect(libcFamily("linux", () => undefined)).toBe("musl");
+    expect(
+      libcFamily("linux", () => {
+        throw new Error("no report");
+      }),
+    ).toBe("unknown");
+    for (const platform of ["darwin", "win32", "freebsd"])
+      expect(libcFamily(platform, glibc)).toBeUndefined();
   });
 
   it("does not let release.strip decide the installed tree, only how it is placed", () => {
     const home = temp();
-    const stripped = runtimeCacheFor(lock("b".repeat(64), true), env(home));
-    const full = runtimeCacheFor(lock(), env(home));
+    const stripped = runtimeCacheFor(
+      lock("b".repeat(64), true),
+      env(home),
+      host,
+    );
+    const full = runtimeCacheFor(lock(), env(home), host);
     expect(stripped.strip).toBe(true);
     expect(full.strip).toBe(false);
     expect(stripped.key).toBe(full.key);
@@ -571,7 +579,7 @@ describe("PiShip's own layer", () => {
   it("is replaced, and the third-party tree kept, when the build input changes", () => {
     const home = temp();
     stageBuildInput();
-    const before = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home });
+    const before = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home }, host);
     const stage = join(home, "stage");
     mkdirSync(stage);
     stageTree(stage);
@@ -588,7 +596,7 @@ describe("PiShip's own layer", () => {
       join(fixture.input, "packages/core/dist/index.js"),
       "changed\n",
     );
-    const after = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home });
+    const after = runtimeCacheFor(lock(), { PISHIP_CACHE_HOME: home }, host);
     expect(after.key).toBe(before.key);
     expect(lookupInstallTree(after)?.digest).toBe(third.digest);
     expect(lookupTree(after, "framework")).toBeUndefined();

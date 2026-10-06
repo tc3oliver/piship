@@ -47,6 +47,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { releaseOptions } from "@piship/schema";
 import { buildInputDigest, safePath } from "./build-cache.js";
 import { canonicalJson, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
@@ -87,6 +88,14 @@ export interface RuntimeCache {
   readonly strip: boolean;
 }
 
+/** `major.minor` of a version line, or `unknown` for anything else. */
+export function majorMinor(text: string): string {
+  const [major, minor] = text.trim().split(".");
+  return /^\d+$/.test(major ?? "") && /^\d+$/.test(minor ?? "")
+    ? `${major}.${minor}`
+    : "unknown";
+}
+
 let npmLine: string | undefined;
 /** The npm that installs the tree, as major.minor; its resolution rules shape the tree. */
 function npmVersion(): string {
@@ -96,44 +105,50 @@ function npmVersion(): string {
         process.platform === "win32"
           ? windowsNpmInvocation(["--version"])
           : { file: "npm", args: ["--version"] };
-      const [major, minor] = execFileSync(
-        invocation.file,
-        [...invocation.args],
-        {
+      npmLine = majorMinor(
+        execFileSync(invocation.file, [...invocation.args], {
           encoding: "utf8",
           timeout: 30_000,
           stdio: ["ignore", "pipe", "ignore"],
-        },
-      )
-        .trim()
-        .split(".");
-      npmLine =
-        /^\d+$/.test(major ?? "") && /^\d+$/.test(minor ?? "")
-          ? `${major}.${minor}`
-          : "unknown";
+        }),
+      );
     } catch {
       npmLine = "unknown";
     }
   return npmLine;
 }
 
-/** glibc or musl on Linux, where native packages differ by it; nothing elsewhere. */
-function libcFamily(): string | undefined {
-  if (process.platform !== "linux") return undefined;
+/**
+ * glibc or musl on Linux, where native packages differ by it; nothing
+ * elsewhere. `report` is Node's diagnostic report: only glibc builds name
+ * their runtime version in its header.
+ */
+export function libcFamily(
+  platform: string,
+  report: () => unknown,
+): string | undefined {
+  if (platform !== "linux") return undefined;
   try {
-    const report = process.report?.getReport() as
-      | { header?: { glibcVersionRuntime?: string } }
-      | undefined;
-    return report?.header?.glibcVersionRuntime ? "glibc" : "musl";
+    const header = (
+      report() as { header?: { glibcVersionRuntime?: string } } | undefined
+    )?.header;
+    return header?.glibcVersionRuntime ? "glibc" : "musl";
   } catch {
     return "unknown";
   }
+}
+
+/** What the key reads from this machine; a caller (a test) may state it instead. */
+export interface HostFacts {
+  readonly libc?: string | undefined;
+  readonly npm?: string;
 }
 
 /** The runtime cache a build of `lock` on this machine reads and fills. */
 export function runtimeCacheFor(
   lock: DistributionLock,
   env: NodeJS.ProcessEnv = process.env,
+  host: HostFacts = {},
 ): RuntimeCache {
   const [major, minor] = process.versions.node.split(".");
   const { package: pi, version, npmLockSha256, packages } = lock.runtime;
@@ -145,15 +160,18 @@ export function runtimeCacheFor(
         runtime: { package: pi, version, npmLockSha256, packages },
         platform: process.platform,
         arch: process.arch,
-        libc: libcFamily(),
+        libc:
+          "libc" in host
+            ? host.libc
+            : libcFamily(process.platform, () => process.report?.getReport()),
         node: `${major}.${minor}`,
-        npm: npmVersion(),
+        npm: host.npm ?? npmVersion(),
       }),
     ),
     framework: hash(
       canonicalJson({ schema: SCHEMA, input: buildInputDigest(buildInput) }),
     ),
-    strip: lock.release?.strip === true,
+    strip: releaseOptions(lock.manifest.schema, lock.release).strip,
   };
 }
 

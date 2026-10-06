@@ -28,7 +28,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import {
   type DistributionLock,
@@ -286,6 +286,75 @@ export function installSearchTools(
   }
   if (receiptChanged) writeReceipt(directory, receipt);
   return installed;
+}
+
+/** The names Pi looks for on PATH, besides its own tool directory. */
+const SYSTEM_NAMES: Readonly<Record<SearchTool, readonly string[]>> = {
+  fd: ["fd", "fdfind"],
+  rg: ["rg"],
+};
+
+/**
+ * The tools Pi would download when its interactive mode starts: in neither
+ * its own tool directory nor on PATH, found the way Pi finds them (it starts
+ * the program with no shell, so on Windows only `<name>.exe` counts).
+ */
+export function toolsPiWouldDownload(
+  agentDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): SearchTool[] {
+  const suffix = platform === "win32" ? ".exe" : "";
+  const directories = (env.PATH ?? "").split(
+    platform === "win32" ? ";" : delimiter,
+  );
+  const runnable = (path: string) => {
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    return (
+      !!stat &&
+      !stat.isDirectory() &&
+      (platform === "win32" || (stat.mode & 0o111) !== 0)
+    );
+  };
+  return SEARCH_TOOLS.filter(
+    (tool) =>
+      !runnable(join(piToolDirectory(agentDir), `${tool}${suffix}`)) &&
+      !SYSTEM_NAMES[tool].some((name) =>
+        directories.some(
+          (directory) =>
+            directory && runnable(join(directory, `${name}${suffix}`)),
+        ),
+      ),
+  );
+}
+
+/**
+ * The tools whose download by Pi is to be skipped at this launch. Pi's
+ * interactive mode waits for `fd` and `rg` before it takes any key, and
+ * downloads a missing one from GitHub: about 30 seconds on a fast connection,
+ * and as long as the network takes to fail on one that blocks it. A managed
+ * launch is offline already, and a distribution that bundles the tools has
+ * them in place. For a personal distribution that does neither, the launch
+ * goes offline for Pi (`PI_OFFLINE`, the only switch Pi has) when a tool would
+ * have to be downloaded: Pi then says the tool was not found and starts at
+ * once, without file-name autocomplete or `rg` in the shell until the tool is
+ * installed or bundled (`runtime.searchTools`). `PISHIP_ALLOW_TOOL_DOWNLOAD=1`
+ * leaves the download to Pi.
+ */
+export function deferredToolDownloads(
+  lock: Pick<DistributionLock, "searchTools" | "deployment">,
+  agentDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): SearchTool[] {
+  if (
+    lock.deployment.mode !== "personal" ||
+    lock.searchTools ||
+    env.PI_OFFLINE ||
+    env.PISHIP_ALLOW_TOOL_DOWNLOAD === "1"
+  )
+    return [];
+  return toolsPiWouldDownload(agentDir, env, platform);
 }
 
 /**

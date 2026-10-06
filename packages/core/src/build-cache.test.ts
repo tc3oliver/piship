@@ -248,9 +248,11 @@ describe("immutable runtime cache", () => {
     return root;
   };
   const cacheOf = (manifest: string, directory: string) =>
-    runtimeCacheFor(requireCurrentLock(manifest), {
-      PISHIP_CACHE_HOME: directory,
-    });
+    runtimeCacheFor(
+      requireCurrentLock(manifest),
+      { PISHIP_CACHE_HOME: directory },
+      { npm: "11.19", libc: undefined },
+    );
   /** The personal example, a piship/v1alpha6 manifest, with the release settings the caller gives. */
   function example(release: string) {
     const root = mkdtempSync(join(tmpdir(), "piship-runtime-cache-example-"));
@@ -488,7 +490,7 @@ describe("immutable runtime cache", () => {
 
   it("places the cached tree, with no npm and no strip, when a manifest change alters the whole payload but not the dependencies", () => {
     fixture.declarations = true;
-    const { manifest, root } = example("  strip: true\n");
+    const { manifest, root } = example("  strip: true\n  bundle: false\n");
     const runtimeCache = cacheOf(manifest, home());
     const output = join(root, "dist");
     const build = () =>
@@ -534,6 +536,7 @@ describe("immutable runtime cache", () => {
         runtimeCache: cache.runtimeCacheFor(
           lockModule.requireCurrentLock(p.manifest),
           { PISHIP_CACHE_HOME: where },
+          { npm: "11.19", libc: undefined },
         ),
       });
     };
@@ -610,7 +613,7 @@ describe("immutable runtime cache", () => {
 
   it("leaves the maps and declarations out by omission, the same files an in-place strip leaves", () => {
     fixture.declarations = true;
-    const { manifest, root } = example("  strip: true\n");
+    const { manifest, root } = example("  strip: true\n  bundle: false\n");
     const runtimeCache = cacheOf(manifest, home());
     const build = (name: string, cached: boolean) =>
       buildDistribution(manifest, join(root, name), {

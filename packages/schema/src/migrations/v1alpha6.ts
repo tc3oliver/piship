@@ -1,6 +1,7 @@
 // piship/v1alpha5 -> piship/v1alpha6. Deterministic and never broadening:
-// every value it writes keeps the v0.8 decision, and the one default that
-// changes (cache warming) is reported as an effective change.
+// every value it writes keeps the v0.8 decision, and the defaults that change
+// (cache warming, and a bundled and stripped payload) are reported as
+// effective changes.
 import { isMap, isSeq } from "yaml";
 import { defaultMcpServerClass } from "../governance.js";
 import { PISHIP_SCHEMA_V1ALPHA6 } from "../versions.js";
@@ -111,6 +112,10 @@ export function migrateToV1alpha6(
     "runtime.cacheWarming: absent, which is off in v0.9 (also for an unmigrated piship/v1alpha5 manifest); v0.8 sessions warmed the prompt cache (Pi's default, streaming). Set runtime.cacheWarming.mode: streaming to keep warming";
   changes.push(warming);
   effective.push(warming);
+  const bundling =
+    "release.bundle and release.strip: absent, which is true in piship/v1alpha6, so a build is a bundled, stripped payload (far fewer files; it cannot build or release another distribution); piship/v1alpha5 built an unbundled one. Set both to false to keep that";
+  changes.push(bundling);
+  effective.push(bundling);
   changes.push("data: absent, so no retention sweep runs (as in v0.8)");
   document.set("schema", PISHIP_SCHEMA_V1ALPHA6);
   return { changes, effective };

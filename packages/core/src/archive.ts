@@ -36,6 +36,14 @@ export interface ExtractResult {
   readonly bytes: number;
   /** SHA-256 of the archive file, computed from the read that extracted it (unless `hash` is false). */
   readonly sha256?: string;
+  /**
+   * With `digests`: the SHA-256 of every file written, by its `/`-separated
+   * output path relative to the destination. Computed from the bytes as they
+   * were written, so a later read of the files is not needed to know them.
+   */
+  readonly files?: ReadonlyMap<string, string>;
+  /** The content of each entry `capture` asked for, by archive path; such an entry is not written. */
+  readonly captured?: ReadonlyMap<string, Buffer>;
 }
 
 const BLOCK = 512;
@@ -521,7 +529,13 @@ export function entrySegments(path: string, directory: boolean): string[] {
 
 type ParserState =
   | { readonly kind: "header" }
-  | { readonly kind: "file"; remaining: number; readonly pad: number }
+  | {
+      readonly kind: "file";
+      remaining: number;
+      readonly pad: number;
+      readonly key: string;
+      readonly hash: Hash | undefined;
+    }
   | {
       readonly kind: "pax";
       readonly data: Buffer;
@@ -533,7 +547,9 @@ type ParserState =
       readonly kind: "buffered";
       readonly data: Buffer;
       filled: number;
-      readonly output: string;
+      /** Where to write it; undefined for an entry that is only captured. */
+      readonly output: string | undefined;
+      readonly key: string;
       readonly mode: number;
       readonly pad: number;
     }
@@ -550,6 +566,10 @@ export async function extractArchive(
     readonly maxEntries?: number;
     /** Hash the archive while reading it (default true). */
     readonly hash?: boolean;
+    /** Compute the SHA-256 of each file written, returned as `files`. */
+    readonly digests?: boolean;
+    /** Keep the content of a small file entry in memory (returned as `captured`) instead of writing it. */
+    readonly capture?: (path: string) => boolean;
     /** How many files are written at once (default 8). */
     readonly concurrency?: number;
     /** Map validated archive paths to relative output paths; undefined skips writing. */
@@ -612,11 +632,16 @@ export async function extractArchive(
   const dispatch = (job: () => Promise<void>): Promise<void> =>
     writers.run(job);
 
+  const fileDigests = options.digests ? new Map<string, string>() : undefined;
+  const captured = options.capture ? new Map<string, Buffer>() : undefined;
+
   const writeBuffered = async (
     output: string,
+    key: string,
     data: Buffer,
     mode: number,
   ): Promise<void> => {
+    fileDigests?.set(key, createHash("sha256").update(data).digest("hex"));
     await ensureDirectory(dirname(output));
     const file = await open(output, "wx", mode);
     try {
@@ -703,6 +728,21 @@ export async function extractArchive(
     bytes += directory ? 0 : size;
     if (bytes > maxBytes)
       throw new Error(`Archive content exceeds ${maxBytes} bytes`);
+    if (!directory && options.capture?.(key)) {
+      if (size > MAX_PAX_BYTES)
+        throw new Error(`Archive entry too large to read: ${path}`);
+      state = {
+        kind: "buffered",
+        data: Buffer.allocUnsafe(size),
+        filled: 0,
+        output: undefined,
+        key,
+        mode: 0o644,
+        pad: padding(size),
+      };
+      if (size === 0) await endBuffered();
+      return;
+    }
     const mapped = options.mapEntry ? options.mapEntry(key, directory) : key;
     if (mapped === undefined) {
       if (directory && size !== 0)
@@ -725,12 +765,14 @@ export async function extractArchive(
       return;
     }
     const mode = (octalField(block, 100, 8) & 0o111) !== 0 ? 0o755 : 0o644;
+    const written = entrySegments(mapped, false).join("/");
     if (size <= BUFFERED_FILE_MAX) {
       state = {
         kind: "buffered",
         data: Buffer.allocUnsafe(size),
         filled: 0,
         output,
+        key: written,
         mode,
         pad: padding(size),
       };
@@ -740,14 +782,21 @@ export async function extractArchive(
     await ensureDirectory(dirname(output));
     handle = await open(output, "wx", mode);
     if (!WINDOWS) await handle.chmod(mode);
-    state = { kind: "file", remaining: size, pad: padding(size) };
+    state = {
+      kind: "file",
+      remaining: size,
+      pad: padding(size),
+      key: written,
+      hash: fileDigests ? createHash("sha256") : undefined,
+    };
   };
 
   const endBuffered = async (): Promise<void> => {
     if (state.kind !== "buffered") return;
-    const { data, output, mode, pad } = state;
+    const { data, output, key, mode, pad } = state;
     state = pad > 0 ? { kind: "skip", remaining: pad } : { kind: "header" };
-    await dispatch(() => writeBuffered(output, data, mode));
+    if (output === undefined) captured?.set(key, data);
+    else await dispatch(() => writeBuffered(output, key, data, mode));
   };
 
   const endPax = async (): Promise<void> => {
@@ -781,6 +830,7 @@ export async function extractArchive(
         }
         case "file": {
           const count = Math.min(state.remaining, available);
+          state.hash?.update(chunk.subarray(offset, offset + count));
           let written = 0;
           while (written < count) {
             const result = await (handle as FileHandle).write(
@@ -792,7 +842,11 @@ export async function extractArchive(
           }
           offset += count;
           state.remaining -= count;
-          if (state.remaining === 0) await finishFile(state.pad);
+          if (state.remaining === 0) {
+            if (state.hash)
+              fileDigests?.set(state.key, state.hash.digest("hex"));
+            await finishFile(state.pad);
+          }
           break;
         }
         case "buffered": {
@@ -859,6 +913,8 @@ export async function extractArchive(
       root,
       entries,
       bytes,
+      ...(fileDigests ? { files: fileDigests } : {}),
+      ...(captured ? { captured } : {}),
       ...(digest
         ? {
             sha256: read ? digest.digest("hex") : await sha256File(archive),

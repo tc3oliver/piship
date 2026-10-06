@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
-import { readManifest } from "@piship/schema";
+import { readManifest, releaseOptions } from "@piship/schema";
 import { bundleDistribution } from "./bundle.js";
 import {
   buildCacheKeys,
@@ -28,6 +28,7 @@ import {
   removeNpmBins,
   stripRuntimeIrrelevant,
 } from "./payload.js";
+import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
 import {
@@ -386,8 +387,10 @@ export function buildDistribution(
     );
   const output = join(outputRoot, lock.app.id);
   const manifest = readManifest(manifestPath);
-  const strip = manifest.lifecycle?.release.strip === true;
-  const wantsBundle = manifest.lifecycle?.release.bundle === true;
+  const { strip, bundle: wantsBundle } = releaseOptions(
+    manifest.schema,
+    manifest.lifecycle?.release,
+  );
   const deferred = wantsBundle && options.deferBundle === true;
   const bundling = wantsBundle && options.bundle !== false && !deferred;
   const cacheStarted = process.hrtime.bigint();
@@ -455,6 +458,10 @@ export function buildDistribution(
         vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
           supplyChainGates: options.supplyChainGates !== false,
         });
+        // The runtime was stripped before the packages were vendored, so the
+        // maps and declarations they ship are removed here.
+        if (strip)
+          stripRuntimeIrrelevant(join(stage, PI_PACKAGE_VENDOR_DIRECTORY));
       }
       if (lock.searchTools) {
         // The executables come from the cached upstream archives, checked

@@ -92,7 +92,7 @@ for (const version of ["1.0.0", "1.1.0"]) {
   if (!baseline)
     source = source.replace(
       "\nrelease:\n",
-      `\nrelease:\n  strip: true\n${bundled ? "  bundle: true\n" : ""}`,
+      `\nrelease:\n  strip: true\n  bundle: ${bundled}\n`,
     );
   writeFileSync(manifest, source);
   console.log(

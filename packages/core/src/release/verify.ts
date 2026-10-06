@@ -10,6 +10,7 @@ import {
 import { extractArchive, sha256File } from "../archive.js";
 import { verifyPayloadContents, type DistributionLock } from "../index.js";
 import { LEGACY_STATE_SCHEMAS, type StateSchemaSupport } from "../migration.js";
+import { verifyWrittenPayload } from "../payload.js";
 import {
   verifyChecksums,
   verifyNotices,
@@ -63,21 +64,31 @@ export async function verifyRelease(
   options: {
     readonly requireTarget?: boolean;
     readonly expectedSha256?: string;
-    /**
-     * The archive's SHA-256, when the caller already computed it (a download
-     * hashes as it streams): it is checked and reported without reading the
-     * archive again.
-     */
-    readonly archiveSha256?: string;
     readonly extractTo?: string;
-    /** Client install uses archive trust and small metadata, leaving qualification to CI. */
+    /**
+     * The consumer path: archive trust and small metadata, leaving
+     * qualification to CI. An archive is read once. Its digest and the
+     * SHA-256 of every payload file are computed from the bytes that are
+     * written, and checked against `expectedSha256` and the payload inventory
+     * that `release.json` binds, before anything is returned.
+     */
     readonly fastClient?: boolean;
+    /** With `fastClient`: extract only the few metadata files, not the payload (a check that installs nothing). */
     readonly metadataOnly?: boolean;
+    /**
+     * With `fastClient` and an archive: write the payload directly into this
+     * directory (which must not exist), instead of a staging directory the
+     * caller would move it from. `release.json` is read from memory. The
+     * directory is removed again if anything fails to verify; on success
+     * `directory` and `payload` of the result are this directory.
+     */
+    readonly payloadTo?: string;
   } = {},
 ): Promise<VerifiedRelease> {
   const path = resolve(input);
   let directory = path;
   let archiveSha256: string | undefined;
+  let writtenFiles: ReadonlyMap<string, string> | undefined;
   let cleanup = () => {};
   if (!statSync(path).isFile() && isUnqualifiedPayload(path))
     throw fail(
@@ -85,29 +96,14 @@ export async function verifyRelease(
       "Run piship release <manifest> to build the qualified release",
     );
   if (statSync(path).isFile()) {
-    const checkDigest = (actual: string): void => {
-      if (options.expectedSha256 && actual !== options.expectedSha256)
-        throw fail(
-          `archive SHA-256 ${actual} does not match the expected ${options.expectedSha256}`,
-        );
-      const sidecar = `${path}.sha256`;
-      if (existsSync(sidecar)) {
-        const recorded = readFileSync(sidecar, "utf8").split(/\s+/)[0];
-        if (recorded !== actual)
-          throw fail(
-            `archive SHA-256 ${actual} does not match ${basename(sidecar)}`,
-          );
-      }
-    };
-    // An archive is hashed once. A digest the caller computed, or one the
-    // caller expects (checked before the archive is parsed), is used as it is;
-    // otherwise the extraction hashes the bytes it reads. A full verification
-    // also hashes first.
-    archiveSha256 =
-      options.archiveSha256 ??
-      (options.expectedSha256 !== undefined || !options.fastClient
-        ? await sha256File(path)
-        : undefined);
+    const checkDigest = (actual: string): void =>
+      checkArchiveDigest(path, actual, options.expectedSha256);
+    if (options.payloadTo !== undefined && options.fastClient)
+      return extractVerifiedPayload(path, options.payloadTo, options);
+    // The consumer path reads the archive once, and hashes it from that read:
+    // a second read could be of other bytes. A full verification checks the
+    // digest first, then reads every file.
+    archiveSha256 = options.fastClient ? undefined : await sha256File(path);
     if (archiveSha256 !== undefined) checkDigest(archiveSha256);
     // Without `extractTo` the extraction is a directory of this call, owned
     // and removed by it; a caller's `extractTo` is its own staging directory.
@@ -118,9 +114,11 @@ export async function verifyRelease(
     }
     const parent = options.extractTo ?? (own as TemporaryDirectory).path;
     const expectedRoot = basename(path).replace(/\.tar\.gz$/, "");
+    const streamed = options.fastClient === true && !options.metadataOnly;
     const extracted = await extractArchive(path, join(parent, "x"), {
       expectedRoot,
       hash: archiveSha256 === undefined,
+      digests: streamed,
       ...(options.metadataOnly
         ? {
             mapEntry: (name: string, directory: boolean) => {
@@ -140,12 +138,26 @@ export async function verifyRelease(
                 : undefined;
             },
           }
-        : {}),
+        : streamed
+          ? {
+              // Only what the consumer path needs: the release metadata and
+              // the payload, written once.
+              mapEntry: (name: string) => {
+                const relative = name.slice(expectedRoot.length + 1);
+                return relative === "release.json" ||
+                  relative === "payload" ||
+                  relative.startsWith("payload/")
+                  ? name
+                  : undefined;
+              },
+            }
+          : {}),
     }).catch((error: Error) => {
       own?.remove();
       throw fail(error.message);
     });
     directory = join(parent, "x", extracted.root);
+    writtenFiles = extracted.files;
     cleanup = () =>
       own ? own.remove() : rmSync(parent, { recursive: true, force: true });
     if (archiveSha256 === undefined) {
@@ -164,6 +176,26 @@ export async function verifyRelease(
       options.requireTarget,
       options.fastClient,
     );
+    if (writtenFiles !== undefined) {
+      // The bytes of every payload file, as written, against the inventory
+      // whose digest release.json binds (checked above).
+      const prefix = `${basename(directory)}/payload/`;
+      const inventory = JSON.parse(
+        readFileSync(
+          join(verified.payload, "metadata", "inventory.json"),
+          "utf8",
+        ),
+      ) as Record<string, string>;
+      verifyWrittenPayload(
+        new Map(
+          [...writtenFiles]
+            .filter(([file]) => file.startsWith(prefix))
+            .map(([file, digest]) => [file.slice(prefix.length), digest]),
+        ),
+        inventory,
+        verified.payload,
+      );
+    }
     return {
       ...verified,
       ...(archiveSha256 ? { archiveSha256 } : {}),
@@ -175,13 +207,86 @@ export async function verifyRelease(
   }
 }
 
+/** The archive's digest against the one expected and the sidecar published beside it. */
+function checkArchiveDigest(
+  path: string,
+  actual: string,
+  expectedSha256: string | undefined,
+): void {
+  if (expectedSha256 && actual !== expectedSha256)
+    throw fail(
+      `archive SHA-256 ${actual} does not match the expected ${expectedSha256}`,
+    );
+  const sidecar = `${path}.sha256`;
+  if (existsSync(sidecar)) {
+    const recorded = readFileSync(sidecar, "utf8").split(/\s+/)[0];
+    if (recorded !== actual)
+      throw fail(
+        `archive SHA-256 ${actual} does not match ${basename(sidecar)}`,
+      );
+  }
+}
+
+/**
+ * The consumer path of an archive whose destination is known: one read
+ * writes the payload straight into `payloadTo`, hashing the archive and every
+ * file as they are written, and keeps `release.json` in memory. Both are
+ * checked before anything is returned, and `payloadTo` is removed if they do
+ * not hold.
+ */
+async function extractVerifiedPayload(
+  path: string,
+  payloadTo: string,
+  options: {
+    readonly requireTarget?: boolean;
+    readonly expectedSha256?: string;
+  },
+): Promise<VerifiedRelease> {
+  const root = basename(path).replace(/\.tar\.gz$/, "");
+  const releaseKey = `${root}/release.json`;
+  const prefix = `${root}/payload/`;
+  const extracted = await extractArchive(path, payloadTo, {
+    expectedRoot: root,
+    digests: true,
+    capture: (key) => key === releaseKey,
+    mapEntry: (name) =>
+      name.startsWith(prefix) ? name.slice(prefix.length) : undefined,
+  }).catch((error: Error) => {
+    throw fail(error.message);
+  });
+  try {
+    const archiveSha256 = extracted.sha256 as string;
+    checkArchiveDigest(path, archiveSha256, options.expectedSha256);
+    const releaseJson = extracted.captured?.get(releaseKey);
+    if (releaseJson === undefined) throw fail("release.json is missing");
+    const verified = verifyReleaseDirectory(
+      payloadTo,
+      options.requireTarget,
+      true,
+      { releaseJson: releaseJson.toString("utf8"), payload: payloadTo },
+    );
+    verifyWrittenPayload(
+      extracted.files as ReadonlyMap<string, string>,
+      JSON.parse(
+        readFileSync(join(payloadTo, "metadata", "inventory.json"), "utf8"),
+      ) as Record<string, string>,
+      payloadTo,
+    );
+    return { ...verified, archiveSha256, cleanup: () => {} };
+  } catch (error) {
+    rmSync(payloadTo, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function verifyReleaseDirectory(
   directory: string,
   requireTarget = false,
   fastClient = false,
+  source?: ReleaseSource,
 ): Omit<VerifiedRelease, "cleanup"> {
   try {
-    return checkReleaseDirectory(directory, requireTarget, fastClient);
+    return checkReleaseDirectory(directory, requireTarget, fastClient, source);
   } catch (error) {
     // Malformed metadata is an integrity failure, not a crash.
     if (error instanceof PiShipError) throw error;
@@ -189,10 +294,17 @@ function verifyReleaseDirectory(
   }
 }
 
+/** A release whose `release.json` and payload are not read from `directory`. */
+interface ReleaseSource {
+  readonly releaseJson: string;
+  readonly payload: string;
+}
+
 function checkReleaseDirectory(
   directory: string,
   requireTarget: boolean,
   fastClient: boolean,
+  source?: ReleaseSource,
 ): Omit<VerifiedRelease, "cleanup"> {
   if (!fastClient) {
     const checksums = join(directory, "checksums.txt");
@@ -206,7 +318,8 @@ function checkReleaseDirectory(
     }
   }
   const metadata = JSON.parse(
-    readFileSync(join(directory, "release.json"), "utf8"),
+    source?.releaseJson ??
+      readFileSync(join(directory, "release.json"), "utf8"),
   ) as ReleaseMetadata;
   if (metadata.schema !== RELEASE_SCHEMA)
     throw fail(`unsupported release metadata ${String(metadata.schema)}`);
@@ -219,7 +332,7 @@ function checkReleaseDirectory(
     throw fail(
       `the release records its qualification as ${JSON.stringify(metadata.qualification)}, not ${RELEASE_QUALIFIED}`,
     );
-  const payload = join(directory, "payload");
+  const payload = source?.payload ?? join(directory, "payload");
   let lock: DistributionLock;
   try {
     lock = verifyPayloadContents(payload, {

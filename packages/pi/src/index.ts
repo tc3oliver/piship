@@ -29,7 +29,10 @@ import { runInteractive, runSmoke } from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
-import { installSearchTools } from "./launch/search-tools.js";
+import {
+  deferredToolDownloads,
+  installSearchTools,
+} from "./launch/search-tools.js";
 
 export {
   type GovernedRuntime,
@@ -197,6 +200,12 @@ export async function launchPiDistribution(
   // Pi's agent directory here before Pi was imported (environment.ts).
   startupMark("search_tools_start");
   installSearchTools(metadata, options.distributionDir, agentDir);
+  // Pi's interactive mode would wait for a download of a missing fd or rg.
+  const deferred = deferredToolDownloads(metadata, agentDir);
+  if (deferred.length) {
+    process.env.PI_OFFLINE = "1";
+    startupNote("tool_downloads_deferred", deferred.join(","));
+  }
   startupMark("search_tools_done");
   const ctx: LaunchContext = {
     metadata,

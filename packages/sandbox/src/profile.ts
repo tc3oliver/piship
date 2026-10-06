@@ -10,7 +10,7 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, startupMemo } from "@piship/contracts";
 
 /** Structurally identical to `SandboxConfig` in @piship/schema. */
 export interface SandboxPolicy {
@@ -91,6 +91,12 @@ export interface SandboxProfile {
 /** Resolve a path through its nearest existing ancestor so symlinks cannot redirect a rule. */
 export function realpathNearest(path: string): string {
   const absolute = resolve(path);
+  return startupMemo("realpath-nearest", absolute, () =>
+    resolveNearest(absolute),
+  );
+}
+
+function resolveNearest(absolute: string): string {
   const rest: string[] = [];
   let current = absolute;
   for (;;) {

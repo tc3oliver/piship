@@ -9,9 +9,8 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { PiShipError, stopwatch, systemError } from "@piship/contracts";
-import { extractArchive } from "../archive.js";
 import { hash } from "../digest.js";
 import {
   assertDisjointRoots,
@@ -23,9 +22,11 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { verifyWrittenPayload } from "../payload.js";
 import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { raiseThreadpool } from "../threadpool.js";
 import {
   initialTrustState,
   removeTrustState,
@@ -46,7 +47,8 @@ import {
   type InstalledRelease,
 } from "./receipt.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
-import { copyTree, renameWithRetry } from "./files.js";
+import { copyTree } from "./copy.js";
+import { renameWithRetry } from "./files.js";
 import { launcherSource, ownsCommandShim, writeShim } from "./launcher.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
@@ -90,6 +92,39 @@ function otherCommandOwner(
       return name.slice(0, -5);
   }
   return undefined;
+}
+
+/**
+ * The payload copied from a directory against its inventory, from the digests
+ * computed while it was copied: the inventory itself must be the one the
+ * release binds, when the directory is a release, and every file must match it.
+ */
+function verifyCopiedPayload(
+  target: string,
+  copied: ReadonlyMap<string, string>,
+  boundInventory: string | undefined,
+): void {
+  const inventory = copied.get("metadata/inventory.json");
+  if (
+    inventory === undefined ||
+    (boundInventory && inventory !== boundInventory)
+  )
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `Payload integrity mismatch in ${target}; the payload inventory is ${inventory === undefined ? "missing" : `not the one the release binds (expected ${boundInventory?.slice(0, 16)}, actual ${inventory.slice(0, 16)})`}`,
+      {
+        component: "payload",
+        userAction:
+          "Do not install this artifact; obtain it again from the trusted source",
+      },
+    );
+  verifyWrittenPayload(
+    copied,
+    JSON.parse(
+      readFileSync(join(target, "metadata", "inventory.json"), "utf8"),
+    ) as Record<string, string>,
+    target,
+  );
 }
 
 function ownedIncompleteInstall(
@@ -141,6 +176,7 @@ export async function installDistribution(
   useExistingState = false,
   checks: InstallChecks = {},
 ): Promise<InstallReceipt> {
+  raiseThreadpool();
   const expectedSha256 = checks.expectedSha256?.toLowerCase();
   if (expectedSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedSha256))
     throw invalidCheck(
@@ -184,26 +220,30 @@ export async function installDistribution(
     let payload = source;
     let lock: DistributionLock;
     let info: InstalledRelease["release"];
+    // The inventory digest release.json binds, for a release directory.
+    let boundInventory: string | undefined;
     if (isRelease) {
-      // For an archive: its digest, from the one read that also unpacks the
-      // few metadata files, and the checks that bind them to the release.
+      // An archive is read once: the same pass extracts it into the staging
+      // directory and computes its digest and the SHA-256 of every payload
+      // file, which are checked against the expected digest and the inventory
+      // that release.json binds before anything is installed.
       const verified = await verifyRelease(source, {
         requireTarget: true,
         extractTo: staging,
         fastClient: true,
-        metadataOnly: isArchive,
         ...(expectedSha256 ? { expectedSha256 } : {}),
       });
       payload = verified.payload;
       lock = verified.lock;
+      boundInventory = verified.metadata.payload.inventorySha256;
       info = releaseInfo(verified.metadata, verified.archiveSha256);
-      lap("install digest and release metadata");
+      lap("install verify release");
     } else {
       lock = verifyPayloadContents(source, {
         requireTarget: true,
         verifyContents: false,
       });
-      lap("install payload metadata");
+      lap("install verify payload metadata");
     }
     const pinned = new Set(
       channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
@@ -309,7 +349,7 @@ export async function installDistribution(
           } catch {}
           throw new Error(
             active
-              ? `Install collision for ${id}/${command}; ${active} is already installed. Run ${command} update --from <signed update source> to upgrade without removing installed versions`
+              ? `Install collision for ${id}/${command}; ${active} is already installed. To restore it from a release you trust, run piship repair ${id} <release archive or directory>; to start over, run piship uninstall ${id} (state is kept) and install again with --use-existing-state. ${command} update --from <signed update source> only upgrades to a newer version`
               : `Install collision for ${id}/${command}; uninstall the existing distribution first`,
           );
         }
@@ -348,23 +388,28 @@ export async function installDistribution(
         lap("install preflight");
         try {
           // The version directory is not referenced until the receipt is
-          // written, so the payload is written straight into it: no second
-          // move of thousands of files, and an interruption leaves only an
-          // unreferenced directory.
-          if (isArchive) {
-            const expectedRoot = basename(source).replace(/\.tar\.gz$/, "");
-            await extractArchive(source, target, {
-              expectedRoot,
-              hash: false,
-              mapEntry: (name) =>
-                name.startsWith(`${expectedRoot}/payload/`)
-                  ? name.slice(`${expectedRoot}/payload/`.length)
-                  : undefined,
+          // written. An archive's payload was verified as it was extracted and
+          // is moved into place; a directory is copied straight into it,
+          // hashed as it is copied, and the partial copy is removed if it does
+          // not match its inventory.
+          if (isArchive) renameWithRetry(payload, target);
+          else {
+            // Files are copied and hashed as they are copied. PISHIP_INSTALL_LINK=1
+            // hard-links them from an extracted release instead: the installed
+            // payload then shares inodes with that directory, so any later
+            // write through it changes what is installed. Only for a throwaway
+            // source on one volume.
+            const copied = await copyTree(payload, target, {
+              link: isRelease && process.env.PISHIP_INSTALL_LINK === "1",
             });
-          } else if (payload.startsWith(`${staging}`))
-            renameWithRetry(payload, target);
-          else await copyTree(payload, target);
-          lap("install extract payload");
+            try {
+              verifyCopiedPayload(target, copied, boundInventory);
+            } catch (error) {
+              rmSync(target, { recursive: true, force: true });
+              throw error;
+            }
+          }
+          lap("install place payload");
           writeFileSync(launcher, launcherSource(id));
           syncDirectory(dirname(apps));
           // A fresh install is the one point where a release lock sets the

@@ -29,6 +29,12 @@ export {
 } from "./trust-state.js";
 export { sweepStateTemporaries } from "./temporaries.js";
 export {
+  describeReclaimed,
+  reclaimObsoleteVersions,
+  type ReclaimedVersions,
+  type ReclaimOptions,
+} from "./reclaim.js";
+export {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
   type UninstallOptions,
