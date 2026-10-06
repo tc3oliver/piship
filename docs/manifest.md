@@ -805,7 +805,7 @@ v1 freezes v1alpha6, so this step has nothing to convert. It changes the `schema
 
 1. Run `piship migrate piship.yaml --check`. `migratable` means go ahead.
 2. Run `piship migrate piship.yaml --write`.
-3. Run `piship validate`, `piship lock`, and `piship diff previous.lock piship.lock`. The diff shows the new schema ids and manifest digest and no other change.
+3. Run `piship validate`, `piship lock`, and `piship diff previous.lock piship.lock`. The diff reports the two schema ids as a medium-risk change that needs migration review, and no other change.
 4. Rebuild. For an installed distribution, read [updating across a schema](support-policy.md#manifest-versions-and-the-migration-window): publish one release that is built by this PiShip with its manifest still on `piship/v1alpha6` before the first `piship/v1` release.
 
 What `--check` can ask you to review for this step:
