@@ -11,15 +11,16 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DistributionLock, LockedSearchTools } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { piAgentDirectory, preparePiEnvironment } from "../environment.js";
-import { supplyChainGroup } from "../doctor/supply-chain.js";
 import type { DoctorData } from "../doctor/data.js";
+import { supplyChainGroup } from "../doctor/supply-chain.js";
+import { piAgentDirectory, preparePiEnvironment } from "../environment.js";
 import {
   installSearchTools,
   piToolDirectory,
@@ -182,5 +183,67 @@ describe("bundled search tools at launch", () => {
     expect(
       lines.find((line) => line.startsWith("bad search tool rg")),
     ).toContain("does not hold the pinned executable");
+  });
+});
+
+describe("the receipt of a verified tool (no hashing at start)", () => {
+  it("reads neither executable at a start that finds the receipt's fingerprint", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    expect(
+      existsSync(join(piToolDirectory(agentDir), ".piship-search-tools.json")),
+    ).toBe(true);
+    // Break the payload copies: a start that read them would refuse them.
+    writeFileSync(join(dir, "tools", "fd"), "tampered\n");
+    writeFileSync(join(dir, "tools", "rg"), "tampered\n");
+    expect(() => installSearchTools(lock, dir, agentDir, target)).not.toThrow();
+    expect(
+      searchToolStatus(lock, agentDir, target).map((item) => item.pinned),
+    ).toEqual([true, true]);
+  });
+
+  it("checks the digest again once an executable is rewritten to the same size", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    const path = join(piToolDirectory(agentDir), "fd");
+    const before = statSync(path);
+    // Same size and, to the millisecond, the same modification time.
+    writeFileSync(path, "xx 10.5.0 for linux-x64\n");
+    utimesSync(path, before.atime, before.mtime);
+    expect(statSync(path).size).toBe(before.size);
+    installSearchTools(lock, dir, agentDir, target);
+    expect(readFileSync(path, "utf8")).toBe("fd 10.5.0 for linux-x64\n");
+  });
+
+  it("verifies a copy that has no receipt and then records it", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    const bin = piToolDirectory(agentDir);
+    mkdirSync(bin, { recursive: true });
+    for (const name of ["fd", "rg"])
+      writeFileSync(join(bin, name), readFileSync(join(dir, "tools", name)), {
+        mode: 0o755,
+      });
+    const before = statSync(join(bin, "fd")).mtimeMs;
+    installSearchTools(lock, dir, agentDir, target);
+    expect(statSync(join(bin, "fd")).mtimeMs).toBe(before);
+    expect(existsSync(join(bin, ".piship-search-tools.json"))).toBe(true);
+  });
+
+  it("ignores a damaged receipt", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    writeFileSync(
+      join(piToolDirectory(agentDir), ".piship-search-tools.json"),
+      "{",
+    );
+    expect(installSearchTools(lock, dir, agentDir, target)).toHaveLength(2);
   });
 });
