@@ -183,16 +183,33 @@ export function scanModules(
   const plain = linked instanceof Error ? linked : run(files, false);
   if (linked instanceof Error || plain instanceof Error) {
     const error = (linked instanceof Error ? linked : plain) as Error;
-    // One unparsable file fails the whole batch: scan each alone to say which.
-    if (files.length === 1) {
-      failed.set(files[0] as string, error.message.split("\n")[0] ?? "");
+    // One unparsable file fails the whole batch. esbuild names the files that
+    // failed: scan again without them.
+    const first = error.message.split("\n")[0] ?? "";
+    const named = new Map<string, string>();
+    for (const item of (
+      error as {
+        errors?: { text: string; location?: { file?: string } | null }[];
+      }
+    ).errors ?? []) {
+      const file = item.location?.file?.replaceAll("\\", "/");
+      if (file && files.includes(file) && !named.has(file))
+        named.set(file, item.text);
+    }
+    if (named.size) {
+      for (const [file, text] of named) failed.set(file, text);
+      const rest = scanModules(
+        esbuild,
+        root,
+        files.filter((file) => !named.has(file)),
+      );
+      for (const [key, value] of rest.modules) modules.set(key, value);
+      for (const [key, value] of rest.failed) failed.set(key, value);
       return { modules, failed };
     }
-    for (const file of files) {
-      const single = scanModules(esbuild, root, [file]);
-      for (const [key, value] of single.modules) modules.set(key, value);
-      for (const [key, value] of single.failed) failed.set(key, value);
-    }
+    // Not attributable to a file (esbuild itself failed): the whole batch is
+    // unscanned, which callers treat as not safe.
+    for (const file of files) failed.set(file, first);
     return { modules, failed };
   }
   const exportsOf = new Map<string, readonly string[]>();

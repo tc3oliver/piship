@@ -222,6 +222,52 @@ describe("the built distribution", () => {
   });
 });
 
+describe("the Pi package footprint", () => {
+  const report = () =>
+    JSON.parse(
+      readFileSync(
+        join(artifact, "metadata", "pi-package-footprint.json"),
+        "utf8",
+      ),
+    ) as {
+      closures: { id: string; closure: string }[];
+      shared: {
+        name: string;
+        directory: string;
+        locations: string[];
+        saved: number;
+      }[];
+      files: { before: number; after: number };
+    };
+
+  it("records what became of each closure, and shares identical dependencies", () => {
+    const footprint = report();
+    expect(footprint.closures.map((item) => item.id).sort()).toEqual([
+      "pi-background-tasks",
+      "pi-browser-use",
+      "pi-code",
+      "pi-lens",
+      "pi-permission-system",
+      "pi-review",
+    ]);
+    // None of the six is bundle-safe (child processes of their own files,
+    // native code, WebAssembly, TypeScript closures); each keeps its files.
+    for (const item of footprint.closures)
+      expect(item.closure, item.id).toBe("vendored");
+    expect(footprint.shared.length).toBeGreaterThan(0);
+    expect(footprint.files.after).toBeLessThan(footprint.files.before);
+    for (const shared of footprint.shared) {
+      // The real files are in one place; each place a copy was keeps a
+      // package.json and forwarding modules, in plain files.
+      expect(existsSync(join(artifact, shared.directory, "package.json"))).toBe(
+        true,
+      );
+      for (const location of shared.locations)
+        expect(existsSync(join(artifact, location, "package.json"))).toBe(true);
+    }
+  });
+});
+
 describe("--smoke", () => {
   let first: Smoke;
   let workspaceArea: ReturnType<typeof area>;

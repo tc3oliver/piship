@@ -21,7 +21,6 @@ import {
 } from "./closure.js";
 import {
   describeFootprint,
-  FOOTPRINT_FILE,
   optimizePiPackages,
   readFootprint,
 } from "./footprint.js";

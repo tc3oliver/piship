@@ -454,6 +454,16 @@ describe("dependency sharing across vendored Pi packages", () => {
       expect(kept(folder, folder)).toEqual(["unsupported-exports"]);
     });
 
+    it("when a file does not parse", () => {
+      const broken = leaf(
+        "leaf",
+        "1.0.0",
+        {},
+        { "lib/broken.js": "export const = ;\n" },
+      );
+      expect(kept(broken, broken)).toEqual(["unparsable"]);
+    });
+
     it("when a path would not survive an ES module specifier", () => {
       const odd = leaf("leaf", "1.0.0", {}, { "lib/a#b.js": "export {};\n" });
       expect(kept(odd, odd)).toEqual(["unsafe-path"]);
