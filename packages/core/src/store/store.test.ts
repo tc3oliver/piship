@@ -252,9 +252,8 @@ describe("the file store", () => {
       );
     }
     expect(await Promise.all(jobs)).toEqual(jobs.map(() => true));
-    outputs.forEach((output, index) =>
-      expect(readFileSync(output, "utf8")).toBe(`file ${index % 7}`),
-    );
+    for (const [index, output] of outputs.entries())
+      expect(readFileSync(output, "utf8")).toBe(`file ${index % 7}`);
     for (let value = 0; value < 7; value += 1) {
       const text = `file ${value}`;
       expect(
