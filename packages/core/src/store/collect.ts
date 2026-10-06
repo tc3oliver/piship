@@ -165,7 +165,7 @@ export function collectStore(options: CollectOptions): CollectedStore {
     throw error;
   }
   try {
-    const old = (path: string) => now() - modified(path) > grace;
+    const old = (path: string) => now() - modified(path) >= grace;
     let deferred = false;
     for (const marker of entries(layout.inflight)) {
       const path = join(layout.inflight, marker.name);
