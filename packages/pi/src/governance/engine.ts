@@ -277,7 +277,7 @@ export function projectProtection(
   }
   const main = linkedClaudeSettings(project.root, homeDir);
   if (main) directories.push(join(main, ".."));
-  return { ...git, directories };
+  return { ...git, directories, gitDirectories: git.directories };
 }
 
 /** Policy paths use POSIX separators; native joins use backslashes on Windows.

@@ -67,6 +67,24 @@ describe("path tokens", () => {
 });
 
 describe("resolveProfile", () => {
+  it("preserves resolved Git directory provenance without changing protection", () => {
+    const ws = join(root, "ws");
+    const git = join(ws, ".git", "hooks");
+    const claude = join(ws, ".claude");
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "t"),
+      protectedPaths: {
+        files: [],
+        directories: [git, claude],
+        gitDirectories: [git],
+      },
+    });
+    expect(profile.writeProtect.directories).toEqual([git, claude]);
+    expect(profile.writeProtect.gitDirectories).toEqual([git]);
+  });
+
   let root: string;
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), "piship-profile-")));

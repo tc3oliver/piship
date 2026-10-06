@@ -26,7 +26,7 @@ import { MemorySecretStore } from "@piship/credentials";
 import { type GovernanceOptions, GovernanceSession } from "@piship/pi";
 import { describeContainment } from "@piship/sandbox";
 import { resolveTemplate } from "@piship/schema";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error The adapter is plain JavaScript, as a distribution ships it.
 import acmeContainerSandbox from "../sandbox/acme-container-sandbox.mjs";
 import { leaks, scan } from "./support/distribution.js";
@@ -723,6 +723,10 @@ describe.skipIf(process.platform === "win32")(
         built = buildSandboxDistribution("sandbox-distribution");
       }, 300_000);
 
+      afterEach(async () => {
+        for (const session of sessions.splice(0)) await session.close();
+      });
+
       afterAll(async () => {
         for (const session of sessions.splice(0))
           await session.close().catch(() => undefined);
@@ -890,6 +894,16 @@ describe.skipIf(process.platform === "win32")(
         ).toMatch(
           /Workspace: shared \(verified \S+, both directions immediate\)/,
         );
+        const planted = await bash(
+          session,
+          project,
+          "if ( : > .claude/settings.json ) 2>/dev/null; then echo planted; fi; if mv .claude claude-old 2>/dev/null; then echo moved; fi; echo protected",
+        );
+        expect(planted.output).toBe("protected\n");
+        expect(existsSync(join(project, ".claude", "settings.json"))).toBe(
+          false,
+        );
+        expect(existsSync(join(project, "claude-old"))).toBe(false);
         expect(session.metrics.snapshot().workspace).toMatchObject({
           declared: "shared",
           effective: "shared",
@@ -935,7 +949,7 @@ describe.skipIf(process.platform === "win32")(
         ).toEqual([]);
       }, 300_000);
 
-      it("protects a hooks directory in the working tree, and refuses one it cannot protect", async () => {
+      it("protects existing and missing hooks directories in the working tree", async () => {
         const project = makeProject(
           service.root,
           "hooks-in-tree",
@@ -961,17 +975,36 @@ describe.skipIf(process.platform === "win32")(
         });
         await session.close();
 
-        // A hooks directory that does not exist cannot be made read-only, and
-        // PiShip's check would find it creatable: the service refuses before
-        // starting a container, and the session does not start.
+        // A missing hooks directory is covered by a read-only tmpfs. The
+        // session may run, while both planting a hook and replacing the
+        // protected mount point remain impossible.
         const missing = makeProject(
           service.root,
           "hooks-missing",
           "[core]\n\thooksPath = .githooks\n",
         );
-        await expect(
-          open({ project: missing, key: service.key("alice") }),
-        ).rejects.toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+        const { session: missingSession } = await open({
+          project: missing,
+          key: service.key("alice"),
+        });
+        const missingAttempt = await bash(
+          missingSession,
+          missing,
+          "if ( : > .githooks/pre-push ) 2>/dev/null; then echo planted; fi; if mv .githooks hooks-old 2>/dev/null; then echo moved; fi; if rmdir .githooks 2>/dev/null; then echo removed; fi; printf ordinary > ordinary.txt; echo protected",
+        );
+        expect(missingAttempt).toEqual({ exitCode: 0, output: "protected\n" });
+        expect(existsSync(join(missing, ".githooks", "pre-push"))).toBe(false);
+        expect(existsSync(join(missing, "hooks-old"))).toBe(false);
+        expect(readFileSync(join(missing, "ordinary.txt"), "utf8")).toBe(
+          "ordinary",
+        );
+        expect(missingSession.sandbox.workspace()).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+          gitControlProtection: "not-verified",
+          complete: true,
+        });
+        await missingSession.close();
         expect(await service.sandboxes("alice")).toBe(0);
       }, 300_000);
 

@@ -47,6 +47,12 @@ export interface ProtectedPaths {
   readonly files: readonly string[];
   readonly directories: readonly string[];
   /**
+   * The directory subset originating from Git control discovery. Additional
+   * agent configuration trees remain protected, but do not identify Git
+   * hooks. Omitted by legacy callers: every directory is treated as Git's.
+   */
+  readonly gitDirectories?: readonly string[];
+  /**
    * The symbolic links on the way to a protected path, as the links
    * themselves (absolute, not resolved). Protection covers what a link points
    * to and nothing can hold the link in place, so a link in a directory the
@@ -220,6 +226,9 @@ export function resolveProfile(
     writeProtect: {
       files: resolveAll(protect?.files ?? [], full),
       directories: resolveAll(protect?.directories ?? [], full),
+      ...(protect?.gitDirectories === undefined
+        ? {}
+        : { gitDirectories: resolveAll(protect.gitDirectories, full) }),
       ...(unverified ? { unverified } : {}),
     },
     network: config.network.mode,
