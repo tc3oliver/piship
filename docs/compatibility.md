@@ -85,7 +85,6 @@ This section is the stable contract from v0.11.0. The versions of PiShip's own s
 | 0.7.1 | 0.87.1 | `piship/v1alpha4` | `piship-lock/v1alpha4` |
 | 0.8.0, 0.8.1 | 1.0.0 | `piship/v1alpha5` | `piship-lock/v1alpha5` |
 | 0.9.0, 0.9.1 | 1.0.2 | `piship/v1alpha6` | `piship-lock/v1alpha6` |
-| 0.10.0 (a candidate when this page was written) | 1.0.3 | `piship/v1alpha6` | `piship-lock/v1alpha6` |
 | 0.11.0 | the pin in `@piship/pi` at that tag (1.0.3 while this page is written) | `piship/v1`; `piship/v1alpha6` accepted for the [migration window](support-policy.md#manifest-versions-and-the-migration-window) | `piship-lock/v1`; `piship-lock/v1alpha6` read |
 
 `compatibility/pi.json`, and its copy in `@piship/core` that the compatibility suite checks for equality, list every Pi version PiShip recognizes and the status of each surface: `personal` `supported`, and `managed`, `governance`, and `lifecycle` `candidate` for every listed version today (the terms are defined at the top of this page). A release is recognized while its Pi is in the matrix, so a version stays listed after it stops being the pin. The status of a surface is evidence, and it is never carried to a new Pi version without saying so: a surface "carried over" from an earlier Pi is recorded as carried over, with the evidence that is still pending.

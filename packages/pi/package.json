@@ -1,6 +1,6 @@
 {
   "name": "@piship/pi",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -24,13 +24,13 @@
   ],
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.0.3",
-    "@piship/audit": "0.10.0",
-    "@piship/contracts": "0.10.0",
-    "@piship/core": "0.10.0",
-    "@piship/mcp": "0.10.0",
-    "@piship/policy": "0.10.0",
-    "@piship/sandbox": "0.10.0",
-    "@piship/schema": "0.10.0",
+    "@piship/audit": "0.11.0",
+    "@piship/contracts": "0.11.0",
+    "@piship/core": "0.11.0",
+    "@piship/mcp": "0.11.0",
+    "@piship/policy": "0.11.0",
+    "@piship/sandbox": "0.11.0",
+    "@piship/schema": "0.11.0",
     "@earendil-works/pi-ai": "1.0.3",
     "@earendil-works/pi-codemode": "1.0.3",
     "@earendil-works/chord": "1.0.3"

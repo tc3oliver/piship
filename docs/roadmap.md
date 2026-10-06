@@ -12,7 +12,7 @@ Three steps remain before PiShip is a stable distribution framework. The first t
 
 ### v0.10 — Portability and Windows hot-path performance
 
-A distribution is a portable artifact that builds, installs, and starts cheaply on Windows, not only on a developer's Mac. It ships a bundled, stripped payload that installs and starts in far fewer file operations, a portable build that needs no clone of the PiShip source, the developer distribution (`devcode`), and the controls that make a developer profile usable without weakening a managed one (project trust for Claude Code configuration, `--yolo`, package environment and agent files). Candidate; qualification and publication are pending ([status](status.md#v0100-candidate)).
+A distribution is a portable artifact that builds, installs, and starts cheaply on Windows, not only on a developer's Mac. It ships a bundled, stripped payload that installs and starts in far fewer file operations, a portable build that needs no clone of the PiShip source, the developer distribution (`devcode`), and the controls that make a developer profile usable without weakening a managed one (project trust for Claude Code configuration, `--yolo`, package environment and agent files). Never published as its own release: it ships inside v0.11.0 ([status](status.md#v0110-candidate)).
 
 ### v0.11 — Runtime footprint, Windows performance, stable v1 contracts, and production readiness
 
