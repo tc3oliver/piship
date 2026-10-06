@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. Each section is
 
 ## Unreleased
 
-No changes yet.
+- Fix release notices to include bundled fd and ripgrep and their shipped licenses, matching the SBOM so `verify-release` accepts distributions with bundled search tools.
 
 ## v0.10.0 (candidate)
 
