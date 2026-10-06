@@ -2,7 +2,11 @@
 import { LocalMetrics } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
-import { abandonedTemporaryCount, lifecycleStatus } from "../index.js";
+import {
+  abandonedTemporaryCount,
+  inspectInstalledLauncher,
+  lifecycleStatus,
+} from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
 import { installedHere } from "./lifecycle.js";
 
@@ -78,6 +82,13 @@ function updateDoctor(
     return;
   }
   ok("active", status.active ?? metadata.app.version);
+  const launcher = inspectInstalledLauncher(metadata.app.id);
+  if (launcher?.current) ok("launcher", `build ${launcher.expected}`);
+  else if (launcher)
+    warn(
+      "launcher",
+      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor and the end of a session replace it`,
+    );
   if (!metadata.updates) {
     warn("updates", `not configured (${metadata.manifest.schema})`);
   } else {

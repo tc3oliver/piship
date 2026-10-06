@@ -16,6 +16,7 @@ import {
   type EnterpriseContext,
   formatError,
   PiShipError,
+  startupMark,
 } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import {
@@ -147,6 +148,7 @@ async function startRuntime(
   ownership: SessionOwnership,
 ) {
   verifyBuiltResources(ctx);
+  startupMark("resources_verified");
   const instructions = gov
     ? gov.loader.instructions
     : resourcePaths(ctx, "instructions").map((path) => ({
@@ -285,6 +287,7 @@ async function startRuntime(
       agentsFilesOverride: () => ({ agentsFiles: instructions }),
     });
     await resourceLoader.reload();
+    startupMark("resources_loaded");
     const extensionErrors = resourceLoader.getExtensions().errors;
     const themeDiagnostics = resourceLoader.getThemes().diagnostics;
     // Counted before the launch fails; Pi reports these without a PiShip code.
@@ -359,6 +362,7 @@ async function startRuntime(
         );
       }
     }
+    startupMark("agent_session_start");
     const result = await createAgentSession({
       cwd,
       agentDir: ctx.agentDir,

@@ -2,6 +2,7 @@ import { PiShipError } from "@piship/contracts";
 import {
   verifyPayload,
   reclaimLaunchTemporaries,
+  refreshInstalledLauncher,
   sweepStateTemporaries,
 } from "@piship/core";
 import { auditGroup } from "../doctor/audit.js";
@@ -74,6 +75,9 @@ export async function runDoctor(
   sweepStateTemporaries(ctx.stateDir);
   const notice = reclaimLaunchTemporaries(ctx.metadata.app.id);
   if (notice) ctx.err(notice);
+  // An installed launcher an earlier PiShip wrote is replaced, as at the end
+  // of a session, so the report below names the one that runs next.
+  refreshInstalledLauncher(ctx.metadata.app.id, ctx.distributionDir);
   const report = renderDoctor(await collectDoctorData(ctx));
   ctx.out(
     args[0] === "--json" ? JSON.stringify(report, null, 2) : report.render(),

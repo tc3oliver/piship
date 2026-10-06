@@ -5,7 +5,7 @@ import {
   type createAgentSession,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, startupMark, startupNote } from "@piship/contracts";
 import {
   applyAgentFiles,
   applyPackageEnvironment,
@@ -76,6 +76,10 @@ export async function launchPiDistribution(
   options: LaunchOptions,
 ): Promise<void> {
   const { metadata } = options;
+  startupNote("distribution", `${metadata.app.id}@${metadata.app.version}`);
+  startupNote("piship_runtime", metadata.runtime.pishipVersion);
+  startupNote("pi", VERSION);
+  startupMark("launch_pi_distribution");
   if (
     metadata.runtime.package !== "@earendil-works/pi-coding-agent" ||
     metadata.runtime.version !== PINNED_PI_VERSION ||
@@ -191,7 +195,9 @@ export async function launchPiDistribution(
   });
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
   // Pi's agent directory here before Pi was imported (environment.ts).
+  startupMark("search_tools_start");
   installSearchTools(metadata, options.distributionDir, agentDir);
+  startupMark("search_tools_done");
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),

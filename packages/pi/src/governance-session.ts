@@ -21,6 +21,7 @@ import {
   type ResolvedDecision,
   redact,
   resolveDecision,
+  startupMark,
 } from "@piship/contracts";
 import {
   auditRotation,
@@ -183,7 +184,9 @@ export class GovernanceSession {
         resolveUrl: (template) =>
           options.resolveTemplate("audit.sinks.url", template),
       });
+      startupMark("governance_audit_open");
       const { project, candidates } = discoverProject(options, homeDir);
+      startupMark("governance_project_discovered");
       // The distribution state holds sessions and credential metadata; tool
       // subprocesses never need to read it. The git files that classify the
       // project and the hooks git runs outside the sandbox stay read-only.
@@ -198,6 +201,7 @@ export class GovernanceSession {
         // company-origin project; any other origin keeps the check in .git.
         projectOrigin: project.origin,
       });
+      startupMark("governance_sandbox_active");
       const { level, adapter, networkDenial } = sandbox.report;
       bestEffort(() =>
         metrics.recordSandbox(level, adapter, networkDenial?.evidence),
@@ -210,6 +214,7 @@ export class GovernanceSession {
         sandbox.profile.tmpDir,
         homeDir,
       );
+      startupMark("governance_engine_built");
       const session = new GovernanceSession(
         options,
         audit,
@@ -276,7 +281,9 @@ export class GovernanceSession {
           });
       await resolveResources(session);
       await resolveProject(session, session.#projectServers);
+      startupMark("governance_resources_resolved");
       await startMcp(session, session.#projectServers);
+      startupMark("governance_mcp_started");
       await computeCapabilities(session);
       bestEffort(() => metrics.recordStartupLatency(Date.now() - started));
       bestEffort(() => metrics.save());
