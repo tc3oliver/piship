@@ -34,6 +34,7 @@ import {
   requireCurrentLock,
   resolveLock,
 } from "./index.js";
+import { createArchive } from "./archive.js";
 import { STATE_SCHEMAS } from "./migration.js";
 import {
   buildRelease,
@@ -2197,47 +2198,61 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
     });
   });
 
-  describe("the install check binds the archive to its digest without a second hash", () => {
-    const fast = { fastClient: true, metadataOnly: true } as const;
-    it("hashes the bytes the extraction reads, and reports the digest", async () => {
+  describe("the consumer path reads an archive once and verifies the bytes it wrote", () => {
+    const consumer = { fastClient: true, requireTarget: true } as const;
+
+    /** A valid archive of `built` whose payload was edited after the inventory was written. */
+    async function edited(
+      built: Awaited<ReturnType<typeof build>>,
+      edit: (payload: string) => void,
+    ): Promise<string> {
+      const dir = temp();
+      cpSync(built.directory, join(dir, built.name), { recursive: true });
+      edit(join(dir, built.name, "payload"));
+      const out = join(dir, `${built.name}.tar.gz`);
+      await createArchive(join(dir, built.name), built.name, out);
+      return out;
+    }
+    const agents = (payload: string) =>
+      join(payload, "resources", "resources", "AGENTS.md");
+
+    it("reports the digest of the bytes it read and leaves a verified payload", async () => {
       const { path } = project();
       const built = await build(path);
-      const verified = await verifyRelease(built.archive, fast);
+      const verified = await verifyRelease(built.archive, consumer);
       expect(verified.archiveSha256).toBe(built.sha256);
+      expect(existsSync(join(verified.payload, "piship.lock"))).toBe(true);
+      // Only the release metadata and the payload are written.
+      expect(readdirSync(verified.directory).sort()).toEqual([
+        "payload",
+        "release.json",
+      ]);
       verified.cleanup();
     });
-    it("checks a digest the caller computed against the expected one", async () => {
+    it("hashes the bytes a metadata-only read sees too", async () => {
       const { path } = project();
       const built = await build(path);
       const verified = await verifyRelease(built.archive, {
-        ...fast,
-        expectedSha256: built.sha256,
-        archiveSha256: built.sha256,
+        fastClient: true,
+        metadataOnly: true,
       });
       expect(verified.archiveSha256).toBe(built.sha256);
       verified.cleanup();
+    });
+    it("rejects an expected digest the bytes it read do not match, removing what it extracted", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const extractTo = join(temp(), "extract");
       const error = await rejection(
         verifyRelease(built.archive, {
-          ...fast,
-          expectedSha256: built.sha256,
-          archiveSha256: "0".repeat(64),
+          ...consumer,
+          expectedSha256: "f".repeat(64),
+          extractTo,
         }),
       );
       expect(error.code).toBe("INTEGRITY_FAILED");
       expect(error.message).toMatch(/does not match the expected/);
-    });
-    it("checks the expected digest before the archive is parsed", async () => {
-      const { path } = project();
-      const built = await build(path);
-      flipByte(built.archive);
-      // The flipped archive would fail to inflate; the digest check comes first.
-      const error = await rejection(
-        verifyRelease(built.archive, {
-          ...fast,
-          expectedSha256: built.sha256,
-        }),
-      );
-      expect(error.message).toMatch(/does not match the expected/);
+      expect(existsSync(extractTo)).toBe(false);
     });
     it("rejects a sidecar that disagrees with the bytes read", async () => {
       const { path } = project();
@@ -2246,9 +2261,107 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
         `${built.archive}.sha256`,
         `${"0".repeat(64)}  ${basename(built.archive)}\n`,
       );
-      const error = await rejection(verifyRelease(built.archive, fast));
+      const error = await rejection(verifyRelease(built.archive, consumer));
       expect(error.code).toBe("INTEGRITY_FAILED");
       expect(error.message).toMatch(/does not match .*\.tar\.gz\.sha256/);
+    });
+    it("rejects a corrupted file inside an otherwise valid archive, naming it with its digests", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const archive = await edited(built, (payload) =>
+        writeFileSync(agents(payload), "# edited after the inventory\n"),
+      );
+      const error = await rejection(verifyRelease(archive, consumer));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(
+        /modified: resources\/resources\/AGENTS\.md \(expected [0-9a-f]{16}, actual [0-9a-f]{16}\)/,
+      );
+    });
+    it("rejects a truncated file, a missing file, and an extra file", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const truncated = await edited(built, (payload) =>
+        writeFileSync(
+          agents(payload),
+          readFileSync(agents(payload)).subarray(0, 3),
+        ),
+      );
+      expect(
+        (await rejection(verifyRelease(truncated, consumer))).message,
+      ).toContain("modified: resources/resources/AGENTS.md");
+      const missing = await edited(built, (payload) => rmSync(agents(payload)));
+      expect(
+        (await rejection(verifyRelease(missing, consumer))).message,
+      ).toContain("missing: resources/resources/AGENTS.md");
+      const extra = await edited(built, (payload) =>
+        writeFileSync(join(payload, "planted.js"), "console.log('x');\n"),
+      );
+      expect(
+        (await rejection(verifyRelease(extra, consumer))).message,
+      ).toContain("unexpected: planted.js");
+    });
+    describe("written straight into the destination", () => {
+      it("writes only the payload, keeps release.json in memory, and verifies the files", async () => {
+        const { path } = project();
+        const built = await build(path);
+        const payloadTo = join(temp(), "1.0.0");
+        const verified = await verifyRelease(built.archive, {
+          ...consumer,
+          payloadTo,
+          expectedSha256: built.sha256,
+        });
+        expect(verified.archiveSha256).toBe(built.sha256);
+        expect(verified.payload).toBe(payloadTo);
+        expect(verified.metadata.distribution.version).toBe("1.0.0");
+        expect(existsSync(join(payloadTo, "piship.lock"))).toBe(true);
+        expect(existsSync(join(payloadTo, "release.json"))).toBe(false);
+        expect(readdirSync(payloadTo).sort()).toEqual(
+          readdirSync(join(built.directory, "payload")).sort(),
+        );
+      });
+      it("removes the destination when a file, the digest, or the sidecar does not match", async () => {
+        const { path } = project();
+        const built = await build(path);
+        const corrupted = await edited(built, (payload) =>
+          writeFileSync(agents(payload), "# edited\n"),
+        );
+        const first = join(temp(), "dest");
+        const error = await rejection(
+          verifyRelease(corrupted, { ...consumer, payloadTo: first }),
+        );
+        expect(error.code).toBe("INTEGRITY_FAILED");
+        expect(error.message).toContain(
+          "modified: resources/resources/AGENTS.md",
+        );
+        expect(existsSync(first)).toBe(false);
+        const second = join(temp(), "dest");
+        await expect(
+          verifyRelease(built.archive, {
+            ...consumer,
+            payloadTo: second,
+            expectedSha256: "f".repeat(64),
+          }),
+        ).rejects.toThrow(/does not match the expected/);
+        expect(existsSync(second)).toBe(false);
+      });
+    });
+    it("rejects a replaced inventory that release.json does not bind", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const archive = await edited(built, (payload) => {
+        const inventory = join(payload, "metadata", "inventory.json");
+        const entries = JSON.parse(readFileSync(inventory, "utf8")) as Record<
+          string,
+          string
+        >;
+        // An inventory that vouches for an edited file.
+        writeFileSync(agents(payload), "# edited\n");
+        entries["resources/resources/AGENTS.md"] = "0".repeat(64);
+        writeFileSync(inventory, JSON.stringify(entries, null, 2));
+      });
+      const error = await rejection(verifyRelease(archive, consumer));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toContain("payload inventory");
     });
   });
 });

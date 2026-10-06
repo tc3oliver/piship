@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -470,6 +471,72 @@ describe("createArchive / extractArchive", () => {
         expect(readFileSync(join(dest, "r", path), "utf8")).toBe(data);
     },
   );
+
+  it("returns the SHA-256 of every file written, from the bytes as they were written", async () => {
+    const work = tempDir();
+    const large = "L".repeat(1024 * 1024 + 9);
+    const archive = rawArchive(work, [
+      { name: "r/", type: "5" },
+      { name: "r/skipped.txt", data: "not written" },
+      { name: "r/payload/", type: "5" },
+      { name: "r/payload/empty", data: "" },
+      { name: "r/payload/small.txt", data: "small" },
+      { name: "r/payload/deep/x.txt", data: "deep" },
+      { name: "r/payload/large.bin", data: large },
+    ]);
+    const sha = (data: string) =>
+      createHash("sha256").update(data).digest("hex");
+    const result = await extractArchive(archive, join(work, "dest"), {
+      digests: true,
+      mapEntry: (name) => (name.startsWith("r/payload") ? name : undefined),
+    });
+    expect(Object.fromEntries(result.files ?? [])).toEqual({
+      "r/payload/empty": sha(""),
+      "r/payload/small.txt": sha("small"),
+      "r/payload/deep/x.txt": sha("deep"),
+      "r/payload/large.bin": sha(large),
+    });
+    expect(
+      (await extractArchive(archive, join(work, "other"))).files,
+    ).toBeUndefined();
+  });
+
+  it("keeps a captured entry in memory instead of writing it", async () => {
+    const work = tempDir();
+    const archive = rawArchive(work, [
+      { name: "r/", type: "5" },
+      { name: "r/release.json", data: '{"schema":"x"}' },
+      { name: "r/empty.json", data: "" },
+      { name: "r/payload/", type: "5" },
+      { name: "r/payload/a.txt", data: "a" },
+    ]);
+    const dest = join(work, "dest");
+    const result = await extractArchive(archive, dest, {
+      capture: (path) => path === "r/release.json" || path === "r/empty.json",
+      mapEntry: (name) =>
+        name.startsWith("r/payload/")
+          ? name.slice("r/payload/".length)
+          : undefined,
+    });
+    expect(
+      Object.fromEntries(
+        [...(result.captured ?? [])].map(([key, data]) => [
+          key,
+          data.toString(),
+        ]),
+      ),
+    ).toEqual({ "r/release.json": '{"schema":"x"}', "r/empty.json": "" });
+    expect(listTree(dest)).toEqual(["a.txt"]);
+    const tooLarge = rawArchive(work, [
+      { name: "r/", type: "5" },
+      { name: "r/big.json", data: "x".repeat(1024 * 1024 + 1) },
+    ]);
+    await expect(
+      extractArchive(tooLarge, join(work, "other"), {
+        capture: () => true,
+      }),
+    ).rejects.toThrow(/too large to read/);
+  });
 
   it("stops at a failing writer and leaves nothing behind", async () => {
     const work = tempDir();
