@@ -186,7 +186,11 @@ const variantA = (...argv) =>
 const variantB = (...argv) => {
   const command = receipt().commandPath;
   return windows
-    ? run(`"${command}" ${argv.join(" ")}`, [], { shell: true })
+    ? run(
+        "cmd.exe",
+        ["/d", "/s", "/c", `call "${command}" ${argv.join(" ")}`],
+        { windowsVerbatimArguments: true },
+      )
     : run(command, argv);
 };
 const variants = { A: variantA, B: variantB };
@@ -314,9 +318,11 @@ try {
     cpu: cpus()[0]?.model,
     logicalCpus: cpus().length,
     node: process.version,
-    npm: await probe(windows ? "npm.cmd" : "npm", ["--version"], {
-      shell: windows,
-    }),
+    npm: windows
+      ? await probe("cmd.exe", ["/d", "/s", "/c", "call npm --version"], {
+          windowsVerbatimArguments: true,
+        })
+      : await probe("npm", ["--version"]),
     defender,
     defenderExclusions: exclusions,
     defenderNote: process.env.PISHIP_BENCH_DEFENDER ?? "not recorded",
