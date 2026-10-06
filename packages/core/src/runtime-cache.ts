@@ -47,6 +47,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { releaseOptions } from "@piship/schema";
 import { buildInputDigest, safePath } from "./build-cache.js";
 import { canonicalJson, hash } from "./digest.js";
 import type { DistributionLock } from "./lock-schema.js";
@@ -140,7 +141,7 @@ export function runtimeCacheFor(
         npm: npmVersion(),
       }),
     ),
-    strip: lock.release?.strip === true,
+    strip: releaseOptions(lock.manifest.schema, lock.release).strip,
   };
 }
 

@@ -93,6 +93,7 @@ afterEach(() => {
 
 const lock = (npmLockSha256 = "b".repeat(64), strip = false) =>
   ({
+    manifest: { schema: "piship/v1alpha6" },
     runtime: { package: "pi", version: "1.0.3", npmLockSha256 },
     release: { strip },
   }) as unknown as DistributionLock;

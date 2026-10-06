@@ -425,7 +425,7 @@ describe("immutable runtime cache", () => {
 
   it("leaves the maps and declarations out by omission, the same files an in-place strip leaves", () => {
     fixture.declarations = true;
-    const { manifest, root } = example("  strip: true\n");
+    const { manifest, root } = example("  strip: true\n  bundle: false\n");
     const runtimeCache = cacheOf(manifest, home());
     const build = (name: string, cached: boolean) =>
       buildDistribution(manifest, join(root, name), {

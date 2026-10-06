@@ -17,6 +17,7 @@ import { createStageTimer, createTemporaryDirectory } from "@piship/contracts";
 import {
   RELEASE_CHANNELS,
   type ReleaseManifest,
+  releaseOptions,
   type UpdatesManifest,
 } from "@piship/schema";
 import { bundleDistribution } from "../bundle.js";
@@ -358,6 +359,7 @@ export async function buildRelease(
       }
     }
     const release = lock.release as ReleaseManifest;
+    const { bundle, strip } = releaseOptions(lock.manifest.schema, release);
     const now = options.now ?? (() => new Date());
     // The scans wait on the registry, so they start together and run beside
     // the SBOM, notices, bundling, and tests, which do not touch the lock
@@ -462,9 +464,9 @@ export async function buildRelease(
     // run beside the signature check. Bundling replaces those packages: the
     // signature check, which reads them, has to finish first, and the tests
     // run on what bundling leaves.
-    const unbundledTests = release.bundle === true ? undefined : startTests();
+    const unbundledTests = bundle ? undefined : startTests();
     const signatures = evaluateSignatures(unwrap(await signatureScan));
-    if (release.bundle === true)
+    if (bundle)
       await timer.run("bundle", () =>
         bundleDistribution(payload, {
           ...(runtimeCache
@@ -476,7 +478,7 @@ export async function buildRelease(
                 },
               }
             : {}),
-          strip: release.strip === true,
+          strip,
         }),
       );
     const tests = unwrap(await (unbundledTests ?? startTests()));
