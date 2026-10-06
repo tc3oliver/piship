@@ -1,5 +1,6 @@
 // The installed launcher: `apps/<id>/launch.mjs`, what the command shim runs.
 import {
+  chmodSync,
   existsSync,
   readFileSync,
   realpathSync,
@@ -320,4 +321,58 @@ export function refreshInstalledLauncher(id: string, running: string): boolean {
   } catch {
     return false;
   }
+}
+
+const NODE_REQUIRED =
+  "Node.js 22.19.0 or newer is required. Install Node separately.";
+
+/**
+ * The text of the command shim (`<bin>/<command>`, `.cmd` on Windows) that
+ * runs the installed launcher with whatever `node` the PATH holds.
+ *
+ * On Windows it does not look for node first. The earlier shim ran
+ * `where node` on every start, which is a process spawn; cmd answers a
+ * command it cannot find with exit code 9009, which the shim turns into the
+ * same message. It does not pin the node that installed it either: a pinned
+ * path outlives the node the user switches to (a version manager keeps the
+ * old one), and a running `.cmd` file cannot be rewritten safely, since cmd
+ * reads it again by offset after each command.
+ */
+export function commandShimSource(
+  launcher: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "win32"
+    ? `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\n`
+    : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo '${NODE_REQUIRED}' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
+}
+
+/** The Windows shim of an earlier PiShip, still on disk until reinstalled. */
+function legacyWindowsShimSource(launcher: string): string {
+  return `@echo off\r\nwhere node >nul 2>nul || (echo ${NODE_REQUIRED} 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`;
+}
+
+export function writeShim(
+  commandPath: string,
+  launcher: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  writeFileSync(commandPath, commandShimSource(launcher, platform), {
+    flag: "wx",
+  });
+  if (platform !== "win32") chmodSync(commandPath, 0o755);
+}
+
+/** Require exact shim content before deleting or repairing an owned command. */
+export function ownsCommandShim(
+  commandPath: string,
+  launcher: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!existsSync(commandPath)) return false;
+  const text = readFileSync(commandPath, "utf8");
+  return (
+    text === commandShimSource(launcher, platform) ||
+    (platform === "win32" && text === legacyWindowsShimSource(launcher))
+  );
 }

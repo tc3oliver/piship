@@ -2,8 +2,18 @@
 // with, what its timing report prints, and its replacement when an earlier
 // PiShip left a different one on disk.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   appsDir,
   fakeRun,
@@ -14,10 +24,13 @@ import {
 import { launcherBuildOf } from "../launcher-source.js";
 import { rollbackDistribution, updateDistribution } from "../update/index.js";
 import {
+  commandShimSource,
   inspectInstalledLauncher,
   installedLauncherPath,
   launcherSource,
+  ownsCommandShim,
   refreshInstalledLauncher,
+  writeShim,
 } from "./launcher.js";
 import { readInstallReceipt } from "./receipt.js";
 
@@ -187,4 +200,84 @@ describe("replacing a launcher an earlier PiShip installed", () => {
     });
     expect(inspectInstalledLauncher(ID)).toMatchObject({ current: false });
   }, 60_000);
+});
+
+describe("the command shim", () => {
+  const launcher = "C:\\Users\\me\\install\\apps\\acmepi\\launch.mjs";
+  const posixLauncher = "/home/me/it's/apps/acmepi/launch.mjs";
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0))
+      rmSync(root, { recursive: true, force: true });
+  });
+  const file = (content: string) => {
+    const root = mkdtempSync(join(tmpdir(), "piship-shim-"));
+    roots.push(root);
+    const path = join(root, "acmepi");
+    writeFileSync(path, content);
+    return path;
+  };
+
+  it("runs node on the Windows PATH without spawning `where` first", () => {
+    const text = commandShimSource(launcher, "win32");
+    expect(text).toBe(
+      `@echo off\r\nnode "${launcher}" %*\r\nif %errorlevel% equ 9009 (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\n`,
+    );
+    // No process is started to find node, and none is pinned: a path written
+    // at install time outlives the node the user switches to.
+    expect(text).not.toMatch(/where|\.exe|if exist/);
+    expect(text.split("\r\n").filter(Boolean)).toHaveLength(3);
+  });
+
+  it("keeps the POSIX shim as it was", () => {
+    expect(commandShimSource(posixLauncher, "linux")).toBe(
+      `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '/home/me/it'"'"'s/apps/acmepi/launch.mjs' "$@"\n`,
+    );
+    expect(commandShimSource(posixLauncher, "darwin")).toBe(
+      commandShimSource(posixLauncher, "linux"),
+    );
+  });
+
+  it("is owned when its text is exactly one PiShip wrote, the earlier Windows text included", () => {
+    const legacy = `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`;
+    expect(
+      ownsCommandShim(
+        file(commandShimSource(launcher, "win32")),
+        launcher,
+        "win32",
+      ),
+    ).toBe(true);
+    expect(ownsCommandShim(file(legacy), launcher, "win32")).toBe(true);
+    // Only on Windows, and only for this launcher.
+    expect(ownsCommandShim(file(legacy), launcher, "linux")).toBe(false);
+    expect(
+      ownsCommandShim(
+        file(commandShimSource(launcher, "win32")),
+        `${launcher}x`,
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      ownsCommandShim(
+        file(`${commandShimSource(launcher, "win32")}rem edited\r\n`),
+        launcher,
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      ownsCommandShim(join(tmpdir(), "no-such-shim"), launcher, "win32"),
+    ).toBe(false);
+  });
+
+  it("is written once, executable off Windows", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-shim-"));
+    roots.push(root);
+    const path = join(root, "acmepi");
+    writeShim(path, posixLauncher, "linux");
+    expect(readFileSync(path, "utf8")).toBe(
+      commandShimSource(posixLauncher, "linux"),
+    );
+    expect(statSync(path).mode & 0o111).toBe(0o111);
+    expect(() => writeShim(path, posixLauncher, "linux")).toThrow(/EEXIST/);
+  });
 });

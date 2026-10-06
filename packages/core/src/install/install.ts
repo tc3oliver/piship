@@ -47,7 +47,7 @@ import {
 } from "./receipt.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
 import { copyTree, renameWithRetry } from "./files.js";
-import { launcherSource } from "./launcher.js";
+import { launcherSource, ownsCommandShim, writeShim } from "./launcher.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -109,36 +109,6 @@ function ownedIncompleteInstall(
   } catch {
     return false;
   }
-}
-
-function writeShim(commandPath: string, launcher: string): void {
-  if (process.platform === "win32")
-    writeFileSync(
-      commandPath,
-      `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`,
-      { flag: "wx" },
-    );
-  else {
-    writeFileSync(
-      commandPath,
-      `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`,
-      { flag: "wx" },
-    );
-    chmodSync(commandPath, 0o755);
-  }
-}
-
-/** Require exact shim content before deleting or repairing an owned command. */
-export function ownsCommandShim(
-  commandPath: string,
-  launcher: string,
-): boolean {
-  if (!existsSync(commandPath)) return false;
-  const expected =
-    process.platform === "win32"
-      ? `@echo off\r\nwhere node >nul 2>nul || (echo Node.js 22.19.0 or newer is required. Install Node separately. 1>&2 & exit /b 1)\r\nnode "${launcher}" %*\r\n`
-      : `#!/bin/sh\ncommand -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }\nexec node '${launcher.replaceAll("'", "'\"'\"'")}' "$@"\n`;
-  return readFileSync(commandPath, "utf8") === expected;
 }
 
 /** Checks an installer asks for before anything is installed. */
