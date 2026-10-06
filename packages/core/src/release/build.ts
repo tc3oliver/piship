@@ -499,7 +499,9 @@ export async function buildRelease(
       }),
     );
     const published = timer.start("publish");
-    await rm(directory, { recursive: true, force: true });
+    // The async removal overlaps its per-file work, and retries a file that
+    // Windows still holds open (a scanner, an indexer) for a moment.
+    await rm(directory, { recursive: true, force: true, maxRetries: 3 });
     rmSync(archive, { force: true });
     renameSync(root, directory);
     renameSync(stagedArchive, archive);
