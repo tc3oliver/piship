@@ -576,11 +576,11 @@ describe("renameWithRetry", () => {
     onWindows();
     const root = temp();
     mkdirSync(join(root, "from"));
-    fixture.renameFailures.push(...Array<string>(11).fill("EPERM"));
+    fixture.renameFailures.push(...Array<string>(10).fill("EPERM"));
     expect(() =>
       renameWithRetry(join(root, "from"), join(root, "to"), 1),
     ).toThrow(/rename refused/);
-    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(11);
+    expect(vi.mocked(renameSync)).toHaveBeenCalledTimes(10);
     vi.mocked(renameSync).mockClear();
     fixture.renameFailures.length = 0;
     fixture.renameFailures.push("EXDEV");

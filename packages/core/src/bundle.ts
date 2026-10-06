@@ -19,11 +19,18 @@ import {
   type RuntimeCache,
   renameWithRetry,
   storeBundle,
+  TRANSIENT_ATTEMPTS,
+  TRANSIENT_RETRY_MS,
 } from "./runtime-cache.js";
 import { listPayloadPackages } from "./supply-chain.js";
 import { workspacePackages } from "./runtime-dependencies.js";
 
 const posix = (path: string) => path.split(sep).join("/");
+
+/** An `exports` pattern target with every `*` replaced, as Node resolves it. */
+export function wildcardTarget(target: string, subpath: string): string {
+  return target.replaceAll("*", () => subpath);
+}
 
 export interface BundleOptions {
   /**
@@ -36,6 +43,8 @@ export interface BundleOptions {
    * the files kept from it.
    */
   readonly strip?: boolean;
+  /** Told whether the bundled runtime came from the cache or the bundler ran. */
+  readonly onCache?: (found: "hit" | "miss") => void;
 }
 
 /** Build-time only: combine JS while retaining upstream assets and public exports. */
@@ -43,7 +52,9 @@ export function bundleDistribution(
   payload: string,
   options: BundleOptions = {},
 ): void {
-  payload = realpathSync(payload);
+  // The native form also expands Windows 8.3 short names (RUNNER~1), so the
+  // paths esbuild reports and the root they are made relative to agree.
+  payload = realpathSync.native(payload);
   const strip = options.strip ?? options.cache?.strip === true;
   const components = listPayloadPackages(payload);
   const runtime = join(payload, "runtime");
@@ -101,8 +112,8 @@ export function bundleDistribution(
         manifest.exports?.[key] ??
         (key.startsWith("./providers/")
           ? {
-              import: manifest.exports["./providers/*"].import.replace(
-                "*",
+              import: wildcardTarget(
+                manifest.exports["./providers/*"].import,
                 key.slice("./providers/".length),
               ),
             }
@@ -165,13 +176,14 @@ export function bundleDistribution(
       renameWithRetry(original, join(payload, "node_modules"));
     }
   }
+  if (options.cache) options.onCache?.(placed ? "hit" : "miss");
   if (!placed) {
     mkdirSync(runtime, { recursive: true });
     const tool = load.resolve("esbuild");
     const script = `
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 const require = createRequire(import.meta.url);
 const { build } = require(${JSON.stringify(tool)});
 const root = ${JSON.stringify(payload)};
@@ -206,15 +218,16 @@ const mainSource = ${JSON.stringify(join(runtime, ".main.mjs"))};
 const bootSource = ${JSON.stringify(join(runtime, ".boot.mjs"))};
 const { writeFileSync, rmSync } = require('node:fs');
 writeFileSync(mainSource, sources.join('\\n'));
-writeFileSync(bootSource, 'export {formatError} from '+JSON.stringify(root+'/node_modules/@piship/contracts/dist/index.js')+'; export {verifyLaunchPayload} from '+JSON.stringify(root+'/node_modules/@piship/core/dist/index.js')+'; export {preparePiEnvironment} from '+JSON.stringify(root+'/node_modules/@piship/pi/dist/environment.js')+';');
+const dependency = (name, file) => JSON.stringify(join(root, 'node_modules', '@piship', name, 'dist', file));
+writeFileSync(bootSource, 'export {formatError} from '+dependency('contracts', 'index.js')+'; export {verifyLaunchPayload} from '+dependency('core', 'index.js')+'; export {preparePiEnvironment} from '+dependency('pi', 'environment.js')+';');
 await build({...options, entryPoints: { main: mainSource, boot: bootSource, 'codemode-worker': options.entryPoints['codemode-worker'], 'image-resize-worker': options.entryPoints['image-resize-worker'] }, splitting: false, write:true});
 writeFileSync(${JSON.stringify(join(runtime, "exports.json"))}, JSON.stringify(mapping));
 rmSync(mainSource); rmSync(bootSource);`;
-    const result = spawnSync(
-      process.execPath,
-      ["--input-type=module", "-e", script],
-      { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
-    );
+    const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+      input: script,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+    });
     if (result.status !== 0)
       throw new Error(
         `Runtime bundling failed: ${result.stderr || result.error?.message}`,
@@ -359,7 +372,12 @@ rmSync(mainSource); rmSync(bootSource);`;
       )}\n`,
     );
   } finally {
-    rmSync(original, { recursive: true, force: true });
+    rmSync(original, {
+      recursive: true,
+      force: true,
+      maxRetries: TRANSIENT_ATTEMPTS,
+      retryDelay: TRANSIENT_RETRY_MS,
+    });
   }
   // Bundled files taken from the cache were hashed when it stored them.
   const digests = inventory(payload, cached && placed ? cached.inventory : {});

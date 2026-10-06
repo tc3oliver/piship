@@ -441,6 +441,53 @@ describe("immutable runtime cache", () => {
       ).toBe(readFileSync(join(plain, "metadata", "inventory.json"), "utf8"));
   });
 
+  it("never writes through a hardlink into the entry, whatever a later step rewrites", () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    const digests = (directory: string): Record<string, string> =>
+      Object.fromEntries(
+        walk(directory)
+          .filter((name) => !name.endsWith("/"))
+          .map((name) => [name, readFileSync(join(directory, name), "utf8")]),
+      );
+    const p = project();
+    const runtimeCache = cacheOf(p.manifest, home());
+    const build = (name: string, cache = false) =>
+      buildDistribution(p.manifest, join(p.root, name), {
+        ...options,
+        cache,
+        runtimeCache,
+      });
+    // Windows is where files are linked from the entry; stand in for it here.
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const first = build("first");
+      const tree = lookupInstallTree(runtimeCache);
+      const before = digests(tree?.tree as string);
+      const placed = join(first, "node_modules", "dependency", "index.js");
+      // The placed file is the entry's own bytes under a second name.
+      expect(statSync(placed).ino).toBe(
+        statSync(join(tree?.tree as string, "node_modules/dependency/index.js"))
+          .ino,
+      );
+      // Everything a payload rewrites after placement: its manifest and lock,
+      // resources, launcher, metadata, inventory, and the refresh of an
+      // earlier output, with a changed command, in the same output directory.
+      p.writeManifest("renamed", "Updated name");
+      writeFileSync(p.resource, "# changed\n");
+      lockManifest(p.manifest);
+      build("first", true);
+      build("first", true);
+      p.writeManifest("again", "Renamed again");
+      lockManifest(p.manifest);
+      build("first", true);
+      build("second");
+      expect(digests(tree?.tree as string)).toEqual(before);
+      expect(lookupInstallTree(runtimeCache)?.files).toEqual(tree?.files);
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("hands strip and the inventory to the bundler when the caller will bundle", () => {
     fixture.declarations = true;
     const { manifest, root } = example("  strip: true\n  bundle: true\n");

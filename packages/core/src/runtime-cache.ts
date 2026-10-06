@@ -39,6 +39,9 @@ const SCHEMA = "piship-runtime-cache/v1";
 const RECORD = "entry.json";
 /** Entries kept per kind; older ones are evicted when a new one is published. */
 const KEEP = { install: 3, bundle: 6 } as const;
+/** Windows scanners and indexers briefly hold a freshly written tree open. */
+export const TRANSIENT_ATTEMPTS = 10;
+export const TRANSIENT_RETRY_MS = 100;
 const ABANDONED_MS = 24 * 60 * 60 * 1000;
 /** What a build spends deleting evicted entries after it published one, and after a hit. */
 const DISCARD_BUDGET_MS = { published: 2000, hit: 500 } as const;
@@ -90,23 +93,28 @@ function sleep(ms: number): void {
 /**
  * Rename, retrying where Windows briefly refuses it: Defender or the search
  * indexer holds a handle on a file just written, and the rename of its
- * directory fails with EPERM, EBUSY, or EACCES until the handle closes.
- * Ten attempts with a growing pause wait about two seconds in all. Every
- * other error, EXDEV included, is immediate.
+ * directory fails with EPERM, EBUSY, or EACCES until the handle closes. Ten
+ * attempts with a pause of `delayMs` times the attempt number wait about four
+ * and a half seconds in all. Every other error, EXDEV included, is immediate,
+ * and so is any error off Windows.
  */
-export function renameWithRetry(from: string, to: string, delayMs = 35): void {
-  for (let attempt = 0; ; attempt++) {
+export function renameWithRetry(
+  from: string,
+  to: string,
+  delayMs = TRANSIENT_RETRY_MS,
+): void {
+  for (let attempt = 1; ; attempt++) {
     try {
       renameSync(from, to);
       return;
     } catch (error) {
       if (
         process.platform !== "win32" ||
-        attempt >= 10 ||
+        attempt === TRANSIENT_ATTEMPTS ||
         !["EPERM", "EBUSY", "EACCES"].includes(code(error) ?? "")
       )
         throw error;
-      sleep(delayMs * (attempt + 1));
+      sleep(delayMs * attempt);
     }
   }
 }

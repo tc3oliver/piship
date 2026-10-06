@@ -136,9 +136,10 @@ function placeRuntime(
     readonly strip: boolean;
     readonly leaveWhole: boolean;
     readonly progress: ((step: string) => void) | undefined;
+    readonly found: ((found: "hit" | "miss" | "unusable") => void) | undefined;
   },
 ): InstallTree | undefined {
-  const { cache, strip, progress } = options;
+  const { cache, strip, progress, found } = options;
   let phase = process.hrtime.bigint();
   if (cache) {
     const hit = lookupInstallTree(cache);
@@ -147,6 +148,7 @@ function placeRuntime(
       try {
         materializeInstallTree(hit, stage, { strip });
         debugTiming("runtime cache placement", phase);
+        found?.("hit");
         return hit;
       } catch {
         // Damaged or evicted underneath this build: install again, and publish
@@ -169,12 +171,15 @@ function placeRuntime(
       throw error;
     }
     debugTiming("runtime cache publish and placement", phase);
+    found?.("miss");
     return adopted;
   }
-  if (cache)
+  if (cache) {
+    found?.("unusable");
     progress?.(
       "The runtime cache is not usable here (another volume, or the directory is locked); building without it",
     );
+  }
   if (strip && !options.leaveWhole) stripRuntimeIrrelevant(stage);
   debugTiming("strip runtime-irrelevant files", phase);
   return undefined;
@@ -211,6 +216,8 @@ export function buildDistribution(
      * Independent of `cache`, which reuses a whole earlier output.
      */
     readonly runtimeCache?: RuntimeCache;
+    /** Told whether the runtime came from the cache, was installed into it, or could not use it. */
+    readonly onRuntimeCache?: (found: "hit" | "miss" | "unusable") => void;
     /** Receives a short line as each long step starts. */
     readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},
@@ -274,6 +281,7 @@ export function buildDistribution(
       // The bundler drops the whole tree, so deleting from it is wasted work.
       leaveWhole: bundling || deferred,
       progress: options.progress,
+      found: options.onRuntimeCache,
     });
     phase = process.hrtime.bigint();
     options.progress?.("Assembling and verifying the payload");

@@ -54,6 +54,12 @@ export interface ReleaseMetadata {
   readonly channel: string;
   /** RFC 3339; SOURCE_DATE_EPOCH when set, so rebuilds stay identical. */
   readonly created: string;
+  /**
+   * `qualified` for a release that passed the release gates (dependency
+   * audit, registry signatures, SBOM, notices, tests). Releases built before
+   * this field omit it and were qualified the same way.
+   */
+  readonly qualification?: string;
   readonly payload: {
     readonly path: "payload";
     readonly inventorySha256: string;
@@ -152,6 +158,17 @@ export type ReleaseTestRunner = (
   env: NodeJS.ProcessEnv,
 ) => CommandResult;
 
+/**
+ * A runner that may finish later. The release tests run side by side, each
+ * with its own state directory in `env`.
+ */
+export type AsyncReleaseTestRunner = (
+  payload: string,
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<CommandResult> | CommandResult;
+
 export interface ReleaseOptions extends OutputStagingOptions {
   /**
    * Output root; the release lands in `<outputRoot>/releases/`, where the
@@ -165,7 +182,7 @@ export interface ReleaseOptions extends OutputStagingOptions {
   readonly scanner?: VulnerabilityScanner;
   /** Registry signature check (defaults to `npm audit signatures`). */
   readonly signatureAuditor?: SignatureAuditor;
-  readonly runTest?: ReleaseTestRunner;
+  readonly runTest?: AsyncReleaseTestRunner;
   /** Injectable clock for vulnerability exception expiry. */
   readonly now?: () => Date;
   /**

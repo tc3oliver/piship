@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -51,7 +51,7 @@ beforeAll(() => {
   );
   const buildEnv: NodeJS.ProcessEnv = { ...env };
   delete buildEnv.PISHIP_BUILD_INPUT;
-  const script = `import {buildDistribution, lockManifest} from ${JSON.stringify(join(repository, "packages/core/dist/index.js"))}; lockManifest(${JSON.stringify(manifest)}); console.log(buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(join(root, "output"))}, {supplyChainGates:false}));`;
+  const script = `import {buildDistribution, lockManifest} from ${JSON.stringify(pathToFileURL(join(repository, "packages/core/dist/index.js")).href)}; lockManifest(${JSON.stringify(manifest)}); console.log(buildDistribution(${JSON.stringify(manifest)}, ${JSON.stringify(join(root, "output"))}, {supplyChainGates:false}));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],
