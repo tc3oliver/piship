@@ -14,6 +14,7 @@ import {
   watch,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { processHostToken } from "@piship/contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -226,6 +227,38 @@ await new Promise((resolve) => {
       expect(readdirSync(join(leases, "1.0.0"))).toEqual([]);
     } finally {
       child.kill();
+    }
+  }, 60_000);
+
+  it("reclaims at once a gate that names the launcher's own process ID, which is a dead process's", async () => {
+    await installed();
+    // A wrapper holds the launcher back until the gate names its own ID: the
+    // ID a killed launcher had, given again to the next one within the start
+    // tolerance. The record's start time is a second before the wrapper's.
+    const wrapper = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `process.stdin.once("data", async () => { process.stdin.destroy(); await import(${JSON.stringify(pathToFileURL(join(appsDir(), "launch.mjs")).href)}); });`,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    wrapper.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    try {
+      gate({ pid: wrapper.pid as number, started: Date.now() - 1_000 });
+      wrapper.stdin.write("go\n");
+      const code = await new Promise<number | null>((done) =>
+        wrapper.once("exit", done),
+      );
+      expect(code).toBe(0);
+      expect(stdout).toContain("payload 1.0.0");
+      expect(existsSync(gatePath())).toBe(false);
+    } finally {
+      wrapper.kill();
     }
   }, 60_000);
 
