@@ -23,6 +23,7 @@ import {
   type RetiredKey,
 } from "../install/receipt.js";
 import { renameWithRetry } from "../install/files.js";
+import { refreshInstalledLauncher } from "../install/launcher.js";
 import { runtimeLeases } from "../install/runtime-lease.js";
 import {
   advanceTrustState,
@@ -531,6 +532,9 @@ export async function updateDistribution(
       lap("update receipt commit");
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
+      // The launcher an earlier PiShip installed is not rewritten by an
+      // activation; a stale one is replaced now, not at the next session.
+      refreshInstalledLauncher(id, destination);
       notices.push(...markActivated(stateDir, verified.lock));
       try {
         verified.cleanup();

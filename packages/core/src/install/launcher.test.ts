@@ -2,15 +2,17 @@
 // with, what its timing report prints, and its replacement when an earlier
 // PiShip left a different one on disk.
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   appsDir,
+  fakeRun,
   ID,
   installed,
   useLifecycleHomes,
 } from "../../../../tests/helpers/lifecycle-faults.js";
 import { launcherBuildOf } from "../launcher-source.js";
+import { rollbackDistribution, updateDistribution } from "../update/index.js";
 import {
   inspectInstalledLauncher,
   installedLauncherPath,
@@ -152,4 +154,37 @@ describe("replacing a launcher an earlier PiShip installed", () => {
       readdirSync(appsDir()).filter((name) => name.endsWith(".tmp")),
     ).toEqual([]);
   });
+
+  // What a launcher installed before builds were stamped looked like.
+  const earlierLauncher = (current: string) =>
+    current
+      .replace(/^\/\/ launcher-build: .*\n/m, "")
+      .replace(/^const timing = .*\nconst mark = .*\n/m, "");
+
+  it("replaces a stale launcher when an update activates a release, and when a rollback does", async () => {
+    const { opts } = await installed();
+    const path = installedLauncherPath(ID);
+    const current = readFileSync(path, "utf8");
+    writeFileSync(path, earlierLauncher(current));
+    await updateDistribution(ID, opts);
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    expect(readFileSync(path, "utf8")).toBe(current);
+
+    writeFileSync(path, earlierLauncher(current));
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(readFileSync(path, "utf8")).toBe(current);
+  }, 60_000);
+
+  it("does not fail an update whose launcher cannot be replaced", async () => {
+    const { opts } = await installed();
+    const path = installedLauncherPath(ID);
+    // A directory where the temporary file would go makes the write fail.
+    writeFileSync(path, earlierLauncher(readFileSync(path, "utf8")));
+    mkdirSync(`${path}.${process.pid}.tmp`);
+    await expect(updateDistribution(ID, opts)).resolves.toMatchObject({
+      status: "updated",
+    });
+    expect(inspectInstalledLauncher(ID)).toMatchObject({ current: false });
+  }, 60_000);
 });
