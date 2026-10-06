@@ -586,9 +586,15 @@ describe("CLI", () => {
       expect(existsSync(path), path).toBe(true);
     const resource = join(payload, "resources", "resources", "AGENTS.md");
     const original = readFileSync(resource);
-    writeFileSync(resource, "tampered\n");
+    // An installed file may be a hard link to a read-only shared-store object
+    // (the Windows default): replace the file, never write through it.
+    const replace = (path: string, data: Buffer | string) => {
+      rmSync(path, { force: true });
+      writeFileSync(path, data);
+    };
+    replace(resource, "tampered\n");
     expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
-    writeFileSync(resource, original);
+    replace(resource, original);
     for (const path of [
       join(payload, "piship.lock"),
       join(payload, "piship.yaml"),
@@ -602,14 +608,11 @@ describe("CLI", () => {
       ),
     ]) {
       const content = readFileSync(path);
-      writeFileSync(
-        path,
-        Buffer.concat([content, Buffer.from("\n// altered\n")]),
-      );
+      replace(path, Buffer.concat([content, Buffer.from("\n// altered\n")]));
       expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
       if (path === join(payload, "piship.lock"))
         expect(launch().status).toBe(1);
-      writeFileSync(path, content);
+      replace(path, content);
     }
     const targetPath = join(payload, "metadata", "target.json");
     const inventoryPath = join(payload, "metadata", "inventory.json");
