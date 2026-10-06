@@ -94,9 +94,11 @@ export interface Manifest {
     /** piship/v1alpha6: bundled `fd` and `rg`; absent unless declared. */
     readonly searchTools?: SearchToolsConfig;
     /**
-     * Legacy piship/v1alpha6 compatibility field, parsed and locked unchanged.
-     * Startup never scans payload contents, regardless of this value.
-     * Use explicit verify-release or doctor for full integrity diagnostics.
+     * piship/v1alpha6, locked as declared. Absent or false: startup never
+     * scans the payload, reads the resources it loads without hashing them,
+     * and may keep a V8 code cache of a bundled payload. True: startup hashes
+     * each resource against the lock and keeps no code cache. The full
+     * payload inventory is only ever checked by verify-release and doctor.
      */
     readonly verifyAtLaunch?: boolean;
   };

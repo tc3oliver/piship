@@ -115,6 +115,23 @@ describe("lock piship-lock/v1alpha6", () => {
     );
   });
 
+  it("records runtime.verifyAtLaunch only when the manifest declares it", () => {
+    const declared = (value: string) =>
+      resolveLock(
+        project(
+          V6.replace(
+            'runtime: { pi: "1.0.3" }',
+            `runtime:\n  pi: "1.0.3"\n  verifyAtLaunch: ${value}`,
+          ),
+        ),
+      );
+    expect(declared("true").verifyAtLaunch).toBe(true);
+    expect(declared("false").verifyAtLaunch).toBe(false);
+    // Absent stays absent, so a lock that never mentioned it does not change.
+    const lock = resolveLock(project(V6));
+    expect("verifyAtLaunch" in lock).toBe(false);
+  });
+
   it("records runtime.tools and the static tool exposure", () => {
     const lock = resolveLock(
       project(

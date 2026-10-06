@@ -174,6 +174,9 @@ export function resolveLock(
           ...(manifest.runtime.cacheWarming
             ? { cacheWarming: manifest.runtime.cacheWarming }
             : {}),
+          ...(manifest.runtime.verifyAtLaunch === undefined
+            ? {}
+            : { verifyAtLaunch: manifest.runtime.verifyAtLaunch }),
           enforcement: seamEvidence(runtime.version),
           data: {
             contract: DATA_CONTRACT_VERSION,
