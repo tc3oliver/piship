@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
 import { writeFileAtomic } from "./atomic.js";
 import { touchHeldLocks } from "./lock-heartbeat.js";
+import {
+  type CredentialHelper,
+  HelperUnavailable,
+  sharedPowerShellHelper,
+} from "./powershell-helper.js";
 
 export interface CommandResult {
   readonly status: number | null;
@@ -458,11 +463,26 @@ elseif ($op -eq 'delete') { $n = Parts ([PiShipCred]::Read($target)); for ($i = 
 else { exit 2 }
 `;
 
+export interface WindowsStoreOptions {
+  /**
+   * Serves requests through one PowerShell that defines the Win32 calls in
+   * memory, instead of starting a PowerShell that compiles them for each
+   * request. Started on the first request. When it cannot serve (PowerShell
+   * is constrained, or cannot be started) the store runs each request
+   * through its runner, as it did before the helper.
+   */
+  readonly helper?: () => CredentialHelper;
+}
+
 /** Windows Credential Manager (DPAPI-protected, per user) via PowerShell; secrets travel on stdin. */
 export class WindowsCredentialSecretStore implements SecretStore {
   readonly kind = "windows-credential-manager";
   readonly description = "Windows Credential Manager";
-  constructor(private readonly run: CommandRunner = runCommand) {}
+  constructor(
+    private readonly run: CommandRunner = runCommand,
+    private readonly options: WindowsStoreOptions = {},
+  ) {}
+  /** One PowerShell per request, compiling its P/Invoke class: seconds each. */
   #invoke(lines: readonly string[]): CommandResult {
     const encoded = Buffer.from(WINDOWS_CREDMAN, "utf16le").toString("base64");
     return invoke(
@@ -481,21 +501,39 @@ export class WindowsCredentialSecretStore implements SecretStore {
       `${lines.join("\n")}\n`,
     );
   }
+  async #call(
+    op: "get" | "put" | "delete",
+    ref: string,
+    value?: string,
+  ): Promise<CommandResult> {
+    const target = `${SERVICE}:${ref}`;
+    if (this.options.helper)
+      try {
+        return await this.options.helper().request(op, target, value);
+      } catch (error) {
+        if (!(error instanceof HelperUnavailable))
+          throw unavailable(
+            this.description,
+            error instanceof Error ? error.message : String(error),
+          );
+      }
+    return this.#invoke([op, target, ...(value === undefined ? [] : [value])]);
+  }
   async put(ref: string, value: SecretValue): Promise<void> {
     checkRef(ref);
-    const result = this.#invoke(["put", `${SERVICE}:${ref}`, encode(value)]);
+    const result = await this.#call("put", ref, encode(value));
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
   }
   async get(ref: string): Promise<SecretValue | null> {
     checkRef(ref);
-    const result = this.#invoke(["get", `${SERVICE}:${ref}`]);
+    const result = await this.#call("get", ref);
     if (result.status === 44) return null;
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
     return decode(result.stdout);
   }
   async delete(ref: string): Promise<void> {
     checkRef(ref);
-    const result = this.#invoke(["delete", `${SERVICE}:${ref}`]);
+    const result = await this.#call("delete", ref);
     if (result.status !== 0) throw unavailable(this.description, result.stderr);
   }
 }
@@ -649,6 +687,12 @@ export function createSecretStore(
   const platform = selection.platform ?? process.platform;
   const run = selection.run ?? runCommand;
   if (platform === "darwin") return new MacKeychainSecretStore(run);
-  if (platform === "win32") return new WindowsCredentialSecretStore(run);
+  // Without an injected runner, every request of the launch goes through one
+  // PowerShell (powershell-helper.ts); an injected runner serves each request.
+  if (platform === "win32")
+    return new WindowsCredentialSecretStore(
+      run,
+      selection.run ? {} : { helper: sharedPowerShellHelper },
+    );
   return new SecretServiceSecretStore(run);
 }

@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type SecretStore, SecretValue } from "@piship/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type SpawnOptions, spawn } from "node:child_process";
 import {
   type CommandRunner,
+  createPowerShellHelper,
   createSecretStore,
+  runCommand,
   SecretServiceSecretStore,
+  sharedPowerShellHelper,
+  WindowsCredentialSecretStore,
 } from "./index.js";
 
 // Exercises the real platform secret store. It writes to the user's keychain,
@@ -65,7 +70,111 @@ describe.runIf(live)("platform secret store (live)", () => {
     }
     expect(await store.get(ref)).toBeNull();
   });
+  it("serves a batch of reads, sequential and concurrent, of values of different sizes", async () => {
+    const store = createSecretStore({
+      provider: "system",
+      fileDirectory: "unused",
+    });
+    const suffix = randomBytes(4).toString("hex");
+    const values = new Map<string, SecretValue>();
+    for (const [name, size] of [
+      ["inference", 40],
+      ["identity", 6000],
+      ["sandbox", 300],
+      ["other", 2200],
+    ] as const)
+      values.set(
+        `piship:live-test:${name}#${suffix}`,
+        new SecretValue(randomBytes(size).toString("base64url")),
+      );
+    try {
+      for (const [ref, value] of values) await store.put(ref, value);
+      for (const [ref, value] of values)
+        expect((await store.get(ref))?.reveal()).toBe(value.reveal());
+      const refs = [...values.keys()];
+      const batch = await Promise.all(
+        [...refs, ...refs, ...refs].map((ref) => store.get(ref)),
+      );
+      for (const [index, value] of batch.entries())
+        expect(value?.reveal()).toBe(
+          values.get(refs[index % refs.length] as string)?.reveal(),
+        );
+    } finally {
+      for (const ref of values.keys()) await store.delete(ref);
+    }
+    for (const ref of values.keys()) expect(await store.get(ref)).toBeNull();
+  });
 });
+
+// The Windows store answers through one PowerShell that defines the Win32
+// calls with Reflection.Emit (powershell-helper.ts). A launch must not fall
+// back silently to the per-request script, so these ask the helper itself and
+// fail with the reason when it reports the machine unsupported.
+describe.runIf(live && process.platform === "win32")(
+  "Windows Credential Manager through one PowerShell (live)",
+  () => {
+    const ref = () =>
+      `piship:live-test:helper#${randomBytes(4).toString("hex")}`;
+    const perRequest = () => new WindowsCredentialSecretStore(runCommand);
+    const helped = () =>
+      new WindowsCredentialSecretStore(runCommand, {
+        helper: sharedPowerShellHelper,
+      });
+
+    it("answers every request with one process, and does not fall back", async () => {
+      let spawned = 0;
+      const helper = createPowerShellHelper({
+        spawn: ((
+          command: string,
+          args: readonly string[],
+          options: SpawnOptions,
+        ) => {
+          spawned += 1;
+          return spawn(command, [...args], options);
+        }) as unknown as typeof spawn,
+      });
+      const target = `piship:${ref()}`;
+      expect(await helper.request("get", target)).toMatchObject({ status: 44 });
+      expect(await helper.request("put", target, "dGVzdA")).toMatchObject({
+        status: 0,
+      });
+      expect(await helper.request("get", target)).toEqual({
+        status: 0,
+        stdout: "dGVzdA",
+        stderr: "",
+      });
+      expect(await helper.request("delete", target)).toMatchObject({
+        status: 0,
+      });
+      expect(await helper.request("get", target)).toMatchObject({ status: 44 });
+      expect(spawned).toBe(1);
+    });
+
+    it("reads what the per-request script stored, and is read by it, small and in parts", async () => {
+      const first = ref();
+      const second = ref();
+      const small = new SecretValue(
+        `sk-live-${randomBytes(12).toString("hex")}`,
+      );
+      const large = new SecretValue(randomBytes(6000).toString("base64url"));
+      try {
+        await perRequest().put(first, small);
+        await perRequest().put(second, large);
+        expect((await helped().get(first))?.reveal()).toBe(small.reveal());
+        expect((await helped().get(second))?.reveal()).toBe(large.reveal());
+        await helped().put(first, large);
+        await helped().put(second, small);
+        expect((await perRequest().get(first))?.reveal()).toBe(large.reveal());
+        expect((await perRequest().get(second))?.reveal()).toBe(small.reveal());
+      } finally {
+        await helped().delete(first);
+        await perRequest().delete(second);
+      }
+      expect(await perRequest().get(first)).toBeNull();
+      expect(await helped().get(second)).toBeNull();
+    });
+  },
+);
 
 describe("Linux Secret Service store", () => {
   // A stateful `secret-tool` double with what was seen on libsecret 0.21.4:
