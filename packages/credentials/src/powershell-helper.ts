@@ -165,13 +165,20 @@ function CredDelete($target) {
  */
 export const SERVICE_LOOP = `
 $Max = ${MAX_CHUNK}
+$MaxParts = 1024
 function Say($text) { [Console]::Out.WriteLine($text) }
 function Encode($text) {
   if ([string]::IsNullOrEmpty($text)) { return '-' }
   return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
 }
 function Parts($text) {
-  if ($null -ne $text -and $text.StartsWith('chunks:')) { return [int]$text.Substring(7) }
+  if ($null -ne $text -and $text.StartsWith('chunks:')) {
+    $n = 0
+    $digits = [System.Globalization.NumberStyles]::None
+    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+    if (-not [int]::TryParse($text.Substring(7), $digits, $invariant, [ref]$n) -or $n -gt $MaxParts) { throw 'stored credential has an invalid part count' }
+    return $n
+  }
   return 0
 }
 function Save($target, $text) {
@@ -422,6 +429,20 @@ export function createPowerShellHelper(
     target: string,
     value: string | undefined,
   ): Promise<HelperReply> => {
+    // A request is one line split at spaces: a target that holds one, or a
+    // line break or another control character, would be read as other fields
+    // or another request.
+    if (
+      [...target].some(
+        (character) =>
+          /\s/u.test(character) ||
+          character.charCodeAt(0) < 0x20 ||
+          character.charCodeAt(0) === 0x7f,
+      )
+    )
+      throw new Error(
+        "the credential target holds a space or control character the PowerShell helper cannot carry",
+      );
     clearTimeout(idle);
     if (refused) throw refused;
     let live: Session;
