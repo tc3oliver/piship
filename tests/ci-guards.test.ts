@@ -49,3 +49,35 @@ describe("the CI check job", () => {
       );
   });
 });
+
+describe("browser evidence tiers", () => {
+  const portable = readFileSync(
+    join(ROOT, ".github/workflows/portable-e2e.yml"),
+    "utf8",
+  );
+  const qualification = readFileSync(
+    join(ROOT, ".github/workflows/release-qualification.yml"),
+    "utf8",
+  );
+
+  it("keeps live Chrome required by default and excludes it only in qualification", () => {
+    expect(portable).toMatch(
+      /skip-browser:\n(?:[^\n]*\n)*?        type: boolean\n        default: false/,
+    );
+    expect(portable).toContain(
+      "PISHIP_SKIP_BROWSER: ${{ inputs.skip-browser && '1' || '0' }}",
+    );
+    expect(portable).toContain(
+      "PISHIP_REQUIRE_BROWSER: ${{ inputs.skip-browser && '0' || '1' }}",
+    );
+    expect(portable).toContain(
+      "if: runner.os == 'Linux' && matrix.shard == 1 && !inputs.skip-browser",
+    );
+    expect(qualification).toMatch(
+      /portable-e2e:\n    uses: \.\/\.github\/workflows\/portable-e2e.yml\n    with:\n      skip-browser: true/,
+    );
+    expect(qualification).toContain(
+      "needs: [ci, codeql, portable-e2e, reference-e2e]",
+    );
+  });
+});
