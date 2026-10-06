@@ -22,6 +22,7 @@ import {
   type DistributionLock,
 } from "../index.js";
 import { verifyRelease } from "../release/index.js";
+import { openInstallStore } from "../store/policy.js";
 import { verifyWrittenPayload } from "../payload.js";
 import { channelTrustFromLock } from "../lock.js";
 import { keyFingerprint } from "../signing.js";
@@ -214,6 +215,9 @@ export async function installDistribution(
   const lap = stopwatch();
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
+  // Where the runtime, Pi package, and dependency files come from a shared
+  // store, they are placed from it; the installed release is whole without it.
+  const store = openInstallStore();
   const temporary = createStagingDirectory(installHome());
   const staging = temporary.path;
   try {
@@ -231,6 +235,7 @@ export async function installDistribution(
         requireTarget: true,
         extractTo: staging,
         fastClient: true,
+        ...(store ? { store } : {}),
         ...(expectedSha256 ? { expectedSha256 } : {}),
       });
       payload = verified.payload;
@@ -401,6 +406,7 @@ export async function installDistribution(
             // source on one volume.
             const copied = await copyTree(payload, target, {
               link: isRelease && process.env.PISHIP_INSTALL_LINK === "1",
+              ...(store ? { place: store.placer() } : {}),
             });
             try {
               verifyCopiedPayload(target, copied, boundInventory);
@@ -448,6 +454,9 @@ export async function installDistribution(
           };
           if (!hold.stillHeld())
             throw new Error(`Initial install lock for ${id} was lost; retry`);
+          // The objects this release placed are pinned while it is active or
+          // the rollback target; a failure here only leaves them unpinned.
+          store?.record(id, version, installHome());
           writeReceipt(receipt);
           lap("install receipt");
           writeShim(commandPath, launcher);
@@ -475,6 +484,7 @@ export async function installDistribution(
       commandHold.release();
     }
   } finally {
+    store?.end();
     temporary.remove();
     lap("install cleanup");
   }

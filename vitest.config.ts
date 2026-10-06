@@ -1,6 +1,7 @@
 import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
+import { testStoreHome } from "./tests/helpers/test-store.js";
 
 export default defineConfig({
   resolve: {
@@ -13,6 +14,8 @@ export default defineConfig({
   test: {
     env: {
       PISHIP_BUILD_INPUT: fileURLToPath(new URL("./", import.meta.url)),
+      // Installs in a test fill a store of this run, not the user's.
+      PISHIP_STORE_HOME: testStoreHome,
     },
     include: ["packages/**/*.test.ts", "tests/**/*.test.ts"],
     testTimeout: 15_000,

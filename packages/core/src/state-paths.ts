@@ -129,18 +129,23 @@ function within(inner: string, outer: string): boolean {
  * or nested in one another, also through a symlink or a difference in case.
  * Uninstall removes `<install-home>/apps/<id>` and purge `<state-home>/<id>`
  * recursively, so an overlap would let uninstall delete state it keeps, or
- * purge delete another distribution's command or install.
+ * purge delete another distribution's command or install. `extra` names
+ * further roots that must be as separate, such as the shared file store: a
+ * state directory inside it would be linked to or collected with the objects.
  */
-export function assertDisjointRoots(): void {
-  const roots = [
+export function assertDisjointRoots(
+  extra: readonly (readonly [string, string])[] = [],
+): void {
+  const roots: readonly (readonly [string, string])[] = [
     ["PISHIP_STATE_HOME", stateHome()],
     ["PISHIP_INSTALL_HOME", installHome()],
     ["PISHIP_BIN_HOME", binHome()],
-  ] as const;
+    ...extra,
+  ];
   for (let a = 0; a < roots.length; a += 1)
     for (let b = a + 1; b < roots.length; b += 1) {
-      const [nameA, pathA] = roots[a] as (typeof roots)[number];
-      const [nameB, pathB] = roots[b] as (typeof roots)[number];
+      const [nameA, pathA] = roots[a] as readonly [string, string];
+      const [nameB, pathB] = roots[b] as readonly [string, string];
       const realA = canonical(pathA);
       const realB = canonical(pathB);
       if (within(realA, realB) || within(realB, realA))

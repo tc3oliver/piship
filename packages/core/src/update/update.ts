@@ -6,6 +6,7 @@ import { PiShipError, stopwatch } from "@piship/contracts";
 import { resolveTemplate, type UpdatesManifest } from "@piship/schema";
 import {
   currentTarget,
+  installHome,
   runtimeStateDirectory,
   type DistributionLock,
 } from "../index.js";
@@ -38,6 +39,8 @@ import {
   type MigrationReport,
 } from "../migration.js";
 import { storageOf } from "../storage-transition.js";
+import { openInstallStore } from "../store/policy.js";
+import type { ContentStore } from "../store/store.js";
 import { refreshRoot, roleTrust, rootExpired } from "../release/root.js";
 import { createStagingDirectory } from "../temporary-directories.js";
 import { raiseThreadpool } from "../threadpool.js";
@@ -345,6 +348,9 @@ export async function updateDistribution(
     const extracting = options.check !== true && !reuseRetained;
     let replaced: string | undefined;
     let written = false;
+    // Where the runtime, Pi package, and dependency files come from a shared
+    // store, they are placed from it; the release is whole without it.
+    let store: ContentStore | undefined;
     const temporary = createStagingDirectory(apps);
     const staging = temporary.path;
     try {
@@ -392,12 +398,13 @@ export async function updateDistribution(
       // every file the inventory release.json binds, before this returns. A
       // check, or a release already retained, needs only the metadata.
       written = extracting;
+      store = extracting ? openInstallStore() : undefined;
       const verified = await verifyRelease(archive, {
         requireTarget: true,
         expectedSha256: entry.sha256,
         fastClient: true,
         ...(extracting
-          ? { payloadTo: destination }
+          ? { payloadTo: destination, ...(store ? { store } : {}) }
           : { extractTo: join(staging, "release"), metadataOnly: true }),
       });
       lap("update extract and verify release");
@@ -528,6 +535,9 @@ export async function updateDistribution(
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
       lap("update credentials and receipt record");
+      // The objects this release placed are pinned while it is active or the
+      // rollback target; a failure here only leaves them unpinned.
+      store?.record(id, entry.version, installHome());
       lifecycle.commit(next);
       written = false;
       lap("update receipt commit");
@@ -554,6 +564,7 @@ export async function updateDistribution(
         notices,
       };
     } finally {
+      store?.end();
       // Not committed: put back the retained release this update replaced,
       // unless another operation holds the installation now and owns it.
       if (
