@@ -66,6 +66,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.json" benchmark-evidence/concurrency-report.json
           Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.md" benchmark-evidence/concurrency-report.md
+      - name: Sweep extraction and copy concurrency on the unbundled layout (thousands of files)
+        shell: pwsh
+        run: |
+          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-concurrency-unbundled" --reps 3 --bundle false 2>&1 | Tee-Object -FilePath benchmark-evidence/concurrency-unbundled.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency-unbundled/report.json" benchmark-evidence/concurrency-unbundled-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency-unbundled/report.md" benchmark-evidence/concurrency-unbundled-report.md
       - name: Measure the .cmd shim against a direct launcher start
         shell: pwsh
         run: |

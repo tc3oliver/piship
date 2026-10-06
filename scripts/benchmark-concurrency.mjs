@@ -4,7 +4,7 @@
 // Build first (npm run build). Defaults in production are unchanged; this only
 // passes the optional tuning that those functions accept.
 // Usage: node scripts/benchmark-concurrency.mjs --out <dir> [--root <checkout>]
-//   [--reps 3] [--concurrency 4,8,16,32] [--buffer-kib 256,1024,4096] [--keep]
+//   [--reps 3] [--bundle true|false] [--concurrency 4,8,16,32] [--buffer-kib 256,1024,4096] [--keep]
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -32,6 +32,8 @@ const root = resolve(
 );
 const out = resolve(option("--out", "benchmark-concurrency-output"));
 const reps = Number(option("--reps", "3"));
+// `--bundle false` measures the unbundled layout (thousands of files), where file-count costs dominate.
+const bundle = option("--bundle", "true") !== "false";
 const concurrencies = list("--concurrency", "4,8,16,32");
 const bufferKib = list("--buffer-kib", "256,1024,4096");
 const keep = args.includes("--keep");
@@ -70,7 +72,7 @@ const cli = (...argv) => {
     throw new Error(`${argv.join(" ")}: ${result.status}\n${result.stderr}`);
 };
 
-// A bundled, stripped release of the personal example, two versions.
+// A stripped release (bundled unless --bundle false) of the personal example, two versions.
 const archives = [];
 for (const version of ["1.0.0", "1.1.0"]) {
   const distribution = join(work, version, "distribution");
@@ -82,7 +84,7 @@ for (const version of ["1.0.0", "1.1.0"]) {
     .replace(/^ {2}(strip|bundle): .*\n/gm, "");
   source = source.replace(
     "\nrelease:\n",
-    "\nrelease:\n  strip: true\n  bundle: true\n",
+    `\nrelease:\n  strip: true\n  bundle: ${bundle}\n`,
   );
   writeFileSync(manifest, source);
   console.log(`Preparing ${version}; build time is not measured`);
