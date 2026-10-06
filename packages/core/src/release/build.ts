@@ -59,6 +59,7 @@ import {
   type RuntimeCacheProvenance,
   type ReleaseTestResult,
   type AsyncReleaseTestRunner,
+  BUILD_INFO_SCHEMA,
 } from "./metadata.js";
 import {
   evaluateSignatures,
@@ -258,6 +259,7 @@ export async function buildRelease(
   const name = releaseName(lock, target);
   const directory = join(outputRoot, name);
   const archive = join(outputRoot, `${name}.tar.gz`);
+  const buildInfo = join(outputRoot, `${name}.build-info.json`);
   mkdirSync(outputRoot, { recursive: true });
   sweepOutputStaging(outputRoot, "release", options);
   // Every character of the staging path counts on Windows, where npm cannot
@@ -282,11 +284,10 @@ export async function buildRelease(
     const runtimeCache = runtimeCacheDisabled(options)
       ? undefined
       : runtimeCacheFor(lock);
-    // Recorded in release.json: whether cached bytes shipped, and which entry.
+    // Reported beside the release, never in it: the release bytes must not
+    // depend on the cache.
     const provenance: {
-      status: RuntimeCacheProvenance["status"];
-      entry?: string;
-      bundle?: "hit" | "miss";
+      -readonly [K in keyof RuntimeCacheProvenance]: RuntimeCacheProvenance[K];
     } = { status: "disabled" };
     if (!runtimeCache) timer.start("runtime cache disabled")();
     const assembled = timer.start("runtime assembly");
@@ -309,7 +310,12 @@ export async function buildRelease(
                   // A cache that could not be used shipped nothing from it.
                   provenance.status =
                     found.status === "unusable" ? "disabled" : found.status;
-                  if (found.entry) provenance.entry = found.entry;
+                  if (found.entry) {
+                    provenance.entry = found.entry;
+                    provenance.linked = found.linked;
+                    provenance.copied = found.copied;
+                  }
+                  if (found.crossVolume) provenance.crossVolume = true;
                 },
               }
             : {}),
@@ -524,7 +530,6 @@ export async function buildRelease(
       channel,
       created,
       qualification: RELEASE_QUALIFIED,
-      runtimeCache: provenance,
       payload: {
         path: "payload",
         inventorySha256: hash(inventory),
@@ -571,11 +576,25 @@ export async function buildRelease(
     // Windows still holds open (a scanner, an indexer) for a moment.
     await rm(directory, { recursive: true, force: true, maxRetries: 3 });
     rmSync(archive, { force: true });
+    rmSync(buildInfo, { force: true });
     renameWithRetry(root, directory);
     renameWithRetry(stagedArchive, archive);
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
+    // Beside the archive and outside what it, checksums.txt, and release.json
+    // cover, replaced with the release it describes.
+    writeJson(buildInfo, {
+      schema: BUILD_INFO_SCHEMA,
+      runtimeCache: provenance,
+    });
     published();
-    return { name, directory, archive, sha256: result.sha256, metadata };
+    return {
+      name,
+      directory,
+      archive,
+      sha256: result.sha256,
+      metadata,
+      runtimeCache: provenance,
+    };
   } finally {
     await Promise.all(inFlight);
     const cleaned = timer.start("staging cleanup");

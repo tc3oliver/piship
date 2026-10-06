@@ -16,9 +16,12 @@
 //   digest over its recorded (path, size) list, the complete file set, and the
 //   size of every file it places; the digests a payload inventory takes for
 //   it were computed from its bytes when the entry was first used;
-// - a release records in release.json whether it came from the cache, and
-//   which entry, and `piship release --rebuild` or PISHIP_RELEASE_NO_CACHE=1
-//   builds cold;
+// - a release reports whether it came from the cache, and which entry, in the
+//   timing output, on one stderr line of `piship release`, and in
+//   `<out>/releases/<name>.build-info.json` beside the archive; never in the
+//   archive, checksums.txt, or release.json, so a release's bytes are the same
+//   with the cache, without it, and from a cold one;
+// - `piship release --rebuild` or PISHIP_RELEASE_NO_CACHE=1 builds cold;
 // - release qualification runs on a fresh machine, so it always starts cold.
 //
 // Only runtime bytes are cached. A release always regenerates its audit,

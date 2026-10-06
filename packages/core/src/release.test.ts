@@ -1821,6 +1821,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
         `${name}bbbbbb`,
         `${name}notes`,
         built.name,
+        `${built.name}.build-info.json`,
         `${built.name}.tar.gz`,
         `${built.name}.tar.gz.sha256`,
       ].sort(),
@@ -1845,6 +1846,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
         `${name}bbbbbb`,
         `${name}notes`,
         built.name,
+        `${built.name}.build-info.json`,
         `${built.name}.tar.gz`,
         `${built.name}.tar.gz.sha256`,
       ].sort(),
@@ -1941,6 +1943,7 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
     ]);
     expect(readdirSync(join(dir, "dist", "releases")).sort()).toEqual([
       `acmepi-1.0.0-${target}`,
+      `acmepi-1.0.0-${target}.build-info.json`,
       `acmepi-1.0.0-${target}.tar.gz`,
       `acmepi-1.0.0-${target}.tar.gz.sha256`,
     ]);
@@ -2985,17 +2988,28 @@ describe("release stages", () => {
     expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
   });
 
-  it("records that an injected assembler built its runtime without the cache, and verifies that release", async () => {
+  it("reports where the runtime came from beside the release, never inside it", async () => {
     const { path } = project();
     const built = await build(path);
-    expect(built.metadata.runtimeCache).toEqual({ status: "disabled" });
-    expect(
-      JSON.parse(readFileSync(join(built.directory, "release.json"), "utf8"))
-        .runtimeCache,
-    ).toEqual({ status: "disabled" });
-    expect(
-      (await verifyRelease(built.directory)).metadata.runtimeCache,
-    ).toEqual({ status: "disabled" });
+    // An injected assembler has no runtime to cache.
+    expect(built.runtimeCache).toEqual({ status: "disabled" });
+    const info = `${built.archive.replace(/\.tar\.gz$/, "")}.build-info.json`;
+    expect(JSON.parse(readFileSync(info, "utf8"))).toEqual({
+      schema: "piship-build-info/v1",
+      runtimeCache: { status: "disabled" },
+    });
+    // Neither release.json nor the checksums (and so the archive) name it.
+    for (const file of ["release.json", "checksums.txt"])
+      expect(readFileSync(join(built.directory, file), "utf8")).not.toMatch(
+        /runtimeCache|build-info|runtime cache/,
+      );
+    expect(await verifyRelease(built.directory)).toBeDefined();
+    // A rebuilt release replaces the record with its own.
+    writeFileSync(info, "stale");
+    await build(path);
+    expect(JSON.parse(readFileSync(info, "utf8")).runtimeCache).toEqual({
+      status: "disabled",
+    });
   });
 
   it("builds the runtime cold for --rebuild, PISHIP_RELEASE_NO_CACHE=1, or an injected assembler only", () => {
