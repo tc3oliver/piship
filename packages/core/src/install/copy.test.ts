@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ContentStore } from "../store/store.js";
 import { copyTree } from "./copy.js";
 
 const roots: string[] = [];
@@ -195,4 +196,26 @@ describe("copyTree", () => {
       expect(existsSync(join(dir, "copy", "link"))).toBe(false);
     },
   );
+
+  it("places the shared files of a directory install from a store, hashed as they are read", async () => {
+    const dir = temp();
+    const source = join(dir, "source");
+    mkdirSync(join(source, "node_modules", "dep"), { recursive: true });
+    mkdirSync(join(source, "resources"), { recursive: true });
+    writeFileSync(join(source, "node_modules", "dep", "index.js"), "shared");
+    writeFileSync(join(source, "resources", "AGENTS.md"), "private");
+    const store = ContentStore.open(join(dir, "store"), {
+      primitive: "copy",
+    }) as ContentStore;
+    const destination = join(dir, "destination");
+    const digests = await copyTree(source, destination, {
+      place: store.placer(),
+    });
+    expect(Object.fromEntries(digests)).toEqual({
+      "node_modules/dep/index.js": sha256("shared"),
+      "resources/AGENTS.md": sha256("private"),
+    });
+    expect(tree(destination)).toEqual(tree(source));
+    expect(store.counts).toMatchObject({ created: 1, copied: 1, declined: 1 });
+  });
 });
