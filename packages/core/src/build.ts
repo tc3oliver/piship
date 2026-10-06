@@ -28,6 +28,7 @@ import {
   removeNpmBins,
   stripRuntimeIrrelevant,
 } from "./payload.js";
+import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
 import {
@@ -324,6 +325,10 @@ export function buildDistribution(
       vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
         supplyChainGates: options.supplyChainGates !== false,
       });
+      // The runtime was stripped before the packages were vendored, so the
+      // maps and declarations they ship are removed here.
+      if (strip)
+        stripRuntimeIrrelevant(join(stage, PI_PACKAGE_VENDOR_DIRECTORY));
     }
     if (lock.searchTools) {
       // The executables come from the cached upstream archives, checked
