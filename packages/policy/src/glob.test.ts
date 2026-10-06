@@ -118,7 +118,9 @@ function trySymlink(
 }
 
 describe("normalizePathResource", () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const posix = (path: string) => toPosixPath(path);
   const workspace = join(base, "work");
@@ -226,7 +228,9 @@ describe("normalizePathResource on a path that exists in full", () => {
     return current;
   }
 
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const deep = join(base, "a", "b", "c", "d");
   mkdirSync(deep, { recursive: true });
@@ -275,7 +279,9 @@ describe("normalizePathResource on a path that exists in full", () => {
 });
 
 describe("normalizePathResource while a session is being set up", () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   mkdirSync(join(base, "a", "b"), { recursive: true });
   writeFileSync(join(base, "a", "b", "file"), "x");

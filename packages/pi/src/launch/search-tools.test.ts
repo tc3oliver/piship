@@ -252,6 +252,8 @@ describe("the receipt of a verified tool (no hashing at start)", () => {
 });
 
 describe("tools Pi would download at startup", () => {
+  // A program is found by its executable bit, or by its .exe name on Windows.
+  const exe = process.platform === "win32" ? ".exe" : "";
   /** A PATH directory and an agent directory, with the given executables in each. */
   function layout(
     onPath: Record<string, string>,
@@ -272,35 +274,36 @@ describe("tools Pi would download at startup", () => {
   }
 
   it("is nothing when each tool is on PATH or in Pi's tool directory, and fdfind counts for fd", () => {
-    const both = layout({ fd: "755", rg: "755" });
-    expect(toolsPiWouldDownload(both.agentDir, both.env, "linux")).toEqual([]);
-    const split = layout({ fdfind: "755" }, { rg: "755" });
-    expect(toolsPiWouldDownload(split.agentDir, split.env, "linux")).toEqual(
-      [],
-    );
+    const both = layout({ [`fd${exe}`]: "755", [`rg${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(both.agentDir, both.env, process.platform),
+    ).toEqual([]);
+    const split = layout({ [`fdfind${exe}`]: "755" }, { [`rg${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(split.agentDir, split.env, process.platform),
+    ).toEqual([]);
   });
 
   it("names the tools that are in neither place, and does not count a file that cannot run", () => {
-    const only = layout({ fd: "755" });
-    expect(toolsPiWouldDownload(only.agentDir, only.env, "linux")).toEqual([
-      "rg",
-    ]);
+    const only = layout({ [`fd${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(only.agentDir, only.env, process.platform),
+    ).toEqual(["rg"]);
     const noMode = layout({ fd: "644", rg: "644" });
     if (process.platform !== "win32")
       expect(
-        toolsPiWouldDownload(noMode.agentDir, noMode.env, "linux"),
+        toolsPiWouldDownload(noMode.agentDir, noMode.env, process.platform),
       ).toEqual(["fd", "rg"]);
     const none = layout({});
-    expect(toolsPiWouldDownload(none.agentDir, { PATH: "" }, "linux")).toEqual([
-      "fd",
-      "rg",
-    ]);
+    expect(
+      toolsPiWouldDownload(none.agentDir, { PATH: "" }, process.platform),
+    ).toEqual(["fd", "rg"]);
   });
 
   it("looks for <name>.exe on Windows, as Pi starts the program with no shell", () => {
-    const exe = layout({ "fd.exe": "644", "rg.cmd": "644" });
-    const env = { PATH: exe.env.PATH.split(delimiter).join(";") };
-    expect(toolsPiWouldDownload(exe.agentDir, env, "win32")).toEqual(["rg"]);
+    const found = layout({ "fd.exe": "644", "rg.cmd": "644" });
+    const env = { PATH: found.env.PATH.split(delimiter).join(";") };
+    expect(toolsPiWouldDownload(found.agentDir, env, "win32")).toEqual(["rg"]);
   });
 
   const personal = { deployment: { mode: "personal" } } as never;
@@ -310,7 +313,12 @@ describe("tools Pi would download at startup", () => {
   it("is deferred for a personal distribution that bundles nothing", () => {
     const missing = layout({});
     expect(
-      deferredToolDownloads(personal, missing.agentDir, missing.env, "linux"),
+      deferredToolDownloads(
+        personal,
+        missing.agentDir,
+        missing.env,
+        process.platform,
+      ),
     ).toEqual(["fd", "rg"]);
   });
 
@@ -338,15 +346,20 @@ describe("tools Pi would download at startup", () => {
         lock,
         missing.agentDir,
         { ...missing.env, ...extra },
-        "linux",
+        process.platform,
       ),
     ).toEqual([]);
   });
 
   it("is not deferred when nothing would be downloaded", () => {
-    const present = layout({ fd: "755", rg: "755" });
+    const present = layout({ [`fd${exe}`]: "755", [`rg${exe}`]: "755" });
     expect(
-      deferredToolDownloads(personal, present.agentDir, present.env, "linux"),
+      deferredToolDownloads(
+        personal,
+        present.agentDir,
+        present.env,
+        process.platform,
+      ),
     ).toEqual([]);
   });
 });
