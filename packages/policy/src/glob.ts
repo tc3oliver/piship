@@ -101,7 +101,9 @@ const MAX_SYMLINK_DEPTH = 40;
 
 function lstatOrUndefined(path: string): Stats | undefined {
   try {
-    return lstatSync(path);
+    // A missing path is the common answer, and raising an error for it costs
+    // far more than reporting it.
+    return lstatSync(path, { throwIfNoEntry: false });
   } catch {
     return undefined;
   }
@@ -117,6 +119,20 @@ function resolveSegments(path: string, depth: number): string {
   if (depth > MAX_SYMLINK_DEPTH) return path;
   const { root } = parse(path);
   const segments = path.slice(root.length).split(/[\\/]+/);
+  // A path that exists in full and names no `.` or `..` resolves in one call,
+  // to what the walk below gives: the symlinks of a prefix are resolved before
+  // the next segment is looked up either way. The walk costs a call per
+  // segment, each one resolving its whole prefix, which on a deep path is the
+  // slowest part of starting a governed session. A path that is missing (or a
+  // dangling or looping link) is left to the walk, which appends what is
+  // missing as written and follows a link's text.
+  if (
+    !segments.some((segment) => segment === "." || segment === "..") &&
+    lstatOrUndefined(path) !== undefined
+  ) {
+    const whole = safeRealpath(path);
+    if (whole !== undefined) return whole;
+  }
   let current = safeRealpath(root) ?? root;
   let existing = true;
   for (let index = 0; index < segments.length; index += 1) {
