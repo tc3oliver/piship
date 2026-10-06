@@ -268,10 +268,13 @@ if (platform() === "win32") {
     defender = `query failed: ${String(error.message ?? error).trim()}`;
   }
 }
-const npm = spawnSync("npm", ["--version"], {
-  encoding: "utf8",
-  shell: platform() === "win32",
-});
+const npm =
+  platform() === "win32"
+    ? spawnSync("cmd.exe", ["/d", "/s", "/c", "call npm --version"], {
+        encoding: "utf8",
+        windowsVerbatimArguments: true,
+      })
+    : spawnSync("npm", ["--version"], { encoding: "utf8" });
 const setup = {
   date: new Date().toISOString(),
   platform: target,
