@@ -394,16 +394,13 @@ export async function installDistribution(
           // not match its inventory.
           if (isArchive) renameWithRetry(payload, target);
           else {
-            // An extracted release is not rewritten in place, so on Windows
-            // (where creating a file costs a scanner's pass over it) its files
-            // are hashed and linked instead of written again. A payload
-            // directory from a build is rewritten by the next build: copied.
-            // PISHIP_INSTALL_LINK=0 copies anyway.
+            // Files are copied and hashed as they are copied. PISHIP_INSTALL_LINK=1
+            // hard-links them from an extracted release instead: the installed
+            // payload then shares inodes with that directory, so any later
+            // write through it changes what is installed. Only for a throwaway
+            // source on one volume.
             const copied = await copyTree(payload, target, {
-              link:
-                isRelease &&
-                process.platform === "win32" &&
-                process.env.PISHIP_INSTALL_LINK !== "0",
+              link: isRelease && process.env.PISHIP_INSTALL_LINK === "1",
             });
             try {
               verifyCopiedPayload(target, copied, boundInventory);

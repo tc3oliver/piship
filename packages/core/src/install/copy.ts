@@ -70,9 +70,9 @@ export interface CopyOptions {
   /**
    * Hard-link each file after hashing it instead of writing a second copy.
    * Creating a file costs a scanner's pass over it on Windows; a link costs a
-   * directory entry. The installed file is then the source's file, so use it
-   * only for a source nothing rewrites in place (an extracted release), on one
-   * volume: a file that cannot be linked (another volume, a file system
+   * directory entry. The installed file is then the source's file: a later
+   * write through the source path changes what is installed. Opt-in, only for
+   * a throwaway source, on one volume: a file that cannot be linked (another volume, a file system
    * without links) is copied, and so is every file after the first such
    * failure.
    */
