@@ -91,9 +91,10 @@ function sleep(ms: number): void {
  * Rename, retrying where Windows briefly refuses it: Defender or the search
  * indexer holds a handle on a file just written, and the rename of its
  * directory fails with EPERM, EBUSY, or EACCES until the handle closes.
- * Every other error, EXDEV included, is immediate.
+ * Ten attempts with a growing pause wait about two seconds in all. Every
+ * other error, EXDEV included, is immediate.
  */
-export function renameWithRetry(from: string, to: string, delayMs = 50): void {
+export function renameWithRetry(from: string, to: string, delayMs = 35): void {
   for (let attempt = 0; ; attempt++) {
     try {
       renameSync(from, to);

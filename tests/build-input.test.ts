@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -136,5 +139,24 @@ describe("incremental relocatable build input", () => {
     expect(first.files).toBe(28);
     expect(first.removed).toBe(1);
     expect(prepare(workspace).copied).toBe(0);
+  });
+  it("runs as a script from a checkout reached through a symlink or junction", () => {
+    const { workspace, input } = fixture();
+    mkdirSync(join(workspace, "scripts"));
+    copyFileSync(
+      prepareScript,
+      join(workspace, "scripts", "prepare-build-input.mjs"),
+    );
+    const link = `${workspace}-link`;
+    roots.push(link);
+    // A junction needs no privilege on Windows; elsewhere it is a symlink.
+    symlinkSync(workspace, link, "junction");
+    const result = spawnSync(
+      process.execPath,
+      [join(link, "scripts", "prepare-build-input.mjs")],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(input, ".piship-build-input.json"))).toBe(true);
   });
 });

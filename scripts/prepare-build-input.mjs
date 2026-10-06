@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   rmdirSync,
@@ -178,8 +179,18 @@ export function prepareBuildInput(workspace) {
   return metrics;
 }
 
+// Node resolves the main module's links, so the module URL is a real path
+// while argv[1] is as typed, which is a link in a symlinked or junctioned
+// checkout: compare real paths on both sides.
+const real = (path) => {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return resolve(path);
+  }
+};
 if (
   process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  real(process.argv[1]) === real(fileURLToPath(import.meta.url))
 )
   prepareBuildInput(fileURLToPath(new URL("../", import.meta.url)));

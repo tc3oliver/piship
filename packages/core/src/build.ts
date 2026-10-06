@@ -6,7 +6,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -341,7 +340,7 @@ export function buildDistribution(
     phase = process.hrtime.bigint();
     rmSync(buildCachePath(output), { force: true });
     rmSync(output, { recursive: true, force: true });
-    renameSync(stage, output);
+    renameWithRetry(stage, output);
     if (keys)
       writeBuildCache(
         output,
