@@ -1,5 +1,5 @@
 // Verified update of an installed distribution from its signed channel.
-import { existsSync, renameSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { extractArchive } from "../archive.js";
@@ -22,6 +22,8 @@ import {
   type LifecycleOptions,
   type RetiredKey,
 } from "../install/receipt.js";
+import { renameWithRetry } from "../install/files.js";
+import { stopwatch } from "../install/timing.js";
 import {
   advanceTrustState,
   damagedTrustState,
@@ -321,6 +323,7 @@ export async function updateDistribution(
         `Channel ${channel} offers ${entry.version}, older than the active ${receipt.active}; downgrades are refused (use rollback to return to a retained release)`,
       );
     const apps = appDirectory(id);
+    const lap = stopwatch();
     const temporary = createStagingDirectory(apps);
     const staging = temporary.path;
     try {
@@ -328,16 +331,27 @@ export async function updateDistribution(
       options.progress?.(
         `Downloading ${entry.version} (${(entry.bytes / 1_048_576).toFixed(1)} MiB)`,
       );
-      await downloadArchive(source, entry, archive, options.fetcher, transport);
+      // The download hashes as it streams and checks the digest and size
+      // against the signed entry; that digest is passed on, not recomputed.
+      const archiveSha256 = await downloadArchive(
+        source,
+        entry,
+        archive,
+        options.fetcher,
+        transport,
+      );
+      lap("update download and digest");
       options.faults?.("staged");
       options.progress?.(`Verifying the ${entry.version} release`);
       const verified = await verifyRelease(archive, {
         requireTarget: true,
         expectedSha256: entry.sha256,
+        archiveSha256,
         extractTo: join(staging, "release"),
         fastClient: true,
         metadataOnly: true,
       });
+      lap("update release metadata");
       const target = verified.metadata;
       const problems = [
         [target.distribution.id, id, "distribution"],
@@ -357,6 +371,7 @@ export async function updateDistribution(
           `The ${entry.version} release runs Pi ${target.pi.version}, which it records as unsupported`,
         );
       options.faults?.("verified");
+      lap("update signed-entry binding");
       const stateDir = runtimeStateDirectory({ value: id });
       const migration = checkStateMigration(
         stateDir,
@@ -435,18 +450,21 @@ export async function updateDistribution(
         // Only an unreferenced interrupted candidate can be moved aside.
         // Receipt-retained payloads remain untouched, including during failures.
         if (existsSync(destination))
-          renameSync(
+          renameWithRetry(
             destination,
             join(apps, `.retained-${entry.version}-${randomUUID()}`),
           );
+        lap("update snapshot and preflight");
         const expectedRoot = entry.archive.replace(/\.tar\.gz$/, "");
         await extractArchive(archive, destination, {
           expectedRoot,
+          hash: false,
           mapEntry: (name) =>
             name.startsWith(`${expectedRoot}/payload/`)
               ? name.slice(`${expectedRoot}/payload/`.length)
               : undefined,
         });
+        lap("update extract payload");
       }
       syncDirectory(apps);
       options.faults?.("installed");
@@ -489,7 +507,9 @@ export async function updateDistribution(
         },
       };
       if (!keepPrevious) delete (next as { previous?: string }).previous;
+      lap("update credentials and receipt record");
       lifecycle.commit(next);
+      lap("update receipt commit");
       // Committed: from here on nothing reports the update as failed.
       options.faults?.("committed");
       notices.push(...markActivated(stateDir, verified.lock));
@@ -512,6 +532,7 @@ export async function updateDistribution(
     } finally {
       try {
         temporary.remove();
+        lap("update staging cleanup");
         options.faults?.("cleaned");
       } catch {
         // Explicit diagnostics can remove abandoned staging later.

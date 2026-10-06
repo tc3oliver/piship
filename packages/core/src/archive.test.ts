@@ -387,7 +387,74 @@ describe("createArchive / extractArchive", () => {
       maxBytes: 200,
       maxEntries: 3,
     });
-    expect(ok).toEqual({ root: "r", entries: 3, bytes: 200 });
+    expect(ok).toEqual({
+      root: "r",
+      entries: 3,
+      bytes: 200,
+      sha256: await sha256File(archive),
+    });
+  });
+
+  it("hashes the archive during the extraction that reads it", async () => {
+    const work = tempDir();
+    const archive = rawArchive(work, [
+      { name: "r/", type: "5" },
+      { name: "r/a", data: "a".repeat(100) },
+    ]);
+    const hashed = await extractArchive(archive, join(work, "one"));
+    expect(hashed.sha256).toBe(await sha256File(archive));
+    const unhashed = await extractArchive(archive, join(work, "two"), {
+      hash: false,
+    });
+    expect(unhashed.sha256).toBeUndefined();
+  });
+
+  it.each([1, 8])(
+    "writes many small, empty, and large files with %i writers",
+    async (concurrency) => {
+      const work = tempDir();
+      const entries: RawEntry[] = [{ name: "r/", type: "5" }];
+      const expected = new Map<string, string>();
+      for (let d = 0; d < 12; d++) {
+        entries.push({ name: `r/d${d}/`, type: "5" });
+        for (let f = 0; f < 40; f++) {
+          const data = f % 10 === 0 ? "" : `${d}:${f}:`.repeat(f);
+          entries.push({ name: `r/d${d}/f${f}.txt`, data });
+          expected.set(`d${d}/f${f}.txt`, data);
+        }
+      }
+      // An entry with no directory entry of its own, and one past the
+      // buffered size, which streams in order.
+      entries.push({ name: "r/implicit/deep/x.txt", data: "implicit" });
+      expected.set("implicit/deep/x.txt", "implicit");
+      const large = "L".repeat(1024 * 1024 + 5);
+      entries.push({ name: "r/large.bin", data: large });
+      expected.set("large.bin", large);
+      const archive = rawArchive(work, entries);
+      const dest = join(work, "dest");
+      const result = await extractArchive(archive, dest, { concurrency });
+      expect(result.entries).toBe(entries.length);
+      for (const [path, data] of expected)
+        expect(readFileSync(join(dest, "r", path), "utf8")).toBe(data);
+    },
+  );
+
+  it("stops at a failing writer and leaves nothing behind", async () => {
+    const work = tempDir();
+    // `r/a` is a file, so `r/a/b` cannot be created beneath it.
+    const entries: RawEntry[] = [
+      { name: "r/", type: "5" },
+      { name: "r/a", data: "file" },
+      { name: "r/a/b", data: "beneath a file" },
+    ];
+    for (let i = 0; i < 50; i++)
+      entries.push({ name: `r/z${i}`, data: "later" });
+    const archive = rawArchive(work, entries);
+    const dest = join(work, "dest");
+    await expect(extractArchive(archive, dest)).rejects.toThrow();
+    // A writer that outlived the failure would recreate files after the cleanup.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(existsSync(dest)).toBe(false);
   });
 
   it("leaves no files behind after a late failure", async () => {

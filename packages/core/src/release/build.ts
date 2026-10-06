@@ -178,21 +178,25 @@ function runReleaseTests(
 function installScripts(name: string): { sh: string; ps1: string } {
   return {
     sh: `#!/bin/sh
-# Verifies this release, then installs its payload for the current user.
+# Installs this release's payload for the current user. The install checks the
+# release metadata and this machine's target; it does not hash every payload
+# file. Run \`verify-release\` on this directory for the full verification.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 command -v node >/dev/null 2>&1 || { echo 'Node.js 22.19.0 or newer is required. Install Node separately.' >&2; exit 1; }
-node "$here/payload/piship.mjs" verify-release "$here"
 node "$here/payload/piship.mjs" install "$here" "$@"
+echo "Full verification of this release (every payload file, SBOM, notices) is separate: node \\"$here/payload/piship.mjs\\" verify-release \\"$here\\""
 `,
-    ps1: `# Verifies this release, then installs its payload for the current user.
+    ps1: `# Installs this release's payload for the current user. The install checks the
+# release metadata and this machine's target; it does not hash every payload
+# file. Run verify-release on this directory for the full verification.
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error 'Node.js 22.19.0 or newer is required. Install Node separately.'; exit 1 }
-node "$here\\payload\\piship.mjs" verify-release "$here"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node "$here\\payload\\piship.mjs" install "$here" @args
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Output "Full verification of this release (every payload file, SBOM, notices) is separate: node \`"$here\\payload\\piship.mjs\`" verify-release \`"$here\`""
+exit 0
 # Release ${name}
 `,
   };

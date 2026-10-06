@@ -61,6 +61,12 @@ export async function verifyRelease(
   options: {
     readonly requireTarget?: boolean;
     readonly expectedSha256?: string;
+    /**
+     * The archive's SHA-256, when the caller already computed it (a download
+     * hashes as it streams): it is checked and reported without reading the
+     * archive again.
+     */
+    readonly archiveSha256?: string;
     readonly extractTo?: string;
     /** Client install uses archive trust and small metadata, leaving qualification to CI. */
     readonly fastClient?: boolean;
@@ -72,20 +78,30 @@ export async function verifyRelease(
   let archiveSha256: string | undefined;
   let cleanup = () => {};
   if (statSync(path).isFile()) {
-    const actual = await sha256File(path);
-    archiveSha256 = actual;
-    if (options.expectedSha256 && actual !== options.expectedSha256)
-      throw fail(
-        `archive SHA-256 ${actual} does not match the expected ${options.expectedSha256}`,
-      );
-    const sidecar = `${path}.sha256`;
-    if (existsSync(sidecar)) {
-      const recorded = readFileSync(sidecar, "utf8").split(/\s+/)[0];
-      if (recorded !== actual)
+    const checkDigest = (actual: string): void => {
+      if (options.expectedSha256 && actual !== options.expectedSha256)
         throw fail(
-          `archive SHA-256 ${actual} does not match ${basename(sidecar)}`,
+          `archive SHA-256 ${actual} does not match the expected ${options.expectedSha256}`,
         );
-    }
+      const sidecar = `${path}.sha256`;
+      if (existsSync(sidecar)) {
+        const recorded = readFileSync(sidecar, "utf8").split(/\s+/)[0];
+        if (recorded !== actual)
+          throw fail(
+            `archive SHA-256 ${actual} does not match ${basename(sidecar)}`,
+          );
+      }
+    };
+    // An archive is hashed once. A digest the caller computed, or one the
+    // caller expects (checked before the archive is parsed), is used as it is;
+    // otherwise the extraction hashes the bytes it reads. A full verification
+    // also hashes first.
+    archiveSha256 =
+      options.archiveSha256 ??
+      (options.expectedSha256 !== undefined || !options.fastClient
+        ? await sha256File(path)
+        : undefined);
+    if (archiveSha256 !== undefined) checkDigest(archiveSha256);
     // Without `extractTo` the extraction is a directory of this call, owned
     // and removed by it; a caller's `extractTo` is its own staging directory.
     let own: TemporaryDirectory | undefined;
@@ -97,6 +113,7 @@ export async function verifyRelease(
     const expectedRoot = basename(path).replace(/\.tar\.gz$/, "");
     const extracted = await extractArchive(path, join(parent, "x"), {
       expectedRoot,
+      hash: archiveSha256 === undefined,
       ...(options.metadataOnly
         ? {
             mapEntry: (name: string, directory: boolean) => {
@@ -124,6 +141,15 @@ export async function verifyRelease(
     directory = join(parent, "x", extracted.root);
     cleanup = () =>
       own ? own.remove() : rmSync(parent, { recursive: true, force: true });
+    if (archiveSha256 === undefined) {
+      archiveSha256 = extracted.sha256 as string;
+      try {
+        checkDigest(archiveSha256);
+      } catch (error) {
+        cleanup();
+        throw error;
+      }
+    }
   }
   try {
     const verified = verifyReleaseDirectory(

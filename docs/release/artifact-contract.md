@@ -15,7 +15,7 @@ acmecode-1.1.0-linux-x64/
   licenses/index.json               piship-notices/v1 machine-readable index
   vulnerabilities.json              piship-vulnerabilities/v1 scan result and verdict, with a packages entry per vendored Pi package
   checksums.txt                     sha256sum lines for every file above except payload/, plus payload/metadata/inventory.json
-  install.sh, install.ps1           verify this release, then install it for the current user
+  install.sh, install.ps1           install this release for the current user
 ```
 
 The payload's own `metadata/inventory.json` covers every payload file, so `checksums.txt` plus the inventory cover the whole release. `release.json` records the distribution ID, name, version, command, and deployment mode; the PiShip version; the Pi package, version, and its compatibility status, the weakest of the distribution's deployment surface, the `governance` surface when the distribution declares governance (every `piship/v1alpha3` or later manifest does), and the `lifecycle` surface, with each surface's status; the manifest and lock schemas and the lock SHA-256; the target; the channel it was built for; the creation time; the payload inventory digest and file count; the local state schemas this PiShip version reads; the passed tests; the SBOM digest and package count; the vulnerability verdict and counts; the registry signature verdict and any packages without signatures; and a Pi attribution line. Distribution, PiShip, and Pi versions are recorded separately.
@@ -24,7 +24,7 @@ The archive is plain ustar in gzip at zlib level 6: entries are sorted by byte o
 
 ## Verifying a release
 
-`piship verify-release <archive|release-dir>` is the consumer check, and also runs inside `install.sh`, `install.ps1`, `piship install`, `sign-channel`, and every update. It fails with `INTEGRITY_FAILED` unless:
+`piship verify-release <archive|release-dir>` is the full consumer check, and also runs inside `sign-channel`. `install.sh`, `install.ps1`, `piship install`, and every update do not run it: they check the archive digest, the signed or expected bindings, and the small release and payload metadata, without hashing every payload file, so it stays an explicit step for CI, `doctor`, and diagnosis. It fails with `INTEGRITY_FAILED` unless:
 
 - For an archive: its SHA-256 matches `--sha256` when given and the `.sha256` sidecar when present, and it extracts cleanly under the rules above.
 - `checksums.txt` lists every required release file, each file matches, and no listed path escapes the release root.

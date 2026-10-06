@@ -26,6 +26,7 @@ import {
 } from "@piship/credentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deadPid } from "../../../tests/helpers/processes.js";
+import * as archiveModule from "./archive.js";
 import { PISHIP_VERSION } from "./compatibility.js";
 import {
   currentTarget,
@@ -559,6 +560,75 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
       expectedSha256: a.sha256.toUpperCase(),
     });
     expect(receipt.releases[0]?.release?.archiveSha256).toBe(a.sha256);
+  });
+
+  it("hashes an installed archive once, in the read that unpacks its metadata", async () => {
+    const a = await release("1.0.0");
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      const receipt = await installDistribution(a.archive);
+      expect(receipt.releases[0]?.release?.archiveSha256).toBe(a.sha256);
+      // No separate read to hash it, and the payload extraction after the
+      // metadata read does not hash the bytes again.
+      expect(hashed).not.toHaveBeenCalled();
+      expect(
+        extracted.mock.calls.map(([, , options]) => options?.hash !== false),
+      ).toEqual([true, false]);
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("hashes an archive once when the caller expects its digest", async () => {
+    const a = await release("1.0.0");
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      await installDistribution(a.archive, false, { expectedSha256: a.sha256 });
+      // The expected digest is checked before the archive is parsed, and that
+      // digest is the one the extractions use.
+      expect(hashed).toHaveBeenCalledTimes(1);
+      expect(
+        extracted.mock.calls.map(([, , options]) => options?.hash !== false),
+      ).toEqual([false, false]);
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("reports the phases of an install under PISHIP_DEBUG_TIMING", async () => {
+    const a = await release("1.0.0");
+    const written: string[] = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written.push(String(chunk));
+        return true;
+      });
+    process.env.PISHIP_DEBUG_TIMING = "1";
+    try {
+      await installDistribution(a.archive);
+    } finally {
+      delete process.env.PISHIP_DEBUG_TIMING;
+      stderr.mockRestore();
+    }
+    const labels = written
+      .join("")
+      .split("\n")
+      .filter((line) => line.startsWith("install "))
+      .map((line) => line.slice(0, line.indexOf(":")));
+    expect(labels).toEqual([
+      "install digest and release metadata",
+      "install preflight",
+      "install extract payload",
+      "install launcher and trust state",
+      "install receipt",
+      "install command shim",
+      "install cleanup",
+    ]);
   });
 
   it("refuses an archive whose SHA-256 differs from the expected digest, installing nothing", async () => {
@@ -2005,6 +2075,62 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
     );
     expect(error.code).toBe("CONFIG_UNAVAILABLE");
+  });
+
+  it("hashes a downloaded update archive once, as it streams", async () => {
+    const { a, b, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      const fetcher = (async (input: URL | string) => {
+        const file = join(
+          channelDir,
+          new URL(String(input)).pathname.split("/").pop() as string,
+        );
+        return existsSync(file)
+          ? new Response(readFileSync(file))
+          : new Response("", { status: 404 });
+      }) as typeof fetch;
+      const result = await updateDistribution(ID, {
+        runCheck: fakeRun,
+        fetcher,
+        env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+      });
+      expect(result.status).toBe("updated");
+      // A download is hashed as it streams: the archive is never read to hash
+      // it, and neither the metadata read nor the extraction hashes it again.
+      expect(hashed).not.toHaveBeenCalled();
+      expect(
+        extracted.mock.calls.map(([, , options]) => options?.hash),
+      ).toEqual([false, false]);
+      expect(readInstallReceipt(ID).releases[0]?.release?.archiveSha256).toBe(
+        b.sha256,
+      );
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("hashes an update archive copied from a directory once", async () => {
+    const { a, b, opts } = await fixture();
+    await installDistribution(a.archive);
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      expect((await updateDistribution(ID, opts)).status).toBe("updated");
+      expect(hashed).toHaveBeenCalledTimes(1);
+      expect(
+        extracted.mock.calls.map(([, , options]) => options?.hash),
+      ).toEqual([false, false]);
+      expect(readInstallReceipt(ID).releases[0]?.release?.archiveSha256).toBe(
+        b.sha256,
+      );
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
   });
 
   it("applies the manifest source rules to the resolved updates.source", async () => {
