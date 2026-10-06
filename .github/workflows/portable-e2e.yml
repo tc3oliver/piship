@@ -141,7 +141,10 @@ jobs:
       # E2E file once.
       - if: runner.os != 'Linux'
         timeout-minutes: 40
-        run: npm run test:e2e -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        # The npm 11.21 Windows command shim drops --shard instead of
+        # forwarding it. Invoke Vitest directly on both non-Linux targets so
+        # each runner executes only its assigned shard.
+        run: node node_modules/vitest/vitest.mjs run --config vitest.e2e.config.ts --shard=${{ matrix.shard }}/${{ matrix.shards }}
         env:
           PISHIP_E2E_QUALIFICATION: "0"
           PISHIP_REQUIRE_SANDBOX: ${{ runner.os != 'Windows' && '1' || '0' }}
