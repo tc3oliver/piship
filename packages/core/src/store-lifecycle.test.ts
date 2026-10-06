@@ -139,6 +139,16 @@ describe.runIf(HOST_EVIDENCED)(
       expect(launch()).toBe("payload 1.0.0");
     });
 
+    it("refuses a store inside the install home, where an uninstall or a state directory could meet it", async () => {
+      process.env.PISHIP_STORE_HOME = join(
+        process.env.PISHIP_INSTALL_HOME as string,
+        "store",
+      );
+      const error = await rejection(installed());
+      expect(error.message).toMatch(/PISHIP_STORE_HOME .* overlap/);
+      expect(existsSync(appsDir())).toBe(false);
+    });
+
     it("refuses a value of PISHIP_STORE it does not know", async () => {
       process.env.PISHIP_STORE = "link";
       const error = await rejection(installed());

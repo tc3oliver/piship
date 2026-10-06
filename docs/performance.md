@@ -205,6 +205,72 @@ With the stamp, the same unchanged manifests and locks produced:
 
 An unchanged rebuild is about 95% faster unbundled and 96% faster bundled: it skips the runtime npm install, strip, inventory hashing, bundling, and output replacement. The first build still seeds the stamp and assembles the payload, and was not faster in that run; its largest stages when the runtime inputs change are npm installation (1.288 s), bundling (0.952 s), and stripping (0.535 s). A release gets the same effect from the runtime cache even on a fresh output directory, which is what the release timings above show.
 
+## Shared file store
+
+An install or update can place the runtime, Pi package, and dependency files of a release (`node_modules/` and `pi-packages/`, files up to 1 MiB, which is nearly all of them) from a content-addressed store in the user's cache directory instead of writing them again ([architecture](architecture.md#shared-file-store), [security](security.md#shared-file-store)). Whether that is faster depends on what a created file costs. A store writes each object once and places from it, so the first install writes every file twice, and a repeat install replaces a create and a write with a lookup, a read-back and hash of the object (always: a placement trusts bytes it has hashed), and a clone, copy, or link. It can win only where creating a file is expensive, and on Windows with Defender it might; nothing here shows that yet.
+
+**The default is off** (`DEFAULT_STORE_MODE` in `packages/core/src/store/policy.ts`; `PISHIP_STORE=copy|clone|hardlink` opts in, `PISHIP_STORE_HOME` moves the store). The choice of a primitive is made by measurement, not by design preference. If Windows shows a primitive within the budgets below, the default changes by editing that one line: `clone` where the volume has copy-on-write clones (it is not used at all where it has none, since copying through the store only adds writes), or `hardlink` once the removal of a linked tree and Defender behavior are confirmed on Windows. `copy` is never a candidate: it only adds writes. Until then every install and update behaves as it did before this change.
+
+### What `scripts/benchmark-store.mjs` measures
+
+The real `ContentStore` code, driven the way extraction drives it (eight writers, each file held in memory, its digest taken from the bytes), on a deterministic tree shaped like `node_modules` (a few thousand files, mostly under 20 KB, a few hundred KB, 8% identical files, 1% executable). Per primitive (`copy`, `clone`, `hardlink`), with the object check the product does (`content`) and optionally without it (`size`, measurement only):
+
+| Scenario | What it is |
+| --- | --- |
+| `direct` | Extraction without a store: create and write each file. The baseline for every ratio. |
+| `<p>.fresh` | A first install: an empty store is filled and the files are placed from it. |
+| `<p>.warm` | A second install of the same release from a full store. |
+| `<p>.update` | An update that changes a tenth of the files, from the store of the release it replaces. |
+| `<p>.remove` | Deleting the installed tree (links, read-only files), against `direct.remove`, which deletes a tree extraction wrote. |
+
+Repetitions alternate the order of the primitives; the report has medians, P95, minimum, maximum, and every sample, the primitive the volume actually gave (a refused `clone` is reported as the `copy` it became), the counts of objects created, reused, and repaired, and the host. A tree is sampled and hashed after each run, so a broken placement cannot look fast. `--store-dir` puts the store on another volume, which makes `clone` and `hardlink` fall back.
+
+**The rule the script applies and the checked-in budgets** (`scripts/store-budgets.json`, applied by `scripts/store-budgets.mjs` and `--check`): a primitive is worth shipping only when `warm` is at most 0.70 of `direct`, `update` at most 0.85 of `direct`, and `fresh` at most 1.15 of `direct`, with the file system giving the primitive asked for. Once a mode is in force the budgets are hard: `fresh` at most 1.10x `direct`, `warm` and `update` no slower than `direct`, `remove` at most 1.10x `direct.remove`. A pull request that changes the store, the extraction, or the placement reruns the benchmark and compares it with the earlier report (`--baseline`): a median that is more than 5% worse needs an explanation, one that is stably more than 10% worse blocks the change unless the pull request justifies it.
+
+### Results: macOS only, and not a decision
+
+Apple M4 Max, macOS 27, Node 24.21.0, APFS, no Defender, 3,000 files (51.9 MiB), 7 repetitions, 8 writers, medians in milliseconds, ratio to `direct` in parentheses (`--verify-modes content,size`; run on this branch while other processes were using the machine, so single figures can move by tens of percent; an earlier 5-repetition run gave the same ordering):
+
+| Scenario | direct | copy | clone (used: copy) | hardlink | hardlink, size check only |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fresh | 71 | 297 (4.2x) | 299 (4.2x) | 423 (5.9x) | 416 (5.8x) |
+| warm | 71 | 164 (2.3x) | 164 (2.3x) | 329 (4.6x) | 293 (4.1x) |
+| update | 71 | 179 (2.5x) | 179 (2.5x) | 329 (4.6x) | 312 (4.4x) |
+| remove | 153 (`direct.remove`) | 151 (1.0x) | 155 (1.0x) | 144 (0.9x) | 152 (1.0x) |
+
+On macOS every primitive costs more than writing the files, because creating a file there is cheap: a link on APFS costs more than a create, and the read-back that makes a placement trustworthy is part of the warm cost (the size-only column shows how much, and it is not a product option). No primitive meets the rule, so macOS supports leaving the default off. `clone` is reported as `copy`: Node 24.21 on this macOS returns `ENOSYS` for a forced clone (`COPYFILE_FICLONE_FORCE`), so the store, which never accepts a clone it cannot confirm, does not count one. Nothing here says anything about Windows, where a created file is scanned and a link is not; that measurement is the manual benchmark.
+
+### Reproduce on Windows
+
+The manual `Windows benchmark` workflow (`.github/workflows/authoring-benchmark.yml`) runs `scripts/benchmark-store.mjs` after the install and `.cmd` measurements, on the same Defender-on runner, writes `store-report.json`, `store-summary.md`, a second report with the store on `D:` where one exists, and `store-budgets.log` (a result, not a gate), and uploads them with the rest of the evidence. By hand, in PowerShell with Defender on and a built checkout:
+
+```powershell
+$measurementPath = Join-Path $env:LOCALAPPDATA ('PiShipStore-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+node scripts/benchmark-store.mjs --out $measurementPath --files 3000 --reps 7 --verify-modes content,size
+node scripts/store-budgets.mjs --store-report (Join-Path $measurementPath 'report.json') --mode hardlink
+```
+
+What to read in the Windows result before changing the default: whether `hardlink.warm` and `.update` clear the rule with the object check on; whether `hardlink.remove` succeeds and stays within its budget (read-only linked files and a link limit of 1,023 per file on NTFS, which the placement answers by copying that file); the result with the store on another volume (everything falls back to copies); and `copy` against `clone` on a Dev Drive (ReFS), where a clone is available if Node reports it. Record the result, the host, and the revision in this section and in the changelog when the default changes.
+
+## Windows launcher decision
+
+The Windows command is `<command>.cmd`, which starts `cmd.exe`, which starts `node.exe` on the installed `launch.mjs`. A native launcher (resolve Node, `CreateProcessW`, pass the exact arguments and environment, return the exit code, and nothing else: no runtime, policy, authentication, or store logic) is worth building only if `cmd.exe` adds a measurable, stable cost. `scripts/benchmark-cmd-launch.mjs` measures it: the same installation started as `node launch.mjs --smoke` and as `<command>.cmd --smoke`, cold first starts and warm starts, repeated in alternating order, with the bare `node` and `cmd.exe` start times as reference. The manual Windows benchmark workflow runs it.
+
+**Threshold.** Implement a native launcher only if, on a Windows machine with Defender on and at least 15 repetitions, the script's verdict says the overhead is stable (the minimums differ by at least 50 ms) and its median is at least 100 ms or 1.25x of the direct start, and a second run reproduces it. Anything smaller, a noisy difference, or a result that does not repeat is rejected, and the `.cmd` shim stays. Either outcome is recorded here; neither opens a separate pull request.
+
+**Verdict.** Pending: no Windows measurement of the `.cmd` shim exists yet (the macOS run measures the POSIX shim and says so). When the manual workflow has produced one, write here its host, revision, repetitions, the median, P95, and minimum of both starts, the overhead, and the decision (implement, or reject because it stayed under the threshold), with the report's file name. The macOS run of the script is not evidence for a Windows decision.
+
+## Regression budgets
+
+`scripts/store-budgets.json` holds the rules and `scripts/store-budgets.mjs` applies them, to the reports the benchmarks already write; it is separate from any other budget file so that concerns do not collide.
+
+- **Rule.** A median regression above 5% needs an explanation in the pull request; a stable regression above 10% blocks the change unless the pull request justifies it explicitly. The comparison is always between a candidate and a baseline of the same distribution, workload, machine, and run order.
+- **Install and startup metrics** for each of the personal, managed, and developer distributions, taken from two reports of `scripts/benchmark-install.mjs` (`node scripts/store-budgets.mjs --install-report candidate/report.json --install-baseline baseline/report.json --distribution personal`): payload files, installed files, archive bytes, install, update, first startup, warm startup, startup after update, and, when the report has them, cold and warm build. Run each distribution: an optimization for the developer distribution may not regress the personal one, and the check is per distribution.
+- **Store metrics** from a report of `scripts/benchmark-store.mjs`, as above.
+- **Launch.** A launch performs no authoring, no deep verification, no store access, and no collection. This is structural and tested (`packages/core/src/store-boundary.test.ts`), not a time budget.
+
+`scripts/store-budgets.mjs` reads the existing report of `scripts/benchmark-install.mjs`, which records one run per metric; a multi-run report with arrays of samples is compared by its median. The cold and warm release metrics wait on a report that carries them.
+
 ## Not measured
 
-Windows behavior still needs the affected machine: Defender and EDR scanning cost, C: write and rename timing, file locks held by a running executable or native module, simultaneous session and update registration, process-cold versus reboot-cold boot, and network transfer latency. The code retains version directories used by runtime leases and never overwrites a receipt-retained version with different archive bytes.
+Windows behavior still needs the affected machine (including the shared file store and the `.cmd` launcher, above): Defender and EDR scanning cost, C: write and rename timing, file locks held by a running executable or native module, simultaneous session and update registration, process-cold versus reboot-cold boot, and network transfer latency. The code retains version directories used by runtime leases and never overwrites a receipt-retained version with different archive bytes.
