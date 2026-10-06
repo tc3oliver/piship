@@ -4,30 +4,30 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 ## Current baseline
 
-v0.9.1 is the production-validation baseline: tag `v0.9.1` at commit `a97ba43`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.9.1) with six attested archives, Pi 1.0.2, and the schemas `piship/v1alpha6` and `piship-lock/v1alpha6`. A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v091-production-validation-baseline) of the status page. It replaced v0.9.0 (the same schemas and Pi), which stays documented as the [previous baseline](status.md#v090-previous-production-validation-baseline). v0.9.1 is a patch release of the v0.9.0 milestone below: it adds opt-in plain HTTP to internal MCP servers and to the gateway, credential broker, OIDC issuer, audit sinks, and sandbox, identity-derived MCP request headers, and bundled `fd` and `rg` (the [changelog](../CHANGELOG.md#v091) lists them). Changes on `main` since v0.9.1 are listed under Unreleased in the [changelog](../CHANGELOG.md#unreleased).
+v0.11.0 is the production-validation baseline: tag `v0.11.0` at commit `d4f740f`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) on 2026-10-07 with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target), Pi 1.0.3, and the stable contracts `piship/v1` and `piship-lock/v1` (`piship/v1alpha6` and `piship-lock/v1alpha6` stay accepted for the migration window). A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v0110-production-validation-baseline) of the status page. It replaced v0.9.1, which stays documented as the [previous baseline](status.md#v091-previous-production-validation-baseline). v0.10.0 was never published; its changes shipped inside v0.11.0 (the [changelog](../CHANGELOG.md#v0110) lists them). Changes on `main` since v0.11.0 are listed under Unreleased in the [changelog](../CHANGELOG.md#unreleased).
 
 ## Direction
 
-Three steps remain before PiShip is a stable distribution framework. The first two are engineering milestones; the third is a decision. There is no separate "v1.0 engineering" milestone: everything it would have held is in v0.11.
+The engineering milestones on the way to a stable distribution framework, v0.10 and v0.11, are done and shipped in v0.11.0. What is left is 1.0.0, a decision and not engineering: there is no separate "v1.0 engineering" milestone, because everything it would have held is in v0.11. The work that continues is production validation and the open items under [before broad rollout](#before-broad-rollout).
 
-### v0.10 — Portability and Windows hot-path performance
+### v0.10 — Portability and Windows hot-path performance (done)
 
-A distribution is a portable artifact that builds, installs, and starts cheaply on Windows, not only on a developer's Mac. It ships a bundled, stripped payload that installs and starts in far fewer file operations, a portable build that needs no clone of the PiShip source, the developer distribution (`devcode`), and the controls that make a developer profile usable without weakening a managed one (project trust for Claude Code configuration, `--yolo`, package environment and agent files). Never published as its own release: it ships inside v0.11.0 ([status](status.md#v0110-candidate)).
+A distribution is a portable artifact that builds, installs, and starts cheaply on Windows, not only on a developer's Mac. It ships a bundled, stripped payload that installs and starts in far fewer file operations, a portable build that needs no clone of the PiShip source, the developer distribution (`devcode`), and the controls that make a developer profile usable without weakening a managed one (project trust for Claude Code configuration, `--yolo`, package environment and agent files). Never published as its own release: it shipped inside v0.11.0 ([status](status.md#v0110-production-validation-baseline)).
 
-### v0.11 — Runtime footprint, Windows performance, stable v1 contracts, and production readiness
+### v0.11 — Runtime footprint, Windows performance, stable v1 contracts, and production readiness (done)
 
-The last major engineering milestone before 1.0.0. Four workstreams, in this order, in four pull requests:
+The last major engineering milestone before 1.0.0, published as [v0.11.0](status.md#v0110-production-validation-baseline) after Release qualification passed on its exact commit. Four workstreams, in this order, in four pull requests:
 
-- **Runtime footprint and Windows performance.** A measured v0.10 baseline. Pi package dependencies shared where name, exact version, integrity, and bytes are the same, without hoisting. Bundle-safe closures bundled and unsafe ones kept as vendored files. An opt-in shared, content-addressed, immutable file store that never becomes part of what a release or an installation is. A Windows launcher decision made from measurement. Regression budgets for the personal, managed, and developer distributions.
+- **Runtime footprint and Windows performance.** A measured v0.10 baseline. Pi package dependencies shared where name, exact version, integrity, and bytes are the same, without hoisting. Bundle-safe closures bundled and unsafe ones kept as vendored files. A shared, content-addressed, immutable file store (the default on Windows, opt-in elsewhere) that never becomes part of what a release or an installation is. A Windows launcher decision made from measurement. Regression budgets for the personal, managed, and developer distributions.
 - **Stable v1 contracts.** `piship/v1` and `piship-lock/v1` frozen from `piship/v1alpha6` without a redesign, the `v1alpha6` to `v1` migration with a non-mutating `piship migrate --check`, and the compatibility, support, and user-experience contracts.
 - **Production readiness.** Clean-machine qualification of a managed, a personal, and a developer distribution, traced step by step to the test and the workflow that proves it ([qualification matrix](maintainers/v0.11-qualification-matrix.md)), and the Windows file-count pressure of the developer profile.
 - **Security and supply chain.** A [security review](security.md#v011-security-review) of the store, dependency sharing, closure bundling, and the migration, with a responsibility boundary table; and supply-chain qualification on Linux, macOS, and Windows: reproducibility, `verify-release`, tamper rejection, SBOM, notices, vulnerability and registry-signature checks, provenance, and attestation. The SBOM describes the logical dependency graph, not a file list, so sharing and bundling cannot hide a dependency, a license, a source, or an integrity value.
 
 Not part of v0.11: a Windows sandbox adapter, remote workspace synchronization, vendor KMS or HSM integrations, full TUF, a registry marketplace, npm publication, new platform targets, and Pi runtime seams that upstream does not expose.
 
-### 1.0.0 — GA and versioning decision
+### 1.0.0 — GA and versioning decision (next, not an engineering milestone)
 
-A decision, not a body of work. It records that general availability is accepted on the evidence of v0.11 and that stable package versioning begins (the manifest and lock contracts are `piship/v1` and `piship-lock/v1` already; the package version is a separate number). It does not contain unfinished core architecture: anything that would is v0.11's, or is not part of 1.0.0.
+A decision, not a body of work, and the next step. It records that general availability is accepted on the evidence of v0.11 and that stable package versioning begins (the manifest and lock contracts are `piship/v1` and `piship-lock/v1` already; the package version is a separate number). It does not contain unfinished core architecture: anything that would is v0.11's, or is not part of 1.0.0.
 
 ## v0.9.0 — Pi 1.x-native governance (implemented)
 
@@ -60,7 +60,7 @@ This is the work that closed signed channel hardening ([#181](https://github.com
 
 ## Production validation
 
-The first production consumer validates the managed path of a real company distribution on a pinned baseline: v0.9.1, which replaced v0.9.0. The steps to run, and the only facts a report may carry, are in the [production validation protocol](production-validation.md). That evidence is collected downstream, with the owner's approval, and summarized on the status page without identifiers ([distribution qualification](status.md#distribution-qualification)).
+The first production consumer validates the managed path of a real company distribution on a pinned baseline: v0.11.0, which replaced v0.9.1. The steps to run, and the only facts a report may carry, are in the [production validation protocol](production-validation.md). That evidence is collected downstream, with the owner's approval, and summarized on the status page without identifiers ([distribution qualification](status.md#distribution-qualification)).
 
 So far the project has manual real-provider evidence for the reference stack only ([Live provider runs](status.md#after-v071-on-main)). Validation against a real company identity provider and company gateway in production does not exist yet; it is what this stage is for. Fixes that production validation needs go to `main` and reach the consumer in a later qualified release, never by tracking `main`.
 

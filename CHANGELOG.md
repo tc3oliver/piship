@@ -1,16 +1,12 @@
 # Changelog
 
-All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, v0.9.0, and v0.9.1 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0), [v0.9.1](https://github.com/tc3oliver/piship/releases/tag/v0.9.1)); v0.10.0 was never published and its changes ship in v0.11.0, a candidate that will be published as one GitHub pre-release. Every package is versioned `0.11.0`.
+All notable changes to this project are documented in this file. Each section is a project milestone; the manifest and lock schema each milestone uses is listed in the [version map](docs/status.md#version-map). No milestone has been published to npm. v0.7.0, v0.7.1, v0.8.0, v0.8.1, v0.9.0, v0.9.1, and v0.11.0 are published as GitHub pre-releases ([v0.7.0](https://github.com/tc3oliver/piship/releases/tag/v0.7.0), [v0.7.1](https://github.com/tc3oliver/piship/releases/tag/v0.7.1), [v0.8.0](https://github.com/tc3oliver/piship/releases/tag/v0.8.0), [v0.8.1](https://github.com/tc3oliver/piship/releases/tag/v0.8.1), [v0.9.0](https://github.com/tc3oliver/piship/releases/tag/v0.9.0), [v0.9.1](https://github.com/tc3oliver/piship/releases/tag/v0.9.1)); v0.11.0 is published the same way ([v0.11.0](https://github.com/tc3oliver/piship/releases/tag/v0.11.0)); v0.10.0 was never published and its changes ship in v0.11.0. Every package is versioned `0.11.0`.
 
 ## Unreleased
 
-### Fixed
+## v0.11.0
 
-- Sandbox conformance kit: the wait for a command that has printed nothing before the timeout and dispose checks abort it now counts only time the event loop was responsive. A stall at start (a busy host, a backend that works synchronously in the kit's process) no longer aborts a command the backend was not yet given a turn to start, which misreported a backend that ignores cancellation before start as failing the timeout check too. The timing constants are unchanged.
-
-## v0.11.0 (candidate)
-
-Unpublished minor milestone on Pi 1.0.3 with the stable `piship/v1` and `piship-lock/v1` contracts (`piship/v1alpha6` and `piship-lock/v1alpha6` stay accepted for the migration window). Qualification and publication are pending; v0.9.1 remains the production-validation baseline.
+Released 2026-10-07. Minor milestone on Pi 1.0.3 with the stable `piship/v1` and `piship-lock/v1` contracts (`piship/v1alpha6` and `piship-lock/v1alpha6` stay accepted for the migration window). Tag `v0.11.0` is commit `d4f740f0ce7c1b7bebc244e0d4cfa471ede81813`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.11.0) with nine attested archives (`acmecode`, `mypi`, and `devcode` for each target). [Release qualification run 37538011406](https://github.com/tc3oliver/piship/actions/runs/37538011406) passed on that exact commit, every job on its first attempt. v0.11.0 is the production-validation baseline and replaces v0.9.1 ([status](docs/status.md#v0110-production-validation-baseline)).
 
 **v0.10.0 was never published.** It was a candidate only, with no tag, release, or archives. Its changes ship in v0.11.0, as one GitHub pre-release, and are listed here with the rest (the developer distribution, `--yolo`, package environment and agent files, package capability providers, managed Claude project trust controls, and Pi 1.0.3).
 
@@ -67,6 +63,7 @@ Changes since v0.9.1:
 - Update the development-only transitive dependency source-map-js to 1.2.2 to fix CVE-2026-93749 (indexed source-map denial of service).
 - Fix the registry signature check of `piship release`: it ran `npm audit signatures --omit=dev` in a payload that keeps the root `workspaces` but not the workspace packages, so npm reached no runtime package and answered "found no dependencies to audit", and every release recorded `signatures: unavailable` and `qualified` having verified nothing (the v0.9.1 candidate archives of two targets and local builds all did). The check now puts the workspace manifests in place while npm runs and removes them, and a local release records `passed`. A release whose signature verdict is `unavailable` for that reason fails Release candidate (`scripts/check-release-evidence.mjs`).
 - Fix the shared file store's layout marker: it was written in place, so a second install opening a new store at once could read it half-written, take it for a layout it does not know, and run without the store, and an opener that stopped between creating and writing it left an empty marker that turned the store off for good. The marker is now published by one rename, and an empty one is written again.
+- Sandbox conformance kit: the wait for a command that has printed nothing before the timeout and dispose checks abort it now counts only time the event loop was responsive. A stall at start (a busy host, a backend that works synchronously in the kit's process) no longer aborts a command the backend was not yet given a turn to start, which misreported a backend that ignores cancellation before start as failing the timeout check too. The timing constants are unchanged.
 
 ### Behavior changes
 
