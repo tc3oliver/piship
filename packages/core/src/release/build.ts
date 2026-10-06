@@ -7,7 +7,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -27,7 +26,9 @@ import {
   currentTarget,
   type DistributionLock,
 } from "../index.js";
+import type { RuntimeCacheReport } from "../build.js";
 import { STATE_SCHEMAS } from "../migration.js";
+import { renameWithRetry } from "../rename-retry.js";
 import { runtimeCacheFor } from "../runtime-cache.js";
 import { downloadLockedSearchTools } from "../search-tools/index.js";
 import { workspacePackages } from "../runtime-dependencies.js";
@@ -55,6 +56,7 @@ import {
   type CommandResult,
   type ReleaseMetadata,
   type ReleaseOptions,
+  type RuntimeCacheProvenance,
   type ReleaseTestResult,
   type AsyncReleaseTestRunner,
 } from "./metadata.js";
@@ -218,6 +220,22 @@ exit 0
 }
 
 /**
+ * Whether a release builds its runtime cold: `piship release --rebuild`,
+ * PISHIP_RELEASE_NO_CACHE=1, or an injected assembler, which has no runtime to
+ * cache.
+ */
+export function runtimeCacheDisabled(
+  options: Pick<ReleaseOptions, "cache" | "assemble">,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    options.cache === false ||
+    options.assemble !== undefined ||
+    env.PISHIP_RELEASE_NO_CACHE === "1"
+  );
+}
+
+/**
  * Build a verified release: static gates, the canonical payload, required
  * tests, dependency scan, registry signature check, SBOM, notices,
  * metadata, checksums, and a deterministic archive. Any failure removes
@@ -261,10 +279,16 @@ export async function buildRelease(
       downloadLockedSearchTools(lock, target),
     );
     // Only runtime bytes come from the cache; every check below runs afresh.
-    const runtimeCache =
-      options.cache === false || options.assemble
-        ? undefined
-        : runtimeCacheFor(lock);
+    const runtimeCache = runtimeCacheDisabled(options)
+      ? undefined
+      : runtimeCacheFor(lock);
+    // Recorded in release.json: whether cached bytes shipped, and which entry.
+    const provenance: {
+      status: RuntimeCacheProvenance["status"];
+      entry?: string;
+      bundle?: "hit" | "miss";
+    } = { status: "disabled" };
+    if (!runtimeCache) timer.start("runtime cache disabled")();
     const assembled = timer.start("runtime assembly");
     const built = options.assemble
       ? options.assemble(manifestPath, stage)
@@ -274,15 +298,26 @@ export async function buildRelease(
           ...(runtimeCache
             ? {
                 runtimeCache,
-                onRuntimeCache: (found: "hit" | "miss" | "unusable") =>
-                  timer.start(`runtime cache ${found}`)(),
+                onRuntimeCache: (found: RuntimeCacheReport) => {
+                  const detail =
+                    found.status === "hit"
+                      ? ` (${found.linked} linked, ${found.copied} copied)`
+                      : found.crossVolume
+                        ? " (entry copied across volumes)"
+                        : "";
+                  timer.start(`runtime cache ${found.status}${detail}`)();
+                  // A cache that could not be used shipped nothing from it.
+                  provenance.status =
+                    found.status === "unusable" ? "disabled" : found.status;
+                  if (found.entry) provenance.entry = found.entry;
+                },
               }
             : {}),
         });
     assembled();
     const payload = join(stage, RELEASE_DIRECTORY, "payload");
     mkdirSync(dirname(payload), { recursive: true });
-    renameSync(built, payload);
+    renameWithRetry(built, payload);
     const root = dirname(payload);
     const lockDirectory = join(stage, AUDIT_DIRECTORY);
     mkdirSync(lockDirectory);
@@ -429,8 +464,10 @@ export async function buildRelease(
           ...(runtimeCache
             ? {
                 cache: runtimeCache,
-                onCache: (found: "hit" | "miss") =>
-                  timer.start(`bundle cache ${found}`)(),
+                onCache: (found: "hit" | "miss") => {
+                  timer.start(`bundle cache ${found}`)();
+                  provenance.bundle = found;
+                },
               }
             : {}),
           strip: release.strip === true,
@@ -487,6 +524,7 @@ export async function buildRelease(
       channel,
       created,
       qualification: RELEASE_QUALIFIED,
+      runtimeCache: provenance,
       payload: {
         path: "payload",
         inventorySha256: hash(inventory),
@@ -533,8 +571,8 @@ export async function buildRelease(
     // Windows still holds open (a scanner, an indexer) for a moment.
     await rm(directory, { recursive: true, force: true, maxRetries: 3 });
     rmSync(archive, { force: true });
-    renameSync(root, directory);
-    renameSync(stagedArchive, archive);
+    renameWithRetry(root, directory);
+    renameWithRetry(stagedArchive, archive);
     writeFileSync(`${archive}.sha256`, `${result.sha256}  ${name}.tar.gz\n`);
     published();
     return { name, directory, archive, sha256: result.sha256, metadata };

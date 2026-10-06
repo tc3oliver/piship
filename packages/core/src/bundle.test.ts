@@ -15,7 +15,7 @@ vi.mock("node:fs", async (importOriginal) => ({
 }));
 
 import { wildcardTarget } from "./bundle.js";
-import { renameWithRetry } from "./runtime-cache.js";
+import { renameWithRetry } from "./rename-retry.js";
 
 function failure(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(code), { code });

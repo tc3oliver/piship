@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,11 @@ function run(args: string[]) {
     env,
     timeout: 60_000,
   });
+}
+/** The size of a file, or the number of entries of a directory. */
+function readdirSyncOrFile(path: string): number {
+  const stat = statSync(path, { throwIfNoEntry: false });
+  return !stat ? 0 : stat.isDirectory() ? readdirSync(path).length : stat.size;
 }
 function files(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
@@ -60,7 +66,8 @@ beforeAll(() => {
   expect(result.status, result.stderr).toBe(0);
   payload = result.stdout.trim();
 }, 120_000);
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+// The runtime cache built under `root` holds a whole installed tree.
+afterAll(() => rmSync(root, { recursive: true, force: true }), 120_000);
 
 /** Build the same bundled example through the runtime cache in `cache`. */
 function cachedBuild(cache: string, output: string) {
@@ -123,6 +130,90 @@ describe("real bundled Pi runtime", () => {
     const cli = run([join(payload, "piship.mjs"), "--help"]);
     expect(cli.status, cli.stderr).toBe(0);
     expect(cli.stdout).toContain("PiShip");
+  });
+  // The bundler reads these Pi paths by name. Those it only copies are skipped
+  // quietly when they are missing, so a Pi release that moves one would ship a
+  // payload without it; this test fails instead. Paths it must read to bundle
+  // (pi-codemode dist/runtime/worker.js, pi-coding-agent dist/utils/image-
+  // resize-worker.js, and the exports patterns) already fail the build, and
+  // their entries are pinned below.
+  it("pins every Pi path the bundler reads by name", () => {
+    const modules = join(payload, "node_modules");
+    const upstream = join(modules, "@earendil-works");
+    const present = (...parts: string[]) => {
+      const path = join(...parts);
+      expect(readdirSyncOrFile(path), `${path} is missing`).toBeGreaterThan(0);
+    };
+    for (const name of [
+      "pi-coding-agent",
+      "pi-ai",
+      "pi-agent-core",
+      "pi-codemode",
+      "pi-tui",
+      "chord",
+    ])
+      present(upstream, name, "package.json");
+    const agent = join(upstream, "pi-coding-agent");
+    for (const asset of [
+      "README.md",
+      "CHANGELOG.md",
+      "dist/modes/interactive/theme/dark.json",
+      "dist/modes/interactive/theme/light.json",
+      "dist/modes/interactive/assets",
+      "dist/core/export-html/template.html",
+      "dist/core/export-html/template.css",
+      "dist/core/export-html/template.js",
+      "dist/core/export-html/vendor",
+    ])
+      present(agent, ...asset.split("/"));
+    present(
+      upstream,
+      "pi-tui",
+      "native",
+      process.platform,
+      "prebuilds",
+      `${process.platform}-${process.arch}`,
+    );
+    present(modules, "typebox", "package.json");
+    present(modules, "quickjs-wasi", "package.json");
+    present(modules, "quickjs-wasi", "quickjs.wasm");
+    for (const file of [
+      "package.json",
+      "lib/jiti.mjs",
+      "lib/jiti-static.mjs",
+      "dist/jiti.cjs",
+      "dist/babel.cjs",
+    ])
+      present(modules, "jiti", ...file.split("/"));
+    present(modules, "@silvia-odwyer", "photon-node", "package.json");
+    for (const output of [
+      "main.js",
+      "boot.js",
+      "codemode-worker.js",
+      "image-resize-worker.js",
+    ])
+      present(payload, "runtime", output);
+    const { entries } = JSON.parse(
+      readFileSync(join(payload, "metadata", "bundle.json"), "utf8"),
+    ) as { entries: string[] };
+    // An exports key an upstream package drops is skipped, not an error.
+    for (const entry of [
+      "pi-coding-agent",
+      "pi-ai",
+      "pi-ai-compat",
+      "pi-ai-oauth",
+      "pi-ai-providers-all",
+      "pi-agent-core",
+      "pi-codemode",
+      "pi-tui",
+      "chord",
+      "chord-context",
+      "chord-node",
+      "typebox",
+      "codemode-worker",
+      "image-resize-worker",
+    ])
+      expect(entries, entry).toContain(entry);
   });
   it("takes the installed tree and the bundle from the runtime cache and ships the same bytes", () => {
     const cache = join(root, "runtime-cache");

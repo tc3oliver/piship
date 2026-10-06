@@ -25,6 +25,12 @@ export interface ReleaseTestResult {
   readonly result: "passed";
 }
 
+export interface RuntimeCacheProvenance {
+  readonly status: "hit" | "miss" | "disabled";
+  readonly entry?: string;
+  readonly bundle?: "hit" | "miss";
+}
+
 export interface ReleaseMetadata {
   readonly schema: typeof RELEASE_SCHEMA;
   readonly distribution: {
@@ -60,6 +66,15 @@ export interface ReleaseMetadata {
    * this field omit it and were qualified the same way.
    */
   readonly qualification?: string;
+  /**
+   * Where the runtime came from: `hit` placed a cached tree, `miss` installed
+   * and cached one, `disabled` built cold (`--rebuild`,
+   * PISHIP_RELEASE_NO_CACHE=1, or a cache that could not be used). `entry` is
+   * the cached tree's identity (the digest of its file list) and `bundle`
+   * says the same of a bundled runtime. Payload bytes do not depend on it;
+   * the release.json of two builds of one source can differ in this field.
+   */
+  readonly runtimeCache?: RuntimeCacheProvenance;
   readonly payload: {
     readonly path: "payload";
     readonly inventorySha256: string;

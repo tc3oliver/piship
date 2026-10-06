@@ -56,6 +56,7 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
+import { runtimeCacheDisabled } from "./release/build.js";
 import { runCommand } from "./release/shared.js";
 import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
@@ -2982,6 +2983,32 @@ describe("release stages", () => {
     expect(error.code).toBe("INTEGRITY_FAILED");
     expect(scanEnded).toBe(true);
     expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("records that an injected assembler built its runtime without the cache, and verifies that release", async () => {
+    const { path } = project();
+    const built = await build(path);
+    expect(built.metadata.runtimeCache).toEqual({ status: "disabled" });
+    expect(
+      JSON.parse(readFileSync(join(built.directory, "release.json"), "utf8"))
+        .runtimeCache,
+    ).toEqual({ status: "disabled" });
+    expect(
+      (await verifyRelease(built.directory)).metadata.runtimeCache,
+    ).toEqual({ status: "disabled" });
+  });
+
+  it("builds the runtime cold for --rebuild, PISHIP_RELEASE_NO_CACHE=1, or an injected assembler only", () => {
+    expect(runtimeCacheDisabled({})).toBe(false);
+    expect(runtimeCacheDisabled({ cache: true }, {})).toBe(false);
+    expect(runtimeCacheDisabled({ cache: false })).toBe(true);
+    expect(runtimeCacheDisabled({ assemble: () => "" })).toBe(true);
+    expect(runtimeCacheDisabled({}, { PISHIP_RELEASE_NO_CACHE: "1" })).toBe(
+      true,
+    );
+    expect(runtimeCacheDisabled({}, { PISHIP_RELEASE_NO_CACHE: "0" })).toBe(
+      false,
+    );
   });
 
   it("records the release as qualified and verifies only a qualified release", async () => {
