@@ -20,6 +20,7 @@ import {
   plainHttpOrigins,
   type ResolvedDecision,
   redact,
+  duringStartup,
   resolveDecision,
   startupMark,
 } from "@piship/contracts";
@@ -154,7 +155,16 @@ export class GovernanceSession {
     this.#yolo = options.yolo === true;
   }
 
-  static async open(options: GovernanceOptions): Promise<GovernanceSession> {
+  /**
+   * Opens the session. The paths it resolves while it sets up (the sandbox
+   * profile, the project's git protection, the policy engine) are resolved
+   * once, not once per caller: `duringStartup`.
+   */
+  static open(options: GovernanceOptions): Promise<GovernanceSession> {
+    return duringStartup(() => GovernanceSession.#open(options));
+  }
+
+  static async #open(options: GovernanceOptions): Promise<GovernanceSession> {
     // The launch refuses this first; a session opened by other means must too.
     const refusal = options.yolo ? yoloRefusal(options.lock) : undefined;
     if (refusal) throw refusal;
