@@ -26,7 +26,14 @@ jobs:
           foreach ($process in $preferences.ExclusionProcess) { Remove-MpPreference -ExclusionProcess $process }
           foreach ($extension in $preferences.ExclusionExtension) { Remove-MpPreference -ExclusionExtension $extension }
           Set-MpPreference -DisableRealtimeMonitoring $false
-          $status = Get-MpComputerStatus
+          # Real-time protection starts asynchronously on the runner image; wait for it.
+          $deadline = (Get-Date).AddSeconds(120)
+          do {
+            $status = Get-MpComputerStatus
+            if ($status.RealTimeProtectionEnabled) { break }
+            Start-Sleep -Seconds 3
+            Set-MpPreference -DisableRealtimeMonitoring $false
+          } while ((Get-Date) -lt $deadline)
           $preferences = Get-MpPreference
           if (-not $status.RealTimeProtectionEnabled) { throw "Defender real-time protection is disabled" }
           if ($preferences.ExclusionPath.Count -or $preferences.ExclusionProcess.Count -or $preferences.ExclusionExtension.Count) { throw "Defender exclusions remain" }
