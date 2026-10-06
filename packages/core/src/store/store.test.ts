@@ -10,10 +10,12 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { verifyStore } from "./collect.js";
 import { ContentStore, type Primitive, storeLayout } from "./store.js";
@@ -106,6 +108,44 @@ describe("the file store", () => {
     if (unprivileged)
       expect(() => writeFileSync(output, "changed")).toThrow(/EACCES|EPERM/);
     expect(readFileSync(object, "utf8")).toBe("shared");
+  });
+
+  it("removes a tree of read-only hard-linked files, by every kind of removal, and leaves the object intact", async () => {
+    const home = temp();
+    const store = open(join(home, "store"), "hardlink");
+    const names = ["rm-tree", "unlink", "rm-file"] as const;
+    for (const name of names)
+      await place(store, join(home, name, "pkg", "index.js"), "shared");
+    const object = objectOf(store, "shared");
+    expect(lstatSync(object).nlink).toBe(1 + names.length);
+    // What uninstall, update, and rollback use (rmSync with recursive), what
+    // the reclaim of old versions uses (unlinkSync), and a single file (rm).
+    rmSync(join(home, "rm-tree"), { recursive: true, force: true });
+    unlinkSync(join(home, "unlink", "pkg", "index.js"));
+    await rm(join(home, "rm-file", "pkg", "index.js"));
+    expect(existsSync(join(home, "rm-tree"))).toBe(false);
+    expect(readFileSync(object, "utf8")).toBe("shared");
+    expect(lstatSync(object).nlink).toBe(1);
+    // The object is still read-only afterwards, whatever the removals did to
+    // the attribute that all of a file's names share.
+    expect(lstatSync(object).mode & 0o222).toBe(0);
+    expect(verifyStore({ root: join(home, "store") }).damaged).toEqual([]);
+  });
+
+  it("restores the read-only mode of an object whose bytes are right but whose mode was changed", async () => {
+    const home = temp();
+    const root = join(home, "store");
+    const store = open(root, "hardlink");
+    await place(store, join(home, "a", "index.js"), "shared");
+    const object = objectOf(store, "shared");
+    store.end();
+    chmodSync(object, 0o666);
+    expect(lstatSync(object).mode & 0o222).not.toBe(0);
+    const next = open(root, "hardlink");
+    await place(next, join(home, "b", "index.js"), "shared");
+    expect(next.counts.reused).toBe(1);
+    expect(next.counts.repaired).toBe(0);
+    expect(lstatSync(object).mode & 0o222).toBe(0);
   });
 
   it.each(["copy", "clone"] as const)(

@@ -1,6 +1,6 @@
 // Whether an install or update uses the shared file store, where it is, and
 // how it places files. The one decision that depends on measurement is
-// `DEFAULT_STORE_MODE`; everything else follows from it.
+// `defaultStoreMode`; everything else follows from it.
 import {
   constants,
   copyFileSync,
@@ -19,28 +19,38 @@ import { ContentStore, type Primitive, storeLayout } from "./store.js";
 export type StoreMode = Primitive | "off";
 
 /**
- * What an install and an update do when `PISHIP_STORE` is unset.
+ * What an install and an update do on `platform` when `PISHIP_STORE` is unset.
  *
- * `off` until a measurement says otherwise. A store writes every object once
- * and then places from it, so the first install writes each file twice, and
- * any primitive that is safe costs more than writing the files where file
- * creation is cheap (macOS: 2x to 4x, `docs/performance.md`). It can pay only
- * where a created file is expensive, and that is Windows with Defender, where
- * no number exists yet. `scripts/benchmark-store.mjs` produces it (the manual
- * Windows benchmark workflow runs it). If it shows a primitive within the
- * budgets of `scripts/store-budgets.json`, this is the one line to change:
- * `clone` where the volume has copy-on-write clones (it is not used at all
- * where it does not), `hardlink` when the Windows result and the removal of a
- * linked tree support it, `copy` never (it only adds writes).
+ * `hardlink` on Windows, `off` everywhere else, because that is what the
+ * measurements say (`docs/performance.md`). A store writes every object once
+ * and then places from it, so it pays only where creating a file is expensive:
+ * on Windows with Defender, hardlinking is 0.97x a direct extraction for a
+ * first install (the store being filled) and 0.10x for a repeat install,
+ * 0.17x for an update, and 0.70x for removal. On macOS every primitive costs
+ * 2x to 6x more than writing the files, and Linux has no measurement showing
+ * a gain, so both stay as they were. `copy` is never a candidate (it only
+ * adds writes) and `clone` falls back to a copy on NTFS. An explicit
+ * `PISHIP_STORE`, including `off`, always wins. This is the one place the
+ * default is decided; `scripts/benchmark-store.mjs` produces the evidence.
  */
-export const DEFAULT_STORE_MODE: StoreMode = "off";
+export function defaultStoreMode(
+  platform: NodeJS.Platform = process.platform,
+): StoreMode {
+  return platform === "win32" ? "hardlink" : "off";
+}
 
 const MODES: readonly StoreMode[] = ["off", "copy", "clone", "hardlink"];
 
-/** The mode `PISHIP_STORE` names, or the default; anything else is refused. */
-export function storeMode(env: NodeJS.ProcessEnv = process.env): StoreMode {
+/**
+ * The mode `PISHIP_STORE` names, or the default of `platform`; anything else
+ * is refused.
+ */
+export function storeMode(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): StoreMode {
   const value = env.PISHIP_STORE?.trim().toLowerCase();
-  if (!value) return DEFAULT_STORE_MODE;
+  if (!value) return defaultStoreMode(platform);
   const mode = MODES.find((candidate) => candidate === value);
   if (!mode)
     throw new PiShipError(

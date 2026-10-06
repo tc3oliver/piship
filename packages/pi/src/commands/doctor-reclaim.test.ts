@@ -12,6 +12,8 @@ vi.mock("@piship/core", async (original) => ({
   sweepStateTemporaries: vi.fn(),
   reclaimLaunchTemporaries: vi.fn(() => undefined),
   refreshInstalledLauncher: vi.fn(),
+  // The shared store of the test run may be in use by other test files.
+  maintainRuntimeStore: vi.fn(() => undefined),
   reclaimObsoleteVersions: core.reclaimObsoleteVersions,
   describeReclaimed: core.describeReclaimed,
 }));

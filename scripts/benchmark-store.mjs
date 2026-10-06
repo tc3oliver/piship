@@ -21,7 +21,7 @@
 //
 // The decision rule is printed with the result and documented in
 // docs/performance.md. This script changes no product code and never picks the
-// default: a person reads the Windows numbers and edits DEFAULT_STORE_MODE.
+// default: a person reads the Windows numbers and edits defaultStoreMode.
 //
 // Build first (npm run build). Usage:
 //   node scripts/benchmark-store.mjs --out <dir> [--root <checkout>]
@@ -186,7 +186,7 @@ async function main() {
   const { ContentStore } = await import(
     pathToFileURL(join(root, "packages/core/dist/store/store.js")).href
   );
-  const { DEFAULT_STORE_MODE } = await import(
+  const { defaultStoreMode } = await import(
     pathToFileURL(join(root, "packages/core/dist/store/policy.js")).href
   );
 
@@ -319,7 +319,7 @@ async function main() {
       primitives,
       verifyModes,
       storeOnAnotherVolume: Boolean(storeBase),
-      defaultMode: DEFAULT_STORE_MODE,
+      defaultMode: defaultStoreMode(),
     },
     scenarios,
     primitives: notes,

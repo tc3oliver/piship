@@ -10,7 +10,7 @@ export {
   type VerifyStoreOptions,
 } from "./collect.js";
 export {
-  DEFAULT_STORE_MODE,
+  defaultStoreMode,
   openInstallStore,
   storeMode,
   storeRoot,
