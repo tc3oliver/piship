@@ -795,6 +795,82 @@ describe("one owner per session file (#57)", () => {
     expect(ownerRecords()).toEqual([]);
   }, 30_000);
 
+  // Linux counts ticks from boot, which a start time cannot be compared with;
+  // elsewhere a record names its process by pid and start time, and the system
+  // is asked only to judge a record whose ID some process holds.
+  describe.runIf(process.platform !== "linux")(
+    "a record that carries a start time and no start identity",
+    () => {
+      function owned(
+        file: string,
+        pid: number,
+        started: number,
+        instance: string,
+      ) {
+        const directory = join(sessionDir, OWNER_DIRECTORY);
+        mkdirSync(directory, { recursive: true });
+        const session = file.slice(sessionDir.length + 1);
+        writeFileSync(
+          join(directory, `${session}.${instance}.json`),
+          JSON.stringify({
+            schema: "piship-session-owner/v1",
+            session,
+            pid,
+            identity: null,
+            started,
+            host: hostname(),
+            instance,
+            ...hereScope(),
+          }),
+        );
+      }
+      it("is taken over when the process with its ID started at another time", () => {
+        const { file, id } = persistedSession();
+        owned(
+          file,
+          livePid(),
+          Date.now() - 3_600_000,
+          "00000000-0000-4000-8000-000000000011",
+        );
+        const opened = open();
+        expect(opened.notice).toBeUndefined();
+        expect(opened.sessionManager.getSessionId()).toBe(id);
+        opened.ownership.release();
+        expect(ownerRecords()).toEqual([]);
+      });
+
+      it("keeps the session with its owner when the process started when the record says", () => {
+        const { file, id } = persistedSession();
+        owned(
+          file,
+          livePid(),
+          Date.now(),
+          "00000000-0000-4000-8000-000000000012",
+        );
+        const opened = open();
+        expect(opened.notice).toMatch(/open in another mypi process/);
+        expect(opened.sessionManager.getSessionId()).not.toBe(id);
+        opened.ownership.release();
+      });
+
+      it("writes its own record with its start time and without reading an identity", () => {
+        const { file } = persistedSession();
+        const ownership = new SessionOwnership();
+        expect(ownership.claim(file)).toBe(true);
+        const [record] = ownerRecords();
+        const held = JSON.parse(
+          readFileSync(
+            join(sessionDir, OWNER_DIRECTORY, record as string),
+            "utf8",
+          ),
+        );
+        expect(held.identity).toBeNull();
+        expect(held.started).toBe(Math.round(performance.timeOrigin));
+        ownership.release();
+      });
+    },
+  );
+
   it("lets launches in different projects run at once", async () => {
     const mine = persistedSession();
     const otherProject = join(temp, "other-project");

@@ -1,6 +1,12 @@
 // Installed release ownership: the receipt, install, uninstall, purge, and
 // status.
 export { installDistribution, type InstallChecks } from "./install.js";
+export {
+  inspectInstalledLauncher,
+  installedLauncherPath,
+  refreshInstalledLauncher,
+  type InstalledLauncher,
+} from "./launcher.js";
 export { purgeDistributionState, type PurgeResult } from "./purge.js";
 export {
   RECEIPT_SCHEMA,
@@ -22,6 +28,12 @@ export {
   type UpdateTrustState,
 } from "./trust-state.js";
 export { sweepStateTemporaries } from "./temporaries.js";
+export {
+  describeReclaimed,
+  reclaimObsoleteVersions,
+  type ReclaimedVersions,
+  type ReclaimOptions,
+} from "./reclaim.js";
 export {
   uninstallAndPurgeDistribution,
   uninstallDistribution,

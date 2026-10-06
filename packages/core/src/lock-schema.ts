@@ -278,6 +278,17 @@ export interface DistributionLock {
    * only for a managed distribution.
    */
   readonly cacheWarming?: CacheWarmingConfig;
+  /**
+   * v1alpha6: `runtime.verifyAtLaunch` when the manifest declares it. Absent
+   * or false: a launch hashes only this lock, against the digest recorded
+   * when the release was installed, trusts the rest of the payload as
+   * installed (it was verified then, and `doctor` verifies it again), reads
+   * the resources it loads without hashing them, and may keep a V8 code cache
+   * of a bundled payload. True: a launch verifies the whole payload, its
+   * inventory included, hashes each resource against this lock, and keeps no
+   * code cache, since a cache in state is not verified.
+   */
+  readonly verifyAtLaunch?: boolean;
   /** v1alpha6: virtual models and their physical routes. */
   readonly virtualModels?: readonly LockedVirtualModel[];
   /** v1alpha6: the runtime seam evidence. */

@@ -52,7 +52,7 @@ function run(launch: string) {
   write(join(temp, "bin", "acmepi"), launcherSource());
   stub(
     "core",
-    'export function verifyPayload() { return { app: { id: "acmepi" } }; }\n',
+    'export function verifyLaunchPayload() { return { app: { id: "acmepi" } }; }\n',
   );
   // What Pi would see when @piship/pi imports it.
   stub(

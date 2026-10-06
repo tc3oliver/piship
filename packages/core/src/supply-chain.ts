@@ -42,12 +42,23 @@ function declaredLicense(manifest: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * The package in `directory`, from one listing of it, or null when it has no
+ * readable name and version. `modules` is its own `node_modules` when it has a
+ * real one.
+ */
 function readPackage(
   payloadDir: string,
   directory: string,
-): PayloadPackage | null {
+): { item: PayloadPackage; modules: string | undefined } | null {
+  const entries = readdirSync(directory, { withFileTypes: true });
   const file = join(directory, "package.json");
-  if (!existsSync(file)) return null;
+  if (
+    !entries.some(
+      (entry) => entry.name === "package.json" && !entry.isDirectory(),
+    )
+  )
+    return null;
   let manifest: Record<string, unknown>;
   try {
     manifest = JSON.parse(readFileSync(file, "utf8")) as Record<
@@ -63,14 +74,21 @@ function readPackage(
     return null;
   const path = posix(relative(payloadDir, directory));
   return {
-    name: manifest.name,
-    version: manifest.version,
-    path,
-    license: declaredLicense(manifest),
-    licenseFiles: readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && LICENSE_FILE.test(entry.name))
-      .map((entry) => `${path}/${entry.name}`)
-      .sort(),
+    item: {
+      name: manifest.name,
+      version: manifest.version,
+      path,
+      license: declaredLicense(manifest),
+      licenseFiles: entries
+        .filter((entry) => entry.isFile() && LICENSE_FILE.test(entry.name))
+        .map((entry) => `${path}/${entry.name}`)
+        .sort(),
+    },
+    modules: entries.some(
+      (entry) => entry.name === "node_modules" && entry.isDirectory(),
+    )
+      ? join(directory, "node_modules")
+      : undefined,
   };
 }
 
@@ -79,15 +97,21 @@ function readPackage(
  * sorted by path. Only real directories are walked; symlinks are not followed.
  */
 export function listPayloadPackages(payloadDir: string): PayloadPackage[] {
+  const bundle = join(payloadDir, "metadata", "bundle.json");
+  if (existsSync(bundle)) {
+    const metadata = JSON.parse(readFileSync(bundle, "utf8")) as {
+      components?: PayloadPackage[];
+    };
+    if (Array.isArray(metadata.components)) return metadata.components;
+  }
   const found: PayloadPackage[] = [];
   const visitPackage = (directory: string) => {
-    const item = readPackage(payloadDir, directory);
-    if (!item) return;
-    found.push(item);
-    visitModules(join(directory, "node_modules"));
+    const read = readPackage(payloadDir, directory);
+    if (!read) return;
+    found.push(read.item);
+    if (read.modules) visitModules(read.modules);
   };
   const visitModules = (modules: string) => {
-    if (!existsSync(modules) || !lstatSync(modules).isDirectory()) return;
     for (const entry of readdirSync(modules, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
       const directory = join(modules, entry.name);
@@ -100,13 +124,17 @@ export function listPayloadPackages(payloadDir: string): PayloadPackage[] {
           visitPackage(join(directory, scoped.name));
     }
   };
-  visitModules(join(payloadDir, "node_modules"));
+  const top = join(payloadDir, "node_modules");
+  if (existsSync(top) && lstatSync(top).isDirectory()) visitModules(top);
   // Vendored Pi packages: each has its own npm root under pi-packages/<id>.
   const vendored = join(payloadDir, "pi-packages");
   if (existsSync(vendored) && lstatSync(vendored).isDirectory())
     for (const entry of readdirSync(vendored, { withFileTypes: true }))
-      if (entry.isDirectory())
-        visitModules(join(vendored, entry.name, "node_modules"));
+      if (entry.isDirectory()) {
+        const modules = join(vendored, entry.name, "node_modules");
+        if (existsSync(modules) && lstatSync(modules).isDirectory())
+          visitModules(modules);
+      }
   return found.sort((a, b) => compare(a.path, b.path));
 }
 
@@ -167,6 +195,8 @@ export interface SbomInput {
   readonly target: string;
   /** RFC3339 creation time. */
   readonly created: string;
+  /** The payload's packages, when the caller has already listed them. */
+  readonly packages?: readonly PayloadPackage[];
   readonly lockPackages: readonly {
     readonly path: string;
     readonly version: string;
@@ -320,7 +350,7 @@ function packageListDigest(packages: readonly PayloadPackage[]): string {
 
 /** A deterministic SPDX 2.3 JSON document for every package in the payload. */
 export function generateSbom(input: SbomInput): SpdxDocument {
-  const packages = listPayloadPackages(input.payloadDir);
+  const packages = input.packages ?? listPayloadPackages(input.payloadDir);
   const { id, version } = input.distribution;
   const lock = new Map(input.lockPackages.map((item) => [item.path, item]));
   const spdxId = spdxIdAllocator();
@@ -447,7 +477,11 @@ function sbomPackages(sbom: unknown): {
  * Each payload package is matched by name, version, and its `payload:<path>`
  * sourceInfo.
  */
-export function verifySbom(payloadDir: string, sbom: unknown): void {
+export function verifySbom(
+  payloadDir: string,
+  sbom: unknown,
+  listed: readonly PayloadPackage[] = listPayloadPackages(payloadDir),
+): void {
   const { document, packages } = sbomPackages(sbom);
   const described = new Map<string, SpdxPackage>();
   const seenIds = new Set<string>();
@@ -470,10 +504,7 @@ export function verifySbom(payloadDir: string, sbom: unknown): void {
   if (!relationships.has(`${DOCUMENT_ID} DESCRIBES ${DISTRIBUTION_ID}`))
     fail("SBOM is missing the DESCRIBES relationship for the distribution");
   const installed = new Set<string>();
-  for (const item of [
-    ...listPayloadPackages(payloadDir),
-    ...payloadSearchTools(payloadDir),
-  ]) {
+  for (const item of [...listed, ...payloadSearchTools(payloadDir)]) {
     const key = `${item.name}@${item.version} (${item.path})`;
     installed.add(key);
     const entry = described.get(key);

@@ -1,14 +1,7 @@
 // Restore a damaged installed release from a trusted copy of the same release.
-import {
-  cpSync,
-  existsSync,
-  readFileSync,
-  renameSync,
-  statSync,
-} from "node:fs";
+import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
-import { sha256File } from "../archive.js";
 import { hash } from "../digest.js";
 import { type DistributionLock, verifyPayload } from "../index.js";
 import {
@@ -23,6 +16,7 @@ import {
 import { acquireLaunchGate, runtimeLeases } from "../install/runtime-lease.js";
 import { verifyRelease } from "../release/index.js";
 import { createStagingDirectory } from "../temporary-directories.js";
+import { renameWithRetry } from "../rename-retry.js";
 
 export interface RepairResult {
   readonly status: "repaired" | "intact";
@@ -56,13 +50,15 @@ export async function repairDistribution(
       const path = resolve(source);
       const isArchive = statSync(path).isFile();
       let payload = path;
-      if (isArchive || existsSync(join(path, "release.json")))
-        payload = (
-          await verifyRelease(path, {
-            requireTarget: true,
-            extractTo: join(temporary.path, "release"),
-          })
-        ).payload;
+      let archiveSha256: string | undefined;
+      if (isArchive || existsSync(join(path, "release.json"))) {
+        const verified = await verifyRelease(path, {
+          requireTarget: true,
+          extractTo: join(temporary.path, "release"),
+        });
+        payload = verified.payload;
+        archiveSha256 = verified.archiveSha256;
+      }
       if (!payload.startsWith(`${temporary.path}`)) {
         // Verified below as the copy that is moved into place.
         cpSync(payload, join(temporary.path, "payload"), { recursive: true });
@@ -87,7 +83,7 @@ export async function repairDistribution(
           "lock digest",
         isArchive &&
           entry.release?.archiveSha256 &&
-          (await sha256File(path)) !== entry.release.archiveSha256 &&
+          archiveSha256 !== entry.release.archiveSha256 &&
           "archive digest",
       ].filter(Boolean);
       if (problems.length)
@@ -119,8 +115,8 @@ export async function repairDistribution(
         // the release missing, which fails closed and the next repair
         // restores.
         if (existsSync(entry.payload))
-          renameSync(entry.payload, join(temporary.path, "damaged"));
-        renameSync(payload, entry.payload);
+          renameWithRetry(entry.payload, join(temporary.path, "damaged"));
+        renameWithRetry(payload, entry.payload);
         syncDirectory(apps);
       } finally {
         gate.release();

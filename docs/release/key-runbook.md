@@ -127,7 +127,7 @@ A client is stranded when it cannot verify the current channel: its root's chann
 A released version is bad and should leave every machine. Clients refuse downgrades, so "rollback" is one of three actions, often together:
 
 1. **Stop it spreading.** Re-sign the channel with a fixed version, or take `<channel>.json` and `<channel>.json.sig` off the host: clients then fail `update` with `UPDATE_FAILED` and stay on what they have.
-2. **Local rollback, on each machine.** `<command> rollback` switches back to the retained release when `updates.rollback` is true in both releases. It verifies the retained release, runs its launch check and the migration check, and keeps sessions, preferences, and user policy. It does not change the update trust state, so a key a newer root removed stays refused.
+2. **Local rollback, on each machine.** `<command> rollback` switches back to the retained release when `updates.rollback` is true in both releases. It loads the retained release's target and metadata, runs the migration check, and keeps sessions, preferences, and user policy. It does not change the update trust state, so a key a newer root removed stays refused.
 3. **Fix forward, for everyone.** Release the last good source again with a **higher version**, review `piship diff`, and sign it into every channel that carries the bad one, with a higher sequence.
 
 ## Checklist after any key event

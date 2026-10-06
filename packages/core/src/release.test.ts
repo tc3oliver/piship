@@ -34,6 +34,7 @@ import {
   requireCurrentLock,
   resolveLock,
 } from "./index.js";
+import { createArchive } from "./archive.js";
 import { STATE_SCHEMAS } from "./migration.js";
 import {
   buildRelease,
@@ -45,6 +46,9 @@ import {
   downloadArchive,
   evaluateSignatures,
   evaluateVulnerabilities,
+  isUnqualifiedPayload,
+  localBuildMarkerPath,
+  markLocalBuild,
   npmAuditScanner,
   piCompatibility,
   piCompatibilitySurfaces,
@@ -53,6 +57,8 @@ import {
   signChannel,
   verifyRelease,
 } from "./release/index.js";
+import { runtimeCacheDisabled } from "./release/build.js";
+import { runCommand } from "./release/shared.js";
 import { generateSigningKey, pemSigner, signBytes } from "./signing.js";
 import { formatChecksums } from "./supply-chain.js";
 
@@ -1816,6 +1822,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
         `${name}bbbbbb`,
         `${name}notes`,
         built.name,
+        `${built.name}.build-info.json`,
         `${built.name}.tar.gz`,
         `${built.name}.tar.gz.sha256`,
       ].sort(),
@@ -1840,6 +1847,7 @@ describe.runIf(HOST_EVIDENCED)("staging a killed release build left", () => {
         `${name}bbbbbb`,
         `${name}notes`,
         built.name,
+        `${built.name}.build-info.json`,
         `${built.name}.tar.gz`,
         `${built.name}.tar.gz.sha256`,
       ].sort(),
@@ -1936,9 +1944,23 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
     ]);
     expect(readdirSync(join(dir, "dist", "releases")).sort()).toEqual([
       `acmepi-1.0.0-${target}`,
+      `acmepi-1.0.0-${target}.build-info.json`,
       `acmepi-1.0.0-${target}.tar.gz`,
       `acmepi-1.0.0-${target}.tar.gz.sha256`,
     ]);
+    // The shipped installers go straight to `install`, which binds the
+    // release's metadata and target. Hashing every payload file belongs to
+    // `verify-release`, which the installers only point to.
+    for (const script of ["install.sh", "install.ps1"]) {
+      const text = readFileSync(join(first.directory, script), "utf8");
+      const commands = text
+        .split("\n")
+        .filter((line) => /^node /.test(line))
+        .map((line) => line.replace(/^node .*piship\.mjs"? /, ""));
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatch(/^install "\$here"/);
+      expect(text).toContain("verify-release");
+    }
     const checksums = readFileSync(
       join(first.directory, "checksums.txt"),
       "utf8",
@@ -1977,6 +1999,7 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       target,
       channel: "stable",
       created: "2026-01-01T00:00:00Z",
+      qualification: "qualified",
       stateSchemas: STATE_SCHEMAS,
       tests: [
         { name: "launch-version", result: "passed" },
@@ -2176,6 +2199,173 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       await expect(
         verifyRelease(built.archive, { expectedSha256: "f".repeat(64) }),
       ).rejects.toThrow(/does not match the expected/);
+    });
+  });
+
+  describe("the consumer path reads an archive once and verifies the bytes it wrote", () => {
+    const consumer = { fastClient: true, requireTarget: true } as const;
+
+    /** A valid archive of `built` whose payload was edited after the inventory was written. */
+    async function edited(
+      built: Awaited<ReturnType<typeof build>>,
+      edit: (payload: string) => void,
+    ): Promise<string> {
+      const dir = temp();
+      cpSync(built.directory, join(dir, built.name), { recursive: true });
+      edit(join(dir, built.name, "payload"));
+      const out = join(dir, `${built.name}.tar.gz`);
+      await createArchive(join(dir, built.name), built.name, out);
+      return out;
+    }
+    const agents = (payload: string) =>
+      join(payload, "resources", "resources", "AGENTS.md");
+
+    it("reports the digest of the bytes it read and leaves a verified payload", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const verified = await verifyRelease(built.archive, consumer);
+      expect(verified.archiveSha256).toBe(built.sha256);
+      expect(existsSync(join(verified.payload, "piship.lock"))).toBe(true);
+      // Only the release metadata and the payload are written.
+      expect(readdirSync(verified.directory).sort()).toEqual([
+        "payload",
+        "release.json",
+      ]);
+      verified.cleanup();
+    });
+    it("hashes the bytes a metadata-only read sees too", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const verified = await verifyRelease(built.archive, {
+        fastClient: true,
+        metadataOnly: true,
+      });
+      expect(verified.archiveSha256).toBe(built.sha256);
+      verified.cleanup();
+    });
+    it("rejects an expected digest the bytes it read do not match, removing what it extracted", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const extractTo = join(temp(), "extract");
+      const error = await rejection(
+        verifyRelease(built.archive, {
+          ...consumer,
+          expectedSha256: "f".repeat(64),
+          extractTo,
+        }),
+      );
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(/does not match the expected/);
+      expect(existsSync(extractTo)).toBe(false);
+    });
+    it("rejects a sidecar that disagrees with the bytes read", async () => {
+      const { path } = project();
+      const built = await build(path);
+      writeFileSync(
+        `${built.archive}.sha256`,
+        `${"0".repeat(64)}  ${basename(built.archive)}\n`,
+      );
+      const error = await rejection(verifyRelease(built.archive, consumer));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(/does not match .*\.tar\.gz\.sha256/);
+    });
+    it("rejects a corrupted file inside an otherwise valid archive, naming it with its digests", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const archive = await edited(built, (payload) =>
+        writeFileSync(agents(payload), "# edited after the inventory\n"),
+      );
+      const error = await rejection(verifyRelease(archive, consumer));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(
+        /modified: resources\/resources\/AGENTS\.md \(expected [0-9a-f]{16}, actual [0-9a-f]{16}\)/,
+      );
+    });
+    it("rejects a truncated file, a missing file, and an extra file", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const truncated = await edited(built, (payload) =>
+        writeFileSync(
+          agents(payload),
+          readFileSync(agents(payload)).subarray(0, 3),
+        ),
+      );
+      expect(
+        (await rejection(verifyRelease(truncated, consumer))).message,
+      ).toContain("modified: resources/resources/AGENTS.md");
+      const missing = await edited(built, (payload) => rmSync(agents(payload)));
+      expect(
+        (await rejection(verifyRelease(missing, consumer))).message,
+      ).toContain("missing: resources/resources/AGENTS.md");
+      const extra = await edited(built, (payload) =>
+        writeFileSync(join(payload, "planted.js"), "console.log('x');\n"),
+      );
+      expect(
+        (await rejection(verifyRelease(extra, consumer))).message,
+      ).toContain("unexpected: planted.js");
+    });
+    describe("written straight into the destination", () => {
+      it("writes only the payload, keeps release.json in memory, and verifies the files", async () => {
+        const { path } = project();
+        const built = await build(path);
+        const payloadTo = join(temp(), "1.0.0");
+        const verified = await verifyRelease(built.archive, {
+          ...consumer,
+          payloadTo,
+          expectedSha256: built.sha256,
+        });
+        expect(verified.archiveSha256).toBe(built.sha256);
+        expect(verified.payload).toBe(payloadTo);
+        expect(verified.metadata.distribution.version).toBe("1.0.0");
+        expect(existsSync(join(payloadTo, "piship.lock"))).toBe(true);
+        expect(existsSync(join(payloadTo, "release.json"))).toBe(false);
+        expect(readdirSync(payloadTo).sort()).toEqual(
+          readdirSync(join(built.directory, "payload")).sort(),
+        );
+      });
+      it("removes the destination when a file, the digest, or the sidecar does not match", async () => {
+        const { path } = project();
+        const built = await build(path);
+        const corrupted = await edited(built, (payload) =>
+          writeFileSync(agents(payload), "# edited\n"),
+        );
+        const first = join(temp(), "dest");
+        const error = await rejection(
+          verifyRelease(corrupted, { ...consumer, payloadTo: first }),
+        );
+        expect(error.code).toBe("INTEGRITY_FAILED");
+        expect(error.message).toContain(
+          "modified: resources/resources/AGENTS.md",
+        );
+        expect(existsSync(first)).toBe(false);
+        const second = join(temp(), "dest");
+        await expect(
+          verifyRelease(built.archive, {
+            ...consumer,
+            payloadTo: second,
+            expectedSha256: "f".repeat(64),
+          }),
+        ).rejects.toThrow(/does not match the expected/);
+        expect(existsSync(second)).toBe(false);
+      });
+    });
+    it("rejects a replaced inventory that release.json does not bind", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const archive = await edited(built, (payload) => {
+        const inventory = join(payload, "metadata", "inventory.json");
+        const entries = JSON.parse(readFileSync(inventory, "utf8")) as Record<
+          string,
+          string
+        >;
+        // An inventory that vouches for an edited file.
+        writeFileSync(agents(payload), "# edited\n");
+        entries["resources/resources/AGENTS.md"] = "0".repeat(64);
+        writeFileSync(inventory, JSON.stringify(entries, null, 2));
+      });
+      const error = await rejection(verifyRelease(archive, consumer));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toContain("payload inventory");
     });
   });
 });
@@ -2671,6 +2861,16 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       fetcher,
     );
     expect(readFileSync(out).length).toBe(entry.bytes);
+    // The digest comes from the stream that wrote the file, and is returned.
+    const streamed = join(temp(), entry.archive);
+    expect(
+      await downloadArchive(
+        "https://updates.example.test/acmepi",
+        entry,
+        streamed,
+        fetcher,
+      ),
+    ).toBe(entry.sha256);
   });
 
   it("follows redirects only within the source origin, honors 429 Retry-After, and names a clock that is ahead", async () => {
@@ -2781,6 +2981,333 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
         join(out, "c.tar.gz"),
       ),
     ).rejects.toThrow(/does not match the signed channel metadata/);
+  });
+});
+
+describe("release stages", () => {
+  const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+  /** Waits for `condition`, failing the stage that waits when it never holds. */
+  async function until(condition: () => boolean, what: string): Promise<void> {
+    for (let waited = 0; !condition(); waited += 5) {
+      if (waited > 3000) throw new Error(`never ${what}`);
+      await sleep(5);
+    }
+  }
+
+  it("runs the dependency audit and the signature check at the same time", async () => {
+    const { path } = project();
+    let auditing = false;
+    let checking = false;
+    const built = await build(path, {
+      // Each waits for the other to have started: they only finish if neither
+      // is awaited before the other begins.
+      scanner: async () => {
+        auditing = true;
+        await until(() => checking, "started the signature check");
+        return cleanScanner();
+      },
+      signatureAuditor: async () => {
+        checking = true;
+        await until(() => auditing, "started the dependency audit");
+        return signatureOutput();
+      },
+    });
+    expect(built.metadata.vulnerabilities.verdict).toBe("passed");
+  });
+
+  it("starts the tests while the signature check is still running when nothing is bundled", async () => {
+    const { path } = project();
+    let tested = false;
+    const built = await build(path, {
+      // The check ends only once a test has started: it never would if the
+      // tests waited for it.
+      signatureAuditor: async () => {
+        await until(() => tested, "started a test");
+        return signatureOutput();
+      },
+      runTest: (payload, command, args) => {
+        tested = true;
+        return fakeRun(payload, command, args);
+      },
+    });
+    expect(built.metadata.signatures?.verdict).toBe("passed");
+  });
+
+  it("runs the required tests side by side, each in its own state directory", async () => {
+    const { path } = project();
+    const states = new Map<string, string>();
+    let active = 0;
+    let most = 0;
+    const built = await build(path, {
+      runTest: async (payload, command, args, env) => {
+        const state = env.PISHIP_STATE_HOME as string;
+        states.set(args.join(" "), state);
+        expect(existsSync(state)).toBe(true);
+        active++;
+        most = Math.max(most, active);
+        await sleep(40);
+        active--;
+        return fakeRun(payload, command, args);
+      },
+    });
+    expect(built.metadata.tests.map((test) => test.name)).toEqual([
+      "launch-version",
+      "offline-smoke",
+      "governance-inspection",
+    ]);
+    expect(most).toBe(3);
+    expect(new Set(states.values()).size).toBe(3);
+    for (const state of states.values()) expect(existsSync(state)).toBe(false);
+  });
+
+  it("reports the first failing test in test order after every test has finished", async () => {
+    const { dir, path } = project();
+    let finished = 0;
+    const error = await rejection(
+      build(path, {
+        runTest: async (payload, command, args) => {
+          // The later test fails first; the earlier one is the one reported.
+          await sleep(args[0] === "version" ? 60 : 5);
+          finished++;
+          return args[0] === "--smoke" || args[0] === "version"
+            ? { status: 1, stdout: "", stderr: `${args[0]} failed` }
+            : fakeRun(payload, command, args);
+        },
+      }),
+    );
+    expect(error.message).toMatch(/required test launch-version failed/);
+    expect(finished).toBe(3);
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("waits for a scan still running when another stage fails", async () => {
+    const { dir, path } = project();
+    let scanEnded = false;
+    const error = await rejection(
+      build(path, {
+        scanner: async () => {
+          await sleep(60);
+          scanEnded = true;
+          throw new Error("registry unreachable");
+        },
+        signatureAuditor: () =>
+          signatureOutput([{ name: "alpha", version: "1.0.0", code: "x" }]),
+      }),
+    );
+    // The signature failure is reported, and the scan it did not wait for
+    // has ended (its own failure handled) before the staging is removed.
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(scanEnded).toBe(true);
+    expect(readdirSync(join(dir, "dist", "releases"))).toEqual([]);
+  });
+
+  it("reports where the runtime came from beside the release, never inside it", async () => {
+    const { path } = project();
+    const built = await build(path);
+    // An injected assembler has no runtime to cache.
+    expect(built.runtimeCache).toEqual({ status: "disabled" });
+    const info = `${built.archive.replace(/\.tar\.gz$/, "")}.build-info.json`;
+    expect(JSON.parse(readFileSync(info, "utf8"))).toEqual({
+      schema: "piship-build-info/v1",
+      runtimeCache: { status: "disabled" },
+    });
+    // Neither release.json nor the checksums (and so the archive) name it.
+    for (const file of ["release.json", "checksums.txt"])
+      expect(readFileSync(join(built.directory, file), "utf8")).not.toMatch(
+        /runtimeCache|build-info|runtime cache/,
+      );
+    expect(await verifyRelease(built.directory)).toBeDefined();
+    // A rebuilt release replaces the record with its own.
+    writeFileSync(info, "stale");
+    await build(path);
+    expect(JSON.parse(readFileSync(info, "utf8")).runtimeCache).toEqual({
+      status: "disabled",
+    });
+  });
+
+  it("builds the runtime cold for --rebuild, PISHIP_RELEASE_NO_CACHE=1, or an injected assembler only", () => {
+    expect(runtimeCacheDisabled({})).toBe(false);
+    expect(runtimeCacheDisabled({ cache: true }, {})).toBe(false);
+    expect(runtimeCacheDisabled({ cache: false })).toBe(true);
+    expect(runtimeCacheDisabled({ assemble: () => "" })).toBe(true);
+    expect(runtimeCacheDisabled({}, { PISHIP_RELEASE_NO_CACHE: "1" })).toBe(
+      true,
+    );
+    expect(runtimeCacheDisabled({}, { PISHIP_RELEASE_NO_CACHE: "0" })).toBe(
+      false,
+    );
+  });
+
+  it("records the release as qualified and verifies only a qualified release", async () => {
+    const { path } = project();
+    const built = await build(path);
+    expect(built.metadata.qualification).toBe("qualified");
+    for (const qualification of ["unqualified-local", ""]) {
+      const release = join(built.directory, "release.json");
+      const original = readFileSync(release, "utf8");
+      writeFileSync(
+        release,
+        original.replace(
+          '"qualification": "qualified"',
+          `"qualification": ${JSON.stringify(qualification)}`,
+        ),
+      );
+      writeFileSync(
+        join(built.directory, "checksums.txt"),
+        formatChecksums(built.directory, [...RELEASE_FILES]),
+      );
+      await expect(verifyRelease(built.directory)).rejects.toThrow(
+        /records its qualification as .*, not qualified/,
+      );
+      writeFileSync(release, original);
+    }
+    // Releases built before the field existed omit it and still verify.
+    const release = join(built.directory, "release.json");
+    const legacy = JSON.parse(readFileSync(release, "utf8"));
+    delete legacy.qualification;
+    writeFileSync(release, `${JSON.stringify(legacy, null, 2)}\n`);
+    writeFileSync(
+      join(built.directory, "checksums.txt"),
+      formatChecksums(built.directory, [...RELEASE_FILES]),
+    );
+    (await verifyRelease(built.directory)).cleanup();
+  });
+
+  it("refuses to verify a local build as a release and says what it is", async () => {
+    const { dir, path } = project();
+    const out = join(dir, "dist");
+    const output = fakeAssemble(path, out);
+    expect(isUnqualifiedPayload(output)).toBe(true);
+    markLocalBuild(output);
+    expect(localBuildMarkerPath(output)).toBe(
+      `${output}.piship-qualification.json`,
+    );
+    expect(
+      JSON.parse(readFileSync(localBuildMarkerPath(output), "utf8")),
+    ).toMatchObject({
+      schema: "piship-qualification/v1",
+      qualification: "unqualified-local",
+    });
+    const error = await rejection(verifyRelease(output));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(/unqualified local build, not a release/);
+    expect(error.userAction).toMatch(/piship release/);
+    // A release directory is not an unqualified payload.
+    const built = await build(path);
+    expect(isUnqualifiedPayload(built.directory)).toBe(false);
+    expect(isUnqualifiedPayload(join(built.directory, "payload"))).toBe(true);
+  });
+
+  it("runs a command without blocking and reports every way it can end", async () => {
+    const cwd = temp();
+    const node = process.execPath;
+    expect(
+      await runCommand(
+        node,
+        ["-e", "console.log('out'); console.error('err')"],
+        {
+          cwd,
+        },
+      ),
+    ).toEqual({ status: 0, stdout: "out\n", stderr: "err\n" });
+    const failed = await runCommand(node, ["-e", "process.exit(3)"], { cwd });
+    expect(failed.status).toBe(3);
+    // Standard input is closed, so a command that reads it ends.
+    expect(
+      (
+        await runCommand(
+          node,
+          [
+            "-e",
+            "process.stdin.on('data',()=>{}).on('end',()=>console.log('eof'))",
+          ],
+          { cwd },
+        )
+      ).stdout,
+    ).toBe("eof\n");
+    const missing = await runCommand(join(cwd, "no-such-command"), [], { cwd });
+    expect(missing.status).toBeNull();
+    expect(missing.stderr).toMatch(/ENOENT/);
+    const slow = await runCommand(node, ["-e", "setTimeout(()=>{}, 5000)"], {
+      cwd,
+      timeout: 100,
+    });
+    expect(slow.status).toBeNull();
+    // Two commands overlap: each waits for the other's marker to exist, so
+    // they only finish if both are running at once.
+    const rendezvous =
+      "const fs=require('fs');fs.writeFileSync(process.argv[1],'');const t=Date.now();while(!fs.existsSync(process.argv[2])){if(Date.now()-t>5000)process.exit(9)}";
+    const [a, b] = [join(cwd, "a"), join(cwd, "b")];
+    const both = await Promise.all([
+      runCommand(node, ["-e", rendezvous, "--", a, b], { cwd }),
+      runCommand(node, ["-e", rendezvous, "--", b, a], { cwd }),
+    ]);
+    expect(both.map((result) => result.status)).toEqual([0, 0]);
+  });
+
+  it("prints the release stages longest first, then one JSON summary", async () => {
+    const { path } = project();
+    const lines: string[] = [];
+    const saved = process.env.PISHIP_DEBUG_TIMING;
+    process.env.PISHIP_DEBUG_TIMING = "1";
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        lines.push(String(chunk));
+        return true;
+      });
+    try {
+      await build(path, {
+        runTest: async (payload, command, args) => {
+          await sleep(args[0] === "--smoke" ? 300 : 0);
+          return fakeRun(payload, command, args);
+        },
+      });
+    } finally {
+      write.mockRestore();
+      if (saved === undefined) delete process.env.PISHIP_DEBUG_TIMING;
+      else process.env.PISHIP_DEBUG_TIMING = saved;
+    }
+    const text = lines.join("");
+    const summary = JSON.parse(
+      text
+        .split("\n")
+        .filter((line) => line.startsWith("{"))
+        .at(-1) as string,
+    ) as {
+      schema: string;
+      command: string;
+      totalMs: number;
+      stages: { name: string; startMs: number; ms: number }[];
+    };
+    expect(summary.schema).toBe("piship-timing/v1");
+    expect(summary.command).toBe("release");
+    expect(summary.stages.map((stage) => stage.name)).toEqual(
+      expect.arrayContaining([
+        "runtime assembly",
+        "npm audit",
+        "pi package audits",
+        "signature audit",
+        "sbom",
+        "notices",
+        "smoke tests",
+        "metadata",
+        "checksums",
+        "archive",
+        "publish",
+        "staging cleanup",
+      ]),
+    );
+    const durations = summary.stages.map((stage) => stage.ms);
+    expect(durations).toEqual([...durations].sort((a, b) => b - a));
+    expect(summary.stages[0]?.name).toBe("smoke tests");
+    // The same stages, in the same order, as `release <stage>: N ms` lines.
+    expect(
+      text
+        .split("\n")
+        .filter((line) => /^release .+: [\d.]+ ms$/.test(line))
+        .map((line) => line.slice(8, line.lastIndexOf(":"))),
+    ).toEqual(summary.stages.map((stage) => stage.name));
   });
 });
 

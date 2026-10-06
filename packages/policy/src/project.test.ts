@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { PiShipError } from "@piship/contracts";
+import { duringStartup, PiShipError } from "@piship/contracts";
 import type { ProjectTrustPolicy } from "@piship/schema";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makePolicy } from "./fixtures.test-helpers.js";
@@ -1212,6 +1212,25 @@ describe("the limit on what the git config lists, and the scan cache", () => {
       expect(dirs(root)).toContain(at(root, "bbbb"));
       expect(dirs(root)).not.toContain(at(root, "aaaa"));
       expect(readsOf(config)).toBe(reads + 1);
+    });
+
+    it("looks at the files once while a session is being set up, and at every access afterwards", async () => {
+      const root = repo("cache-startup");
+      const config = join(root, ".git", "config");
+      write(config, hooks("aaaa"));
+      stamp(config);
+      expect(dirs(root)).toContain(at(root, "aaaa"));
+      await duringStartup(async () => {
+        // Looked at here: unchanged, so the earlier scan stands.
+        expect(dirs(root)).toContain(at(root, "aaaa"));
+        writeFileSync(config, hooks("bbbb"));
+        stamp(config, new Date(T.getTime() + 5000));
+        // Not looked at again while the session is set up.
+        expect(dirs(root)).toContain(at(root, "aaaa"));
+      });
+      // A running session sees the change at its next access.
+      expect(dirs(root)).toContain(at(root, "bbbb"));
+      expect(dirs(root)).not.toContain(at(root, "aaaa"));
     });
 
     it("sees a rewrite that puts the modification time back, though size and inode are kept", async () => {

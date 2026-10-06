@@ -88,6 +88,9 @@ describe("replacing a running bundled tool", () => {
     // The other session has ended: the next launch removes it.
     busy.paths.clear();
     installSearchTools(lock, join(root, "payload"), agentDir, target);
-    expect(fs.readdirSync(bin)).toEqual(["rg.exe"]);
+    expect(fs.readdirSync(bin).sort()).toEqual([
+      ".piship-search-tools.json",
+      "rg.exe",
+    ]);
   });
 });

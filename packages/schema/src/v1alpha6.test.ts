@@ -8,6 +8,7 @@ import {
   PISHIP_SCHEMA_V1ALPHA6,
   parseManifest,
   parseManifestHeader,
+  releaseOptions,
   RESOURCE_TRUST_CLASSES,
   PROVIDER_TRUST_CLASSES,
   TOOL_EXPOSURES,
@@ -509,6 +510,80 @@ describe("piship/v1alpha6 schema", () => {
       expect(() =>
         parseManifest(personal({ release: { installScripts: [entry] } })),
       ).toThrow(/release\.installScripts\[0\]/);
+  });
+
+  it("parses an optional boolean release.strip flag", () => {
+    expect(
+      parseManifest(personal({ release: { strip: true } })).lifecycle?.release
+        .strip,
+    ).toBe(true);
+    expect(
+      parseManifest(personal({ release: { strip: false } })).lifecycle?.release
+        .strip,
+    ).toBe(false);
+    expect(
+      parseManifest(personal({})).lifecycle?.release.strip,
+    ).toBeUndefined();
+    expect(() =>
+      parseManifest(personal({ release: { strip: "yes" } })),
+    ).toThrow(/release\.strip/);
+  });
+
+  it("accepts release.bundle only as an optional v1alpha6 boolean", () => {
+    for (const bundle of [true, false])
+      expect(
+        parseManifest(personal({ release: { bundle } })).lifecycle?.release
+          .bundle,
+      ).toBe(bundle);
+    expect(parseManifest(personal()).lifecycle?.release.bundle).toBeUndefined();
+    expect(() =>
+      parseManifest(personal({ release: { bundle: "yes" } })),
+    ).toThrow(/release\.bundle/);
+    expect(() =>
+      parseManifest({
+        ...personal({ release: { bundle: true } }),
+        schema: PISHIP_SCHEMA_V1ALPHA5,
+      }),
+    ).toThrow(/bundle/);
+  });
+
+  it("bundles and strips from v1alpha6 unless the manifest says false, and leaves the parsed manifest as written", () => {
+    const options = (extra?: Json, schema?: string) => {
+      const manifest = parseManifest(
+        schema ? { ...personal(extra), schema } : personal(extra),
+      );
+      return releaseOptions(manifest.schema, manifest.lifecycle?.release);
+    };
+    expect(options()).toEqual({ bundle: true, strip: true });
+    expect(options({ release: { bundle: false } })).toEqual({
+      bundle: false,
+      strip: true,
+    });
+    expect(options({ release: { strip: false, bundle: false } })).toEqual({
+      bundle: false,
+      strip: false,
+    });
+    expect(options({ release: { bundle: true, strip: true } })).toEqual({
+      bundle: true,
+      strip: true,
+    });
+    // The earlier schemas cannot set either key and keep building as before.
+    expect(options(undefined, PISHIP_SCHEMA_V1ALPHA5)).toEqual({
+      bundle: false,
+      strip: false,
+    });
+    expect(releaseOptions(PISHIP_SCHEMA_V1ALPHA6, undefined)).toEqual({
+      bundle: true,
+      strip: true,
+    });
+    // An omitted key stays omitted: the manifest digest of a manifest written
+    // before the default existed does not change.
+    expect(parseManifest(personal()).lifecycle?.release).not.toHaveProperty(
+      "bundle",
+    );
+    expect(parseManifest(personal()).lifecycle?.release).not.toHaveProperty(
+      "strip",
+    );
   });
 
   it("accepts the new policy actions and reads model.use as model.select", () => {

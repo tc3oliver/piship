@@ -93,6 +93,14 @@ export interface Manifest {
     readonly cacheWarming?: CacheWarmingConfig;
     /** piship/v1alpha6: bundled `fd` and `rg`; absent unless declared. */
     readonly searchTools?: SearchToolsConfig;
+    /**
+     * piship/v1alpha6, locked as declared. Absent or false: startup hashes
+     * only the lock, against the digest recorded at install, never scans the
+     * payload, reads the resources it loads without hashing them, and may
+     * keep a V8 code cache of a bundled payload. True: startup verifies the
+     * whole payload, its inventory included, and keeps no code cache.
+     */
+    readonly verifyAtLaunch?: boolean;
   };
   readonly deployment: { readonly mode: DeploymentMode };
   readonly resources: {
@@ -361,7 +369,9 @@ export function parseManifest(value: unknown): Manifest {
   const runtime = record(
     root.runtime,
     "runtime",
-    v6 ? ["pi", "tools", "cacheWarming", "searchTools"] : ["pi"],
+    v6
+      ? ["pi", "tools", "cacheWarming", "searchTools", "verifyAtLaunch"]
+      : ["pi"],
   );
   const deployment = record(root.deployment, "deployment", ["mode"]);
   const resources = v3
@@ -391,7 +401,7 @@ export function parseManifest(value: unknown): Manifest {
   let lifecycle: LifecycleManifest | undefined;
   let v6Runtime: Pick<
     Manifest["runtime"],
-    "tools" | "cacheWarming" | "searchTools"
+    "tools" | "cacheWarming" | "searchTools" | "verifyAtLaunch"
   > = {};
   let data: DataManifest | undefined;
   if (v2)
@@ -408,12 +418,23 @@ export function parseManifest(value: unknown): Manifest {
         );
         if (v4) lifecycle = parseLifecycle(root, variables, v5, v6);
         if (v6) {
+          let verifyAtLaunch: boolean | undefined;
+          if (runtime.verifyAtLaunch !== undefined) {
+            if (typeof runtime.verifyAtLaunch !== "boolean")
+              throw new ManifestError(
+                "invalid field",
+                "runtime.verifyAtLaunch",
+                "Expected true or false",
+              );
+            verifyAtLaunch = runtime.verifyAtLaunch;
+          }
           v6Runtime = {
             tools: parseRuntimeTools(runtime.tools),
             cacheWarming: parseCacheWarming(runtime.cacheWarming),
             ...(runtime.searchTools === undefined
               ? {}
               : { searchTools: parseSearchTools(runtime.searchTools) }),
+            ...(verifyAtLaunch === undefined ? {} : { verifyAtLaunch }),
           };
           data = parseData(root.data);
         }

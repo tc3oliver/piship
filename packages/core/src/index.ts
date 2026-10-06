@@ -28,6 +28,7 @@ export { canonicalJson } from "./digest.js";
 export { checkEnforceability, checkGovernance } from "./governance-lock.js";
 export { initDistribution } from "./init.js";
 export * from "./install/index.js";
+export { raiseThreadpool } from "./threadpool.js";
 export * from "./update/index.js";
 export {
   channelTrustFromLock,
@@ -68,12 +69,16 @@ export * from "./migration.js";
 export {
   payloadApp,
   payloadInventory,
+  verifyLaunchPayload,
   verifyPayload,
   verifyPayloadContents,
 } from "./payload.js";
 export {
   processIdentity,
   processIdentityMatches,
+  recordedIdentity,
+  recordedProcessGone,
+  recordedStart,
 } from "./process-identity.js";
 export * from "./release/index.js";
 export { resolveResources } from "./resources.js";

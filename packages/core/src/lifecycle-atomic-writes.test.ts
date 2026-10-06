@@ -105,7 +105,7 @@ describe.runIf(HOST_EVIDENCED)(
       },
     );
 
-    it("ignores a receipt temporary a killed writer left, and reclaims it", async () => {
+    it("ignores a receipt temporary a killed writer left without sweeping at update", async () => {
       const { opts } = await installed();
       const before = readFileSync(receiptFile(), "utf8");
       const leftover = `${receiptFile()}.p${deadPid()}-0123456789ab.tmp`;
@@ -114,8 +114,8 @@ describe.runIf(HOST_EVIDENCED)(
       expect(readInstallReceipt(ID).active).toBe("1.0.0");
       expect(launch()).toBe("payload 1.0.0");
       await updateDistribution(ID, opts);
-      expect(existsSync(leftover)).toBe(false);
-      expect(temporaries()).toEqual([]);
+      expect(existsSync(leftover)).toBe(true);
+      expect(temporaries()).toEqual([leftover]);
     });
   },
 );

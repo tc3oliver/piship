@@ -238,6 +238,23 @@ describe("CLI", () => {
     const built = run(bin, "build", manifest);
     expect(built.status, built.stderr).toBe(0);
     expect(built.stdout).toContain(`Next: piship test ${manifest}`);
+    // A local build says it is not the qualified artifact, beside its output.
+    expect(built.stderr).toContain("unqualified local build");
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(temp, "dist", "first-run.piship-qualification.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ qualification: "unqualified-local" });
+    const verified = run(
+      bin,
+      "verify-release",
+      join(temp, "dist", "first-run"),
+    );
+    expect(verified.status).toBe(1);
+    expect(verified.stderr).toContain("unqualified local build, not a release");
     const tested = run(bin, "test", manifest);
     expect(tested.status, tested.stderr).toBe(0);
     expect(existsSync(join(temp, "state", "first-run"))).toBe(true);
@@ -245,6 +262,7 @@ describe("CLI", () => {
     const manager = join(payload, "piship.mjs");
     const installed = run(manager, "install", payload);
     expect(installed.status, installed.stderr).toBe(0);
+    expect(installed.stderr).toContain("unqualified local build");
     // Once installed, the state is the install's: after an uninstall it is
     // pre-existing state like any other and must be adopted explicitly.
     expect(run(manager, "uninstall", "first-run").status).toBe(0);
@@ -377,7 +395,7 @@ describe("CLI", () => {
           });
     const first = launch();
     expect(first.status, first.stderr).toBe(0);
-    expect(first.stderr).toContain("verifyPayload:");
+    expect(first.stderr).not.toContain("verifyPayload:");
     console.info(first.stderr.trim());
     const brandedVersion =
       process.platform === "win32"
@@ -590,7 +608,7 @@ describe("CLI", () => {
       );
       expect(command("doctor", "mypi").stderr).toContain("integrity mismatch");
       if (path === join(payload, "piship.lock"))
-        expect(launch().stderr).toContain("integrity mismatch");
+        expect(launch().status).toBe(1);
       writeFileSync(path, content);
     }
     const targetPath = join(payload, "metadata", "target.json");

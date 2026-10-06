@@ -5,13 +5,12 @@ import {
   type createAgentSession,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { PiShipError } from "@piship/contracts";
+import { PiShipError, startupMark, startupNote } from "@piship/contracts";
 import {
   applyAgentFiles,
   applyPackageEnvironment,
   assertDisjointRoots,
   type DistributionLock,
-  reclaimLaunchTemporaries,
   runAuto,
   runConfig,
   runLogin,
@@ -21,8 +20,6 @@ import {
   runtimeStateDirectory,
   runUpdate,
   sessionAutoApproveTarget,
-  sweepDistributionData,
-  sweepStateTemporaries,
   yoloRefusal,
 } from "@piship/core";
 import { runDoctor } from "./commands/doctor.js";
@@ -32,8 +29,10 @@ import { runInteractive, runSmoke } from "./commands/session.js";
 import { piAgentDirectory } from "./environment.js";
 import type { LaunchContext } from "./launch/context.js";
 import { applyPiEnvironment } from "./launch/pi-defaults.js";
-import { installSearchTools } from "./launch/search-tools.js";
-import { liveOwner, SessionOwnership } from "./launch/session-file.js";
+import {
+  deferredToolDownloads,
+  installSearchTools,
+} from "./launch/search-tools.js";
 
 export {
   type GovernedRuntime,
@@ -80,6 +79,10 @@ export async function launchPiDistribution(
   options: LaunchOptions,
 ): Promise<void> {
   const { metadata } = options;
+  startupNote("distribution", `${metadata.app.id}@${metadata.app.version}`);
+  startupNote("piship_runtime", metadata.runtime.pishipVersion);
+  startupNote("pi", VERSION);
+  startupMark("launch_pi_distribution");
   if (
     metadata.runtime.package !== "@earendil-works/pi-coding-agent" ||
     metadata.runtime.version !== PINNED_PI_VERSION ||
@@ -195,15 +198,15 @@ export async function launchPiDistribution(
   });
   // Bundled fd and rg go where Pi looks before PATH. The launcher pointed
   // Pi's agent directory here before Pi was imported (environment.ts).
+  startupMark("search_tools_start");
   installSearchTools(metadata, options.distributionDir, agentDir);
-  // Temporaries of state writers killed before their rename.
-  sweepStateTemporaries(stateDir);
-  // Directories of PiShip operations killed before they cleaned up: session
-  // sandbox temp, verification and launch-check scratch, install and update
-  // staging. Only those whose owner is gone are removed, within a bounded
-  // time: what is left waits for a later start, and the user is told.
-  const reclaimNotice = reclaimLaunchTemporaries(metadata.app.id);
-  if (reclaimNotice) console.error(reclaimNotice);
+  // Pi's interactive mode would wait for a download of a missing fd or rg.
+  const deferred = deferredToolDownloads(metadata, agentDir);
+  if (deferred.length) {
+    process.env.PI_OFFLINE = "1";
+    startupNote("tool_downloads_deferred", deferred.join(","));
+  }
+  startupMark("search_tools_done");
   const ctx: LaunchContext = {
     metadata,
     distributionDir: resolve(options.distributionDir),
@@ -291,17 +294,7 @@ export async function launchPiDistribution(
     throw new Error(
       `Unknown branded command option: ${args.join(" ")}\n${metadata.app.command} has no non-interactive prompt mode; see ${metadata.app.command} --help.`,
     );
-  // The data retention sweep runs when a session launches, before it claims
-  // a session file; a session another launch holds is kept, and one is
-  // deleted only under the sweep's own claim, so a launch resuming it at the
-  // same time keeps it.
-  await sweepDistributionData(ctx, "launch", {
-    sessionHeld: (file) => liveOwner(file) !== undefined,
-    claimSession: (file) => {
-      const ownership = new SessionOwnership();
-      return ownership.claim(file) ? () => ownership.release() : undefined;
-    },
-  });
+  // Maintenance runs after the session ends, outside the boot path.
   if (smoke)
     return runSmoke(
       ctx,

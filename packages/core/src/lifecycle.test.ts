@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -9,9 +9,11 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   watch,
   writeFileSync,
 } from "node:fs";
@@ -19,13 +21,14 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
-import type { UpdateRoot } from "@piship/schema";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
 } from "@piship/credentials";
+import type { UpdateRoot } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deadPid } from "../../../tests/helpers/processes.js";
+import * as archiveModule from "./archive.js";
 import { PISHIP_VERSION } from "./compatibility.js";
 import {
   currentTarget,
@@ -40,20 +43,25 @@ import {
   verifyPayload,
   withTestState,
 } from "./index.js";
+import * as copyModule from "./install/copy.js";
+import * as filesModule from "./install/files.js";
 import {
+  describeReclaimed,
   holdRuntimeLease,
   installDistribution,
   lifecycleStatus,
   purgeDistributionState,
   RECEIPT_SCHEMA,
   readInstallReceipt,
+  reclaimObsoleteVersions,
   recoverInstallation,
   runtimeLeases,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { readStateMarker } from "./migration.js";
+import { acquireLock } from "./install/receipt.js";
 import { readTrustState, trustStatePath } from "./install/trust-state.js";
+import { readStateMarker } from "./migration.js";
 import {
   buildRelease,
   type CommandResult,
@@ -348,6 +356,61 @@ async function fixture(
   return { a, b, channelDir, old, opts };
 }
 
+const PARTIAL_FILE = join("node_modules", "alpha", "package.json");
+
+/** Make the archive extraction leave a partly written tree where it writes, and throw, as a process killed during it would. */
+function killArchiveExtraction() {
+  return vi
+    .spyOn(archiveModule, "extractArchive")
+    .mockImplementation(async (_archive, destination) => {
+      write(join(destination, "x", "partial", PARTIAL_FILE), '{"name":"al');
+      throw new Error("killed");
+    });
+}
+
+/** Make the copy of a release directory leave a partial copy at its destination, and throw. */
+function killDirectoryCopy() {
+  return vi
+    .spyOn(copyModule, "copyTree")
+    .mockImplementation(async (_source, destination) => {
+      write(join(destination, PARTIAL_FILE), '{"name":"al');
+      throw new Error("killed");
+    });
+}
+
+/** A version directory no receipt references, partly written: what an earlier PiShip left when killed during an extraction. */
+function strandCandidate(version: string): string {
+  const directory = join(appsDir(), version);
+  write(join(directory, PARTIAL_FILE), '{"name":"al');
+  return directory;
+}
+
+/** Make every directory rename fail as it does on Windows while a scanner holds a file in it. */
+function busyRenames() {
+  const real = filesModule.renameWithRetry;
+  return vi
+    .spyOn(filesModule, "renameWithRetry")
+    .mockImplementation((from, to) =>
+      real(from, to, {
+        platform: "win32",
+        sleep: () => {},
+        rename: () => {
+          throw Object.assign(new Error("EBUSY: resource busy or locked"), {
+            code: "EBUSY",
+          });
+        },
+      }),
+    );
+}
+
+function receiptFile(): string {
+  return join(
+    process.env.PISHIP_INSTALL_HOME as string,
+    "receipts",
+    `${ID}.json`,
+  );
+}
+
 function stateDir(): string {
   return join(process.env.PISHIP_STATE_HOME as string, ID);
 }
@@ -561,6 +624,166 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     expect(receipt.releases[0]?.release?.archiveSha256).toBe(a.sha256);
   });
 
+  it("reads an installed archive once, hashing it and every payload file as they are written", async () => {
+    const a = await release("1.0.0");
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      const receipt = await installDistribution(a.archive);
+      // The receipt records the digest of the bytes that were extracted.
+      expect(receipt.releases[0]?.release?.archiveSha256).toBe(a.sha256);
+      expect(hashed).not.toHaveBeenCalled();
+      expect(extracted).toHaveBeenCalledTimes(1);
+      expect(extracted.mock.calls[0]?.[2]).toMatchObject({ digests: true });
+      expect(extracted.mock.calls[0]?.[2]?.hash).not.toBe(false);
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("checks an expected digest against the bytes it read, never a second read of the file", async () => {
+    const a = await release("1.0.0");
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      await installDistribution(a.archive, false, { expectedSha256: a.sha256 });
+      expect(hashed).not.toHaveBeenCalled();
+      expect(extracted).toHaveBeenCalledTimes(1);
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("refuses an archive swapped for another release after its digest was published", async () => {
+    const a = await release("1.0.0");
+    // The same release built again with another timestamp: another archive
+    // under the same root name.
+    process.env.SOURCE_DATE_EPOCH = "1767312000";
+    const other = await release("1.0.0");
+    expect(other.sha256).not.toBe(a.sha256);
+    // The swap happens just before the one read: whatever is read is what is
+    // hashed, so the swapped bytes cannot pass for the published digest.
+    const real = archiveModule.extractArchive;
+    const extracted = vi
+      .spyOn(archiveModule, "extractArchive")
+      .mockImplementation(async (archive, destination, options) => {
+        cpSync(other.archive, archive);
+        return real(archive, destination, options);
+      });
+    try {
+      const error = await rejection(
+        installDistribution(a.archive, false, { expectedSha256: a.sha256 }),
+      );
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toContain("does not match the expected");
+    } finally {
+      extracted.mockRestore();
+    }
+    expect(apps()).toEqual([]);
+    expect(existsSync(receiptFile())).toBe(false);
+  });
+
+  it("refuses a corrupted file inside an otherwise valid archive, installing nothing", async () => {
+    const a = await release("1.0.0");
+    const dir = temp();
+    cpSync(a.directory, join(dir, a.name), { recursive: true });
+    write(
+      join(dir, a.name, "payload", "resources", "resources", "AGENTS.md"),
+      "# corrupted after the inventory was written\n",
+    );
+    const archive = join(dir, `${a.name}.tar.gz`);
+    await archiveModule.createArchive(join(dir, a.name), a.name, archive);
+    const error = await rejection(installDistribution(archive));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain("modified: resources/resources/AGENTS.md");
+    expect(apps()).toEqual([]);
+    expect(existsSync(receiptFile())).toBe(false);
+    // Nothing of the extraction is left in the install home.
+    expect(
+      readdirSync(process.env.PISHIP_INSTALL_HOME as string).filter(
+        (name) => name !== "receipts" && name !== "apps",
+      ),
+    ).toEqual([]);
+  });
+
+  it("copies a release directory's files by default, and links them only when asked", async () => {
+    const a = await release("1.0.0");
+    const source = statSync(join(a.directory, "payload", "piship.lock"));
+    delete process.env.PISHIP_INSTALL_LINK;
+    const copied = await installDistribution(a.directory);
+    const installed = statSync(join(copied.payload, "piship.lock"));
+    expect(installed.nlink).toBe(1);
+    expect(installed.ino).not.toBe(source.ino);
+    if (process.platform === "win32") return;
+    uninstallDistribution(ID);
+    process.env.PISHIP_INSTALL_LINK = "1";
+    try {
+      const linked = await installDistribution(a.directory, true);
+      expect(statSync(join(linked.payload, "piship.lock")).ino).toBe(
+        source.ino,
+      );
+    } finally {
+      delete process.env.PISHIP_INSTALL_LINK;
+    }
+  });
+
+  it("refuses a truncated file in a release directory, removing the partial copy", async () => {
+    const a = await release("1.0.0");
+    const file = join(
+      a.directory,
+      "payload",
+      "resources",
+      "resources",
+      "AGENTS.md",
+    );
+    const original = readFileSync(file);
+    writeFileSync(file, original.subarray(0, 4));
+    const error = await rejection(installDistribution(a.directory));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toMatch(
+      /modified: resources\/resources\/AGENTS\.md \(expected [0-9a-f]{16}, actual [0-9a-f]{16}\)/,
+    );
+    expect(existsSync(join(appsDir(), "1.0.0"))).toBe(false);
+    expect(existsSync(receiptFile())).toBe(false);
+    // Restored, the same directory installs.
+    writeFileSync(file, original);
+    expect((await installDistribution(a.directory)).active).toBe("1.0.0");
+  });
+
+  it("reports the phases of an install under PISHIP_DEBUG_TIMING", async () => {
+    const a = await release("1.0.0");
+    const written: string[] = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written.push(String(chunk));
+        return true;
+      });
+    process.env.PISHIP_DEBUG_TIMING = "1";
+    try {
+      await installDistribution(a.archive);
+    } finally {
+      delete process.env.PISHIP_DEBUG_TIMING;
+      stderr.mockRestore();
+    }
+    const labels = written
+      .join("")
+      .split("\n")
+      .filter((line) => line.startsWith("install "))
+      .map((line) => line.slice(0, line.indexOf(":")));
+    expect(labels).toEqual([
+      "install verify release",
+      "install preflight",
+      "install place payload",
+      "install launcher and trust state",
+      "install receipt",
+      "install command shim",
+      "install cleanup",
+    ]);
+  });
+
   it("refuses an archive whose SHA-256 differs from the expected digest, installing nothing", async () => {
     const a = await release("1.0.0");
     const error = await rejection(
@@ -651,15 +874,8 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     await installDistribution(a.archive);
     const before = treeHash(process.env.PISHIP_INSTALL_HOME as string);
     const collision = await rejection(installDistribution(a.archive));
-    const cli = join(
-      process.env.PISHIP_INSTALL_HOME as string,
-      "apps",
-      ID,
-      "1.0.0",
-      "piship.mjs",
-    );
     expect(collision.message).toBe(
-      `Install collision for acmepi/acmepi; 1.0.0 is already installed. Run node ${cli} uninstall ${ID} (state is kept), then install again with --use-existing-state`,
+      "Install collision for acmepi/acmepi; 1.0.0 is already installed. To restore it from a release you trust, run piship repair acmepi <release archive or directory>; to start over, run piship uninstall acmepi (state is kept) and install again with --use-existing-state. acmepi update --from <signed update source> only upgrades to a newer version",
     );
     expect(treeHash(process.env.PISHIP_INSTALL_HOME as string)).toEqual(before);
     uninstallDistribution(ID);
@@ -725,6 +941,67 @@ describe.runIf(HOST_EVIDENCED)("install", () => {
     const receipt = await installDistribution(a.archive);
     expect(receipt.active).toBe("1.0.0");
     expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+  });
+
+  it("reinstalls after an archive extraction was killed partway", async () => {
+    const a = await release("1.0.0");
+    const killed = killArchiveExtraction();
+    try {
+      await expect(installDistribution(a.archive)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    // The archive is extracted into a staging directory, so nothing of it is
+    // at the version path and no receipt was written.
+    expect(apps()).toEqual([]);
+    expect(existsSync(receiptFile())).toBe(false);
+    const receipt = await installDistribution(a.archive);
+    expect(receipt.active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(() => verifyPayload(receipt.payload)).not.toThrow();
+  });
+
+  it("reinstalls after a directory copy was killed partway, with no manual cleanup", async () => {
+    const a = await release("1.0.0");
+    const killed = killDirectoryCopy();
+    try {
+      await expect(installDistribution(a.directory)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    // The killed install leaves its marked, partly copied directory and no receipt.
+    expect(existsSync(join(appsDir(), ".initial-install.json"))).toBe(true);
+    expect(existsSync(join(appsDir(), "1.0.0", PARTIAL_FILE))).toBe(true);
+    expect(existsSync(receiptFile())).toBe(false);
+    const receipt = await installDistribution(a.directory);
+    expect(receipt.active).toBe("1.0.0");
+    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(() => verifyPayload(receipt.payload)).not.toThrow();
+  });
+
+  it("reports a retryable error, changing nothing, when a scanner holds the abandoned install", async () => {
+    const a = await release("1.0.0");
+    const killed = killDirectoryCopy();
+    try {
+      await expect(installDistribution(a.directory)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    const busy = busyRenames();
+    let error: Awaited<ReturnType<typeof rejection>>;
+    try {
+      error = await rejection(installDistribution(a.directory));
+    } finally {
+      busy.mockRestore();
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain("EBUSY");
+    expect((error as PiShipError).userAction).toContain("nothing was changed");
+    expect(existsSync(join(appsDir(), "1.0.0", PARTIAL_FILE))).toBe(true);
+    expect(existsSync(receiptFile())).toBe(false);
+    expect((await installDistribution(a.directory)).active).toBe("1.0.0");
   });
 
   it("repairs a committed first install whose shim was not written", async () => {
@@ -798,10 +1075,22 @@ await installDistribution(artifact);
       expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
       expect(readInstallReceipt(ID)).toEqual(receipt);
       expect(existsSync(receipt.commandPath)).toBe(true);
-      // Nothing of the killed install is left behind, and uninstall works.
+      // Install ignores abandoned staging rather than recursively deleting it.
+      const homeEntries = readdirSync(
+        process.env.PISHIP_INSTALL_HOME as string,
+      ).sort();
       expect(
-        readdirSync(process.env.PISHIP_INSTALL_HOME as string).sort(),
+        homeEntries.filter((name) => !name.startsWith(".staging-")),
       ).toEqual(["apps", "receipts", "trust"]);
+      const stagingCount = homeEntries.filter((name) =>
+        name.startsWith(".staging-"),
+      ).length;
+      expect(stagingCount).toBe(
+        phase === "the payload is installed" ||
+          phase === "the launcher is written"
+          ? 2
+          : 1,
+      );
       uninstallDistribution(ID);
       expect(existsSync(appsDir())).toBe(false);
       expect(existsSync(receipt.commandPath)).toBe(false);
@@ -926,6 +1215,25 @@ await installDistribution(artifact);
     recoverInstallation(ID);
     expect(existsSync(old)).toBe(false);
     expect(() => uninstallDistribution(ID)).not.toThrow();
+  });
+
+  it("installs a local release directory without its release scans, and verifies every payload file as it is copied", async () => {
+    const a = await release("1.0.0");
+    rmSync(join(a.directory, "sbom.spdx.json"));
+    rmSync(join(a.directory, "vulnerabilities.json"));
+    rmSync(join(a.directory, "checksums.txt"));
+    const receipt = await installDistribution(a.directory);
+    expect(receipt.active).toBe("1.0.0");
+    expect(() => verifyPayload(receipt.payload)).not.toThrow();
+    // A file changed after the inventory was written is refused.
+    uninstallDistribution(ID);
+    write(
+      join(a.directory, "payload", "resources", "resources", "AGENTS.md"),
+      "# local resource change\n",
+    );
+    const error = await rejection(installDistribution(a.directory, true));
+    expect(error.code).toBe("INTEGRITY_FAILED");
+    expect(error.message).toContain("modified: resources/resources/AGENTS.md");
   });
 
   it("refuses a tampered release before installing", async () => {
@@ -1125,9 +1433,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       notices: [],
     });
     expect(result.migration?.verdict).toBe("safe");
-    // The candidate was launch-checked before activation, from staging.
-    expect(checked).toHaveLength(1);
-    expect(checked[0]).toContain(".staging-");
+    // Installation never boots the candidate; the first user launch does.
+    expect(checked).toEqual([]);
     const receipt = readInstallReceipt(ID);
     expect(receipt).toMatchObject({
       active: "1.1.0",
@@ -1214,7 +1521,7 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     ]);
   });
 
-  it("does not replace a retained release that a running session still uses", async () => {
+  it("reactivates unchanged retained bytes even while a runtime session uses them", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive, true);
     await updateDistribution(ID, opts);
@@ -1225,18 +1532,199 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     writeFileSync(marker, "running");
     const releaseLease = holdRuntimeLease(ID, "1.1.0");
     try {
-      const error = await rejection(updateDistribution(ID, opts));
-      expect(error).toMatchObject({ code: "UPDATE_FAILED" });
-      expect(error.message).toMatch(/runtime session/);
+      expect(await updateDistribution(ID, opts)).toMatchObject({
+        status: "updated",
+        to: "1.1.0",
+      });
       expect(readFileSync(marker, "utf8")).toBe("running");
-      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+      expect(readInstallReceipt(ID).active).toBe("1.1.0");
     } finally {
       releaseLease();
     }
     expect(await updateDistribution(ID, opts)).toMatchObject({
-      status: "updated",
-      to: "1.1.0",
+      status: "up-to-date",
     });
+  });
+
+  it("retries an update that failed during extraction: the partial candidate is set aside", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    const killed = killArchiveExtraction();
+    try {
+      await expect(updateDistribution(ID, opts)).rejects.toThrow("killed");
+    } finally {
+      killed.mockRestore();
+    }
+    // The extraction writes into the version directory itself, which nothing
+    // references: the receipt is unchanged.
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(
+      existsSync(join(appsDir(), "1.1.0", "x", "partial", PARTIAL_FILE)),
+    ).toBe(true);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+    expect(() => verifyPayload(join(appsDir(), "1.1.0"))).not.toThrow();
+    expect(
+      apps().filter((name) => name.startsWith(".retained-1.1.0-")),
+    ).toHaveLength(1);
+  });
+
+  it("replaces an unreferenced candidate stranded at the version path", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    strandCandidate("1.1.0");
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    expect(() => verifyPayload(join(appsDir(), "1.1.0"))).not.toThrow();
+    // The stranded tree was moved aside in one rename; recovery removes it.
+    const aside = apps().filter((name) => name.startsWith(".retained-1.1.0-"));
+    expect(aside).toHaveLength(1);
+    expect(recoverInstallation(ID)).toEqual(aside);
+  });
+
+  it("does not move aside a candidate a running session holds", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    strandCandidate("1.1.0");
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(updateDistribution(ID, opts));
+      expect(error.code).toBe("UPDATE_FAILED");
+      expect(error.retryable).toBe(true);
+      expect(error.message).toContain("running session");
+      expect(existsSync(join(appsDir(), "1.1.0", PARTIAL_FILE))).toBe(true);
+      expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    } finally {
+      releaseLease();
+    }
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+  });
+
+  it("reports a retryable error and keeps the active release when a scanner holds the stale candidate", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    strandCandidate("1.1.0");
+    const busy = busyRenames();
+    let error: Awaited<ReturnType<typeof rejection>>;
+    try {
+      error = await rejection(updateDistribution(ID, opts));
+    } finally {
+      busy.mockRestore();
+    }
+    expect(error).toBeInstanceOf(PiShipError);
+    expect(error.code).toBe("UPDATE_FAILED");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toContain("EBUSY");
+    expect(error.message).toContain(join(appsDir(), "1.1.0"));
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(existsSync(join(appsDir(), "1.1.0", PARTIAL_FILE))).toBe(true);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
+  });
+
+  it("replaces a retained release the channel has re-signed with other archive bytes", async () => {
+    const { a, b, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.0.0",
+      previous: "1.1.0",
+    });
+    // The same version built again with another timestamp: other archive bytes.
+    process.env.SOURCE_DATE_EPOCH = "1767312000";
+    const other = await release("1.1.0");
+    expect(other.sha256).not.toBe(b.sha256);
+    await sign(channelDir, [other.archive]);
+    const result = await updateDistribution(ID, opts);
+    expect(result.status).toBe("updated");
+    expect(result.notices.join("\n")).toContain(
+      "built from other archive bytes than the channel now offers",
+    );
+    const receipt = readInstallReceipt(ID);
+    // Rollback now returns to the release that was active, which is intact.
+    expect(receipt).toMatchObject({ active: "1.1.0", previous: "1.0.0" });
+    expect(receipt.releases[0]?.release?.archiveSha256).toBe(other.sha256);
+    expect(() => verifyPayload(join(appsDir(), "1.1.0"))).not.toThrow();
+    expect(() => verifyPayload(join(appsDir(), "1.0.0"))).not.toThrow();
+    expect(
+      apps().filter((name) => name.startsWith(".retained-1.1.0-")),
+    ).toHaveLength(1);
+  });
+
+  it("puts back a replaced retained release when the update fails before its commit", async () => {
+    const { a, b, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    const retained = join(appsDir(), "1.1.0");
+    const before = treeHash(retained);
+    process.env.SOURCE_DATE_EPOCH = "1767312000";
+    const other = await release("1.1.0");
+    expect(other.sha256).not.toBe(b.sha256);
+    await sign(channelDir, [other.archive]);
+    const error = await rejection(
+      updateDistribution(ID, {
+        ...opts,
+        faults: (phase) => {
+          if (phase === "verified") throw new Error("interrupted");
+        },
+      }),
+    );
+    expect(error.message).toBe("interrupted");
+    // The rollback target is the release it was: same files, same receipt.
+    expect(treeHash(retained)).toEqual(before);
+    expect(readInstallReceipt(ID)).toMatchObject({
+      active: "1.0.0",
+      previous: "1.1.0",
+    });
+    expect(() => verifyPayload(retained)).not.toThrow();
+    expect(
+      apps().filter((name) => name.startsWith(".retained-1.1.0-")),
+    ).toHaveLength(1);
+  });
+
+  it("does not replace a retained release a running session holds", async () => {
+    const { a, b, channelDir, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    const retained = join(appsDir(), "1.1.0");
+    const before = treeHash(retained);
+    process.env.SOURCE_DATE_EPOCH = "1767312000";
+    const other = await release("1.1.0");
+    expect(other.sha256).not.toBe(b.sha256);
+    await sign(channelDir, [other.archive]);
+    const releaseLease = holdRuntimeLease(ID, "1.1.0");
+    try {
+      const error = await rejection(updateDistribution(ID, opts));
+      expect(error.code).toBe("UPDATE_FAILED");
+      expect(error.retryable).toBe(true);
+    } finally {
+      releaseLease();
+    }
+    expect(treeHash(retained)).toEqual(before);
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+  });
+
+  it("keeps receipt-retained bytes intact when reactivation is interrupted", async () => {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    await rollbackDistribution(ID);
+    const retained = join(appsDir(), "1.1.0");
+    const before = treeHash(retained);
+    await expect(
+      updateDistribution(ID, {
+        ...opts,
+        faults: (phase) => {
+          if (phase === "installed")
+            throw new Error("interrupted reactivation");
+        },
+      }),
+    ).rejects.toThrow("interrupted reactivation");
+    expect(readInstallReceipt(ID).active).toBe("1.0.0");
+    expect(treeHash(retained)).toEqual(before);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect((await updateDistribution(ID, opts)).status).toBe("updated");
   });
 
   it("reports up-to-date on the next run", async () => {
@@ -1770,21 +2258,18 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(readTrustState(ID)?.root.version).toBe(3);
   });
 
-  it("refuses a release whose launch check fails", async () => {
+  it("activates without spawning a redundant launch check", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive);
-    const error = await rejection(
-      updateDistribution(ID, {
-        ...opts,
-        runCheck: () => ({ status: 1, stdout: "", stderr: "cannot start" }),
-      }),
-    );
-    expect(error.code).toBe("UPDATE_FAILED");
-    expect(error.message).toMatch(
-      /The 1.1.0 release failed its launch check: cannot start/,
-    );
-    expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    const runCheck = vi.fn(() => ({
+      status: 1,
+      stdout: "",
+      stderr: "cannot start",
+    }));
+    const result = await updateDistribution(ID, { ...opts, runCheck });
+    expect(result.status).toBe("updated");
+    expect(runCheck).not.toHaveBeenCalled();
+    expect(readInstallReceipt(ID).active).toBe("1.1.0");
   });
 
   it("refuses local data the target would reinterpret", async () => {
@@ -1902,9 +2387,9 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     expect(error.message).toMatch(
       /piship:acmepi:inference#1: SECRET_STORE_UNAVAILABLE: The keychain is locked.*so the switch stopped before activation/,
     );
-    // The staged 1.1.0 is gone and the metadata still names the secret.
+    // The inactive candidate is kept for explicit maintenance; the receipt and credentials remain unchanged.
     expect(readInstallReceipt(ID).active).toBe("1.0.0");
-    expect(apps()).toEqual(["1.0.0", "launch.mjs"]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
     expect(treeHash(join(stateDir(), "credentials-metadata"))).toEqual(
       credentials,
     );
@@ -1956,6 +2441,60 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
       updateDistribution(ID, { runCheck: fakeRun, fetcher, env: {} }),
     );
     expect(error.code).toBe("CONFIG_UNAVAILABLE");
+  });
+
+  it("reads a downloaded update archive once, hashing it and every payload file as they are written", async () => {
+    const { a, b, channelDir } = await fixture();
+    await installDistribution(a.archive);
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      const fetcher = (async (input: URL | string) => {
+        const file = join(
+          channelDir,
+          new URL(String(input)).pathname.split("/").pop() as string,
+        );
+        return existsSync(file)
+          ? new Response(readFileSync(file))
+          : new Response("", { status: 404 });
+      }) as typeof fetch;
+      const result = await updateDistribution(ID, {
+        runCheck: fakeRun,
+        fetcher,
+        env: { ACMEPI_UPDATE_SOURCE: "https://updates.example.test/acmepi" },
+      });
+      expect(result.status).toBe("updated");
+      // The download is hashed as it streams, so no read of the file hashes
+      // it; the one extraction hashes the bytes it reads and every file.
+      expect(hashed).not.toHaveBeenCalled();
+      expect(extracted).toHaveBeenCalledTimes(1);
+      expect(extracted.mock.calls[0]?.[2]).toMatchObject({ digests: true });
+      expect(extracted.mock.calls[0]?.[2]?.hash).not.toBe(false);
+      expect(readInstallReceipt(ID).releases[0]?.release?.archiveSha256).toBe(
+        b.sha256,
+      );
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
+  });
+
+  it("hashes an update archive copied from a directory once, and reads it once to extract", async () => {
+    const { a, b, opts } = await fixture();
+    await installDistribution(a.archive);
+    const hashed = vi.spyOn(archiveModule, "sha256File");
+    const extracted = vi.spyOn(archiveModule, "extractArchive");
+    try {
+      expect((await updateDistribution(ID, opts)).status).toBe("updated");
+      expect(hashed).toHaveBeenCalledTimes(1);
+      expect(extracted).toHaveBeenCalledTimes(1);
+      expect(readInstallReceipt(ID).releases[0]?.release?.archiveSha256).toBe(
+        b.sha256,
+      );
+    } finally {
+      hashed.mockRestore();
+      extracted.mockRestore();
+    }
   });
 
   it("applies the manifest source rules to the resolved updates.source", async () => {
@@ -2029,7 +2568,8 @@ describe.runIf(HOST_EVIDENCED)("update", () => {
     const receipt = readInstallReceipt(ID);
     expect(receipt).not.toHaveProperty("previous");
     expect(receipt.releases.map((item) => item.version)).toEqual(["1.1.0"]);
-    expect(apps()).toEqual(["1.1.0", "launch.mjs"]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(recoverInstallation(ID)).toEqual(["1.0.0"]);
     const error = await rejection(
       rollbackDistribution(ID, { runCheck: fakeRun }),
     );
@@ -2060,8 +2600,16 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
       const expected = phase === "committed" ? "1.1.0" : "1.0.0";
       expect(receipt.active).toBe(expected);
       expect(verifyPayload(receipt.payload).app.version).toBe(expected);
+      // The payload is extracted straight into the version directory before
+      // the release is checked against the signed entry, so from "verified"
+      // on an interrupted update leaves it there, unreferenced.
       expect(apps()).toEqual(
-        [...receipt.releases.map((item) => item.version), "launch.mjs"].sort(),
+        phase === "verified" || phase === "installed"
+          ? ["1.0.0", "1.1.0", "launch.mjs"]
+          : [
+              ...receipt.releases.map((item) => item.version),
+              "launch.mjs",
+            ].sort(),
       );
       const retry = await updateDistribution(ID, opts);
       expect(retry.status).toBe(
@@ -2074,6 +2622,13 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
         "1.1.0",
         "1.0.0",
       ]);
+      if (phase === "verified" || phase === "installed") {
+        const leftovers = apps().filter((name) =>
+          name.startsWith(".retained-"),
+        );
+        expect(leftovers).toHaveLength(1);
+        expect(recoverInstallation(ID)).toEqual(leftovers);
+      }
       expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
       for (const item of final.releases) verifyPayload(item.payload);
       expect(recoverInstallation(ID)).toEqual([]);
@@ -2084,7 +2639,7 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
     },
   );
 
-  it("removes leftovers of a killed process before the next operation", async () => {
+  it("leaves cleanup of killed operations to explicit maintenance", async () => {
     const { a, opts } = await fixture();
     await installDistribution(a.archive);
     write(join(appsDir(), ".staging-killed", "partial.tar.gz"), "partial");
@@ -2105,7 +2660,8 @@ describe.runIf(HOST_EVIDENCED)("interrupted update", () => {
     write(join(appsDir(), ".staging-killed", "partial.tar.gz"), "partial");
     const result = await updateDistribution(ID, opts);
     expect(result.status).toBe("updated");
-    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(apps()).toEqual([".staging-killed", "1.0.0", "1.1.0", "launch.mjs"]);
+    expect(recoverInstallation(ID)).toEqual([".staging-killed"]);
   });
   // up-to-date path never rewrites it, so an interruption between the two
   // leaves the marker naming the old release forever.
@@ -2194,7 +2750,7 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
       notices: [],
     });
     expect(result.migration.verdict).toBe("safe");
-    expect(checked).toEqual([join(appsDir(), "1.0.0")]);
+    expect(checked).toEqual([]);
     expect(treeHash(join(stateDir(), "sessions"))).toEqual(sessions);
     expect(treeHash(join(stateDir(), "config"))).toEqual(config);
     expect(treeHash(join(stateDir(), "credentials-metadata"))).toEqual(
@@ -2257,34 +2813,22 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
     expect(error.message).toMatch(/has no retained release/);
   });
 
-  it("refuses a tampered retained release and switches nothing", async () => {
+  it("leaves retained-file auditing to explicit verification", async () => {
     await updated();
+    const payload = join(appsDir(), "1.0.0");
     write(
-      join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
-      "# tampered\n",
+      join(payload, "resources", "resources", "AGENTS.md"),
+      "# changed locally\n",
     );
-    const receipt = readInstallReceipt(ID);
-    const marker = readStateMarker(stateDir());
-    const error = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
-    expect(error.code).toBe("ROLLBACK_FAILED");
-    expect(error.message).toMatch(
-      /The retained release 1.0.0 failed verification: .*integrity mismatch/,
-    );
-    expect(readInstallReceipt(ID)).toEqual(receipt);
-    expect(readStateMarker(stateDir())).toEqual(marker);
+    expect(() => verifyPayload(payload)).toThrow(/integrity mismatch/);
+    expect((await rollbackDistribution(ID)).to).toBe("1.0.0");
   });
 
-  it("refuses when the retained release fails its launch check", async () => {
+  it("rolls back without a redundant launch check", async () => {
     await updated();
-    const error = await rejection(
-      rollbackDistribution(ID, {
-        runCheck: () => ({ status: 1, stdout: "", stderr: "broken" }),
-      }),
-    );
-    expect(error.code).toBe("ROLLBACK_FAILED");
-    expect(readInstallReceipt(ID).active).toBe("1.1.0");
+    const runCheck = vi.fn(() => ({ status: 1, stdout: "", stderr: "broken" }));
+    expect((await rollbackDistribution(ID, { runCheck })).to).toBe("1.0.0");
+    expect(runCheck).not.toHaveBeenCalled();
   });
 
   it("clears credentials the target cannot read and never restores the secret", async () => {
@@ -2653,6 +3197,216 @@ describe.runIf(HOST_EVIDENCED)("rollback", () => {
 
 // ------------------------------------------------------------------ repair
 
+describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
+  /** Active 1.1.0 with rollback target 1.0.0, plus directories nothing records. */
+  async function strewn() {
+    const { a, opts } = await fixture();
+    await installDistribution(a.archive);
+    await updateDistribution(ID, opts);
+    const aside = `.retained-1.1.0-${randomUUID()}`;
+    write(join(appsDir(), "0.9.0", "bin", "run.js"), "o".repeat(1000));
+    write(
+      join(appsDir(), "0.9.0", "node_modules", "a", "index.js"),
+      "a".repeat(500),
+    );
+    write(join(appsDir(), aside, "payload.js"), "r".repeat(2000));
+    return { aside, opts };
+  }
+
+  it("keeps the active release and the rollback target, removes the rest, and says what it freed", async () => {
+    const { aside } = await strewn();
+    const before = readInstallReceipt(ID);
+    const result = reclaimObsoleteVersions(ID);
+    expect([...result.removed].sort()).toEqual([aside, "0.9.0"].sort());
+    expect(result.freedBytes).toBe(3500);
+    expect(result.skipped).toEqual([]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+    expect(readInstallReceipt(ID)).toEqual(before);
+    expect(describeReclaimed(result)).toMatch(
+      /^Removed 2 obsolete release directories \(.*0\.9\.0.*\) and freed 0\.0 MiB\.$/,
+    );
+    // Rollback still works, and a second run has nothing to do.
+    expect(reclaimObsoleteVersions(ID)).toMatchObject({
+      removed: [],
+      freedBytes: 0,
+    });
+    expect((await rollbackDistribution(ID, { runCheck: fakeRun })).to).toBe(
+      "1.0.0",
+    );
+  });
+
+  it("never touches a directory a live runtime lease holds", async () => {
+    const { aside } = await strewn();
+    const releaseLease = holdRuntimeLease(ID, "0.9.0");
+    try {
+      const result = reclaimObsoleteVersions(ID);
+      expect(result.removed).toEqual([aside]);
+      expect(result.skipped).toEqual([
+        { name: "0.9.0", reason: "a running session holds it" },
+      ]);
+      expect(existsSync(join(appsDir(), "0.9.0", "bin", "run.js"))).toBe(true);
+      expect(describeReclaimed(result)).toContain(
+        "Left 0.9.0 in place (a running session holds it).",
+      );
+    } finally {
+      releaseLease();
+    }
+    expect(reclaimObsoleteVersions(ID).removed).toEqual(["0.9.0"]);
+  });
+
+  it("leaves a directory a scanner holds in place and reports it, removing the others", async () => {
+    const { aside } = await strewn();
+    write(join(appsDir(), "0.9.0", "locked.node"), "x");
+    const result = reclaimObsoleteVersions(ID, {
+      unlink: (path) => {
+        if (path.endsWith("locked.node"))
+          throw Object.assign(new Error("EBUSY: resource busy or locked"), {
+            code: "EBUSY",
+          });
+        unlinkSync(path);
+      },
+    });
+    expect(result.removed).toEqual([aside]);
+    expect(result.skipped).toEqual([
+      { name: "0.9.0", reason: "in use: locked.node (EBUSY)" },
+    ]);
+    expect(existsSync(join(appsDir(), "0.9.0", "locked.node"))).toBe(true);
+    // Once nothing holds it, the next run finishes.
+    expect(reclaimObsoleteVersions(ID).removed).toEqual(["0.9.0"]);
+  });
+
+  it("stops at its budget between directories, and the next run continues", async () => {
+    await strewn();
+    for (let version = 1; version <= 6; version++)
+      write(join(appsDir(), `0.${version}.0`, "file.js"), "v");
+    let time = 0;
+    // Deadline 6: the checks before each directory read 2, 3, 4, 5, 6, then 7.
+    const result = reclaimObsoleteVersions(ID, {
+      budgetMs: 5,
+      now: () => ++time,
+    });
+    expect(result.removed).toHaveLength(5);
+    expect(result.remaining).toHaveLength(3);
+    expect(describeReclaimed(result)).toContain(
+      "Stopped at the 0.005 s budget with 3 obsolete directories left; run doctor again to continue.",
+    );
+    const next = reclaimObsoleteVersions(ID);
+    expect(next.removed).toHaveLength(3);
+    expect(next.remaining).toEqual([]);
+    expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
+  });
+
+  it("stops at its budget inside a large directory, leaving it for the next run", async () => {
+    await strewn();
+    for (let file = 0; file < 200; file++)
+      write(join(appsDir(), "0.8.0", `f${file}.js`), "z");
+    // The deadline, then the checks before the two first directories read 0;
+    // after that the budget is spent, which the 64th deletion notices.
+    const reads = [0, 0, 0];
+    const result = reclaimObsoleteVersions(ID, {
+      budgetMs: 1,
+      now: () => reads.shift() ?? 100,
+    });
+    expect(result.remaining).toContain("0.8.0");
+    const left = readdirSync(join(appsDir(), "0.8.0")).length;
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThan(200);
+    expect(reclaimObsoleteVersions(ID).remaining).toEqual([]);
+    expect(existsSync(join(appsDir(), "0.8.0"))).toBe(false);
+  });
+
+  describe("a retained release an interrupted update set aside", () => {
+    /** Active 1.0.0 with rollback target 1.1.0, then the state a killed update leaves. */
+    async function interrupted(standIn: "missing" | "half-extracted") {
+      const { a, opts } = await fixture();
+      await installDistribution(a.archive);
+      await updateDistribution(ID, opts);
+      await rollbackDistribution(ID, { runCheck: fakeRun });
+      const retained = join(appsDir(), "1.1.0");
+      const before = treeHash(retained);
+      // The update renamed the receipt-named release aside, then was killed.
+      const aside = join(appsDir(), `.retained-1.1.0-${randomUUID()}`);
+      renameSync(retained, aside);
+      if (standIn === "half-extracted")
+        write(join(retained, PARTIAL_FILE), "{");
+      return { opts, retained, before, aside };
+    }
+
+    it.each(["missing", "half-extracted"] as const)(
+      "is moved back, not deleted, when the version directory is %s",
+      async (standIn) => {
+        const { opts, retained, before, aside } = await interrupted(standIn);
+        const result = reclaimObsoleteVersions(ID);
+        expect(result.restored).toEqual(["1.1.0"]);
+        expect(describeReclaimed(result)).toContain("Restored 1.1.0");
+        expect(treeHash(retained)).toEqual(before);
+        expect(existsSync(aside)).toBe(false);
+        expect(() => verifyPayload(retained)).not.toThrow();
+        // A half-extracted stand-in was set aside, and the next run removes it.
+        expect(reclaimObsoleteVersions(ID).restored).toEqual([]);
+        expect(apps().filter((name) => name.startsWith(".retained-"))).toEqual(
+          [],
+        );
+        // The release the receipt names is whole: the update reuses it.
+        expect(await updateDistribution(ID, opts)).toMatchObject({
+          status: "updated",
+          to: "1.1.0",
+        });
+      },
+    );
+
+    it("is deleted when the version directory stands as the receipt recorded it", async () => {
+      const { retained, aside } = await interrupted("missing");
+      cpSync(aside, retained, { recursive: true });
+      const result = reclaimObsoleteVersions(ID);
+      expect(result.restored).toEqual([]);
+      expect(result.removed).toEqual([basename(aside)]);
+      expect(() => verifyPayload(retained)).not.toThrow();
+    });
+
+    it("is left alone while a running session holds it", async () => {
+      const { aside } = await interrupted("missing");
+      const releaseLease = holdRuntimeLease(ID, "1.1.0");
+      try {
+        const result = reclaimObsoleteVersions(ID);
+        expect(result.restored).toEqual([]);
+        expect(existsSync(aside)).toBe(true);
+      } finally {
+        releaseLease();
+      }
+    });
+  });
+
+  it("does nothing while an update, rollback, or uninstall holds the installation", async () => {
+    await strewn();
+    const hold = acquireLock(ID);
+    try {
+      const result = reclaimObsoleteVersions(ID);
+      expect(result).toMatchObject({ busy: true, removed: [] });
+      expect(describeReclaimed(result)).toContain(
+        "another update, rollback, or uninstall is running",
+      );
+      expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+    } finally {
+      hold.release();
+    }
+  });
+
+  it("does nothing for a distribution that is not installed", () => {
+    expect(reclaimObsoleteVersions(ID)).toMatchObject({
+      removed: [],
+      busy: false,
+    });
+  });
+
+  it("is never part of an update, which only sets directories aside", async () => {
+    const { opts } = await strewn();
+    await rollbackDistribution(ID, { runCheck: fakeRun });
+    await updateDistribution(ID, opts);
+    expect(existsSync(join(appsDir(), "0.9.0"))).toBe(true);
+  });
+});
+
 describe.runIf(HOST_EVIDENCED)("repair", () => {
   /** A installed, updated to B: B active, A retained. */
   async function updated() {
@@ -2683,13 +3437,6 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
     expect(refused.userAction).toContain(
       `piship repair ${ID} <release archive>`,
     );
-    expect(
-      (await rejection(rollbackDistribution(ID, { runCheck: fakeRun }))).code,
-    ).toBe("INTEGRITY_FAILED");
-    expect(
-      (await rejection(updateDistribution(ID, { ...f.opts, check: true })))
-        .code,
-    ).toBe("INTEGRITY_FAILED");
     const receipt = readInstallReceipt(ID);
 
     const result = await repairDistribution(ID, f.b.archive);
@@ -2718,15 +3465,8 @@ describe.runIf(HOST_EVIDENCED)("repair", () => {
       join(appsDir(), "1.0.0", "resources", "resources", "AGENTS.md"),
       "# tampered\n",
     );
-    const blocked = await rejection(
-      rollbackDistribution(ID, { runCheck: fakeRun }),
-    );
-    expect(blocked.code).toBe("ROLLBACK_FAILED");
-    expect(blocked.message).toContain(
-      "modified: resources/resources/AGENTS.md",
-    );
-    expect((blocked as PiShipError).userAction).toContain(
-      `piship repair ${ID} <release archive of 1.0.0>`,
+    expect(() => verifyPayload(join(appsDir(), "1.0.0"))).toThrow(
+      /modified: resources\/resources\/AGENTS.md/,
     );
     const result = await repairDistribution(ID, f.a.archive);
     expect(result).toMatchObject({ status: "repaired", version: "1.0.0" });
@@ -3397,7 +4137,7 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
     expect(readInstallReceipt(ID).channel).toBe("stable");
   });
 
-  it("runs the candidate's launch check against throwaway state", async () => {
+  it("does not boot the candidate or create throwaway runtime state", async () => {
     const { a, opts } = await fixture();
     seedState();
     await installDistribution(a.archive, true);
@@ -3410,9 +4150,7 @@ describe.runIf(HOST_EVIDENCED)("update hardening", () => {
       },
     });
     expect(result.status).toBe("updated");
-    expect(homes).toHaveLength(1);
-    expect(homes[0]).not.toBe(process.env.PISHIP_STATE_HOME);
-    expect(existsSync(homes[0] as string)).toBe(false);
+    expect(homes).toEqual([]);
   });
 
   it("stops a download that grows past the signed size", async () => {
@@ -3627,31 +4365,33 @@ wait();
     expect(releaseDirs()).toEqual(["1.1.0"]);
   }, 60_000);
 
-  it("holds launcher registration against uninstall through core import", async () => {
+  it("holds the release against uninstall while the runtime loads, and holds the gate only while the launch registers", async () => {
     const { a } = await fixture();
     const receipt = await installDistribution(a.archive);
     const ready = join(temp("piship-launch-race-"), "ready");
     const release = join(dirname(ready), "release");
-    const core = join(
-      receipt.payload,
-      "node_modules",
-      "@piship",
-      "core",
-      "dist",
-      "index.js",
+    const gate = join(
+      process.env.PISHIP_INSTALL_HOME as string,
+      "receipts",
+      `.${ID}.launch.lock`,
     );
+    // A release whose launcher takes as long as a cold load of the runtime:
+    // the first launch writes `ready` and waits; a launch that finds `ready`
+    // is the second, and returns at once.
     writeFileSync(
-      core,
+      join(receipt.payload, "bin", receipt.app.command),
       `import { writeFileSync, watch, existsSync } from "node:fs";
 import { dirname } from "node:path";
-writeFileSync(${JSON.stringify(ready)}, "ready");
-await new Promise((resolve) => {
-  const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+if (existsSync(${JSON.stringify(ready)})) console.log("second launch ran");
+else {
+  writeFileSync(${JSON.stringify(ready)}, "ready");
+  await new Promise((resolve) => {
+    const watcher = watch(dirname(${JSON.stringify(release)}), () => {
+      if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
+    });
     if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
   });
-  if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
-});
-export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};
+}
 `,
     );
     const child = spawn(process.execPath, [receipt.launcher as string], {
@@ -3659,7 +4399,17 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     });
     try {
       await waitForFile(ready);
-      expect(() => uninstallDistribution(ID)).toThrow(/registering/);
+      // The gate is free: a second launch is not held up by the load.
+      expect(existsSync(gate)).toBe(false);
+      const second = spawnSync(process.execPath, [receipt.launcher as string], {
+        encoding: "utf8",
+      });
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stdout).toContain("second launch ran");
+      // What keeps the release is the lease, not the gate.
+      expect(() => uninstallDistribution(ID)).toThrow(
+        /while 1 runtime session\(s\) still use its payload/,
+      );
       expect(existsSync(receipt.payload)).toBe(true);
       writeFileSync(release, "continue");
       const code = await new Promise<number | null>((resolvePromise) =>

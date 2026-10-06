@@ -56,6 +56,7 @@ function context(mode: "managed" | "personal"): LaunchContext {
         command: "acmecode",
       },
       runtime: { pishipVersion: "0.7.0" },
+      deployment: { mode },
       manifest: { schema: "piship/v1alpha4" },
     },
     mode,
@@ -1933,7 +1934,7 @@ describe("Governance group", () => {
     const lines = group(renderDoctor(data).render(), "Governance");
     expect(lines).toEqual(
       expect.arrayContaining([
-        `  ✓ ${"Pi packages".padEnd(20)} 1 vendored, integrity verified at launch`,
+        `  ✓ ${"Pi packages".padEnd(20)} 1 vendored, integrity verified by doctor`,
         `  - ${"package pi-platform".padEnd(20)} npm 1.0.0 (company), 4 files`,
         `  ✓ ${"cache warming".padEnd(20)} streaming (user may override)`,
         `  ✓ ${"runtime mutation".padEnd(20)} enforced per turn; a change that cannot be restored blocks the session`,

@@ -114,10 +114,10 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
     }
   }
   if (lock.packages?.length) {
-    // The payload inventory verified every vendored file before Pi loaded.
+    // Doctor explicitly verifies every vendored file against the inventory.
     out.ok(
       "Pi packages",
-      `${lock.packages.length} vendored, integrity verified at launch`,
+      `${lock.packages.length} vendored, integrity verified by doctor`,
     );
     for (const item of lock.packages)
       out.info(

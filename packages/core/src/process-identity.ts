@@ -4,7 +4,11 @@
 // live after a crash and a reuse of the ID.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { processAlive, processHostToken } from "@piship/contracts";
+import {
+  processAlive,
+  processHostToken,
+  startupCount,
+} from "@piship/contracts";
 
 /**
  * The start identity of the process with this ID: the boot ID and start time
@@ -16,13 +20,38 @@ import { processAlive, processHostToken } from "@piship/contracts";
 export function processIdentity(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid < 1) return undefined;
   // This process's own start time never changes; on Windows each lookup is a
-  // PowerShell start, and a launch asks for it from more than one place.
+  // PowerShell start, and a launch asks for it from more than one place. A
+  // lookup that failed (PowerShell blocked by policy) is remembered too, or
+  // every caller would wait out its timeout again.
   if (pid !== process.pid) return lookup(pid);
-  ownIdentity ??= lookup(pid);
+  if (!ownRead) {
+    ownIdentity = lookup(pid);
+    ownRead = true;
+  }
   return ownIdentity;
 }
 
 let ownIdentity: string | undefined;
+let ownRead = false;
+
+/**
+ * The start identity this process writes into a lease, lock, or owner
+ * record. Linux reads it from /proc at no cost. Elsewhere reading it starts a
+ * process (PowerShell on Windows, half a second to several; `ps` on macOS),
+ * so the record carries `null` and `recordedStart` instead: the process that
+ * must tell a crashed owner from a live one pays for the lookup then
+ * (`recordedProcessGone`), and a launch nobody contends with pays nothing.
+ */
+export function recordedIdentity(): string | null {
+  return process.platform === "linux"
+    ? (processIdentity(process.pid) ?? null)
+    : null;
+}
+
+/** This process's start time in ms since the epoch, as a record carries it. */
+export function recordedStart(): number {
+  return Math.round(performance.timeOrigin);
+}
 
 // `ps -o lstart=` in the C locale: "Thu Oct  1 08:05:10 2026".
 const LSTART = /^\w{3} (\w{3}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
@@ -70,9 +99,14 @@ export function processIdentityMatches(
  * How far a recorded start time (the writer's `performance.timeOrigin`) may
  * lie from the start time the system reports for the same process: `ps`
  * reports whole seconds, and Node takes its time origin after the process
- * (or the shell a command shim replaces with `exec`) began.
+ * (or the shell a command shim replaces with `exec`) began. On Windows the
+ * system stamps a process when it is created, and a first launch can spend
+ * seconds loading and scanning `node.exe` before Node starts, so a live
+ * owner must never be judged gone for that gap; a process that merely has
+ * the same ID started minutes or hours from the owner, not within half a
+ * minute of it.
  */
-const START_TOLERANCE_MS = 5_000;
+export const START_TOLERANCE_MS = 30_000;
 
 /** A record that names the process holding something. */
 export interface ProcessRecord {
@@ -101,6 +135,13 @@ export function recordedProcessGone(
 ): boolean | undefined {
   if (record.host !== null && record.host !== processHostToken())
     return undefined;
+  // A record that names this process's own ID. What this process wrote has
+  // this process's start time, exactly, and needs no question to the system;
+  // a record with another start time is a dead process's, whose ID this one
+  // was given (Windows hands an ID out again at once: a command killed by
+  // Ctrl-C and run again within the start tolerance can get the same one).
+  if (record.pid === process.pid && record.started !== null)
+    return record.started !== recordedStart();
   if (!processAlive(record.pid)) return true;
   const same = processIdentityMatches(record.identity, record.pid);
   if (same !== undefined) return !same;
@@ -135,6 +176,7 @@ function lookup(pid: number): string | undefined {
       ).trim();
       return fields[19] ? `${boot}:${fields[19]}` : undefined;
     }
+    startupCount("identity_spawns");
     if (process.platform === "win32") {
       const value = execFileSync(
         "powershell.exe",

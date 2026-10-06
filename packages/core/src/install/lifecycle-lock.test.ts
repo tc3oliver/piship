@@ -30,7 +30,7 @@ import {
   LIFECYCLE_LOCK_SCHEMA,
   acquireLifecycleLock,
 } from "./lifecycle-lock.js";
-import { processIdentity } from "../process-identity.js";
+import { processIdentity, recordedIdentity } from "../process-identity.js";
 
 // Stops the live processes `livePid` starts.
 useLifecycleHomes();
@@ -177,10 +177,13 @@ describe("lifecycle lock holder identity", () => {
     const held = JSON.parse(readFileSync(lock, "utf8"));
     expect(held).toMatchObject({
       pid: process.pid,
-      identity: processIdentity(process.pid) ?? null,
+      identity: recordedIdentity(),
       host: processHostToken(),
       started: Math.round(performance.timeOrigin),
     });
+    // Reading it elsewhere starts a process (PowerShell on Windows), which a
+    // lock nobody contends for does not pay; the start time stands in.
+    if (process.platform !== "linux") expect(held.identity).toBeNull();
     hold.release();
   });
 
@@ -190,6 +193,30 @@ describe("lifecycle lock holder identity", () => {
     writeFileSync(lock, identified({ pid: livePid(), identity: "1" }));
     acquire().release();
     expect(existsSync(lock)).toBe(false);
+  });
+
+  it("recovers at once a lock that names this process's ID with another start time", () => {
+    // A command killed by Ctrl-C leaves its lock behind, and the next run can
+    // be given the same process ID within the start tolerance: the lock is a
+    // dead process's, not this one's, however fresh.
+    writeFileSync(
+      lock,
+      identified({
+        pid: process.pid,
+        started: Math.round(performance.timeOrigin) - 1_000,
+      }),
+    );
+    acquire().release();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("still waits for a lock this very process holds", () => {
+    const hold = acquire();
+    try {
+      expect(busy().pid).toBe(process.pid);
+    } finally {
+      hold.release();
+    }
   });
 
   it("waits for a live holder whose start identity matches", () => {

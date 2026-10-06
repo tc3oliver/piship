@@ -24,7 +24,7 @@ import {
   binHome,
   installHome,
   distributionStateDirectory,
-  verifyPayload,
+  verifyPayloadContents,
   type DistributionLock,
 } from "../index.js";
 import type { ReleaseMetadata, ReleaseTestRunner } from "../release/index.js";
@@ -40,6 +40,12 @@ export interface InstalledRelease {
   readonly version: string;
   readonly payload: string;
   readonly installedAt: string;
+  /**
+   * The SHA-256 of the installed `piship.lock`, recorded when a payload
+   * directory was installed; a release records it in `release.lockSha256`,
+   * from its signed metadata. A launch refuses a lock that differs.
+   */
+  readonly lockSha256?: string;
   /** Present when installed from a verified release artifact. */
   readonly release?: {
     readonly target: string;
@@ -112,7 +118,7 @@ export interface LifecycleOptions {
   readonly progress?: (step: string) => void;
   /** Test seam: throw at a phase to simulate interruption. */
   readonly faults?: (phase: LifecyclePhase) => void;
-  /** Runs a candidate payload's launcher check; defaults to Node. */
+  /** @deprecated Client activation no longer boots a candidate; qualification runs in CI. */
   readonly runCheck?: ReleaseTestRunner;
   /**
    * The secret store of this distribution's credentials, used when a
@@ -401,6 +407,16 @@ export function acquireLock(
       ),
     () => new PiShipError(code, `Could not lock ${id} for ${operation}`),
   );
+  // Admission waits only for launcher registration, without scanning or
+  // reclaiming payloads. A launch already registering finishes before this
+  // operation mutates state; a new registration is serialized at commit.
+  try {
+    const gate = acquireLaunchGate(id, code);
+    gate.release();
+  } catch (error) {
+    hold.release();
+    throw error;
+  }
   return {
     ...hold,
     commit(receipt) {
@@ -414,7 +430,18 @@ export function acquireLock(
               "Run the command again once no other update, rollback, or uninstall is running",
           },
         );
-      writeReceipt(receipt);
+      const gate = acquireLaunchGate(id, code);
+      try {
+        if (!hold.stillHeld())
+          throw new PiShipError(
+            code,
+            `The lock on ${id} was taken over before commit`,
+            { retryable: true },
+          );
+        writeReceipt(receipt);
+      } finally {
+        gate.release();
+      }
     },
   };
 }
@@ -476,5 +503,8 @@ export function activeLock(receipt: InstallReceipt): DistributionLock {
   );
   if (!active)
     throw new Error(`Unsafe installation receipt for ${receipt.app.id}`);
-  return verifyPayload(active.payload);
+  return verifyPayloadContents(active.payload, {
+    requireTarget: true,
+    verifyContents: false,
+  });
 }

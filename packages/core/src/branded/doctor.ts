@@ -2,7 +2,11 @@
 import { LocalMetrics } from "@piship/audit";
 import { isLoopbackHost } from "@piship/contracts";
 import { resolveTemplate } from "@piship/schema";
-import { abandonedTemporaryCount, lifecycleStatus } from "../index.js";
+import {
+  abandonedTemporaryCount,
+  inspectInstalledLauncher,
+  lifecycleStatus,
+} from "../index.js";
 import type { BrandedContext, DoctorLine } from "./context.js";
 import { installedHere } from "./lifecycle.js";
 
@@ -30,7 +34,7 @@ function supplyChainDoctor(ctx: BrandedContext, ok: DoctorLine): void {
   const { metadata } = ctx;
   ok("manifest", `verified (${metadata.manifest.schema})`);
   ok("lockfile", `verified (${metadata.schema})`);
-  ok("integrity", "payload inventory verified at launch");
+  ok("integrity", "payload inventory verified by doctor");
 }
 
 function releaseDoctor(
@@ -56,8 +60,8 @@ function updateDoctor(
   warn: DoctorLine,
 ): void {
   const { metadata } = ctx;
-  // The launch removed every abandoned temporary directory it could, so any
-  // that remain resisted removal. Only a count: the paths are not reported.
+  // Doctor attempts temporary maintenance before collecting this report.
+  // Only a count: the paths are not reported.
   const abandoned = abandonedTemporaryCount(metadata.app.id);
   if (abandoned > 0)
     warn(
@@ -78,6 +82,13 @@ function updateDoctor(
     return;
   }
   ok("active", status.active ?? metadata.app.version);
+  const launcher = inspectInstalledLauncher(metadata.app.id);
+  if (launcher?.current) ok("launcher", `build ${launcher.expected}`);
+  else if (launcher)
+    warn(
+      "launcher",
+      `build ${launcher.build ?? "before builds were stamped"}, but this PiShip writes ${launcher.expected}; doctor and the end of a session replace it`,
+    );
   if (!metadata.updates) {
     warn("updates", `not configured (${metadata.manifest.schema})`);
   } else {

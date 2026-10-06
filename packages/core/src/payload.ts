@@ -1,39 +1,71 @@
-import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import {
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { readManifest } from "@piship/schema";
 import { hash } from "./digest.js";
+import { hashFilesInParallel, workerCount } from "./parallel-files.js";
+import { readInstallReceipt } from "./install/receipt.js";
 import { manifestDigest } from "./lock.js";
 import type { DistributionLock } from "./lock-schema.js";
+import { installHome } from "./state-paths.js";
 
 /** SHA-256 of every payload file except the inventory itself, by `/` path. */
 export function payloadInventory(root: string): Record<string, string> {
   return inventory(root);
 }
-export function inventory(root: string): Record<string, string> {
-  const output: Record<string, string> = {};
-  const visit = (directory: string): void => {
-    for (const name of readdirSync(directory).sort()) {
-      const path = join(directory, name);
-      const stat = lstatSync(path);
-      const key = relative(root, path).split(sep).join("/");
-      if (stat.isSymbolicLink())
+const byName = (a: { name: string }, b: { name: string }) =>
+  a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+/**
+ * The inventory of `root`. `known` carries digests a verified source (a cache
+ * entry that was hashed when it was created) already holds; a file listed
+ * there is not read again. Every other file is hashed from its bytes, by
+ * several threads when there are many.
+ */
+export function inventory(
+  root: string,
+  known: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const files: string[] = [];
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
+      byName,
+    )) {
+      const key = `${prefix}${entry.name}`;
+      if (entry.isSymbolicLink())
         throw new Error(`Payload symlink is not allowed: ${key}`);
-      if (stat.isDirectory()) visit(path);
-      else if (stat.isFile() && key !== "metadata/inventory.json")
-        output[key] = hash(readFileSync(path));
-      else if (!stat.isFile())
+      if (entry.isDirectory()) visit(join(directory, entry.name), `${key}/`);
+      else if (entry.isFile() && key !== "metadata/inventory.json")
+        files.push(key);
+      else if (!entry.isFile())
         throw new Error(`Unsupported payload entry: ${key}`);
     }
   };
-  visit(root);
+  visit(root, "");
+  const unknown = files.filter((key) => !Object.hasOwn(known, key));
+  const threads = workerCount(unknown.length);
+  const hashed = new Map<string, string>();
+  if (threads > 1)
+    hashFilesInParallel(threads, root, unknown).forEach((digest, index) => {
+      hashed.set(unknown[index] as string, digest);
+    });
+  const output: Record<string, string> = {};
+  for (const key of files)
+    output[key] = Object.hasOwn(known, key)
+      ? (known[key] as string)
+      : (hashed.get(key) ?? hash(readFileSync(join(root, ...key.split("/")))));
   return output;
 }
 export function removeNpmBins(directory: string): void {
-  for (const name of readdirSync(directory)) {
-    const path = join(directory, name);
-    if (name === ".bin") rmSync(path, { recursive: true, force: true });
-    else if (lstatSync(path).isDirectory()) removeNpmBins(path);
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.name === ".bin") rmSync(path, { recursive: true, force: true });
+    else if (entry.isDirectory()) removeNpmBins(path);
   }
 }
 /**
@@ -71,32 +103,82 @@ function supports(values: readonly string[] | undefined, value: string) {
   const allowed = values.filter((item) => !item.startsWith("!"));
   return allowed.length === 0 || allowed.includes(value);
 }
+/** JS source maps and TypeScript declaration files, by file name. */
+const RUNTIME_IRRELEVANT = /\.(?:map|d\.ts|d\.mts|d\.cts)$/;
+export const isRuntimeIrrelevant = (name: string): boolean =>
+  RUNTIME_IRRELEVANT.test(name);
+/**
+ * Remove files a running Node process never reads — JS source maps and
+ * TypeScript declaration files — before the payload inventory is computed.
+ * A PiShip payload ships ~17k files and over half are exactly these; on
+ * Windows Defender real-time-scans every extracted file, so stripping them
+ * roughly halves first-install extraction time and shrinks the download.
+ * Markdown is deliberately kept: Pi embeds `.md` prompt templates at run time.
+ * Returns the removed paths, `/`-separated and relative to `root`.
+ */
+export function stripRuntimeIrrelevant(root: string): string[] {
+  const removed: string[] = [];
+  /** Returns whether `directory` itself was removed, having been emptied. */
+  const visit = (directory: string, prefix: string): boolean => {
+    let changed = false;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (visit(path, `${prefix}${entry.name}/`)) changed = true;
+      } else if (entry.isFile() && isRuntimeIrrelevant(entry.name)) {
+        rmSync(path);
+        removed.push(`${prefix}${entry.name}`);
+        changed = true;
+      }
+    }
+    // A directory only declarations lived in is left out, as a build from a
+    // runtime cache never creates it.
+    if (!changed || !prefix || readdirSync(directory).length > 0) return false;
+    rmdirSync(directory);
+    return true;
+  };
+  visit(root, "");
+  return removed;
+}
 export function verifyPayload(directory: string): DistributionLock {
-  return verifyPayloadContents(directory, { requireTarget: true });
+  return verifyPayloadContents(directory, {
+    requireTarget: true,
+    verifyContents: true,
+  });
 }
 /**
  * Inventory, manifest, lock, and npm lock verification of a payload. Without
- * `requireTarget`, a consumer on another OS/CPU can still verify it.
+ * `requireTarget`, a consumer on another OS/CPU can still verify it. Set
+ * `verifyContents: false` to skip the per-file content hash and keep only the
+ * manifest/lock/npm-lock bindings and the target check; install, update,
+ * rollback, and doctor never do.
  */
 export function verifyPayloadContents(
   directory: string,
-  options: { readonly requireTarget?: boolean } = {},
+  options: {
+    readonly requireTarget?: boolean;
+    readonly verifyContents?: boolean;
+  } = {},
 ): DistributionLock {
   const started = process.hrtime.bigint();
   const root = resolve(directory);
   const inventoryPath = join(root, "metadata", "inventory.json");
-  const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
-    string,
-    string
-  >;
-  const actual = inventory(root);
-  const added = Object.keys(actual).filter((key) => !(key in expected));
-  const missing = Object.keys(expected).filter((key) => !(key in actual));
-  const modified = Object.keys(actual).filter(
-    (key) => key in expected && expected[key] !== actual[key],
-  );
-  if (added.length || missing.length || modified.length)
-    throw payloadIntegrityError(root, { added, modified, missing });
+  let fileCount = 0;
+  if (options.verifyContents !== false) {
+    const expected = JSON.parse(readFileSync(inventoryPath, "utf8")) as Record<
+      string,
+      string
+    >;
+    const actual = inventory(root);
+    fileCount = Object.keys(actual).length;
+    const added = Object.keys(actual).filter((key) => !(key in expected));
+    const missing = Object.keys(expected).filter((key) => !(key in actual));
+    const modified = Object.keys(actual).filter(
+      (key) => key in expected && expected[key] !== actual[key],
+    );
+    if (added.length || missing.length || modified.length)
+      throw payloadIntegrityError(root, { added, modified, missing });
+  }
   const target = JSON.parse(
     readFileSync(join(root, "metadata", "target.json"), "utf8"),
   ) as { platform: string; arch: string };
@@ -131,12 +213,85 @@ export function verifyPayloadContents(
     );
   if (process.env.PISHIP_DEBUG_TIMING === "1")
     process.stderr.write(
-      `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${Object.keys(actual).length} files)\n`,
+      `verifyPayload: ${Number(process.hrtime.bigint() - started) / 1e6} ms (${fileCount} files${options.verifyContents === false ? ", content hash skipped" : ""})\n`,
     );
   return lock;
 }
-// Doctor only needs the command name here. The launcher performs the complete
-// integrity verification before importing Pi, including this lockfile.
+/**
+ * Load the metadata required to boot. By default a launch never walks the
+ * payload or reads its inventory, manifest, or npm lock, but it does hash the
+ * one small file that carries the distribution's policy, `piship.lock`,
+ * against the digest recorded when the release was installed: an edited lock
+ * (a relaxed `policy.enforced`, a changed capability) is refused, and costs
+ * one hash of a file of tens of kilobytes however large the payload is. A
+ * distribution that declares `runtime.verifyAtLaunch: true` (recorded in its
+ * lock) opts into the full verification of the payload, inventory included,
+ * at every launch. The target check is constant-cost and prevents a
+ * wrong-platform installation from trying to load its native runtime.
+ */
+export function verifyLaunchPayload(directory: string): DistributionLock {
+  const root = resolve(directory);
+  const target = JSON.parse(
+    readFileSync(join(root, "metadata", "target.json"), "utf8"),
+  ) as { platform: string; arch: string };
+  if (target.platform !== process.platform || target.arch !== process.arch)
+    throw new Error(
+      `Payload target ${target.platform}/${target.arch} does not match this machine ${process.platform}/${process.arch}; use an artifact built for this target`,
+    );
+  const bytes = readFileSync(join(root, "piship.lock"));
+  checkInstalledLock(root, bytes);
+  const lock = JSON.parse(bytes.toString("utf8")) as DistributionLock;
+  return lock.verifyAtLaunch === true ? verifyPayload(root) : lock;
+}
+
+function sameDirectory(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An installed release's lock must be the file that was installed: its
+ * digest is recorded in the install receipt, from the signed release
+ * metadata (`release.lockSha256`) or, for a payload directory, from the
+ * install itself. Only a payload at `apps/<id>/<version>` of this install
+ * home is bound; a build directory, a release the receipt does not list, a
+ * receipt that cannot be read (the installed launcher would not have started
+ * it), and an installation from before the digest was recorded have nothing
+ * to compare with and are not refused here.
+ */
+function checkInstalledLock(root: string, bytes: Buffer): void {
+  const id = basename(dirname(root));
+  if (!sameDirectory(dirname(dirname(root)), join(installHome(), "apps")))
+    return;
+  let expected: string | undefined;
+  let version: string | undefined;
+  try {
+    const entry = readInstallReceipt(id).releases.find((item) =>
+      sameDirectory(item.payload, root),
+    );
+    expected = entry?.release?.lockSha256 ?? entry?.lockSha256;
+    version = entry?.version;
+  } catch {
+    return;
+  }
+  if (!expected) return;
+  const actual = hash(bytes);
+  if (actual !== expected)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `The installed piship.lock of ${id} ${version} is not the one that was installed (SHA-256 ${actual.slice(0, 12)}, recorded ${expected.slice(0, 12)}); its policy cannot be trusted`,
+      {
+        component: "payload",
+        userAction: repairAction(root),
+        sanitizedDetail: { payload: root, expected, actual },
+      },
+    );
+}
+// Doctor only needs the command name here. Full integrity verification belongs
+// to explicit diagnostics and release qualification.
 export function payloadApp(directory: string): DistributionLock["app"] {
   try {
     const lock = JSON.parse(
@@ -146,7 +301,7 @@ export function payloadApp(directory: string): DistributionLock["app"] {
     if (command && /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(command))
       return lock.app;
   } catch {
-    // The launcher will verify the complete payload for a well-formed lock.
+    // Malformed metadata cannot identify this distribution.
   }
   throw payloadIntegrityError();
 }
@@ -205,4 +360,42 @@ function repairAction(root?: string, onlyUnexpected = false): string {
     /^[a-z](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(id as string);
   const name = installed ? id : "<id>";
   return `Do not run it. ${onlyUnexpected ? "Remove the unexpected files it names, or restore" : "Restore"} it from a trusted release of the same version with: piship repair ${name} <release archive>, or without a PiShip CLI: node <extracted release>/payload/piship.mjs repair ${name} <extracted release> (repair does not run this payload; never run its piship.mjs). A payload that is not installed must be rebuilt or downloaded again`;
+}
+/**
+ * Compare the SHA-256 of every payload file, computed from the bytes as they
+ * were written (an archive extraction or a directory copy), with the payload's
+ * own inventory: no file modified, none missing, none the inventory does not
+ * name. The inventory file itself is bound separately, by the digest the
+ * release records for it. Names the first offending paths with the expected
+ * and the actual digest.
+ */
+export function verifyWrittenPayload(
+  digests: ReadonlyMap<string, string>,
+  expected: Readonly<Record<string, string>>,
+  where: string,
+): void {
+  const written = new Map(
+    [...digests].filter(([path]) => path !== "metadata/inventory.json"),
+  );
+  const problems: string[] = [];
+  for (const [path, actual] of written) {
+    const wanted = expected[path];
+    if (wanted === undefined) problems.push(`unexpected: ${path}`);
+    else if (wanted !== actual)
+      problems.push(
+        `modified: ${path} (expected ${wanted.slice(0, 16)}, actual ${actual.slice(0, 16)})`,
+      );
+  }
+  for (const path of Object.keys(expected))
+    if (!written.has(path)) problems.push(`missing: ${path}`);
+  if (problems.length > 0)
+    throw new PiShipError(
+      "INTEGRITY_FAILED",
+      `Payload integrity mismatch in ${where}; ${problems.slice(0, 5).join("; ")}${problems.length > 5 ? `; and ${problems.length - 5} more` : ""}`,
+      {
+        component: "payload",
+        userAction:
+          "Do not install this artifact; obtain it again from the trusted source",
+      },
+    );
 }

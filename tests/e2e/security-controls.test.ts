@@ -756,8 +756,8 @@ describe("policy: a broken policy stops the launch; a widening one is ignored (c
   });
 });
 
-describe("integrity: a payload that changed does not run (case 13)", () => {
-  it("refuses a tampered policy adapter before it executes, and runs it again once restored", async () => {
+describe("integrity: explicit diagnostics detect payload changes", () => {
+  it("doctor refuses a tampered policy adapter before it executes, and launch works once restored", async () => {
     const session = fixture.session();
     await session.login();
     const marker = join(fixture.temp, "tampered-adapter-ran");
@@ -768,10 +768,6 @@ describe("integrity: a payload that changed does not run (case 13)", () => {
         fixture.adapter,
         `${original.toString("utf8")}\nimport { writeFileSync as w } from "node:fs";\nw(${JSON.stringify(marker)}, "ran");\n`,
       );
-      const refused = await session.run(["--smoke"]);
-      expect(refused.status).toBe(1);
-      expect(refused.stderr).toContain("INTEGRITY_FAILED");
-      expect(existsSync(marker)).toBe(false);
       const doctor = await session.run(["doctor"]);
       expect(doctor.status).toBe(1);
       expect(`${doctor.stdout}${doctor.stderr}`).toContain(
@@ -785,7 +781,7 @@ describe("integrity: a payload that changed does not run (case 13)", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("refuses a payload whose inventory is missing", async () => {
+  it("launch ignores a missing inventory while doctor reports it", async () => {
     const { services } = fixture;
     const session = fixture.session();
     await session.login();
@@ -794,13 +790,12 @@ describe("integrity: a payload that changed does not run (case 13)", () => {
     services.state.requests.length = 0;
     try {
       rmSync(inventory);
-      const refused = await session.run(["--smoke-model"]);
-      expect(refused.status).toBe(1);
-      expect(refused.stdout).not.toContain('"initialized"');
-      // The launcher could not read the inventory it verifies the payload
-      // against, and went no further: no gateway, no broker, no model.
-      expect(refused.stderr).toContain("inventory.json");
-      expect(services.state.requests).toEqual([]);
+      const boot = await session.run(["--smoke"]);
+      expect(boot.status, boot.stderr).toBe(0);
+      expect(JSON.parse(boot.stdout).initialized).toBe(true);
+      const doctor = await session.run(["doctor"]);
+      expect(doctor.status).toBe(1);
+      expect(doctor.stderr).toContain("inventory.json");
     } finally {
       writeFileSync(inventory, original);
     }

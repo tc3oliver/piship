@@ -34,8 +34,10 @@ import {
   inspection,
   installDistribution,
   isEncryptedPrivateKey,
+  isUnqualifiedPayload,
   keyFingerprint,
   lockManifest,
+  markLocalBuild,
   nextTrustRoot,
   payloadApp,
   payloadStateSchemas,
@@ -44,6 +46,7 @@ import {
   pathHint,
   progressReporter,
   purgeDistributionState,
+  raiseThreadpool,
   readInstallReceipt,
   readSigningPassphrase,
   repairDistribution,
@@ -52,6 +55,7 @@ import {
   runtimeStateDirectory,
   SEARCH_TOOL_SPECS,
   signChannel,
+  UNQUALIFIED_BUILD_NOTICE,
   uninstallAndPurgeDistribution,
   uninstallDistribution,
   verifyPayload,
@@ -59,6 +63,7 @@ import {
   withTestState,
   writePrivateKey,
   type AbandonedStaging,
+  type RuntimeCacheProvenance,
   type DistributionLock,
   type KeyedSigner,
   type PassphraseInput,
@@ -109,7 +114,7 @@ const simpleUsage: Record<string, string> = {
   dev: "dev <manifest> [--smoke]",
   validate: "validate <manifest>",
   lock: "lock <manifest>",
-  build: "build <manifest> [--reclaim-staging]",
+  build: "build <manifest> [--rebuild] [--reclaim-staging]",
   test: "test <manifest> [--model-request] [--json]",
   inspect: "inspect <manifest|artifact|id> [--json]",
   doctor: "doctor <artifact|id> [--json]",
@@ -139,10 +144,10 @@ const lifecycleCommands: Record<
   },
   release: {
     usage:
-      "release <manifest> [--out <dir>] [--channel <name>] [--reclaim-staging]",
+      "release <manifest> [--out <dir>] [--channel <name>] [--rebuild] [--reclaim-staging]",
     positional: [1, 1],
     values: ["--out", "--channel"],
-    flags: ["--reclaim-staging"],
+    flags: ["--rebuild", "--reclaim-staging"],
   },
   "verify-release": {
     usage: "verify-release <archive|release-dir> [--sha256 <hex>] [--json]",
@@ -365,7 +370,12 @@ async function lockFor(target: string): Promise<DistributionLock> {
   return verifyPayload(readInstallReceipt(target).payload);
 }
 const allowedOptions: Record<string, readonly string[]> = {
-  build: ["--reclaim-staging"],
+  build: [
+    "--reclaim-staging",
+    "--rebuild",
+    "--rebuild --reclaim-staging",
+    "--reclaim-staging --rebuild",
+  ],
   purge: ["--yes", "--yes --without-logout"],
   init: ["--personal", "--managed"],
   migrate: ["--write", "--check"],
@@ -388,6 +398,21 @@ export interface CliOutput {
  * in its output directory. They are removed only on request: the output
  * directory is usually inside a project that sandboxed commands can write.
  */
+/** One line saying whether a release's runtime came from the runtime cache. */
+export function runtimeCacheLine(cache: RuntimeCacheProvenance): string {
+  if (cache.status === "disabled" || cache.entry === undefined)
+    return `runtime cache: ${cache.status}`;
+  const placed = [
+    `entry ${cache.entry}`,
+    `linked ${cache.linked ?? 0}`,
+    `copied ${cache.copied ?? 0}`,
+    ...(cache.framework ? [`PiShip ${cache.framework}`] : []),
+    ...(cache.bundle ? [`bundle ${cache.bundle}`] : []),
+    ...(cache.crossVolume ? ["cache on another volume, entry copied in"] : []),
+  ];
+  return `runtime cache: ${cache.status} (${placed.join(", ")})`;
+}
+
 function stagingNotice(found: AbandonedStaging): string {
   const what = `${found.count} abandoned staging ${found.count === 1 ? "directory" : "directories"} of killed runs in ${found.directory}`;
   return found.attempted
@@ -495,6 +520,9 @@ export async function runCli(
     output.stderr(`Unknown command: ${command}. Run piship --help.`);
     return 2;
   }
+  // Before anything touches the file system asynchronously: the pool size is
+  // read when it first runs.
+  if (command === "install" || command === "update") raiseThreadpool();
   const lifecycle = lifecycleCommands[command];
   // --help anywhere after the command asks for help; it is never a target.
   if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) {
@@ -705,10 +733,14 @@ export async function runCli(
         progress ? { progress } : {},
       );
       const built = buildDistribution(target, undefined, {
-        reclaimStaging: rest[0] === "--reclaim-staging",
+        reclaimStaging: rest.includes("--reclaim-staging"),
+        cache: !rest.includes("--rebuild"),
+        ...(rest.includes("--rebuild") ? {} : { runtimeCache: true as const }),
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
         ...(progress ? { progress } : {}),
       });
+      markLocalBuild(built);
+      output.stderr(UNQUALIFIED_BUILD_NOTICE);
       output.stdout(
         `Built ${built}\nNext: piship test ${target} runs the acceptance smoke, then node ${join(built, "piship.mjs")} install ${built} installs it for this user.`,
       );
@@ -755,8 +787,10 @@ export async function runCli(
       // Local iteration: the supply-chain gates run on build and release.
       const artifact = buildDistribution(target, undefined, {
         supplyChainGates: false,
+        runtimeCache: true,
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
       });
+      markLocalBuild(artifact);
       const lock = requireCurrentLock(target);
       // `dev --smoke` runs the same isolated launch headlessly, for scripts.
       const interactive = command === "dev" && rest[0] !== "--smoke";
@@ -847,6 +881,10 @@ async function runLifecycle(
 ): Promise<number> {
   const [first = "", second = ""] = positional;
   if (command === "install") {
+    if (isUnqualifiedPayload(resolve(first)))
+      output.stderr(
+        `Warning: ${first} is an unqualified local build, not a release: it was not audited and has no SBOM, notices, or recorded tests. Install it for local testing only; use the release piship release builds, or your publisher's, for anything else.`,
+      );
     const receipt = await installDistribution(
       first,
       flags.has("--use-existing-state"),
@@ -872,12 +910,16 @@ async function runLifecycle(
     const built = await buildRelease(first, {
       ...(options["--out"] ? { outputRoot: options["--out"] } : {}),
       ...(options["--channel"] ? { channel: options["--channel"] } : {}),
+      cache: !flags.has("--rebuild"),
       reclaimStaging: flags.has("--reclaim-staging"),
       abandonedStaging: (found) => output.stderr(stagingNotice(found)),
     });
     output.stdout(
-      `Built release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
+      `Built qualified release ${built.name} (${built.metadata.channel})\n  archive  ${built.archive}\n  sha256   ${built.sha256}\n  tests    ${built.metadata.tests.map((test) => test.name).join(", ")}\n  SBOM     ${built.metadata.sbom.packages} packages\n  qualified: dependency audit, registry signatures, SBOM, notices, and the release tests passed\nThis local build is unsigned: publish it through a signed channel (piship sign-channel) or verified provenance before calling it a release.`,
     );
+    // Where the runtime came from is no part of the release, so it goes to
+    // stderr and to the build-info file beside the archive.
+    output.stderr(runtimeCacheLine(built.runtimeCache));
   } else if (command === "verify-release") {
     const verified = await verifyRelease(first, {
       ...(options["--sha256"] ? { expectedSha256: options["--sha256"] } : {}),
@@ -887,7 +929,7 @@ async function runLifecycle(
       output.stdout(
         flags.has("--json")
           ? JSON.stringify(metadata, null, 2)
-          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
+          : `Verified ${metadata.distribution.name} ${metadata.distribution.version} for ${metadata.target} (${metadata.channel})\n  PiShip ${metadata.piship.version}, Pi ${metadata.pi.version} (${metadata.pi.compatibility})\n  payload ${metadata.payload.files} files match their inventory\n  SBOM ${metadata.sbom.packages} packages, notices, checksums, and vulnerability scan (${metadata.vulnerabilities.verdict}, fail on ${metadata.vulnerabilities.failOn}) verified\n  tests ${metadata.tests.map((test) => test.name).join(", ")}\n  qualification ${metadata.qualification ?? "not recorded (built before PiShip recorded it)"}\nPublisher identity is not checked here: verify the channel signature or build provenance.`,
       );
     } finally {
       verified.cleanup();

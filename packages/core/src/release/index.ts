@@ -12,6 +12,15 @@ export {
   type ChannelRelease,
   type SignChannelOptions,
 } from "./channel.js";
+export {
+  isUnqualifiedPayload,
+  LOCAL_BUILD_UNQUALIFIED,
+  localBuildMarkerPath,
+  markLocalBuild,
+  QUALIFICATION_SCHEMA,
+  RELEASE_QUALIFIED,
+  UNQUALIFIED_BUILD_NOTICE,
+} from "./qualification.js";
 export { checkLockedPackageSources } from "./sources.js";
 export {
   checkPackageSources,
@@ -22,17 +31,20 @@ export {
   virtualRouteProblems,
 } from "./gates.js";
 export {
+  BUILD_INFO_SCHEMA,
   CHANNEL_SCHEMA,
   RELEASE_FILES,
   RELEASE_SCHEMA,
   REPRODUCIBILITY_SCHEMA,
   VULNERABILITY_REPORT_SCHEMA,
+  type AsyncReleaseTestRunner,
   type BuiltRelease,
   type CommandResult,
   type ReleaseMetadata,
   type ReleaseOptions,
   type ReleaseTestResult,
   type ReleaseTestRunner,
+  type RuntimeCacheProvenance,
   type SignatureAuditor,
   type SignatureReport,
   type VulnerabilityFinding,

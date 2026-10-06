@@ -11,19 +11,22 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { DistributionLock, LockedSearchTools } from "@piship/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { piAgentDirectory, preparePiEnvironment } from "../environment.js";
-import { supplyChainGroup } from "../doctor/supply-chain.js";
 import type { DoctorData } from "../doctor/data.js";
+import { supplyChainGroup } from "../doctor/supply-chain.js";
+import { piAgentDirectory, preparePiEnvironment } from "../environment.js";
 import {
+  deferredToolDownloads,
   installSearchTools,
   piToolDirectory,
   searchToolStatus,
+  toolsPiWouldDownload,
 } from "./search-tools.js";
 
 const roots: string[] = [];
@@ -165,6 +168,7 @@ describe("bundled search tools at launch", () => {
         agentDir,
         metadata: {
           ...lock,
+          deployment: { mode: "personal" },
           manifest: { schema: "piship/v1alpha6" },
           schema: "piship-lock/v1alpha6",
         },
@@ -182,5 +186,220 @@ describe("bundled search tools at launch", () => {
     expect(
       lines.find((line) => line.startsWith("bad search tool rg")),
     ).toContain("does not hold the pinned executable");
+  });
+});
+
+describe("the receipt of a verified tool (no hashing at start)", () => {
+  it("reads neither executable at a start that finds the receipt's fingerprint", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    expect(
+      existsSync(join(piToolDirectory(agentDir), ".piship-search-tools.json")),
+    ).toBe(true);
+    // Break the payload copies: a start that read them would refuse them.
+    writeFileSync(join(dir, "tools", "fd"), "tampered\n");
+    writeFileSync(join(dir, "tools", "rg"), "tampered\n");
+    expect(() => installSearchTools(lock, dir, agentDir, target)).not.toThrow();
+    expect(
+      searchToolStatus(lock, agentDir, target).map((item) => item.pinned),
+    ).toEqual([true, true]);
+  });
+
+  it("checks the digest again once an executable is rewritten to the same size", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    const path = join(piToolDirectory(agentDir), "fd");
+    const before = statSync(path);
+    // Same size and, to the millisecond, the same modification time.
+    writeFileSync(path, "xx 10.5.0 for linux-x64\n");
+    utimesSync(path, before.atime, before.mtime);
+    expect(statSync(path).size).toBe(before.size);
+    installSearchTools(lock, dir, agentDir, target);
+    expect(readFileSync(path, "utf8")).toBe("fd 10.5.0 for linux-x64\n");
+  });
+
+  it("verifies a copy that has no receipt and then records it", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    const bin = piToolDirectory(agentDir);
+    mkdirSync(bin, { recursive: true });
+    for (const name of ["fd", "rg"])
+      writeFileSync(join(bin, name), readFileSync(join(dir, "tools", name)), {
+        mode: 0o755,
+      });
+    const before = statSync(join(bin, "fd")).mtimeMs;
+    installSearchTools(lock, dir, agentDir, target);
+    expect(statSync(join(bin, "fd")).mtimeMs).toBe(before);
+    expect(existsSync(join(bin, ".piship-search-tools.json"))).toBe(true);
+  });
+
+  it("ignores a damaged receipt", () => {
+    const target = "linux-x64";
+    const { dir, lock } = payload(target);
+    const agentDir = join(temp(), "agent");
+    installSearchTools(lock, dir, agentDir, target);
+    writeFileSync(
+      join(piToolDirectory(agentDir), ".piship-search-tools.json"),
+      "{",
+    );
+    expect(installSearchTools(lock, dir, agentDir, target)).toHaveLength(2);
+  });
+});
+
+describe("tools Pi would download at startup", () => {
+  // A program is found by its executable bit, or by its .exe name on Windows.
+  const exe = process.platform === "win32" ? ".exe" : "";
+  /** A PATH directory and an agent directory, with the given executables in each. */
+  function layout(
+    onPath: Record<string, string>,
+    inBin: Record<string, string> = {},
+  ) {
+    const bin = temp();
+    const agentDir = join(temp(), "agent");
+    mkdirSync(piToolDirectory(agentDir), { recursive: true });
+    for (const [name, mode] of Object.entries(onPath))
+      writeFileSync(join(bin, name), "tool\n", {
+        mode: Number.parseInt(mode, 8),
+      });
+    for (const [name, mode] of Object.entries(inBin))
+      writeFileSync(join(piToolDirectory(agentDir), name), "tool\n", {
+        mode: Number.parseInt(mode, 8),
+      });
+    return { agentDir, env: { PATH: `${temp()}${delimiter}${bin}` } };
+  }
+
+  it("is nothing when each tool is on PATH or in Pi's tool directory, and fdfind counts for fd", () => {
+    const both = layout({ [`fd${exe}`]: "755", [`rg${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(both.agentDir, both.env, process.platform),
+    ).toEqual([]);
+    const split = layout({ [`fdfind${exe}`]: "755" }, { [`rg${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(split.agentDir, split.env, process.platform),
+    ).toEqual([]);
+  });
+
+  it("names the tools that are in neither place, and does not count a file that cannot run", () => {
+    const only = layout({ [`fd${exe}`]: "755" });
+    expect(
+      toolsPiWouldDownload(only.agentDir, only.env, process.platform),
+    ).toEqual(["rg"]);
+    const noMode = layout({ fd: "644", rg: "644" });
+    if (process.platform !== "win32")
+      expect(
+        toolsPiWouldDownload(noMode.agentDir, noMode.env, process.platform),
+      ).toEqual(["fd", "rg"]);
+    const none = layout({});
+    expect(
+      toolsPiWouldDownload(none.agentDir, { PATH: "" }, process.platform),
+    ).toEqual(["fd", "rg"]);
+  });
+
+  it("looks for <name>.exe on Windows, as Pi starts the program with no shell", () => {
+    const found = layout({ "fd.exe": "644", "rg.cmd": "644" });
+    const env = { PATH: found.env.PATH.split(delimiter).join(";") };
+    expect(toolsPiWouldDownload(found.agentDir, env, "win32")).toEqual(["rg"]);
+  });
+
+  const personal = { deployment: { mode: "personal" } } as never;
+  const lockWith = (extra: object) =>
+    ({ ...(personal as object), ...extra }) as never;
+
+  it("is deferred for a personal distribution that bundles nothing", () => {
+    const missing = layout({});
+    expect(
+      deferredToolDownloads(
+        personal,
+        missing.agentDir,
+        missing.env,
+        process.platform,
+      ),
+    ).toEqual(["fd", "rg"]);
+  });
+
+  it.each([
+    [
+      "a distribution that bundles the tools",
+      lockWith({ searchTools: {} }),
+      {},
+    ],
+    [
+      "a managed launch, which is offline already",
+      { deployment: { mode: "managed" } } as never,
+      {},
+    ],
+    ["Pi already offline", personal, { PI_OFFLINE: "1" }],
+    [
+      "the user's choice to let Pi download",
+      personal,
+      { PISHIP_ALLOW_TOOL_DOWNLOAD: "1" },
+    ],
+  ])("is not deferred for %s", (_name, lock, extra) => {
+    const missing = layout({});
+    expect(
+      deferredToolDownloads(
+        lock,
+        missing.agentDir,
+        { ...missing.env, ...extra },
+        process.platform,
+      ),
+    ).toEqual([]);
+  });
+
+  it("is not deferred when nothing would be downloaded", () => {
+    const present = layout({ [`fd${exe}`]: "755", [`rg${exe}`]: "755" });
+    expect(
+      deferredToolDownloads(
+        personal,
+        present.agentDir,
+        present.env,
+        process.platform,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("doctor on a personal distribution with no tools", () => {
+  it("warns that a launch will skip the download Pi would wait for", () => {
+    const lines: string[] = [];
+    const record = (kind: string) => (label: string, value: string) =>
+      lines.push(`${kind} ${label}: ${value}`);
+    const out = {
+      ok: record("ok"),
+      warn: record("warn"),
+      bad: record("bad"),
+      info: record("info"),
+    };
+    const data = {
+      ctx: {
+        agentDir: join(temp(), "agent"),
+        metadata: {
+          deployment: { mode: "personal" },
+          manifest: { schema: "piship/v1alpha6" },
+          schema: "piship-lock/v1alpha6",
+        },
+      },
+    } as unknown as DoctorData;
+    const saved = {
+      PATH: process.env.PATH,
+      PI_OFFLINE: process.env.PI_OFFLINE,
+    };
+    process.env.PATH = "";
+    delete process.env.PI_OFFLINE;
+    try {
+      supplyChainGroup(data, out);
+    } finally {
+      for (const [key, value] of Object.entries(saved))
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
+    expect(
+      lines.find((line) => line.startsWith("warn search tools")),
+    ).toContain("fd and rg not found");
   });
 });

@@ -16,6 +16,7 @@ import {
   type EnterpriseContext,
   formatError,
   PiShipError,
+  startupMark,
 } from "@piship/contracts";
 import type { DistributionLock } from "@piship/core";
 import {
@@ -61,8 +62,21 @@ import {
   type SessionOwnership,
 } from "./session-file.js";
 
-function verifyBuiltResources(ctx: LaunchContext): void {
+/**
+ * Each resource the launch loads is still the regular file the lock lists.
+ * Hashing every one at every start is per-file work the installed payload
+ * was already verified for (at install or update, and by `doctor`), so it is
+ * done only for a distribution that declares `runtime.verifyAtLaunch: true`.
+ */
+export function verifyBuiltResources(
+  ctx: Pick<LaunchContext, "distributionDir"> & {
+    readonly metadata: Pick<LaunchContext["metadata"], "resources"> & {
+      readonly verifyAtLaunch?: boolean;
+    };
+  },
+): void {
   const resourceDir = join(ctx.distributionDir, "resources");
+  const hash = ctx.metadata.verifyAtLaunch === true;
   for (const resource of ctx.metadata.resources) {
     if (
       resource.path.startsWith("/") ||
@@ -72,6 +86,7 @@ function verifyBuiltResources(ctx: LaunchContext): void {
     const path = join(resourceDir, resource.path);
     if (!lstatSync(path).isFile())
       throw new Error(`Built resource is not a regular file: ${resource.path}`);
+    if (!hash) continue;
     const digest = createHash("sha256")
       .update(readFileSync(path))
       .digest("hex");
@@ -147,6 +162,7 @@ async function startRuntime(
   ownership: SessionOwnership,
 ) {
   verifyBuiltResources(ctx);
+  startupMark("resources_verified");
   const instructions = gov
     ? gov.loader.instructions
     : resourcePaths(ctx, "instructions").map((path) => ({
@@ -285,6 +301,7 @@ async function startRuntime(
       agentsFilesOverride: () => ({ agentsFiles: instructions }),
     });
     await resourceLoader.reload();
+    startupMark("resources_loaded");
     const extensionErrors = resourceLoader.getExtensions().errors;
     const themeDiagnostics = resourceLoader.getThemes().diagnostics;
     // Counted before the launch fails; Pi reports these without a PiShip code.
@@ -359,6 +376,7 @@ async function startRuntime(
         );
       }
     }
+    startupMark("agent_session_start");
     const result = await createAgentSession({
       cwd,
       agentDir: ctx.agentDir,

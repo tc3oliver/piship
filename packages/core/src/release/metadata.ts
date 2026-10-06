@@ -25,6 +25,35 @@ export interface ReleaseTestResult {
   readonly result: "passed";
 }
 
+/**
+ * Where a release's runtime came from. It is reported beside the release, in
+ * the timing output, and never inside it: nothing in the archive, checksums,
+ * or release.json depends on the cache, so a release built from the same
+ * inputs has the same bytes with it, without it, and on a cold cache.
+ */
+export interface RuntimeCacheProvenance {
+  /**
+   * `hit` placed a cached tree, `miss` installed and cached one, `disabled`
+   * built cold (`--rebuild`, PISHIP_RELEASE_NO_CACHE=1, or a cache that could
+   * not be used).
+   */
+  readonly status: "hit" | "miss" | "disabled";
+  /** The cached tree's identity: the digest of its sorted path and size list. */
+  readonly entry?: string;
+  /** PiShip's own layer: placed from its entry, published first, or copied directly. */
+  readonly framework?: "hit" | "miss" | "direct";
+  /** Whether a bundled runtime came from the cache. */
+  readonly bundle?: "hit" | "miss";
+  /** How the tree's files reached the payload. */
+  readonly linked?: number;
+  readonly copied?: number;
+  /** The cache is on another volume than the build. */
+  readonly crossVolume?: true;
+}
+
+/** The unsigned record `<out>/releases/<name>.build-info.json` beside a release. */
+export const BUILD_INFO_SCHEMA = "piship-build-info/v1";
+
 export interface ReleaseMetadata {
   readonly schema: typeof RELEASE_SCHEMA;
   readonly distribution: {
@@ -54,6 +83,12 @@ export interface ReleaseMetadata {
   readonly channel: string;
   /** RFC 3339; SOURCE_DATE_EPOCH when set, so rebuilds stay identical. */
   readonly created: string;
+  /**
+   * `qualified` for a release that passed the release gates (dependency
+   * audit, registry signatures, SBOM, notices, tests). Releases built before
+   * this field omit it and were qualified the same way.
+   */
+  readonly qualification?: string;
   readonly payload: {
     readonly path: "payload";
     readonly inventorySha256: string;
@@ -152,6 +187,17 @@ export type ReleaseTestRunner = (
   env: NodeJS.ProcessEnv,
 ) => CommandResult;
 
+/**
+ * A runner that may finish later. The release tests run side by side, each
+ * with its own state directory in `env`.
+ */
+export type AsyncReleaseTestRunner = (
+  payload: string,
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<CommandResult> | CommandResult;
+
 export interface ReleaseOptions extends OutputStagingOptions {
   /**
    * Output root; the release lands in `<outputRoot>/releases/`, where the
@@ -165,9 +211,14 @@ export interface ReleaseOptions extends OutputStagingOptions {
   readonly scanner?: VulnerabilityScanner;
   /** Registry signature check (defaults to `npm audit signatures`). */
   readonly signatureAuditor?: SignatureAuditor;
-  readonly runTest?: ReleaseTestRunner;
+  readonly runTest?: AsyncReleaseTestRunner;
   /** Injectable clock for vulnerability exception expiry. */
   readonly now?: () => Date;
+  /**
+   * Reuse the runtime cache (the default). False installs, strips, and bundles
+   * the runtime from scratch, as `piship release --rebuild` does.
+   */
+  readonly cache?: boolean;
   /** Test seam: assembles the canonical payload (defaults to buildDistribution). */
   readonly assemble?: (manifestPath: string, outputRoot: string) => string;
 }
@@ -178,4 +229,5 @@ export interface BuiltRelease {
   readonly archive: string;
   readonly sha256: string;
   readonly metadata: ReleaseMetadata;
+  readonly runtimeCache: RuntimeCacheProvenance;
 }

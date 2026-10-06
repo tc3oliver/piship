@@ -1,6 +1,6 @@
 // Deterministic ustar + gzip release archives, and a strict extractor for
 // them. Dependency-free and streaming so large payloads never sit in memory.
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
@@ -18,9 +18,10 @@ import {
   stat,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
+import { JobPool } from "./job-pool.js";
 
 export interface ArchiveResult {
   readonly path: string;
@@ -33,6 +34,16 @@ export interface ExtractResult {
   readonly root: string;
   readonly entries: number;
   readonly bytes: number;
+  /** SHA-256 of the archive file, computed from the read that extracted it (unless `hash` is false). */
+  readonly sha256?: string;
+  /**
+   * With `digests`: the SHA-256 of every file written, by its `/`-separated
+   * output path relative to the destination. Computed from the bytes as they
+   * were written, so a later read of the files is not needed to know them.
+   */
+  readonly files?: ReadonlyMap<string, string>;
+  /** The content of each entry `capture` asked for, by archive path; such an entry is not written. */
+  readonly captured?: ReadonlyMap<string, Buffer>;
 }
 
 const BLOCK = 512;
@@ -42,6 +53,15 @@ const OCTAL_12_MAX = 8 ** 11 - 1;
 const MAX_PAX_BYTES = 1 << 20;
 const DEFAULT_MAX_BYTES = 2 * 1024 ** 3;
 const DEFAULT_MAX_ENTRIES = 200_000;
+/**
+ * Extraction is bound by per-file latency (create, write, close, and on
+ * Windows the scanner's work at each close), not by bandwidth, so files are
+ * written by several writers at once.
+ */
+const WRITE_CONCURRENCY = 8;
+/** Files up to this size are buffered and written by a pooled writer; larger files stream in order. */
+const BUFFERED_FILE_MAX = 1 << 20;
+const INFLATE_CHUNK = 1 << 18;
 const WINDOWS = process.platform === "win32";
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -235,10 +255,59 @@ function entryHeaders(
   ];
 }
 
+/** Files read ahead of the archive writer: how many at once, and the largest. */
+const READ_AHEAD_FILES = 16;
+const READ_AHEAD_BYTES = CHUNK;
+
+/** One file of at most `READ_AHEAD_BYTES`, read whole. */
+async function readSmallFile(entry: SourceEntry): Promise<Buffer> {
+  const handle = await open(entry.absolute as string, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(entry.size);
+    let filled = 0;
+    while (filled < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        filled,
+        buffer.length - filled,
+        null,
+      );
+      if (bytesRead === 0)
+        throw new Error(`File changed while archiving: ${entry.absolute}`);
+      filled += bytesRead;
+    }
+    if ((await handle.stat()).size !== entry.size)
+      throw new Error(`File changed while archiving: ${entry.absolute}`);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function* tarStream(
   entries: readonly SourceEntry[],
   mtime: number,
 ): AsyncGenerator<Buffer> {
+  // A payload is thousands of small files, and opening, reading, and closing
+  // each in turn waits on the file system once per file (worst where every
+  // open is scanned, as on Windows). The next few are read while the current
+  // one is compressed; the archive's bytes and order do not change.
+  const ahead = new Map<number, Promise<Buffer>>();
+  let scheduled = 0;
+  const readAhead = (from: number): void => {
+    scheduled = Math.max(scheduled, from);
+    while (scheduled < entries.length && ahead.size < READ_AHEAD_FILES) {
+      const entry = entries[scheduled] as SourceEntry;
+      if (entry.absolute !== undefined && entry.size < READ_AHEAD_BYTES) {
+        const read = readSmallFile(entry);
+        // Awaited in order below; a failure of one not reached yet is not
+        // unhandled.
+        read.catch(() => {});
+        ahead.set(scheduled, read);
+      }
+      scheduled++;
+    }
+  };
   let parts: Buffer[] = [];
   let pending = 0;
   const take = (): Buffer => {
@@ -251,43 +320,59 @@ async function* tarStream(
     parts.push(buffer);
     pending += buffer.length;
   };
-  for (const [index, entry] of entries.entries()) {
-    for (const part of entryHeaders(entry, index, mtime)) add(part);
-    if (pending >= CHUNK) yield take();
-    if (entry.absolute === undefined) continue;
-    const handle = await open(entry.absolute, "r");
-    try {
-      let remaining = entry.size;
-      while (remaining > 0) {
-        const buffer = Buffer.allocUnsafe(Math.min(remaining, CHUNK));
-        let filled = 0;
-        while (filled < buffer.length) {
-          const { bytesRead } = await handle.read(
-            buffer,
-            filled,
-            buffer.length - filled,
-            null,
-          );
-          if (bytesRead === 0)
-            throw new Error(`File changed while archiving: ${entry.absolute}`);
-          filled += bytesRead;
-        }
-        remaining -= buffer.length;
-        if (buffer.length >= CHUNK) {
-          if (pending > 0) yield take();
-          yield buffer;
-        } else {
-          add(buffer);
-          if (pending >= CHUNK) yield take();
-        }
+  try {
+    for (const [index, entry] of entries.entries()) {
+      readAhead(index);
+      for (const part of entryHeaders(entry, index, mtime)) add(part);
+      if (pending >= CHUNK) yield take();
+      if (entry.absolute === undefined) continue;
+      const read = ahead.get(index);
+      if (read !== undefined) {
+        ahead.delete(index);
+        add(await read);
+        add(Buffer.alloc(padding(entry.size)));
+        if (pending >= CHUNK) yield take();
+        continue;
       }
-      if ((await handle.stat()).size !== entry.size)
-        throw new Error(`File changed while archiving: ${entry.absolute}`);
-    } finally {
-      await handle.close();
+      const handle = await open(entry.absolute, "r");
+      try {
+        let remaining = entry.size;
+        while (remaining > 0) {
+          const buffer = Buffer.allocUnsafe(Math.min(remaining, CHUNK));
+          let filled = 0;
+          while (filled < buffer.length) {
+            const { bytesRead } = await handle.read(
+              buffer,
+              filled,
+              buffer.length - filled,
+              null,
+            );
+            if (bytesRead === 0)
+              throw new Error(
+                `File changed while archiving: ${entry.absolute}`,
+              );
+            filled += bytesRead;
+          }
+          remaining -= buffer.length;
+          if (buffer.length >= CHUNK) {
+            if (pending > 0) yield take();
+            yield buffer;
+          } else {
+            add(buffer);
+            if (pending >= CHUNK) yield take();
+          }
+        }
+        if ((await handle.stat()).size !== entry.size)
+          throw new Error(`File changed while archiving: ${entry.absolute}`);
+      } finally {
+        await handle.close();
+      }
+      add(Buffer.alloc(padding(entry.size)));
+      if (pending >= CHUNK) yield take();
     }
-    add(Buffer.alloc(padding(entry.size)));
-    if (pending >= CHUNK) yield take();
+  } finally {
+    // No file stays open once the archive has finished or failed.
+    await Promise.allSettled(ahead.values());
   }
   add(Buffer.alloc(BLOCK * 2));
   yield take();
@@ -298,6 +383,30 @@ export async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+/**
+ * Normalizes the gzip header (zlib records the build platform in the OS byte
+ * and a modification time) and hashes the stream as it will be written, so
+ * the archive is neither reopened to patch nor read again for its digest.
+ */
+function normalizedGzip(digest: Hash): Transform & { size: () => number } {
+  let offset = 0;
+  const stream = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      for (let i = 0; i < chunk.length && offset + i < 10; i++) {
+        const at = offset + i;
+        if ((at === 0 && chunk[i] !== 0x1f) || (at === 1 && chunk[i] !== 0x8b))
+          return callback(new Error("Unexpected gzip header"));
+        if (at >= 4 && at < 8) chunk[i] = 0;
+        else if (at === 9) chunk[i] = 0xff;
+      }
+      offset += chunk.length;
+      digest.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  return Object.assign(stream, { size: () => offset });
 }
 
 /**
@@ -325,30 +434,23 @@ export async function createArchive(
   const entries = await collect(source, rootName, options.executable);
   const partial = `${out}.partial`;
   try {
+    const digest = createHash("sha256");
+    const gzip = normalizedGzip(digest);
     await pipeline(
       Readable.from(tarStream(entries, mtime)),
       // Level 9 compressed about 2.7x slower than 6 for an archive under
       // 0.5% smaller.
       createGzip({ level: 6 }),
+      gzip,
       createWriteStream(partial),
     );
-    // zlib records the build platform in the OS byte; normalize it.
-    const handle = await open(partial, "r+");
-    try {
-      const head = Buffer.alloc(10);
-      await handle.read(head, 0, 10, 0);
-      if (head[0] !== 0x1f || head[1] !== 0x8b)
-        throw new Error(`Unexpected gzip header in ${partial}`);
-      head.fill(0, 4, 8);
-      head[9] = 0xff;
-      await handle.write(head, 0, 10, 0);
-    } finally {
-      await handle.close();
-    }
-    const sha256 = await sha256File(partial);
-    const { size } = await stat(partial);
     await rename(partial, out);
-    return { path: out, sha256, bytes: size, entries: entries.length };
+    return {
+      path: out,
+      sha256: digest.digest("hex"),
+      bytes: gzip.size(),
+      entries: entries.length,
+    };
   } catch (error) {
     await rm(partial, { force: true });
     throw error;
@@ -427,13 +529,29 @@ export function entrySegments(path: string, directory: boolean): string[] {
 
 type ParserState =
   | { readonly kind: "header" }
-  | { readonly kind: "file"; remaining: number; readonly pad: number }
+  | {
+      readonly kind: "file";
+      remaining: number;
+      readonly pad: number;
+      readonly key: string;
+      readonly hash: Hash | undefined;
+    }
   | {
       readonly kind: "pax";
       readonly data: Buffer;
       filled: number;
       readonly pad: number;
       readonly global: boolean;
+    }
+  | {
+      readonly kind: "buffered";
+      readonly data: Buffer;
+      filled: number;
+      /** Where to write it; undefined for an entry that is only captured. */
+      readonly output: string | undefined;
+      readonly key: string;
+      readonly mode: number;
+      readonly pad: number;
     }
   | { readonly kind: "skip"; remaining: number }
   | { readonly kind: "end" };
@@ -446,11 +564,25 @@ export async function extractArchive(
     readonly expectedRoot?: string;
     readonly maxBytes?: number;
     readonly maxEntries?: number;
+    /** Hash the archive while reading it (default true). */
+    readonly hash?: boolean;
+    /** Compute the SHA-256 of each file written, returned as `files`. */
+    readonly digests?: boolean;
+    /** Keep the content of a small file entry in memory (returned as `captured`) instead of writing it. */
+    readonly capture?: (path: string) => boolean;
+    /** How many files are written at once (default 8). */
+    readonly concurrency?: number;
+    /** Map validated archive paths to relative output paths; undefined skips writing. */
+    readonly mapEntry?: (
+      path: string,
+      directory: boolean,
+    ) => string | undefined;
   } = {},
 ): Promise<ExtractResult> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
   const maxHeaders = maxEntries * 3 + 16;
+  const concurrency = Math.max(1, options.concurrency ?? WRITE_CONCURRENCY);
   const target = resolve(destination);
   let created = false;
   try {
@@ -476,12 +608,48 @@ export async function extractArchive(
   const block = Buffer.alloc(BLOCK);
   let blockFilled = 0;
   const seen = new Set<string>();
-  const directories = new Set<string>([target]);
+  const directories = new Map<string, Promise<void>>([
+    [target, Promise.resolve()],
+  ]);
 
-  const ensureDirectory = async (dir: string): Promise<void> => {
-    if (directories.has(dir)) return;
-    await mkdir(dir, { recursive: true, mode: 0o755 });
-    directories.add(dir);
+  // Each directory is made once, after its parent, by a single mkdir. A
+  // directory creates or is awaited inside a writer job, which owns the
+  // failure.
+  const ensureDirectory = (dir: string): Promise<void> => {
+    let made = directories.get(dir);
+    if (made === undefined) {
+      made = ensureDirectory(dirname(dir)).then(() =>
+        mkdir(dir, { recursive: true, mode: 0o755 }).then(() => undefined),
+      );
+      directories.set(dir, made);
+    }
+    return made;
+  };
+
+  // The parser waits for a free writer, so buffered file data is bounded, and
+  // stops at the first failure of any writer.
+  const writers = new JobPool(concurrency);
+  const dispatch = (job: () => Promise<void>): Promise<void> =>
+    writers.run(job);
+
+  const fileDigests = options.digests ? new Map<string, string>() : undefined;
+  const captured = options.capture ? new Map<string, Buffer>() : undefined;
+
+  const writeBuffered = async (
+    output: string,
+    key: string,
+    data: Buffer,
+    mode: number,
+  ): Promise<void> => {
+    fileDigests?.set(key, createHash("sha256").update(data).digest("hex"));
+    await ensureDirectory(dirname(output));
+    const file = await open(output, "wx", mode);
+    try {
+      if (data.length > 0) await file.writeFile(data);
+      if (!WINDOWS) await file.chmod(mode);
+    } finally {
+      await file.close();
+    }
   };
 
   const finishFile = async (pad: number): Promise<void> => {
@@ -557,7 +725,35 @@ export async function extractArchive(
     const key = segments.join("/");
     if (seen.has(key)) throw new Error(`Duplicate archive entry: ${path}`);
     seen.add(key);
-    const output = resolve(target, ...segments);
+    bytes += directory ? 0 : size;
+    if (bytes > maxBytes)
+      throw new Error(`Archive content exceeds ${maxBytes} bytes`);
+    if (!directory && options.capture?.(key)) {
+      if (size > MAX_PAX_BYTES)
+        throw new Error(`Archive entry too large to read: ${path}`);
+      state = {
+        kind: "buffered",
+        data: Buffer.allocUnsafe(size),
+        filled: 0,
+        output: undefined,
+        key,
+        mode: 0o644,
+        pad: padding(size),
+      };
+      if (size === 0) await endBuffered();
+      return;
+    }
+    const mapped = options.mapEntry ? options.mapEntry(key, directory) : key;
+    if (mapped === undefined) {
+      if (directory && size !== 0)
+        throw new Error(`Corrupt archive: directory with data: ${path}`);
+      state =
+        size + padding(size) > 0
+          ? { kind: "skip", remaining: size + padding(size) }
+          : { kind: "header" };
+      return;
+    }
+    const output = resolve(target, ...entrySegments(mapped, directory));
     const inside = relative(target, output);
     if (inside === "" || inside.startsWith("..") || isAbsolute(inside))
       throw new Error(`Unsafe archive entry path: ${JSON.stringify(path)}`);
@@ -565,18 +761,42 @@ export async function extractArchive(
     if (directory) {
       if (size !== 0)
         throw new Error(`Corrupt archive: directory with data: ${path}`);
-      await ensureDirectory(output);
+      await dispatch(() => ensureDirectory(output));
       return;
     }
-    bytes += size;
-    if (bytes > maxBytes)
-      throw new Error(`Archive content exceeds ${maxBytes} bytes`);
     const mode = (octalField(block, 100, 8) & 0o111) !== 0 ? 0o755 : 0o644;
+    const written = entrySegments(mapped, false).join("/");
+    if (size <= BUFFERED_FILE_MAX) {
+      state = {
+        kind: "buffered",
+        data: Buffer.allocUnsafe(size),
+        filled: 0,
+        output,
+        key: written,
+        mode,
+        pad: padding(size),
+      };
+      if (size === 0) await endBuffered();
+      return;
+    }
     await ensureDirectory(dirname(output));
     handle = await open(output, "wx", mode);
     if (!WINDOWS) await handle.chmod(mode);
-    state = { kind: "file", remaining: size, pad: padding(size) };
-    if (size === 0) await finishFile(padding(size));
+    state = {
+      kind: "file",
+      remaining: size,
+      pad: padding(size),
+      key: written,
+      hash: fileDigests ? createHash("sha256") : undefined,
+    };
+  };
+
+  const endBuffered = async (): Promise<void> => {
+    if (state.kind !== "buffered") return;
+    const { data, output, key, mode, pad } = state;
+    state = pad > 0 ? { kind: "skip", remaining: pad } : { kind: "header" };
+    if (output === undefined) captured?.set(key, data);
+    else await dispatch(() => writeBuffered(output, key, data, mode));
   };
 
   const endPax = async (): Promise<void> => {
@@ -610,6 +830,7 @@ export async function extractArchive(
         }
         case "file": {
           const count = Math.min(state.remaining, available);
+          state.hash?.update(chunk.subarray(offset, offset + count));
           let written = 0;
           while (written < count) {
             const result = await (handle as FileHandle).write(
@@ -621,7 +842,19 @@ export async function extractArchive(
           }
           offset += count;
           state.remaining -= count;
-          if (state.remaining === 0) await finishFile(state.pad);
+          if (state.remaining === 0) {
+            if (state.hash)
+              fileDigests?.set(state.key, state.hash.digest("hex"));
+            await finishFile(state.pad);
+          }
+          break;
+        }
+        case "buffered": {
+          const count = Math.min(state.data.length - state.filled, available);
+          chunk.copy(state.data, state.filled, offset, offset + count);
+          state.filled += count;
+          offset += count;
+          if (state.filled === state.data.length) await endBuffered();
           break;
         }
         case "pax": {
@@ -645,27 +878,52 @@ export async function extractArchive(
 
   try {
     // Surface the parser's own error rather than the stream abort it causes.
-    let failure: unknown;
+    let parseFailure: unknown;
+    const digest = options.hash === false ? undefined : createHash("sha256");
+    let read = false;
     await pipeline(
-      createReadStream(archive),
-      createGunzip(),
+      createReadStream(archive, { highWaterMark: CHUNK }),
+      // The digest comes from the bytes this extraction reads, so the archive
+      // is not read a second time to hash it.
+      async function* (source: AsyncIterable<Buffer>) {
+        for await (const chunk of source) {
+          digest?.update(chunk);
+          yield chunk;
+        }
+        read = true;
+      },
+      createGunzip({ chunkSize: INFLATE_CHUNK }),
       async (source: AsyncIterable<Buffer>) => {
         try {
           for await (const chunk of source) await consume(chunk);
+          await writers.finish();
         } catch (error) {
-          failure = error;
+          parseFailure = error;
           throw error;
         }
       },
     ).catch((error: unknown) => {
-      throw failure ?? error;
+      throw parseFailure ?? error;
     });
     if ((state as ParserState).kind !== "end")
       throw new Error("Corrupt archive: unexpected end of archive");
     if (root === undefined || entries === 0)
       throw new Error("Archive has no entries");
-    return { root, entries, bytes };
+    return {
+      root,
+      entries,
+      bytes,
+      ...(fileDigests ? { files: fileDigests } : {}),
+      ...(captured ? { captured } : {}),
+      ...(digest
+        ? {
+            sha256: read ? digest.digest("hex") : await sha256File(archive),
+          }
+        : {}),
+    };
   } catch (error) {
+    // Writers still running would recreate what the removal below deletes.
+    await writers.drain();
     await handle?.close().catch(() => undefined);
     if (created) rmSync(target, { recursive: true, force: true });
     else

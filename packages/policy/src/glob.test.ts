@@ -1,14 +1,18 @@
 import {
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { dirname, isAbsolute, join, parse, sep } from "node:path";
+import { duringStartup } from "@piship/contracts";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   expandPathTokens,
   isWithin,
@@ -114,7 +118,9 @@ function trySymlink(
 }
 
 describe("normalizePathResource", () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const posix = (path: string) => toPosixPath(path);
   const workspace = join(base, "work");
@@ -164,5 +170,153 @@ describe("normalizePathResource", () => {
       workspaceRoot: workspace,
     });
     expect(resolved).toBe(posix(realpathSync.native(tmpdir())));
+  });
+});
+
+describe("normalizePathResource on a path that exists in full", () => {
+  // The walk over every prefix this resolution had before it took one call
+  // for such a path: kept here to show the two agree.
+  function walk(path: string, depth = 0): string {
+    if (depth > 40) return path;
+    const { root } = parse(path);
+    const segments = path.slice(root.length).split(/[\\/]+/);
+    const real = (target: string) => {
+      try {
+        return realpathSync.native(target);
+      } catch {
+        return undefined;
+      }
+    };
+    const isLink = (target: string) => {
+      try {
+        return lstatSync(target).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    };
+    let current = real(root) ?? root;
+    let existing = true;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index] ?? "";
+      if (segment === "" || segment === ".") continue;
+      if (segment === "..") {
+        current = dirname(current);
+        continue;
+      }
+      const next = join(current, segment);
+      if (!existing) {
+        current = next;
+        continue;
+      }
+      const resolved = real(next);
+      if (resolved !== undefined) {
+        current = resolved;
+        continue;
+      }
+      if (isLink(next)) {
+        const target = readlinkSync(next);
+        const absolute = isAbsolute(target) ? target : join(current, target);
+        const rest = segments.slice(index + 1).join(sep);
+        return walk(
+          rest === "" ? absolute : `${absolute}${sep}${rest}`,
+          depth + 1,
+        );
+      }
+      existing = false;
+      current = next;
+    }
+    return current;
+  }
+
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  const deep = join(base, "a", "b", "c", "d");
+  mkdirSync(deep, { recursive: true });
+  writeFileSync(join(deep, "file"), "x");
+  const aliased = join(base, "alias");
+  const aliasMade = trySymlink(join(base, "a", "b"), aliased, "dir");
+  const chained = join(base, "chain");
+  const chainMade = aliasMade && trySymlink(aliased, chained, "dir");
+  const dangling = join(base, "dangling");
+  const danglingMade = trySymlink(join(base, "not-yet", "x"), dangling, "file");
+
+  it("asks the system once for an existing path, and agrees with the walk over each prefix", () => {
+    const paths = [
+      join(deep, "file"),
+      deep,
+      `${deep}${sep}`,
+      `${base}${sep}a${sep}b${sep}..${sep}b${sep}c`,
+      join(base, "a", "missing", "file"),
+      join(base, "a", "missing", "deeper", "still", "file"),
+      join(deep, "file", "below-a-file"),
+      join(base, "nothing"),
+      ...(aliasMade ? [join(aliased, "c", "missing", "deeper")] : []),
+      ...(danglingMade ? [dangling, join(dangling, "below")] : []),
+      base,
+      parse(base).root,
+      ...(aliasMade ? [join(aliased, "c", "d", "file")] : []),
+      ...(chainMade
+        ? [
+            join(chained, "c", "d", "file"),
+            `${chained}${sep}c${sep}..${sep}b${sep}c`,
+          ]
+        : []),
+    ];
+    for (const path of paths) {
+      const spy = vi.spyOn(realpathSync, "native");
+      const found = normalizePathResource(path, { workspaceRoot: base });
+      const calls = spy.mock.calls.length;
+      spy.mockRestore();
+      expect(found, path).toBe(toPosixPath(walk(path)));
+      const dotted = path.split(/[\\/]+/).some((s) => s === "." || s === "..");
+      // One call for a path that exists and names no `.` or `..`.
+      if (!dotted && path !== parse(base).root && existsSync(path))
+        expect(calls, path).toBe(1);
+    }
+  });
+});
+
+describe("normalizePathResource while a session is being set up", () => {
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, "a", "b"), { recursive: true });
+  writeFileSync(join(base, "a", "b", "file"), "x");
+
+  it("asks the system once for a path that is resolved again and again, and afresh outside", async () => {
+    const path = join(base, "a", "b", "file");
+    const resolveAll = () => {
+      for (let index = 0; index < 5; index += 1)
+        normalizePathResource(path, { workspaceRoot: base });
+    };
+    const count = async (work: () => void | Promise<void>) => {
+      const spy = vi.spyOn(realpathSync, "native");
+      await work();
+      const calls = spy.mock.calls.length;
+      spy.mockRestore();
+      return calls;
+    };
+    expect(await count(resolveAll)).toBe(5);
+    expect(await count(() => duringStartup(async () => resolveAll()))).toBe(1);
+    expect(await count(resolveAll)).toBe(5);
+  });
+
+  it("does not carry an answer from one startup to the next, or to a running session", async () => {
+    const link = join(base, "link");
+    if (!trySymlink(join(base, "a"), link, "dir")) return;
+    const resolved = () =>
+      normalizePathResource(join(link, "b", "file"), { workspaceRoot: base });
+    await duringStartup(async () => {
+      expect(resolved()).toBe(toPosixPath(join(base, "a", "b", "file")));
+    });
+    // The link now leads elsewhere: the next resolution sees it.
+    rmSync(link);
+    mkdirSync(join(base, "c", "b"), { recursive: true });
+    writeFileSync(join(base, "c", "b", "file"), "y");
+    symlinkSync(join(base, "c"), link, "dir");
+    expect(resolved()).toBe(toPosixPath(join(base, "c", "b", "file")));
   });
 });

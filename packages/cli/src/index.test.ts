@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "./index.js";
+import { runCli, runtimeCacheLine } from "./index.js";
 
 const ID = "mypi";
 let temp: string;
@@ -627,6 +627,24 @@ describe("file system errors", () => {
     expect(result.stderr).toContain("Action: Install the release .tar.gz");
   });
 
+  it("warns before installing a local build, and verify-release names it unqualified", async () => {
+    const build = join(temp, "dist", "mypi");
+    mkdirSync(join(build, "metadata"), { recursive: true });
+    writeFileSync(join(build, "metadata", "inventory.json"), "{}\n");
+    const installed = await run(["install", build]);
+    expect(installed.stderr).toContain(
+      `Warning: ${build} is an unqualified local build, not a release`,
+    );
+    const verified = await run(["verify-release", build]);
+    expect(verified.status).toBe(1);
+    expect(verified.stderr).toContain("unqualified local build, not a release");
+    expect(verified.stderr).toContain("Action: Run piship release");
+    // A directory that is no build at all gets no such warning.
+    const other = join(temp, "other");
+    mkdirSync(other);
+    expect((await run(["install", other])).stderr).not.toContain("Warning:");
+  });
+
   it("refuses malformed install checks before touching the source", async () => {
     const missing = join(temp, "missing");
     const digest = await run(["install", missing, "--sha256", "xyz"]);
@@ -1055,8 +1073,9 @@ describe("migrate --check", () => {
     expect(result.stdout).toContain(
       "Migration check piship/v1alpha5 -> piship/v1alpha6",
     );
-    expect(result.stderr).toContain("would change 1 effective decision(s)");
+    expect(result.stderr).toContain("would change 2 effective decision(s)");
     expect(result.stderr).toContain("runtime.cacheWarming");
+    expect(result.stderr).toContain("release.bundle and release.strip");
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
@@ -1195,6 +1214,32 @@ describe("config explain from a manifest", () => {
     expect(validated.status).toBe(0);
     expect(validated.text).toContain(
       "Update transport http-allowed: the update channel may use plain HTTP to a private or internal host; integrity by signature only.",
+    );
+  });
+});
+
+describe("the runtime cache line of piship release", () => {
+  const entry = "ab".repeat(32);
+  it("says where the runtime came from, with the entry and how files were placed", () => {
+    expect(
+      runtimeCacheLine({ status: "hit", entry, linked: 7440, copied: 3 }),
+    ).toBe(`runtime cache: hit (entry ${entry}, linked 7440, copied 3)`);
+    expect(
+      runtimeCacheLine({
+        status: "miss",
+        entry,
+        linked: 0,
+        copied: 7443,
+        bundle: "miss",
+        crossVolume: true,
+      }),
+    ).toBe(
+      `runtime cache: miss (entry ${entry}, linked 0, copied 7443, bundle miss, cache on another volume, entry copied in)`,
+    );
+  });
+  it("is one short line when the runtime was built cold", () => {
+    expect(runtimeCacheLine({ status: "disabled" })).toBe(
+      "runtime cache: disabled",
     );
   });
 });

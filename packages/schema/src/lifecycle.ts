@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { isPrivateNetworkHost } from "@piship/contracts";
 import { AccessFieldError } from "./access.js";
 import { PRIVATE_HOSTS } from "./http-transport.js";
+import { PISHIP_SCHEMA_V1ALPHA6 } from "./versions.js";
 import {
   checkTemplate,
   hasRuntimeReference,
@@ -139,6 +140,39 @@ export interface ReleaseManifest {
    * exact dependency through the install-script gate; PiShip never runs it.
    */
   readonly installScripts?: readonly string[];
+  /**
+   * piship/v1alpha6: strip JS source maps and TypeScript declaration files
+   * from the payload before its inventory is computed. Roughly halves the
+   * file count a managed Windows machine extracts and scans on first install.
+   * As written: an omitted key stays omitted here (`releaseOptions` says what
+   * that means).
+   */
+  readonly strip?: boolean;
+  /**
+   * piship/v1alpha6: bundle the runtime JavaScript to reduce installation
+   * files. As written, like `strip`.
+   */
+  readonly bundle?: boolean;
+}
+
+/**
+ * What a release does about `release.bundle` and `release.strip`: both are on
+ * from piship/v1alpha6 unless the manifest says `false`. The earlier schemas
+ * cannot set them and build as they always did.
+ *
+ * This is the one place the default is applied. The parsed manifest and the
+ * lock keep what the file said, an omitted key staying omitted, on purpose:
+ * the lock records the digest of the parsed manifest, and a PiShip that read
+ * a default into it would no longer match the lock of a payload built before
+ * the default existed (a rollback to it, `doctor`, and `repair` all check that).
+ * `schema` is the manifest's (`lock.manifest.schema` for a lock).
+ */
+export function releaseOptions(
+  schema: string,
+  release: Pick<ReleaseManifest, "bundle" | "strip"> | undefined,
+): { readonly bundle: boolean; readonly strip: boolean } {
+  const on = schema === PISHIP_SCHEMA_V1ALPHA6;
+  return { bundle: release?.bundle ?? on, strip: release?.strip ?? on };
 }
 export interface LifecycleManifest {
   readonly updates: UpdatesManifest;
@@ -640,7 +674,7 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
     "targets",
     "sources",
     "vulnerabilities",
-    ...(v6 ? ["installScripts"] : []),
+    ...(v6 ? ["installScripts", "strip", "bundle"] : []),
   ]);
   const targets =
     release.targets === undefined
@@ -722,6 +756,18 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
           },
         );
   if (installScripts) unique(installScripts, "release.installScripts");
+  let strip: boolean | undefined;
+  if (release.strip !== undefined) {
+    if (typeof release.strip !== "boolean")
+      fail("release.strip", "Expected a boolean");
+    strip = release.strip === true;
+  }
+  let bundle: boolean | undefined;
+  if (release.bundle !== undefined) {
+    if (typeof release.bundle !== "boolean")
+      fail("release.bundle", "Expected a boolean");
+    bundle = release.bundle === true;
+  }
   return {
     targets,
     sources,
@@ -731,6 +777,8 @@ function parseRelease(value: unknown, v6: boolean): ReleaseManifest {
       ...(registry === undefined ? {} : { registry }),
     },
     ...(installScripts === undefined ? {} : { installScripts }),
+    ...(strip === undefined ? {} : { strip }),
+    ...(bundle === undefined ? {} : { bundle }),
   };
 }
 

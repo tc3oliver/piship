@@ -1,8 +1,10 @@
 // Temporary directories a hard termination left. A real `piship build` is
 // killed with SIGKILL while it stages its payload, and the next builds do not
-// pile its leftovers up; the branded launcher removes what dead PiShip
+// pile its leftovers up; the branded `doctor` removes what dead PiShip
 // processes left in the OS temp directory and the install home, and leaves a
-// live process's directories and every directory that is not PiShip's.
+// live process's directories and every directory that is not PiShip's. A
+// launch does not sweep: it must not wait on deleting what a killed process
+// left, so only the explicit diagnostic pays for it.
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -43,7 +45,7 @@ beforeAll(() => {
     PISHIP_BIN_HOME: join(temp, "bin"),
     HOME: join(temp, "home"),
     USERPROFILE: join(temp, "home"),
-    // The launcher reclaims in this directory, never the machine's own.
+    // The sweep reclaims in this directory, never the machine's own.
     TMPDIR: join(temp, "os-temp"),
     TEMP: join(temp, "os-temp"),
     TMP: join(temp, "os-temp"),
@@ -115,7 +117,7 @@ async function killBuildMidStaging(flags: string[] = []): Promise<string> {
 }
 
 let built: string | undefined;
-/** The finished build the launcher scenario runs. */
+/** The finished build the sweep scenario runs. */
 function build(): string {
   if (built) return built;
   const result = spawnSync(process.execPath, [bin, "build", manifest], {
@@ -160,13 +162,16 @@ describe.runIf(posix)("piship build killed with SIGKILL", () => {
     expect(result.status, result.stderr).toBe(0);
     built = join(dist(), "stale-agent");
     expect(stagings()).toEqual([]);
-    expect(readdirSync(dist())).toEqual(["stale-agent"]);
+    // Stamps such as stale-agent.piship-build.json sit beside the output.
+    expect(
+      readdirSync(dist()).filter((name) => !name.startsWith("stale-agent.")),
+    ).toEqual(["stale-agent"]);
     // The payload is not marked: the marker lives beside it, not in it.
     expect(existsSync(join(built, TEMPORARY_OWNER_FILE))).toBe(false);
   }, 240_000);
 });
 
-describe("the branded launcher", () => {
+describe("the branded command", () => {
   const osTemp = () => join(temp, "os-temp");
   const installHome = () => join(temp, "install");
 
@@ -177,7 +182,7 @@ describe("the branded launcher", () => {
     pid: number,
   ) => plantTemporary(parent, name, kind, pid);
 
-  it("removes what dead PiShip processes left and nothing else", async () => {
+  it("leaves them at launch and, when asked to diagnose, removes what dead PiShip processes left and nothing else", async () => {
     const payload = build();
     const dead = deadPid();
     const alive = livePid();
@@ -208,16 +213,24 @@ describe("the branded launcher", () => {
         return path;
       },
     );
+    const present = (paths: string[]) =>
+      paths.filter((path) => existsSync(path));
+    // A launch is the cold-start path and sweeps nothing.
     const version = await branded(
       launcher(payload, "stale-agent"),
       ["--version"],
-      {
-        cwd: temp,
-        env,
-      },
+      { cwd: temp, env },
     );
     expect(version.status, version.stderr).toBe(0);
-    for (const path of stale) expect(existsSync(path)).toBe(false);
+    expect(present(stale)).toEqual(stale);
+    // `doctor` is the explicit diagnostic that reclaims them.
+    const doctor = await branded(
+      launcher(payload, "stale-agent"),
+      ["doctor", "--json"],
+      { cwd: temp, env },
+    );
+    expect(doctor.status, doctor.stderr).toBe(0);
+    expect(present(stale)).toEqual([]);
     for (const path of kept)
       expect(readFileSync(join(path, "x", "output.txt"), "utf8")).toBe(
         "private tool output",

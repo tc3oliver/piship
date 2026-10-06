@@ -363,8 +363,9 @@ jobs:
           expect_rejected payload/package.json "a modified payload file" "payload integrity mismatch" "$append"
 
   # A fresh runner per target installs the first build with the install
-  # script shipped inside it, which verifies the release itself. It needs no
-  # PiShip CLI, so it runs alongside verification. The personal and developer examples then
+  # script shipped inside it, which installs the release itself (checking its
+  # digests as it extracts; the full verify-release runs in the verify job). It
+  # needs no PiShip CLI, so it runs alongside verification. The personal and developer examples then
   # runs the installed offline `--smoke` and `doctor`; the managed demo needs
   # a sign-in (fixtures, a secret store, and on Linux bubblewrap) for those,
   # which the Portable E2E covers, so it checks the version only.
