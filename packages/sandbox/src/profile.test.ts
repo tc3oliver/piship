@@ -8,7 +8,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { duringStartup } from "@piship/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expandPathToken,
   protectedAncestors,
@@ -316,5 +317,34 @@ describe("resolveProfile", () => {
       { workspace: join(root, "ws"), homeDir: root, tmpDir: join(root, "t") },
     );
     expect(profile.warnings[0]).toContain("deny wins");
+  });
+});
+
+describe("realpathNearest while a session is being set up", () => {
+  it("asks the system once for a path resolved again and again, and afresh outside", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "piship-nearest-")));
+    try {
+      const path = join(dir, "missing", "leaf");
+      const calls = async (work: () => void | Promise<void>) => {
+        const spy = vi.spyOn(realpathSync, "native");
+        await work();
+        const count = spy.mock.calls.length;
+        spy.mockRestore();
+        return count;
+      };
+      const again = () => {
+        for (let index = 0; index < 4; index += 1)
+          expect(realpathNearest(path)).toBe(path);
+      };
+      // Each resolution tries the missing leaf and its parent, then the
+      // existing ancestor.
+      const outside = await calls(again);
+      expect(outside).toBeGreaterThan(4);
+      expect(await calls(() => duringStartup(async () => again()))).toBe(
+        outside / 4,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

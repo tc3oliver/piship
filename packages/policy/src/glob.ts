@@ -9,6 +9,7 @@
 // `/`, so `~/.ssh/**` covers `~/.ssh` and `a/**/b` covers `a/b`.
 import { lstatSync, readlinkSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, parse, sep } from "node:path";
+import { startupMemo } from "@piship/contracts";
 
 const compiled = new Map<string, RegExp>();
 
@@ -100,13 +101,15 @@ export function toPosixPath(path: string, separator: string = sep): string {
 const MAX_SYMLINK_DEPTH = 40;
 
 function lstatOrUndefined(path: string): Stats | undefined {
-  try {
-    // A missing path is the common answer, and raising an error for it costs
-    // far more than reporting it.
-    return lstatSync(path, { throwIfNoEntry: false });
-  } catch {
-    return undefined;
-  }
+  return startupMemo("lstat", path, () => {
+    try {
+      // A missing path is the common answer, and raising an error for it
+      // costs far more than reporting it.
+      return lstatSync(path, { throwIfNoEntry: false });
+    } catch {
+      return undefined;
+    }
+  });
 }
 
 /**
@@ -169,11 +172,13 @@ function resolveSegments(path: string, depth: number): string {
 }
 
 function safeRealpath(path: string): string | undefined {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return undefined;
-  }
+  return startupMemo("realpath", path, () => {
+    try {
+      return realpathSync.native(path);
+    } catch {
+      return undefined;
+    }
+  });
 }
 
 /**

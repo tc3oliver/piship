@@ -88,6 +88,7 @@ function context(): LaunchContext {
         command: "acmecode",
       },
       runtime: { pishipVersion: "0.7.0" },
+      deployment: { mode: "managed" },
       manifest: { schema: "piship/v1alpha4" },
       governance: {
         manifest: {
