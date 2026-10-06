@@ -11,7 +11,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { searchToolCacheDirectory } from "@piship/core";
 import { readManifest } from "@piship/schema";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -50,6 +49,16 @@ beforeAll(() => {
   const source = join(root, "source");
   cpSync(join(repository, "examples", "personal"), source, { recursive: true });
   const manifest = join(source, "piship.yaml");
+  // The example also bundles fd and rg, whose archives a build reads from the
+  // download cache; this test needs no network and no warm cache, so its copy
+  // leaves them out and is locked as it stands.
+  writeFileSync(
+    manifest,
+    readFileSync(manifest, "utf8").replace(
+      /^ {2}# fd and rg ship[^\n]*\n[^\n]*\n {2}searchTools:\n {4}mode: bundled\n/m,
+      "",
+    ),
+  );
   // The personal example ships bundled and stripped: build it as it is.
   expect(readManifest(manifest).lifecycle?.release).toMatchObject({
     bundle: true,
@@ -71,11 +80,6 @@ afterAll(() => rmSync(root, { recursive: true, force: true }), 120_000);
 
 /** Build the same bundled example through the runtime cache in `cache`. */
 function cachedBuild(cache: string, output: string) {
-  // The example bundles fd and rg, which a build reads from the download
-  // cache: this cache is a fresh one, so it gets the archives `lock` fetched.
-  cpSync(searchToolCacheDirectory(env), join(cache, "search-tools"), {
-    recursive: true,
-  });
   const buildEnv: NodeJS.ProcessEnv = { ...env, PISHIP_CACHE_HOME: cache };
   delete buildEnv.PISHIP_BUILD_INPUT;
   const manifest = join(root, "source", "piship.yaml");

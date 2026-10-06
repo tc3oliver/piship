@@ -264,6 +264,12 @@ describe("immutable runtime cache", () => {
       readFileSync(manifest, "utf8")
         // The example ships bundled and stripped; the caller picks its own.
         .replace(/^ {2}(strip|bundle): .*\n/gm, "")
+        // And it bundles fd and rg, whose archives a build reads from the
+        // download cache: a test needs no network and no warm cache.
+        .replace(
+          /^ {2}# fd and rg ship[^\n]*\n[^\n]*\n {2}searchTools:\n {4}mode: bundled\n/m,
+          "",
+        )
         .replace("release:\n", `release:\n${release}`),
     );
     lockManifest(manifest);
