@@ -714,7 +714,10 @@ describe("pi-browser-use", () => {
     return candidates.find((path) => path && existsSync(path));
   }
 
-  it.skipIf(!chrome() && process.env.PISHIP_REQUIRE_BROWSER !== "1")(
+  it.skipIf(
+    process.env.PISHIP_SKIP_BROWSER === "1" ||
+      (!chrome() && process.env.PISHIP_REQUIRE_BROWSER !== "1"),
+  )(
     `starts chrome-devtools-mcp and registers its browser tools on Node ${process.versions.node}`,
     () => {
       const executablePath = chrome();

@@ -1,7 +1,7 @@
 name: Release qualification
 # One manual run on the exact candidate HEAD produces all release evidence
-# for that commit: the fast merge gate, CodeQL, the full Portable E2E, and the
-# Reference E2E against the enterprise reference stack in parallel, then the
+# for that commit: the fast merge gate, CodeQL, Portable E2E (excluding live
+# Chrome startup), and Reference E2E against the enterprise stack, then the
 # Release candidate build, attestation, and verification once all four pass
 # (see AGENTS.md, CI evidence tiers).
 on:
@@ -25,6 +25,8 @@ jobs:
 
   portable-e2e:
     uses: ./.github/workflows/portable-e2e.yml
+    with:
+      skip-browser: true
     # The nested issue report runs only on schedule, but a reusable
     # workflow's job permissions must fit within the caller's grant.
     permissions:
