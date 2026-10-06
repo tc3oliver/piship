@@ -89,15 +89,15 @@ describe("the store and install budgets", () => {
 
   it("explains a median regression above 5% and blocks one above 10% against a baseline", () => {
     const before = report({ direct: 100, "hardlink.warm": 100 });
-    const after = (direct: number, warm: number) =>
+    const evaluate = (direct: number, warm: number) =>
       evaluateStoreBudgets(report({ direct, "hardlink.warm": warm }), budgets, {
         baseline: before,
       });
-    expect(after(104, 100)).toEqual([]);
-    expect(after(106, 100)).toEqual([
+    expect(evaluate(104, 100)).toEqual([]);
+    expect(evaluate(106, 100)).toEqual([
       expect.objectContaining({ name: "direct", level: "explain" }),
     ]);
-    expect(after(100, 111)).toEqual([
+    expect(evaluate(100, 111)).toEqual([
       expect.objectContaining({ name: "hardlink.warm", level: "block" }),
     ]);
   });

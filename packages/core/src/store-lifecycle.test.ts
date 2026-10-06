@@ -113,7 +113,15 @@ describe.runIf(HOST_EVIDENCED)(
 
     it("installs and launches on a clean machine with an empty, a missing, or an unusable store", async () => {
       // Empty store, offline: the first install of this test is exactly that.
-      await installed();
+      const { a } = await installed();
+      // The release the machine installed from carries no store reference.
+      const unpacked = join(storeHome, "..", "unpacked");
+      await extractArchive(a.archive, unpacked);
+      for (const path of files(unpacked)) {
+        const text = readFileSync(path, "latin1");
+        expect(text, path).not.toContain(storeHome);
+        expect(text, path).not.toMatch(/piship-store/);
+      }
       verifyPayload(join(appsDir(), "1.0.0"));
       expect(launch()).toBe("payload 1.0.0");
       // The store removed after the install: nothing the release runs from.

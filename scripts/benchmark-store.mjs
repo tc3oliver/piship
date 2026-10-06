@@ -197,7 +197,10 @@ async function main() {
   const bytes = first.reduce((sum, file) => sum + file.data.length, 0);
   const samples = {};
   const notes = {};
-  const sample = (name, value) => (samples[name] ??= []).push(value);
+  const sample = (name, value) => {
+    samples[name] ??= [];
+    samples[name].push(value);
+  };
   const variants = primitives.flatMap((primitive) =>
     verifyModes.map((verify) => ({ primitive, verify })),
   );
