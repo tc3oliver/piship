@@ -1,5 +1,7 @@
 // Release dependency scans: the npm audit vulnerability policy and the
 // registry signature check.
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { ReleaseManifest } from "@piship/schema";
 import {
   VULNERABILITY_REPORT_SCHEMA,
@@ -8,6 +10,7 @@ import {
   type VulnerabilityFinding,
   type VulnerabilityReport,
 } from "./metadata.js";
+import { workspacePackages } from "../runtime-dependencies.js";
 import { windowsNpmInvocation } from "../windows-npm.js";
 import { gate, runCommand } from "./shared.js";
 
@@ -50,6 +53,47 @@ export async function npmAuditScanner(
 const SIGNATURE_TOOL = "npm audit signatures --omit=dev";
 
 /**
+ * Run `run` with the manifests of PiShip's workspace packages in
+ * `<payload>/packages/<name>/package.json`, and take them away again. The
+ * payload keeps the root `package.json` and its `workspaces` but not the
+ * workspace packages, and npm reaches the runtime dependencies only through
+ * the workspace packages that declare them: without the manifests every
+ * installed package is unreachable, `--omit=dev` drops it, and
+ * `npm audit signatures` reports "found no dependencies to audit" having
+ * verified nothing. A `packages` directory the payload already has is left
+ * alone.
+ */
+export async function withWorkspaceManifests<T>(
+  payloadDirectory: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const source = join(
+    payloadDirectory,
+    "node_modules",
+    "@piship",
+    "core",
+    "dist",
+    "build-input",
+    "packages",
+  );
+  const target = join(payloadDirectory, "packages");
+  const added = existsSync(source) && !existsSync(target);
+  try {
+    if (added)
+      for (const name of workspacePackages) {
+        mkdirSync(join(target, name), { recursive: true });
+        copyFileSync(
+          join(source, name, "package.json"),
+          join(target, name, "package.json"),
+        );
+      }
+    return await run();
+  } finally {
+    if (added) rmSync(target, { recursive: true, force: true });
+  }
+}
+
+/**
  * `npm audit signatures` over the installed payload. It reads the payload's
  * `node_modules` and needs the registry and the Sigstore trust root.
  */
@@ -62,13 +106,15 @@ export function npmSignatureAuditor(
     maxBuffer: 64 * 1024 * 1024,
     timeout: 300_000,
   };
-  return process.platform === "win32"
-    ? runCommand(
-        "cmd.exe",
-        ["/d", "/s", "/c", `npm ${args.join(" ")}`],
-        options,
-      )
-    : runCommand("npm", args, options);
+  return withWorkspaceManifests(payloadDirectory, () =>
+    process.platform === "win32"
+      ? runCommand(
+          "cmd.exe",
+          ["/d", "/s", "/c", `npm ${args.join(" ")}`],
+          options,
+        )
+      : runCommand("npm", args, options),
+  );
 }
 
 interface SignatureEntry {

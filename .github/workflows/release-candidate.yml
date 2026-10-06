@@ -265,6 +265,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       ATTESTED: ${{ needs.attest.result == 'success' }}
     steps:
+      # Only for scripts/check-release-evidence.mjs below, which reads the
+      # extracted release; the archive under test is the downloaded one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/check-release-evidence.mjs
+          sparse-checkout-cone-mode: false
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -361,6 +368,16 @@ jobs:
             fs.writeFileSync(file, lines.join("\n"));
           '
           expect_rejected payload/package.json "a modified payload file" "payload integrity mismatch" "$append"
+      # The evidence the release records about itself, read from the pristine
+      # extraction on every target: qualified, tests and vulnerability verdict
+      # passed, every SBOM package covered by the notices (the logical
+      # dependency graph, whatever the payload's file layout), every vendored
+      # Pi package audited, and the registry signature verdict recorded (an
+      # unavailable check is a warning, never silence).
+      - name: Check the recorded release evidence
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/check-release-evidence.mjs" "extracted/$NAME" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # A fresh runner per target installs the first build with the install
   # script shipped inside it, which installs the release itself (checking its
@@ -432,6 +449,22 @@ jobs:
           $version = & "$env:RUNNER_TEMP\bin\$env:DIST.cmd" version
           $version
           if (-not ($version -match "$env:DIST_NAME 1\.0\.0")) { exit 1 }
+      # What the release costs the machine it is installed on: its installed
+      # file count, per target. Reported, not gated: no budget is recorded for
+      # Windows or Linux yet (docs/maintainers/v0.11-qualification-matrix.md).
+      - name: Report the installed file count
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const count = (dir) =>
+              fs.readdirSync(dir, { withFileTypes: true }).reduce(
+                (total, entry) => total + (entry.isDirectory() ? count(path.join(dir, entry.name)) : 1), 0);
+            const files = count(path.join(process.env.RUNNER_TEMP, "install", "apps", process.env.DIST));
+            const line = `- ${process.env.NAME}: ${files} installed files`;
+            console.log(line);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
+          '
       # Offline checks on the installed personal releases: Pi startup, the
       # declared resources and extensions, session resume, and the diagnostics.
       # mypi also starts its notes MCP server; devcode loads its six packages

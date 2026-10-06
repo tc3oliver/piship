@@ -6,9 +6,32 @@ PiShip is a company-first open-source distribution and governance framework arou
 
 v0.9.1 is the production-validation baseline: tag `v0.9.1` at commit `a97ba43`, published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.9.1) with six attested archives, Pi 1.0.2, and the schemas `piship/v1alpha6` and `piship-lock/v1alpha6`. A production consumer pins it and installs its qualified artifact directly instead of tracking `main`. Its qualification, platforms, and open issues are in the [baseline section](status.md#v091-production-validation-baseline) of the status page. It replaced v0.9.0 (the same schemas and Pi), which stays documented as the [previous baseline](status.md#v090-previous-production-validation-baseline). v0.9.1 is a patch release of the v0.9.0 milestone below: it adds opt-in plain HTTP to internal MCP servers and to the gateway, credential broker, OIDC issuer, audit sinks, and sandbox, identity-derived MCP request headers, and bundled `fd` and `rg` (the [changelog](../CHANGELOG.md#v091) lists them). Changes on `main` since v0.9.1 are listed under Unreleased in the [changelog](../CHANGELOG.md#unreleased).
 
+## Direction
+
+Three steps remain before PiShip is a stable distribution framework. The first two are engineering milestones; the third is a decision. There is no separate "v1.0 engineering" milestone: everything it would have held is in v0.11.
+
+### v0.10 — Portability and Windows hot-path performance
+
+A distribution is a portable artifact that builds, installs, and starts cheaply on Windows, not only on a developer's Mac. It ships a bundled, stripped payload that installs and starts in far fewer file operations, a portable build that needs no clone of the PiShip source, the developer distribution (`devcode`), and the controls that make a developer profile usable without weakening a managed one (project trust for Claude Code configuration, `--yolo`, package environment and agent files). Candidate; qualification and publication are pending ([status](status.md#v0100-candidate)).
+
+### v0.11 — Runtime footprint, Windows performance, stable v1 contracts, and production readiness
+
+The last major engineering milestone before 1.0.0. Four workstreams, in this order, in four pull requests:
+
+- **Runtime footprint and Windows performance.** A measured v0.10 baseline. Pi package dependencies shared where name, exact version, integrity, and bytes are the same, without hoisting. Bundle-safe closures bundled and unsafe ones kept as vendored files. An opt-in shared, content-addressed, immutable file store that never becomes part of what a release or an installation is. A Windows launcher decision made from measurement. Regression budgets for the personal, managed, and developer distributions.
+- **Stable v1 contracts.** `piship/v1` and `piship-lock/v1` frozen from `piship/v1alpha6` without a redesign, the `v1alpha6` to `v1` migration with a non-mutating `piship migrate --check`, and the compatibility, support, and user-experience contracts.
+- **Production readiness.** Clean-machine qualification of a managed, a personal, and a developer distribution, traced step by step to the test and the workflow that proves it ([qualification matrix](maintainers/v0.11-qualification-matrix.md)), and the Windows file-count pressure of the developer profile.
+- **Security and supply chain.** A [security review](security.md#v011-security-review) of the store, dependency sharing, closure bundling, and the migration, with a responsibility boundary table; and supply-chain qualification on Linux, macOS, and Windows: reproducibility, `verify-release`, tamper rejection, SBOM, notices, vulnerability and registry-signature checks, provenance, and attestation. The SBOM describes the logical dependency graph, not a file list, so sharing and bundling cannot hide a dependency, a license, a source, or an integrity value.
+
+Not part of v0.11: a Windows sandbox adapter, remote workspace synchronization, vendor KMS or HSM integrations, full TUF, a registry marketplace, npm publication, new platform targets, and Pi runtime seams that upstream does not expose.
+
+### 1.0.0 — GA and versioning decision
+
+A decision, not a body of work. It records that general availability is accepted on the evidence of v0.11 and that stable package versioning begins (the manifest and lock contracts are `piship/v1` and `piship-lock/v1` already; the package version is a separate number). It does not contain unfinished core architecture: anything that would is v0.11's, or is not part of 1.0.0.
+
 ## v0.9.0 — Pi 1.x-native governance (implemented)
 
-v0.9 is the last feature milestone before v1.0. It governs every Pi 1.x dynamic capability PiShip exposes, and it introduces the last alpha schemas, `piship/v1alpha6` and `piship-lock/v1alpha6`. Its ground rule, carried from v0.8: an action without a runtime seam never looks enforced; it is reported `unsupported`. Every item below is implemented. It is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.9.0) from tag `v0.9.0` after [Release qualification](https://github.com/tc3oliver/piship/actions/runs/37247881318) passed on its exact commit, and it was the production-validation baseline until v0.9.1, replacing v0.8.1; the [status page](status.md#v090-previous-production-validation-baseline) records its evidence.
+v0.9 is the last feature milestone before the stable contracts of v0.11. It governs every Pi 1.x dynamic capability PiShip exposes, and it introduces the last alpha schemas, `piship/v1alpha6` and `piship-lock/v1alpha6`. Its ground rule, carried from v0.8: an action without a runtime seam never looks enforced; it is reported `unsupported`. Every item below is implemented. It is published as a [GitHub pre-release](https://github.com/tc3oliver/piship/releases/tag/v0.9.0) from tag `v0.9.0` after [Release qualification](https://github.com/tc3oliver/piship/actions/runs/37247881318) passed on its exact commit, and it was the production-validation baseline until v0.9.1, replacing v0.8.1; the [status page](status.md#v090-previous-production-validation-baseline) records its evidence.
 
 - **Pi 1.0.2.** The exact pin and a pinned Pi sibling package tree, closing the `brace-expansion` exception ([#129](https://github.com/tc3oliver/piship/issues/129)).
 - **Tool governance.** Exposure (`direct`, `model-only`, `codemode`, `deferred`, `hidden`), excluded tools, and Pi's Codemode and tool search as explicit, governed opt-ins whose nested calls pass the same policy hook.
@@ -17,10 +40,10 @@ v0.9 is the last feature milestone before v1.0. It governs every Pi 1.x dynamic 
 - **Pi packages.** `resources.packages` resolved by PiShip to immutable, integrity-pinned, vendored trees under `packageTrust` and the supply-chain gates; Pi never installs packages.
 - **Enforcement completeness.** A status for every action from a runtime seam table recorded in the lock, `POLICY_UNENFORCEABLE` for managed rules the runtime cannot honor, and `policy.acknowledgeUnenforced`.
 - **Data lifecycle and session export.** Retention and purge per data class, and a `session.export` contract whose gaps (`/share` through a gist, `/export`, and `/bug` in personal mode) are always reported.
-- **Migration.** A migration registry with a fixture per step and `piship migrate --check`, which v1.0 reuses for `v1alpha6` to `v1`; v0.8.1 state launches on v0.9 and a rollback to v0.8.1 still reads it.
+- **Migration.** A migration registry with a fixture per step and `piship migrate --check`, which v0.11 reuses for `v1alpha6` to `v1`; v0.8.1 state launches on v0.9 and a rollback to v0.8.1 still reads it.
 - **Upstream requests.** Each Pi gap v0.9 works around is raised upstream: a model ID on `before_provider_request`, a tool-set change event, tool-search discover and activate events, a way to disable or intercept `/share` and `/export`, a capability discovery API, and package installation without lifecycle scripts.
 
-After v0.9, v1.0 designs nothing new: it freezes `piship/v1` and `piship-lock/v1` and adds the compatibility guarantee, the migration and support policy, production evidence, a security review, and GA documentation.
+After v0.9, nothing new is designed: [v0.11](#v011--runtime-footprint-windows-performance-stable-v1-contracts-and-production-readiness) freezes `piship/v1` and `piship-lock/v1` and adds the compatibility and support contracts, production evidence, a security review, and the release documentation.
 
 ## v0.8.0 — pre-production trust & validation hardening (implemented)
 
@@ -51,7 +74,7 @@ These must be resolved before PiShip is rolled out broadly, beyond production va
 
 Candidates, not scheduled:
 
-- Fields for a schema after `piship/v1alpha6`, driven by production evidence: `app.configDir` and branding, a `policy.userRules` field, and a `tests` section. The `data` section and `resources.packages` are part of v1alpha6.
+- Fields added to `piship/v1` without a breaking change, driven by production evidence: `app.configDir` and branding, a `policy.userRules` field, and a `tests` section. The `data` section and `resources.packages` are part of v1alpha6.
 - Lock capabilities that record the contract actually selected, if the provider evidence the governance lock already carries proves not to be enough. The `sha256-` prefixed, canonical manifest digest is part of `piship-lock/v1alpha5` in v0.8.0.
 - A `registry/` directory and additional certification metadata.
 - The remaining git control-file hardening listed in [security](security.md#limits).

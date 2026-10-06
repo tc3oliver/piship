@@ -348,14 +348,72 @@ function packageListDigest(packages: readonly PayloadPackage[]): string {
   return createHash("sha256").update(JSON.stringify(list)).digest("hex");
 }
 
+type LockedSource = SbomInput["lockPackages"][number];
+
+/**
+ * The registry source and integrity of the dependencies of each vendored Pi
+ * package, from the npm lockfile that ships beside it
+ * (`pi-packages/<id>/package-lock.json`), keyed by the payload path the
+ * dependency has under `pi-packages/<id>/node_modules`. Read from the
+ * lockfile and not from the files on disk, so the SBOM records the same
+ * source and integrity whether a copy of the dependency is a full package, a
+ * shared stand-in, or has been bundled away.
+ */
+function vendoredLockPackages(payloadDir: string): LockedSource[] {
+  const vendored = join(payloadDir, "pi-packages");
+  if (!existsSync(vendored) || !lstatSync(vendored).isDirectory()) return [];
+  const found: LockedSource[] = [];
+  for (const entry of readdirSync(vendored, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    let lockfile: { packages?: Record<string, unknown> };
+    try {
+      lockfile = JSON.parse(
+        readFileSync(join(vendored, entry.name, "package-lock.json"), "utf8"),
+      );
+    } catch {
+      continue;
+    }
+    for (const [key, value] of Object.entries(lockfile.packages ?? {})) {
+      const item = value as {
+        version?: unknown;
+        integrity?: unknown;
+        resolved?: unknown;
+        link?: unknown;
+      } | null;
+      if (
+        !key.startsWith("node_modules/") ||
+        item?.link ||
+        typeof item?.version !== "string" ||
+        typeof item.integrity !== "string"
+      )
+        continue;
+      found.push({
+        path: `pi-packages/${entry.name}/${key}`,
+        version: item.version,
+        integrity: item.integrity,
+        ...(typeof item.resolved === "string"
+          ? { resolved: item.resolved }
+          : {}),
+      });
+    }
+  }
+  return found;
+}
+
 /** A deterministic SPDX 2.3 JSON document for every package in the payload. */
 export function generateSbom(input: SbomInput): SpdxDocument {
   const packages = input.packages ?? listPayloadPackages(input.payloadDir);
   const { id, version } = input.distribution;
-  const lock = new Map(input.lockPackages.map((item) => [item.path, item]));
+  const lock = new Map(
+    [...vendoredLockPackages(input.payloadDir), ...input.lockPackages].map(
+      (item) => [item.path, item],
+    ),
+  );
   const spdxId = spdxIdAllocator();
   const entries: SpdxPackage[] = packages.map((item) => {
-    const locked = lock.get(item.path);
+    const found = lock.get(item.path);
+    // A lock entry for another version says nothing about this package.
+    const locked = found?.version === item.version ? found : undefined;
     const checksums = locked ? sriToSpdxChecksums(locked.integrity) : [];
     return {
       SPDXID: spdxId(item),

@@ -376,6 +376,28 @@ describe("the file store", () => {
     ).toBeUndefined();
   });
 
+  it("writes its marker whole, and writes again one an earlier opener left empty", () => {
+    const root = temp();
+    expect(ContentStore.open(root, { primitive: "copy" })).toBeDefined();
+    const marker = join(root, "store.json");
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({
+      schema: "piship-store/v1",
+    });
+    // Nothing is left beside it: the marker is published by a rename.
+    expect(readdirSync(join(root, "tmp"))).toEqual([]);
+    // An opener that stopped between creating the marker and writing it left
+    // an empty file, which must not turn the store off for good.
+    writeFileSync(marker, "");
+    expect(ContentStore.open(root, { primitive: "copy" })).toBeDefined();
+    expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual({
+      schema: "piship-store/v1",
+    });
+    // A file that is not a marker is somebody else's and is left alone.
+    writeFileSync(marker, "not a marker");
+    expect(ContentStore.open(root, { primitive: "copy" })).toBeUndefined();
+    expect(readFileSync(marker, "utf8")).toBe("not a marker");
+  });
+
   it("records the objects a release placed, whole, and refuses a name that is not an id", async () => {
     const home = temp();
     const root = join(home, "store");

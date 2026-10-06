@@ -357,6 +357,177 @@ describe("notices", () => {
   });
 });
 
+// The SBOM and the notices describe the logical dependency graph the payload
+// carries, not its files. Bundling a runtime, sharing identical dependencies
+// between Pi packages, and placing files from a shared store all change which
+// files are on disk; none of them may change what these documents list, the
+// license text they reproduce, or the source and integrity they record.
+describe("the logical dependency graph under a smaller file layout", () => {
+  const SHA512_LEAF = createHash("sha512").update("leaf").digest();
+  const integrity = `sha512-${SHA512_LEAF.toString("base64")}`;
+  const resolved = "https://registry.npmjs.org/leaf/-/leaf-1.0.0.tgz";
+
+  /** A Pi package root of its own with `leaf` as its one dependency. */
+  function vendoredLeaf(root: string, id: string, layout: "full" | "stand-in") {
+    write(
+      root,
+      `pi-packages/${id}/package-lock.json`,
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { name: id, version: "1.0.0" },
+          "node_modules/leaf": { version: "1.0.0", resolved, integrity },
+          "node_modules/linked": { link: true, resolved: "../x" },
+        },
+      }),
+    );
+    const dir = `pi-packages/${id}/node_modules/leaf`;
+    const manifest = JSON.stringify({
+      name: "leaf",
+      version: "1.0.0",
+      license: "MIT",
+    });
+    write(root, `${dir}/package.json`, manifest);
+    write(root, `${dir}/LICENSE`, "MIT leaf\n");
+    write(
+      root,
+      `${dir}/index.js`,
+      layout === "full"
+        ? "export const leaf = 1;\n"
+        : 'export * from "../../../.shared/leaf@1.0.0-abcdef123456/index.js";\n',
+    );
+  }
+
+  const sbomOf = (root: string) =>
+    generateSbom({
+      payloadDir: root,
+      distribution: { id: "devcode", name: "DevCode", version: "1.0.0" },
+      target: "linux-x64",
+      created: "2026-01-01T00:00:00Z",
+      lockPackages: [],
+    });
+
+  /** What the documents say, with nothing that is the file layout's own. */
+  function logical(root: string) {
+    const listed = listPayloadPackages(root);
+    const sbom = sbomOf(root);
+    verifySbom(root, sbom, listed);
+    const { text, index } = generateNotices(root, listed);
+    verifyNotices(sbom, index);
+    return { listed, sbom, text, index };
+  }
+
+  it("lists a shared dependency at every place that uses it, with the same source, integrity, and license text", () => {
+    const full = payload();
+    vendoredLeaf(full, "a", "full");
+    vendoredLeaf(full, "b", "full");
+    const shared = payload();
+    vendoredLeaf(shared, "a", "stand-in");
+    vendoredLeaf(shared, "b", "stand-in");
+    // The one real copy, outside any package's node_modules.
+    write(
+      shared,
+      "pi-packages/.shared/leaf@1.0.0-abcdef123456/package.json",
+      JSON.stringify({ name: "leaf", version: "1.0.0", license: "MIT" }),
+    );
+    write(
+      shared,
+      "pi-packages/.shared/leaf@1.0.0-abcdef123456/index.js",
+      "export const leaf = 1;\n",
+    );
+    write(
+      shared,
+      "pi-packages/.shared/leaf@1.0.0-abcdef123456/LICENSE",
+      "MIT leaf\n",
+    );
+    const before = logical(full);
+    const after = logical(shared);
+    expect(after.listed).toEqual(before.listed);
+    expect(after.sbom.packages).toEqual(before.sbom.packages);
+    expect(after.index).toEqual(before.index);
+    expect(after.text).toBe(before.text);
+    // Each place that uses leaf is a package of its own in the graph, and the
+    // shared directory is not a second one.
+    const leaves = after.sbom.packages.filter((item) => item.name === "leaf");
+    expect(leaves.map((item) => item.sourceInfo)).toEqual([
+      "payload:pi-packages/a/node_modules/leaf",
+      "payload:pi-packages/b/node_modules/leaf",
+    ]);
+    for (const item of leaves)
+      expect(item).toMatchObject({
+        downloadLocation: resolved,
+        licenseDeclared: "MIT",
+        checksums: [
+          { algorithm: "SHA512", checksumValue: SHA512_LEAF.toString("hex") },
+        ],
+      });
+    expect(after.text.match(/MIT leaf/g)).toHaveLength(2);
+  });
+
+  it("records the source and integrity of a Pi package's dependency from its lockfile, and ignores an entry for another version", () => {
+    const root = payload();
+    vendoredLeaf(root, "a", "full");
+    const [item] = sbomOf(root).packages.filter((p) => p.name === "leaf");
+    expect(item).toMatchObject({ downloadLocation: resolved });
+    // A lockfile entry for another version says nothing about the installed one.
+    write(
+      root,
+      "pi-packages/a/package-lock.json",
+      JSON.stringify({
+        packages: {
+          "node_modules/leaf": { version: "2.0.0", resolved, integrity },
+        },
+      }),
+    );
+    const [other] = sbomOf(root).packages.filter((p) => p.name === "leaf");
+    expect(other?.downloadLocation).toBe("NOASSERTION");
+    expect(other?.checksums).toBeUndefined();
+  });
+
+  it("keeps listing the packages a bundled runtime no longer has files for, and reproduces their license text", () => {
+    const root = mkdtempSync(join(tmpdir(), "piship-supply-bundled-"));
+    roots.push(root);
+    // After bundling, the runtime's JavaScript is in a few files; what
+    // remains of each package is its license, and bundle.json is the record of
+    // the packages that were bundled.
+    const components = [
+      {
+        name: "alpha",
+        version: "1.0.0",
+        path: "node_modules/alpha",
+        license: "MIT",
+        licenseFiles: ["node_modules/alpha/LICENSE"],
+      },
+      {
+        name: "beta",
+        version: "2.0.0",
+        path: "node_modules/alpha/node_modules/beta",
+        license: "ISC",
+        licenseFiles: [],
+      },
+    ];
+    write(
+      root,
+      "metadata/bundle.json",
+      JSON.stringify({ format: "x", components }),
+    );
+    write(root, "node_modules/alpha/LICENSE", "MIT License\nalpha\n");
+    write(root, "runtime/main.js", "// everything is in here\n");
+    const { listed, sbom, text, index } = logical(root);
+    expect(listed).toEqual(components);
+    expect(sbom.packages.map((item) => item.name)).toEqual([
+      "DevCode",
+      "alpha",
+      "beta",
+    ]);
+    expect(index.packages.map((item) => item.name)).toEqual(["alpha", "beta"]);
+    expect(text).toContain("MIT License\nalpha");
+    expect(text).toContain(
+      "No license file is shipped with this package. Declared license: ISC.",
+    );
+  });
+});
+
 describe("checksums", () => {
   function tree() {
     const root = payload();
