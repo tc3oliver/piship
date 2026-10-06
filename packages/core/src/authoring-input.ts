@@ -34,7 +34,7 @@ export function writeAuthoringSnapshot(
     )) {
       const path = join(directory, entry.name);
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.name === "build-input") continue;
+      if (relative === "packages/core/dist/build-input") continue;
       if (entry.isDirectory()) visit(path, relative);
       else if (entry.isFile())
         files.push([
@@ -68,11 +68,13 @@ export function writeAuthoringSnapshot(
   }
   files.sort((a, b) => Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0])));
   mkdirSync(dirname(destination), { recursive: true });
-  writeFileSync(
-    destination,
-    gzipSync(JSON.stringify({ schema: SCHEMA, files })),
-  );
+  const bytes = gzipSync(JSON.stringify({ schema: SCHEMA, files }));
+  // zlib records the host OS in the header; fix it so every platform writes the same bytes.
+  bytes[9] = 0xff;
+  writeFileSync(destination, bytes);
 }
+
+const resolved = new Map<string, string>();
 
 /** Runtime commands never expand this; builds use a private, digest-keyed cache copy. */
 export function authoringBuildInput(
@@ -80,7 +82,25 @@ export function authoringBuildInput(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (existsSync(join(input, "packages", "core", "dist"))) return input;
-  const bytes = readFileSync(join(input, AUTHORING_SNAPSHOT));
+  const key = `${input}\0${searchToolCacheDirectory(env)}`;
+  const known = resolved.get(key);
+  // One validation per process: later calls of the same build reuse the verified tree.
+  if (known && existsSync(known)) return known;
+  const tree = expandAuthoringSnapshot(input, env);
+  resolved.set(key, tree);
+  return tree;
+}
+
+function expandAuthoringSnapshot(
+  input: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const snapshotPath = join(input, AUTHORING_SNAPSHOT);
+  if (!existsSync(snapshotPath))
+    throw new Error(
+      "This payload has neither compiled PiShip sources nor an authoring snapshot, so it cannot build a distribution. Build from the PiShip source checkout or a payload that carries authoring.json.gz.",
+    );
+  const bytes = readFileSync(snapshotPath);
   const digest = hash(bytes);
   const parent = join(dirname(searchToolCacheDirectory(env)), "authoring");
   const location = join(parent, `${PISHIP_VERSION}-${digest}`);
@@ -97,7 +117,12 @@ export function authoringBuildInput(
         canonicalJson(inventory(tree)) === canonicalJson(manifest.inventory)
       )
         return tree;
-    } catch {}
+    } catch (error) {
+      // A transient read error (a scanner holding a handle) must not trigger a
+      // rebuild that deletes a tree another build may be copying from.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code && code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
     return undefined;
   };
   const cached = valid();
