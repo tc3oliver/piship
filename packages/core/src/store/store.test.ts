@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { verifyStore } from "./collect.js";
 import { ContentStore, type Primitive, storeLayout } from "./store.js";
 
 const roots: string[] = [];
@@ -128,6 +129,34 @@ describe("the file store", () => {
       );
     },
   );
+
+  it("detects, and does not spread, a mutation of a hard-linked object that a program forced", async () => {
+    const home = temp();
+    const root = join(home, "store");
+    const a = join(home, "a", "index.js");
+    const b = join(home, "b", "index.js");
+    const store = open(root, "hardlink");
+    await place(store, a, "shipped bytes");
+    await place(store, b, "shipped bytes");
+    store.end();
+    // A program with the right to change modes writes through installation A.
+    chmodSync(a, 0o644);
+    writeFileSync(a, "forced bytes!");
+    // Links share one file, so B shows it too: the store cannot prevent that
+    // here, which is why the mode is not the default. What it guarantees is
+    // that the next installation neither reads nor shares the changed file.
+    expect(readFileSync(b, "utf8")).toBe("forced bytes!");
+    expect(verifyStore({ root }).damaged).toEqual([
+      digest(Buffer.from("shipped bytes")),
+    ]);
+    const c = join(home, "c", "index.js");
+    const next = open(root, "hardlink");
+    await place(next, c, "shipped bytes");
+    expect(readFileSync(c, "utf8")).toBe("shipped bytes");
+    expect(next.counts.repaired).toBe(1);
+    expect(lstatSync(c).ino).not.toBe(lstatSync(a).ino);
+    expect(verifyStore({ root }).damaged).toEqual([]);
+  });
 
   it("keeps an object read-only and its executable variant apart", async () => {
     const home = temp();
@@ -260,8 +289,12 @@ describe("the file store", () => {
         readFileSync(objectOf(stores[0] as ContentStore, text), "utf8"),
       ).toBe(text);
     }
-    // No temporary file is left where objects are written.
+    // No temporary file is left where objects are written, and each
+    // operation holds one marker however many files it places at once.
     expect(readdirSync(storeLayout(root).temporary)).toEqual([]);
+    expect(readdirSync(storeLayout(root).inflight)).toHaveLength(3);
+    for (const store of stores) store.end();
+    expect(readdirSync(storeLayout(root).inflight)).toEqual([]);
   });
 
   it("declines, leaving nothing behind, when the store cannot be written", async () => {

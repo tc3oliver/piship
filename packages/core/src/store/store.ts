@@ -164,6 +164,7 @@ export class ContentStore {
   private readonly directories = new Set<string>();
   private readonly placed = new Set<string>();
   private marker: string | undefined;
+  private beginning: Promise<void> | undefined;
   private broken = false;
 
   private constructor(root: string, options: ContentStoreOptions) {
@@ -295,14 +296,17 @@ export class ContentStore {
   end(): void {
     if (this.marker) rmSync(this.marker, { force: true });
     this.marker = undefined;
+    this.beginning = undefined;
   }
 
   /** The operation is in flight until `end`: a collection does not sweep while it runs. */
-  private async begin(): Promise<void> {
-    if (this.marker) return;
-    const marker = join(this.layout.inflight, randomUUID());
-    await (await open(marker, "wx")).close();
-    this.marker = marker;
+  private begin(): Promise<void> {
+    this.beginning ??= (async () => {
+      const marker = join(this.layout.inflight, randomUUID());
+      await (await open(marker, "wx")).close();
+      this.marker = marker;
+    })();
+    return this.beginning;
   }
 
   private async directory(path: string): Promise<void> {

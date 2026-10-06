@@ -259,6 +259,12 @@ export interface VerifyStoreOptions {
   /** Remove a damaged object; the next install that needs its bytes writes it again. */
   readonly repair?: boolean;
   readonly budgetMs?: number;
+  /**
+   * Which bucket to begin at (default: a different one each call), so a store
+   * larger than the budget is covered by successive runs, not by the first
+   * buckets every time.
+   */
+  readonly start?: number;
   readonly now?: () => number;
 }
 
@@ -279,7 +285,17 @@ export function verifyStore(options: VerifyStoreOptions): VerifiedStore {
   let checked = 0;
   let repaired = 0;
   let remaining = false;
-  sweep: for (const bucket of entries(layout.objects)) {
+  const buckets = entries(layout.objects).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const begin = buckets.length
+    ? (options.start ?? Math.floor(Math.random() * buckets.length)) %
+      buckets.length
+    : 0;
+  sweep: for (const bucket of [
+    ...buckets.slice(begin),
+    ...buckets.slice(0, begin),
+  ]) {
     if (!bucket.isDirectory()) continue;
     for (const file of entries(join(layout.objects, bucket.name))) {
       const parsed = parseObjectName(file.name);

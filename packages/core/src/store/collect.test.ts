@@ -57,17 +57,19 @@ function world(): World {
         primitive: "copy",
       }) as ContentStore;
       const tree = join(home, "apps", id, version);
-      for (const [path, text] of Object.entries(files)) {
-        const output = join(tree, path);
-        mkdirSync(join(output, ".."), { recursive: true });
-        await store.place({
-          path,
-          data: Buffer.from(text),
-          digest: digest(text),
-          output,
-          exec: false,
-        });
-      }
+      await Promise.all(
+        Object.entries(files).map(async ([path, text]) => {
+          const output = join(tree, path);
+          mkdirSync(join(output, ".."), { recursive: true });
+          await store.place({
+            path,
+            data: Buffer.from(text),
+            digest: digest(text),
+            output,
+            exec: false,
+          });
+        }),
+      );
       store.record(id, version, home);
       store.end();
       state.set(`${id}@${version}`, "dead");
@@ -284,6 +286,33 @@ describe("collecting the file store", () => {
 });
 
 describe("verifying the file store", () => {
+  it("covers a store larger than its budget by starting somewhere else each time", async () => {
+    const w = world();
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 300; index += 1)
+      files[NODE(`p${index}`)] = `content ${index}`;
+    await w.release("acme", "1.0.0", files);
+    let tick = 0;
+    const seen = new Set<number>();
+    for (const start of [0, 64, 128, 192]) {
+      tick = 0;
+      const result = verifyStore({
+        root: w.root,
+        start,
+        budgetMs: 100,
+        now: () => (tick += 50),
+      });
+      expect(result.remaining).toBe(true);
+      seen.add(result.checked);
+    }
+    // Each call stopped at the same count, from a different place.
+    expect(seen.size).toBe(1);
+    expect(verifyStore({ root: w.root, start: 7 })).toMatchObject({
+      checked: 300,
+      remaining: false,
+    });
+  });
+
   it("finds a damaged object and removes it so the next install writes it again", async () => {
     const w = world();
     await w.release("acme", "1.0.0", {
