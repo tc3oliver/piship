@@ -89,8 +89,8 @@ await import(${JSON.stringify(receipt.launcher)});`,
       "launcher_start",
       "gate_acquired",
       "receipt_resolved",
-      "core_loaded",
       "lease_held",
+      "gate_released",
       "launcher_handoff",
     ]);
     // Reading no process identity: nothing was contended.

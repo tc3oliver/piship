@@ -29,6 +29,7 @@ import {
   rejection,
   useLifecycleHomes,
 } from "../../../tests/helpers/lifecycle-faults.js";
+import { holdRuntimeLease } from "./install/runtime-lease.js";
 import { readInstallReceipt, uninstallDistribution } from "./install/index.js";
 import { LIFECYCLE_LOCK_REUSE_MS } from "./install/lifecycle-lock.js";
 import { processIdentity, recordedProcessGone } from "./process-identity.js";
@@ -95,15 +96,73 @@ const waitForFile = (path: string): Promise<void> =>
   });
 
 describe.runIf(HOST_EVIDENCED)("the launch gate", () => {
-  it("records the launcher's process as a runtime lease does, in the gate and in its launching marker", async () => {
+  // The launcher is held right after it took the gate and wrote its launching
+  // marker by making the receipt a named pipe, which it blocks on until the
+  // test writes the receipt into it. Windows has no named pipe a file read
+  // can block on; the lease test below covers the same record there.
+  it.runIf(process.platform !== "win32")(
+    "records the launcher's process as a runtime lease does, in the gate and in its launching marker",
+    async () => {
+      await installed();
+      const receipts = join(
+        process.env.PISHIP_INSTALL_HOME as string,
+        "receipts",
+      );
+      const receipt = join(receipts, `${ID}.json`);
+      const real = readFileSync(receipt, "utf8");
+      renameSync(receipt, `${receipt}.real`);
+      expect(spawnSync("mkfifo", [receipt]).status).toBe(0);
+      const child = spawn(process.execPath, [join(appsDir(), "launch.mjs")], {
+        stdio: "ignore",
+      });
+      try {
+        await waitForFile(gatePath());
+        const launching = join(appsDir(), ".runtime-leases", ".launching");
+        while (!existsSync(launching) || readdirSync(launching).length === 0)
+          await new Promise((done) => setTimeout(done, 5));
+        const records = [
+          JSON.parse(readFileSync(gatePath(), "utf8")),
+          ...readdirSync(launching).map((name) =>
+            JSON.parse(readFileSync(join(launching, name), "utf8")),
+          ),
+        ];
+        expect(records).toHaveLength(2);
+        for (const record of records) {
+          expect(record).toMatchObject({
+            pid: child.pid,
+            host: processHostToken(),
+            started: expect.any(Number),
+          });
+          // Linux records the start identity itself, exactly as core reads it.
+          if (process.platform === "linux")
+            expect(record.identity).toBe(processIdentity(child.pid as number));
+          else expect(record.identity).toBeNull();
+          // Core judges the launcher's own record as its running process.
+          expect(recordedProcessGone(record)).toBe(false);
+        }
+        writeFileSync(receipt, real);
+        const code = await new Promise<number | null>((resolvePromise) =>
+          child.once("exit", resolvePromise),
+        );
+        expect(code).toBe(0);
+        expect(existsSync(gatePath())).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(receipt, { force: true });
+        renameSync(`${receipt}.real`, receipt);
+      }
+    },
+    60_000,
+  );
+
+  it("holds a runtime lease that core judges as the launcher's running process, and has released the gate when the release's own launcher runs", async () => {
     await installed();
     const payload = readInstallReceipt(ID).payload;
     const ready = join(dirname(payload), "ready");
     const release = join(dirname(payload), "release");
-    // A core that holds the launcher right after it took the gate and wrote
-    // its launching marker.
+    // A release whose launcher runs until told to stop, as a session does.
     writeFileSync(
-      join(payload, "node_modules", "@piship", "core", "dist", "index.js"),
+      join(payload, "bin", ID),
       `import { writeFileSync, watch, existsSync } from "node:fs";
 import { dirname } from "node:path";
 writeFileSync(${JSON.stringify(ready)}, "ready");
@@ -113,7 +172,6 @@ await new Promise((resolve) => {
   });
   if (existsSync(${JSON.stringify(release)})) { watcher.close(); resolve(); }
 });
-export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("packages/core/dist/index.js")).href)};
 `,
     );
     const child = spawn(
@@ -123,33 +181,50 @@ export { holdRuntimeLease } from ${JSON.stringify(pathToFileURL(resolve("package
     );
     try {
       await waitForFile(ready);
-      const launching = join(appsDir(), ".runtime-leases", ".launching");
-      const records = [
-        JSON.parse(readFileSync(gatePath(), "utf8")),
-        ...readdirSync(launching).map((name) =>
-          JSON.parse(readFileSync(join(launching, name), "utf8")),
-        ),
-      ];
-      expect(records).toHaveLength(2);
-      for (const record of records) {
-        expect(record).toMatchObject({
-          pid: child.pid,
-          host: processHostToken(),
-          started: expect.any(Number),
-        });
-        // Linux records the start identity itself, exactly as core reads it.
-        if (process.platform === "linux")
-          expect(record.identity).toBe(processIdentity(child.pid as number));
-        else expect(record.identity).toBeNull();
-        // Core judges the launcher's own record as its running process.
-        expect(recordedProcessGone(record)).toBe(false);
+      // The gate is free for the next launcher, the marker is gone, and the
+      // lease stands.
+      expect(existsSync(gatePath())).toBe(false);
+      const leases = join(appsDir(), ".runtime-leases");
+      expect(readdirSync(join(leases, ".launching"))).toEqual([]);
+      const [name] = readdirSync(join(leases, "1.0.0"));
+      const record = JSON.parse(
+        readFileSync(join(leases, "1.0.0", name as string), "utf8"),
+      );
+      expect(record).toMatchObject({
+        schema: "piship-runtime-lease/v1",
+        pid: child.pid,
+        host: processHostToken(),
+        started: expect.any(Number),
+        version: "1.0.0",
+      });
+      if (process.platform === "linux")
+        expect(record.identity).toBe(processIdentity(child.pid as number));
+      else expect(record.identity).toBeNull();
+      expect(recordedProcessGone(record)).toBe(false);
+      // The record core writes for a release it holds has the same keys.
+      const own = holdRuntimeLease(ID, "1.0.0");
+      try {
+        const names = readdirSync(join(leases, "1.0.0"));
+        const mine = JSON.parse(
+          readFileSync(
+            join(
+              leases,
+              "1.0.0",
+              names.find((item) => item !== name) as string,
+            ),
+            "utf8",
+          ),
+        );
+        expect(Object.keys(record).sort()).toEqual(Object.keys(mine).sort());
+      } finally {
+        own();
       }
       writeFileSync(release, "continue");
       const code = await new Promise<number | null>((resolvePromise) =>
         child.once("exit", resolvePromise),
       );
       expect(code).toBe(0);
-      expect(existsSync(gatePath())).toBe(false);
+      expect(readdirSync(join(leases, "1.0.0"))).toEqual([]);
     } finally {
       child.kill();
     }

@@ -38,7 +38,7 @@ const IMPORT_META_URL = `import.meta${"."}url`;
 export function launcherSource(id: string): string {
   return stampLauncherBuild(`// PiShip launcher for ${id}: runs the active release named by the install receipt.
 // launcher-build: ${LAUNCHER_BUILD_PLACEHOLDER}
-import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync, existsSync } from "node:fs";
+import { readFileSync, realpathSync, mkdirSync, writeFileSync, rmSync, lstatSync, renameSync, linkSync, readlinkSync, existsSync, utimesSync } from "node:fs";
 import { enableCompileCache } from "node:module";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
@@ -214,6 +214,33 @@ if (!payload) {
   process.exit(1);
 }
 mark("receipt_resolved");
+// The lease: this process holds the release it resolved until it exits. It
+// is written here, under the gate and before the runtime loads, with the
+// record holdRuntimeLease in @piship/core writes, so the gate is held for the
+// milliseconds registration takes, not for the time a cold load of the
+// runtime can (a second launch waits half a second for it, and a lifecycle
+// operation three seconds). The gate is released as soon as the lease stands
+// in the launching marker's place; until the process exits the lease keeps
+// the release from being removed.
+const leaseInstance = randomUUID();
+const leaseDirectory = join(home, ".runtime-leases", version);
+mkdirSync(leaseDirectory, { recursive: true, mode: 0o700 });
+const leasePath = join(leaseDirectory, leaseInstance + ".json");
+const leaseBytes = JSON.stringify({ schema: "piship-runtime-lease/v1", ...self, instance: leaseInstance, version }) + "\\n";
+writeFileSync(leasePath, leaseBytes, { flag: "wx", mode: 0o600 });
+const leaseBeat = setInterval(() => { try { const now = new Date(); utimesSync(leasePath, now, now); } catch {} }, 15000);
+leaseBeat.unref();
+process.on("exit", () => {
+  clearInterval(leaseBeat);
+  try { if (readFileSync(leasePath, "utf8") === leaseBytes) rmSync(leasePath, { force: true }); } catch {}
+});
+mark("lease_held");
+if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
+clearLaunching();
+process.removeListener("exit", clearLaunching);
+clearGate();
+process.removeListener("exit", clearGate);
+mark("gate_released");
 // A bundled payload is a few large files, so what V8 compiled of them is kept
 // in the distribution's state directory and read back at the next start. Only
 // once that directory exists: a launch creates it after checking the install,
@@ -237,17 +264,6 @@ try {
 // before importing it, just as the payload launcher does before boot.
 process.env.PI_CODING_AGENT_DIR = join(stateRoot, "agent");
 process.env.PI_PACKAGE_DIR = join(payload, "node_modules", "@earendil-works", "pi-coding-agent");
-const core = await import(pathToFileURL(join(payload, "node_modules", "@piship", "core", "dist", "index.js")).href);
-mark("core_loaded");
-// A release older than runtime leases (after a rollback, or an older archive
-// installed by a newer CLI) has no holdRuntimeLease: it launches without one.
-if (typeof core.holdRuntimeLease === "function") core.holdRuntimeLease(${JSON.stringify(id)}, version);
-mark("lease_held");
-if (readFileSync(gatePath, "utf8") !== gateRecord) throw new Error("Launcher registration lock was lost");
-clearLaunching();
-process.removeListener("exit", clearLaunching);
-clearGate();
-process.removeListener("exit", clearGate);
 mark("launcher_handoff");
 await import(pathToFileURL(join(payload, "bin", command)).href);
 `);
