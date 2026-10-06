@@ -18,9 +18,41 @@ import { workspacePackages } from "./runtime-dependencies.js";
 
 const posix = (path: string) => path.split(sep).join("/");
 
+/** An `exports` pattern target with every `*` replaced, as Node resolves it. */
+export function wildcardTarget(target: string, subpath: string): string {
+  return target.replaceAll("*", () => subpath);
+}
+
+const TRANSIENT_ATTEMPTS = 10;
+const TRANSIENT_RETRY_MS = 100;
+
+/** Windows scanners and indexers briefly hold a freshly written tree open. */
+export function renameWithRetry(from: string, to: string): void {
+  for (let attempt = 1; ; attempt++)
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        attempt === TRANSIENT_ATTEMPTS ||
+        (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")
+      )
+        throw error;
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        TRANSIENT_RETRY_MS * attempt,
+      );
+    }
+}
+
 /** Build-time only: combine JS while retaining upstream assets and public exports. */
 export function bundleDistribution(payload: string): void {
-  payload = realpathSync(payload);
+  // The native form also expands Windows 8.3 short names (RUNNER~1), so the
+  // paths esbuild reports and the root they are made relative to agree.
+  payload = realpathSync.native(payload);
   const components = listPayloadPackages(payload);
   const runtime = join(payload, "runtime");
   mkdirSync(runtime, { recursive: true });
@@ -77,8 +109,8 @@ export function bundleDistribution(payload: string): void {
         manifest.exports?.[key] ??
         (key.startsWith("./providers/")
           ? {
-              import: manifest.exports["./providers/*"].import.replace(
-                "*",
+              import: wildcardTarget(
+                manifest.exports["./providers/*"].import,
                 key.slice("./providers/".length),
               ),
             }
@@ -126,7 +158,7 @@ export function bundleDistribution(payload: string): void {
   const script = `
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 const require = createRequire(import.meta.url);
 const { build } = require(${JSON.stringify(tool)});
 const root = ${JSON.stringify(payload)};
@@ -161,21 +193,22 @@ const mainSource = ${JSON.stringify(join(runtime, ".main.mjs"))};
 const bootSource = ${JSON.stringify(join(runtime, ".boot.mjs"))};
 const { writeFileSync, rmSync } = require('node:fs');
 writeFileSync(mainSource, sources.join('\\n'));
-writeFileSync(bootSource, 'export {formatError} from '+JSON.stringify(root+'/node_modules/@piship/contracts/dist/index.js')+'; export {verifyLaunchPayload} from '+JSON.stringify(root+'/node_modules/@piship/core/dist/index.js')+'; export {preparePiEnvironment} from '+JSON.stringify(root+'/node_modules/@piship/pi/dist/environment.js')+';');
+const dependency = (name, file) => JSON.stringify(join(root, 'node_modules', '@piship', name, 'dist', file));
+writeFileSync(bootSource, 'export {formatError} from '+dependency('contracts', 'index.js')+'; export {verifyLaunchPayload} from '+dependency('core', 'index.js')+'; export {preparePiEnvironment} from '+dependency('pi', 'environment.js')+';');
 await build({...options, entryPoints: { main: mainSource, boot: bootSource, 'codemode-worker': options.entryPoints['codemode-worker'], 'image-resize-worker': options.entryPoints['image-resize-worker'] }, splitting: false, write:true});
 writeFileSync(${JSON.stringify(join(runtime, "exports.json"))}, JSON.stringify(mapping));
 rmSync(mainSource); rmSync(bootSource);`;
-  const result = spawnSync(
-    process.execPath,
-    ["--input-type=module", "-e", script],
-    { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
-  );
+  const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+    input: script,
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+  });
   if (result.status !== 0)
     throw new Error(
       `Runtime bundling failed: ${result.stderr || result.error?.message}`,
     );
   const original = join(payload, ".bundle-input");
-  renameSync(join(payload, "node_modules"), original);
+  renameWithRetry(join(payload, "node_modules"), original);
   const keep = (path: string) => {
     const source = join(original, path);
     if (!existsSync(source)) return;
@@ -303,7 +336,12 @@ rmSync(mainSource); rmSync(bootSource);`;
       )}\n`,
     );
   } finally {
-    rmSync(original, { recursive: true, force: true });
+    rmSync(original, {
+      recursive: true,
+      force: true,
+      maxRetries: TRANSIENT_ATTEMPTS,
+      retryDelay: TRANSIENT_RETRY_MS,
+    });
   }
   writeFileSync(
     join(payload, "metadata", "inventory.json"),

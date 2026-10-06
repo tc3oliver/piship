@@ -160,7 +160,10 @@ describe.runIf(posix)("piship build killed with SIGKILL", () => {
     expect(result.status, result.stderr).toBe(0);
     built = join(dist(), "stale-agent");
     expect(stagings()).toEqual([]);
-    expect(readdirSync(dist())).toEqual(["stale-agent"]);
+    // Stamps such as stale-agent.piship-build.json sit beside the output.
+    expect(
+      readdirSync(dist()).filter((name) => !name.startsWith("stale-agent.")),
+    ).toEqual(["stale-agent"]);
     // The payload is not marked: the marker lives beside it, not in it.
     expect(existsSync(join(built, TEMPORARY_OWNER_FILE))).toBe(false);
   }, 240_000);

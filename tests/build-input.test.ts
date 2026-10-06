@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const prepareScript = fileURLToPath(
@@ -54,7 +54,7 @@ function fixture() {
   };
 }
 function prepare(workspace: string) {
-  const script = `import {prepareBuildInput} from ${JSON.stringify(prepareScript)}; console.log(JSON.stringify(prepareBuildInput(${JSON.stringify(workspace)})));`;
+  const script = `import {prepareBuildInput} from ${JSON.stringify(pathToFileURL(prepareScript).href)}; console.log(JSON.stringify(prepareBuildInput(${JSON.stringify(workspace)})));`;
   const result = spawnSync(
     process.execPath,
     ["--input-type=module", "-e", script],

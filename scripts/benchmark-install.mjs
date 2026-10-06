@@ -38,7 +38,12 @@ mkdirSync(env.HOME, { recursive: true });
 const run = (exe, argv, extra = {}) =>
   new Promise((resolveRun, reject) => {
     const started = performance.now();
-    const child = spawn(exe, argv, { cwd: out, env, ...extra });
+    const child = spawn(exe, argv, {
+      cwd: out,
+      env,
+      windowsHide: true,
+      ...extra,
+    });
     let stdout = "",
       stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -132,14 +137,16 @@ const server = createServer((request, response) => {
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 env.MYPI_UPDATE_SOURCE = `http://127.0.0.1:${server.address().port}`;
-const shim = join(
-  env.PISHIP_BIN_HOME,
-  platform() === "win32" ? "mypi.cmd" : "mypi",
-);
+const receiptPath = join(env.PISHIP_INSTALL_HOME, "receipts/mypi.json");
+// The command shim only runs `node <launcher> <args>`. Run that directly: Node
+// refuses to spawn a .cmd without a shell, and a shell would take the path and
+// arguments as command text. The shim's own cost (cmd.exe and `where node`) is
+// therefore not measured.
 const branded = (...argv) =>
-  platform() === "win32"
-    ? run("cmd.exe", ["/d", "/s", "/c", `call "${shim}" ${argv.join(" ")}`])
-    : run(shim, argv);
+  run(process.execPath, [
+    JSON.parse(readFileSync(receiptPath)).launcher,
+    ...argv,
+  ]);
 const count = (dir) =>
   readdirSync(dir, { withFileTypes: true }).reduce(
     (n, entry) =>
@@ -168,15 +175,11 @@ try {
   const smoke = JSON.parse(cold.stdout);
   if (!smoke.piVersion || !smoke.sessionId)
     throw new Error("Smoke did not create a real Pi session");
-  const receipt = JSON.parse(
-    readFileSync(join(env.PISHIP_INSTALL_HOME, "receipts/mypi.json")),
-  );
+  const receipt = JSON.parse(readFileSync(receiptPath));
   const payloadFiles = count(receipt.payload);
   const update = await branded("update");
   const afterUpdate = await branded("--smoke");
-  const upgraded = JSON.parse(
-    readFileSync(join(env.PISHIP_INSTALL_HOME, "receipts/mypi.json")),
-  );
+  const upgraded = JSON.parse(readFileSync(receiptPath));
   if (upgraded.app.version !== "1.1.0")
     throw new Error("Update did not activate 1.1.0");
   const report = {
@@ -191,6 +194,7 @@ try {
       cache:
         "process-cold first installed launch; filesystem cache warmed by extraction/build; OS caches not flushed",
       channel: "signed localhost HTTP; excludes WAN transfer latency",
+      entry: "node launch.mjs directly; the command shim is not measured",
     },
     elapsedMs: {
       install: install.elapsedMs,
