@@ -509,6 +509,7 @@ describe("migration piship/v1alpha4 -> piship/v1alpha5", () => {
         to: PISHIP_SCHEMA_V1ALPHA5,
         changes: [],
         effective: [],
+        review: [],
         source: first.source,
       },
     );

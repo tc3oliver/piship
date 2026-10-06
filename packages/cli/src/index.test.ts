@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PI_VERSION } from "@piship/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli, runtimeCacheLine } from "./index.js";
 
@@ -1049,7 +1050,10 @@ describe("migrate --check", () => {
     return { status, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   }
 
-  const manifest = (schema: string, runtime = 'runtime: { pi: "1.0.0" }') => {
+  const manifest = (
+    schema: string,
+    runtime = `runtime: { pi: "${PI_VERSION}" }`,
+  ) => {
     const path = join(temp, "piship.yaml");
     writeFileSync(
       path,
@@ -1071,28 +1075,58 @@ describe("migrate --check", () => {
     const result = await run(["migrate", path, "--check"]);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
-      "Migration check piship/v1alpha5 -> piship/v1alpha6",
+      "Migration check piship/v1alpha5 -> piship/v1\nResult: requires review",
     );
-    expect(result.stderr).toContain("would change 2 effective decision(s)");
+    expect(result.stderr).toContain("2 item(s)");
     expect(result.stderr).toContain("runtime.cacheWarming");
     expect(result.stderr).toContain("release.bundle and release.strip");
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
-  it("exits 0 when the manifest is already current", async () => {
-    const path = manifest(
-      "piship/v1alpha6",
-      'runtime: { pi: "1.0.0", cacheWarming: { mode: streaming } }',
-    );
+  it("exits 0 and writes nothing for a migratable piship/v1alpha6 manifest", async () => {
+    const path = manifest("piship/v1alpha6");
+    const before = readFileSync(path, "utf8");
     const result = await run(["migrate", path, "--check"]);
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("Already piship/v1alpha6; nothing to migrate.");
+    expect(result.stdout).toContain(
+      "Migration check piship/v1alpha6 -> piship/v1\nResult: migratable",
+    );
+    expect(result.stderr).toBe("");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("exits 1 for a Pi pin this PiShip does not carry", async () => {
+    const path = manifest("piship/v1alpha6", 'runtime: { pi: "0.0.1" }');
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Result: requires review");
+    expect(result.stderr).toContain(
+      `runtime.pi is 0.0.1 but this PiShip pins Pi ${PI_VERSION}`,
+    );
+  });
+
+  it("exits 3, writing nothing, when the manifest cannot migrate", async () => {
+    const path = manifest("piship/v1alpha6", 'runtime: { pi: "latest" }');
+    const before = readFileSync(path, "utf8");
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(3);
+    expect(result.stdout).toContain("Result: cannot migrate");
+    expect(result.stderr).toContain("Cannot migrate");
+    expect(result.stderr).toContain("runtime.pi");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("exits 0 when the manifest is already current", async () => {
+    const path = manifest("piship/v1");
+    const result = await run(["migrate", path, "--check"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Already piship/v1; nothing to migrate.");
   });
 
   it("exits 0 for a manifest written by --write", async () => {
-    const path = manifest("piship/v1alpha5");
+    const path = manifest("piship/v1alpha6");
     expect((await run(["migrate", path, "--write"])).status).toBe(0);
-    expect(readFileSync(path, "utf8")).toContain("schema: piship/v1alpha6");
+    expect(readFileSync(path, "utf8")).toContain("schema: piship/v1\n");
     expect((await run(["migrate", path, "--check"])).status).toBe(0);
   });
 

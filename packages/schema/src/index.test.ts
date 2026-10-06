@@ -52,7 +52,7 @@ describe("alpha manifest", () => {
     },
   );
   it.each([
-    [{ ...valid, schema: "piship/v1" }, "schema mismatch"],
+    [{ ...valid, schema: "piship/v2" }, "schema mismatch"],
     [
       { ...valid, app: { name: "My Pi", command: "mypi", version: "0.1.0" } },
       "app.id",
