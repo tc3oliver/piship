@@ -22,7 +22,7 @@ const cli = join(root, "packages/cli/dist/bin.js");
 const run = (command, argv, cwd, env = process.env) =>
   new Promise((done, reject) => {
     const started = performance.now();
-    const child = spawn(command, argv, { cwd, env });
+    const child = spawn(command, argv, { cwd, env, windowsHide: true });
     let stdout = "",
       stderr = "";
     child.stdout.on("data", (value) => (stdout += value));
