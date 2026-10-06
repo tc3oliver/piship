@@ -261,7 +261,7 @@ process.on("exit", () => process.stderr.write("PISHIP_PROBE " + JSON.stringify({
         ? payloadFiles * 3 + payloadFiles
         : 0,
       successfulActivationPayloadDeletes: 0,
-      note: "Structural estimates, not ETW/ProcMon counters. Extraction creates one file per archive entry. Both measured archive paths extract straight into the version directory, without copying or renaming it. Baseline verifies each payload twice and flushes each file; update additionally verifies the active payload. Additional version launch and cleanup passes are excluded from these lower bounds. See docs/performance.md; Node/Defender and directory operations excluded.",
+      note: "Structural estimates, not ETW/ProcMon counters. Extraction creates one file per archive entry. The candidate extracts straight into the version directory; the baseline (a revision before this change) extracted into a staging directory and renamed it. Baseline verifies each payload twice and flushes each file; update additionally verifies the active payload. Additional version launch and cleanup passes are excluded from these lower bounds. See docs/performance.md; Node/Defender and directory operations excluded.",
     },
     startup: {
       ...(probed ? JSON.parse(probed.slice("PISHIP_PROBE ".length)) : {}),
