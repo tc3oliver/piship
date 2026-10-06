@@ -182,7 +182,7 @@ describe("the PowerShell helper's protocol", () => {
   });
 
   it("gives up on a request that is never answered", async () => {
-    const { helper } = fake({ requestTimeoutMs: 300 });
+    const { helper } = fake({ requestTimeoutMs: 1500 });
     await expect(helper.request("get", "slow-one")).rejects.toThrow(
       /did not answer/,
     );
