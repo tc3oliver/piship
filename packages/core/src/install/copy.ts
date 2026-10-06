@@ -1,8 +1,10 @@
 // Copying a payload directory for an install: thousands of small files, written
 // by several writers at once, each hashed from the bytes that are read.
 import { createHash } from "node:crypto";
-import { link, mkdir, open, readdir } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { chmod, link, mkdir, open, readdir } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { JobPool } from "../job-pool.js";
 
 const COPY_CONCURRENCY = 8;
@@ -10,60 +12,60 @@ const COPY_CONCURRENCY = 8;
 const CHUNK = 1 << 20;
 const WINDOWS = process.platform === "win32";
 
-/** SHA-256 of a file's content: read whole when small, in chunks otherwise. */
+/** SHA-256 of a file's content: read whole when small, streamed otherwise. */
 async function hashFile(path: string): Promise<string> {
+  const hash = createHash("sha256");
   const input = await open(path, "r");
   try {
-    const hash = createHash("sha256");
     if ((await input.stat()).size <= CHUNK) {
       hash.update(await input.readFile());
       return hash.digest("hex");
     }
-    const buffer = Buffer.allocUnsafe(CHUNK);
-    for (;;) {
-      const { bytesRead } = await input.read(buffer, 0, CHUNK, null);
-      if (bytesRead === 0) return hash.digest("hex");
-      hash.update(buffer.subarray(0, bytesRead));
-    }
   } finally {
     await input.close();
   }
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 async function copyHashed(from: string, to: string): Promise<string> {
+  const hash = createHash("sha256");
   const input = await open(from, "r");
+  let size: number;
+  let mode: number;
+  let data: Buffer | undefined;
   try {
-    const { size, mode } = await input.stat();
-    const bits = WINDOWS ? 0o666 : mode & 0o777;
-    const output = await open(to, "wx", bits);
-    try {
-      const hash = createHash("sha256");
-      if (size <= CHUNK) {
-        const data = await input.readFile();
-        hash.update(data);
-        if (data.length > 0) await output.writeFile(data);
-      } else {
-        const buffer = Buffer.allocUnsafe(CHUNK);
-        for (;;) {
-          const { bytesRead } = await input.read(buffer, 0, CHUNK, null);
-          if (bytesRead === 0) break;
-          hash.update(buffer.subarray(0, bytesRead));
-          let written = 0;
-          while (written < bytesRead)
-            written += (
-              await output.write(buffer, written, bytesRead - written)
-            ).bytesWritten;
-        }
-      }
-      // The creation mode is cut by the umask; the copy keeps the source's.
-      if (!WINDOWS) await output.chmod(bits);
-      return hash.digest("hex");
-    } finally {
-      await output.close();
-    }
+    ({ size, mode } = await input.stat());
+    if (size <= CHUNK) data = await input.readFile();
   } finally {
     await input.close();
   }
+  const bits = WINDOWS ? 0o666 : mode & 0o777;
+  if (data) {
+    hash.update(data);
+    const output = await open(to, "wx", bits);
+    try {
+      if (data.length > 0) await output.writeFile(data);
+      // The creation mode is cut by the umask; the copy keeps the source's.
+      if (!WINDOWS) await output.chmod(bits);
+    } finally {
+      await output.close();
+    }
+    return hash.digest("hex");
+  }
+  // A large file goes through streams, which handle partial reads and writes.
+  await pipeline(
+    createReadStream(from),
+    async function* (source: AsyncIterable<Buffer>) {
+      for await (const chunk of source) {
+        hash.update(chunk);
+        yield chunk;
+      }
+    },
+    createWriteStream(to, { flags: "wx", mode: bits }),
+  );
+  if (!WINDOWS) await chmod(to, bits);
+  return hash.digest("hex");
 }
 
 export interface CopyOptions {
