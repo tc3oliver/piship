@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, sep } from "node:path";
+import { duringStartup } from "@piship/contracts";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   expandPathTokens,
@@ -117,7 +118,9 @@ function trySymlink(
 }
 
 describe("normalizePathResource", () => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const posix = (path: string) => toPosixPath(path);
   const workspace = join(base, "work");
@@ -225,7 +228,9 @@ describe("normalizePathResource on a path that exists in full", () => {
     return current;
   }
 
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "piship-policy-glob-")));
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
   afterAll(() => rmSync(base, { recursive: true, force: true }));
   const deep = join(base, "a", "b", "c", "d");
   mkdirSync(deep, { recursive: true });
@@ -270,5 +275,48 @@ describe("normalizePathResource on a path that exists in full", () => {
       if (!dotted && path !== parse(base).root && existsSync(path))
         expect(calls, path).toBe(1);
     }
+  });
+});
+
+describe("normalizePathResource while a session is being set up", () => {
+  const base = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "piship-policy-glob-")),
+  );
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, "a", "b"), { recursive: true });
+  writeFileSync(join(base, "a", "b", "file"), "x");
+
+  it("asks the system once for a path that is resolved again and again, and afresh outside", async () => {
+    const path = join(base, "a", "b", "file");
+    const resolveAll = () => {
+      for (let index = 0; index < 5; index += 1)
+        normalizePathResource(path, { workspaceRoot: base });
+    };
+    const count = async (work: () => void | Promise<void>) => {
+      const spy = vi.spyOn(realpathSync, "native");
+      await work();
+      const calls = spy.mock.calls.length;
+      spy.mockRestore();
+      return calls;
+    };
+    expect(await count(resolveAll)).toBe(5);
+    expect(await count(() => duringStartup(async () => resolveAll()))).toBe(1);
+    expect(await count(resolveAll)).toBe(5);
+  });
+
+  it("does not carry an answer from one startup to the next, or to a running session", async () => {
+    const link = join(base, "link");
+    if (!trySymlink(join(base, "a"), link, "dir")) return;
+    const resolved = () =>
+      normalizePathResource(join(link, "b", "file"), { workspaceRoot: base });
+    await duringStartup(async () => {
+      expect(resolved()).toBe(toPosixPath(join(base, "a", "b", "file")));
+    });
+    // The link now leads elsewhere: the next resolution sees it.
+    rmSync(link);
+    mkdirSync(join(base, "c", "b"), { recursive: true });
+    writeFileSync(join(base, "c", "b", "file"), "y");
+    symlinkSync(join(base, "c"), link, "dir");
+    expect(resolved()).toBe(toPosixPath(join(base, "c", "b", "file")));
   });
 });

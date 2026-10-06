@@ -20,11 +20,11 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiShipError, type SecretStore, SecretValue } from "@piship/contracts";
-import type { UpdateRoot } from "@piship/schema";
 import {
   MemorySecretStore,
   RestrictedFileSecretStore,
 } from "@piship/credentials";
+import type { UpdateRoot } from "@piship/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deadPid } from "../../../tests/helpers/processes.js";
 import * as archiveModule from "./archive.js";
@@ -58,9 +58,9 @@ import {
   uninstallAndPurgeDistribution,
   uninstallDistribution,
 } from "./install/index.js";
-import { readStateMarker } from "./migration.js";
 import { acquireLock } from "./install/receipt.js";
 import { readTrustState, trustStatePath } from "./install/trust-state.js";
+import { readStateMarker } from "./migration.js";
 import {
   buildRelease,
   type CommandResult,
@@ -3208,7 +3208,7 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     const { aside } = await strewn();
     const before = readInstallReceipt(ID);
     const result = reclaimObsoleteVersions(ID);
-    expect(result.removed.sort()).toEqual([aside, "0.9.0"].sort());
+    expect([...result.removed].sort()).toEqual([aside, "0.9.0"].sort());
     expect(result.freedBytes).toBe(3500);
     expect(result.skipped).toEqual([]);
     expect(apps()).toEqual(["1.0.0", "1.1.0", "launch.mjs"]);
