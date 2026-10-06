@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -3312,6 +3313,68 @@ describe.runIf(HOST_EVIDENCED)("obsolete release directories", () => {
     expect(left).toBeLessThan(200);
     expect(reclaimObsoleteVersions(ID).remaining).toEqual([]);
     expect(existsSync(join(appsDir(), "0.8.0"))).toBe(false);
+  });
+
+  describe("a retained release an interrupted update set aside", () => {
+    /** Active 1.0.0 with rollback target 1.1.0, then the state a killed update leaves. */
+    async function interrupted(standIn: "missing" | "half-extracted") {
+      const { a, opts } = await fixture();
+      await installDistribution(a.archive);
+      await updateDistribution(ID, opts);
+      await rollbackDistribution(ID, { runCheck: fakeRun });
+      const retained = join(appsDir(), "1.1.0");
+      const before = treeHash(retained);
+      // The update renamed the receipt-named release aside, then was killed.
+      const aside = join(appsDir(), `.retained-1.1.0-${randomUUID()}`);
+      renameSync(retained, aside);
+      if (standIn === "half-extracted")
+        write(join(retained, PARTIAL_FILE), "{");
+      return { opts, retained, before, aside };
+    }
+
+    it.each(["missing", "half-extracted"] as const)(
+      "is moved back, not deleted, when the version directory is %s",
+      async (standIn) => {
+        const { opts, retained, before, aside } = await interrupted(standIn);
+        const result = reclaimObsoleteVersions(ID);
+        expect(result.restored).toEqual(["1.1.0"]);
+        expect(describeReclaimed(result)).toContain("Restored 1.1.0");
+        expect(treeHash(retained)).toEqual(before);
+        expect(existsSync(aside)).toBe(false);
+        expect(() => verifyPayload(retained)).not.toThrow();
+        // A half-extracted stand-in was set aside, and the next run removes it.
+        expect(reclaimObsoleteVersions(ID).restored).toEqual([]);
+        expect(apps().filter((name) => name.startsWith(".retained-"))).toEqual(
+          [],
+        );
+        // The release the receipt names is whole: the update reuses it.
+        expect(await updateDistribution(ID, opts)).toMatchObject({
+          status: "updated",
+          to: "1.1.0",
+        });
+      },
+    );
+
+    it("is deleted when the version directory stands as the receipt recorded it", async () => {
+      const { retained, aside } = await interrupted("missing");
+      cpSync(aside, retained, { recursive: true });
+      const result = reclaimObsoleteVersions(ID);
+      expect(result.restored).toEqual([]);
+      expect(result.removed).toEqual([basename(aside)]);
+      expect(() => verifyPayload(retained)).not.toThrow();
+    });
+
+    it("is left alone while a running session holds it", async () => {
+      const { aside } = await interrupted("missing");
+      const releaseLease = holdRuntimeLease(ID, "1.1.0");
+      try {
+        const result = reclaimObsoleteVersions(ID);
+        expect(result.restored).toEqual([]);
+        expect(existsSync(aside)).toBe(true);
+      } finally {
+        releaseLease();
+      }
+    });
   });
 
   it("does nothing while an update, rollback, or uninstall holds the installation", async () => {
