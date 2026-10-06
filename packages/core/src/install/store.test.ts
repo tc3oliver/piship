@@ -111,8 +111,10 @@ describe("what doctor says of the store", () => {
     expect(
       describeStoreMaintenance({
         collected: { ...collected, busy: true },
-        verified,
+        verified: { ...verified, damaged: ["x", "y"], repaired: 0 },
       }),
-    ).toContain("another collection is running");
+    ).toMatch(
+      /another collection is running.*Found 2 damaged file store objects/,
+    );
   });
 });

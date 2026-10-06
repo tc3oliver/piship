@@ -73,16 +73,19 @@ export interface MaintainedStore {
 }
 
 /**
- * Collect and verify the shared file store within a time budget. This is
+ * Collect and verify the shared file store, each within a time budget
+ * (`PISHIP_RECLAIM_BUDGET_MS`, else five seconds). This is
  * the only caller of either, and `doctor` the only caller of this: no launch,
  * install, update, or rollback does it. Undefined when there is no store.
  */
 export function maintainRuntimeStore(
   env: NodeJS.ProcessEnv = process.env,
-  budgetMs?: number,
 ): MaintainedStore | undefined {
   const root = storeRoot(env);
   if (!existsSync(root)) return undefined;
+  // The budget `doctor` gives the removal of obsolete releases, for each step.
+  const given = Number(env.PISHIP_RECLAIM_BUDGET_MS);
+  const budgetMs = Number.isFinite(given) && given > 0 ? given : undefined;
   const collected = collectStore({
     root,
     liveness: storeLiveness(),
@@ -90,7 +93,9 @@ export function maintainRuntimeStore(
   });
   const verified = verifyStore({
     root,
-    repair: true,
+    // Objects are published whole, so a damaged one is never a half-written
+    // one; it is still left alone while another operation holds the store.
+    repair: !collected.deferred && !collected.busy,
     ...(budgetMs ? { budgetMs } : {}),
   });
   return { collected, verified };
@@ -119,9 +124,13 @@ export function describeStoreMaintenance(
     parts.push(
       "Stopped collecting the file store at the time budget; run doctor again to continue.",
     );
-  if (verified.damaged.length > 0)
+  if (verified.repaired > 0)
     parts.push(
       `Removed ${verified.repaired} damaged file store object${verified.repaired === 1 ? "" : "s"}; the next install writes them again. Installed releases are unaffected.`,
+    );
+  else if (verified.damaged.length > 0)
+    parts.push(
+      `Found ${verified.damaged.length} damaged file store object${verified.damaged.length === 1 ? "" : "s"} and left them for the next doctor; an install never places a damaged object.`,
     );
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
