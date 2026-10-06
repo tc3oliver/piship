@@ -2,10 +2,8 @@
 // release directory, the launcher, the command shim, and the first receipt.
 import {
   chmodSync,
-  cpSync,
   existsSync,
   mkdirSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -48,7 +46,9 @@ import {
   type InstalledRelease,
 } from "./receipt.js";
 import { acquireLifecycleLock } from "./lifecycle-lock.js";
+import { copyTree, renameWithRetry } from "./files.js";
 import { launcherSource } from "./launcher.js";
+import { stopwatch } from "./timing.js";
 
 const INITIAL_INSTALL_SCHEMA = "piship-initial-install/v1";
 
@@ -206,6 +206,7 @@ export async function installDistribution(
       "Install the release .tar.gz archive with --sha256, or omit --sha256 for a release or payload directory",
     );
   const isRelease = isArchive || existsSync(join(source, "release.json"));
+  const lap = stopwatch();
   assertDisjointRoots();
   mkdirSync(installHome(), { recursive: true });
   const temporary = createStagingDirectory(installHome());
@@ -215,6 +216,8 @@ export async function installDistribution(
     let lock: DistributionLock;
     let info: InstalledRelease["release"];
     if (isRelease) {
+      // For an archive: its digest, from the one read that also unpacks the
+      // few metadata files, and the checks that bind them to the release.
       const verified = await verifyRelease(source, {
         requireTarget: true,
         extractTo: staging,
@@ -225,11 +228,14 @@ export async function installDistribution(
       payload = verified.payload;
       lock = verified.lock;
       info = releaseInfo(verified.metadata, verified.archiveSha256);
-    } else
+      lap("install digest and release metadata");
+    } else {
       lock = verifyPayloadContents(source, {
         requireTarget: true,
         verifyContents: false,
       });
+      lap("install payload metadata");
+    }
     const pinned = new Set(
       channelTrustFromLock(lock).map((key) => keyFingerprint(key.publicKey)),
     );
@@ -323,7 +329,7 @@ export async function installDistribution(
           // under an owned staging directory avoids thousands of deletes
           // before this retry can begin extracting the new payload.
           const abandoned = createStagingDirectory(installHome());
-          renameSync(apps, join(abandoned.path, "initial-app"));
+          renameWithRetry(apps, join(abandoned.path, "initial-app"));
         }
         if (existsSync(receiptPath(id))) {
           // The branded command has no uninstall, so name the installed
@@ -367,22 +373,29 @@ export async function installDistribution(
           { flag: "wx", mode: 0o600 },
         );
         syncTree(pending);
-        renameSync(pending, apps);
+        renameWithRetry(pending, apps);
         syncDirectory(dirname(apps));
         mkdirSync(dirname(commandPath), { recursive: true });
+        lap("install preflight");
         try {
+          // The version directory is not referenced until the receipt is
+          // written, so the payload is written straight into it: no second
+          // move of thousands of files, and an interruption leaves only an
+          // unreferenced directory.
           if (isArchive) {
             const expectedRoot = basename(source).replace(/\.tar\.gz$/, "");
             await extractArchive(source, target, {
               expectedRoot,
+              hash: false,
               mapEntry: (name) =>
                 name.startsWith(`${expectedRoot}/payload/`)
                   ? name.slice(`${expectedRoot}/payload/`.length)
                   : undefined,
             });
           } else if (payload.startsWith(`${staging}`))
-            renameSync(payload, target);
-          else cpSync(payload, target, { recursive: true });
+            renameWithRetry(payload, target);
+          else await copyTree(payload, target);
+          lap("install extract payload");
           writeFileSync(launcher, launcherSource(id));
           syncDirectory(dirname(apps));
           // A fresh install is the one point where a release lock sets the
@@ -390,6 +403,7 @@ export async function installDistribution(
           // install is replaced, never merged.
           if (trust) writeTrustState(trust);
           else removeTrustState(id);
+          lap("install launcher and trust state");
           const receipt: InstallReceipt = {
             schema: RECEIPT_SCHEMA,
             app: lock.app,
@@ -413,8 +427,10 @@ export async function installDistribution(
           if (!hold.stillHeld())
             throw new Error(`Initial install lock for ${id} was lost; retry`);
           writeReceipt(receipt);
+          lap("install receipt");
           writeShim(commandPath, launcher);
           syncDirectory(dirname(commandPath));
+          lap("install command shim");
           rmSync(installMarker(apps), { force: true });
           // The state belongs to this install now: installing again after an
           // uninstall must adopt it explicitly.
@@ -438,5 +454,6 @@ export async function installDistribution(
     }
   } finally {
     temporary.remove();
+    lap("install cleanup");
   }
 }

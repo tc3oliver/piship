@@ -1,5 +1,6 @@
 // Update sources: validating a directory or URL source and reading channel
 // files and release archives from it with size and time limits.
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, parseRetryAfter, redact } from "@piship/contracts";
@@ -27,16 +28,20 @@ function tooLarge(name: string, limit: number): PiShipError {
   );
 }
 
-/** Stream a response body into `destination`, stopping past `limit` bytes. */
+/**
+ * Stream a response body into `destination`, stopping past `limit` bytes.
+ * Returns the SHA-256 of what was written, computed while it streamed.
+ */
 async function saveBody(
   response: Response,
   destination: string,
   name: string,
   limit: number,
-): Promise<void> {
+): Promise<string> {
   const { Readable, Transform } = await import("node:stream");
   const { pipeline } = await import("node:stream/promises");
   const { createWriteStream } = await import("node:fs");
+  const digest = createHash("sha256");
   let received = 0;
   try {
     await pipeline(
@@ -44,11 +49,13 @@ async function saveBody(
       new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           received += chunk.length;
+          digest.update(chunk);
           callback(received > limit ? tooLarge(name, limit) : null, chunk);
         },
       }),
       createWriteStream(destination, { flags: "wx" }),
     );
+    return digest.digest("hex");
   } catch (error) {
     if (["TimeoutError", "AbortError"].includes((error as Error).name))
       throw new PiShipError(
@@ -351,14 +358,18 @@ export function checkSourceUrl(url: URL, transport?: UpdateTransport): void {
     );
 }
 
-/** Download a channel archive into `destination`, streaming, and check size and SHA-256. */
+/**
+ * Download a channel archive into `destination`, streaming, and check size and
+ * SHA-256 against the signed entry. Returns the verified digest, which the
+ * caller passes on instead of hashing the archive again.
+ */
 export async function downloadArchive(
   source: string,
   entry: ChannelRelease,
   destination: string,
   fetcher: typeof fetch = fetch,
   transport?: UpdateTransport,
-): Promise<void> {
+): Promise<string> {
   if (
     basename(entry.archive) !== entry.archive ||
     !entry.archive.endsWith(".tar.gz")
@@ -367,6 +378,7 @@ export async function downloadArchive(
       "INTEGRITY_FAILED",
       `Unsafe archive name ${entry.archive}`,
     );
+  let actual: string;
   if (isUrlSource(source)) {
     const url = new URL(
       entry.archive,
@@ -379,15 +391,15 @@ export async function downloadArchive(
       ARCHIVE_TIMEOUT_MS,
       transport,
     );
-    await saveBody(response, destination, entry.archive, entry.bytes);
+    actual = await saveBody(response, destination, entry.archive, entry.bytes);
   } else {
     const path = join(resolve(source), entry.archive);
     if (statSync(path).size > entry.bytes)
       throw tooLarge(entry.archive, entry.bytes);
     cpSync(path, destination);
+    actual = await sha256File(destination);
   }
   const size = statSync(destination).size;
-  const actual = await sha256File(destination);
   if (size !== entry.bytes || actual !== entry.sha256)
     throw new PiShipError(
       "INTEGRITY_FAILED",
@@ -397,4 +409,5 @@ export async function downloadArchive(
           "Do not install it; report the update source to the distribution owner",
       },
     );
+  return actual;
 }

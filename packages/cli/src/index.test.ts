@@ -627,6 +627,24 @@ describe("file system errors", () => {
     expect(result.stderr).toContain("Action: Install the release .tar.gz");
   });
 
+  it("warns before installing a local build, and verify-release names it unqualified", async () => {
+    const build = join(temp, "dist", "mypi");
+    mkdirSync(join(build, "metadata"), { recursive: true });
+    writeFileSync(join(build, "metadata", "inventory.json"), "{}\n");
+    const installed = await run(["install", build]);
+    expect(installed.stderr).toContain(
+      `Warning: ${build} is an unqualified local build, not a release`,
+    );
+    const verified = await run(["verify-release", build]);
+    expect(verified.status).toBe(1);
+    expect(verified.stderr).toContain("unqualified local build, not a release");
+    expect(verified.stderr).toContain("Action: Run piship release");
+    // A directory that is no build at all gets no such warning.
+    const other = join(temp, "other");
+    mkdirSync(other);
+    expect((await run(["install", other])).stderr).not.toContain("Warning:");
+  });
+
   it("refuses malformed install checks before touching the source", async () => {
     const missing = join(temp, "missing");
     const digest = await run(["install", missing, "--sha256", "xyz"]);
