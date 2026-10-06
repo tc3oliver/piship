@@ -616,9 +616,32 @@ interface SentinelOutcome {
 }
 
 /**
+ * Sleep `ms` of time the event loop was responsive. A stretch where the loop
+ * was blocked (a busy host, a backend that works synchronously in this
+ * process) counts for at most twice a polling step, so it cannot make the
+ * wait elapse before the backend's own pending work, queued ahead of the
+ * wait, has had a turn to run.
+ */
+async function sleepResponsive(ms: number): Promise<void> {
+  const step = Math.min(50, ms);
+  let counted = 0;
+  let last = Date.now();
+  while (counted < ms) {
+    await sleep(Math.min(step, ms - counted));
+    const now = Date.now();
+    counted += Math.min(now - last, step * 2);
+    last = now;
+  }
+}
+
+/**
  * Wait until a command is running: shortly after its first line arrives, or
  * after a fixed time for a backend that returns output only when the
- * command ends. False when the command already ended.
+ * command ends. False when the command already ended. The fixed time counts
+ * only while the event loop is responsive: a stall right after start() must
+ * not abort a command the backend has not yet been given a turn to start,
+ * which would test cancellation before start, not the timeout or dispose
+ * this wait is for.
  */
 async function whileRunning(execution: Execution): Promise<boolean> {
   let ended = false;
@@ -627,7 +650,7 @@ async function whileRunning(execution: Execution): Promise<boolean> {
   });
   await Promise.race([
     execution.saw("started").then(() => sleep(RUNNING_MS)),
-    sleep(RUNNING_MS * 3),
+    sleepResponsive(RUNNING_MS * 3),
   ]);
   return !ended;
 }

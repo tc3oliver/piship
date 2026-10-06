@@ -273,7 +273,18 @@ interface ReferenceOptions {
    * is aborted or its sandbox disposed, so the kit passes it.
    */
   readonly slowStart?: boolean;
+  /**
+   * Block this process's event loop for `STALL_MS` as each command that
+   * writes a marker is being started, as a busy host (or a backend that works
+   * synchronously in the kit's process) does. A kit that times its first
+   * wait on the wall clock aborts the command before the backend has had a
+   * turn to start it.
+   */
+  readonly stallStart?: boolean;
 }
+
+/** How long the event loop is blocked, for `stallStart`: longer than the kit's wait for a command that prints nothing. */
+const STALL_MS = 800;
 
 /** How long a service under load takes to start a command, for `slowStart`. */
 const LATE_START_MS = 1_700;
@@ -550,6 +561,13 @@ function referenceAdapter(options: ReferenceOptions) {
       io: SandboxExecIO,
     ): Promise<SandboxExecResult> => {
       if (session.disposed) throw new Error("the sandbox session is closed");
+      if (options.stallStart && writesMarker(request.command)) {
+        // Stall in a later turn of the event loop. The round trip below is
+        // then queued behind the kit's timers, which are due by the time it
+        // runs, as they are when the loop was busy elsewhere.
+        await new Promise((resolve) => setImmediate(resolve));
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, STALL_MS);
+      }
       // A round trip to the service before the command starts.
       await new Promise((resolve) => setImmediate(resolve));
       const late = fault ? LATE_FAULTS[fault] : undefined;
@@ -1517,6 +1535,18 @@ describeIsolated(isolator)(
     it.concurrent("passes a reference that starts a command late, and gives up on it when it is aborted or disposed", async () => {
       const report = await run({ variant: "shared", slowStart: true });
       expect(statuses(report)).toEqual(expected.shared);
+    }, 120_000);
+
+    it.concurrent('fails only "ignores cancellation" when the event loop stalls as a command starts', async () => {
+      const report = await run({
+        variant: "shared",
+        fault: "ignores cancellation",
+        stallStart: true,
+      });
+      expect(statuses(report)).toEqual({
+        ...expected.shared,
+        cancellation: "failed",
+      });
     }, 120_000);
 
     it.concurrent.each(seeds)(
