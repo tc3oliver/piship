@@ -129,13 +129,14 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       expect(server.class).toBe("company");
       expect(server.exposure).toBe("direct");
     }
-    // Absent cacheWarming is off now: the one effective change.
+    // Absent cacheWarming is off now, and an absent release.bundle is on.
     expect(after.runtime.cacheWarming).toEqual({
       mode: "off",
       userOverride: false,
     });
     expect(plan.effective).toEqual([
       expect.stringContaining("runtime.cacheWarming"),
+      expect.stringContaining("release.bundle and release.strip"),
     ]);
     // Absent data stays absent: no retention sweep.
     expect(after.data).toBeUndefined();
@@ -150,7 +151,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       "policy:\n  resourceTrust: { company: deny }\n",
     );
     const plan = migrateManifestSource(narrowed);
-    expect(plan.effective).toHaveLength(4);
+    expect(plan.effective).toHaveLength(5);
     for (const id of ["docs", "issues", "notes"])
       expect(plan.effective).toContainEqual(
         expect.stringContaining(
@@ -208,6 +209,7 @@ describe("piship/v1alpha5 -> piship/v1alpha6", () => {
       ]);
       expect(plan.effective).toEqual([
         expect.stringContaining("runtime.cacheWarming"),
+        expect.stringContaining("release.bundle and release.strip"),
       ]);
     });
 

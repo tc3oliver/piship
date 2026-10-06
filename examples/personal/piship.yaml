@@ -89,8 +89,10 @@ updates:
   rollback: true
 
 release:
-  # Fewer, smaller files to install and scan, and a faster start. A bundled
-  # payload cannot build other distributions (docs/performance.md).
+  # Both are on by default in piship/v1alpha6 and written out here so the
+  # example shows the choice. Fewer, smaller files to install and scan, and a
+  # faster start; a bundled payload cannot build other distributions
+  # (docs/performance.md). Set either to false for the unbundled layout.
   strip: true
   bundle: true
   targets: [linux-x64, darwin-arm64, win32-x64]

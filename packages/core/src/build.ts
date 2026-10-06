@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
-import { readManifest } from "@piship/schema";
+import { readManifest, releaseOptions } from "@piship/schema";
 import { bundleDistribution } from "./bundle.js";
 import {
   buildCacheKeys,
@@ -254,8 +254,10 @@ export function buildDistribution(
     );
   const output = join(outputRoot, lock.app.id);
   const manifest = readManifest(manifestPath);
-  const strip = manifest.lifecycle?.release.strip === true;
-  const wantsBundle = manifest.lifecycle?.release.bundle === true;
+  const { strip, bundle: wantsBundle } = releaseOptions(
+    manifest.schema,
+    manifest.lifecycle?.release,
+  );
   const deferred = wantsBundle && options.deferBundle === true;
   const bundling = wantsBundle && options.bundle !== false && !deferred;
   // A cache built for another strip setting would place the wrong files.

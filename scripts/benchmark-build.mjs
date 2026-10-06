@@ -141,7 +141,7 @@ for (const bundled of [false, true]) {
       .replace(/^ {2}(strip|bundle): .*\n/gm, "")
       .replace(
         "\nrelease:\n",
-        `\nrelease:\n  strip: true\n${bundled ? "  bundle: true\n" : ""}`,
+        `\nrelease:\n  strip: true\n  bundle: ${bundled}\n`,
       );
     writeFileSync(manifest, source);
     console.log(

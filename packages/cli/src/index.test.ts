@@ -1073,8 +1073,9 @@ describe("migrate --check", () => {
     expect(result.stdout).toContain(
       "Migration check piship/v1alpha5 -> piship/v1alpha6",
     );
-    expect(result.stderr).toContain("would change 1 effective decision(s)");
+    expect(result.stderr).toContain("would change 2 effective decision(s)");
     expect(result.stderr).toContain("runtime.cacheWarming");
+    expect(result.stderr).toContain("release.bundle and release.strip");
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
