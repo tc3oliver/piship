@@ -21,6 +21,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
+import { JobPool } from "./job-pool.js";
 
 export interface ArchiveResult {
   readonly path: string;
@@ -33,6 +34,8 @@ export interface ExtractResult {
   readonly root: string;
   readonly entries: number;
   readonly bytes: number;
+  /** SHA-256 of the archive file, computed from the read that extracted it (unless `hash` is false). */
+  readonly sha256?: string;
 }
 
 const BLOCK = 512;
@@ -42,6 +45,15 @@ const OCTAL_12_MAX = 8 ** 11 - 1;
 const MAX_PAX_BYTES = 1 << 20;
 const DEFAULT_MAX_BYTES = 2 * 1024 ** 3;
 const DEFAULT_MAX_ENTRIES = 200_000;
+/**
+ * Extraction is bound by per-file latency (create, write, close, and on
+ * Windows the scanner's work at each close), not by bandwidth, so files are
+ * written by several writers at once.
+ */
+const WRITE_CONCURRENCY = 8;
+/** Files up to this size are buffered and written by a pooled writer; larger files stream in order. */
+const BUFFERED_FILE_MAX = 1 << 20;
+const INFLATE_CHUNK = 1 << 18;
 const WINDOWS = process.platform === "win32";
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
@@ -435,6 +447,14 @@ type ParserState =
       readonly pad: number;
       readonly global: boolean;
     }
+  | {
+      readonly kind: "buffered";
+      readonly data: Buffer;
+      filled: number;
+      readonly output: string;
+      readonly mode: number;
+      readonly pad: number;
+    }
   | { readonly kind: "skip"; remaining: number }
   | { readonly kind: "end" };
 
@@ -446,6 +466,10 @@ export async function extractArchive(
     readonly expectedRoot?: string;
     readonly maxBytes?: number;
     readonly maxEntries?: number;
+    /** Hash the archive while reading it (default true). */
+    readonly hash?: boolean;
+    /** How many files are written at once (default 8). */
+    readonly concurrency?: number;
     /** Map validated archive paths to relative output paths; undefined skips writing. */
     readonly mapEntry?: (
       path: string,
@@ -456,6 +480,7 @@ export async function extractArchive(
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
   const maxHeaders = maxEntries * 3 + 16;
+  const concurrency = Math.max(1, options.concurrency ?? WRITE_CONCURRENCY);
   const target = resolve(destination);
   let created = false;
   try {
@@ -481,12 +506,43 @@ export async function extractArchive(
   const block = Buffer.alloc(BLOCK);
   let blockFilled = 0;
   const seen = new Set<string>();
-  const directories = new Set<string>([target]);
+  const directories = new Map<string, Promise<void>>([
+    [target, Promise.resolve()],
+  ]);
 
-  const ensureDirectory = async (dir: string): Promise<void> => {
-    if (directories.has(dir)) return;
-    await mkdir(dir, { recursive: true, mode: 0o755 });
-    directories.add(dir);
+  // Each directory is made once, after its parent, by a single mkdir. A
+  // directory creates or is awaited inside a writer job, which owns the
+  // failure.
+  const ensureDirectory = (dir: string): Promise<void> => {
+    let made = directories.get(dir);
+    if (made === undefined) {
+      made = ensureDirectory(dirname(dir)).then(() =>
+        mkdir(dir, { recursive: true, mode: 0o755 }).then(() => undefined),
+      );
+      directories.set(dir, made);
+    }
+    return made;
+  };
+
+  // The parser waits for a free writer, so buffered file data is bounded, and
+  // stops at the first failure of any writer.
+  const writers = new JobPool(concurrency);
+  const dispatch = (job: () => Promise<void>): Promise<void> =>
+    writers.run(job);
+
+  const writeBuffered = async (
+    output: string,
+    data: Buffer,
+    mode: number,
+  ): Promise<void> => {
+    await ensureDirectory(dirname(output));
+    const file = await open(output, "wx", mode);
+    try {
+      if (data.length > 0) await file.writeFile(data);
+      if (!WINDOWS) await file.chmod(mode);
+    } finally {
+      await file.close();
+    }
   };
 
   const finishFile = async (pad: number): Promise<void> => {
@@ -583,15 +639,33 @@ export async function extractArchive(
     if (directory) {
       if (size !== 0)
         throw new Error(`Corrupt archive: directory with data: ${path}`);
-      await ensureDirectory(output);
+      await dispatch(() => ensureDirectory(output));
       return;
     }
     const mode = (octalField(block, 100, 8) & 0o111) !== 0 ? 0o755 : 0o644;
+    if (size <= BUFFERED_FILE_MAX) {
+      state = {
+        kind: "buffered",
+        data: Buffer.allocUnsafe(size),
+        filled: 0,
+        output,
+        mode,
+        pad: padding(size),
+      };
+      if (size === 0) await endBuffered();
+      return;
+    }
     await ensureDirectory(dirname(output));
     handle = await open(output, "wx", mode);
     if (!WINDOWS) await handle.chmod(mode);
     state = { kind: "file", remaining: size, pad: padding(size) };
-    if (size === 0) await finishFile(padding(size));
+  };
+
+  const endBuffered = async (): Promise<void> => {
+    if (state.kind !== "buffered") return;
+    const { data, output, mode, pad } = state;
+    state = pad > 0 ? { kind: "skip", remaining: pad } : { kind: "header" };
+    await dispatch(() => writeBuffered(output, data, mode));
   };
 
   const endPax = async (): Promise<void> => {
@@ -639,6 +713,14 @@ export async function extractArchive(
           if (state.remaining === 0) await finishFile(state.pad);
           break;
         }
+        case "buffered": {
+          const count = Math.min(state.data.length - state.filled, available);
+          chunk.copy(state.data, state.filled, offset, offset + count);
+          state.filled += count;
+          offset += count;
+          if (state.filled === state.data.length) await endBuffered();
+          break;
+        }
         case "pax": {
           const count = Math.min(state.data.length - state.filled, available);
           chunk.copy(state.data, state.filled, offset, offset + count);
@@ -660,27 +742,50 @@ export async function extractArchive(
 
   try {
     // Surface the parser's own error rather than the stream abort it causes.
-    let failure: unknown;
+    let parseFailure: unknown;
+    const digest = options.hash === false ? undefined : createHash("sha256");
+    let read = false;
     await pipeline(
-      createReadStream(archive),
-      createGunzip(),
+      createReadStream(archive, { highWaterMark: CHUNK }),
+      // The digest comes from the bytes this extraction reads, so the archive
+      // is not read a second time to hash it.
+      async function* (source: AsyncIterable<Buffer>) {
+        for await (const chunk of source) {
+          digest?.update(chunk);
+          yield chunk;
+        }
+        read = true;
+      },
+      createGunzip({ chunkSize: INFLATE_CHUNK }),
       async (source: AsyncIterable<Buffer>) => {
         try {
           for await (const chunk of source) await consume(chunk);
+          await writers.finish();
         } catch (error) {
-          failure = error;
+          parseFailure = error;
           throw error;
         }
       },
     ).catch((error: unknown) => {
-      throw failure ?? error;
+      throw parseFailure ?? error;
     });
     if ((state as ParserState).kind !== "end")
       throw new Error("Corrupt archive: unexpected end of archive");
     if (root === undefined || entries === 0)
       throw new Error("Archive has no entries");
-    return { root, entries, bytes };
+    return {
+      root,
+      entries,
+      bytes,
+      ...(digest
+        ? {
+            sha256: read ? digest.digest("hex") : await sha256File(archive),
+          }
+        : {}),
+    };
   } catch (error) {
+    // Writers still running would recreate what the removal below deletes.
+    await writers.drain();
     await handle?.close().catch(() => undefined);
     if (created) rmSync(target, { recursive: true, force: true });
     else

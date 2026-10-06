@@ -1939,6 +1939,19 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       `acmepi-1.0.0-${target}.tar.gz`,
       `acmepi-1.0.0-${target}.tar.gz.sha256`,
     ]);
+    // The shipped installers go straight to `install`, which binds the
+    // release's metadata and target. Hashing every payload file belongs to
+    // `verify-release`, which the installers only point to.
+    for (const script of ["install.sh", "install.ps1"]) {
+      const text = readFileSync(join(first.directory, script), "utf8");
+      const commands = text
+        .split("\n")
+        .filter((line) => /^node /.test(line))
+        .map((line) => line.replace(/^node .*piship\.mjs"? /, ""));
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatch(/^install "\$here"/);
+      expect(text).toContain("verify-release");
+    }
     const checksums = readFileSync(
       join(first.directory, "checksums.txt"),
       "utf8",
@@ -2176,6 +2189,61 @@ describe.runIf(HOST_EVIDENCED)("buildRelease output", () => {
       await expect(
         verifyRelease(built.archive, { expectedSha256: "f".repeat(64) }),
       ).rejects.toThrow(/does not match the expected/);
+    });
+  });
+
+  describe("the install check binds the archive to its digest without a second hash", () => {
+    const fast = { fastClient: true, metadataOnly: true } as const;
+    it("hashes the bytes the extraction reads, and reports the digest", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const verified = await verifyRelease(built.archive, fast);
+      expect(verified.archiveSha256).toBe(built.sha256);
+      verified.cleanup();
+    });
+    it("checks a digest the caller computed against the expected one", async () => {
+      const { path } = project();
+      const built = await build(path);
+      const verified = await verifyRelease(built.archive, {
+        ...fast,
+        expectedSha256: built.sha256,
+        archiveSha256: built.sha256,
+      });
+      expect(verified.archiveSha256).toBe(built.sha256);
+      verified.cleanup();
+      const error = await rejection(
+        verifyRelease(built.archive, {
+          ...fast,
+          expectedSha256: built.sha256,
+          archiveSha256: "0".repeat(64),
+        }),
+      );
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(/does not match the expected/);
+    });
+    it("checks the expected digest before the archive is parsed", async () => {
+      const { path } = project();
+      const built = await build(path);
+      flipByte(built.archive);
+      // The flipped archive would fail to inflate; the digest check comes first.
+      const error = await rejection(
+        verifyRelease(built.archive, {
+          ...fast,
+          expectedSha256: built.sha256,
+        }),
+      );
+      expect(error.message).toMatch(/does not match the expected/);
+    });
+    it("rejects a sidecar that disagrees with the bytes read", async () => {
+      const { path } = project();
+      const built = await build(path);
+      writeFileSync(
+        `${built.archive}.sha256`,
+        `${"0".repeat(64)}  ${basename(built.archive)}\n`,
+      );
+      const error = await rejection(verifyRelease(built.archive, fast));
+      expect(error.code).toBe("INTEGRITY_FAILED");
+      expect(error.message).toMatch(/does not match .*\.tar\.gz\.sha256/);
     });
   });
 });
@@ -2671,6 +2739,16 @@ describe.runIf(HOST_EVIDENCED)("signed channels", () => {
       fetcher,
     );
     expect(readFileSync(out).length).toBe(entry.bytes);
+    // The digest comes from the stream that wrote the file, and is returned.
+    const streamed = join(temp(), entry.archive);
+    expect(
+      await downloadArchive(
+        "https://updates.example.test/acmepi",
+        entry,
+        streamed,
+        fetcher,
+      ),
+    ).toBe(entry.sha256);
   });
 
   it("follows redirects only within the source origin, honors 429 Retry-After, and names a clock that is ahead", async () => {
