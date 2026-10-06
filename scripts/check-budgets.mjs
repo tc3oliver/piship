@@ -75,9 +75,7 @@ function main() {
   const budgetFile = join(root, "scripts", "performance-budgets.json");
   const only = option(
     "--only",
-    args.includes("--developer")
-      ? "personal,managed,developer"
-      : "managed",
+    args.includes("--developer") ? "personal,managed,developer" : "managed",
   )
     .split(",")
     .filter(Boolean);
