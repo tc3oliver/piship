@@ -6,17 +6,17 @@
       "personal": {
         "payloadFiles": 125,
         "installedFiles": 127,
-        "archiveBytes": 10324976
+        "archiveBytes": 10330699
       },
       "managed": {
         "payloadFiles": 116,
         "installedFiles": 118,
-        "archiveBytes": 7250826
+        "archiveBytes": 7254041
       },
       "developer": {
         "payloadFiles": 8292,
         "installedFiles": 8294,
-        "archiveBytes": 41853783
+        "archiveBytes": 41857044
       }
     }
   }

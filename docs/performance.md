@@ -59,7 +59,7 @@ Pi package closures: 0 of 6 bundled; vendored: pi-code (entry-imports-entry, typ
 Pi package dependencies: 3 shared (716 fewer files); copies kept: no-exports 38, has-dependencies 37, single-copy 22, ...
 ```
 
-On the developer example (macOS, `piship build`) the payload goes from 9,007 to 8,292 files and its archive from 43.8 MB to 42.0 MB (the release archive, `scripts/benchmark-footprint.mjs --release`, on the same example: 43,783,864 to 41,958,539 bytes). Three dependencies are shared: zod (three copies, 592 files each, 157 kept per place), content-type 2.1.0 (six copies), and eventsource-parser. What remains is mostly dependencies that have dependencies of their own (the MCP SDK and the express stack under it, 37 packages), or no `exports` map (38 packages), where sharing would need the closure-level store of the next milestone. The step costs about 2.4 s of a cold developer build on this machine; a distribution without Pi packages pays nothing.
+On the developer example (macOS, `piship build`) the payload goes from 9,007 to 8,292 files and its archive from 43.8 MB to 42.0 MB (the archive of a qualified `piship release` of the same example: 43,783,864 to 41,958,539 bytes). Three dependencies are shared: zod (three copies, 592 files each, 157 kept per place), content-type 2.1.0 (six copies), and eventsource-parser. What remains is mostly dependencies that have dependencies of their own (the MCP SDK and the express stack under it, 37 packages), or no `exports` map (38 packages), where sharing would need the closure-level store of the next milestone. The step reads every vendored closure and candidate dependency (a few esbuild runs, started together) and costs about 1.0 s of a developer build on this machine; a distribution without Pi packages pays nothing. [The measurement below](#measuring-the-footprint) has the build, install, and start timings before and after.
 
 ## Measuring the footprint
 
@@ -82,6 +82,25 @@ node scripts/benchmark-footprint.mjs --root $checkoutPath --out $out --label can
 The timings it prints are macOS or whatever machine ran it; none is a Windows result unless it ran there, and a single run on a hosted runner supports no claim of improvement. The managed distribution cannot start headlessly without a sign-in, so its start is recorded as an error, not a time. Build timings include `npm ci` of the vendored packages and so depend on the npm cache.
 
 The deterministic figures are also budgeted. `scripts/performance-budgets.json` records, per platform and distribution, the payload files, installed files, and payload archive bytes; `npm run check:budgets` builds the personal and managed examples (about a minute, mostly the search-tool archives it fetches from GitHub once) and fails when a figure is more than 10% over its budget; one more than 10% under is reported so the budget can be tightened. It runs in the CI check job on every pull request. The developer example needs the registry, so `npm run check:budgets -- --developer` runs in the nightly Portable E2E workflow and Release qualification instead. `-- --record` rewrites the budget of the current platform from a fresh measurement, which is how a reviewer accepts a deliberate increase. A platform with no recorded budget says so and passes. Timings are never gated by a pull request: a median start that regresses more than 5%, or a build, install, or release that regresses more than 10%, is judged from the manual benchmark and needs an explanation in the pull request.
+
+### Footprint results, v0.10.0 baseline against this change
+
+`scripts/benchmark-footprint.mjs --runs 2 --startup`, forward order, and once more in the reverse order, on macOS 27 (Apple M4 Max), Node 24.21.0, warm npm and OS caches, with other work running on the machine, so a difference of a few percent is noise. The baseline is `8b3c278`, the commit this change started from. None of it is a Windows result.
+
+| Developer example | Baseline | After | Change |
+| --- | --- | --- | --- |
+| Payload files | 9,007 | 8,292 | -715 (-7.9%) |
+| Installed files | 9,009 | 8,294 | -715 |
+| Payload bytes | 201.2 MB | 190.3 MB | -5.4% |
+| Payload archive | 43.69 MB | 41.86 MB | -4.2% |
+| Cold build (`--rebuild`) | 5.0 s | 6.0 s | +1.0 s |
+| Warm build (runtime cache hit) | 4.0 s | 5.0 s | +1.0 s |
+| Unchanged rebuild (build stamp) | 0.16 s | 0.16 s | |
+| `piship install` of the payload | 0.88 s | 0.83 s | -5% |
+| First `--smoke` start | 3.64 s | 3.61 to 3.71 s | |
+| Warm `--smoke` start | 2.45 s | 2.39 s | |
+
+The reverse-order runs agree with the forward ones to within about 2% on every row. The build gains a second because the step reads the vendored closures; nothing in a launch changes, and the installed payload has 715 fewer files to create and scan. The personal example's payload file count, install time, and start are unchanged (125 files, 0.37 s, 0.54 s warm); its archive is 0.5% larger (10.28 to 10.33 MB) and the managed reference's 0.7% (7.20 to 7.25 MB) because the compiled sharing and bundling code travels in the authoring snapshot. A qualified `piship release` of the developer example before and after has the same `piship.lock`, SBOM (358 packages), and notices, and the same payload with the files above removed; a cold release and a release from a warm runtime cache have identical payloads.
 
 ## Reproduce on Windows
 
