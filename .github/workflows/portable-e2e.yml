@@ -40,6 +40,7 @@ jobs:
     # cached package metadata instead of revalidating it with the registry.
     env:
       npm_config_prefer_offline: "true"
+      PISHIP_REQUIRE_BROWSER: "1"
     steps:
       # Windows runners are ephemeral VMs whose C: drive is slow for the many
       # small files npm writes. Skip Defender scanning and keep temp output and
@@ -89,6 +90,28 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends gnome-keyring dbus dbus-x11 libsecret-tools
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
+      - name: Verify headless Chrome
+        if: runner.os == 'Linux' && matrix.shard == 1
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, appendFileSync, mkdtempSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const candidates = [process.env.CHROME_PATH,
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium', '/usr/bin/chromium-browser',
+            join(process.env.PROGRAMFILES ?? 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            join(process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe')];
+          const chrome = candidates.find(path => path && existsSync(path));
+          if (!chrome) throw new Error('Portable browser qualification requires Google Chrome');
+          console.log(execFileSync(chrome, ['--version'], {encoding: 'utf8', timeout: 30_000}));
+          const profile = mkdtempSync(join(process.env.RUNNER_TEMP, 'piship-chrome-preflight-'));
+          const page = execFileSync(chrome, ['--headless', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, '--dump-dom', 'about:blank'], {encoding: 'utf8', timeout: 60_000});
+          if (!page.includes('<html')) throw new Error('Headless Chrome did not render the blank page');
+          appendFileSync(process.env.GITHUB_ENV, `CHROME_PATH=${chrome}\n`);
+          NODE
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code

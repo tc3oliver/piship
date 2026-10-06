@@ -80,8 +80,11 @@ async function session(options) {
     sessionManager: pi.SessionManager.inMemory(workspace),
     resourceLoader,
   });
-  await created.bindExtensions({});
-  return { session: created, resourceLoader };
+  const extensionErrors = [];
+  await created.bindExtensions({
+    onError: (error) => extensionErrors.push(error),
+  });
+  return { session: created, resourceLoader, extensionErrors };
 }
 
 if (mode === "permissions") {
@@ -198,7 +201,7 @@ if (mode === "permissions") {
 } else if (mode === "browser") {
   // pi-browser-use starts chrome-devtools-mcp and a headless Chrome at
   // session_start and registers its tools then.
-  const { session: probed } = await session({
+  const { session: probed, extensionErrors } = await session({
     additionalExtensionPaths: packageExtensions("pi-browser-use"),
   });
   const registered = () =>
@@ -218,6 +221,8 @@ if (mode === "permissions") {
   } catch {
     // The tools are what is reported.
   }
-  console.log(JSON.stringify({ node: process.version, tools }));
+  console.log(
+    JSON.stringify({ node: process.version, tools, errors: extensionErrors }),
+  );
 } else throw new Error(`unknown mode ${mode}`);
 process.exit(0);

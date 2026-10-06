@@ -714,15 +714,34 @@ describe("pi-browser-use", () => {
     return candidates.find((path) => path && existsSync(path));
   }
 
-  it.skipIf(!chrome())(
+  it.skipIf(!chrome() && process.env.PISHIP_REQUIRE_BROWSER !== "1")(
     `starts chrome-devtools-mcp and registers its browser tools on Node ${process.versions.node}`,
     () => {
+      const executablePath = chrome();
+      expect(
+        executablePath,
+        "Browser qualification requires installed Chrome or CHROME_PATH",
+      ).toBeDefined();
       const where = area("browser");
-      const result = probed<{ tools: string[] }>(
+      // Configure the isolated fixture's own user scope so the package starts
+      // exactly the Chrome that the test discovered, explicitly headless.
+      const settings = join(where.home, ".pi", "agent", "settings.json");
+      mkdirSync(join(where.home, ".pi", "agent"), { recursive: true });
+      writeFileSync(
+        settings,
+        JSON.stringify({
+          "pi-browser-use": { executablePath, headless: true },
+        }),
+      );
+      const result = probed<{ tools: string[]; errors: unknown[] }>(
         where,
         "browser",
         where.workspace,
       );
+      expect(
+        result.errors,
+        `Browser extension startup errors (Chrome: ${executablePath})`,
+      ).toEqual([]);
       expect(result.tools).toEqual(
         expect.arrayContaining([
           "browser_navigate_page",
