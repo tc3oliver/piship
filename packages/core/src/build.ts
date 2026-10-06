@@ -12,7 +12,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { createTemporaryDirectory, debugTiming } from "@piship/contracts";
 import { readManifest, releaseOptions } from "@piship/schema";
-import { bundleDistribution } from "./bundle.js";
+import { authoringBuildInput } from "./authoring-input.js";
+import { startBackgroundProcess } from "./background-process.js";
 import {
   buildCacheKeys,
   buildCachePath,
@@ -20,8 +21,10 @@ import {
   refreshCachedDistribution,
   writeBuildCache,
 } from "./build-cache.js";
+import { bundleDistribution } from "./bundle.js";
 import { launcherSource, portableCliSource } from "./launcher-source.js";
 import { requireCurrentLock } from "./lock.js";
+import { removeTree } from "./parallel-files.js";
 import {
   inventory,
   removeForeignPlatformPackages,
@@ -31,6 +34,7 @@ import {
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
 import { checkPackageSources } from "./release/index.js";
+import { renameWithRetry } from "./rename-retry.js";
 import {
   adoptInstallTree,
   discardInstallTree,
@@ -45,14 +49,11 @@ import {
   runtimeCacheFor,
   writeFrameworkFiles,
 } from "./runtime-cache.js";
-import { startBackgroundProcess } from "./background-process.js";
-import { removeTree } from "./parallel-files.js";
-import { renameWithRetry } from "./rename-retry.js";
+import { workspacePackages } from "./runtime-dependencies.js";
 import { stageSearchTools } from "./search-tools/index.js";
-import { buildInput, workspacePackages } from "./runtime-dependencies.js";
 import {
-  sweepOutputStaging,
   type OutputStagingOptions,
+  sweepOutputStaging,
 } from "./temporary-directories.js";
 
 /**
@@ -90,6 +91,7 @@ function installRuntime(
   framework: boolean,
   meanwhile: { readonly run: () => void; readonly overlap: boolean },
 ): void {
+  const buildInput = authoringBuildInput();
   let phase = process.hrtime.bigint();
   copyFileSync(join(buildInput, "package.json"), join(stage, "package.json"));
   copyFileSync(
@@ -396,10 +398,7 @@ export function buildDistribution(
 ): string {
   const lock = requireCurrentLock(manifestPath);
   if (options.supplyChainGates !== false) checkPackageSources(lock, "Build");
-  if (!existsSync(join(buildInput, "packages", "core", "dist")))
-    throw new Error(
-      "This bundled payload contains runtime management commands only. Build distributions from the PiShip source checkout.",
-    );
+  const buildInput = authoringBuildInput();
   const output = join(outputRoot, lock.app.id);
   const manifest = readManifest(manifestPath);
   const { strip, bundle: wantsBundle } = releaseOptions(

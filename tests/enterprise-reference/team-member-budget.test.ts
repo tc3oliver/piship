@@ -81,22 +81,50 @@ describe("team-member budgets in the pinned LiteLLM (live reference stack)", () 
     const keysA = [await teamKey(memberA), await teamKey(memberA)] as const;
     const keyB = await teamKey(memberB);
 
-    // Member A alternates two keys (200 words, about $0.00044 a request)
-    // until the gateway refuses.
+    let successfulCost = 0;
+    const settledMemberSpend = async () => {
+      await poll("settled team-member spend", async () => {
+        const info = await stack.admin(`/team/info?team_id=${teamId}`);
+        expect(info.status).toBe(200);
+        const rows = (
+          info.body as {
+            team_memberships: { user_id: string; spend: number }[];
+          }
+        ).team_memberships;
+        const spend = rows.find((row) => row.user_id === memberA)?.spend ?? 0;
+        return Math.abs(spend - successfulCost) < 1e-9 ? spend : undefined;
+      });
+    };
+
+    // Member A alternates two keys (200 words, about $0.00044 a request).
     let passed = 0;
     let refusal: Awaited<ReturnType<ReferenceStack["chat"]>> | undefined;
-    for (; passed < 20; passed += 1) {
+    for (let attempts = 0; attempts < 20; attempts += 1) {
       const response = await stack.chat(keysA[passed % 2 === 0 ? 0 : 1], {
         words: 200,
       });
       if (response.status !== 200) {
+        expect(response.status).toBe(429);
+        expect(errorType(response)).toBe("budget_exceeded");
+        expect(response.scrubbed).toContain(`TeamMember=${memberA}:${teamId}`);
+        // Admission includes outstanding reservations. CI refused after only
+        // $0.00132 of accepted calls; that is temporary, not budget exhaustion.
+        // Wait for actual spend before continuing or checking a new key, so
+        // persisted membership state also proves exhaustion.
+        await settledMemberSpend();
+        if (successfulCost < MEMBER_BUDGET) continue;
         refusal = response;
         break;
       }
+      passed += 1;
+      const cost = Number(response.headers["x-litellm-response-cost"]);
+      expect(Number.isFinite(cost) && cost > 0).toBe(true);
+      successfulCost += cost;
     }
     // The personal budget (0.0005) was passed after two requests and did not
     // stop the team keys; the team-member budget (0.002) did.
     expect(passed).toBeGreaterThan(2);
+    expect(successfulCost).toBeGreaterThanOrEqual(MEMBER_BUDGET);
     expect(refusal?.status).toBe(429);
     expect(errorType(refusal)).toBe("budget_exceeded");
     expect(refusal?.scrubbed).toContain(`TeamMember=${memberA}:${teamId}`);

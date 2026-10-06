@@ -83,6 +83,11 @@ export async function verifyRelease(
      * `directory` and `payload` of the result are this directory.
      */
     readonly payloadTo?: string;
+    /** Extraction tuning for the `payloadTo` path; defaults apply. Measurement only. */
+    readonly tuning?: {
+      readonly concurrency?: number;
+      readonly bufferedFileMax?: number;
+    };
   } = {},
 ): Promise<VerifiedRelease> {
   const path = resolve(input);
@@ -240,6 +245,10 @@ async function extractVerifiedPayload(
   options: {
     readonly requireTarget?: boolean;
     readonly expectedSha256?: string;
+    readonly tuning?: {
+      readonly concurrency?: number;
+      readonly bufferedFileMax?: number;
+    };
   },
 ): Promise<VerifiedRelease> {
   const root = basename(path).replace(/\.tar\.gz$/, "");
@@ -248,6 +257,7 @@ async function extractVerifiedPayload(
   const extracted = await extractArchive(path, payloadTo, {
     expectedRoot: root,
     digests: true,
+    ...options.tuning,
     capture: (key) => key === releaseKey,
     mapEntry: (name) =>
       name.startsWith(prefix) ? name.slice(prefix.length) : undefined,

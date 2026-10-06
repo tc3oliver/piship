@@ -1,5 +1,5 @@
 // Manual benchmark: build/sign outside timings; retain output for inspection.
-// Usage: node scripts/benchmark-install.mjs --root <checkout> --out <dir> [--bundle]
+// Usage: node scripts/benchmark-install.mjs --root <checkout> --out <dir> [--bundle] [--authoring]
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
@@ -23,6 +23,9 @@ const root = resolve(option("--root", "."));
 const out = resolve(option("--out", "benchmark-output"));
 const bundled = args.includes("--bundle");
 const baseline = args.includes("--baseline");
+const measureAuthoring = args.includes("--authoring");
+if (measureAuthoring && !bundled)
+  throw new Error("--authoring requires --bundle");
 mkdirSync(out, { recursive: true });
 const bin = join(root, "packages/cli/dist/bin.js");
 const target = `${platform()}-${arch()}`;
@@ -31,10 +34,12 @@ const env = {
   PISHIP_INSTALL_HOME: join(out, "install"),
   PISHIP_STATE_HOME: join(out, "state"),
   PISHIP_BIN_HOME: join(out, "bin"),
+  PISHIP_CACHE_HOME: join(out, "cache"),
   HOME: join(out, "home"),
   USERPROFILE: join(out, "home"),
   PI_OFFLINE: "1",
 };
+delete env.PISHIP_BUILD_INPUT;
 mkdirSync(env.HOME, { recursive: true });
 const run = (exe, argv, extra = {}) =>
   new Promise((resolveRun, reject) => {
@@ -181,11 +186,73 @@ try {
     throw new Error("Smoke did not create a real Pi session");
   const receipt = JSON.parse(readFileSync(receiptPath));
   const payloadFiles = count(receipt.payload);
+  const warm = await branded("--smoke");
   const update = await branded("update");
   const afterUpdate = await branded("--smoke");
   const upgraded = JSON.parse(readFileSync(receiptPath));
   if (upgraded.app.version !== "1.1.0")
     throw new Error("Update did not activate 1.1.0");
+  let authoring;
+  if (measureAuthoring) {
+    // Use the installed, relocated manager, with no checkout build-input override.
+    const manager = join(upgraded.payload, "piship.mjs");
+    const authoringRoot = join(out, "authored-agent");
+    const manifest = join(authoringRoot, "piship.yaml");
+    const portable = (...argv) => run(process.execPath, [manager, ...argv]);
+    await portable("init", authoringRoot);
+    await portable("lock", manifest);
+    const authoringCache = join(env.PISHIP_CACHE_HOME, "authoring");
+    const cacheEntries = () => {
+      try {
+        return readdirSync(authoringCache)
+          .sort()
+          .map((name) => ({
+            name,
+            modifiedMs: statSync(join(authoringCache, name, "cache.json"))
+              .mtimeMs,
+            files: count(join(authoringCache, name)),
+          }));
+      } catch (error) {
+        if (error.code === "ENOENT") return [];
+        throw error;
+      }
+    };
+    const before = cacheEntries();
+    if (before.length)
+      throw new Error("Authoring cache must be cold before first build");
+    const firstBuild = await portable("build", manifest);
+    const firstCache = cacheEntries();
+    if (!firstCache.length)
+      throw new Error("Portable build did not expand authoring snapshot");
+    const warmBuild = await portable("build", manifest);
+    const warmCache = cacheEntries();
+    const reused = JSON.stringify(firstCache) === JSON.stringify(warmCache);
+    if (!reused)
+      throw new Error("Warm authoring build replaced the snapshot cache");
+    const snapshot = readFileSync(
+      join(
+        upgraded.payload,
+        "node_modules",
+        "@piship",
+        "core",
+        "dist",
+        "build-input",
+        "authoring.json.gz",
+      ),
+    );
+    authoring = {
+      snapshotBytes: snapshot.length,
+      snapshotSha256: createHash("sha256").update(snapshot).digest("hex"),
+      firstBuildMs: firstBuild.elapsedMs,
+      warmBuildMs: warmBuild.elapsedMs,
+      cachePath: authoringCache,
+      coldCacheEntries: before,
+      firstCacheEntries: firstCache,
+      warmCacheEntries: warmCache,
+      cacheReused: reused,
+      note: "End-to-end portable builds include npm and bundling; only snapshot cache is cold initially. No source checkout override; snapshot expands outside installed runtime.",
+    };
+  }
   // One more start of the upgraded release, with its phases reported
   // (PISHIP_DEBUG_TIMING) and its loaded modules and process spawns counted by
   // a preload. An older PiShip reports no phases; the counts still work.
@@ -242,14 +309,18 @@ process.on("exit", () => process.stderr.write("PISHIP_PROBE " + JSON.stringify({
     elapsedMs: {
       install: install.elapsedMs,
       firstProcessStartup: cold.elapsedMs,
+      warmProcessStartup: warm.elapsedMs,
       upgrade: update.elapsedMs,
       firstStartupAfterUpgrade: afterUpdate.elapsedMs,
     },
+    ...(authoring ? { authoring } : {}),
     filesystem: {
       payloadFiles,
       upgradedPayloadFiles: count(upgraded.payload),
       installedFilesAfterUpgrade: count(env.PISHIP_INSTALL_HOME),
       archiveBytes: statSync(archives[0]).size,
+      archiveSha256: digest,
+      upgradedArchiveBytes: statSync(archives[1]).size,
     },
     operationEstimates: {
       payloadCreatesPerInstallOrUpgrade: payloadFiles,

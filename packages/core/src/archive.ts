@@ -572,6 +572,8 @@ export async function extractArchive(
     readonly capture?: (path: string) => boolean;
     /** How many files are written at once (default 8). */
     readonly concurrency?: number;
+    /** Largest file that is buffered and written by a pooled writer (default 1 MiB); measurement only. */
+    readonly bufferedFileMax?: number;
     /** Map validated archive paths to relative output paths; undefined skips writing. */
     readonly mapEntry?: (
       path: string,
@@ -583,6 +585,7 @@ export async function extractArchive(
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
   const maxHeaders = maxEntries * 3 + 16;
   const concurrency = Math.max(1, options.concurrency ?? WRITE_CONCURRENCY);
+  const bufferedFileMax = options.bufferedFileMax ?? BUFFERED_FILE_MAX;
   const target = resolve(destination);
   let created = false;
   try {
@@ -766,7 +769,7 @@ export async function extractArchive(
     }
     const mode = (octalField(block, 100, 8) & 0o111) !== 0 ? 0o755 : 0o644;
     const written = entrySegments(mapped, false).join("/");
-    if (size <= BUFFERED_FILE_MAX) {
+    if (size <= bufferedFileMax) {
       state = {
         kind: "buffered",
         data: Buffer.allocUnsafe(size),

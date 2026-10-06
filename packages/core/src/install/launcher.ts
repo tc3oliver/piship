@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  IMPORT_META_URL,
   LAUNCHER_BUILD_PLACEHOLDER,
   LAUNCHER_TIMING_SNIPPET,
   launcherBuildOf,
@@ -17,15 +18,6 @@ import {
 } from "../launcher-source.js";
 import { START_TOLERANCE_MS } from "../process-identity.js";
 import { appDirectory, readInstallReceipt, VERSION_NAME } from "./receipt.js";
-
-/**
- * The launcher's own location. Written in two parts because the bundler
- * (bundle.ts) rewrites the module-URL property of every module it finds that
- * names it, to keep asset URLs working, and would rewrite the one inside the
- * launcher's text too; a bundled runtime that refreshes the launcher would
- * then write a launcher that looks for its receipts in the wrong directory.
- */
-const IMPORT_META_URL = `import.meta${"."}url`;
 
 /**
  * The text of `apps/<id>/launch.mjs`, the file the command shim runs: it

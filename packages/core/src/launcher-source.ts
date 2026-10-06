@@ -10,6 +10,16 @@ import { createHash } from "node:crypto";
  */
 export const LAUNCHER_BUILD_PLACEHOLDER = "@@LAUNCHER_BUILD@@";
 
+/**
+ * The module-URL property, written in two parts. The bundler (bundle.ts)
+ * rewrites every `import.meta.url` it finds in a module's text, to keep asset
+ * URLs working, including one inside generated source text; a bundled runtime
+ * that writes a launcher or bundles again would then emit text that resolves
+ * against the bundled module instead of the launcher or script it is written
+ * into. Generated source takes the property from here, never as a literal.
+ */
+export const IMPORT_META_URL = `import.meta${"."}url`;
+
 export function stampLauncherBuild(template: string): string {
   const build = createHash("sha256")
     .update(template)
@@ -52,7 +62,7 @@ import { verifyLaunchPayload } from "@piship/core";
 ${LAUNCHER_TIMING_SNIPPET}mark("node_entry");
 if (timing) timing.notes.payload_launcher = "${LAUNCHER_BUILD_PLACEHOLDER}";
 process.on("uncaughtException", (error) => { try { console.error(formatError(error)); } finally { process.exit(1); } });
-const directory = fileURLToPath(new URL("..", import.meta.url));
+const directory = fileURLToPath(new URL("..", ${IMPORT_META_URL}));
 try {
   const version = process.versions.node.split(".").map(Number);
   if (version[0] < 22 || (version[0] === 22 && version[1] < 19)) throw new Error("Node.js 22.19.0 or newer is required; install Node separately before launch");

@@ -1,0 +1,74 @@
+name: Windows benchmark
+# Manual measurement only. These throwaway archives are never release artifacts.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      npm_config_prefer_offline: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.21.x
+          cache: npm
+      - name: Enable Defender and remove runner exclusions
+        shell: pwsh
+        run: |
+          $preferences = Get-MpPreference
+          foreach ($path in $preferences.ExclusionPath) { Remove-MpPreference -ExclusionPath $path }
+          foreach ($process in $preferences.ExclusionProcess) { Remove-MpPreference -ExclusionProcess $process }
+          foreach ($extension in $preferences.ExclusionExtension) { Remove-MpPreference -ExclusionExtension $extension }
+          Set-MpPreference -DisableRealtimeMonitoring $false
+          $status = Get-MpComputerStatus
+          $preferences = Get-MpPreference
+          if (-not $status.RealTimeProtectionEnabled) { throw "Defender real-time protection is disabled" }
+          if ($preferences.ExclusionPath.Count -or $preferences.ExclusionProcess.Count -or $preferences.ExclusionExtension.Count) { throw "Defender exclusions remain" }
+          New-Item -ItemType Directory -Force benchmark-evidence | Out-Null
+          @{
+            status = $status
+            preferences = $preferences
+          } | ConvertTo-Json -Depth 8 | Set-Content benchmark-evidence/defender.json
+          "PISHIP_BENCH_DEFENDER=enabled; path/process/extension exclusions removed" >> $env:GITHUB_ENV
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "npm_config_cache=$env:RUNNER_TEMP\npm-cache" >> $env:GITHUB_ENV
+      - name: Use npm 11
+        shell: bash
+        run: |
+          npm install -g npm@11.21.0 --prefix "$(node -p "require('path').dirname(process.execPath)")"
+          node -e "const v = require('child_process').execSync('npm --version', { shell: true }).toString().trim(); console.log('spawned npm ' + v); if (!v.startsWith('11.')) process.exit(1);"
+      - run: npm ci
+      - run: npm run build
+      - name: Measure install, update, launch and cold/warm portable authoring
+        shell: pwsh
+        run: |
+          node scripts/benchmark-install.mjs --root . --out "$env:RUNNER_TEMP/piship-authoring-benchmark" --bundle --authoring 2>&1 | Tee-Object -FilePath benchmark-evidence/benchmark.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-authoring-benchmark/report.json" benchmark-evidence/report.json
+      - name: Sweep extraction and copy concurrency and buffer thresholds
+        shell: pwsh
+        run: |
+          node scripts/benchmark-concurrency.mjs --out "$env:RUNNER_TEMP/piship-concurrency" --reps 5 2>&1 | Tee-Object -FilePath benchmark-evidence/concurrency.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.json" benchmark-evidence/concurrency-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-concurrency/report.md" benchmark-evidence/concurrency-report.md
+      - name: Measure the .cmd shim against a direct launcher start
+        shell: pwsh
+        run: |
+          node scripts/benchmark-cmd-launch.mjs --root . --out "$env:RUNNER_TEMP/piship-cmd-launch" --reps 15 2>&1 | Tee-Object -FilePath benchmark-evidence/cmd-launch.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/report.json" benchmark-evidence/cmd-launch-report.json
+          Copy-Item "$env:RUNNER_TEMP/piship-cmd-launch/summary.md" benchmark-evidence/cmd-launch-summary.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: windows-authoring-benchmark-${{ github.sha }}
+          path: benchmark-evidence/
+          if-no-files-found: error
