@@ -27,6 +27,7 @@ import {
   formatExplanation,
   formatInspection,
   formatSmokeSummary,
+  describeFootprint,
   formatMigrationReport,
   generateSigningKey,
   initDistribution,
@@ -737,6 +738,9 @@ export async function runCli(
         cache: !rest.includes("--rebuild"),
         ...(rest.includes("--rebuild") ? {} : { runtimeCache: true as const }),
         abandonedStaging: (found) => output.stderr(stagingNotice(found)),
+        onPackageFootprint: (report) => {
+          for (const line of describeFootprint(report)) output.stderr(line);
+        },
         ...(progress ? { progress } : {}),
       });
       markLocalBuild(built);

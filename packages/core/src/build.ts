@@ -32,7 +32,13 @@ import {
   stripRuntimeIrrelevant,
 } from "./payload.js";
 import { PI_PACKAGE_VENDOR_DIRECTORY } from "./pi-packages/gates.js";
+import {
+  optimizePiPackages,
+  type PackageFootprint,
+} from "./pi-packages/footprint.js";
 import { vendorPiPackages } from "./pi-packages/lock.js";
+import { loadEsbuild } from "./pi-packages/module-scan.js";
+import type { VendoredPiPackage } from "./pi-packages/resolve.js";
 import { checkPackageSources } from "./release/index.js";
 import { renameWithRetry } from "./rename-retry.js";
 import {
@@ -392,6 +398,8 @@ export function buildDistribution(
     readonly runtimeCache?: RuntimeCache | true;
     /** Told whether the runtime came from the cache, was installed into it, or could not use it. */
     readonly onRuntimeCache?: (report: RuntimeCacheReport) => void;
+    /** Told what became of the vendored Pi packages' closures and shared dependencies. */
+    readonly onPackageFootprint?: (report: PackageFootprint) => void;
     /** Receives a short line as each long step starts. */
     readonly progress?: (step: string) => void;
   } & OutputStagingOptions = {},
@@ -451,6 +459,7 @@ export function buildDistribution(
   mkdirSync(stage);
   try {
     let phase = process.hrtime.bigint();
+    let vendored: readonly VendoredPiPackage[] = [];
     const assemble = (): void => {
       const started = process.hrtime.bigint();
       options.progress?.("Assembling and verifying the payload");
@@ -469,9 +478,15 @@ export function buildDistribution(
         options.progress?.(
           "Vendoring the Pi packages (npm ci --ignore-scripts)",
         );
-        vendorPiPackages(lock, readManifest(manifestPath), base, stage, {
-          supplyChainGates: options.supplyChainGates !== false,
-        });
+        vendored = vendorPiPackages(
+          lock,
+          readManifest(manifestPath),
+          base,
+          stage,
+          {
+            supplyChainGates: options.supplyChainGates !== false,
+          },
+        );
         // The runtime was stripped before the packages were vendored, so the
         // maps and declarations they ship are removed here.
         if (strip)
@@ -509,6 +524,25 @@ export function buildDistribution(
       overlap: (lock.packages?.length ?? 0) > 0,
     });
     phase = process.hrtime.bigint();
+    if (vendored.length && wantsBundle) {
+      // release.bundle covers the Pi packages too: a closure that is safe to
+      // bundle is, identical dependencies are shared, and the rest stays as
+      // vendored. What is decided is in metadata/pi-package-footprint.json.
+      options.progress?.("Sharing and bundling the Pi package closures");
+      const footprint = optimizePiPackages(stage, {
+        esbuild: loadEsbuild(join(stage, "package.json")),
+        bundle: true,
+        packages: vendored.map((item) => ({
+          id: item.locked.id,
+          directory: item.directory,
+          packageRoot: item.packageRoot,
+          resources: item.locked.resources,
+        })),
+      });
+      options.onPackageFootprint?.(footprint);
+      debugTiming("pi package footprint", phase);
+      phase = process.hrtime.bigint();
+    }
     if (bundling) {
       options.progress?.("Bundling the portable runtime");
       bundleDistribution(stage, {

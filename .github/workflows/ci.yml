@@ -76,6 +76,11 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         run: npm run check:boundaries
       - run: npm run build
+      # The deterministic footprint of the managed example (file counts and
+      # archive bytes; no timing) against scripts/performance-budgets.json. It
+      # needs no network and takes seconds; the personal and developer
+      # examples download fd, rg, and Pi packages, so the nightly job checks them.
+      - run: npm run check:budgets
       # Linux and macOS must enforce the sandbox: a missing adapter fails
       # the sandbox tests instead of skipping them.
       - run: npm test
