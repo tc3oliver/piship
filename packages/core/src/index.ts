@@ -46,6 +46,7 @@ export {
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
   LOCK_SCHEMA_V1ALPHA6,
+  LOCK_SCHEMA_V1,
   LOCK_SCHEMA_VERSION,
   type LockDigests,
   type LockedAgentFile,

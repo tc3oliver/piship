@@ -8,7 +8,7 @@ import {
   AccessFieldError,
   parseUpdateRoot,
   PISHIP_SCHEMA_V1ALPHA5,
-  PISHIP_SCHEMA_V1ALPHA6,
+  schemaAtLeast,
   readManifest,
   sharedRoleKeyIds,
   type UpdateRoot,
@@ -183,8 +183,7 @@ export async function nextTrustRoot(
   const manifest = readManifest(options.manifest);
   const updates = manifest.lifecycle?.updates;
   const bootstrap =
-    (manifest.schema === PISHIP_SCHEMA_V1ALPHA5 ||
-      manifest.schema === PISHIP_SCHEMA_V1ALPHA6) &&
+    schemaAtLeast(manifest.schema, PISHIP_SCHEMA_V1ALPHA5) &&
     updates &&
     "bootstrap" in updates.trust
       ? updates.trust.bootstrap

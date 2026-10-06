@@ -6,6 +6,7 @@ import {
   DATA_CONTRACT_VERSION,
   type Manifest,
   ManifestError,
+  PISHIP_SCHEMA_V1,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
   PISHIP_SCHEMA_V1ALPHA4,
@@ -23,6 +24,7 @@ import {
   LOCK_SCHEMA_V1ALPHA3,
   LOCK_SCHEMA_V1ALPHA4,
   LOCK_SCHEMA_V1ALPHA5,
+  LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA6,
   LOCK_SCHEMA_VERSION,
 } from "./lock-schema.js";
@@ -42,7 +44,8 @@ import { checkToolExposure, lockedTools } from "./tool-exposure.js";
  */
 export function manifestDigest(manifest: Manifest): string {
   return manifest.schema === PISHIP_SCHEMA_V1ALPHA5 ||
-    manifest.schema === PISHIP_SCHEMA_V1ALPHA6
+    manifest.schema === PISHIP_SCHEMA_V1ALPHA6 ||
+    manifest.schema === PISHIP_SCHEMA_V1
     ? digest(manifest)
     : hash(JSON.stringify(manifest));
 }
@@ -86,7 +89,10 @@ export function resolveLock(
     dirname(resolve(manifestPath)),
     resources,
   );
-  const v6 = manifest.schema === PISHIP_SCHEMA_V1ALPHA6;
+  // piship/v1 locks carry exactly the v1alpha6 content.
+  const v6 =
+    manifest.schema === PISHIP_SCHEMA_V1ALPHA6 ||
+    manifest.schema === PISHIP_SCHEMA_V1;
   const v5 = manifest.schema === PISHIP_SCHEMA_V1ALPHA5 || v6;
   const v4 = manifest.schema === PISHIP_SCHEMA_V1ALPHA4 || v5;
   const policy = governance?.manifest;
@@ -118,17 +124,20 @@ export function resolveLock(
         : [],
   );
   return {
-    schema: v6
-      ? LOCK_SCHEMA_V1ALPHA6
-      : v5
-        ? LOCK_SCHEMA_V1ALPHA5
-        : v4
-          ? LOCK_SCHEMA_V1ALPHA4
-          : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
-            ? LOCK_SCHEMA_V1ALPHA3
-            : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
-              ? LOCK_SCHEMA_V1ALPHA2
-              : LOCK_SCHEMA_VERSION,
+    schema:
+      manifest.schema === PISHIP_SCHEMA_V1
+        ? LOCK_SCHEMA_V1
+        : v6
+          ? LOCK_SCHEMA_V1ALPHA6
+          : v5
+            ? LOCK_SCHEMA_V1ALPHA5
+            : v4
+              ? LOCK_SCHEMA_V1ALPHA4
+              : manifest.schema === PISHIP_SCHEMA_V1ALPHA3
+                ? LOCK_SCHEMA_V1ALPHA3
+                : manifest.schema === PISHIP_SCHEMA_V1ALPHA2
+                  ? LOCK_SCHEMA_V1ALPHA2
+                  : LOCK_SCHEMA_VERSION,
     manifest: { schema: manifest.schema, sha256: manifestDigest(manifest) },
     app: manifest.app,
     deployment: manifest.deployment,

@@ -16,6 +16,7 @@ import {
   checkToolExposure,
   checkGovernance,
   checkPiVersion,
+  PI_VERSION,
   checkStateMigration,
   storageOf,
   compareReleases,
@@ -76,6 +77,7 @@ import {
   runtimeVariableUse,
   readManifest,
   ManifestError,
+  checkManifestMigration,
   migrateManifestSource,
   readManifestSource,
 } from "@piship/schema";
@@ -647,32 +649,62 @@ export async function runCli(
           `Note: ${missingUpdate.join(", ")} not set in this shell; only update reads ${them(missingUpdate)}, and update fails until ${theyAre(missingUpdate)} set. Launch does not need ${them(missingUpdate)}.`,
         );
     } else if (command === "migrate") {
-      const plan = migrateManifestSource(readManifestSource(target));
       const list = (items: readonly string[]) =>
         items.map((item) => `  - ${item}`).join("\n");
-      if (!plan.changes.length)
-        output.stdout(`Already ${plan.to}; nothing to migrate.`);
-      else if (rest[0] === "--check") {
-        // Nothing is written; the exit status says whether migrating would
-        // change what the distribution decides.
-        output.stdout(
-          `Migration check ${plan.from} -> ${plan.to}:\n${list(plan.changes)}`,
-        );
-        if (plan.effective.length) {
-          output.stderr(
-            `Migrating ${target} would change ${plan.effective.length} effective decision(s):\n${list(plan.effective)}`,
+      if (rest[0] === "--check") {
+        // Read-only: the manifest text is classified and nothing is written.
+        // Exit 0 migratable, 1 requires review, 3 cannot migrate.
+        const source = readManifestSource(target);
+        const check = checkManifestMigration(source);
+        if (check.verdict === "cannot migrate") {
+          output.stdout(
+            `Migration check -> ${check.to}\nResult: cannot migrate`,
           );
-          return 1;
+          output.stderr(`Cannot migrate ${target}: ${check.reason}`);
+          return 3;
         }
-      } else if (rest[0] === "--write") {
-        writeFileSync(target, plan.source);
-        output.stdout(
-          `Migrated ${target} from ${plan.from} to ${plan.to}:\n${plan.changes.map((item) => `  - ${item}`).join("\n")}`,
-        );
-      } else
-        output.stdout(
-          `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${plan.changes.map((item) => `  - ${item}`).join("\n")}\n\n${plan.source}`,
-        );
+        // The lock refuses a Pi pin this PiShip does not carry, so a manifest
+        // that migrates cleanly can still need its pin reviewed.
+        const pin = readManifest(target).runtime.pi;
+        const review = [
+          ...check.review,
+          ...(pin === PI_VERSION
+            ? []
+            : [
+                `runtime.pi is ${pin} but this PiShip pins Pi ${PI_VERSION}; piship lock and build refuse the manifest until the pin is updated and the distribution is re-verified (docs/compatibility.md, "Upgrading Pi")`,
+              ]),
+        ];
+        if (!check.changes.length && !review.length)
+          output.stdout(`Already ${check.to}; nothing to migrate.`);
+        else {
+          output.stdout(
+            `Migration check ${check.from} -> ${check.to}\nResult: ${review.length ? "requires review" : "migratable"}\n${list(check.changes)}`,
+          );
+          if (review.length) {
+            output.stderr(
+              `Review before migrating ${target} (${review.length} item(s)):\n${list(review)}`,
+            );
+            return 1;
+          }
+        }
+      } else {
+        const plan = migrateManifestSource(readManifestSource(target));
+        if (!plan.changes.length)
+          output.stdout(`Already ${plan.to}; nothing to migrate.`);
+        else if (rest[0] === "--write") {
+          writeFileSync(target, plan.source);
+          output.stdout(
+            `Migrated ${target} from ${plan.from} to ${plan.to}:\n${list(plan.changes)}`,
+          );
+          if (plan.effective.length || plan.review.length)
+            output.stderr(
+              `Review the result (${plan.effective.length + plan.review.length} item(s)):\n${list([...plan.effective, ...plan.review])}`,
+            );
+        } else
+          output.stdout(
+            `Migration plan ${plan.from} -> ${plan.to} (dry run; add --write to apply):\n${list(plan.changes)}\n\n${plan.source}`,
+          );
+      }
     } else if (command === "config") {
       const configTarget = rest[0] ?? "";
       const path = resolve(configTarget);

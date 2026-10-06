@@ -22,6 +22,13 @@ export const PISHIP_SCHEMA_V1ALPHA5 = "piship/v1alpha5" as const;
  * `release.vulnerabilities.registry`.
  */
 export const PISHIP_SCHEMA_V1ALPHA6 = "piship/v1alpha6" as const;
+/**
+ * The stable v1 schema (v0.11). It freezes the v1alpha6 semantics: every
+ * field, default, and validation rule of v1alpha6 holds in v1, and the only
+ * difference is the schema id. A backward-compatible addition keeps `piship/v1`;
+ * a breaking change needs a new major (docs/manifest.md, "Stability").
+ */
+export const PISHIP_SCHEMA_V1 = "piship/v1" as const;
 export const SUPPORTED_SCHEMAS = [
   PISHIP_SCHEMA_VERSION,
   PISHIP_SCHEMA_V1ALPHA2,
@@ -29,9 +36,10 @@ export const SUPPORTED_SCHEMAS = [
   PISHIP_SCHEMA_V1ALPHA4,
   PISHIP_SCHEMA_V1ALPHA5,
   PISHIP_SCHEMA_V1ALPHA6,
+  PISHIP_SCHEMA_V1,
 ] as const;
 /** The newest schema; `migrateManifestSource` targets it by default. */
-export const LATEST_SCHEMA = PISHIP_SCHEMA_V1ALPHA6;
+export const LATEST_SCHEMA = PISHIP_SCHEMA_V1;
 export type PishipSchemaVersion = (typeof SUPPORTED_SCHEMAS)[number];
 
 /** True when `schema` is `at` or a later schema. */

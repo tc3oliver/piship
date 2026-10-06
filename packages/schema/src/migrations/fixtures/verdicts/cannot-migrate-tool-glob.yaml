@@ -1,0 +1,9 @@
+schema: piship/v1alpha5
+# v1alpha5 tool filters list exact names; a glob could outrank a deny, so it is refused, not migrated.
+app: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }
+runtime: { pi: "1.0.3" }
+deployment: { mode: personal }
+mcp:
+  servers:
+    docs: { transport: stdio, module: ./mcp/docs.mjs, tools: { allow: ["get_issue*"], deny: ["get_*"] } }
+updates: { channel: stable, channels: [stable] }

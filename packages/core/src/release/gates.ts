@@ -16,6 +16,7 @@ import {
   type DistributionLock,
   EVIDENCED_TARGETS,
   LOCK_SCHEMA_V1ALPHA5,
+  LOCK_SCHEMA_V1,
   LOCK_SCHEMA_V1ALPHA6,
   PI_COMPATIBILITY,
   requireCurrentLock,
@@ -265,14 +266,15 @@ export function checkReleaseInputs(
   }
   if (
     (lock.schema !== LOCK_SCHEMA_V1ALPHA5 &&
-      lock.schema !== LOCK_SCHEMA_V1ALPHA6) ||
+      lock.schema !== LOCK_SCHEMA_V1ALPHA6 &&
+      lock.schema !== LOCK_SCHEMA_V1) ||
     !lock.release ||
     !lock.updates
   )
     throw gate(
       "CONFIG_INVALID",
       "schema",
-      `production releases need a piship/v1alpha5 or piship/v1alpha6 manifest (found ${lock.manifest.schema})`,
+      `production releases need a piship/v1alpha5, piship/v1alpha6, or piship/v1 manifest (found ${lock.manifest.schema})`,
       "Run piship migrate --write, review updates.trust.bootstrap, and lock again",
     );
   checkUpdateTrust(lock);
