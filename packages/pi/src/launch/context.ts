@@ -7,6 +7,7 @@ import {
 import {
   type AccessEvent,
   type ActivatedAccess,
+  applyPackageEnvironment,
   type BrandedContext,
   type DistributionAccess,
   openAccess,
@@ -18,6 +19,10 @@ import { applyPiEnvironment } from "./pi-defaults.js";
 
 export interface LaunchContext extends BrandedContext {
   readonly agentDir: string;
+  /** The session was started with `--yolo`. */
+  readonly yolo?: boolean;
+  /** Takes back the permission provider's auto-approval `--yolo` switched on. */
+  readonly endProviderAutoApprove?: () => void;
 }
 
 /**
@@ -81,8 +86,10 @@ export async function prepareAccess(
       access.network,
       ctx.metadata.access.variables,
     );
-  // The managed cleanup above removed Pi's switches with every other PI_*.
+  // The managed cleanup above removed Pi's switches with every other PI_*,
+  // and the packages' own.
   applyPiEnvironment(ctx.agentDir, ctx.mode);
+  applyPackageEnvironment(ctx.metadata, ctx.stateDir);
   // Only a managed distribution narrows what child processes inherit; a
   // personal one keeps the environment of the user's shell.
   // Pi's provider requests use the process dispatcher: with

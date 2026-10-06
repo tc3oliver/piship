@@ -1659,6 +1659,34 @@ describe.skipIf(!posix)("the validity window", () => {
 });
 
 describe("hooksInWorkingTree", () => {
+  it("uses Git discovery rather than extra agent protection trees for attestation", () => {
+    const ws = join(root, "ws");
+    const git = join(ws, ".git", "hooks");
+    const claude = join(ws, ".claude");
+    const pi = join(ws, ".pi");
+    const paths = {
+      files: [],
+      directories: [git, claude, pi],
+      gitDirectories: [git],
+    };
+    expect(hooksInWorkingTree(ws, paths)).toBe(false);
+    expect(gitControlUnproven(ws, paths, "remote")).toBe(false);
+    expect(
+      hooksInWorkingTree(ws, {
+        ...paths,
+        gitDirectories: [join(ws, ".githooks")],
+      }),
+    ).toBe(true);
+    // core.hooksPath may itself name .claude; names are never exemptions.
+    expect(hooksInWorkingTree(ws, { ...paths, gitDirectories: [claude] })).toBe(
+      true,
+    );
+    // Legacy callers keep their conservative behavior.
+    expect(hooksInWorkingTree(ws, { files: [], directories: [claude] })).toBe(
+      true,
+    );
+  });
+
   const paths = (...directories: string[]): ProtectedPaths => ({
     files: [],
     directories,

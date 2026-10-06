@@ -167,6 +167,17 @@ export function userAutoPrincipal(
   return binding ? { issuer: binding.issuer, subject: binding.subject } : null;
 }
 
+/**
+ * One line for `--yolo`, which approves asks for the running session only and
+ * stores nothing. A personal user owns the whole policy, so every ask is
+ * approved; managed behaves as auto mode does.
+ */
+export function describeYolo(mode: "personal" | "managed"): string {
+  return mode === "personal"
+    ? "yolo is on for this session only: every ask is approved without a prompt and audited; deny still applies; nothing is stored"
+    : "yolo is on for this session only: asks from the distribution defaults are approved without a prompt and audited; deny and enforced rules still apply; nothing is stored";
+}
+
 /** One line for `doctor` and `auto status`. */
 export function describeUserAuto(status: UserAutoStatus): string {
   switch (status.state) {

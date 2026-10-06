@@ -14,7 +14,7 @@ import {
   redact,
   type ToolCallFailure,
 } from "@piship/contracts";
-import { describeUserAuto } from "@piship/core";
+import { describeUserAuto, describeYolo } from "@piship/core";
 import type { ToolExposure } from "@piship/schema";
 import { CODEMODE_TOOL, widerExposure } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
@@ -31,7 +31,10 @@ export const DEFAULT_BUILD_PROMPT =
 
 function showAuto(gov: GovernanceSession, ctx: ExtensionContext): void {
   if (ctx.hasUI)
-    ctx.ui.setStatus("piship-auto", gov.userAuto.active ? "Auto" : undefined);
+    ctx.ui.setStatus(
+      "piship-auto",
+      gov.yolo ? "YOLO" : gov.userAuto.active ? "Auto" : undefined,
+    );
 }
 
 /**
@@ -47,8 +50,15 @@ async function autoCommand(
   const action = args.trim() || "status";
   let message: string;
   let level: "info" | "warning" | "error" = "info";
+  const mode = gov.options.lock.deployment.mode;
   if (action === "status")
-    message = `Auto mode: ${describeUserAuto(gov.userAuto)}`;
+    message = `Auto mode: ${
+      gov.yolo
+        ? describeYolo(mode)
+        : mode === "personal"
+          ? "yolo is off for this session"
+          : describeUserAuto(gov.userAuto)
+    }`;
   else if (action === "on" || action === "off")
     try {
       const status = await gov.switchUserAuto(action === "on");
@@ -229,12 +239,20 @@ export function governanceHooks(gov: GovernanceSession): InlineExtension {
       pi.on("session_start", (_event, ctx) => {
         attach(gov, ctx);
         showAuto(gov, ctx);
+        if (gov.yolo && ctx.hasUI)
+          ctx.ui.notify(
+            `${describeYolo(gov.options.lock.deployment.mode)}; /auto off ends it`,
+            "warning",
+          );
       });
-      // Managed only: a personal user owns the policy (config/policy.json).
-      if (gov.options.lock.deployment.mode === "managed")
+      // Managed, or a personal session started with --yolo (to see it and
+      // end it): a personal user owns the policy (config/policy.json).
+      if (gov.options.lock.deployment.mode === "managed" || gov.yolo)
         pi.registerCommand("auto", {
           description:
-            "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply",
+            gov.options.lock.deployment.mode === "managed"
+              ? "Auto mode: approve asks from the distribution defaults without a prompt (on, off, or status); deny and enforced rules still apply"
+              : "Yolo: show whether every ask is approved without a prompt in this session (status), or end it (off)",
           handler: (args, ctx) => autoCommand(gov, args, ctx),
         });
       // Audit is keyed on tool_execution_start/end, not tool_call: a call

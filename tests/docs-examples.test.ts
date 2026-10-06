@@ -15,6 +15,7 @@ import {
   capabilityMismatch,
   KubernetesAgentSandboxBackend,
 } from "@piship/sandbox";
+import { PI_VERSION } from "@piship/core";
 import {
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
@@ -141,6 +142,49 @@ describe("documented examples", () => {
     expect(sandbox?.environment.allow).toEqual(
       expect.arrayContaining([...DEFAULT_SANDBOX_ENVIRONMENT]),
     );
+  });
+
+  it("the Claude Code project configuration examples parse in a manifest and mean what the text says", () => {
+    const policy = block(
+      "docs/manifest.md",
+      "yaml",
+      "claudeHooks: deny   # the default",
+    );
+    const packages = block("docs/manifest.md", "yaml", "package: pi-code");
+    const directory = temporary();
+    const personal = [
+      "schema: piship/v1alpha6",
+      "app: { id: unit, name: Unit, command: unit, version: 0.1.0 }",
+      `runtime: { pi: "${PI_VERSION}" }`,
+      "deployment: { mode: personal }",
+      "updates: { channel: stable, channels: [stable] }",
+      "",
+    ].join("\n");
+    writeFileSync(
+      join(directory, "piship.yaml"),
+      `${personal}${policy}${packages}`,
+    );
+    const manifest = readManifest(join(directory, "piship.yaml"));
+    const company = manifest.governance?.policy.projectTrust.company;
+    expect(company?.match).toEqual([
+      { remote: "git.acme.example/**", path: "/srv/src/**" },
+    ]);
+    expect(company?.dimensions).toMatchObject({
+      claudeRules: "allow",
+      claudeCommands: "allow",
+      claudeSkills: "allow",
+      claudeAgents: "allow",
+      claudeHooks: "deny",
+    });
+    expect(manifest.governance?.policy.defaults.map((rule) => rule.id)).toEqual(
+      ["project-claude"],
+    );
+    const [pkg] = manifest.governance?.resources.packages ?? [];
+    expect(pkg).toMatchObject({
+      id: "pi-code",
+      class: "company",
+      filters: { extensions: ["!extensions/mcp/**"] },
+    });
   });
 
   it("the README manifest is a complete manifest PiShip accepts on its own", () => {

@@ -4,6 +4,7 @@
 // no real model). A Pi upgrade that renames, removes, or changes one of these
 // seams must fail here before it can silently weaken governance.
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -12,6 +13,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { parseManifest } from "@piship/schema";
 import { tmpdir } from "node:os";
 import { inspect } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
@@ -30,9 +33,12 @@ import {
   DefaultPackageManager,
   DefaultResourceLoader,
   type EditOperations,
+  getAgentDir,
+  hasTrustRequiringProjectResources,
   type InlineExtension,
   InteractiveMode,
   ModelRuntime,
+  ProjectTrustStore,
   type ReadOperations,
   SessionManager,
   SettingsManager,
@@ -69,6 +75,7 @@ import {
   uninstallCrashRedaction,
 } from "./launch/crash-redaction.js";
 import { PI_SETTINGS } from "./launch/pi-defaults.js";
+import { sessionProjectTrust } from "./launch/project-trust.js";
 import {
   ASSISTANT_MESSAGE_FIELDS,
   providerErrorRedaction,
@@ -783,6 +790,130 @@ describe("Pi session seams used by governance", () => {
         item.path.endsWith("/chat/completions"),
       )
       .map((item: { body: string }) => JSON.parse(item.body));
+
+  // The project-trust seam an extension that loads `.claude/*` follows (the
+  // approval of pi-code, reduced to the public Pi calls it makes): Pi's flag
+  // `ctx.isProjectTrusted()` first, then, for configuration Pi never gates
+  // itself, the decision in Pi's trust store under the agent directory, and
+  // only then a question to the person. PiShip sets the first and writes the
+  // second from its policy, so a headless session with no stored click still
+  // loads exactly what policy admits, and nothing else.
+  describe("project trust seam", () => {
+    const seam = (decision: { trusted: boolean; surfaces: number }) =>
+      ({
+        projectTrust: { ...decision, reason: "compat" },
+        options: { cwd: temp },
+        emit: () => {},
+        notice: () => {},
+      }) as never;
+
+    async function claudeExtension(agentDir: string, projectTrusted: boolean) {
+      const saved = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      try {
+        const seen: {
+          flag: boolean;
+          stored: boolean | null;
+          approved: boolean;
+          hasUI: boolean;
+        }[] = [];
+        const extension: InlineExtension = {
+          name: "compat-claude-trust",
+          factory: (pi) => {
+            pi.on("session_start", (_event, ctx) => {
+              const flag = ctx.isProjectTrusted();
+              const stored = new ProjectTrustStore(getAgentDir()).get(ctx.cwd);
+              const claudeShaped = existsSync(
+                join(ctx.cwd, ".claude", "rules"),
+              );
+              seen.push({
+                flag,
+                stored,
+                hasUI: ctx.hasUI,
+                approved:
+                  flag === true &&
+                  (!claudeShaped ||
+                    hasTrustRequiringProjectResources(ctx.cwd) ||
+                    stored === true),
+              });
+            });
+          },
+        };
+        const { session: agent } = await session({
+          extensions: [extension],
+          settingsManager: SettingsManager.inMemory(
+            { retry: { enabled: false } },
+            { projectTrusted },
+          ),
+        });
+        await agent.bindExtensions({});
+        return seen;
+      } finally {
+        if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = saved;
+      }
+    }
+
+    it("is Pi's flag, true by default for an in-memory settings manager and false when PiShip says so", () => {
+      expect(SettingsManager.inMemory({}).isProjectTrusted()).toBe(true);
+      expect(
+        SettingsManager.inMemory(
+          {},
+          { projectTrusted: false },
+        ).isProjectTrusted(),
+      ).toBe(false);
+    });
+
+    it("gates .pi/mcp.json itself, but not .claude/*, which is why an extension needs the seam", () => {
+      const project = join(temp, "gated");
+      mkdirSync(join(project, ".claude", "rules"), { recursive: true });
+      expect(hasTrustRequiringProjectResources(project)).toBe(false);
+      write(join(project, ".pi", "mcp.json"), "{}");
+      expect(hasTrustRequiringProjectResources(project)).toBe(true);
+    });
+
+    it("hands an extension the decision PiShip took, with no person to click", async () => {
+      const agentDir = join(temp, "seam-agent");
+      mkdirSync(join(temp, ".claude", "rules"), { recursive: true });
+      const trusted = sessionProjectTrust(
+        seam({ trusted: true, surfaces: 4 }),
+        temp,
+        agentDir,
+      );
+      expect(trusted).toBe(true);
+      expect(await claudeExtension(agentDir, trusted)).toEqual([
+        { flag: true, stored: true, hasUI: false, approved: true },
+      ]);
+    });
+
+    it("closes the extension when PiShip denies the project, and withdraws an approval the person stored earlier", async () => {
+      const agentDir = join(temp, "seam-agent");
+      mkdirSync(join(temp, ".claude", "rules"), { recursive: true });
+      new ProjectTrustStore(agentDir).set(temp, true);
+      const trusted = sessionProjectTrust(
+        seam({ trusted: false, surfaces: 4 }),
+        temp,
+        agentDir,
+      );
+      expect(trusted).toBe(false);
+      expect(await claudeExtension(agentDir, trusted)).toEqual([
+        { flag: false, stored: false, hasUI: false, approved: false },
+      ]);
+    });
+
+    it("leaves a person's click out of it: a stored approval does not open a project PiShip denies", async () => {
+      const agentDir = join(temp, "seam-agent");
+      mkdirSync(join(temp, ".claude", "rules"), { recursive: true });
+      // The store says yes (as /trust would), the flag says no.
+      new ProjectTrustStore(agentDir).set(temp, true);
+      const [outcome] = await claudeExtension(agentDir, false);
+      expect(outcome).toMatchObject({
+        flag: false,
+        stored: true,
+        approved: false,
+      });
+    });
+  });
 
   it("delivers every extension event and registration PiShip uses", async () => {
     const seen: string[] = [];
@@ -2790,4 +2921,63 @@ describe("Codemode, tool search, and exposure under PiShip governance", () => {
     expect(agent.getActiveToolNames()).toEqual(["codemode"]);
     agent.dispose();
   });
+});
+
+it("reserves every Pi-owned environment variable from package configuration", () => {
+  const root = fileURLToPath(
+    new URL(
+      "../../../node_modules/@earendil-works/pi-coding-agent/dist/",
+      import.meta.url,
+    ),
+  );
+  const names = new Set<string>();
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.name.endsWith(".js")) {
+        const source = readFileSync(path, "utf8");
+        for (const match of source.matchAll(
+          /process\.env(?:\.(PI_[A-Z0-9_]+)|\[["'](PI_[A-Z0-9_]+)["']\])/g,
+        )) {
+          const name = match[1] ?? match[2];
+          if (name) names.add(name);
+        }
+      }
+    }
+  }
+  visit(root);
+  expect(names.has("PI_PACKAGE_DIR")).toBe(true);
+  for (const name of names) {
+    for (const npmPackage of ["pi-lens", "pi-background-tasks", "pi-tools"]) {
+      expect(
+        () =>
+          parseManifest({
+            schema: "piship/v1alpha6",
+            app: {
+              id: "compat",
+              name: "Compat",
+              command: "compat",
+              version: "1.0.0",
+            },
+            runtime: { pi: PINNED_PI_VERSION },
+            deployment: { mode: "personal" },
+            updates: { channel: "stable", channels: ["stable"] },
+            resources: {
+              packages: [
+                {
+                  id: "lens",
+                  source: "npm",
+                  package: npmPackage,
+                  version: "1.0.0",
+                  class: "user",
+                  environment: { [name]: "1" },
+                },
+              ],
+            },
+          }),
+        name,
+      ).toThrow(`resources.packages[0].environment.${name}`);
+    }
+  }
 });

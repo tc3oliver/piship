@@ -56,6 +56,13 @@ export function governanceLock(
       if (provider.certified)
         assertIntegrity(integrity, provider.certified.integrity, field);
     }
+    // A package provider is the package's extensions, reviewed and locked as
+    // the package: its class and evidence are the package's own.
+    const evidence =
+      provider.certified ??
+      governance.resources.packages?.find(
+        (item) => item.id === provider.package,
+      )?.certified;
     return [
       {
         capability: capability.name,
@@ -64,8 +71,9 @@ export function governanceLock(
         version: provider.version,
         implements: provider.implements,
         ...(provider.path ? { path: provider.path } : {}),
+        ...(provider.package ? { package: provider.package } : {}),
         ...(integrity ? { integrity } : {}),
-        ...(provider.certified ? { certified: provider.certified } : {}),
+        ...(evidence ? { certified: evidence } : {}),
       },
     ];
   });

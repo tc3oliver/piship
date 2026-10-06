@@ -5,13 +5,13 @@ import {
   DEFAULT_SANDBOX_ENVIRONMENT,
   DEFAULT_SANDBOX_READ_DENY,
   ManifestError,
+  migrateManifestSource,
   PISHIP_SCHEMA_V1ALPHA2,
   PISHIP_SCHEMA_V1ALPHA3,
-  SUPPORTED_SCHEMAS,
-  migrateManifestSource,
   parseGovernance,
   parseManifest,
   parseManifestHeader,
+  SUPPORTED_SCHEMAS,
 } from "./index.js";
 
 type Json = Record<string, unknown>;
@@ -50,7 +50,7 @@ function managed(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA3,
     app,
-    runtime: { pi: "1.0.2" },
+    runtime: { pi: "1.0.3" },
     deployment: { mode: "managed" },
     ...structuredClone(managedAccess),
     ...extra,
@@ -60,7 +60,7 @@ function personal(extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA3,
     app: { ...app, id: "mypi", command: "mypi" },
-    runtime: { pi: "1.0.2" },
+    runtime: { pi: "1.0.3" },
     deployment: { mode: "personal" },
     ...extra,
   };
@@ -78,7 +78,7 @@ function certified(extra: Json = {}): Json {
     source: "https://example.org/source-citation",
     integrity: INTEGRITY,
     license: "MIT",
-    pi: ["1.0.2"],
+    pi: ["1.0.3"],
     ...extra,
   };
 }
@@ -385,7 +385,7 @@ describe("v1alpha3 full managed example", () => {
           source: "npm:@acme/agents-plus@0.4.0",
           integrity: INTEGRITY,
           license: "Apache-2.0",
-          pi: ["1.0.2", "0.88.0"],
+          pi: ["1.0.3", "0.88.0"],
           platforms: ["linux"],
         },
       },
@@ -513,7 +513,7 @@ describe("v1alpha3 full managed example", () => {
           source: "https://example.org/source-citation",
           integrity: INTEGRITY,
           license: "MIT",
-          pi: ["1.0.2"],
+          pi: ["1.0.3"],
           platforms: ["linux", "darwin", "win32"],
         },
       },
@@ -572,7 +572,7 @@ describe("v1alpha3 full managed example", () => {
         source: "npm:@acme/agents-plus@0.4.0",
         integrity: INTEGRITY,
         license: "Apache-2.0",
-        pi: ["1.0.2", "0.88.0"],
+        pi: ["1.0.3", "0.88.0"],
         platforms: ["linux"],
       },
     });
@@ -1057,7 +1057,7 @@ describe("v1alpha3 capabilities", () => {
       source: "npm:perm@1.0.0",
       integrity: INTEGRITY,
       license: "MIT",
-      pi: ["1.0.2"],
+      pi: ["1.0.3"],
     };
     expect(
       governance(capability("permissions", company(base))).capabilities[0]
@@ -1285,6 +1285,62 @@ describe("v1alpha3 policy", () => {
     ],
   ])("rejects invalid project trust %#", (value, field) => {
     rejects(trust(value), field);
+  });
+
+  describe("Claude Code dimensions", () => {
+    const claude = (value: Json, mode: "personal" | "managed" = "personal") =>
+      governance(
+        mode === "managed"
+          ? managed({ policy: { projectTrust: value } })
+          : personal({ policy: { projectTrust: value } }),
+      ).policy.projectTrust;
+
+    it("are absent from the parsed policy unless declared, so no lock changes", () => {
+      for (const mode of ["personal", "managed"] as const) {
+        const projectTrust = claude({}, mode);
+        for (const origin of ["company", "external", "unknown"] as const)
+          for (const dimension of [
+            "claudeRules",
+            "claudeCommands",
+            "claudeSkills",
+            "claudeAgents",
+            "claudeHooks",
+          ])
+            expect(projectTrust[origin].dimensions).not.toHaveProperty(
+              dimension,
+            );
+      }
+    });
+
+    it("are kept when declared, and only those", () => {
+      const projectTrust = claude({
+        company: { claudeRules: "allow", claudeHooks: "ask" },
+        unknown: { claudeAgents: "company-approved" },
+      });
+      expect(projectTrust.company.dimensions).toMatchObject({
+        instructions: "allow",
+        claudeRules: "allow",
+        claudeHooks: "ask",
+      });
+      expect(projectTrust.company.dimensions).not.toHaveProperty(
+        "claudeCommands",
+      );
+      expect(projectTrust.unknown.dimensions).toMatchObject({
+        claudeAgents: "company-approved",
+      });
+      expect(projectTrust.external.dimensions).not.toHaveProperty(
+        "claudeAgents",
+      );
+    });
+
+    it.each([
+      [{ company: { claudeRules: "maybe" } }, "claudeRules"],
+      [{ external: { claudeHooks: true } }, "claudeHooks"],
+      [{ unknown: { claudeCommand: "allow" } }, "claudeCommand"],
+    ])("rejects an invalid declaration %#", (value, name) => {
+      const origin = Object.keys(value)[0];
+      rejects(trust(value), `policy.projectTrust.${origin}.${name}`);
+    });
   });
 });
 
@@ -2129,7 +2185,7 @@ describe("v1alpha3 audit", () => {
 
 describe("migration to piship/v1alpha3", () => {
   const v1 =
-    'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n  extensions: [./ext]\n';
+    'schema: piship/v1alpha1\n# keep comments\napp:\n  id: mypi\n  name: MyPi\n  command: mypi\n  version: 1.0.0\nruntime:\n  pi: "1.0.3"\ndeployment:\n  mode: personal\nresources:\n  skills:\n    - ./skills\n  extensions: [./ext]\n';
   it("migrates v1alpha1 to v1alpha3 in steps", () => {
     const plan = migrateManifestSource(v1, PISHIP_SCHEMA_V1ALPHA3);
     expect(plan.from).toBe("piship/v1alpha1");
@@ -2164,7 +2220,7 @@ describe("migration to piship/v1alpha3", () => {
     const source = [
       "schema: piship/v1alpha2",
       "app: { id: acmecode, name: AcmeCode, command: acmecode, version: 1.0.0 }",
-      'runtime: { pi: "1.0.2" }',
+      'runtime: { pi: "1.0.3" }',
       "deployment: { mode: managed }",
       "variables: [ACME_ISSUER, ACME_CLIENT_ID, ACME_GATEWAY_URL]",
       "identity:",
@@ -2229,6 +2285,11 @@ describe("migration to piship/v1alpha3", () => {
         extensions: "deny",
         mcp: "deny",
         providers: "deny",
+        claudeRules: "deny",
+        claudeCommands: "deny",
+        claudeSkills: "deny",
+        claudeAgents: "deny",
+        claudeHooks: "deny",
       });
     expect(manifest.governance?.sandbox.required).toBe(false);
     expect(manifest.governance?.sandbox.network.mode).toBe("allow");
@@ -2241,7 +2302,7 @@ describe("migration to piship/v1alpha3", () => {
   });
   it("leaves a v1alpha3 manifest unchanged", () => {
     const source =
-      'schema: piship/v1alpha3\napp: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }\nruntime: { pi: "1.0.2" }\ndeployment: { mode: personal }\n';
+      'schema: piship/v1alpha3\napp: { id: mypi, name: MyPi, command: mypi, version: 1.0.0 }\nruntime: { pi: "1.0.3" }\ndeployment: { mode: personal }\n';
     expect(migrateManifestSource(source, PISHIP_SCHEMA_V1ALPHA3)).toEqual({
       from: PISHIP_SCHEMA_V1ALPHA3,
       to: PISHIP_SCHEMA_V1ALPHA3,

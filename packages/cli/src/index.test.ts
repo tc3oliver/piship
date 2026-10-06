@@ -297,7 +297,7 @@ describe("validate", () => {
       command: "acmecode",
       version: "1.0.0",
     },
-    runtime: { pi: "1.0.2" },
+    runtime: { pi: "1.0.3" },
     deployment: { mode: "managed" },
     identity: {
       mode: "oidc",
@@ -859,7 +859,7 @@ describe("signing key passphrases", () => {
       "") as string;
     writeFileSync(
       join(temp, "project", "piship.yaml"),
-      `schema: piship/v1alpha5\napp:\n  id: acmepi\n  name: AcmePi\n  command: acmepi\n  version: 1.0.0\nruntime:\n  pi: "1.0.2"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    user: [./resources/AGENTS.md]\n${yaml}\n`,
+      `schema: piship/v1alpha5\napp:\n  id: acmepi\n  name: AcmePi\n  command: acmepi\n  version: 1.0.0\nruntime:\n  pi: "1.0.3"\ndeployment:\n  mode: personal\nresources:\n  instructions:\n    user: [./resources/AGENTS.md]\n${yaml}\n`,
     );
     const args = [
       "trust-root",
@@ -1159,7 +1159,7 @@ describe("config explain from a manifest", () => {
       JSON.stringify({
         schema: "piship/v1alpha5",
         app: { id: ID, name: "MyPi", command: ID, version: "1.0.0" },
-        runtime: { pi: "1.0.2" },
+        runtime: { pi: "1.0.3" },
         deployment: { mode: "personal" },
         updates: {
           source: "http://updates.corp.internal/mypi",

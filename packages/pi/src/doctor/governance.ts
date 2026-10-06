@@ -3,7 +3,11 @@
 // a launch resolves, virtual models and Pi packages from the lock, the data
 // lifecycle, and whether the manifest schema predates the current one.
 import { POLICY_ACTIONS } from "@piship/contracts";
-import { releasesWithoutDataSweep } from "@piship/core";
+import {
+  inspectAgentFiles,
+  packageEnvironment,
+  releasesWithoutDataSweep,
+} from "@piship/core";
 import {
   enforcementStatus,
   manifestContainment,
@@ -120,6 +124,28 @@ export function governanceGroup(data: DoctorData, out: DoctorSection): void {
         `package ${item.id}`,
         `${item.source}${item.version ? ` ${item.version}` : ""}${item.commit ? ` ${item.commit.slice(0, 12)}` : ""} (${item.class}), ${item.files} files`,
       );
+    // What the launch sets for the packages: values are manifest content, never
+    // secrets, so they are shown as declared (a state path stays relative).
+    for (const entry of packageEnvironment(lock, data.ctx.stateDir))
+      out.info(
+        `${entry.package} env`,
+        `${entry.name}=${typeof entry.declared === "string" ? entry.declared : `<state>/${entry.declared.statePath}`}`,
+      );
+    for (const file of inspectAgentFiles(lock, data.ctx.agentDir)) {
+      const mode = `${file.package} ${file.mode}`;
+      if (file.state === "current")
+        out.ok(`${mode} file`, `${file.path} as declared`);
+      else if (file.state === "edited")
+        out.info(
+          `${mode} file`,
+          `${file.path} edited by the user and kept; delete it to restore the declared default`,
+        );
+      else
+        out.warn(
+          `${mode} file`,
+          `${file.path} is missing or differs; the next launch writes it`,
+        );
+    }
   }
   // Absent on a v1alpha6 lock means off; an older lock leaves Pi's setting.
   if (lock.enforcement || lock.cacheWarming) {

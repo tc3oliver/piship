@@ -54,6 +54,10 @@ export interface CapabilityStateInput {
   readonly policy?: Pick<PolicyConfig, "providerTrust">;
   /** Integrity/verification results by provider id (builtin providers need none). */
   readonly verification?: Readonly<Record<string, VerificationResult>>;
+  /** Reviewed compatibility evidence from the resolved provider lock. */
+  readonly providerCertification?: Readonly<
+    Record<string, NonNullable<CapabilityProviderRef["certified"]>>
+  >;
   readonly piVersion: string;
   readonly platform: string;
   /** Contracts implemented by this release (default SUPPORTED_CAPABILITY_CONTRACTS). */
@@ -212,7 +216,8 @@ function compatibleAxis(
     return no(
       `Provider ${provider.id} implements ${sameName.join(", ")}, not major version of ${contract}`,
     );
-  const evidence = provider.certified;
+  const evidence =
+    input.providerCertification?.[provider.id] ?? provider.certified;
   if (evidence) {
     if (!evidence.pi.includes(input.piVersion))
       return no(

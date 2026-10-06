@@ -35,7 +35,9 @@ export function capabilities(
           "capabilities",
           key in bs ? (key in as ? "changed" : "removed") : "added",
           `${item} setting ${key}`,
-          ["low", "Capability setting changed."],
+          key === "autoApproveFile" || key === "autoApproveKey"
+            ? ["high", "Changes provider auto approval configuration."]
+            : ["low", "Capability setting changed."],
         );
   }
 }

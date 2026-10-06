@@ -1,6 +1,6 @@
 {
   "name": "@piship/sandbox",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/contracts": "0.9.1"
+    "@piship/contracts": "0.10.0"
   },
   "description": "Sandbox adapters and governed child-process execution for PiShip.",
   "keywords": [

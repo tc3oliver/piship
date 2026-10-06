@@ -397,11 +397,28 @@ export class Sandboxes {
     // PiShip names the git control paths it needs kept read-only. Those under
     // .git are covered by the mount above; the rest (a core.hooksPath in the
     // working tree, a config file the git config includes) are mounted
-    // read-only if they exist. One that does not exist cannot be guarded, and
-    // PiShip's workspace check would find it creatable, so refuse now.
+    // read-only if they exist. An absent directory is covered by a read-only
+    // tmpfs at its first missing ancestor. An absent file still needs a
+    // protected parent directory, or creation is refused.
     const candidates = [];
-    for (const path of [...request.directories, ...request.files]) {
-      const resolved = realpathNearest(path);
+    for (const [path, directory] of [
+      ...request.directories.map((path) => [path, true]),
+      ...request.files.map((path) => [path, false]),
+    ]) {
+      let resolved = realpathNearest(path);
+      // One empty read-only mount covers the entire missing subtree. Mount
+      // its first absent directory, so no writable new ancestor can be
+      // renamed to carry the protection away.
+      if (directory && !lstatOrUndefined(resolved)) {
+        while (
+          dirname(resolved) !== real &&
+          !lstatOrUndefined(dirname(resolved))
+        ) {
+          const parent = dirname(resolved);
+          if (parent === resolved) break;
+          resolved = parent;
+        }
+      }
       const rel = relative(real, resolved);
       if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`)) continue;
       if (isAbsolute(rel) || rel === ".git" || rel.startsWith(`.git${sep}`))
@@ -410,6 +427,7 @@ export class Sandboxes {
         throw unsupported("A protected path cannot be mounted");
       candidates.push({
         resolved,
+        directory,
         depth: rel.split(sep).length,
         target: posix.join(WORKSPACE_MOUNT, ...rel.split(sep)),
       });
@@ -419,9 +437,19 @@ export class Sandboxes {
     candidates.sort((a, b) => a.depth - b.depth);
     const directories = [];
     const protectedMounts = [];
-    for (const { resolved, target } of candidates) {
-      if (directories.some((dir) => target.startsWith(`${dir}/`))) continue;
+    for (const { resolved, target, directory } of candidates) {
+      if (
+        directories.some(
+          (dir) => target === dir || target.startsWith(`${dir}/`),
+        )
+      )
+        continue;
       const stat = lstatOrUndefined(resolved);
+      if (!stat && directory) {
+        directories.push(target);
+        protectedMounts.push({ target, readonly: true, tmpfs: true });
+        continue;
+      }
       if (!stat)
         throw new SandboxError(
           409,
@@ -546,8 +574,11 @@ export class Sandboxes {
     // be the very file the check held, by device and inode; otherwise the
     // container goes.
     if (this.#config.mountIdentity === "verify") {
-      const targets = [WORKSPACE_MOUNT, ...plan.mounts.map((m) => m.target)];
-      const expected = [plan.identity, ...plan.mounts.map((m) => m.identity)];
+      // An empty tmpfs has no host source identity to compare. All host
+      // binds, including every parent pin, retain the same verification.
+      const binds = plan.mounts.filter((mount) => !mount.tmpfs);
+      const targets = [WORKSPACE_MOUNT, ...binds.map((m) => m.target)];
+      const expected = [plan.identity, ...binds.map((m) => m.identity)];
       const seen = await this.#docker.run(
         mountIdentityArguments(name, targets),
         { timeoutMs: 15_000 },
@@ -577,6 +608,47 @@ export class Sandboxes {
               "runtime_error",
               "The container runtime could not start the sandbox",
             );
+      }
+    }
+    // An empty tmpfs has no source inode. Verify the kernel's mount table
+    // instead: it must be a read-only tmpfs at the exact requested path. A
+    // target swapped for a symlink during creation would mount elsewhere.
+    const emptyMounts = plan.mounts.filter((mount) => mount.tmpfs);
+    if (emptyMounts.length) {
+      const table = await this.#docker.run(
+        ["exec", name, "cat", "/proc/self/mountinfo"],
+        { timeoutMs: 15_000 },
+      );
+      const decode = (path) =>
+        path.replace(/\\([0-7]{3})/g, (_match, octal) =>
+          String.fromCharCode(Number.parseInt(octal, 8)),
+        );
+      const same =
+        table.code === 0 &&
+        emptyMounts.every((mount) =>
+          table.stdout.split("\n").some((line) => {
+            const [left, right] = line.split(" - ");
+            const fields = left?.split(" ");
+            return (
+              fields?.[4] &&
+              decode(fields[4]) === mount.target &&
+              fields[5]?.split(",").includes("ro") &&
+              right?.split(" ")[0] === "tmpfs"
+            );
+          }),
+        );
+      if (!same) {
+        this.#log("sandbox.create.failed", {
+          owner,
+          reason:
+            "an empty protected directory is not a read-only tmpfs at its checked path",
+        });
+        await this.#docker.run(["rm", "--force", name]);
+        throw new SandboxError(
+          409,
+          "workspace_changed",
+          "The workspace changed while the sandbox was being created",
+        );
       }
     }
     // The sandbox's main process, found now, before any command has run: a

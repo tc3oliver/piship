@@ -29,7 +29,7 @@ function manifest(updates: Json, extra: Json = {}): Json {
   return {
     schema: PISHIP_SCHEMA_V1ALPHA5,
     app: { id: "mypi", name: "MyPi", command: "mypi", version: "1.0.0" },
-    runtime: { pi: "1.0.2" },
+    runtime: { pi: "1.0.3" },
     deployment: { mode: "personal" },
     ...(JSON.stringify(updates).includes("MYPI_UPDATE_SOURCE")
       ? { variables: ["MYPI_UPDATE_SOURCE"] }

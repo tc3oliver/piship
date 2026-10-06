@@ -57,6 +57,8 @@ export interface ProviderLockEntry {
   readonly implements: readonly string[];
   /** Declared `./` path for non-builtin providers. */
   readonly path?: string;
+  /** piship/v1alpha6: the declared Pi package whose extensions are the provider. */
+  readonly package?: string;
   /** Tree digest of the provider files for non-builtin providers. */
   readonly integrity?: string;
   readonly certified?: CertifiedEvidence;

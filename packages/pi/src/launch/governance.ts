@@ -16,6 +16,7 @@ import {
 } from "@piship/contracts";
 import {
   configuredModel,
+  describeYolo,
   eventDetail,
   type GovernedLock,
   governedLock,
@@ -98,6 +99,10 @@ export function governanceOptions(
     cwd: process.cwd(),
     piVersion: VERSION,
     interactive,
+    ...(ctx.yolo ? { yolo: true } : {}),
+    ...(ctx.endProviderAutoApprove
+      ? { onYoloEnd: ctx.endProviderAutoApprove }
+      : {}),
     fetch: createManagedFetch(network, "governance"),
     plainHttpFetch: (plainHttp) =>
       createManagedFetch(network, "governance", { plainHttp }),
@@ -245,6 +250,8 @@ export async function openGovernance(
   const gov = await GovernanceSession.open(
     governanceOptions(ctx, lock, prepared, interactive),
   );
+  // Before Pi's screen opens, and in a headless run where nothing else shows it.
+  if (gov.yolo) ctx.err(`Notice: ${describeYolo(ctx.mode)}`);
   const { access } = prepared;
   // Only lifecycle changes are recorded: reusing a stored credential is not
   // an acquisition. Later refreshes during the session are forwarded live.

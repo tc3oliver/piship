@@ -92,10 +92,14 @@ export function runArguments(config, spec) {
     "no",
     "--env",
     `HOME=${CANCEL_DIRECTORY}`,
-    ...mounts.flatMap((mount) => [
-      "--mount",
-      `type=bind,src=${mount.source},dst=${mount.target}${mount.readonly ? ",readonly" : ""}`,
-    ]),
+    ...mounts.flatMap((mount) =>
+      mount.tmpfs
+        ? ["--tmpfs", `${mount.target}:ro,nosuid,nodev,size=64k,mode=0555`]
+        : [
+            "--mount",
+            `type=bind,src=${mount.source},dst=${mount.target}${mount.readonly ? ",readonly" : ""}`,
+          ],
+    ),
     "--workdir",
     WORKSPACE_MOUNT,
     config.image,

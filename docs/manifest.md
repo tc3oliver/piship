@@ -7,7 +7,7 @@ Six alpha schemas are accepted. All remain experimental, and unknown fields are 
 - `piship/v1alpha3` keeps the v1alpha2 access fields and adds governance: trust-classed resources, capabilities, policy, MCP, sandbox, and audit.
 - `piship/v1alpha4` is v1alpha3 plus a required `updates` section and an optional `release` section for the production lifecycle ([release](release.md)). Every v1alpha3 field keeps its meaning.
 - `piship/v1alpha5` changes only the update-trust contract: `updates.trust.bootstrap`, a versioned update root with separate root and channel signing roles, replaces v1alpha4's `updates.trust.keys` ([update trust](#update-trust-bootstrap-v1alpha5)). Every other v1alpha4 field keeps its meaning. A v0.8 release requires v1alpha5.
-- `piship/v1alpha6` adds Pi 1.x-native governance: tool exposure, Codemode and tool search, cache warming, MCP server classes, model types and virtual models, the `data` lifecycle, Pi packages, and `policy.acknowledgeUnenforced` ([v1alpha6 fields](#v1alpha6-fields)). Every v1alpha5 field keeps its meaning except MCP `tools`, which becomes an exposure map; `piship migrate` converts a v1alpha5 manifest without broadening it ([migration](#migrating-from-v1alpha5-to-v1alpha6)). `piship release` accepts v1alpha5 and v1alpha6. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha6 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha6 manifests.
+- `piship/v1alpha6` adds Pi 1.x-native governance: tool exposure, Codemode and tool search, cache warming, MCP server classes, model types and virtual models, the `data` lifecycle, Pi packages, and `policy.acknowledgeUnenforced` ([v1alpha6 fields](#v1alpha6-fields)). Every v1alpha5 field keeps its meaning except MCP `tools`, which becomes an exposure map; `piship migrate` converts a v1alpha5 manifest without broadening it ([migration](#migrating-from-v1alpha5-to-v1alpha6)). `piship release` accepts v1alpha5 and v1alpha6. The [demo company example](../examples/demo-company/piship.yaml) is a managed v1alpha6 manifest, and the [personal example](../examples/personal/piship.yaml) and its [local-model variant](../examples/personal/local-model/piship.yaml) are personal v1alpha6 manifests, as is the [developer example](../examples/developer/piship.yaml), which also ships a [hardened managed variant](../examples/developer/managed.piship.yaml).
 
 ## Common fields
 
@@ -77,7 +77,7 @@ resources:
         source: https://example.org/acme/release-notes
         integrity: sha256-<64 hex characters>
         license: MIT
-        pi: ["1.0.2"]
+        pi: ["1.0.3"]
         platforms: [linux, darwin]   # optional; empty means any
   extensions:
     builtin: [piship-ask-user, piship-workflow]
@@ -100,7 +100,7 @@ A certified entry carries review evidence: `id`, `version` (SemVer), `source`, `
 | `workflow` | `piship.capability/workflow/v1` | Implemented by `builtin/workflow`; disabled by default |
 | `checkpoint`, `subagents`, `code-intel`, `acp` | `piship.capability/<name>/v1` (`subagents` uses `agents`) | Known but not implemented: reported as `supported: no` and never effective |
 
-A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`, or `user`; `upstream` is rejected because Pi ships no capability providers. A builtin provider declares only its `id`. Other providers declare `version`, `implements` (contract IDs such as `piship.capability/workflow/v1`), and a `./` `path` to their Pi extension; a certified provider adds the certified evidence fields. An enabled capability without a provider uses the builtin provider when one exists.
+A provider `id` is `<class>/<name>` with class `builtin`, `certified`, `company`, or `user`; `upstream` is rejected because Pi ships no capability providers. A builtin provider declares only its `id`. Other providers declare `version`, `implements` (contract IDs such as `piship.capability/workflow/v1`), and a `./` `path` to their Pi extension (or, from v1alpha6, `package: <id>` naming a declared Pi package, see [what a package is given](#what-a-package-is-given-environment-and-files)); a certified provider adds the certified evidence fields. An enabled capability without a provider uses the builtin provider when one exists.
 
 The builtin workflow reads three settings: `defaultMode` (`plan`, the default, or `build`), `planPrompt`, and `buildPrompt`. The prompts are appended to the system prompt for the current mode; built-in defaults are used when they are omitted.
 
@@ -119,7 +119,7 @@ The branded `capabilities [--json]` command reports six axes per capability (`su
 | `policy.projectTrust` | see below | Project origin matchers and per-dimension effects |
 | `policy.enforced` | `[]` | Rules that nothing below can relax |
 | `policy.defaults` | `[]` | Distribution rules a personal user may relax; managed user rules only narrow |
-| `policy.userAuto` | `off` (absent) | v1alpha5, managed only: `off` or `allowed`. `allowed` lets each user switch on [auto mode](#user-auto-mode), which approves an `ask` from `policy.defaults` or `policy.default` without a prompt; `deny`, `policy.enforced`, and team, project, and the user's own rules are never relaxed. A personal manifest that declares it is rejected: there the user already relaxes `ask` with allow rules in `config/policy.json` |
+| `policy.userAuto` | `off` (absent) | v1alpha5, managed only: `off` or `allowed`. `allowed` lets each user switch on [auto mode](#user-auto-mode), which approves an `ask` from `policy.defaults` or `policy.default` without a prompt; `deny`, `policy.enforced`, and team, project, and the user's own rules are never relaxed. It also lets a user start a session with [`--yolo`](#the---yolo-launch-option), which does the same for that session only and stores nothing. A personal manifest that declares it is rejected: there the user already relaxes `ask` with allow rules in `config/policy.json` |
 
 A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, `resource` (default `**`), `effect` (`allow`, `ask`, or `deny`), and an optional `reason` shown in denials. `action` is one action, a known prefix such as `mcp.*`, or `*`. The actions are `model.select` (written `model.use` before v1alpha6, which is still accepted as an alias), `model.dispatch`, `session.export`, `resource.load`, `extension.load`, `skill.load`, `instruction.load`, `provider.load`, `agent.invoke`, `mcp.server.start`, `mcp.tool.call`, `tool.execute`, `shell.execute`, `filesystem.read`, `filesystem.write`, `network.connect`, `memory.read`, `memory.write`, `web.request`, and `browser.execute`. This release evaluates the actions below at runtime. `agent.invoke`, `memory.read`, `memory.write`, `web.request`, `browser.execute`, and `network.connect` (unless a required sandbox has `network.mode: deny`) have no runtime seam: they are accepted in rules and by `policy explain`, report `unsupported`, and a managed `deny` or `ask` rule naming one fails `validate` with `POLICY_UNENFORCEABLE` ([enforcement status](#enforcement-status)).
 
@@ -138,7 +138,7 @@ A rule has `id` (lowercase, unique across `enforced` and `defaults`), `action`, 
 
 Resource globs are anchored and case-sensitive. `*` matches any run of characters except `/`, `:`, and line breaks; `**` matches anything. A trailing `/**` also matches the directory itself (`~/.ssh/**` covers `~/.ssh`), and `/**/` also matches a single `/`. Filesystem rules may start with the path tokens `workspace` (the project root), `~/` (the home directory), and `tmp/` (the session temp directory, or the system one without a sandbox); they are expanded and symlink-resolved like the requested path.
 
-`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with `remote` (a glob over `host/path`), `path` (a glob over the absolute root), or both, in which case both must match; company is checked first, and anything else is `unknown`. The remote comes from the checkout's own git configuration, so `remote` alone is a claim, not proof; in managed distributions combine it with `path`, as in `{ remote: "git.acme.example/**", path: "/srv/src/**" }`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved`:
+`policy.projectTrust` classifies the workspace. PiShip finds the project root by walking up to a `.git` entry, reads the `origin` remote from the git configuration without running git, and normalizes it to `host/path` (no scheme, user, port, or `.git`). `company.match` and `external.match` list matchers with `remote` (a glob over `host/path`), `path` (a glob over the absolute root), or both, in which case both must match; company is checked first, and anything else is `unknown`. The remote comes from the checkout's own git configuration, so `remote` alone is a claim, not proof; in managed distributions combine it with `path`, as in `{ remote: "git.acme.example/**", path: "/srv/src/**" }`. Each origin sets eight dimensions to `allow`, `ask`, `deny`, or `company-approved` (five optional [Claude Code dimensions](#claude-code-project-configuration) follow):
 
 | Dimension | Project items | Managed default (company / external / unknown) | Personal default (company, external / unknown) |
 | --- | --- | --- | --- |
@@ -151,6 +151,57 @@ Resource globs are anchored and case-sensitive. `*` matches any run of character
 
 `company-approved` admits only distribution-approved items: project extensions are never loaded under it, and project MCP definitions may not add servers. This release never loads project agents, hooks, or providers, whatever the dimension says. An `ask` is answered on the terminal before Pi starts; headless launches have no one to ask, so `ask` resolves to deny. The user's [auto mode](#user-auto-mode) never answers these project trust prompts: they decide whether to trust a workspace's content, not whether to run an action.
 
+### Claude Code project configuration
+
+A repository that already works with Claude Code holds `CLAUDE.md`, `.claude/rules`, `.claude/commands`, `.claude/skills`, `.claude/agents`, hooks (declared in `.claude/settings.json`, with scripts often under `.claude/hooks`), and often `.mcp.json`. Pi's own project discovery is off in a distribution, and PiShip itself loads none of this except the root `CLAUDE.md`, an `instructions` item as before. A distribution that includes an extension for it, such as the [pi-code](https://www.npmjs.com/package/pi-code) package, gets it loaded by that extension, which reads the files itself once Pi reports the project as trusted. PiShip owns that answer, so a project's own `.claude/` never admits itself under company policy ([security](security.md#project-trust)). Five optional dimensions, set per origin like the eight above, decide it:
+
+| Dimension | Project items, found in every directory from the working directory up to the project root | Managed default (company / external / unknown) | Personal default (company / external / unknown) |
+| --- | --- | --- | --- |
+| `claudeRules` | `.claude/rules`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/output-styles` | company-approved / deny / deny | allow / allow / ask |
+| `claudeCommands` | `.claude/commands` | company-approved / deny / deny | allow / allow / ask |
+| `claudeSkills` | `.claude/skills` | company-approved / deny / deny | allow / allow / ask |
+| `claudeAgents` | `.claude/agents` | company-approved / deny / deny | allow / allow / ask |
+| `claudeHooks` | `.claude/hooks`, `.claude/settings.json`, `.claude/settings.local.json` | deny / deny / deny | allow / allow / ask |
+
+- **Optional.** A dimension the manifest does not declare takes the default above when the project is evaluated. It is not written to the parsed policy or the lock, so the lock of an existing distribution does not change, and `piship diff` reads an undeclared one as its default (declaring the default is no change) and reports a changed one like any other dimension. Personal mode loads the configuration of a company or external project without a prompt and asks once per launch for an unknown one; managed mode loads none of it until the company declares `allow` for an origin it trusts, because `company-approved` admits no project content here (an extension's code cannot be held to an allowlist). `policy.resourceTrust.project: deny` denies all five, and `allow` admits rules; Claude commands, skills, agents, and hooks still require their own dimension.
+- **Admitted as a unit.** Pi gives an extension one answer per session, never one per kind. PiShip therefore admits the configuration an extension reads as a whole: the five kinds above, `.mcp.json` and `.pi/mcp.json` (the `mcp` dimension), and `.pi/agents` (`agents`), which pi-code reads under the same answer. Each is looked for in every directory from the working directory up to the project root, where an extension finds the nearest one. Every item found must be admitted: one that is denied, or `company-approved`, leaves all of them unloaded. `claudeHooks` covers `.claude/settings.json` and `settings.local.json` because Claude hooks, `env`, and a status-line command are declared there, and PiShip does not read them; a project that has a settings file stays closed while `claudeHooks` is `deny`.
+- **Per item.** Each item is then decided as `resource.load` with the resource `project:<path under the project root>`, such as `project:.claude/hooks` or `project:packages/app/.claude/rules`, so `policy.enforced`, `policy.defaults`, `policy.default`, and a project's narrowing-only `.piship/policy.json` apply to it: `{ id: no-project-hooks, action: resource.load, resource: "project:**/.claude/hooks", effect: deny }` keeps hooks out whatever the dimension says. An `ask` dimension asks once for the whole configuration, on the terminal before Pi starts; headless, it resolves to deny.
+- **Nothing found.** A personal project with no such configuration is trusted. A managed one is trusted only when policy admits all five dimensions for its origin, because an extension can search where PiShip did not (the main checkout of a linked worktree, a directory below the working directory) and PiShip cannot prove nothing is there.
+- **Recorded.** Each item produces a `resource.load` or `resource.denied` audit event (`detail.kind` `claude` or `extension-config`, `detail.dimension`), and the unit produces one more for `project:.claude` with `detail.seam: project-trust`. `--smoke` lists the items under `governance.resources` with the reason each did not load. `doctor` shows each item in the Project group and, last, `project trust for extensions` with the static decision. A launch that leaves configuration unloaded prints one notice saying so.
+
+A company that trusts its own repositories and wants rules, commands, skills, and agents to work, but not hooks, declares:
+
+```yaml
+policy:
+  projectTrust:
+    company:
+      match: [{ remote: "git.acme.example/**", path: "/srv/src/**" }]
+      claudeRules: allow
+      claudeCommands: allow
+      claudeSkills: allow
+      claudeAgents: allow
+      claudeHooks: deny   # the default: a project with hooks or a settings file stays closed
+  defaults:
+    - { id: project-claude, action: resource.load, resource: "project:**/.claude/**", effect: allow }
+```
+
+The seam reaches only an extension that asks Pi whether the project is trusted. What PiShip does and does not enforce, including the user-scope files pi-code reads and the MCP servers it starts itself, is in [security](security.md#project-trust). For a managed distribution that includes pi-code 1.4.2, also leave out its MCP client, which starts the servers named in `~/.claude.json`, the distribution's `<state>/agent/mcp.json`, plugins, and (when trusted) the project outside PiShip's `mcp.server.start` decisions, exposure, and sandbox, and, when no hooks should run at all, its hooks extension:
+
+```yaml
+resources:
+  packages:
+    - id: pi-code
+      source: npm
+      package: pi-code
+      version: 1.4.2
+      registry: https://registry.company.example
+      class: company
+      # Package filters match the paths of the entry files inside the package.
+      extensions: ["!extensions/mcp/**"]   # add "!extensions/hooks/**" to run no Claude hooks
+```
+
+`piship lock` writes the resulting extension inventory into `piship.lock`; review it there, since a later pi-code release can lay its files out differently.
+
 ### Local rule files
 
 Two JSON files add rules at launch. Each is a list of rules or `{"rules": [...]}` with the same rule fields.
@@ -158,7 +209,7 @@ Two JSON files add rules at launch. Each is a list of rules or `{"rules": [...]}
 - `<state>/config/policy.json` holds user rules. In personal mode, where the local owner owns the policy, a matching user rule takes the place of the matching distribution default, so a user may relax a default (for example `ask` to `allow`) but never an enforced or team/project rule. In managed mode user rules are narrowing only, like project restrictions: they can tighten any decision, and `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event.
 - `.piship/policy.json` in the project holds project restrictions. It is narrowing only: `allow` rules are ignored with a warning in `doctor` and `policy explain` and a `policy.violation` audit event. It is not read if it resolves outside the project root.
 
-A managed user cannot widen the policy with these files. The one user-controlled relaxation is auto mode, and only where the distribution allows it.
+A managed user cannot widen the policy with these files. The one user-controlled relaxation is auto mode (and its session-only form, [`--yolo`](#the---yolo-launch-option)), and only where the distribution allows it.
 
 ### User auto mode
 
@@ -168,7 +219,20 @@ With `policy.userAuto: allowed` (v1alpha5, managed), each user may switch auto m
 - `deny` is never changed. An `ask` from `policy.enforced`, the team adapter, a project restriction, or the user's own `config/policy.json` still prompts: those rules were written to keep the prompt. Project trust prompts and the built-in denials (the state directory, git control files, Plan mode, the sandbox) are not policy decisions and are not affected.
 - `policy explain` shows such a decision as `AUTO-APPROVED`, effect `ask (auto-approved by user)` (`"autoApproved": true` with `--json`); `doctor` shows the switch in the Policy group; `config explain` adds a `policy.userAuto` row with the user's state.
 
-Switching it on is recorded as `policy.auto_enabled` (`detail.source`: `command` or `session`) before it changes, so a required audit sink that does not take the event leaves auto mode off (`AUDIT_UNAVAILABLE`: "Auto mode was not switched on, because its audit was not recorded"); `/auto on` delivers the event to the sinks before it switches. Switching it off only restores prompts, so a failing audit sink never blocks it: the switch changes first, and `policy.auto_disabled` is recorded best effort, with a warning when it is not. A session that starts with auto mode on records `policy.auto_enabled` with `detail.source: state`, so a switch turned on without an event (an `auto.json` edited by hand) still leaves one. `policy explain` reports `AUTO-APPROVED` only for the actions a session decides itself (tool calls, shell commands, file access, resource, extension, and provider loads, and MCP servers and tools): a mid-session `model.select` switch accepts only a model approved at start, and `network.connect`, `web.request`, `browser.execute`, `memory.*`, and `agent.invoke` have no runtime hook for auto mode to approve. With `policy.userAuto` absent or `off`, `auto on` and `/auto on` fail with `POLICY_DENIED`, and nothing else changes. The switch is stored in `<state>/config/auto.json`, bound to the signed-in principal (its principal binding): when another identity signs in, auto mode is reset to off, as the model selection is cleared, and stays off even if the first identity signs in again. Turn it on after signing in. The branded `auto on` takes effect at the next start; `/auto` applies at once. It applies only while the running release allows it: after an update to a release with `policy.userAuto: off`, a stored switch has no effect, and `doctor` and `auto status` say so. `uninstall` keeps it with the rest of the state and `purge` deletes it. Personal mode has no auto mode.
+Switching it on is recorded as `policy.auto_enabled` (`detail.source`: `command` or `session`) before it changes, so a required audit sink that does not take the event leaves auto mode off (`AUDIT_UNAVAILABLE`: "Auto mode was not switched on, because its audit was not recorded"); `/auto on` delivers the event to the sinks before it switches. Switching it off only restores prompts, so a failing audit sink never blocks it: the switch changes first, and `policy.auto_disabled` is recorded best effort, with a warning when it is not. A session that starts with auto mode on records `policy.auto_enabled` with `detail.source: state`, so a switch turned on without an event (an `auto.json` edited by hand) still leaves one. `policy explain` reports `AUTO-APPROVED` only for the actions a session decides itself (tool calls, shell commands, file access, resource, extension, and provider loads, and MCP servers and tools): a mid-session `model.select` switch accepts only a model approved at start, and `network.connect`, `web.request`, `browser.execute`, `memory.*`, and `agent.invoke` have no runtime hook for auto mode to approve. With `policy.userAuto` absent or `off`, `auto on` and `/auto on` fail with `POLICY_DENIED`, and nothing else changes. The switch is stored in `<state>/config/auto.json`, bound to the signed-in principal (its principal binding): when another identity signs in, auto mode is reset to off, as the model selection is cleared, and stays off even if the first identity signs in again. Turn it on after signing in. The branded `auto on` takes effect at the next start; `/auto` applies at once. It applies only while the running release allows it: after an update to a release with `policy.userAuto: off`, a stored switch has no effect, and `doctor` and `auto status` say so. `uninstall` keeps it with the rest of the state and `purge` deletes it. Personal mode has no stored auto mode: relax a default with an allow rule in `config/policy.json`, or start one session with [`--yolo`](#the---yolo-launch-option).
+
+### The `--yolo` launch option
+
+`<command> --yolo` starts a session in which every `ask` the policy would put to the person is approved without a prompt, for that session only. It is for the developer who should not be interrupted for routine work, and it keeps the administrator's control: `deny` is never changed, and nothing is stored, so the next start asks again. It is a leading option, accepted in any order with `--model` and `--new-session`. Put it before `--smoke` or `--smoke-model`, for example `<command> --yolo --smoke`. With `--help`, `--version`, or a subcommand it means nothing and fails with `CONFIG_INVALID` before anything starts; a distribution that declares no policy (before v1alpha3) refuses it the same way, since nothing there asks for approval.
+
+- Personal: every `ask` is approved, whichever rule wrote it: a default, `policy.default`, an enforced rule, or your own rule in `config/policy.json`. A `deny` from any layer and the built-in denials (the state directory, git control files, Plan mode, the sandbox) stay in force. No `auto.json` preference is written; a declared provider bridge temporarily changes its own configuration and records session ownership.
+- Managed: it works only where the manifest declares `policy.userAuto: allowed`. Otherwise it fails at startup with `POLICY_DENIED` ("--yolo is not allowed: this distribution does not allow auto-approval (policy.userAuto is off)"), before sign-in, the sandbox, or Pi starts. Where it is allowed it acts as [auto mode](#user-auto-mode) does for that session: an `ask` from `policy.defaults` or `policy.default` is approved, and an `ask` from `policy.enforced`, the team adapter, a project restriction, or the user's own rules keeps its prompt. It writes no `auto.json`, and a stored auto mode is neither needed nor changed.
+- Project trust prompts are not policy decisions, so `--yolo` does not answer them, as auto mode does not.
+- Headless, with `--smoke` or `--smoke-model`, the same rules apply: an `ask` is approved instead of resolving to deny, and a `deny` stays a denial.
+- It is visible: PiShip prints a `Notice:` line before the session starts, the status line shows `YOLO`, and the session opens with a warning notice. `/auto` (or `/auto status`) says that yolo is on, and `/auto off` ends it for the rest of the session; in a managed session `/auto off` also clears a stored auto mode, as it always does. The `--smoke` summary has `"yolo": true` under `governance`.
+- It is audited: the session records `policy.auto_enabled` with `detail.source: yolo` when it starts (and `detail.providerAutoApprove: true` when the provider bridge is active), `policy.loaded` with `detail.yolo: true`, and every approval as `policy.auto_approved` with `detail.approval: auto` and `detail.autoSource: yolo` (the stored auto mode leaves no `autoSource`; `detail.source` already names a tool call's origin, so it is not reused). `/auto off` records `policy.auto_disabled`.
+
+- It reaches a permission provider that declares how. A distribution whose `permissions` capability names `autoApproveFile` and `autoApproveKey` ([a package provider](#what-a-package-is-given-environment-and-files)) has that key set to `true` in the provider's own file for the launch: the provider's own prompts are approved too, which PiShip cannot do for a prompt the provider raises itself. The file is put back when the process exits, when `/auto off` ends yolo, and by the next launch when the process was killed; a `/permission-system` setting changed during the session is kept, except the auto-approval key, which is restored again at exit. Ordinary sessions may share the agent directory, but a provider bridge session started with `--yolo` requires exclusive use: a live ordinary session prevents `--yolo`, and a live `--yolo` session prevents another session. A refused launch changes no provider configuration. Ownership is held until session exit, including after `/auto off`. This restriction does not apply when no provider bridge is declared. A provider settings command can save its stale auto-approval value after `/auto off` and resume its own approvals within that session; exit and restart without `--yolo` to keep its prompts restored. PiShip's own yolo remains off. Without those settings `--yolo` changes only PiShip's own asks, and a provider's prompts stay. In a managed distribution that allows `--yolo` and declares the key, the provider's own `ask` rules are approved as well, including ones the company meant to keep, so declare the key only where that is acceptable.
 
 ### MCP
 
@@ -239,13 +303,66 @@ packageTrust:
 
 Credentials for a private registry or repository come only from npm or git configuration in the build environment; a URL with credentials is refused and never recorded.
 
+#### What a package is given: environment and files
+
+Two optional fields of a package entry hand it what it needs around its code. Both are additive: a manifest that declares neither parses, locks, and diffs exactly as before. The [developer example](../examples/developer/piship.yaml) uses them for six packages, and its [hardened variant](../examples/developer/managed.piship.yaml) shows a company setting the same fields stricter.
+
+```yaml
+resources:
+  packages:
+    - id: pi-lens
+      source: npm
+      package: pi-lens
+      version: 4.3.0
+      class: user
+      environment:
+        PI_LENS_HOME: { statePath: pi-lens }   # <state>/pi-lens, resolved on each machine
+        PI_LENS_DISABLE_TOOL_INSTALL: "1"
+    - id: pi-permission-system
+      source: npm
+      package: "@gotgenes/pi-permission-system"
+      version: 39.0.4
+      class: certified
+      certified: { ... }
+      agentFiles:
+        - path: extensions/pi-permission-system/config.json
+          mode: seed          # or enforce
+          json:
+            permission: { "*": allow, bash: { "*": ask, "rm -rf *": ask } }
+```
+
+- **`environment`.** A map from variable name to a non-secret value: a quoted string, or `{ statePath: <relative path> }`, a path below the distribution's state directory that the launch resolves (letters, digits, dots, hyphens, and underscores in each segment, no traversal). A name is uppercase words joined by at least one underscore (`PI_BG_FEATURES`, never `PATH` or `HOME`), is not credential-looking (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, and the other names a runtime variable cannot have), and is not one PiShip, the process, or the network policy own: `PISHIP_*`, `PI_*`, `ELECTRON_RUN_AS_NODE`, `BASH_ENV`, `PROMPT_COMMAND`, `XDG_*_HOME`, `JDK_JAVA_OPTIONS`, `NODE_*`, `LD_*`, `DYLD_*`, `SSL_*`, `CURL_*`, `REQUESTS_*`, `GIT_*`, `SSH_*`, `NPM_CONFIG_*`, `PIP_*`, and the proxy variables. A value is a plain string: no runtime reference, no secret shape (the manifest's secret check applies), and a number or a boolean must be quoted. The only `PI_*` exceptions are `PI_LENS_*` for the npm package `pi-lens` and `PI_BG_*` for `pi-background-tasks`, checked against the package identity. Two packages may name the same variable only at the same value.
+- **When it applies.** The launch sets each variable on the process before Pi imports a package, and sets them again after a managed launch has removed the shell's `PI_*` and credential variables, so a managed value is never one the shell chose. A declared value replaces the shell's value in every mode, which is what makes a managed value one a user cannot override; a personal user who wants another value builds their own distribution. A variable reaches the extension in the Pi process. It does not reach a child process whose launcher passes only its own environment (the MCP SDK's stdio transport passes a fixed list), so a package that starts such a child needs the setting elsewhere ([the developer example's limits](../examples/developer/README.md#known-limits) name the one case).
+- **`agentFiles`.** A list of at most eight JSON documents PiShip writes into Pi's agent directory (`<state>/agent`), where an extension keeps its own configuration. `path` is `extensions/<file>.json` or `extensions/<name>/<file>.json`, relative to the agent directory; `json` is an object of at most 64 KiB, and its keys keep the order you wrote, which matters to a configuration that reads its rules last-match-wins. No two packages write the same file, and the secret check applies to every string. The files are written owner-only through an atomic replace, never through a link.
+- **`mode`.** `seed` (the default) writes the file when it is absent and replaces it on a later release only while it is still exactly what PiShip last wrote, a fact recorded in `<state>/agent/.piship-agent-files.json`; a file the user edited, or one that was there before, is kept, and `doctor` says so. `enforce` rewrites the file at every launch, so a user's edit does not outlive one. Use `enforce` where the file is part of the policy.
+- **The lock.** `packages[].environment` records the variables as declared (a state path stays relative), and `packages[].agentFiles` records each file's `path`, `mode`, and the `sha256` of the exact bytes written; the content itself is in `governance.manifest`, and a launch refuses a lock whose parts disagree (`LOCK_INVALID`). The stale-lock check recomputes the digest from the declaration, so reordering a file's rules, which the manifest's canonical digest ignores, still reads as stale.
+- **`piship diff`.** A new, changed, or removed variable is medium (low when removed); a new file or a changed `sha256` is high, a file no longer written is low, and a changed `mode` is medium (high when a user's edits now outlive a launch). `doctor` lists each variable in the Governance group and each file with its state: as declared, edited by the user and kept, or missing and written at the next launch.
+
+A capability provider can be one of these packages. Instead of a `./` `path`, a non-builtin provider declares `package: <id>`, which must name a declared package of the same trust class:
+
+```yaml
+capabilities:
+  permissions:
+    enabled: true
+    provider:
+      id: certified/pi-permission-system
+      version: 39.0.4
+      implements: [piship.capability/permissions/v1]
+      package: pi-permission-system
+    settings:
+      autoApproveFile: extensions/pi-permission-system/config.json
+      autoApproveKey: yoloMode
+```
+
+The provider takes its class and its review evidence from the package, so a certified provider declares none of its own; its extension files are the package's `extensions`, loaded through the provider (after `provider.load` and each file's `extension.load` decision) and not with the package's other files. The capability is effective only while the package's files match the lock, its trust class and evidence admit it, and the policy allows the provider and each of its extension files; otherwise it is reported as not effective and its extensions are not loaded, with PiShip's own policy still in force. `autoApproveFile` and `autoApproveKey` are the only provider settings besides `workflow`'s: they name a top-level boolean in one of the provider package's own `agentFiles` that switches the provider's own session-wide auto-approval on. They go together and need a package provider. `<command> --yolo` ([below](#the---yolo-launch-option)) sets that key for the one launch, and the file is put back when the process exits, when `/auto off` ends yolo, and by the next launch if the process was killed before it could.
+
 ### Bundled search tools (v1alpha6)
 
 Pi's find and grep tools and its `@` file completion run `fd` and `rg` (ripgrep). A managed launch runs Pi offline (`PI_OFFLINE=1`), so Pi never downloads them, and without them on `PATH` it prints `fd not found. Offline mode enabled, skipping download.` and falls back to slower behavior. `runtime.searchTools` makes both tools release content instead:
 
 ```yaml
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
   searchTools:
     mode: bundled     # the only mode
     fd: "10.5.0"      # optional; PiShip's default when omitted
@@ -374,7 +491,8 @@ v1alpha4 trusts every key in `updates.trust.keys` to sign channels. `piship migr
 | `data.purge.onUninstall` | `none` | `none` or `all`: recorded in the lock and shown by `doctor`, not yet acted on (`uninstall` keeps state either way; `purge` deletes it) |
 | `data.export.<resource>` | none | `allow`, `ask`, or `deny` for `public`, `local`, or `support`: sugar for a distribution-enforced `session.export` rule |
 | `policy.acknowledgeUnenforced` | `[]` | `"<action>:<resource>"` keys of `deny` or `ask` rules on an action no runtime seam enforces; a managed distribution needs the entry, or `validate` fails with `POLICY_UNENFORCEABLE` |
-| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, and resource filters per kind |
+| `resources.packages` | `[]` | Pi packages, each with `id`, `source` (`npm` with `package`, `version`, and an optional https `registry`; `git` with an https `repository` and `ref`; `local` with a `./` `path`), `class`, `certified` evidence for a certified package, resource filters per kind, and optionally `environment` and `agentFiles` ([below](#what-a-package-is-given-environment-and-files)) |
+| `capabilities.<name>.provider.package` | none | A declared package of the provider's trust class as the provider, instead of a `./` `path`; with the `permissions` settings `autoApproveFile` and `autoApproveKey` ([below](#what-a-package-is-given-environment-and-files)) |
 | `packageTrust` | managed: npm integrity, full commit SHAs, no local paths; personal: npm integrity | `npm.requireIntegrity`, `git.hosts`, `git.requireCommitSha`, `local.paths` |
 | `release.vulnerabilities.registry` | the configured registry | An https registry URL that `npm audit` asks for advisories |
 | `release.installScripts` | `[]` | Reviewed install scripts in Pi package closures, as `pi-packages/<id>/node_modules/<name>@<version>`; PiShip never runs the script either way |
@@ -536,7 +654,8 @@ v1alpha3 and later branded commands add:
 - `policy explain <action> <resource> [--json]`: the decision, deciding rule, layer, policy ID, enforcement plane, reason, other matching rules (including ones shadowed by an earlier rule in their layer), and ignored narrowing-only `allow` rules. Filesystem resources are resolved as tools see them: `~` is the home directory and relative paths resolve against the working directory.
 - `capabilities [--json]`: the six-axis capability table.
 - `auto on | auto off | auto status` (managed): the user's [auto mode](#user-auto-mode), where `policy.userAuto` allows it; `/auto` inside a session.
-- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin and each discovered project item with its effect), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
+- `--yolo` (a leading option, also with `--smoke`): approves every `ask` for that session only, where a personal distribution always allows it and a managed one needs `policy.userAuto: allowed` ([`--yolo`](#the---yolo-launch-option)).
+- `doctor` groups for Resources (trust class, integrity, and whether each loads), Policy, Project (origin, each discovered project item with its effect, and the static project trust for extensions that load `.claude/*`), Capabilities, Sandbox (provider, the containment level proven by a live probe, isolation `local`, `remote`, or `none`, network mode, and scope), Workspace (effective consistency, declared mode, verification state, whether it is a complete coding-agent workspace, and how git control files are protected; a shared or synchronized remote workspace shows `pending`, since doctor never runs the check), MCP (server health), and Audit (the audit state, each sink's type, requirement, target shown as `local file` or the HTTP host only, state, and delivered, pending, and dropped counts, an undelivered required event at the end of doctor's session, and local metrics).
 - A `governance` object in the `--smoke` summary: policy ID, project origin, sandbox level, adapter, planes, and network, workflow mode, capability effectiveness, resource load decisions, MCP server states and exposed tools, and audit state.
 
 Branded commands of installed distributions add `update [--channel <name>] [--from <dir|url>] [--check] [--accept-review]` and `rollback`, and `doctor` fills its Release and Update groups ([update lifecycle](release/update-lifecycle.md#updating-and-rolling-back)). `update` needs a v1alpha4 or later release with update trust: the installation's update root, started from the release's `updates.trust.bootstrap` (or v1alpha4 `updates.trust.keys`) at install ([installation trust state](release/trust-root.md#installation-trust-state)).
@@ -620,7 +739,7 @@ After migrating, regenerate `piship.lock` and rebuild. v1alpha1 remains accepted
 
 ### Migrating from v1alpha5 to v1alpha6
 
-v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2`; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
+v1alpha5 manifests keep loading on v0.9 once `runtime.pi` names the Pi version v0.9 pins (`1.0.2` for v0.9.0 and v0.9.1, `1.0.3` on main; a v0.8 manifest pins `1.0.0`, which v0.9 refuses), and an installation's state files (`config/policy.json`, `auto.json`, the audit logs) are read as they are and never rewritten, so a rollback to v0.8.1 still reads them. Migrate when you want a v1alpha6 field:
 
 1. Run `piship migrate piship.yaml --check`. It prints every change and exits non-zero when one changes an effective decision.
 2. Review the plan, then run `piship migrate piship.yaml --write`.
@@ -664,8 +783,10 @@ Deferred items in this table are tracked on the [roadmap](roadmap.md#later).
 
 | Specification code | What PiShip does instead |
 | --- | --- |
-| `APPROVAL_REQUIRED` | An `ask` decision prompts the person; without an approval channel (headless) it resolves to deny and is recorded as a denial, unless the user's [auto mode](#user-auto-mode) approves it |
+| `APPROVAL_REQUIRED` | An `ask` decision prompts the person; without an approval channel (headless) it resolves to deny and is recorded as a denial, unless the user's [auto mode](#user-auto-mode) or [`--yolo`](#the---yolo-launch-option) approves it |
 | `RESOURCE_DENIED` | A denied tool call is refused to the model and a denied resource is not loaded, both recorded as denials; a refused command or setting fails with `POLICY_DENIED` |
 | `PROVIDER_UNRESOLVED` | Reported on the `resolved` axis of `capabilities`; the capability is not effective |
 | `PROVIDER_UNHEALTHY` | Reported on the `healthy` axis; a provider the policy refuses is reported on the `enabled` axis |
 | `SANDBOX_REQUIRED` | A required sandbox that cannot be enforced fails with `SANDBOX_UNAVAILABLE` |
+
+Managed distributions must exclude pi-code `!extensions/hooks/**` whenever an origin does not allow `claudeHooks`; PiShip also excludes that package entry point at launch for such an origin. Those sessions keep whole project `.claude` directories read-only, including missing paths, to prevent executable settings from being planted. Managed distributions must exclude `!extensions/mcp/**` because user-level MCP consent bypasses project trust. Managed package permission providers reject project provider overrides and keep project `.pi` directories read-only.

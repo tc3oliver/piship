@@ -49,6 +49,7 @@ import {
   realpathNearest,
   withApprovedNetwork,
 } from "@piship/sandbox";
+import { projectProtection } from "./governance/engine.js";
 import type { ToolExposureTable } from "./governance/exposure.js";
 import type { GovernanceSession } from "./governance-session.js";
 import { freeBytes, ShellOutput, userBashBudget } from "./shell-output.js";
@@ -130,6 +131,7 @@ export function pathClass(gov: GovernanceSession, path: string): string {
 }
 
 export const STATE_RULE = "piship.state";
+export const CLAUDE_CONFIG_RULE = "piship.project.executable-config";
 export const GIT_CONFIG_RULE = "piship.project.git-config";
 export const CHANGED_RULE = "piship.path-changed";
 
@@ -145,6 +147,7 @@ function builtinDenial(
   gov: GovernanceSession,
   action: "filesystem.read" | "filesystem.write",
   paths: readonly string[],
+  existingDirectory: boolean,
 ): string | undefined {
   const posix = paths.map((path) => toPosixPath(path));
   const state = normalizePathResource(gov.options.stateDir, {
@@ -153,6 +156,23 @@ function builtinDenial(
   if (posix.some((path) => isWithinPosix(state, path))) return STATE_RULE;
   if (action !== "filesystem.write") return undefined;
   if (isProtectedGitPath(gov.project.root, posix)) return GIT_CONFIG_RULE;
+  if (gov.options.lock.deployment.mode === "managed") {
+    const protection = projectProtection(
+      gov.options,
+      gov.project,
+      gov.sandbox.profile.homeDir,
+    );
+    if (
+      posix.some((path) =>
+        protection.directories.some(
+          (dir) =>
+            isWithinPosix(toPosixPath(dir), path) ||
+            (!existingDirectory && isWithinPosix(path, toPosixPath(dir))),
+        ),
+      )
+    )
+      return CLAUDE_CONFIG_RULE;
+  }
   return undefined;
 }
 
@@ -191,6 +211,7 @@ export async function gatePath(
   action: Extract<PolicyAction, "filesystem.read" | "filesystem.write">,
   path: string,
   tool: string,
+  existingDirectory = false,
 ): Promise<string> {
   const lexical = resolve(path);
   const real = realpathNearest(lexical);
@@ -209,7 +230,12 @@ export async function gatePath(
       `Plan mode does not change files. Switch to Build mode (/build) to write ${path}.`,
     );
   }
-  const builtin = builtinDenial(gov, action, [lexical, real]);
+  const builtin = builtinDenial(
+    gov,
+    action,
+    [lexical, real],
+    existingDirectory,
+  );
   if (builtin) {
     gov.metrics.recordPolicyDenial(action);
     gov.emit("tool.denied", {
@@ -223,7 +249,9 @@ export async function gatePath(
     throw blocked(
       builtin === STATE_RULE
         ? `${path} is in the distribution state directory, which tools never read or write.`
-        : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
+        : builtin === CLAUDE_CONFIG_RULE
+          ? `${path} controls executable project configuration; managed tools may not change it or its ancestors.`
+          : `${path} is a git file that decides this project's origin or what git runs; tools may not change it.`,
     );
   }
   if (gov.sandbox.report.level === "enforced") {
@@ -879,8 +907,20 @@ export function governedTools(
       operations: {
         writeFile: (path, content) => write(path, content, "write"),
         mkdir: async (dir) => {
-          await gatePath(gov, "filesystem.write", absolute(dir), "write");
-          await mkdir(dir, { recursive: true });
+          // Keep the parent policy decision even when mkdir needs no change:
+          // it is an independent opportunity to notice a redirected path.
+          const existingDirectory = await stat(absolute(dir)).then(
+            (info) => info.isDirectory(),
+            () => false,
+          );
+          await gatePath(
+            gov,
+            "filesystem.write",
+            absolute(dir),
+            "write",
+            existingDirectory,
+          );
+          if (!existingDirectory) await mkdir(dir, { recursive: true });
         },
       },
     }) as ToolDefinition,

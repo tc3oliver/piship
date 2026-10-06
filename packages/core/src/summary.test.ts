@@ -3,7 +3,7 @@ import { formatSmokeSummary, pathHint } from "./summary.js";
 
 const smoke = {
   initialized: true,
-  piVersion: "1.0.2",
+  piVersion: "1.0.3",
   sessionId: "abc",
   resumed: false,
   safeTool: "read",
@@ -30,7 +30,7 @@ describe("formatSmokeSummary", () => {
     const text = formatSmokeSummary(JSON.stringify(smoke));
     expect(text).not.toContain("{");
     expect(text).not.toContain("/state/agent");
-    expect(text).toContain("1.0.2, new acceptance session abc");
+    expect(text).toContain("1.0.3, new acceptance session abc");
     expect(text).toContain(
       "instructions 1, skills 1, extensions 2, prompts 0, themes 0",
     );

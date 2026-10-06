@@ -67,6 +67,24 @@ describe("path tokens", () => {
 });
 
 describe("resolveProfile", () => {
+  it("preserves resolved Git directory provenance without changing protection", () => {
+    const ws = join(root, "ws");
+    const git = join(ws, ".git", "hooks");
+    const claude = join(ws, ".claude");
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "t"),
+      protectedPaths: {
+        files: [],
+        directories: [git, claude],
+        gitDirectories: [git],
+      },
+    });
+    expect(profile.writeProtect.directories).toEqual([git, claude]);
+    expect(profile.writeProtect.gitDirectories).toEqual([git]);
+  });
+
   let root: string;
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), "piship-profile-")));
@@ -174,6 +192,24 @@ describe("resolveProfile", () => {
     expect(
       protectedAncestors(profile, entries, undefined, () => false),
     ).toEqual([]);
+  });
+
+  it("pins existing ancestors of an absent protected directory against rename", () => {
+    const ws = join(root, "workspace");
+    mkdirSync(join(ws, "packages/app"), { recursive: true });
+    const profile = resolveProfile(policy(), {
+      workspace: ws,
+      homeDir: root,
+      tmpDir: join(root, "tmp"),
+      protectedPaths: {
+        files: [],
+        directories: [join(ws, "packages/app/.claude")],
+      },
+    });
+    expect(protectedAncestors(profile, writableProtected(profile))).toEqual([
+      join(ws, "packages"),
+      join(ws, "packages/app"),
+    ]);
   });
 
   it("carries the reason a protected list is incomplete into the profile and its warnings", () => {

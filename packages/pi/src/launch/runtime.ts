@@ -40,6 +40,7 @@ import {
   modelPolicy,
 } from "./governance.js";
 import { piSettings } from "./pi-defaults.js";
+import { sessionProjectTrust } from "./project-trust.js";
 import {
   createModelRuntime,
   launchVirtualModels,
@@ -236,8 +237,10 @@ async function startRuntime(
           component: "session",
         },
       );
+    // Pi's project-trust flag is PiShip's decision, not the in-memory default.
     const settingsManager = SettingsManager.inMemory(
       piSettings(cacheWarming.mode),
+      { projectTrusted: sessionProjectTrust(gov, cwd, ctx.agentDir) },
     );
     governCacheWarming(settingsManager, cacheWarming, gov);
     const { modelRuntime, governed } = await createModelRuntime(

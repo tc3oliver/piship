@@ -1,19 +1,21 @@
 // Resource trust and capability-provider trust decisions. The two
 // tables are independent: allowing a class for resources says nothing about
 // the same class for providers.
-import type {
-  DeploymentMode,
-  PolicyConfig,
-  ProjectDimensionEffect,
-  ProjectDimensions,
-  ProjectTrustDimension,
-  ProjectTrustPolicy,
-  ProviderTrustClass,
-  ResourceKind,
-  ResourceTrustClass,
-  TrustClass,
-  TrustSetting,
-  TrustSubject,
+import {
+  CLAUDE_TRUST_DIMENSIONS,
+  type ClaudeTrustDimension,
+  type DeploymentMode,
+  type PolicyConfig,
+  type ProjectDimensionEffect,
+  type ProjectDimensions,
+  type ProjectTrustDimension,
+  type ProjectTrustPolicy,
+  type ProviderTrustClass,
+  type ResourceKind,
+  type ResourceTrustClass,
+  type TrustClass,
+  type TrustSetting,
+  type TrustSubject,
 } from "@piship/schema";
 
 export type ResourceTrustTable = PolicyConfig["resourceTrust"];
@@ -84,6 +86,63 @@ export function defaultProjectDimensions(
     external: dimensions("allow", { hooks: "deny" }),
     unknown: dimensions("ask", { passiveContext: "allow", hooks: "deny" }),
   };
+}
+
+/** Any project trust dimension: the eight always present, and the optional Claude ones. */
+export type AnyProjectDimension = ProjectTrustDimension | ClaudeTrustDimension;
+
+function claudeDimensions(
+  base: ProjectDimensionEffect,
+  overrides: Partial<Record<ClaudeTrustDimension, ProjectDimensionEffect>> = {},
+): Readonly<Record<ClaudeTrustDimension, ProjectDimensionEffect>> {
+  const output = {} as Record<ClaudeTrustDimension, ProjectDimensionEffect>;
+  for (const dimension of CLAUDE_TRUST_DIMENSIONS)
+    output[dimension] = overrides[dimension] ?? base;
+  return output;
+}
+
+/**
+ * Per-origin defaults of the Claude Code dimensions (`.claude/rules`,
+ * `commands`, `skills`, `agents`, `hooks`). The manifest leaves them absent
+ * unless declared (so existing locks do not change); this is what applies
+ * then. Personal mode loads them like the other project items: company and
+ * external projects without a prompt, an unknown one after the person says
+ * yes. Managed mode follows the agents and hooks pattern: `hooks` are denied
+ * and the rest are `company-approved`, which admits no project content, so a
+ * company opts in by declaring `allow`.
+ */
+export function defaultClaudeDimensions(
+  mode: DeploymentMode,
+): Readonly<
+  Record<
+    ProjectOrigin,
+    Readonly<Record<ClaudeTrustDimension, ProjectDimensionEffect>>
+  >
+> {
+  if (mode === "managed")
+    return {
+      company: claudeDimensions("company-approved", { claudeHooks: "deny" }),
+      external: claudeDimensions("deny"),
+      unknown: claudeDimensions("deny"),
+    };
+  return {
+    company: claudeDimensions("allow"),
+    external: claudeDimensions("allow"),
+    unknown: claudeDimensions("ask"),
+  };
+}
+
+/** The effect of a Claude dimension: the declared one, else the mode default. */
+export function claudeDimensionEffect(
+  policy: Pick<PolicyConfig, "projectTrust">,
+  mode: DeploymentMode,
+  origin: ProjectOrigin,
+  dimension: ClaudeTrustDimension,
+): ProjectDimensionEffect {
+  return (
+    policy.projectTrust[origin].dimensions[dimension] ??
+    defaultClaudeDimensions(mode)[origin][dimension]
+  );
 }
 
 /** The full project trust default for a mode (no matchers declared). */
@@ -242,7 +301,7 @@ function resourceTableDecision(
 
 export function projectEffectReason(
   origin: ProjectOrigin,
-  dimension: ProjectTrustDimension,
+  dimension: AnyProjectDimension,
   effect: ProjectDimensionEffect,
 ): string {
   switch (effect) {

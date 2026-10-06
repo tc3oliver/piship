@@ -26,7 +26,7 @@ import { MemorySecretStore } from "@piship/credentials";
 import { type GovernanceOptions, GovernanceSession } from "@piship/pi";
 import { describeContainment } from "@piship/sandbox";
 import { resolveTemplate } from "@piship/schema";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 // @ts-expect-error The adapter is plain JavaScript, as a distribution ships it.
 import acmeContainerSandbox from "../sandbox/acme-container-sandbox.mjs";
 import { leaks, scan } from "./support/distribution.js";
@@ -414,6 +414,91 @@ describe.skipIf(process.platform === "win32")(
         expect(service.containers()).toEqual([...before]);
       });
 
+      it("protects absent and existing Claude configuration without blocking ordinary workspace writes", async () => {
+        for (const existing of [false, true]) {
+          const project = makeProject(
+            service.root,
+            `protected-claude-${existing}`,
+          );
+          const claude = join(project, ".claude");
+          const tools = join(project, "tools");
+          mkdirSync(tools);
+          if (existing) {
+            mkdirSync(claude);
+            writeFileSync(join(claude, "rules.md"), "trusted rules");
+          }
+          const answer = await service.request("/v1/sandboxes", {
+            user: "alice",
+            body: {
+              workspace: project,
+              network: "deny",
+              writeProtect: {
+                directories: [
+                  claude,
+                  join(project, ".pi"),
+                  join(tools, ".claude", "hooks"),
+                ],
+                files: [
+                  join(claude, "settings.json"),
+                  join(claude, "settings.local.json"),
+                ],
+              },
+            },
+          });
+          expect(answer.status, answer.text).toBe(201);
+          const { id } = answer.json() as { id: string };
+          try {
+            const attempts = [
+              ": > .claude/settings.json",
+              ": > .claude/settings.local.json",
+              "mkdir -p .claude/hooks",
+              ": > .pi/settings.json",
+              "mkdir -p tools/.claude/hooks",
+              "mv .claude claude-old",
+              "rmdir .claude",
+              "mv tools tools-old",
+              "rmdir tools/.claude",
+            ];
+            const result = await run(
+              service,
+              "alice",
+              id,
+              [
+                ...attempts.map(
+                  (command, index) =>
+                    `if ( ${command} ) 2>/dev/null; then echo escaped-${index}; fi`,
+                ),
+                "printf 'ordinary-write\n' > notes.txt; cat notes.txt",
+              ].join("; "),
+            );
+            expect(result.exit).toEqual({ exit: 0, signal: null });
+            expect(result.out).toBe("ordinary-write\n");
+            expect(readFileSync(join(project, "notes.txt"), "utf8")).toBe(
+              "ordinary-write\n",
+            );
+            expect(existsSync(join(claude, "settings.json"))).toBe(false);
+            expect(existsSync(join(claude, "settings.local.json"))).toBe(false);
+            expect(existsSync(join(project, ".pi", "settings.json"))).toBe(
+              false,
+            );
+            expect(existsSync(join(project, "tools-old"))).toBe(false);
+            if (existing)
+              expect(readFileSync(join(claude, "rules.md"), "utf8")).toBe(
+                "trusted rules",
+              );
+          } finally {
+            expect(
+              (
+                await service.request(`/v1/sandboxes/${id}`, {
+                  method: "DELETE",
+                  user: "alice",
+                })
+              ).status,
+            ).toBe(204);
+          }
+        }
+      });
+
       it("keeps a command's environment off this machine's process list and out of every file", async () => {
         const project = makeProject(service.root, "environment");
         const made = await create(service, "alice", project);
@@ -638,6 +723,10 @@ describe.skipIf(process.platform === "win32")(
         built = buildSandboxDistribution("sandbox-distribution");
       }, 300_000);
 
+      afterEach(async () => {
+        for (const session of sessions.splice(0)) await session.close();
+      });
+
       afterAll(async () => {
         for (const session of sessions.splice(0))
           await session.close().catch(() => undefined);
@@ -805,6 +894,16 @@ describe.skipIf(process.platform === "win32")(
         ).toMatch(
           /Workspace: shared \(verified \S+, both directions immediate\)/,
         );
+        const planted = await bash(
+          session,
+          project,
+          "if ( : > .claude/settings.json ) 2>/dev/null; then echo planted; fi; if mv .claude claude-old 2>/dev/null; then echo moved; fi; echo protected",
+        );
+        expect(planted.output).toBe("protected\n");
+        expect(existsSync(join(project, ".claude", "settings.json"))).toBe(
+          false,
+        );
+        expect(existsSync(join(project, "claude-old"))).toBe(false);
         expect(session.metrics.snapshot().workspace).toMatchObject({
           declared: "shared",
           effective: "shared",
@@ -850,7 +949,7 @@ describe.skipIf(process.platform === "win32")(
         ).toEqual([]);
       }, 300_000);
 
-      it("protects a hooks directory in the working tree, and refuses one it cannot protect", async () => {
+      it("protects existing and missing hooks directories in the working tree", async () => {
         const project = makeProject(
           service.root,
           "hooks-in-tree",
@@ -876,17 +975,36 @@ describe.skipIf(process.platform === "win32")(
         });
         await session.close();
 
-        // A hooks directory that does not exist cannot be made read-only, and
-        // PiShip's check would find it creatable: the service refuses before
-        // starting a container, and the session does not start.
+        // A missing hooks directory is covered by a read-only tmpfs. The
+        // session may run, while both planting a hook and replacing the
+        // protected mount point remain impossible.
         const missing = makeProject(
           service.root,
           "hooks-missing",
           "[core]\n\thooksPath = .githooks\n",
         );
-        await expect(
-          open({ project: missing, key: service.key("alice") }),
-        ).rejects.toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
+        const { session: missingSession } = await open({
+          project: missing,
+          key: service.key("alice"),
+        });
+        const missingAttempt = await bash(
+          missingSession,
+          missing,
+          "if ( : > .githooks/pre-push ) 2>/dev/null; then echo planted; fi; if mv .githooks hooks-old 2>/dev/null; then echo moved; fi; if rmdir .githooks 2>/dev/null; then echo removed; fi; printf ordinary > ordinary.txt; echo protected",
+        );
+        expect(missingAttempt).toEqual({ exitCode: 0, output: "protected\n" });
+        expect(existsSync(join(missing, ".githooks", "pre-push"))).toBe(false);
+        expect(existsSync(join(missing, "hooks-old"))).toBe(false);
+        expect(readFileSync(join(missing, "ordinary.txt"), "utf8")).toBe(
+          "ordinary",
+        );
+        expect(missingSession.sandbox.workspace()).toMatchObject({
+          effective: "shared",
+          verification: "verified",
+          gitControlProtection: "not-verified",
+          complete: true,
+        });
+        await missingSession.close();
         expect(await service.sandboxes("alice")).toBe(0);
       }, 300_000);
 

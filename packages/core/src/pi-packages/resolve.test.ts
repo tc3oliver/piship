@@ -159,7 +159,7 @@ const PACKAGES: Record<string, Record<string, PublishedVersion>> = {
       manifest: {
         name: "bundles-pi",
         version: "1.0.0",
-        dependencies: { "@earendil-works/pi-ai": "1.0.2" },
+        dependencies: { "@earendil-works/pi-ai": "1.0.3" },
       },
     },
   },
@@ -173,8 +173,8 @@ const PACKAGES: Record<string, Record<string, PublishedVersion>> = {
     },
   },
   "@earendil-works/pi-ai": {
-    "1.0.2": {
-      manifest: { name: "@earendil-works/pi-ai", version: "1.0.2" },
+    "1.0.3": {
+      manifest: { name: "@earendil-works/pi-ai", version: "1.0.3" },
     },
   },
   "git-dependency": {

@@ -6,11 +6,13 @@ import type {
 } from "@piship/contracts";
 import type {
   AccessManifest,
+  AgentFileMode,
   CacheWarmingConfig,
   DATA_CONTRACT_VERSION,
   DataManifest,
   DeclarableResourceClass,
   Manifest,
+  PackageEnvironmentValue,
   PackageResourceKind,
   PackageSourceKind,
   PishipSchemaVersion,
@@ -94,6 +96,19 @@ export interface LockedPackageResource {
   readonly sha256: string;
 }
 /**
+ * v1alpha6: a configuration file the launch writes into Pi's agent
+ * directory for a package, with the digest of the exact bytes it writes (the
+ * declared JSON in its declared key order: an extension may read its rules in
+ * order). The content itself is in `governance.manifest`.
+ */
+export interface LockedAgentFile {
+  /** Relative to the agent directory: `extensions/[<name>/]<file>.json`. */
+  readonly path: string;
+  readonly mode: AgentFileMode;
+  /** `sha256-<hex>` of the written bytes. */
+  readonly sha256: string;
+}
+/**
  * v1alpha6: a Pi package resolved to an immutable identity. The full
  * `node_modules` file list is not recorded: the tree digest and file count
  * bound it.
@@ -118,6 +133,10 @@ export interface LockedPiPackage {
   readonly resources: readonly LockedPackageResource[];
   /** Optional dependencies installed per target (`<platform>-<arch>`). */
   readonly optionalDependencies?: Readonly<Record<string, readonly string[]>>;
+  /** The environment the launch sets for the package; absent when none. */
+  readonly environment?: Readonly<Record<string, PackageEnvironmentValue>>;
+  /** Configuration files written into the agent directory; absent when none. */
+  readonly agentFiles?: readonly LockedAgentFile[];
 }
 /**
  * v1alpha6: where a locked tool came from. Only tools known without running

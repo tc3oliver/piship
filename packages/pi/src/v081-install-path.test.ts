@@ -83,7 +83,7 @@ const V081_AUDIT_EVENT_TYPES = [
 /** A v0.8.1-era personal manifest, still on piship/v1alpha5. */
 const V1ALPHA5 = `schema: piship/v1alpha5
 app: { id: acmepi, name: AcmePi, command: acmepi, version: 1.0.0 }
-runtime: { pi: "1.0.2" }
+runtime: { pi: "1.0.3" }
 deployment: { mode: personal }
 identity: { mode: none }
 credential: { provider: none }
@@ -200,7 +200,7 @@ describe("v0.8.1 state and a v1alpha5 manifest under v0.9", () => {
       distributionDir: distribution,
       stateDir: state,
       cwd: workspace,
-      piVersion: "1.0.2",
+      piVersion: "1.0.3",
       interactive: false,
       fetch: (() => {
         throw new Error("no network in unit tests");

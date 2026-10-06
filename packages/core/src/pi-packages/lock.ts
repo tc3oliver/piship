@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeclaredPackage, Manifest } from "@piship/schema";
 import { currentTarget, REVIEWED_INSTALL_SCRIPTS } from "../compatibility.js";
+import { lockedAgentFiles } from "../agent-files.js";
 import type { DistributionLock } from "../lock-schema.js";
 import {
   checkCertifiedPackage,
@@ -188,6 +189,11 @@ export function currentPiPackages(
       lockfileSha256: existsSync(lockfile)
         ? sha256(readFileSync(lockfile))
         : "missing",
+      // The manifest digest ignores key order, and a file's rules are read in
+      // order: its bytes are recomputed, so a reordering reads as stale.
+      ...(declaration.agentFiles
+        ? { agentFiles: lockedAgentFiles(declaration.agentFiles) }
+        : {}),
     };
     if (declaration.source === "local") {
       const source = checkLocalDeclaration(declaration, base, context.trust);

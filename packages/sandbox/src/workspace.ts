@@ -137,7 +137,7 @@ export function hooksInWorkingTree(
   protectedPaths: ProtectedPaths,
 ): boolean {
   const dotGit = join(workspace, ".git");
-  return protectedPaths.directories.some(
+  return (protectedPaths.gitDirectories ?? protectedPaths.directories).some(
     (directory) =>
       directory !== workspace &&
       isWithin(directory, workspace) &&

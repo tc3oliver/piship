@@ -1,0 +1,2398 @@
+{
+  "schema": "piship-lock/v1alpha6",
+  "manifest": {
+    "schema": "piship/v1alpha6",
+    "sha256": "sha256-7984dede059e590e2a83352b82f3481332f3a7282903a502c6402185d5223102"
+  },
+  "app": {
+    "id": "devcode",
+    "name": "DevCode",
+    "command": "devcode",
+    "version": "1.0.0",
+    "banner": "DevCode developer distribution"
+  },
+  "deployment": {
+    "mode": "personal"
+  },
+  "runtime": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "1.0.3",
+    "pishipVersion": "0.10.0",
+    "npmLockSha256": "6d704053385d4e6534b59532b45ddfda3bd37670295747df2b540dd563367fc0",
+    "packages": [
+      {
+        "path": "node_modules/@anthropic-ai/sdk",
+        "version": "0.129.0",
+        "integrity": "sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw==",
+        "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.129.0.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/client-bedrock-runtime",
+        "version": "3.1127.0",
+        "integrity": "sha512-IDl/lrPb90aH+pZFHGNDmgH9nAUQj5PlZH1sJ3w7RikctyjHSnY3oNjZhrLoaBoQn/rNK0zsP6OHEqEhj2tdLA==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/client-bedrock-runtime/-/client-bedrock-runtime-3.1127.0.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/core",
+        "version": "3.978.1",
+        "integrity": "sha512-LbY9aGsEiznDWmUc30Nwv3aIX/+dbwTx8KfS0yOC3NPYMO+O91e6jkT1azf34FwjOndq8/Q+RcVVZz5xnerwdg==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/core/-/core-3.978.1.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-env",
+        "version": "3.972.72",
+        "integrity": "sha512-xTKO/FWJPozTIXbozVnVGoNBhaGba8TBcx+KyUjRVeOlXE+dUc7GTR1cLvu0uTdIdmemzaFbqqCshXeZA1fZew==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-env/-/credential-provider-env-3.972.72.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-http",
+        "version": "3.972.74",
+        "integrity": "sha512-u91E/hT8f4d1xy0Jl7VG4nVKJ3lxbrZkoBTeSVoJdWBiSEUMwMS/9+e0H/aJVQV//Lt5wuzP+E69v4aRSsNTmw==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-http/-/credential-provider-http-3.972.74.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-ini",
+        "version": "3.973.17",
+        "integrity": "sha512-ged4KXdBkvIC81bLvNHHuQKdKak/VXhQTR1NWYTTqW0474nlmsxy9O/vlgTIohDDWH3xpBdtVMZRyjb+DnocDA==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.17.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-login",
+        "version": "3.972.79",
+        "integrity": "sha512-L+Z85anONJd8MaiuraO4wRxATCdEejBZ3K3eymzWI5JPXa9sOS9CkIm72PBKqXKX+Z9p9NGMX5AIMXm0LEflgw==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.79.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-node",
+        "version": "3.972.84",
+        "integrity": "sha512-oHt854odINVwzwsh+c5x69j0ajm4DbqqqVJ+O1ECsCIZeMDAbzFpXItaqP7UZstJj/ATdTk/KFSH0LaNAgV+kA==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.84.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-process",
+        "version": "3.972.72",
+        "integrity": "sha512-rLIp2xbMjX/k9/od7APpqq1ZgXXnV0pOL1Th3ZsL8Wu0TRtBsDTVS8iPqcfRFcHakFxPvR04OSTv2ka2qOb/2A==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-process/-/credential-provider-process-3.972.72.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-sso",
+        "version": "3.973.16",
+        "integrity": "sha512-IGihaJfFZYacJJr/odqILCoK7W/mvrZ7cuK7ECn3sAu4vLC6u0V8bS7mCGbdugJ8Aum2tnvqmx0F2MRFp2rn9g==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-sso/-/credential-provider-sso-3.973.16.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-sso/node_modules/@aws-sdk/token-providers",
+        "version": "3.1138.0",
+        "integrity": "sha512-GpyAr0DD63YOEmYFM6Df+gJuIgC92MMTiBK4FTKfxii5MJ9ge20epR7LyroulscYlG89J+ZB2ivFDPjvfQhzdw==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1138.0.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/credential-provider-web-identity",
+        "version": "3.972.78",
+        "integrity": "sha512-/y9WvNtlcPBGLR0qc1a+9J/xtYZfVczvLUOuXaVWylzttH7ewsxwHtjmiJSolNrVSDorIxHGHMU61CbonRkmwA==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-web-identity/-/credential-provider-web-identity-3.972.78.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/eventstream-handler-node",
+        "version": "3.972.35",
+        "integrity": "sha512-a8xilRoRaalvSPZdfrs0VY3/BPc0uYhXW56Z/k6nmZ5Vk430LHeowf9APIPq8utM3tMJSNGSSuJMlB9YrPsN+A==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/eventstream-handler-node/-/eventstream-handler-node-3.972.35.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/middleware-eventstream",
+        "version": "3.972.30",
+        "integrity": "sha512-B6gvZlcnRBNWraKgyEjKsbhv+VjtbyHmpU7hmtTHzXpDSxHPpCJnYLpglEOOsF+SFne20DbZC5IVC1aNr2Pb4A==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-eventstream/-/middleware-eventstream-3.972.30.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/middleware-websocket",
+        "version": "3.972.54",
+        "integrity": "sha512-bhESdru8u8KosziH8jcVta/NM/dNreeRz2+2aU86si5bfBYOiJ6IiqD+9U4URUcU5WJO3Yw+jO3GLDIHlscXMQ==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-websocket/-/middleware-websocket-3.972.54.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/nested-clients",
+        "version": "3.997.46",
+        "integrity": "sha512-oRxtBcka/JGHGs9l9p9IVajGoTP8vTPmoAzdHGy4Qcy9P5vPnDf6nhIeM/COQNY9k/OahImTRaLkHftoXvfcmQ==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.997.46.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/signature-v4-multi-region",
+        "version": "3.996.47",
+        "integrity": "sha512-Zk08macMvQTHzQJCLJVkOlviVoqwYMrpXv4lmLN7b7sAbiMoOK7Go0NYdR5UeF+MW8LIbRmwrNy9u/5VvX1U5g==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/signature-v4-multi-region/-/signature-v4-multi-region-3.996.47.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/token-providers",
+        "version": "3.1127.0",
+        "integrity": "sha512-Dv2TMWBshJ+tF6ahs2Sy5bh4Iabsd4GAQqVvE9XZmYmnoaVbpS2QKIKE/HRacc7bTtbjEEvP+laGzHvHlf1CiQ==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1127.0.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/types",
+        "version": "3.974.6",
+        "integrity": "sha512-v/clNZzZnDxGyvpHMOGpJKVXFAExJzUNAAjaWGdcx8QAcXLGwTaOkw33p5SHAi0YAioK32xB3hWwOekRVfmfKg==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/types/-/types-3.974.6.tgz"
+      },
+      {
+        "path": "node_modules/@aws-sdk/xml-builder",
+        "version": "3.972.41",
+        "integrity": "sha512-ctjVSyCMegrWfXlx6VqzSBFI6UqmQ5ZlnfMhdLIiWmhoH8UAQxSCP5N3OpG7X3k4LnS7ou74C4mt20+bfTW2aQ==",
+        "resolved": "https://registry.npmjs.org/@aws-sdk/xml-builder/-/xml-builder-3.972.41.tgz"
+      },
+      {
+        "path": "node_modules/@aws/lambda-invoke-store",
+        "version": "0.3.0",
+        "integrity": "sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==",
+        "resolved": "https://registry.npmjs.org/@aws/lambda-invoke-store/-/lambda-invoke-store-0.3.0.tgz"
+      },
+      {
+        "path": "node_modules/@babel/runtime",
+        "version": "7.29.7",
+        "integrity": "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==",
+        "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/chord",
+        "version": "1.0.3",
+        "integrity": "sha512-H5pKMs3S1z2q4V7NkDGKDFzOMW+OkzdsnGxxj5wNJUANG03VKj29UVmc1xnnnf0FAc03COHYNxwgNApO0nt0fg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/chord/-/chord-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-agent-core",
+        "version": "1.0.3",
+        "integrity": "sha512-lnvi2PJYaq8mDLzwWBttNqfxrLS63SSMONUJnTCypdvt/flmNJchXwWXsXUOJ5Yhe/mN+iHkrXu696lWZZ8o+w==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-agent-core/-/pi-agent-core-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-ai",
+        "version": "1.0.3",
+        "integrity": "sha512-p+/EUrbmfT0xWOtL/NJRtWOsyzcKKFSyiivHLDBMG0DUVpHdaIykd5jFibq0YZDFGBN/nv61zdOelMb+ylPfSg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-codemode",
+        "version": "1.0.3",
+        "integrity": "sha512-/rgWAXA9PhuFm0+j6N5FVvvWrAwt1LnhmbjA3Hy5+Q033XUHgh0YCMGAmU76S90ocr0Vfxm50ddYT/O76T5OGQ==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-codemode/-/pi-codemode-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent",
+        "version": "1.0.3",
+        "integrity": "sha512-t2lb0dw4y/jr5a2PRo6eTHGTZOPB3/YAMVyhhYFC1W3Hl5xE+462I/gMWjF4gCLuhGipNEfuNqONFmdqLFz4SQ==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node",
+        "version": "0.3.4",
+        "integrity": "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==",
+        "resolved": "https://registry.npmjs.org/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/chalk",
+        "version": "6.0.0",
+        "integrity": "sha512-2uNTXIuTTxk7ciZgAU1BQcgnchcG0xXnrs6jzkQfj9SsRa9M2s5zE8WT96hS6KmG4MzWHSrvH43DF1m4XRkrFg==",
+        "resolved": "https://registry.npmjs.org/chalk/-/chalk-6.0.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/diff",
+        "version": "8.0.4",
+        "integrity": "sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==",
+        "resolved": "https://registry.npmjs.org/diff/-/diff-8.0.4.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/graceful-fs",
+        "version": "4.2.11",
+        "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
+        "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/grok-mermaid",
+        "version": "0.2.3",
+        "integrity": "sha512-/4KopAbsjvuRP9MdPtlDjOHUmUVEohOX73JNcsWpzAtFxh+bq5+Dhb6gzvRieLDwIPQIR3/vy8V1NNTuz4Zsmg==",
+        "resolved": "https://registry.npmjs.org/grok-mermaid/-/grok-mermaid-0.2.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/highlight.js",
+        "version": "10.7.3",
+        "integrity": "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==",
+        "resolved": "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/hosted-git-info",
+        "version": "9.0.3",
+        "integrity": "sha512-Hc+ghLoSt6QaYZUv0WBiIvmMDZuZZ7oaDvdH8MbfOO4lOsxdXLEvuC6ePoGs9H1X9oCLyq6+NVN0MKqD+ydxyg==",
+        "resolved": "https://registry.npmjs.org/hosted-git-info/-/hosted-git-info-9.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/ignore",
+        "version": "7.0.8",
+        "integrity": "sha512-YYNsSlXBjMk92SKnkwvB5LOVSa6OznlFUGcsvrFgNJbJCd0M1XKeFVRc8ZByeCqz32FivYNHJVooLmdqrmvp/Q==",
+        "resolved": "https://registry.npmjs.org/ignore/-/ignore-7.0.8.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/jiti",
+        "version": "2.7.0",
+        "integrity": "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==",
+        "resolved": "https://registry.npmjs.org/jiti/-/jiti-2.7.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/lru-cache",
+        "version": "11.4.0",
+        "integrity": "sha512-W+R+kFL4HgVxONq2bhXPi3bGpzGe/yEhVOp233qw9wCRtgncJ15P3bC+e4zZMu4Cq7d+WAJjXGW0uUkifhcatA==",
+        "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.4.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/minimatch",
+        "version": "10.2.6",
+        "integrity": "sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==",
+        "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile",
+        "version": "4.1.2",
+        "integrity": "sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==",
+        "resolved": "https://registry.npmjs.org/proper-lockfile/-/proper-lockfile-4.1.2.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/proper-lockfile/node_modules/retry",
+        "version": "0.12.0",
+        "integrity": "sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==",
+        "resolved": "https://registry.npmjs.org/retry/-/retry-0.12.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/signal-exit",
+        "version": "3.0.7",
+        "integrity": "sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==",
+        "resolved": "https://registry.npmjs.org/signal-exit/-/signal-exit-3.0.7.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-coding-agent/node_modules/yaml",
+        "version": "2.9.0",
+        "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
+        "resolved": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-mcp",
+        "version": "1.0.3",
+        "integrity": "sha512-ZAhL/g0rpjyKtcKzD0jSDk7sFIrMCQocmKtpAE1F9eRnI5fGGVWUyiZwALG/Tn1sagzxFbSqtc29zGx5OvDDGA==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-mcp/-/pi-mcp-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-telemetry",
+        "version": "1.0.3",
+        "integrity": "sha512-Li4YamN09x9zzCquPbtEL2AQmwqv3Vn3sNOYqG0DRg24fjiMfntCsb7QKbejCXZssTAyaN+hutLl6O0UnJDrfg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-telemetry/-/pi-telemetry-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@earendil-works/pi-tui",
+        "version": "1.0.3",
+        "integrity": "sha512-C7b8Y+7iz+/oPEZUJubv6NPm3M/4ziq0hjQ2jhqMNpBwcXeqDMYKL2FYP90t2b5S1IoGc2io47dj5ZlIC1IZWg==",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-1.0.3.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/aix-ppc64",
+        "version": "0.28.2",
+        "integrity": "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/android-arm",
+        "version": "0.28.2",
+        "integrity": "sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==",
+        "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/android-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==",
+        "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/android-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==",
+        "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/darwin-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/darwin-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/freebsd-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/freebsd-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==",
+        "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-arm",
+        "version": "0.28.2",
+        "integrity": "sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-ia32",
+        "version": "0.28.2",
+        "integrity": "sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-loong64",
+        "version": "0.28.2",
+        "integrity": "sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-mips64el",
+        "version": "0.28.2",
+        "integrity": "sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-ppc64",
+        "version": "0.28.2",
+        "integrity": "sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-riscv64",
+        "version": "0.28.2",
+        "integrity": "sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-s390x",
+        "version": "0.28.2",
+        "integrity": "sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/linux-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/netbsd-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/netbsd-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/openbsd-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/openbsd-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==",
+        "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/openharmony-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==",
+        "resolved": "https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/sunos-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==",
+        "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/win32-arm64",
+        "version": "0.28.2",
+        "integrity": "sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==",
+        "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/win32-ia32",
+        "version": "0.28.2",
+        "integrity": "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==",
+        "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@esbuild/win32-x64",
+        "version": "0.28.2",
+        "integrity": "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==",
+        "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz"
+      },
+      {
+        "path": "node_modules/@google/genai",
+        "version": "2.21.0",
+        "integrity": "sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q==",
+        "resolved": "https://registry.npmjs.org/@google/genai/-/genai-2.21.0.tgz",
+        "installScript": true
+      },
+      {
+        "path": "node_modules/@protobufjs/aspromise",
+        "version": "1.1.2",
+        "integrity": "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/aspromise/-/aspromise-1.1.2.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/base64",
+        "version": "1.1.2",
+        "integrity": "sha512-AZkcAA5vnN/v4PDqKyMR5lx7hZttPDgClv83E//FMNhR2TMcLUhfRUBHCmSl0oi9zMgDDqRUJkSxO3wm85+XLg==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/base64/-/base64-1.1.2.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/codegen",
+        "version": "2.0.5",
+        "integrity": "sha512-zgXFLzW3Ap33e6d0Wlj4MGIm6Ce8O89n/apUaGNB/jx+hw+ruWEp7EwGUshdLKVRCxZW12fp9r40E1mQrf/34g==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/codegen/-/codegen-2.0.5.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/eventemitter",
+        "version": "1.1.1",
+        "integrity": "sha512-vW1GmwMZNnL+gMRaovlh9yZX74kc+TTU3FObkkurpMaRtBfLP3ldjS9KQWlwZgraRE0+dheEEoAxdzcJQ8eXZg==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/eventemitter/-/eventemitter-1.1.1.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/fetch",
+        "version": "1.1.1",
+        "integrity": "sha512-GpptLrs57adMSuHi3VNj0mAF8dwh36LMaYF6XyJ6JMWlVsc+t42tm1HSEDmOs3A8fC9yyeisgLhsTVQokOZ0zw==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/fetch/-/fetch-1.1.1.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/float",
+        "version": "1.0.2",
+        "integrity": "sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/float/-/float-1.0.2.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/path",
+        "version": "1.1.2",
+        "integrity": "sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/path/-/path-1.1.2.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/pool",
+        "version": "1.1.0",
+        "integrity": "sha512-0kELaGSIDBKvcgS4zkjz1PeddatrjYcmMWOlAuAPwAeccUrPHdUqo/J6LiymHHEiJT5NrF1UVwxY14f+fy4WQw==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/pool/-/pool-1.1.0.tgz"
+      },
+      {
+        "path": "node_modules/@protobufjs/utf8",
+        "version": "1.1.2",
+        "integrity": "sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==",
+        "resolved": "https://registry.npmjs.org/@protobufjs/utf8/-/utf8-1.1.2.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/core",
+        "version": "3.35.1",
+        "integrity": "sha512-i4YPS4B6ts7bjn7UwLnGjiZdprOvHvgGobFZsYK3GIY3E5hIqtj0rReU69BcTpGp+fvtraSNXeG1l+jtJvF55w==",
+        "resolved": "https://registry.npmjs.org/@smithy/core/-/core-3.35.1.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/credential-provider-imds",
+        "version": "4.5.2",
+        "integrity": "sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==",
+        "resolved": "https://registry.npmjs.org/@smithy/credential-provider-imds/-/credential-provider-imds-4.5.2.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/fetch-http-handler",
+        "version": "5.8.0",
+        "integrity": "sha512-ycSJu3tFAQ4v04CBB0agqFMVsSQ1iG3yw+SpgxRqKfaURpQD4CZ8Wn0zPMmSnOuTpTh65Vz+EA0rMrw089wvkA==",
+        "resolved": "https://registry.npmjs.org/@smithy/fetch-http-handler/-/fetch-http-handler-5.8.0.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/node-http-handler",
+        "version": "4.12.1",
+        "integrity": "sha512-ThMkboGeONWXAelq9FvGsuJC4rOi+qyC4/zhUF58xYpxUg5sQKx2VXZYJmtNjr4dSuBJ1HeJXETQILCz3wOHvw==",
+        "resolved": "https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.12.1.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/signature-v4",
+        "version": "5.7.4",
+        "integrity": "sha512-tHy0K0VtqNd5Y7Y41h0a0Lhh0L1GzC08dTWg0F7vRJWFtTENg7IZikf3wQkanYIRdb7ngoIPMTmqgUi401fEeQ==",
+        "resolved": "https://registry.npmjs.org/@smithy/signature-v4/-/signature-v4-5.7.4.tgz"
+      },
+      {
+        "path": "node_modules/@smithy/types",
+        "version": "4.19.0",
+        "integrity": "sha512-r7jh49VJxGerfAcTQA6gXcKc+98zOp/tqRwzYjgOE+iSQsP6cEU1hq2QzbuipmP68QtYdY9wKEhiCQZIzHgZ4Q==",
+        "resolved": "https://registry.npmjs.org/@smithy/types/-/types-4.19.0.tgz"
+      },
+      {
+        "path": "node_modules/@stablelib/base64",
+        "version": "1.0.1",
+        "integrity": "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==",
+        "resolved": "https://registry.npmjs.org/@stablelib/base64/-/base64-1.0.1.tgz"
+      },
+      {
+        "path": "node_modules/@types/node",
+        "version": "22.20.4",
+        "integrity": "sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==",
+        "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.4.tgz"
+      },
+      {
+        "path": "node_modules/@types/retry",
+        "version": "0.12.0",
+        "integrity": "sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==",
+        "resolved": "https://registry.npmjs.org/@types/retry/-/retry-0.12.0.tgz"
+      },
+      {
+        "path": "node_modules/agent-base",
+        "version": "9.0.0",
+        "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
+        "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz"
+      },
+      {
+        "path": "node_modules/balanced-match",
+        "version": "4.0.4",
+        "integrity": "sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==",
+        "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz"
+      },
+      {
+        "path": "node_modules/base64-js",
+        "version": "1.5.1",
+        "integrity": "sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==",
+        "resolved": "https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz"
+      },
+      {
+        "path": "node_modules/bignumber.js",
+        "version": "9.3.1",
+        "integrity": "sha512-Ko0uX15oIUS7wJ3Rb30Fs6SkVbLmPBAKdlm7q9+ak9bbIeFf0MwuBsQV6z7+X768/cHsfg+WlysDWJcmthjsjQ==",
+        "resolved": "https://registry.npmjs.org/bignumber.js/-/bignumber.js-9.3.1.tgz"
+      },
+      {
+        "path": "node_modules/bowser",
+        "version": "2.14.1",
+        "integrity": "sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==",
+        "resolved": "https://registry.npmjs.org/bowser/-/bowser-2.14.1.tgz"
+      },
+      {
+        "path": "node_modules/brace-expansion",
+        "version": "5.0.12",
+        "integrity": "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==",
+        "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz"
+      },
+      {
+        "path": "node_modules/buffer-equal-constant-time",
+        "version": "1.0.1",
+        "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
+        "resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz"
+      },
+      {
+        "path": "node_modules/cross-spawn",
+        "version": "7.0.6",
+        "integrity": "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==",
+        "resolved": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz"
+      },
+      {
+        "path": "node_modules/data-uri-to-buffer",
+        "version": "4.0.1",
+        "integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
+        "resolved": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz"
+      },
+      {
+        "path": "node_modules/debug",
+        "version": "4.4.3",
+        "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
+        "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz"
+      },
+      {
+        "path": "node_modules/ecdsa-sig-formatter",
+        "version": "1.0.11",
+        "integrity": "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==",
+        "resolved": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz"
+      },
+      {
+        "path": "node_modules/esbuild",
+        "version": "0.28.2",
+        "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
+        "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+        "installScript": true
+      },
+      {
+        "path": "node_modules/extend",
+        "version": "3.0.2",
+        "integrity": "sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==",
+        "resolved": "https://registry.npmjs.org/extend/-/extend-3.0.2.tgz"
+      },
+      {
+        "path": "node_modules/fast-sha256",
+        "version": "1.3.0",
+        "integrity": "sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==",
+        "resolved": "https://registry.npmjs.org/fast-sha256/-/fast-sha256-1.3.0.tgz"
+      },
+      {
+        "path": "node_modules/fetch-blob",
+        "version": "3.2.0",
+        "integrity": "sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==",
+        "resolved": "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz"
+      },
+      {
+        "path": "node_modules/formdata-polyfill",
+        "version": "4.0.10",
+        "integrity": "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==",
+        "resolved": "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz"
+      },
+      {
+        "path": "node_modules/gaxios",
+        "version": "7.3.1",
+        "integrity": "sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ==",
+        "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.3.1.tgz"
+      },
+      {
+        "path": "node_modules/gaxios/node_modules/agent-base",
+        "version": "7.1.4",
+        "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==",
+        "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz"
+      },
+      {
+        "path": "node_modules/gaxios/node_modules/https-proxy-agent",
+        "version": "7.0.6",
+        "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
+        "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz"
+      },
+      {
+        "path": "node_modules/gcp-metadata",
+        "version": "8.1.2",
+        "integrity": "sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==",
+        "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-8.1.2.tgz"
+      },
+      {
+        "path": "node_modules/get-east-asian-width",
+        "version": "1.6.0",
+        "integrity": "sha512-QRbvDIbx6YklUe6RxeTeleMR0yv3cYH6PsPZHcnVn7xv7zO1BHN8r0XETu8n6Ye3Q+ahtSarc3WgtNWmehIBfA==",
+        "resolved": "https://registry.npmjs.org/get-east-asian-width/-/get-east-asian-width-1.6.0.tgz"
+      },
+      {
+        "path": "node_modules/google-auth-library",
+        "version": "10.9.1",
+        "integrity": "sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==",
+        "resolved": "https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.9.1.tgz"
+      },
+      {
+        "path": "node_modules/google-logging-utils",
+        "version": "1.1.3",
+        "integrity": "sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==",
+        "resolved": "https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.3.tgz"
+      },
+      {
+        "path": "node_modules/http-proxy-agent",
+        "version": "9.1.0",
+        "integrity": "sha512-2NxoveTT58mjYT4n3RPTEfCZGLMbidoO8XEieXfpSYxu+PQJ1qpx4ypwH6N+uF9twBPIvRRgvkvW5HUTYWENig==",
+        "resolved": "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-9.1.0.tgz"
+      },
+      {
+        "path": "node_modules/https-proxy-agent",
+        "version": "9.1.0",
+        "integrity": "sha512-ag87y7cJJ9/3+GxFr8Oy4O5faDsGRGnBGsJj/YjOSsSx/5eadKLYTMPlzuR6obgoCDDm0abAAZitXXQkMOPSpA==",
+        "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.1.0.tgz"
+      },
+      {
+        "path": "node_modules/isexe",
+        "version": "2.0.0",
+        "integrity": "sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==",
+        "resolved": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz"
+      },
+      {
+        "path": "node_modules/jose",
+        "version": "6.2.12",
+        "integrity": "sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==",
+        "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.12.tgz"
+      },
+      {
+        "path": "node_modules/json-bigint",
+        "version": "1.0.0",
+        "integrity": "sha512-SiPv/8VpZuWbvLSMtTDU8hEfrZWg/mH/nV/b4o0CYbSxu1UIQPLdwKOCIyLQX+VIPO5vrLX3i8qtqFyhdPSUSQ==",
+        "resolved": "https://registry.npmjs.org/json-bigint/-/json-bigint-1.0.0.tgz"
+      },
+      {
+        "path": "node_modules/json-schema-to-ts",
+        "version": "3.1.1",
+        "integrity": "sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==",
+        "resolved": "https://registry.npmjs.org/json-schema-to-ts/-/json-schema-to-ts-3.1.1.tgz"
+      },
+      {
+        "path": "node_modules/jwa",
+        "version": "2.0.1",
+        "integrity": "sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==",
+        "resolved": "https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz"
+      },
+      {
+        "path": "node_modules/jws",
+        "version": "4.0.1",
+        "integrity": "sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==",
+        "resolved": "https://registry.npmjs.org/jws/-/jws-4.0.1.tgz"
+      },
+      {
+        "path": "node_modules/long",
+        "version": "5.3.2",
+        "integrity": "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==",
+        "resolved": "https://registry.npmjs.org/long/-/long-5.3.2.tgz"
+      },
+      {
+        "path": "node_modules/marked",
+        "version": "18.0.11",
+        "integrity": "sha512-HnslJfsZkRPBDJRHvVtAaWlZHEpSu7u8LgQuJCELjRKuWR+hpq4A7sLq3p8HaI9ypVoXDXxV34CsQJEe1+J5Aw==",
+        "resolved": "https://registry.npmjs.org/marked/-/marked-18.0.11.tgz"
+      },
+      {
+        "path": "node_modules/ms",
+        "version": "2.1.3",
+        "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+        "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz"
+      },
+      {
+        "path": "node_modules/node-domexception",
+        "version": "1.0.0",
+        "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
+        "resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz"
+      },
+      {
+        "path": "node_modules/node-fetch",
+        "version": "3.3.2",
+        "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
+        "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz"
+      },
+      {
+        "path": "node_modules/oauth4webapi",
+        "version": "3.8.8",
+        "integrity": "sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==",
+        "resolved": "https://registry.npmjs.org/oauth4webapi/-/oauth4webapi-3.8.8.tgz"
+      },
+      {
+        "path": "node_modules/openai",
+        "version": "7.19.0",
+        "integrity": "sha512-MX2s3u2L5racTO0CC/SWpCOasJQBCJrqLKXK+l82cAhdeF8mPMBEe/gxMm0ZFa2xpKpOFLRjxv5afYEZbBXmbQ==",
+        "resolved": "https://registry.npmjs.org/openai/-/openai-7.19.0.tgz"
+      },
+      {
+        "path": "node_modules/openid-client",
+        "version": "6.8.8",
+        "integrity": "sha512-ZsucJA5Ad04Uv7YN4ql+s4GXNmb9uAYQwyJTsJx7CH/MX3JZioLE2pVKi1SC+YrbSLA4Px3Gi30dMjgOZtb6pA==",
+        "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.8.tgz"
+      },
+      {
+        "path": "node_modules/p-retry",
+        "version": "4.6.2",
+        "integrity": "sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==",
+        "resolved": "https://registry.npmjs.org/p-retry/-/p-retry-4.6.2.tgz"
+      },
+      {
+        "path": "node_modules/partial-json",
+        "version": "0.1.7",
+        "integrity": "sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA==",
+        "resolved": "https://registry.npmjs.org/partial-json/-/partial-json-0.1.7.tgz"
+      },
+      {
+        "path": "node_modules/path-key",
+        "version": "3.1.1",
+        "integrity": "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==",
+        "resolved": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz"
+      },
+      {
+        "path": "node_modules/protobufjs",
+        "version": "7.6.6",
+        "integrity": "sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==",
+        "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.6.tgz",
+        "installScript": true
+      },
+      {
+        "path": "node_modules/proxy-agent-negotiate",
+        "version": "1.1.0",
+        "integrity": "sha512-N8IBcM3UgCVzz2L2Lqv8DVntDnnC8/hiV4nEDUPkqq72TPUgYWjQc+bdZlBPZK9LzPAvOY//gAt0S0DApoOXWQ==",
+        "resolved": "https://registry.npmjs.org/proxy-agent-negotiate/-/proxy-agent-negotiate-1.1.0.tgz"
+      },
+      {
+        "path": "node_modules/quickjs-wasi",
+        "version": "3.6.2",
+        "integrity": "sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==",
+        "resolved": "https://registry.npmjs.org/quickjs-wasi/-/quickjs-wasi-3.6.2.tgz"
+      },
+      {
+        "path": "node_modules/retry",
+        "version": "0.13.1",
+        "integrity": "sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==",
+        "resolved": "https://registry.npmjs.org/retry/-/retry-0.13.1.tgz"
+      },
+      {
+        "path": "node_modules/safe-buffer",
+        "version": "5.2.1",
+        "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
+        "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz"
+      },
+      {
+        "path": "node_modules/semver",
+        "version": "7.8.5",
+        "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz"
+      },
+      {
+        "path": "node_modules/shebang-command",
+        "version": "2.0.0",
+        "integrity": "sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==",
+        "resolved": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz"
+      },
+      {
+        "path": "node_modules/shebang-regex",
+        "version": "3.0.0",
+        "integrity": "sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==",
+        "resolved": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz"
+      },
+      {
+        "path": "node_modules/standardwebhooks",
+        "version": "1.1.1",
+        "integrity": "sha512-bCbX9ZEyFkWPsRz7Bl3NuQUJohmwGSev/yhr7vhaGPlc4AfIrspIRa6cPTBuI1ItmrTDJ4d/S2hCsfe4+vQGnQ==",
+        "resolved": "https://registry.npmjs.org/standardwebhooks/-/standardwebhooks-1.1.1.tgz"
+      },
+      {
+        "path": "node_modules/ts-algebra",
+        "version": "2.0.0",
+        "integrity": "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==",
+        "resolved": "https://registry.npmjs.org/ts-algebra/-/ts-algebra-2.0.0.tgz"
+      },
+      {
+        "path": "node_modules/tslib",
+        "version": "2.8.1",
+        "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+        "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz"
+      },
+      {
+        "path": "node_modules/typebox",
+        "version": "1.3.27",
+        "integrity": "sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA==",
+        "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.27.tgz"
+      },
+      {
+        "path": "node_modules/undici",
+        "version": "8.10.2",
+        "integrity": "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==",
+        "resolved": "https://registry.npmjs.org/undici/-/undici-8.10.2.tgz"
+      },
+      {
+        "path": "node_modules/undici-types",
+        "version": "6.21.0",
+        "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==",
+        "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz"
+      },
+      {
+        "path": "node_modules/web-streams-polyfill",
+        "version": "3.3.3",
+        "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==",
+        "resolved": "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz"
+      },
+      {
+        "path": "node_modules/which",
+        "version": "2.0.2",
+        "integrity": "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==",
+        "resolved": "https://registry.npmjs.org/which/-/which-2.0.2.tgz"
+      },
+      {
+        "path": "node_modules/ws",
+        "version": "8.22.0",
+        "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
+        "resolved": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz"
+      },
+      {
+        "path": "node_modules/yaml",
+        "version": "2.9.1",
+        "integrity": "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==",
+        "resolved": "https://registry.npmjs.org/yaml/-/yaml-2.9.1.tgz"
+      }
+    ],
+    "stateSchemas": {
+      "state": [
+        "piship-state/v1"
+      ],
+      "identity": [
+        "piship-identity-metadata/v1"
+      ],
+      "credential": [
+        "piship-credential-metadata/v1"
+      ],
+      "preferences": [
+        "piship-preferences/v1"
+      ],
+      "metrics": [
+        "piship-metrics/v1"
+      ],
+      "audit": [
+        "piship-audit/v1"
+      ],
+      "sandboxCredential": [
+        "piship-sandbox-credential-metadata/v1"
+      ],
+      "credentialIssuance": [
+        "piship-credential-issuance/v1"
+      ]
+    }
+  },
+  "resources": [
+    {
+      "kind": "instructions",
+      "path": "resources/AGENTS.md",
+      "sha256": "b0c3d9ce3e6f4ee0267cfa0eee3d496bc2c1bd5c8367c4a081c7538494d1646d",
+      "class": "user"
+    },
+    {
+      "kind": "skills",
+      "path": "resources/skills/code-review-targets/SKILL.md",
+      "sha256": "bd988d52fd491d5a9c19a67b7df2320e120feaeb1737e8071f50746afd419ce8",
+      "class": "user"
+    }
+  ],
+  "declared": {
+    "instructions": [
+      "./resources/AGENTS.md"
+    ],
+    "skills": [
+      "./resources/skills"
+    ],
+    "extensions": [],
+    "prompts": [],
+    "themes": []
+  },
+  "access": {
+    "identity": {
+      "mode": "none"
+    },
+    "credential": {
+      "provider": "pi-native",
+      "storage": {
+        "provider": "system",
+        "acknowledgePlaintext": false
+      },
+      "refresh": {
+        "beforeExpirySeconds": 300
+      }
+    },
+    "inference": {
+      "provider": "pi-native",
+      "liveCatalog": false
+    },
+    "models": {
+      "allowed": [],
+      "catalog": []
+    },
+    "config": {
+      "enforced": {},
+      "defaults": {},
+      "userOverridable": [
+        "model",
+        "theme",
+        "thinkingLevel"
+      ]
+    },
+    "network": {
+      "proxy": {
+        "inheritEnvironment": true
+      },
+      "tls": {
+        "additionalCA": []
+      },
+      "publicFallback": "allow",
+      "privateOnly": false,
+      "allowHosts": []
+    },
+    "variables": [
+      "DEVCODE_UPDATE_SOURCE"
+    ]
+  },
+  "governance": {
+    "manifest": {
+      "resources": {
+        "declared": [
+          {
+            "kind": "instructions",
+            "class": "user",
+            "path": "./resources/AGENTS.md"
+          },
+          {
+            "kind": "skills",
+            "class": "user",
+            "path": "./resources/skills"
+          }
+        ],
+        "builtin": [],
+        "packages": [
+          {
+            "id": "pi-code",
+            "class": "user",
+            "filters": {},
+            "source": "npm",
+            "package": "pi-code",
+            "version": "1.4.2"
+          },
+          {
+            "id": "pi-lens",
+            "class": "user",
+            "filters": {
+              "skills": [
+                "skills/**",
+                "!skills/pi-lens-write-*/**"
+              ]
+            },
+            "environment": {
+              "PI_LENS_HOME": {
+                "statePath": "pi-lens"
+              }
+            },
+            "source": "npm",
+            "package": "pi-lens",
+            "version": "4.3.0"
+          },
+          {
+            "id": "pi-background-tasks",
+            "class": "user",
+            "filters": {
+              "extensions": [
+                "dist/extensions/background-tasks.js"
+              ]
+            },
+            "environment": {
+              "PI_BG_FEATURES": "process",
+              "PI_BG_DISABLE_UPDATE_CHECK": "1"
+            },
+            "source": "npm",
+            "package": "pi-background-tasks",
+            "version": "2.6.9"
+          },
+          {
+            "id": "pi-review",
+            "class": "user",
+            "filters": {},
+            "source": "npm",
+            "package": "pi-review",
+            "version": "1.2.1"
+          },
+          {
+            "id": "pi-browser-use",
+            "class": "user",
+            "filters": {
+              "skills": [
+                "skills/**",
+                "!skills/auth-bootstrap/**",
+                "!skills/gmail-auth/**"
+              ]
+            },
+            "source": "npm",
+            "package": "pi-browser-use",
+            "version": "0.12.11"
+          },
+          {
+            "id": "pi-permission-system",
+            "class": "certified",
+            "certified": {
+              "id": "pi-permission-system",
+              "version": "39.0.4",
+              "source": "https://www.npmjs.com/package/@gotgenes/pi-permission-system",
+              "integrity": "sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84",
+              "license": "MIT",
+              "pi": [
+                "1.0.3"
+              ],
+              "platforms": []
+            },
+            "filters": {},
+            "agentFiles": [
+              {
+                "path": "extensions/pi-permission-system/config.json",
+                "mode": "seed",
+                "json": {
+                  "permissionReviewLog": true,
+                  "debugLog": false,
+                  "yoloMode": false,
+                  "shellTools": {
+                    "bg_run": {
+                      "commandArgument": "command"
+                    }
+                  },
+                  "permission": {
+                    "*": "allow",
+                    "read": "allow",
+                    "write": "allow",
+                    "edit": "allow",
+                    "grep": "allow",
+                    "find": "allow",
+                    "ls": "allow",
+                    "path": {
+                      "*": "allow",
+                      "*.pem": "ask",
+                      "*.key": "ask",
+                      "*.p12": "ask",
+                      "*.pfx": "ask",
+                      "*.jks": "ask",
+                      "*.keystore": "ask",
+                      "*/fixtures/*.pem": "allow",
+                      "*/fixtures/*.key": "allow",
+                      "*/fixture/*.pem": "allow",
+                      "*/fixture/*.key": "allow",
+                      "*/__fixtures__/*.pem": "allow",
+                      "*/__fixtures__/*.key": "allow",
+                      "*/testdata/*.pem": "allow",
+                      "*/testdata/*.key": "allow",
+                      "*/test/*.pem": "allow",
+                      "*/test/*.key": "allow",
+                      "*/tests/*.pem": "allow",
+                      "*/tests/*.key": "allow",
+                      "*/spec/*.pem": "allow",
+                      "*/spec/*.key": "allow",
+                      "*.env": "ask",
+                      "*.env.*": "ask",
+                      "*.env.example": "allow",
+                      "*.env.sample": "allow",
+                      "*.env.template": "allow",
+                      "*.env.dist": "allow",
+                      "~/.ssh": "deny",
+                      "~/.ssh/*": "deny",
+                      "*/id_rsa": "deny",
+                      "*/id_dsa": "deny",
+                      "*/id_ecdsa": "deny",
+                      "*/id_ecdsa_sk": "deny",
+                      "*/id_ed25519": "deny",
+                      "*/id_ed25519_sk": "deny",
+                      "~/.gnupg": "deny",
+                      "~/.gnupg/*": "deny",
+                      "~/.aws/credentials": "deny",
+                      "~/.aws/sso/*": "deny",
+                      "~/.aws/cli/cache/*": "deny",
+                      "~/.config/gcloud/*": "deny",
+                      "~/.azure/*": "deny",
+                      "~/.kube/config": "deny",
+                      "~/.docker/config.json": "deny",
+                      "~/.netrc": "deny",
+                      "~/_netrc": "deny",
+                      "~/.npmrc": "deny",
+                      "~/.pypirc": "deny",
+                      "~/.git-credentials": "deny",
+                      "~/.config/gh/hosts.yml": "deny",
+                      "~/.cargo/credentials": "deny",
+                      "~/.cargo/credentials.toml": "deny",
+                      "~/.gem/credentials": "deny",
+                      "~/.vault-token": "deny",
+                      "~/.terraform.d/credentials.tfrc.json": "deny",
+                      "~/.config/op/*": "deny",
+                      "~/.password-store/*": "deny",
+                      "~/Library/Keychains/*": "deny",
+                      "/Library/Keychains/*": "deny",
+                      "~/.local/share/keyrings/*": "deny",
+                      "*.kdbx": "deny",
+                      "/etc/shadow*": "deny",
+                      "/etc/gshadow*": "deny",
+                      "/etc/master.passwd": "deny",
+                      "/etc/ssh/ssh_host_*": "deny",
+                      "~/.pi/agent/auth.json": "deny",
+                      "~/.pi/browser-profile/*": "deny",
+                      "*/.piship/*/agent/auth.json": "deny",
+                      "*/.piship/*/secrets/*": "deny"
+                    },
+                    "path_write": {
+                      "*/.claude/settings.json": "ask",
+                      "*/.claude/settings.local.json": "ask",
+                      "*/.claude/hooks/*": "ask",
+                      "*/.mcp.json": "ask",
+                      "*/.pi/settings.json": "ask",
+                      "*/.pi/extensions/*": "ask",
+                      "*/.pi/extensions/pi-permission-system/*": "deny",
+                      "*/.git/hooks/*": "ask",
+                      "*/.git/config": "ask"
+                    },
+                    "external_directory": {
+                      "*": "ask"
+                    },
+                    "external_directory_read": {
+                      "*": "allow"
+                    },
+                    "external_directory_write": {
+                      "*": "ask",
+                      "/tmp/*": "allow",
+                      "/private/tmp/*": "allow",
+                      "/var/folders/*": "allow",
+                      "/private/var/folders/*": "allow",
+                      "~/.cache/*": "allow"
+                    },
+                    "bash": {
+                      "*": "ask",
+                      "cd *": "allow",
+                      "pwd": "allow",
+                      "ls *": "allow",
+                      "tree *": "allow",
+                      "cat *": "allow",
+                      "head *": "allow",
+                      "tail *": "allow",
+                      "wc *": "allow",
+                      "stat *": "allow",
+                      "file *": "allow",
+                      "du *": "allow",
+                      "df *": "allow",
+                      "diff *": "allow",
+                      "cmp *": "allow",
+                      "sort *": "allow",
+                      "uniq *": "allow",
+                      "cut *": "allow",
+                      "tr *": "allow",
+                      "grep *": "allow",
+                      "egrep *": "allow",
+                      "fgrep *": "allow",
+                      "rg *": "allow",
+                      "fd *": "allow",
+                      "find *": "allow",
+                      "jq *": "allow",
+                      "yq *": "allow",
+                      "sed *": "allow",
+                      "awk *": "allow",
+                      "basename *": "allow",
+                      "dirname *": "allow",
+                      "realpath *": "allow",
+                      "readlink *": "allow",
+                      "which *": "allow",
+                      "type *": "allow",
+                      "command -v *": "allow",
+                      "echo *": "allow",
+                      "printf *": "allow",
+                      "date *": "allow",
+                      "sleep *": "allow",
+                      "true": "allow",
+                      "false": "allow",
+                      "test *": "allow",
+                      "[ *": "allow",
+                      "[[ *": "allow",
+                      "export *": "allow",
+                      "unset *": "allow",
+                      "source *": "allow",
+                      ". *": "allow",
+                      "uname *": "allow",
+                      "whoami": "allow",
+                      "id": "allow",
+                      "hostname": "allow",
+                      "ps *": "allow",
+                      "lsof *": "allow",
+                      "shasum *": "allow",
+                      "sha256sum *": "allow",
+                      "md5sum *": "allow",
+                      "md5 *": "allow",
+                      "mkdir *": "allow",
+                      "touch *": "allow",
+                      "cp *": "allow",
+                      "mv *": "allow",
+                      "ln *": "allow",
+                      "rm *": "allow",
+                      "rmdir *": "allow",
+                      "tee *": "allow",
+                      "chmod *": "allow",
+                      "tar *": "allow",
+                      "zip *": "allow",
+                      "unzip *": "allow",
+                      "gzip *": "allow",
+                      "gunzip *": "allow",
+                      "patch *": "allow",
+                      "./*": "allow",
+                      "node_modules/.bin/*": "allow",
+                      ".venv/bin/*": "allow",
+                      "venv/bin/*": "allow",
+                      "bash *.sh": "allow",
+                      "sh *.sh": "allow",
+                      "zsh *.sh": "allow",
+                      "git *": "allow",
+                      "gh pr view*": "allow",
+                      "gh pr diff*": "allow",
+                      "gh pr list*": "allow",
+                      "gh pr checks*": "allow",
+                      "gh pr status*": "allow",
+                      "gh issue view*": "allow",
+                      "gh issue list*": "allow",
+                      "gh repo view*": "allow",
+                      "gh run list*": "allow",
+                      "gh run view*": "allow",
+                      "gh search *": "allow",
+                      "node *": "allow",
+                      "npm *": "allow",
+                      "npx *": "allow",
+                      "pnpm *": "allow",
+                      "pnpx *": "allow",
+                      "yarn *": "allow",
+                      "bun *": "allow",
+                      "bunx *": "allow",
+                      "deno *": "allow",
+                      "corepack *": "allow",
+                      "tsx *": "allow",
+                      "ts-node *": "allow",
+                      "tsc *": "allow",
+                      "eslint *": "allow",
+                      "prettier *": "allow",
+                      "biome *": "allow",
+                      "oxlint *": "allow",
+                      "vitest *": "allow",
+                      "jest *": "allow",
+                      "mocha *": "allow",
+                      "playwright *": "allow",
+                      "cypress *": "allow",
+                      "vite *": "allow",
+                      "next *": "allow",
+                      "turbo *": "allow",
+                      "nx *": "allow",
+                      "esbuild *": "allow",
+                      "rollup *": "allow",
+                      "webpack *": "allow",
+                      "python *": "allow",
+                      "python3 *": "allow",
+                      "pytest *": "allow",
+                      "uv *": "allow",
+                      "uvx *": "allow",
+                      "pip *": "allow",
+                      "pip3 *": "allow",
+                      "pipx *": "allow",
+                      "poetry *": "allow",
+                      "pdm *": "allow",
+                      "hatch *": "allow",
+                      "tox *": "allow",
+                      "nox *": "allow",
+                      "ruff *": "allow",
+                      "black *": "allow",
+                      "isort *": "allow",
+                      "flake8 *": "allow",
+                      "mypy *": "allow",
+                      "pyright *": "allow",
+                      "pylint *": "allow",
+                      "coverage *": "allow",
+                      "cargo *": "allow",
+                      "rustc *": "allow",
+                      "rustfmt *": "allow",
+                      "go *": "allow",
+                      "gofmt *": "allow",
+                      "golangci-lint *": "allow",
+                      "java *": "allow",
+                      "javac *": "allow",
+                      "mvn *": "allow",
+                      "gradle *": "allow",
+                      "kotlinc *": "allow",
+                      "sbt *": "allow",
+                      "dotnet *": "allow",
+                      "ruby *": "allow",
+                      "bundle *": "allow",
+                      "rake *": "allow",
+                      "rspec *": "allow",
+                      "rubocop *": "allow",
+                      "php *": "allow",
+                      "composer *": "allow",
+                      "swift *": "allow",
+                      "swiftc *": "allow",
+                      "xcodebuild *": "allow",
+                      "flutter *": "allow",
+                      "dart *": "allow",
+                      "make *": "allow",
+                      "cmake *": "allow",
+                      "ninja *": "allow",
+                      "meson *": "allow",
+                      "bazel *": "allow",
+                      "gcc *": "allow",
+                      "g++ *": "allow",
+                      "cc *": "allow",
+                      "c++ *": "allow",
+                      "clang *": "allow",
+                      "clang++ *": "allow",
+                      "clang-format *": "allow",
+                      "clang-tidy *": "allow",
+                      "pkg-config *": "allow",
+                      "docker ps*": "allow",
+                      "docker images*": "allow",
+                      "docker logs*": "allow",
+                      "docker build*": "allow",
+                      "docker buildx*": "allow",
+                      "docker compose *": "allow",
+                      "docker-compose *": "allow",
+                      "docker exec*": "allow",
+                      "docker run*": "allow",
+                      "docker start*": "allow",
+                      "docker stop*": "allow",
+                      "docker restart*": "allow",
+                      "docker inspect*": "allow",
+                      "docker pull*": "allow",
+                      "docker network *": "allow",
+                      "docker volume ls*": "allow",
+                      "docker volume inspect*": "allow",
+                      "sudo *": "ask",
+                      "doas *": "ask",
+                      "su *": "ask",
+                      "pkexec *": "ask",
+                      "rm -r*": "ask",
+                      "rm -R*": "ask",
+                      "rm -fr*": "ask",
+                      "rm -fR*": "ask",
+                      "rm -f -r*": "ask",
+                      "rm -f -R*": "ask",
+                      "rm --recursive*": "ask",
+                      "rm * -r*": "ask",
+                      "rm * -R*": "ask",
+                      "rm * --recursive*": "ask",
+                      "find* -delete*": "ask",
+                      "chmod -R*": "ask",
+                      "chmod * -R*": "ask",
+                      "chmod --recursive*": "ask",
+                      "git reset*--hard*": "ask",
+                      "git clean*": "ask",
+                      "git push*--force*": "ask",
+                      "git push* -f": "ask",
+                      "git push* -f *": "ask",
+                      "git push*--delete*": "ask",
+                      "git push* -d": "ask",
+                      "git push* -d *": "ask",
+                      "git push*--mirror*": "ask",
+                      "git push*--prune*": "ask",
+                      "git branch* -D*": "ask",
+                      "git branch*--delete*--force*": "ask",
+                      "git branch* -f *": "ask",
+                      "git checkout *": "ask",
+                      "git checkout -b *": "allow",
+                      "git restore *": "ask",
+                      "git restore --staged *": "allow",
+                      "git restore *--w*": "ask",
+                      "git restore * -*W*": "ask",
+                      "git checkout* -f*": "ask",
+                      "git checkout -b * -*": "ask",
+                      "git checkout*--for*": "ask",
+                      "git checkout*--dis*": "ask",
+                      "git -*": "ask",
+                      "git stash drop*": "ask",
+                      "git stash clear*": "ask",
+                      "git reflog expire*": "ask",
+                      "git gc*--prune*": "ask",
+                      "git filter-branch*": "ask",
+                      "git filter-repo*": "ask",
+                      "git update-ref -d*": "ask",
+                      "git remote add*": "ask",
+                      "git remote set-url*": "ask",
+                      "git config*": "ask",
+                      "git clean -n*": "allow",
+                      "git clean --dry-run*": "allow",
+                      "git config --get*": "allow",
+                      "git config --list*": "allow",
+                      "git config -l*": "allow",
+                      "git config --show-origin*": "allow",
+                      "git config user.name": "allow",
+                      "git config user.email": "allow",
+                      "npm publish*": "ask",
+                      "npm unpublish*": "ask",
+                      "npm login*": "ask",
+                      "npm adduser*": "ask",
+                      "npm logout*": "ask",
+                      "npm token*": "ask",
+                      "npm owner*": "ask",
+                      "npm access*": "ask",
+                      "npm deprecate*": "ask",
+                      "npm dist-tag*": "ask",
+                      "npm config set*": "ask",
+                      "npm set *": "ask",
+                      "npm* --global*": "ask",
+                      "npm* -g": "ask",
+                      "npm* -g *": "ask",
+                      "pnpm publish*": "ask",
+                      "pnpm login*": "ask",
+                      "pnpm* --global*": "ask",
+                      "pnpm* -g": "ask",
+                      "pnpm* -g *": "ask",
+                      "yarn npm publish*": "ask",
+                      "yarn npm login*": "ask",
+                      "yarn global*": "ask",
+                      "bun publish*": "ask",
+                      "bun* --global*": "ask",
+                      "bun* -g": "ask",
+                      "bun* -g *": "ask",
+                      "twine *": "ask",
+                      "poetry publish*": "ask",
+                      "uv publish*": "ask",
+                      "pip config set*": "ask",
+                      "pip* --break-system-packages*": "ask",
+                      "cargo publish*": "ask",
+                      "cargo login*": "ask",
+                      "cargo owner*": "ask",
+                      "cargo yank*": "ask",
+                      "mvn deploy*": "ask",
+                      "gradle publish*": "ask",
+                      "./gradlew publish*": "ask",
+                      "dotnet nuget push*": "ask",
+                      "gem push*": "ask",
+                      "docker push*": "ask",
+                      "docker login*": "ask",
+                      "docker system *": "ask",
+                      "docker* prune*": "ask",
+                      "docker volume rm*": "ask",
+                      "docker* rm -f*": "ask",
+                      "docker* rmi -f*": "ask",
+                      "docker* --privileged*": "ask",
+                      "docker*docker.sock*": "ask",
+                      "docker compose*down* -v*": "ask",
+                      "docker compose*down*--volumes*": "ask",
+                      "docker-compose*down* -v*": "ask",
+                      "docker-compose*down*--volumes*": "ask",
+                      "gh api *": "ask",
+                      "gh auth token*": "deny",
+                      "security find-*": "deny",
+                      "security dump-keychain*": "deny",
+                      "security export*": "deny",
+                      "security unlock-keychain*": "deny",
+                      "aws configure get*": "deny"
+                    },
+                    "mcp": {
+                      "*": "ask",
+                      "mcp_status": "allow",
+                      "mcp_list": "allow",
+                      "mcp_search": "allow",
+                      "mcp_describe": "allow",
+                      "get_*": "allow",
+                      "list_*": "allow",
+                      "search_*": "allow",
+                      "read_*": "allow",
+                      "find_*": "allow",
+                      "describe_*": "allow",
+                      "fetch_*": "allow",
+                      "view_*": "allow",
+                      "show_*": "allow",
+                      "lookup_*": "allow",
+                      "query*": "allow",
+                      "resolve-*": "allow",
+                      "status": "allow",
+                      "info": "allow",
+                      "whoami": "allow",
+                      "*create*": "ask",
+                      "*update*": "ask",
+                      "*delete*": "ask",
+                      "*remove*": "ask",
+                      "*write*": "ask",
+                      "*replace*": "ask",
+                      "*execute*": "ask",
+                      "*merge*": "ask",
+                      "*push*": "ask",
+                      "*send*": "ask",
+                      "*deploy*": "ask",
+                      "*drop*": "ask"
+                    },
+                    "browser_evaluate_script": "ask",
+                    "browser_upload_file": "ask",
+                    "browser_switch_mode": "ask",
+                    "browser_setup": "ask",
+                    "browser_reauth": "ask"
+                  }
+                }
+              }
+            ],
+            "source": "npm",
+            "package": "@gotgenes/pi-permission-system",
+            "version": "39.0.4"
+          }
+        ]
+      },
+      "capabilities": [
+        {
+          "name": "permissions",
+          "enabled": true,
+          "provider": {
+            "id": "certified/pi-permission-system",
+            "class": "certified",
+            "version": "39.0.4",
+            "implements": [
+              "piship.capability/permissions/v1"
+            ],
+            "package": "pi-permission-system"
+          },
+          "settings": {
+            "autoApproveFile": "extensions/pi-permission-system/config.json",
+            "autoApproveKey": "yoloMode"
+          }
+        },
+        {
+          "name": "workflow",
+          "enabled": false,
+          "settings": {}
+        },
+        {
+          "name": "checkpoint",
+          "enabled": false,
+          "settings": {}
+        },
+        {
+          "name": "subagents",
+          "enabled": false,
+          "settings": {}
+        },
+        {
+          "name": "code-intel",
+          "enabled": false,
+          "settings": {}
+        },
+        {
+          "name": "acp",
+          "enabled": false,
+          "settings": {}
+        }
+      ],
+      "policy": {
+        "id": "devcode",
+        "version": 1,
+        "default": "allow",
+        "enforced": [
+          {
+            "id": "dev.secret.ssh",
+            "action": "filesystem.*",
+            "resource": "~/.ssh/**",
+            "effect": "deny",
+            "reason": "SSH keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.key-rsa",
+            "action": "filesystem.*",
+            "resource": "**/id_rsa",
+            "effect": "deny",
+            "reason": "Private keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.key-dsa",
+            "action": "filesystem.*",
+            "resource": "**/id_dsa",
+            "effect": "deny",
+            "reason": "Private keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.key-ecdsa",
+            "action": "filesystem.*",
+            "resource": "**/id_ecdsa",
+            "effect": "deny",
+            "reason": "Private keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.key-ed25519",
+            "action": "filesystem.*",
+            "resource": "**/id_ed25519",
+            "effect": "deny",
+            "reason": "Private keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.gnupg",
+            "action": "filesystem.*",
+            "resource": "~/.gnupg/**",
+            "effect": "deny",
+            "reason": "GnuPG keys are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.aws",
+            "action": "filesystem.*",
+            "resource": "~/.aws/credentials",
+            "effect": "deny",
+            "reason": "Cloud credentials are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.gcloud",
+            "action": "filesystem.*",
+            "resource": "~/.config/gcloud/**",
+            "effect": "deny",
+            "reason": "Cloud credentials are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.azure",
+            "action": "filesystem.*",
+            "resource": "~/.azure/**",
+            "effect": "deny",
+            "reason": "Cloud credentials are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.kube",
+            "action": "filesystem.*",
+            "resource": "~/.kube/config",
+            "effect": "deny",
+            "reason": "Cluster credentials are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.docker",
+            "action": "filesystem.*",
+            "resource": "~/.docker/config.json",
+            "effect": "deny",
+            "reason": "Registry credentials are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.netrc",
+            "action": "filesystem.*",
+            "resource": "~/.netrc",
+            "effect": "deny",
+            "reason": "Stored logins are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.npmrc",
+            "action": "filesystem.*",
+            "resource": "~/.npmrc",
+            "effect": "deny",
+            "reason": "Registry tokens are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.git-credentials",
+            "action": "filesystem.*",
+            "resource": "~/.git-credentials",
+            "effect": "deny",
+            "reason": "Stored logins are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.gh",
+            "action": "filesystem.*",
+            "resource": "~/.config/gh/hosts.yml",
+            "effect": "deny",
+            "reason": "The GitHub CLI token is never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.keychains",
+            "action": "filesystem.*",
+            "resource": "~/Library/Keychains/**",
+            "effect": "deny",
+            "reason": "Keychains are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.keyrings",
+            "action": "filesystem.*",
+            "resource": "~/.local/share/keyrings/**",
+            "effect": "deny",
+            "reason": "Keyrings are never read or written by the agent"
+          },
+          {
+            "id": "dev.secret.browser-profile",
+            "action": "filesystem.*",
+            "resource": "~/.pi/browser-profile/**",
+            "effect": "deny",
+            "reason": "The browser profile holds logged-in sessions"
+          }
+        ],
+        "defaults": [],
+        "acknowledgeUnenforced": [],
+        "resourceTrust": {
+          "upstream": "allow",
+          "builtin": "allow",
+          "certified": "allow",
+          "company": "allow",
+          "user": "allow",
+          "project": "policy"
+        },
+        "providerTrust": {
+          "upstream": "allow",
+          "builtin": "allow",
+          "certified": "allow",
+          "company": "allow",
+          "user": "allow"
+        },
+        "projectTrust": {
+          "company": {
+            "match": [],
+            "dimensions": {
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
+              "agents": "allow",
+              "hooks": "deny",
+              "extensions": "ask",
+              "mcp": "allow",
+              "providers": "deny",
+              "claudeRules": "allow",
+              "claudeCommands": "allow",
+              "claudeSkills": "allow",
+              "claudeAgents": "allow",
+              "claudeHooks": "allow"
+            }
+          },
+          "external": {
+            "match": [],
+            "dimensions": {
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
+              "agents": "allow",
+              "hooks": "deny",
+              "extensions": "ask",
+              "mcp": "allow",
+              "providers": "deny",
+              "claudeRules": "allow",
+              "claudeCommands": "allow",
+              "claudeSkills": "allow",
+              "claudeAgents": "allow",
+              "claudeHooks": "allow"
+            }
+          },
+          "unknown": {
+            "dimensions": {
+              "passiveContext": "allow",
+              "instructions": "allow",
+              "skills": "allow",
+              "agents": "ask",
+              "hooks": "deny",
+              "extensions": "ask",
+              "mcp": "ask",
+              "providers": "deny",
+              "claudeRules": "ask",
+              "claudeCommands": "ask",
+              "claudeSkills": "ask",
+              "claudeAgents": "ask",
+              "claudeHooks": "ask"
+            }
+          }
+        }
+      },
+      "mcp": {
+        "mode": "explicit",
+        "servers": [],
+        "project": "deny",
+        "user": "allow"
+      },
+      "sandbox": {
+        "required": false,
+        "filesystem": {
+          "read": {
+            "deny": [
+              "~/.ssh",
+              "~/.aws",
+              "~/.gnupg",
+              "~/.config/gcloud",
+              "~/.azure",
+              "~/.kube",
+              "~/.docker",
+              "~/.netrc",
+              "~/.npmrc",
+              "~/.pi"
+            ]
+          },
+          "write": {
+            "allow": [
+              "workspace",
+              "tmp"
+            ]
+          }
+        },
+        "network": {
+          "mode": "allow"
+        },
+        "environment": {
+          "allow": [
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TERM",
+            "TZ",
+            "SHELL",
+            "TMPDIR"
+          ]
+        }
+      },
+      "audit": {
+        "enabled": false,
+        "sinks": [],
+        "buffer": {
+          "maxEvents": 1000,
+          "flushIntervalMs": 2000
+        },
+        "capture": {
+          "promptContent": false,
+          "responseContent": false,
+          "commandText": false,
+          "sourceContent": false
+        }
+      },
+      "packageTrust": {
+        "npm": {
+          "requireIntegrity": true
+        },
+        "git": {
+          "requireCommitSha": false
+        },
+        "local": {}
+      }
+    },
+    "certified": [],
+    "providers": [
+      {
+        "capability": "permissions",
+        "id": "certified/pi-permission-system",
+        "class": "certified",
+        "version": "39.0.4",
+        "implements": [
+          "piship.capability/permissions/v1"
+        ],
+        "package": "pi-permission-system",
+        "certified": {
+          "id": "pi-permission-system",
+          "version": "39.0.4",
+          "source": "https://www.npmjs.com/package/@gotgenes/pi-permission-system",
+          "integrity": "sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84",
+          "license": "MIT",
+          "pi": [
+            "1.0.3"
+          ],
+          "platforms": []
+        }
+      }
+    ]
+  },
+  "digests": {
+    "resources": "sha256-fd2c9e06817649fdb031617be23a391507149c8b29c6c6a24ca1e9c2ba735899",
+    "policy": "sha256-4fbf3ac5006a21cf6bb7c0291e4338f687d3e76a79c7f508e39a37eae66b9844",
+    "capabilities": "sha256-91bc16ca42a0b910ab28a70aec9beabe0b3d904371e400e094a327f7326fae8c",
+    "mcp": "sha256-7ea81aebd3bb355bc7ab3fda104b7101d09474b7a3f5813e54c9ae4de5a0afe4",
+    "sandbox": "sha256-2cddd847deae4543cd9fe487fc72a1343991bd165b68e1722b7fc4a24f2ebc10",
+    "audit": "sha256-6a3264a8afc7840e6501d491880321085df75c830ad4faf0fecc9aa4dcd743ed",
+    "access": "sha256-1839080b63242dee1ac25e5e0d9e7378e7290eede9a12d1073b14bf056d094ba",
+    "packages": "sha256-1e5da8f7792b3c305e7bdc2743f5a55d9fe0c583d89b89a4e07a970014d64bba"
+  },
+  "updates": {
+    "channel": "stable",
+    "channels": [
+      "stable",
+      "candidate"
+    ],
+    "source": "${DEVCODE_UPDATE_SOURCE}",
+    "rollback": true,
+    "trust": {}
+  },
+  "release": {
+    "targets": [
+      "linux-x64",
+      "darwin-arm64",
+      "win32-x64"
+    ],
+    "sources": [
+      "https://registry.npmjs.org"
+    ],
+    "vulnerabilities": {
+      "failOn": "high",
+      "allow": []
+    },
+    "installScripts": [
+      "pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3",
+      "pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1"
+    ]
+  },
+  "packages": [
+    {
+      "id": "pi-code",
+      "source": "npm",
+      "class": "user",
+      "url": "https://registry.npmjs.org/pi-code/-/pi-code-1.4.2.tgz",
+      "version": "1.4.2",
+      "integrity": "sha512-9hAFZP6cpIe/a0xAAv9bRGhncXYVV5B8KO5SCrEZHMedDy4cIXywhst5VmVS8B31UBPEoqX4NdrihAI1C8v0zg==",
+      "tree": "sha256-141efdb6e6d0501431d552c04578756d8ce0fd9e397f2605b613748540faa3cf",
+      "files": 105,
+      "lockfileSha256": "36c83bb4ee4e6833b9619dd2a7c997e32bf2d439293adc4b813ffdf9b679aa41",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "extensions/claude-rules.ts",
+          "sha256": "abc259389745251e257340a466be0198c55203d15ab8fc3b6c838edde80df9ed"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/commands.ts",
+          "sha256": "f8b91cb1e4fcfec5807abdf1f115a693a0fbf4b5c6b36d627132ae7de72424d0"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/context-imports.ts",
+          "sha256": "ca31da29294466302f8dacd96acf732cd1e6c78a45607278be815335f0079cd9"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/context-usage.ts",
+          "sha256": "35177fef9fe29b180a6e67e23682e7f76da7dd650902d7713bced9e27181bef2"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/env-settings.ts",
+          "sha256": "fb27208aaa2d914cbbf22aba2311b24fdd5a1fc889acc601cb0e3f659d99b7cc"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/git-checkpoint.ts",
+          "sha256": "b3aee0d9a18e3a6ae31a9f60b82cd8618675cb6f3598964650e26f90e213e0da"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/goal.ts",
+          "sha256": "6ccdaa0e3abf179d9c2a570871073c98e6ae0d17ea0d8b86a7dffdd3eb9ee11c"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/hooks/index.ts",
+          "sha256": "6bfad5f6914db2bf53dc2a0a57800f7c2b0fda1ce9d7f3b4e55fce21e6c65aeb"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/init.ts",
+          "sha256": "450c8cf4c13034cd44329d518c2bb9e9ab762f724864c4a9e0926d6cc329932b"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/mcp/index.ts",
+          "sha256": "f06ac2de888c60880c0ffbcdb7eb57a13da637eb7c02289ea8aad83f7ada73aa"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/memory.ts",
+          "sha256": "75d42eca6aaf7f077e610dd6fd01cf1160744a5bb1a8bd6e48f5c9d070243077"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/notify.ts",
+          "sha256": "7d7edbd84d6a29b83f8a841dc9a44e5176606d418975ca04fa92ce74c5878efc"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/output-styles.ts",
+          "sha256": "aaf3b253b662d81df5ac6d9a15277ad3aef44466d6a18d36508071757d342c19"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/plan-mode/index.ts",
+          "sha256": "c7bbae6cc4b2a318c0d4e338ba0694b2421522e223f76c310fe37280adcb0576"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/question.ts",
+          "sha256": "f3fd9ee2eea0212946a68244f8a6eddf1ed52d641103073eb8169ad915fd6eac"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/session-title.ts",
+          "sha256": "f14b2884017255ecdf94eed981d3ec23e91c6955144712f3bd09067807cacbef"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/settings-flags.ts",
+          "sha256": "1c215fc56c9b7db607dbf43d19d3a8f559e63600929fa2a7c90ac690ee68f168"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/skills.ts",
+          "sha256": "cbfc03864ad4ace588eb53ca7bffe18d0333227023507fc476439202889dacc4"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/status-line.ts",
+          "sha256": "146b60d1b3350d5bc0b78983c4c12767487d7f5993dddf8b8c898830a8da6bd0"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/subagent/index.ts",
+          "sha256": "865210fcf1e01f46b4a0d37ce089dc969d853ff808b7f331478f26f288629044"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/thinking.ts",
+          "sha256": "eed731b615ee0dda6ab4b6d2839e0383f254e021da954762c2526b0353874b07"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/todo.ts",
+          "sha256": "8b4d83312537dffbf67e5185a82086fb0ca64283bfb8da4ee7b7fce9c792adc1"
+        },
+        {
+          "kind": "extensions",
+          "path": "extensions/web.ts",
+          "sha256": "2aed8832accde3ce41dc01ae2715476fbfbf2a6ddb02b7c0498c7e1abc8e47cc"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [],
+        "linux-x64": [],
+        "win32-x64": []
+      }
+    },
+    {
+      "id": "pi-lens",
+      "source": "npm",
+      "class": "user",
+      "url": "https://registry.npmjs.org/pi-lens/-/pi-lens-4.3.0.tgz",
+      "version": "4.3.0",
+      "integrity": "sha512-6PTzboAc9z2WSEA6aNXCWGsd5ES5MKNJBMIxazbEk2fzcXZFerhJ1k07UDrGjE+hkkd6TnPhsHAxMQ28ZT0WGQ==",
+      "tree": "sha256-c572b0417918aa4b1d372ee8c5e446a3974fda19a3e40617476d813946f34016",
+      "files": 1568,
+      "lockfileSha256": "821cb43363b954d03baf472f8cbd9491f6551d38045578fe22a2b4f6a749ee62",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "dist/index.js",
+          "sha256": "c16fd7f3bc7c55691ff7ac37f808568617456385e3a6c7848233e4e1d408994e"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/pi-lens-ast-grep/SKILL.md",
+          "sha256": "758263bae44bdee5e140ba73757306ef04cb41bcbc30ac05f476ef8d9863403b"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/pi-lens-lsp-navigation/SKILL.md",
+          "sha256": "43062922931703dc2af425def32e0fd206d3cabdae2dd5f7326914f0603cad0b"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [
+          "node_modules/@ast-grep/cli-darwin-arm64@0.45.3",
+          "node_modules/@ast-grep/napi-darwin-arm64@0.45.3",
+          "node_modules/jiti@2.7.0",
+          "node_modules/web-tree-sitter@0.25.10"
+        ],
+        "linux-x64": [
+          "node_modules/@ast-grep/cli-linux-x64-gnu@0.45.3",
+          "node_modules/@ast-grep/napi-linux-x64-gnu@0.45.3",
+          "node_modules/@ast-grep/napi-linux-x64-musl@0.45.3",
+          "node_modules/jiti@2.7.0",
+          "node_modules/web-tree-sitter@0.25.10"
+        ],
+        "win32-x64": [
+          "node_modules/@ast-grep/cli-win32-x64-msvc@0.45.3",
+          "node_modules/@ast-grep/napi-win32-x64-msvc@0.45.3",
+          "node_modules/jiti@2.7.0",
+          "node_modules/web-tree-sitter@0.25.10"
+        ]
+      },
+      "environment": {
+        "PI_LENS_HOME": {
+          "statePath": "pi-lens"
+        }
+      }
+    },
+    {
+      "id": "pi-background-tasks",
+      "source": "npm",
+      "class": "user",
+      "url": "https://registry.npmjs.org/pi-background-tasks/-/pi-background-tasks-2.6.9.tgz",
+      "version": "2.6.9",
+      "integrity": "sha512-5dma6xvO7jeAimRaCNCzfe5y+b4bVBYPxnJ/0RnGS+mj6B6SzgA4FcORKuAtZaoGvC29dlyof3NtX7/QD4Ywew==",
+      "tree": "sha256-413171d7f53d13706c08e2526cc62bc1d6c5e3d8a1a5597d0739a0e57d8fa8ef",
+      "files": 236,
+      "lockfileSha256": "0281231b12e59f5971f8d0dd64a2a7bf188debc852740f5fce0f93b1ac25a6d0",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "dist/extensions/background-tasks.js",
+          "sha256": "09ddef6fb80828c0823e421312673a8a6bed903838335b295859c0e918ad8c12"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [],
+        "linux-x64": [],
+        "win32-x64": []
+      },
+      "environment": {
+        "PI_BG_FEATURES": "process",
+        "PI_BG_DISABLE_UPDATE_CHECK": "1"
+      }
+    },
+    {
+      "id": "pi-review",
+      "source": "npm",
+      "class": "user",
+      "url": "https://registry.npmjs.org/pi-review/-/pi-review-1.2.1.tgz",
+      "version": "1.2.1",
+      "integrity": "sha512-mkYBCpiDrbBwuay6AFw7W4Z125Vhf0TV7cm/Q6xj+WcY7tCM6lsvHKImUDqrH+g6roHYm1rN7mS8WTeYTrW7dg==",
+      "tree": "sha256-0a9f9403d86820ec98f74727c1c48290d3bb2c775f6b7601ab638b635f5c8512",
+      "files": 20,
+      "lockfileSha256": "551ae6740828f4f804b88bbe2fe966565b138784eb70ae8e3295010795d53cc5",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "src/index.ts",
+          "sha256": "f119d08ff374dee7cd95340c7e8408753d0b7343e9c71ce173c7d54b42392081"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [],
+        "linux-x64": [],
+        "win32-x64": []
+      }
+    },
+    {
+      "id": "pi-browser-use",
+      "source": "npm",
+      "class": "user",
+      "url": "https://registry.npmjs.org/pi-browser-use/-/pi-browser-use-0.12.11.tgz",
+      "version": "0.12.11",
+      "integrity": "sha512-vDC22Pu5sJv9pYk7Fvqjiaihi2BLLkqEZUyYCX3Y77v0pXZB+zt/sx+iGvyJn2iHQI5OAxfoGlH+EFo8o4idsA==",
+      "tree": "sha256-93c5fbf2cbdc25fd6ed9f4c4d2edaf2146b1fd5147ce3691884c86bd30a5f30e",
+      "files": 68,
+      "lockfileSha256": "edaa12b71cff31a0c382dba1f6f0b42de24d9a68bd37c55e2d9bba7ccc56eac6",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "dist/index.js",
+          "sha256": "823cd4bca78cc4205d917b4112ef0c3385bb0d0f083f44ba0dba8308f68958b0"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/browser-policy/SKILL.md",
+          "sha256": "885d2aa72aa508d3c75a8030544b7a8b2f9101ed2d4dc9b83310887c1943c929"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/derive-client/SKILL.md",
+          "sha256": "c7df7b6b12c04c193a78e99a6255b43f88325356e1f71dc0ed8f77d8948cb75e"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/dogfood/SKILL.md",
+          "sha256": "d623f257d28b8d808dd9572b931fea6bedc1c96116c11a2a8b212917a96f993b"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/playwright-handoff/SKILL.md",
+          "sha256": "c04ca1b26096a7580e250e9a07216e2e0d51846c9bbc07ea46677cc479b07771"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/triage-console/SKILL.md",
+          "sha256": "81b3f4001ed2e561e6846e8d781bcafdcf24745e418b95940838c4197bc34e96"
+        },
+        {
+          "kind": "skills",
+          "path": "skills/visual-qa/SKILL.md",
+          "sha256": "420d809f881435b296921d0e93ae9b274a571428e127bbc5f4d2a863fe7909ab"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [],
+        "linux-x64": [],
+        "win32-x64": []
+      }
+    },
+    {
+      "id": "pi-permission-system",
+      "source": "npm",
+      "class": "certified",
+      "url": "https://registry.npmjs.org/@gotgenes/pi-permission-system/-/pi-permission-system-39.0.4.tgz",
+      "version": "39.0.4",
+      "integrity": "sha512-GOTdx8eVfilNhK5jJzCmmf3PnB/eYOb5ZUChiROsIQJFx3nL0jvD6+slYAMnqVbJOpphur2YqA92AEu/pkHLhA==",
+      "tree": "sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84",
+      "files": 196,
+      "lockfileSha256": "e4901fbcd44c8cf0c36996ae1c4f5e229664271d9238f76afb8537d90f70dc71",
+      "resources": [
+        {
+          "kind": "extensions",
+          "path": "src/index.ts",
+          "sha256": "f5d11cdff478a80aa00bdb54e6e2405c7678df9a31f7520af8376e2f26ba549f"
+        }
+      ],
+      "optionalDependencies": {
+        "darwin-arm64": [],
+        "linux-x64": [],
+        "win32-x64": []
+      },
+      "agentFiles": [
+        {
+          "path": "extensions/pi-permission-system/config.json",
+          "mode": "seed",
+          "sha256": "sha256-5cfdaf297f499fcde0a020805c65e986ddc25732592f69ec3a3359774293e5d9"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "tool": "read",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "write",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "edit",
+      "origin": "piship",
+      "exposure": "direct"
+    },
+    {
+      "tool": "bash",
+      "origin": "piship",
+      "exposure": "direct"
+    }
+  ],
+  "runtimeTools": {
+    "codemode": "on",
+    "toolSearch": "on",
+    "exposure": [
+      {
+        "pattern": "bg_delegate",
+        "exposure": "hidden"
+      },
+      {
+        "pattern": "bg_result",
+        "exposure": "hidden"
+      },
+      {
+        "pattern": "bg_run_pi_attested",
+        "exposure": "hidden"
+      },
+      {
+        "pattern": "fusion_*",
+        "exposure": "hidden"
+      }
+    ]
+  },
+  "cacheWarming": {
+    "mode": "off",
+    "userOverride": false
+  },
+  "enforcement": {
+    "pi": "1.0.3",
+    "seams": {
+      "agent.invoke": "none",
+      "browser.execute": "none",
+      "extension.load": "hook",
+      "filesystem.read": "hook",
+      "filesystem.write": "hook",
+      "instruction.load": "hook",
+      "mcp.server.start": "hook",
+      "mcp.tool.call": "hook",
+      "memory.read": "none",
+      "memory.write": "none",
+      "model.dispatch": "hook",
+      "model.select": "hook",
+      "network.connect": "none",
+      "provider.load": "hook",
+      "resource.load": "hook",
+      "session.export": "none",
+      "shell.execute": "hook",
+      "skill.load": "hook",
+      "tool.execute": "hook",
+      "web.request": "none"
+    },
+    "digest": "sha256-cd6fe03f32cb2cee5bab9d0f05da0d569ea92851cebefbc76e2c2ccfd8b7cc33"
+  },
+  "data": {
+    "contract": "piship-data/v1"
+  },
+  "sessionExportStatus": {
+    "public": "unsupported",
+    "local": "unsupported",
+    "support": "unsupported"
+  }
+}

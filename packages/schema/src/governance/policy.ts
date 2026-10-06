@@ -7,6 +7,7 @@ import {
 } from "@piship/contracts";
 import type { DeploymentMode } from "../access.js";
 import {
+  CLAUDE_TRUST_DIMENSIONS,
   type PolicyConfig,
   type PolicyRule,
   PROJECT_TRUST_DIMENSIONS,
@@ -204,8 +205,9 @@ function projectClass(
   const item = optionalRecord(value, path, [
     ...(withMatch ? ["match"] : []),
     ...PROJECT_TRUST_DIMENSIONS,
+    ...CLAUDE_TRUST_DIMENSIONS,
   ]);
-  const output = {} as Dimensions;
+  const output = {} as Dimensions & Record<string, ProjectDimensionEffect>;
   for (const dimension of PROJECT_TRUST_DIMENSIONS)
     output[dimension] = oneOf(
       item[dimension],
@@ -213,6 +215,16 @@ function projectClass(
       DIMENSION_EFFECTS,
       defaults[dimension],
     );
+  // Declared only: an omitted Claude dimension stays absent, so the parsed
+  // policy and the lock of an existing distribution do not change.
+  for (const dimension of CLAUDE_TRUST_DIMENSIONS)
+    if (item[dimension] !== undefined)
+      output[dimension] = oneOf(
+        item[dimension],
+        `${path}.${dimension}`,
+        DIMENSION_EFFECTS,
+        "deny",
+      );
   return {
     match: withMatch
       ? list(item.match, `${path}.match`, matcher, (entry) =>

@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--release-orange" alt="Status: pre-release">
-  <img src="https://img.shields.io/badge/Pi-1.0.2-blue" alt="Pi 1.0.2">
+  <img src="https://img.shields.io/badge/Pi-1.0.3-blue" alt="Pi 1.0.3">
   <img src="https://img.shields.io/badge/Node-%3E%3D22.19.0-339933?logo=node.js&logoColor=white" alt="Node >=22.19.0">
   <img src="https://img.shields.io/github/license/tc3oliver/piship" alt="License">
 </p>
@@ -119,7 +119,7 @@ app:
   version: 1.0.0
 
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
 
 deployment:
   mode: managed
@@ -192,6 +192,14 @@ Personal mode needs no identity provider, broker, or gateway. The MyPi example p
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
 node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
+```
+
+For a batteries-included coding agent, the [developer example](examples/developer/README.md) (`devcode`) ships six Pi packages: Claude Code compatibility, diagnostics and LSP, background tasks, review, a browser, and a permission provider. Its profile runs normal work without asking, and asks before `sudo`, recursive deletes, destructive git, and writes outside the workspace. A [hardened variant](examples/developer/managed.piship.yaml) shows how a company tightens it. Read the [requirements](examples/developer/README.md#requirements) for Chrome and the browser package's Node 24.18.0 requirement.
+
+```bash
+node packages/cli/dist/bin.js build examples/developer/piship.yaml
+node dist/devcode/piship.mjs install dist/devcode
+~/.local/bin/devcode
 ```
 
 To start your own, run `node packages/cli/dist/bin.js init ./my-agent --personal`. See the [personal example](examples/personal/README.md) and the [setup guide](docs/agent-setup.md).

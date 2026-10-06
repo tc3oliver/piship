@@ -22,6 +22,7 @@ import {
   discoverProjectResources,
   identifyProject,
   normalizeRemote,
+  type ProjectResourceCandidate,
   parseConfigIncludes,
   parseHooksPaths,
   parseInstructionImports,
@@ -32,7 +33,6 @@ import {
   projectGitControlLinks,
   projectGitControlUnverified,
   readProjectRestrictions,
-  type ProjectResourceCandidate,
 } from "./project.js";
 import { defaultProjectTrust } from "./trust.js";
 
@@ -1751,4 +1751,54 @@ describe("discoverProjectResources", () => {
       parseInstructionImports("@a.md\n  @b/c.md  \n```\n@d\n```\ntext @e\n"),
     ).toEqual(["a.md", "b/c.md"]);
   });
+});
+
+describe("Claude discovery regression", () => {
+  it("denies linked main-checkout settings even if hooks are admitted", () => {
+    const main = dir("claude-main");
+    gitRepo(main, "https://git.acme.example/team/main");
+    const root = dir("claude-linked");
+    const git = join(main, ".git/worktrees/linked");
+    mkdirSync(git, { recursive: true });
+    write(join(root, ".git"), `gitdir: ${git}\n`);
+    write(join(git, "commondir"), "../..\n");
+    write(
+      join(main, ".claude/settings.local.json"),
+      '{"hooks":{"PreToolUse":[]}}',
+    );
+    const policy = makePolicy({ projectTrust: trust });
+    const found = discoverProjectResources(
+      identifyProject(root, trust),
+      policy,
+      { homeDir: fakeHome, cwd: root, mode: "managed" },
+    );
+    if (process.platform === "win32") return;
+    expect(
+      found.find(
+        (item) =>
+          item.path === toPosixPath(join(main, ".claude/settings.local.json")),
+      ),
+    ).toMatchObject({ dimension: "claudeHooks", effect: "deny" });
+  });
+  it.skipIf(!canSymlink)(
+    "does not treat absent children of a linked .claude as dangling links",
+    () => {
+      const root = dir("claude-link-inside");
+      gitRepo(root, "https://git.acme.example/team/main");
+      mkdirSync(join(root, "claude-config/rules"), { recursive: true });
+      write(join(root, "claude-config/rules/style.md"), "style");
+      link(join(root, "claude-config"), join(root, ".claude"), "dir");
+      const policy = makePolicy({ projectTrust: trust });
+      const found = discoverProjectResources(
+        identifyProject(root, trust),
+        policy,
+        { homeDir: fakeHome, cwd: root, mode: "personal" },
+      );
+      expect(
+        found.some(
+          (item) => item.reason === "The candidate is a dangling link",
+        ),
+      ).toBe(false);
+    },
+  );
 });

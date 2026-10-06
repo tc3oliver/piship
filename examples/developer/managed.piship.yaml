@@ -1,0 +1,488 @@
+schema: piship/v1alpha6
+
+# How a company tightens the developer profile. It is validated, not locked or
+# built: a company copies it next to its own resources, points the identity,
+# broker, and gateway at its own services, and runs `piship lock` itself.
+#
+# What changes from piship.yaml, and why:
+#   - policy.default is ask, and the secret denies are enforced rules no user,
+#     project, or --yolo can relax.
+#   - Packages are `company` class (a managed user class is denied), and the
+#     package trust stays strict: npm integrity, no local paths.
+#   - The browser package and the background-task package are not shipped. The
+#     browser keeps a logged-in profile under ~/.pi, and bg_run starts commands
+#     from an extension, outside PiShip's sandbox and shell policy.
+#   - pi-code keeps its tools but loses the parts that read Claude Code
+#     configuration for themselves (see the filter below), and its user scope is
+#     moved into the distribution's state.
+#   - pi-lens installs nothing on its own.
+#   - The permission provider's file is enforced: it is rewritten at every
+#     launch, so a user's edit does not outlive one.
+#   - Project configuration is closed until the company declares an origin it
+#     trusts. --yolo is refused (policy.userAuto is not declared).
+#   - Codemode is off: a managed distribution must give every tool a script can
+#     reach an explicit policy rule, and this profile keeps its asks in the
+#     permission provider.
+
+app:
+  id: devcode-managed
+  name: DevCode Managed
+  command: devcode-managed
+  version: 1.0.0
+  banner: DevCode, hardened for a company (example)
+
+runtime:
+  pi: "1.0.3"
+
+deployment:
+  mode: managed
+
+variables:
+  - DEVCODE_OIDC_ISSUER
+  - DEVCODE_OIDC_CLIENT_ID
+  - DEVCODE_CREDENTIAL_BROKER_URL
+  - DEVCODE_CREDENTIAL_REVOKE_URL
+  - DEVCODE_LLM_GATEWAY_URL
+
+identity:
+  mode: oidc
+  oidc:
+    issuer: ${DEVCODE_OIDC_ISSUER}
+    clientId: ${DEVCODE_OIDC_CLIENT_ID}
+    flow: authorization_code_pkce
+    scopes: [openid, profile, email]
+    redirectUri: http://127.0.0.1:8765/callback
+
+credential:
+  provider: http-broker
+  broker:
+    endpoint: ${DEVCODE_CREDENTIAL_BROKER_URL}
+    revokeEndpoint: ${DEVCODE_CREDENTIAL_REVOKE_URL}
+  storage:
+    provider: system
+
+inference:
+  provider: openai-compatible
+  baseUrl: ${DEVCODE_LLM_GATEWAY_URL}
+  liveCatalog: true
+
+models:
+  default: devcode/coder
+  allowed: [devcode/coder]
+  catalog:
+    devcode/coder:
+      name: Company Coder
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      tools: true
+      policyTags: [code]
+
+# Managed launches are private-only: pi-code's web tools and anything else that
+# uses the default HTTP dispatcher fails unless its host is listed. Child
+# processes need organization egress controls; this is not a firewall.
+network:
+  proxy:
+    inheritEnvironment: true
+  publicFallback: deny
+  privateOnly: true
+
+resources:
+  instructions:
+    company: [./resources/AGENTS.md]
+  skills:
+    company: [./resources/skills]
+  packages:
+    # Tools without the Claude Code readers. A package filter matches the paths
+    # of the entry files inside the package, and `piship lock` writes the
+    # resulting inventory into piship.lock: review it there, since a later
+    # release can lay its files out differently.
+    #   mcp/         pi-code's own MCP client: servers it starts bypass
+    #                mcp.server.start and the sandbox
+    #   hooks/       Claude hooks run commands
+    #   env-settings settings.json `env` injection
+    #   claude-rules, commands, skills, context-imports, output-styles
+    #                read ~/.claude and the project's .claude
+    # Add one back only after the project-trust dimensions below admit it.
+    - id: pi-code
+      source: npm
+      package: pi-code
+      version: 1.4.2
+      class: company
+      extensions:
+        - "**"
+        - "!extensions/mcp/**"
+        - "!extensions/hooks/**"
+        - "!extensions/env-settings.ts"
+        - "!extensions/claude-rules.ts"
+        - "!extensions/commands.ts"
+        - "!extensions/skills.ts"
+        - "!extensions/context-imports.ts"
+        - "!extensions/output-styles.ts"
+      environment:
+        # pi-code's home scope, if its Claude readers are ever added back,
+        # lives in the distribution's state instead of ~/.claude.
+        CLAUDE_CONFIG_DIR: { statePath: claude }
+
+    - id: pi-lens
+      source: npm
+      package: pi-lens
+      version: 4.3.0
+      class: company
+      skills: ["skills/**", "!skills/pi-lens-write-*/**"]
+      environment:
+        PI_LENS_HOME: { statePath: pi-lens }
+        # It uses the linters and language servers that are already on the
+        # machine and downloads none.
+        PI_LENS_DISABLE_TOOL_INSTALL: "1"
+        PI_LENS_DISABLE_LSP_INSTALL: "1"
+
+    - id: pi-review
+      source: npm
+      package: pi-review
+      version: 1.2.1
+      class: company
+
+    - id: pi-permission-system
+      source: npm
+      package: "@gotgenes/pi-permission-system"
+      version: 39.0.4
+      class: certified
+      certified:
+        version: 39.0.4
+        source: https://www.npmjs.com/package/@gotgenes/pi-permission-system
+        integrity: sha256-816bd8bc066ef6cecf668505efc117f4f004f7d30b50b036c0a261818805fc84
+        license: MIT
+        pi: ["1.0.3"]
+      agentFiles:
+        - path: extensions/pi-permission-system/config.json
+          # Rewritten at every launch.
+          mode: enforce
+          json:
+            permissionReviewLog: false
+            debugLog: false
+            yoloMode: false
+            permission:
+              "*": ask
+              read: allow
+              grep: allow
+              find: allow
+              ls: allow
+              write: allow
+              edit: allow
+              path:
+                "*": allow
+                "*.pem": deny
+                "*.key": deny
+                "*.env": deny
+                "*.env.*": deny
+                "*.env.example": allow
+                "~/.ssh": deny
+                "~/.ssh/*": deny
+                "*/id_rsa": deny
+                "*/id_dsa": deny
+                "*/id_ecdsa": deny
+                "*/id_ecdsa_sk": deny
+                "*/id_ed25519": deny
+                "*/id_ed25519_sk": deny
+                "~/.gnupg": deny
+                "~/.gnupg/*": deny
+                "~/.aws/credentials": deny
+                "~/.aws/sso/*": deny
+                "~/.aws/cli/cache/*": deny
+                "~/.config/gcloud/*": deny
+                "~/.azure/*": deny
+                "~/.kube/config": deny
+                "~/.docker/config.json": deny
+                "~/.netrc": deny
+                "~/_netrc": deny
+                "~/.npmrc": deny
+                "~/.pypirc": deny
+                "~/.git-credentials": deny
+                "~/.config/gh/hosts.yml": deny
+                "~/.cargo/credentials": deny
+                "~/.cargo/credentials.toml": deny
+                "~/.gem/credentials": deny
+                "~/.vault-token": deny
+                "~/.terraform.d/credentials.tfrc.json": deny
+                "~/.config/op/*": deny
+                "~/.password-store/*": deny
+                "~/Library/Keychains/*": deny
+                "/Library/Keychains/*": deny
+                "~/.local/share/keyrings/*": deny
+                "*.kdbx": deny
+                "/etc/shadow*": deny
+                "/etc/gshadow*": deny
+                "/etc/master.passwd": deny
+                "/etc/ssh/ssh_host_*": deny
+                "~/.pi/agent/auth.json": deny
+                "~/.pi/browser-profile/*": deny
+                "*/.piship/*/agent/auth.json": deny
+                "*/.piship/*/secrets/*": deny
+              external_directory:
+                "*": ask
+              bash:
+                "*": ask
+                "git status*": allow
+                "git diff*": allow
+                "git log*": allow
+                "npm test*": allow
+                "npm run lint*": allow
+                "npm run build*": allow
+                "pytest*": allow
+                "cargo test*": allow
+                "go test*": allow
+                "git push*--force*": deny
+                "git reset*--hard*": deny
+                "rm -r*": deny
+                "sudo *": deny
+              mcp:
+                "*": ask
+
+# The package is the permission provider, as in the personal profile. This
+# variant sets no autoApprove settings: nothing switches its yoloMode on.
+capabilities:
+  permissions:
+    enabled: true
+    provider:
+      id: certified/pi-permission-system
+      version: 39.0.4
+      implements: [piship.capability/permissions/v1]
+      package: pi-permission-system
+
+packageTrust:
+  npm: { requireIntegrity: true }
+
+policy:
+  id: devcode-engineering
+  version: 1
+  default: ask
+  # Repositories on the company host that are checked out under the managed
+  # source root are company projects; every other workspace is unknown. The
+  # remote alone is only a claim, so the matcher also requires the path.
+  #
+  # The five Claude dimensions are declared for every origin. claudeHooks is
+  # deny: a project with hooks or a settings file stays closed. The other four
+  # are company-approved, which admits no project content (an extension's code
+  # cannot be held to an allowlist) until the company declares `allow` for an
+  # origin it trusts, for example `claudeRules: allow` under `company`.
+  projectTrust:
+    company:
+      match:
+        - remote: "git.company.example/**"
+          path: "/srv/src/**"
+      claudeRules: company-approved
+      claudeCommands: company-approved
+      claudeSkills: company-approved
+      claudeAgents: company-approved
+      claudeHooks: deny
+    external:
+      claudeRules: company-approved
+      claudeCommands: company-approved
+      claudeSkills: company-approved
+      claudeAgents: company-approved
+      claudeHooks: deny
+    unknown:
+      claudeRules: company-approved
+      claudeCommands: company-approved
+      claudeSkills: company-approved
+      claudeAgents: company-approved
+      claudeHooks: deny
+  enforced:
+    - id: dev.secret.ssh
+      action: filesystem.*
+      resource: "~/.ssh/**"
+      effect: deny
+      reason: SSH keys are never read or written by the agent
+    - id: dev.secret.key-rsa
+      action: filesystem.*
+      resource: "**/id_rsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-dsa
+      action: filesystem.*
+      resource: "**/id_dsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ecdsa
+      action: filesystem.*
+      resource: "**/id_ecdsa"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.key-ed25519
+      action: filesystem.*
+      resource: "**/id_ed25519"
+      effect: deny
+      reason: Private keys are never read or written by the agent
+    - id: dev.secret.gnupg
+      action: filesystem.*
+      resource: "~/.gnupg/**"
+      effect: deny
+      reason: GnuPG keys are never read or written by the agent
+    - id: dev.secret.aws
+      action: filesystem.*
+      resource: "~/.aws/credentials"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.gcloud
+      action: filesystem.*
+      resource: "~/.config/gcloud/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.azure
+      action: filesystem.*
+      resource: "~/.azure/**"
+      effect: deny
+      reason: Cloud credentials are never read or written by the agent
+    - id: dev.secret.kube
+      action: filesystem.*
+      resource: "~/.kube/config"
+      effect: deny
+      reason: Cluster credentials are never read or written by the agent
+    - id: dev.secret.docker
+      action: filesystem.*
+      resource: "~/.docker/config.json"
+      effect: deny
+      reason: Registry credentials are never read or written by the agent
+    - id: dev.secret.netrc
+      action: filesystem.*
+      resource: "~/.netrc"
+      effect: deny
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.npmrc
+      action: filesystem.*
+      resource: "~/.npmrc"
+      effect: deny
+      reason: Registry tokens are never read or written by the agent
+    - id: dev.secret.git-credentials
+      action: filesystem.*
+      resource: "~/.git-credentials"
+      effect: deny
+      reason: Stored logins are never read or written by the agent
+    - id: dev.secret.gh
+      action: filesystem.*
+      resource: "~/.config/gh/hosts.yml"
+      effect: deny
+      reason: The GitHub CLI token is never read or written by the agent
+    - id: dev.secret.keychains
+      action: filesystem.*
+      resource: "~/Library/Keychains/**"
+      effect: deny
+      reason: Keychains are never read or written by the agent
+    - id: dev.secret.keyrings
+      action: filesystem.*
+      resource: "~/.local/share/keyrings/**"
+      effect: deny
+      reason: Keyrings are never read or written by the agent
+    - id: dev.secret.browser-profile
+      action: filesystem.*
+      resource: "~/.pi/browser-profile/**"
+      effect: deny
+      reason: The browser profile holds logged-in sessions
+    - id: dev.shell.sudo
+      action: shell.execute
+      resource: "sudo **"
+      effect: deny
+      reason: The agent does not run privileged commands
+  defaults:
+    - id: dev.models
+      action: model.select
+      resource: "devcode-managed/**"
+      effect: allow
+    - id: dev.instructions
+      action: instruction.load
+      resource: "**"
+      effect: allow
+    - id: dev.skills
+      action: skill.load
+      resource: "**"
+      effect: allow
+    - id: dev.extensions
+      action: extension.load
+      resource: "**"
+      effect: allow
+    - id: dev.providers
+      action: provider.load
+      resource: "certified/**"
+      effect: allow
+    - id: dev.workspace.read
+      action: filesystem.read
+      resource: "workspace/**"
+      effect: allow
+    - id: dev.workspace.write
+      action: filesystem.write
+      resource: "workspace/**"
+      effect: allow
+    - id: dev.shell
+      action: shell.execute
+      resource: "**"
+      effect: allow
+    - id: dev.tools
+      action: tool.execute
+      resource: "*"
+      effect: allow
+
+mcp:
+  mode: allowlist
+
+sandbox:
+  required: true
+  filesystem:
+    read:
+      # A declared list replaces PiShip's default list, so this one restates
+      # every default and adds its own.
+      deny:
+        - ~/.ssh
+        - ~/.aws
+        - ~/.gnupg
+        - ~/.config/gcloud
+        - ~/.azure
+        - ~/.kube
+        - ~/.docker
+        - ~/.netrc
+        - ~/.npmrc
+        - ~/.pi
+        - ~/.claude
+        - ~/_netrc
+        - ~/.pypirc
+        - ~/.git-credentials
+        - ~/.config/gh/hosts.yml
+        - ~/.cargo/credentials
+        - ~/.cargo/credentials.toml
+        - ~/.gem/credentials
+        - ~/.vault-token
+        - ~/.terraform.d/credentials.tfrc.json
+        - ~/.config/op
+        - ~/.password-store
+        - ~/Library/Keychains
+        - /Library/Keychains
+        - ~/.local/share/keyrings
+        - /etc/shadow
+        - /etc/gshadow
+        - /etc/master.passwd
+        - /etc/ssh
+    write:
+      allow: [workspace, tmp]
+  network:
+    mode: allow
+
+audit:
+  enabled: true
+  sinks:
+    - id: local
+      type: file
+      required: false
+
+updates:
+  channel: stable
+  channels: [stable]
+  rollback: true
+
+release:
+  targets: [linux-x64, darwin-arm64, win32-x64]
+  sources: [https://registry.npmjs.org]
+  vulnerabilities:
+    failOn: high
+  # Reviewed in the personal profile: PiShip never runs either script.
+  installScripts:
+    - pi-packages/pi-lens/node_modules/@ast-grep/cli@0.45.3
+    - pi-packages/pi-permission-system/node_modules/tree-sitter-bash@0.25.1

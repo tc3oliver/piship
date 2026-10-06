@@ -8,7 +8,7 @@ app:
   banner: AcmeCode managed demo distribution (fictional)
 
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
 
 deployment:
   mode: managed
@@ -98,7 +98,7 @@ resources:
         source: https://example.org/acme/release-notes
         integrity: sha256-a8c5c2e41d4ef17370f6fe6d7036cd36a781c2114eb1ed99fdc63b18676f2047
         license: MIT
-        pi: ["1.0.2"]
+        pi: ["1.0.3"]
   extensions:
     builtin: [piship-ask-user, piship-workflow]
     company: [./resources/extensions/enterprise-context]

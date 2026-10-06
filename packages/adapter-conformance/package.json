@@ -1,6 +1,6 @@
 {
   "name": "@piship/adapter-conformance",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "dist"
   ],
   "dependencies": {
-    "@piship/adapter-sdk": "0.9.1"
+    "@piship/adapter-sdk": "0.10.0"
   },
   "description": "Conformance kits that test a PiShip adapter against its contract, independently of PiShip internals.",
   "keywords": [

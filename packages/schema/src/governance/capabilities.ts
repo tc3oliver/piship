@@ -35,6 +35,8 @@ const CAPABILITY_NAMES = Object.keys(CAPABILITY_CONTRACTS) as CapabilityName[];
 const CONTRACT_ID =
   /^piship\.capability\/([a-z][a-z0-9-]*)\/v([1-9][0-9]{0,3})$/;
 const PROVIDER_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+/** The ID of a declared Pi package, as `resources.packages[].id` spells it. */
+const PACKAGE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 
 function contractName(contract: string): string {
   return contract.replace(/\/v[0-9]+$/, "");
@@ -44,6 +46,7 @@ function parseProvider(
   value: unknown,
   path: string,
   capability: CapabilityName,
+  v6: boolean,
 ): CapabilityProviderRef {
   if (!isRecord(value)) fail(path, "Expected an object");
   const id = plainString(value.id, `${path}.id`, 128);
@@ -93,6 +96,7 @@ function parseProvider(
     "version",
     "implements",
     "path",
+    ...(v6 ? ["package"] : []),
     ...(certified ? CERTIFIED_FIELDS : []),
   ]);
   const version = semver(item.version, `${path}.version`);
@@ -121,10 +125,39 @@ function parseProvider(
       `${path}.implements`,
       `A ${capability} provider must implement ${contractName(contract)}/v<major>`,
     );
+  if (item.package !== undefined) {
+    if (item.path !== undefined)
+      conflict(
+        `${path}.package`,
+        "A provider is a ./ path or a Pi package, not both",
+      );
+    // The package declares the class and, for a certified one, the evidence.
+    for (const field of CERTIFIED_FIELDS)
+      if (item[field] !== undefined)
+        conflict(
+          `${path}.${field}`,
+          "A package provider takes its review evidence from the package declaration",
+        );
+    const reference = plainString(item.package, `${path}.package`, 64);
+    if (!PACKAGE_ID.test(reference))
+      fail(
+        `${path}.package`,
+        "Expected the ID of a package declared under resources.packages",
+      );
+    return {
+      id,
+      class: providerClass,
+      version,
+      implements: implemented,
+      package: reference,
+    };
+  }
   if (item.path === undefined)
     fail(
       `${path}.path`,
-      "Non-builtin providers need a ./ path to their extension",
+      v6
+        ? "Non-builtin providers need a ./ path to their extension or the package that provides it"
+        : "Non-builtin providers need a ./ path to their extension",
     );
   return {
     id,
@@ -207,7 +240,11 @@ function parseRequirements(
   };
 }
 
-export function parseCapabilities(value: unknown): CapabilityConfig[] {
+export function parseCapabilities(
+  value: unknown,
+  /** piship/v1alpha6 and later: a provider may be a declared Pi package. */
+  v6 = false,
+): CapabilityConfig[] {
   const capabilities = optionalRecord(value, "capabilities", CAPABILITY_NAMES);
   return CAPABILITY_NAMES.map((name): CapabilityConfig => {
     const path = `capabilities.${name}`;
@@ -217,7 +254,12 @@ export function parseCapabilities(value: unknown): CapabilityConfig[] {
         return {
           name,
           enabled: true,
-          provider: parseProvider({ id: "builtin/permissions" }, path, name),
+          provider: parseProvider(
+            { id: "builtin/permissions" },
+            path,
+            name,
+            v6,
+          ),
           settings: {},
         };
       return { name, enabled: false, settings: {} };
@@ -232,7 +274,7 @@ export function parseCapabilities(value: unknown): CapabilityConfig[] {
       fail(`${path}.enabled`, "Expected true or false");
     let provider: CapabilityProviderRef | undefined;
     if (item.provider !== undefined)
-      provider = parseProvider(item.provider, `${path}.provider`, name);
+      provider = parseProvider(item.provider, `${path}.provider`, name, v6);
     else if (item.enabled) {
       const builtin = Object.keys(BUILTIN_PROVIDERS).find((id) =>
         BUILTIN_PROVIDERS[id]?.includes(CAPABILITY_CONTRACTS[name]),
@@ -242,7 +284,7 @@ export function parseCapabilities(value: unknown): CapabilityConfig[] {
           `${path}.provider`,
           `No builtin provider implements ${CAPABILITY_CONTRACTS[name]}; declare a provider`,
         );
-      provider = parseProvider({ id: builtin }, `${path}.provider`, name);
+      provider = parseProvider({ id: builtin }, `${path}.provider`, name, v6);
     }
     const requirements = parseRequirements(
       item.requirements,

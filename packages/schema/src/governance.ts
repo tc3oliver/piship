@@ -137,12 +137,43 @@ export type PackageFilters = Readonly<
   Partial<Record<PackageResourceKind, readonly string[]>>
 >;
 
+/**
+ * One value of a package's `environment`: a literal, or `{ statePath }`, a
+ * path below the distribution's state directory that the launch resolves on
+ * each machine. Never a secret and never a runtime reference.
+ */
+export type PackageEnvironmentValue = string | { readonly statePath: string };
+
+/**
+ * How a package's configuration file is kept: `seed` writes it when absent
+ * and replaces it on a later release only while the user has not edited it;
+ * `enforce` rewrites it at every launch, so a user's edit never outlives one.
+ */
+export const AGENT_FILE_MODES = ["seed", "enforce"] as const;
+export type AgentFileMode = (typeof AGENT_FILE_MODES)[number];
+
+/**
+ * A configuration file PiShip writes into Pi's agent directory at launch
+ * (piship/v1alpha6, additive): a JSON document under
+ * `extensions/<name>/`, the place an extension reads its own settings from.
+ */
+export interface PackageAgentFile {
+  /** Relative to the agent directory: `extensions/[<name>/]<file>.json`. */
+  readonly path: string;
+  readonly mode: AgentFileMode;
+  readonly json: unknown;
+}
+
 interface DeclaredPackageBase {
   readonly id: string;
   readonly class: DeclarableResourceClass;
   /** Present exactly when `class` is `certified`. */
   readonly certified?: CertifiedEvidence;
   readonly filters: PackageFilters;
+  /** Environment variables the launch sets for this package; absent when none. */
+  readonly environment?: Readonly<Record<string, PackageEnvironmentValue>>;
+  /** Configuration files written into the agent directory; absent when none. */
+  readonly agentFiles?: readonly PackageAgentFile[];
 }
 export interface NpmPackage extends DeclaredPackageBase {
   readonly source: "npm";
@@ -296,6 +327,12 @@ export interface CapabilityProviderRef {
   readonly implements: readonly string[];
   /** `./` path to the provider's Pi extension entry (non-builtin providers). */
   readonly path?: string;
+  /**
+   * piship/v1alpha6: the ID of a declared Pi package whose extensions are the
+   * provider, instead of a `path`. The package supplies the class and the
+   * review evidence, so a certified provider carries none of its own.
+   */
+  readonly package?: string;
   /** Required for certified providers. */
   readonly certified?: CertifiedEvidence;
 }
@@ -353,13 +390,29 @@ export const PROJECT_TRUST_DIMENSIONS = [
 ] as const;
 export type ProjectTrustDimension = (typeof PROJECT_TRUST_DIMENSIONS)[number];
 /**
+ * Dimensions for the Claude Code project configuration an extension such as
+ * pi-code loads (`.claude/rules`, `commands`, `skills`, `agents`, `hooks`).
+ * Unlike the dimensions above they are optional: one the manifest does not
+ * declare is absent from the parsed policy, and the mode default applies when
+ * the project is evaluated, so a lock written before they existed is unchanged.
+ */
+export const CLAUDE_TRUST_DIMENSIONS = [
+  "claudeRules",
+  "claudeCommands",
+  "claudeSkills",
+  "claudeAgents",
+  "claudeHooks",
+] as const;
+export type ClaudeTrustDimension = (typeof CLAUDE_TRUST_DIMENSIONS)[number];
+/**
  * `company-approved` admits only distribution-approved items (for example an
  * allowlisted MCP server); project-supplied executable code is never admitted.
  */
 export type ProjectDimensionEffect = PolicyEffect | "company-approved";
 export type ProjectDimensions = Readonly<
   Record<ProjectTrustDimension, ProjectDimensionEffect>
->;
+> &
+  Readonly<Partial<Record<ClaudeTrustDimension, ProjectDimensionEffect>>>;
 
 export interface ProjectMatcher {
   /** Glob over the normalized origin remote, such as `git.example.com/team/**`. */

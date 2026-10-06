@@ -71,6 +71,11 @@ export function migrateToV1alpha3(
     extensions: "deny",
     mcp: "deny",
     providers: "deny",
+    claudeRules: "deny",
+    claudeCommands: "deny",
+    claudeSkills: "deny",
+    claudeAgents: "deny",
+    claudeHooks: "deny",
   };
   document.set(
     "policy",

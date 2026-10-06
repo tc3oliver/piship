@@ -1,12 +1,16 @@
 // Declared and builtin resources of a governed session: trust, certified
 // integrity, and the policy decision for each before it loads.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { PiShipError } from "@piship/contracts";
 import { type GovernanceLock, treeDigest } from "@piship/core";
-import { resourceTrustDecision } from "@piship/policy";
-import type { DeclaredResource, GovernanceManifest } from "@piship/schema";
+import { projectDimensionEffect, resourceTrustDecision } from "@piship/policy";
+import type {
+  DeclaredResource,
+  GovernanceManifest,
+  PackageResourceKind,
+} from "@piship/schema";
 import type { GovernanceSession } from "../governance-session.js";
 import { KIND_ACTION, type ResourceEvidence } from "./options.js";
 
@@ -123,94 +127,178 @@ export function fileMatches(path: string, expected: string): boolean {
   return existsSync(path) && sha256(readFileSync(path)) === expected;
 }
 
+/**
+ * The packages whose extensions are a capability provider: they load once the
+ * provider's own decision has allowed it (`computeCapabilities`), not with
+ * the package's other files.
+ */
+export function providerPackages(session: GovernanceSession): Set<string> {
+  return new Set(
+    session.options.lock.governance.providers.flatMap((item) =>
+      item.package && item.class !== "builtin" ? [item.package] : [],
+    ),
+  );
+}
+
 async function packageResources(session: GovernanceSession): Promise<void> {
-  const { lock, distributionDir, piVersion } = session.options;
-  for (const entry of lock.packages ?? []) {
-    const root = packageRoot(distributionDir, session.manifest, entry.id);
-    const label = `${entry.id}@${entry.version ?? entry.commit ?? "local"}`;
-    // A certified package carries evidence the lock was checked against;
-    // like a certified resource, it loads only on the Pi versions and
-    // platforms it was reviewed for.
-    let incompatible: string | undefined;
-    if (entry.class === "certified") {
-      const evidence = session.manifest.resources.packages?.find(
-        (item) => item.id === entry.id,
-      )?.certified;
-      if (
-        !evidence ||
-        (evidence.integrity !== entry.tree &&
-          evidence.integrity !== entry.integrity)
-      ) {
-        session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
-        throw new PiShipError(
-          "INTEGRITY_FAILED",
-          `Certified package ${entry.id} does not match its reviewed evidence`,
-          { userAction: "Re-lock and rebuild the distribution" },
-        );
-      }
-      if (
-        !evidence.pi.includes(piVersion) ||
-        (evidence.platforms.length > 0 &&
-          !evidence.platforms.includes(process.platform))
-      )
-        incompatible = `certified for Pi ${evidence.pi.join(", ")}${evidence.platforms.length ? ` on ${evidence.platforms.join(", ")}` : ""}; running Pi ${piVersion} on ${process.platform}`;
+  const deferred = providerPackages(session);
+  for (const entry of session.options.lock.packages ?? [])
+    await loadPackageFiles(
+      session,
+      entry,
+      (file) => !(deferred.has(entry.id) && file.kind === "extensions"),
+    );
+}
+
+/** The files of one locked package that `include` selects, one decision each. */
+export async function loadPackageFiles(
+  session: GovernanceSession,
+  entry: NonNullable<GovernanceSession["options"]["lock"]["packages"]>[number],
+  include: (file: { readonly kind: PackageResourceKind }) => boolean,
+  atomic = false,
+): Promise<void> {
+  const { distributionDir, piVersion } = session.options;
+  const root = packageRoot(distributionDir, session.manifest, entry.id);
+  const label = `${entry.id}@${entry.version ?? entry.commit ?? "local"}`;
+  // A certified package carries evidence the lock was checked against;
+  // like a certified resource, it loads only on the Pi versions and
+  // platforms it was reviewed for.
+  let incompatible: string | undefined;
+  if (entry.class === "certified") {
+    const evidence = session.manifest.resources.packages?.find(
+      (item) => item.id === entry.id,
+    )?.certified;
+    if (
+      !evidence ||
+      (evidence.integrity !== entry.tree &&
+        evidence.integrity !== entry.integrity)
+    ) {
+      session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `Certified package ${entry.id} does not match its reviewed evidence`,
+        { userAction: "Re-lock and rebuild the distribution" },
+      );
     }
-    for (const file of entry.resources) {
-      const path = `packages/${entry.id}/${file.path}`;
-      const resource = `${entry.class}:${path}`;
-      const detail = { kind: file.kind, class: entry.class, package: label };
-      const record = (loaded: boolean, reason: string) =>
-        session.resources.push({
-          kind: file.kind,
-          class: entry.class,
-          path,
-          loaded,
-          reason,
-          integrity: loaded ? "verified" : "not-applicable",
-          origin: label,
-        });
-      const trust = resourceTrustDecision(
+    if (
+      !evidence.pi.includes(piVersion) ||
+      (evidence.platforms.length > 0 &&
+        !evidence.platforms.includes(process.platform))
+    )
+      incompatible = `certified for Pi ${evidence.pi.join(", ")}${evidence.platforms.length ? ` on ${evidence.platforms.join(", ")}` : ""}; running Pi ${piVersion} on ${process.platform}`;
+  }
+  const pending: {
+    kind: PackageResourceKind;
+    absolute: string;
+    emit: () => void;
+  }[] = [];
+  const recordStart = session.resources.length;
+  for (const file of entry.resources) {
+    if (!include(file)) continue;
+    const path = `packages/${entry.id}/${file.path}`;
+    const resource = `${entry.class}:${path}`;
+    const detail = { kind: file.kind, class: entry.class, package: label };
+    const record = (loaded: boolean, reason: string) =>
+      session.resources.push({
+        kind: file.kind,
+        class: entry.class,
+        path,
+        loaded,
+        reason,
+        integrity: loaded ? "verified" : "not-applicable",
+        origin: label,
+      });
+    const trust = resourceTrustDecision(
+      session.manifest.policy,
+      entry.class,
+      file.kind,
+    );
+    if (!trust.allowed) {
+      session.emit("resource.denied", { resource, detail });
+      record(false, trust.reason);
+      continue;
+    }
+    if (
+      session.options.lock.deployment.mode === "managed" &&
+      session.manifest.resources.packages?.some(
+        (item) =>
+          item.id === entry.id &&
+          item.source === "npm" &&
+          item.package === "pi-code",
+      ) &&
+      file.kind === "extensions" &&
+      /^extensions\/hooks(?:\/|\.)/.test(file.path) &&
+      projectDimensionEffect(
         session.manifest.policy,
-        entry.class,
-        file.kind,
+        session.project,
+        "claudeHooks",
+        "managed",
+      ) !== "allow"
+    ) {
+      session.emit("resource.denied", { resource, detail });
+      record(
+        false,
+        "managed project hooks are not admitted; hooks extension is excluded",
       );
-      if (!trust.allowed) {
-        session.emit("resource.denied", { resource, detail });
-        record(false, trust.reason);
-        continue;
-      }
-      const absolute = join(root, ...file.path.split("/"));
-      if (!fileMatches(absolute, file.sha256)) {
-        session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
-        throw new PiShipError(
-          "INTEGRITY_FAILED",
-          `Package ${entry.id} file ${file.path} does not match the lock`,
-          { userAction: "Reinstall the distribution from a trusted artifact" },
-        );
-      }
-      if (incompatible) {
-        session.emit("resource.denied", { resource, detail });
-        record(false, incompatible);
-        continue;
-      }
-      const decision = await session.decide(
-        KIND_ACTION[file.kind] ?? "resource.load",
-        resource,
-        session.startupChannel(),
+      continue;
+    }
+    const absolute = join(root, ...file.path.split("/"));
+    if (!fileMatches(absolute, file.sha256)) {
+      session.metrics.recordLoadFailure("resource", "INTEGRITY_FAILED");
+      throw new PiShipError(
+        "INTEGRITY_FAILED",
+        `Package ${entry.id} file ${file.path} does not match the lock`,
+        { userAction: "Reinstall the distribution from a trusted artifact" },
       );
-      if (decision.outcome !== "allow") {
-        session.emit("resource.denied", { resource, detail });
-        record(false, `policy ${decision.ruleId}`);
-        continue;
-      }
+    }
+    if (incompatible) {
+      session.emit("resource.denied", { resource, detail });
+      record(false, incompatible);
+      continue;
+    }
+    const decision = await session.decide(
+      KIND_ACTION[file.kind] ?? "resource.load",
+      resource,
+      session.startupChannel(),
+    );
+    if (decision.outcome !== "allow") {
+      session.emit("resource.denied", { resource, detail });
+      record(false, `policy ${decision.ruleId}`);
+      continue;
+    }
+    const emit = () =>
       session.emit("resource.load", {
         resource,
         policy: decision.policyId,
         rule: decision.ruleId,
         detail,
       });
-      record(true, trust.reason);
+    record(true, trust.reason);
+    if (atomic) pending.push({ kind: file.kind, absolute, emit });
+    else {
+      emit();
       session.loader[file.kind].push(absolute);
+    }
+  }
+  if (atomic) {
+    const records = session.resources.slice(recordStart);
+    const refusal = records.find((record) => !record.loaded);
+    if (refusal) {
+      for (let index = recordStart; index < session.resources.length; index++) {
+        const record = session.resources[index];
+        if (record)
+          session.resources[index] = {
+            ...record,
+            loaded: false,
+            reason: refusal.reason,
+            integrity: "not-applicable",
+          };
+      }
+    } else {
+      for (const file of pending) {
+        file.emit();
+        session.loader[file.kind].push(file.absolute);
+      }
     }
   }
 }

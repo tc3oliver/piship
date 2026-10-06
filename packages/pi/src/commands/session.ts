@@ -243,6 +243,10 @@ export async function runSmoke(
           .filter((path) => !path.startsWith("<inline")),
         prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
         themes: resourceLoader.getThemes().themes.map((item) => item.name),
+        ...registryInventory(
+          runtime.session,
+          resourceLoader.getExtensions().extensions,
+        ),
         ...(searchTools ? { searchTools } : {}),
         ...(access ? { access } : {}),
         ...(gov ? { governance: governanceSummary(gov) } : {}),
@@ -299,9 +303,55 @@ async function checkSearchTools(
   );
 }
 
+/**
+ * What the loaded extensions registered: every tool Pi knows with its
+ * exposure and source, the tools declared to the model, the commands, and
+ * the tool names more than one extension registered (Pi keeps the first and
+ * drops the rest silently, so a duplicate is only visible here).
+ */
+function registryInventory(
+  session: {
+    getAllTools(): {
+      name: string;
+      exposure: string;
+      sourceInfo: { path: string };
+    }[];
+    getActiveToolNames(): string[];
+    extensionRunner: { getRegisteredCommands(): { invocationName: string }[] };
+  },
+  extensions: readonly { path: string; tools: ReadonlyMap<string, unknown> }[],
+) {
+  const registrations = new Map<string, string[]>();
+  for (const extension of extensions)
+    for (const name of extension.tools.keys())
+      registrations.set(name, [
+        ...(registrations.get(name) ?? []),
+        extension.path,
+      ]);
+  return {
+    tools: session
+      .getAllTools()
+      .map((tool) => ({
+        name: tool.name,
+        exposure: tool.exposure,
+        source: tool.sourceInfo.path,
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+    activeTools: session.getActiveToolNames().sort(),
+    commands: session.extensionRunner
+      .getRegisteredCommands()
+      .map((command) => command.invocationName)
+      .sort(),
+    duplicateTools: Object.fromEntries(
+      [...registrations].filter(([, paths]) => paths.length > 1),
+    ),
+  };
+}
+
 function governanceSummary(gov: GovernanceSession) {
   return {
     policy: gov.policyId,
+    ...(gov.yolo ? { yolo: true } : {}),
     project: { origin: gov.project.origin },
     sandbox: {
       level: gov.sandbox.report.level,

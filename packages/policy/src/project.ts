@@ -10,14 +10,17 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PiShipError, redact } from "@piship/contracts";
-import type {
-  PolicyConfig,
-  ProjectDimensionEffect,
-  ProjectMatcher,
-  ProjectTrustDimension,
-  ProjectTrustPolicy,
+import {
+  CLAUDE_TRUST_DIMENSIONS,
+  type ClaudeTrustDimension,
+  type DeploymentMode,
+  type PolicyConfig,
+  type ProjectDimensionEffect,
+  type ProjectMatcher,
+  type ProjectTrustDimension,
+  type ProjectTrustPolicy,
 } from "@piship/schema";
-import { parseRuleList, type ParsedRuleList } from "./engine.js";
+import { type ParsedRuleList, parseRuleList } from "./engine.js";
 import {
   expandPathTokens,
   isWithin,
@@ -25,7 +28,12 @@ import {
   normalizePathResource,
   toPosixPath,
 } from "./glob.js";
-import { projectEffectReason, type ProjectOrigin } from "./trust.js";
+import {
+  type AnyProjectDimension,
+  claudeDimensionEffect,
+  type ProjectOrigin,
+  projectEffectReason,
+} from "./trust.js";
 
 export interface ProjectIdentity {
   /** Realpath'd project root (POSIX separators). */
@@ -916,32 +924,59 @@ export function identifyProject(
   };
 }
 
-const RESOURCE_DIMENSIONS: ReadonlySet<ProjectTrustDimension> = new Set([
+const RESOURCE_DIMENSIONS: ReadonlySet<AnyProjectDimension> = new Set([
   "passiveContext",
   "instructions",
   "skills",
   "extensions",
+  "claudeRules",
 ]);
 
 /** Dimensions whose project items are executable code or start processes. */
-export const EXECUTABLE_DIMENSIONS: ReadonlySet<ProjectTrustDimension> =
-  new Set(["skills", "agents", "hooks", "extensions", "mcp", "providers"]);
+export const EXECUTABLE_DIMENSIONS: ReadonlySet<AnyProjectDimension> = new Set([
+  "skills",
+  "agents",
+  "hooks",
+  "extensions",
+  "mcp",
+  "providers",
+  "claudeCommands",
+  "claudeSkills",
+  "claudeAgents",
+  "claudeHooks",
+]);
+
+const CLAUDE_DIMENSIONS: ReadonlySet<AnyProjectDimension> = new Set(
+  CLAUDE_TRUST_DIMENSIONS,
+);
 
 /**
  * The effect of a project trust dimension for an identified project.
  * `resourceTrust.project: deny` denies every dimension; `allow` allows the
- * Pi resource dimensions (passive context, instructions, skills, extensions)
- * while agents, hooks, MCP, and providers still follow `projectTrust`.
+ * Pi resource dimensions (passive context, instructions, skills, extensions,
+ * and the Claude rules) while agents, hooks, MCP, and
+ * providers still follow `projectTrust`. A Claude dimension the manifest does
+ * not declare takes the default of `mode` (managed when not given).
  */
 export function projectDimensionEffect(
   policy: Pick<PolicyConfig, "resourceTrust" | "projectTrust">,
   identity: Pick<ProjectIdentity, "origin">,
-  dimension: ProjectTrustDimension,
+  dimension: AnyProjectDimension,
+  mode: DeploymentMode = "managed",
 ): ProjectDimensionEffect {
   const setting = policy.resourceTrust.project;
   if (setting === "deny") return "deny";
   if (setting === "allow" && RESOURCE_DIMENSIONS.has(dimension)) return "allow";
-  return policy.projectTrust[identity.origin].dimensions[dimension];
+  if (CLAUDE_DIMENSIONS.has(dimension))
+    return claudeDimensionEffect(
+      policy,
+      mode,
+      identity.origin,
+      dimension as ClaudeTrustDimension,
+    );
+  return policy.projectTrust[identity.origin].dimensions[
+    dimension as ProjectTrustDimension
+  ];
 }
 
 // --------------------------------------------------------------- discovery
@@ -957,12 +992,16 @@ export type ProjectResourceKind =
   | "themes"
   | "agents"
   | "mcp"
+  /** A project file an extension reads and PiShip never loads: `.pi/mcp.json`, and `.mcp.json` and `.pi/agents` below the root. */
+  | "extension-config"
   | "providers"
+  /** Claude Code project configuration an extension loads (`.claude/*`). */
+  | "claude"
   | "restrictions";
 
 export interface ProjectResourceCandidate {
   /** `restrictions` is the narrowing-only project policy file. */
-  readonly dimension: ProjectTrustDimension | "restrictions";
+  readonly dimension: AnyProjectDimension | "restrictions";
   readonly kind: ProjectResourceKind;
   /** Path inside the project root (POSIX, not symlink-resolved). */
   readonly path: string;
@@ -980,7 +1019,7 @@ export interface ProjectResourceCandidate {
 
 interface CandidateSpec {
   readonly relative: string;
-  readonly dimension: ProjectTrustDimension | "restrictions";
+  readonly dimension: AnyProjectDimension | "restrictions";
   readonly kind: ProjectResourceKind;
 }
 
@@ -1020,6 +1059,46 @@ const CANDIDATES: readonly CandidateSpec[] = [
   },
 ];
 
+/**
+ * The Claude Code project configuration an extension such as pi-code loads
+ * (its own list of Claude-shaped files). Found in every directory from the
+ * working directory up to the project root, as the extension searches. The
+ * settings files are where Claude hooks, environment, and a status line
+ * command are declared, so they follow `claudeHooks`; memory files and output
+ * styles shape the prompt, so they follow `claudeRules`.
+ */
+const CLAUDE_SURFACES: readonly {
+  readonly relative: string;
+  readonly dimension: ClaudeTrustDimension;
+}[] = [
+  { relative: ".claude/rules", dimension: "claudeRules" },
+  { relative: ".claude/CLAUDE.md", dimension: "claudeRules" },
+  { relative: "CLAUDE.local.md", dimension: "claudeRules" },
+  { relative: ".claude/output-styles", dimension: "claudeRules" },
+  { relative: ".claude/commands", dimension: "claudeCommands" },
+  { relative: ".claude/skills", dimension: "claudeSkills" },
+  { relative: ".claude/agents", dimension: "claudeAgents" },
+  { relative: ".claude/hooks", dimension: "claudeHooks" },
+  { relative: ".claude/settings.json", dimension: "claudeHooks" },
+  { relative: ".claude/settings.local.json", dimension: "claudeHooks" },
+];
+
+/**
+ * Files an extension reads from the same directories that PiShip does not
+ * load: Pi's project MCP file at every level, and the MCP and agent files
+ * below the root (the root's own are candidates above, where PiShip uses
+ * them). Decided by the existing `mcp` and `agents` dimensions.
+ */
+const EXTENSION_FILES: readonly {
+  readonly relative: string;
+  readonly dimension: "mcp" | "agents";
+  readonly atRoot: boolean;
+}[] = [
+  { relative: ".pi/mcp.json", dimension: "mcp", atRoot: true },
+  { relative: ".mcp.json", dimension: "mcp", atRoot: false },
+  { relative: ".pi/agents", dimension: "agents", atRoot: false },
+];
+
 const COMPANY_APPROVED_REASON =
   "company-approved admits only distribution-approved items";
 
@@ -1046,8 +1125,9 @@ interface Evaluation {
 function evaluateCandidate(
   policy: Pick<PolicyConfig, "resourceTrust" | "projectTrust">,
   identity: ProjectIdentity,
-  dimension: ProjectTrustDimension | "restrictions",
+  dimension: AnyProjectDimension | "restrictions",
   inside: boolean,
+  mode: DeploymentMode,
 ): Evaluation {
   if (dimension === "restrictions")
     return inside
@@ -1073,6 +1153,7 @@ function evaluateCandidate(
       policy,
       { origin: "unknown" },
       dimension,
+      mode,
     );
     return {
       origin: "unknown",
@@ -1080,7 +1161,7 @@ function evaluateCandidate(
       reason: `Resolves outside the project root; evaluated as unknown origin: ${projectEffectReason("unknown", dimension, effect)}`,
     };
   }
-  const effect = projectDimensionEffect(policy, identity, dimension);
+  const effect = projectDimensionEffect(policy, identity, dimension, mode);
   if (effect !== "company-approved")
     return {
       origin: identity.origin,
@@ -1144,6 +1225,7 @@ function discoverImports(
   source: ProjectResourceCandidate,
   identity: ProjectIdentity,
   policy: Pick<PolicyConfig, "resourceTrust" | "projectTrust">,
+  mode: DeploymentMode,
   homeDir: string,
   seen: Set<string>,
   depth: number,
@@ -1179,7 +1261,14 @@ function discoverImports(
         effect: "deny",
         reason: `Instruction import ${reference} does not exist`,
       };
-    else evaluation = evaluateCandidate(policy, identity, "instructions", true);
+    else
+      evaluation = evaluateCandidate(
+        policy,
+        identity,
+        "instructions",
+        true,
+        mode,
+      );
     const candidate = toCandidate(
       spec,
       reference,
@@ -1195,6 +1284,7 @@ function discoverImports(
         candidate,
         identity,
         policy,
+        mode,
         homeDir,
         seen,
         depth + 1,
@@ -1249,26 +1339,76 @@ function escapingEntry(root: string, directory: string): string | undefined {
 }
 
 /**
+ * The directories an extension searches for Claude Code configuration: the
+ * working directory and each parent up to the project root, nearest first.
+ * A directory that is the user's home is the user's own scope, not the
+ * project's, and is left out. Without a working directory, or outside the
+ * root, only the root is searched.
+ */
+export function claudeDirectories(
+  root: string,
+  cwd: string | undefined,
+  homeDir: string,
+): string[] {
+  const start = cwd === undefined ? root : real(cwd);
+  let current = isWithin(root, start) ? start : root;
+  const directories: string[] = [];
+  for (;;) {
+    directories.push(current);
+    const parent = dirname(current);
+    if (current === root || parent === current) break;
+    current = parent;
+  }
+  return directories.filter((directory) => directory !== homeDir);
+}
+
+/** Main checkout settings also read by Claude extensions in linked worktrees.
+ * Treat them as outside-origin executable content; never trust an archive's
+ * git pointer as proof that this other checkout belongs to the company.
+ */
+export function linkedClaudeSettings(
+  root: string,
+  homeDir: string,
+): string | undefined {
+  if (process.platform === "win32" || root === real(homeDir)) return undefined;
+  const git = gitDirectory(root);
+  if (!git) return undefined;
+  const common = real(commonDirectory(git));
+  if (common === git || !common.endsWith("/.git")) return undefined;
+  const main = dirname(common);
+  if (main === root || main === real(homeDir)) return undefined;
+  return joinPosix(main, ".claude/settings.local.json");
+}
+
+/**
  * Discover project-supplied resources and decide each by its trust
  * dimension. Only existing candidates are returned. Every candidate is
  * realpath'd; a target outside the project root is re-evaluated as unknown
  * origin (and denied for executable dimensions). Instruction imports must
  * stay inside the root. Content is never read through a link that leaves it.
+ * The Claude Code configuration (`.claude/*`) is looked for in every
+ * directory from `options.cwd` up to the root; `options.mode` selects the
+ * default of a Claude dimension the manifest does not declare (managed when
+ * not given, the stricter one).
  */
 export function discoverProjectResources(
   identity: ProjectIdentity,
   policy: Pick<PolicyConfig, "resourceTrust" | "projectTrust">,
-  options: { readonly homeDir: string },
+  options: {
+    readonly homeDir: string;
+    readonly cwd?: string;
+    readonly mode?: DeploymentMode;
+  },
 ): ProjectResourceCandidate[] {
   const homeDir = real(options.homeDir);
+  const mode = options.mode ?? "managed";
   const out: ProjectResourceCandidate[] = [];
   const seen = new Set<string>();
-  for (const spec of CANDIDATES) {
-    const path = joinPosix(identity.root, spec.relative);
+  const discover = (spec: CandidateSpec, path: string): void => {
     if (!exists(path)) {
       // A dangling link is still reported so it cannot hide.
+      if (!isSymbolicLink(path)) return;
       const resolvedPath = real(path);
-      if (resolvedPath === path) continue;
       out.push(
         toCandidate(spec, path, resolvedPath, {
           origin: "unknown",
@@ -1276,7 +1416,7 @@ export function discoverProjectResources(
           reason: "The candidate is a dangling link",
         }),
       );
-      continue;
+      return;
     }
     const resolvedPath = real(path);
     const inside = isWithin(identity.root, resolvedPath);
@@ -1290,6 +1430,7 @@ export function discoverProjectResources(
       identity,
       spec.dimension,
       inside && escaping === undefined,
+      mode,
     );
     if (escaping !== undefined)
       evaluation = {
@@ -1303,9 +1444,38 @@ export function discoverProjectResources(
     out.push(candidate);
     if (spec.kind === "instructions" && inside && escaping === undefined) {
       seen.add(resolvedPath);
-      discoverImports(candidate, identity, policy, homeDir, seen, 1, out);
+      discoverImports(candidate, identity, policy, mode, homeDir, seen, 1, out);
     }
+  };
+  for (const spec of CANDIDATES)
+    discover(spec, joinPosix(identity.root, spec.relative));
+  for (const directory of claudeDirectories(
+    identity.root,
+    options.cwd,
+    homeDir,
+  )) {
+    for (const surface of CLAUDE_SURFACES)
+      discover(
+        { ...surface, kind: "claude" },
+        joinPosix(directory, surface.relative),
+      );
+    for (const file of EXTENSION_FILES)
+      if (file.atRoot || directory !== identity.root)
+        discover(
+          { ...file, kind: "extension-config" },
+          joinPosix(directory, file.relative),
+        );
   }
+  const mainSettings = linkedClaudeSettings(identity.root, homeDir);
+  if (mainSettings)
+    discover(
+      {
+        kind: "claude",
+        relative: ".claude/settings.local.json",
+        dimension: "claudeHooks",
+      },
+      mainSettings,
+    );
   return out;
 }
 

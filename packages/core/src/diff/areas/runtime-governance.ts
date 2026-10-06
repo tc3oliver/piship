@@ -337,6 +337,83 @@ export function piPackages(out: Collector, b: AnyLock, a: AnyLock): void {
         ? ["high", "Pi package trust class widened to a less reviewed one."]
         : ["medium", "Pi package trust class narrowed."],
     );
+    packageConfiguration(out, item, x, y);
+  }
+}
+
+type LockedPackage = NonNullable<AnyLock["packages"]>[number];
+
+/**
+ * What a package is given around its code: the environment variables the
+ * launch sets for it, and the configuration files it keeps in the agent
+ * directory. A variable can switch a package's features or its network
+ * behavior; a file can hold its permission rules. Neither shows in the
+ * package's own identity, so a change to either is reported by itself.
+ */
+function packageConfiguration(
+  out: Collector,
+  item: string,
+  before: LockedPackage | undefined,
+  after: LockedPackage | undefined,
+): void {
+  const shown = (value: unknown) =>
+    typeof value === "string" ? value : JSON.stringify(value);
+  const vars = (lock: LockedPackage | undefined) =>
+    new Map(Object.entries(lock?.environment ?? {}));
+  const x = vars(before);
+  const y = vars(after);
+  for (const name of keys(x, y)) {
+    const was = x.get(name);
+    const now = y.get(name);
+    out.scalar(
+      "packages",
+      `${item} environment ${name}`,
+      was === undefined ? undefined : shown(was),
+      now === undefined ? undefined : shown(now),
+      (_, value) =>
+        was === undefined
+          ? ["medium", "The launch sets a new environment variable."]
+          : now === undefined
+            ? ["low", "An environment variable is no longer set."]
+            : ["medium", `Environment variable changed to ${value}.`],
+    );
+  }
+  const files = (lock: LockedPackage | undefined) =>
+    byKey(lock?.agentFiles, (file) => file.path);
+  const fx = files(before);
+  const fy = files(after);
+  for (const path of keys(fx, fy)) {
+    const was = fx.get(path);
+    const now = fy.get(path);
+    const label = `${item} file ${path}`;
+    if (!was && now)
+      out.push(
+        "packages",
+        "added",
+        label,
+        ["high", "The launch writes a new configuration file for the package."],
+        undefined,
+        now.mode,
+      );
+    else if (was && !now)
+      out.push(
+        "packages",
+        "removed",
+        label,
+        ["low", "Configuration file no longer written."],
+        was.mode,
+      );
+    else if (was && now) {
+      out.scalar("packages", `${label} content`, was.sha256, now.sha256, [
+        "high",
+        "The content written for the package changed: review the rules it holds.",
+      ]);
+      out.scalar("packages", `${label} mode`, was.mode, now.mode, (_, mode) =>
+        mode === "enforce"
+          ? ["medium", "The file is now rewritten at every launch."]
+          : ["high", "A user's edits to the file now outlive a launch."],
+      );
+    }
   }
 }
 

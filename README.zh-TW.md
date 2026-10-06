@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--release-orange" alt="Status: pre-release">
-  <img src="https://img.shields.io/badge/Pi-1.0.2-blue" alt="Pi 1.0.2">
+  <img src="https://img.shields.io/badge/Pi-1.0.3-blue" alt="Pi 1.0.3">
   <img src="https://img.shields.io/badge/Node-%3E%3D22.19.0-339933?logo=node.js&logoColor=white" alt="Node >=22.19.0">
   <img src="https://img.shields.io/github/license/tc3oliver/piship" alt="License">
 </p>
@@ -119,7 +119,7 @@ app:
   version: 1.0.0
 
 runtime:
-  pi: "1.0.2"
+  pi: "1.0.3"
 
 deployment:
   mode: managed
@@ -192,6 +192,14 @@ personal 模式不需要 IdP、broker 或 gateway。MyPi 範例會鎖定 Pi 版�
 node packages/cli/dist/bin.js build examples/personal/piship.yaml
 node dist/mypi/piship.mjs install dist/mypi
 ~/.local/bin/mypi
+```
+
+想要開箱即用的 coding agent，可以看 [developer 範例](examples/developer/README.md)（`devcode`）：內建六個 Pi 套件，包括 Claude Code 相容、診斷與 LSP、背景工作、code review、瀏覽器和權限提供者。日常工作不會跳出詢問，只有在 `sudo`、遞迴刪除、破壞性 git、寫到工作區之外時才詢問。另有給公司用的[加固版本](examples/developer/managed.piship.yaml)。先讀[環境需求](examples/developer/README.md#requirements)，確認 Chrome 與瀏覽器套件的 Node 24.18.0 限制。
+
+```bash
+node packages/cli/dist/bin.js build examples/developer/piship.yaml
+node dist/devcode/piship.mjs install dist/devcode
+~/.local/bin/devcode
 ```
 
 要做自己的，執行 `node packages/cli/dist/bin.js init ./my-agent --personal`。見 [personal 範例](examples/personal/README.md) 和 [設定指南](docs/agent-setup.md)。

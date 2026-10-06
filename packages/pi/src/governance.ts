@@ -310,7 +310,20 @@ export function governModelRuntime(
       if (!selectable(model)) refuse("model.select", model);
       if (!dispatchable(model)) refuse("model.dispatch", model);
     }
-    policy?.available?.();
+    try {
+      policy?.available?.();
+    } catch (error) {
+      // Availability can refuse dispatch before another tool is attempted.
+      // Record that boundary without allowing an audit failure to mask it.
+      try {
+        policy?.denied?.("model.dispatch", model.provider, model.id, {
+          error: error instanceof PiShipError ? error.code : "internal",
+        });
+      } catch {
+        // The required-control failure still refuses this request.
+      }
+      throw error;
+    }
     guarded.add(model);
   };
 
